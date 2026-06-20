@@ -223,7 +223,7 @@ function configureStorageExpr(url, token) {
 
 // Drive the overlay the way a real submit does: the content script sends
 // { cmd: "run" | "describe" } to the background, which calls the live gateway and
-// posts { cmd: "done"|"error" } back. We then read the rendered overlay row.
+// posts { cmd: "done"|"error" } back. We then read the replaced field value.
 function triggerExpr(cmd, instruction) {
   const msg = cmd === "run"
     ? `{ cmd: "run", instruction: ${JSON.stringify(instruction)} }`
@@ -242,21 +242,24 @@ function triggerExpr(cmd, instruction) {
   `;
 }
 
-// Wait for a NEW terminal row (done or error) to render in the overlay, then
-// return its kind + text. This is the actual user-visible result.
+// Wait for a NEW terminal state in the hidden one-turn ledger, then return the
+// user-visible field value. The visible product surface is not a chat log.
 function renderedReplyExpr() {
   return `
     (() => {
       const log = document.querySelector("#agee-log");
+      const input = document.querySelector("#agee-input");
       if (!log) return null;
       const before = window.__ageeRowsBefore || 0;
       const rows = [...log.children].slice(before);
-      // Find the latest terminal row (done or error), ignoring the "you" echo
-      // and any interim "agee" progress rows.
+      const fieldText = input ? input.value : "";
+      const logVisible = getComputedStyle(log).display !== "none";
+      // Find the latest terminal state, ignoring the "you" echo and interim
+      // progress rows.
       for (let i = rows.length - 1; i >= 0; i--) {
         const row = rows[i];
-        if (row.classList.contains("agee-done")) return { kind: "done", text: row.textContent };
-        if (row.classList.contains("agee-error")) return { kind: "error", text: row.textContent };
+        if (row.classList.contains("agee-done")) return { kind: "done", text: fieldText, ledgerText: row.textContent, logVisible };
+        if (row.classList.contains("agee-error")) return { kind: "error", text: fieldText, ledgerText: row.textContent, logVisible };
       }
       return null;
     })()
@@ -398,10 +401,11 @@ async function main() {
       const usedDefaultGateway = call && call.url && String(call.url).startsWith(`${GATEWAY_URL}/`);
       const didNotShowMissingUrl = !/No gateway URL/i.test(reply?.text || "");
       const reachedGateway = call && (call.status === 401 || call.ok === true);
-      if (usedDefaultGateway && didNotShowMissingUrl && reachedGateway) {
+      const noVisibleLog = reply?.logVisible === false;
+      if (usedDefaultGateway && didNotShowMissingUrl && reachedGateway && noVisibleLog) {
         pass(
           "blank URL storage reached the baked gateway",
-          `POST /v1/voice/turns -> HTTP ${call.status}; no missing-URL overlay error`,
+          `POST /v1/voice/turns -> HTTP ${call.status}; no missing-URL overlay error; log hidden`,
         );
       } else {
         failures++;
@@ -451,6 +455,7 @@ async function main() {
         reply.kind === "error" &&
         /401|token|unauthor/i.test(reply.text) &&
         reply.text.trim().length > 0;
+      const noVisibleLog = reply?.logVisible === false;
 
       // Prove it actually reached the live gateway and got a 401 (loud, not silent).
       const got401 = call && call.status === 401;
@@ -458,10 +463,10 @@ async function main() {
       // Prove the overlay dot also reflects the error state (visible signal).
       const dotState = await evaluate(pageCdp, `(() => { const d = document.querySelector("#agee-dot"); return d ? d.className : null; })()`, { contextId: contentCtx });
 
-      if (looksLikeAuthError && got401 && dotState === "error") {
+      if (looksLikeAuthError && got401 && dotState === "error" && noVisibleLog) {
         pass(
           "unauthorized command rendered a clear error",
-          `gateway POST /v1/voice/turns -> HTTP 401; overlay error row + red dot`,
+          `gateway POST /v1/voice/turns -> HTTP 401; field error + red dot; log hidden`,
         );
         console.log(`         overlay error text: "${reply.text.trim()}"`);
       } else {
@@ -490,11 +495,11 @@ async function main() {
         await evaluate(pageCdp, triggerExpr("run", "Say a one word greeting."), { contextId: contentCtx });
         const reply = await waitForEval(pageCdp, renderedReplyExpr(), 60000, { contextId: contentCtx });
         const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/voice/turns"));
-        const ok = reply.kind === "done" && call && call.ok === true && call.status === 200;
+        const ok = reply.kind === "done" && reply.logVisible === false && call && call.ok === true && call.status === 200;
         if (ok) {
           pass(
             "command reply originated from /v1/voice/turns",
-            `gateway POST /v1/voice/turns -> HTTP 200; overlay done row`,
+            `gateway POST /v1/voice/turns -> HTTP 200; field replaced; log hidden`,
           );
           console.log(`         overlay reply: "${reply.text.trim().slice(0, 200)}"`);
         } else {
@@ -511,11 +516,11 @@ async function main() {
         await evaluate(pageCdp, triggerExpr("describe"), { contextId: contentCtx });
         const reply = await waitForEval(pageCdp, renderedReplyExpr(), 60000, { contextId: contentCtx });
         const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/chat"));
-        const ok = reply.kind === "done" && call && call.ok === true && call.status === 200;
+        const ok = reply.kind === "done" && reply.logVisible === false && call && call.ok === true && call.status === 200;
         if (ok) {
           pass(
             "describe reply originated from /v1/chat",
-            `gateway POST /v1/chat -> HTTP 200; overlay done row`,
+            `gateway POST /v1/chat -> HTTP 200; field replaced; log hidden`,
           );
           console.log(`         overlay description: "${reply.text.trim().slice(0, 200)}"`);
         } else {
