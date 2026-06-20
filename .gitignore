@@ -1,0 +1,31 @@
+# Secrets and local machine config
+.env
+*.env
+!.env.example
+android_app/local.properties
+
+# Runtime state and local agent output
+scratch/
+.context/
+.gstack/
+.claude/
+.codex/
+.entire/
+gateway/data/
+gateway/*.log
+gateway/*.pid
+
+# Dependencies and build output
+node_modules/
+**/node_modules/
+android_app/.gradle/
+android_app/**/build/
+browser_extension/dist/
+browser_extension/build/
+
+# Binary build artifacts
+*.apk
+*.mp4
+
+# OS files
+.DS_Store

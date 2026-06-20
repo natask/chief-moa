@@ -1,0 +1,16 @@
+.gradle/
+build/
+app/build/
+local.properties
+captures/
+*.iml
+.idea/
+
+scratch/
+
+# Local agent harness state (not product source)
+.claude/
+.codex/
+.entire/
+# Local-only: raw thinking and agent context, never published
+.context/

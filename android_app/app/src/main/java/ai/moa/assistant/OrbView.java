@@ -1,0 +1,112 @@
+package ai.moa.assistant;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.RadialGradient;
+import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
+import android.view.View;
+
+// The floating Moa mark: just the animal, no disc. The dark silhouette would
+// vanish on dark app backgrounds, so a soft light halo (the bird shape feathered
+// behind itself) gives it contrast on any screen. Listening tints the halo gold
+// and grows the bird a touch instead of lighting up an orb. Holding the orb (the
+// push-to-talk gesture) lights a soft teal glow behind it so the press reads.
+final class OrbView extends View {
+    // Viewport box of the bird inside ic_moa_glyph (108x108). Used to center it.
+    private static final float GLYPH_VIEWPORT = 108f;
+    private static final float BIRD_CX = 54f;
+    private static final float BIRD_CY = 50.5f;
+
+    private final Drawable bird;
+    private final Drawable halo;
+    private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private boolean listening;
+    private boolean held;
+
+    OrbView(Context context) {
+        super(context);
+        bird = context.getDrawable(R.drawable.ic_moa_glyph);
+        halo = context.getDrawable(R.drawable.ic_moa_glyph);
+        if (halo != null) {
+            halo.mutate();
+        }
+    }
+
+    void setListening(boolean listening) {
+        this.listening = listening;
+        invalidate();
+    }
+
+    // Held = finger down for push-to-talk. Lights the glow and grows a touch.
+    void setHeld(boolean held) {
+        this.held = held;
+        invalidate();
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        if (bird == null) {
+            return;
+        }
+
+        float w = getWidth();
+        float h = getHeight();
+        float cx = w / 2f;
+        float cy = h / 2f;
+
+        boolean lit = held || listening;
+        // Bird fills most of the window now that the disc is gone. It grows a
+        // little while listening, and a touch more while held.
+        float size = Math.min(w, h) * (held ? 1.0f : (listening ? 0.98f : 0.92f));
+
+        if (lit) {
+            drawGlow(canvas, cx, cy, Math.min(w, h));
+        }
+        drawHalo(canvas, cx, cy, size);
+
+        setGlyphBounds(bird, cx, cy, size);
+        bird.setAlpha(255);
+        bird.draw(canvas);
+    }
+
+    // Soft radial bloom behind the mark. Teal while held, gold while listening,
+    // so push-to-talk gets an unmistakable lit state without adding a disc.
+    private void drawGlow(Canvas canvas, float cx, float cy, float box) {
+        float radius = box * 0.62f;
+        int core = held ? 0x6661E5C6 : 0x55F4D35E;
+        int edge = 0x0061E5C6;
+        glowPaint.setShader(new RadialGradient(cx, cy, radius, core, edge, Shader.TileMode.CLAMP));
+        canvas.drawCircle(cx, cy, radius, glowPaint);
+        glowPaint.setShader(null);
+    }
+
+    // Feathered light rim: the same silhouette drawn a few times, larger and
+    // fainter, tinted light (gold while listening). Reads on dark backgrounds
+    // without bringing back a circle.
+    private void drawHalo(Canvas canvas, float cx, float cy, float size) {
+        if (halo == null) {
+            return;
+        }
+        int tint = listening ? MoaColors.GOLD : 0xFFF7FFF1;
+        halo.setColorFilter(tint, PorterDuff.Mode.SRC_IN);
+
+        float[] scales = {1.18f, 1.10f, 1.05f};
+        int[] alphas = listening ? new int[]{70, 120, 200} : new int[]{45, 80, 150};
+        for (int i = 0; i < scales.length; i++) {
+            setGlyphBounds(halo, cx, cy, size * scales[i]);
+            halo.setAlpha(alphas[i]);
+            halo.draw(canvas);
+        }
+        halo.clearColorFilter();
+    }
+
+    private void setGlyphBounds(Drawable drawable, float cx, float cy, float size) {
+        int left = Math.round(cx - BIRD_CX * size / GLYPH_VIEWPORT);
+        int top = Math.round(cy - BIRD_CY * size / GLYPH_VIEWPORT);
+        drawable.setBounds(left, top, Math.round(left + size), Math.round(top + size));
+    }
+}

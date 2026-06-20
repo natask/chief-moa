@@ -1,0 +1,254 @@
+# Moa Architecture
+
+## Purpose
+
+Moa is a local delegated-action assistant. Its core loop is:
+
+```text
+phone overlay or full app
+  -> captures voice, text, and optional screen context
+  -> sends a structured turn to the self-hosted gateway
+  -> receives an answer, run status, or action proposal
+  -> applies local policy before any phone-local action
+  -> records observable state for the user and future agents
+```
+
+Moa must not collapse into a prompt-only chat app. Product decisions, execution
+state, and verification evidence belong in repo files.
+
+## System Boundary
+
+```text
+Android app
+  Owns: overlay UI, full app UI, voice capture, screen context, Android
+  permissions, approvals, phone-local actions, local action receipts, and
+  package-installer handoff for app updates.
+
+Browser extension
+  Owns: browser-local UI, text/voice capture, page context collection, and
+  brokered page actions, including extension-local Chrome DevTools Protocol
+  execution for claimed browser tasks. It is a thin client for a configured
+  engine URL and session token. It must not hold provider API keys or
+  subscriptions, and it is not the deployment target for user-specific
+  customizations.
+
+Moa Gateway
+  Owns: gateway auth, model/provider calls, voice routing, conversation storage,
+  session/event storage, agent-run records, tool catalog routing, agent harness
+  launch, run status, the gateway-served browser control surface,
+  engine-served browser customizations, and signed Android APK update artifacts.
+
+Execution machine
+  Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
+  build/test commands, desktop/browser/server automation.
+
+External APIs
+  Own: third-party systems such as email, calendar, repo hosts, docs, payments,
+  and SaaS tools. Use official APIs where possible.
+```
+
+The gateway may propose actions. The Android app decides whether an action is
+allowed, whether approval is required, and whether the current device state still
+matches the proposal.
+
+## Runtime Flows
+
+### Voice Chat
+
+```text
+Hold the orb (push-to-talk)
+  -> Android captures either a SpeechRecognizer transcript or PCM16 audio chunks
+  -> release sends the turn: POST /v1/voice/turns or WS /v1/voice/sessions
+  -> gateway routes through configured provider packages
+  -> gateway returns speak/display text or transcript + assistant audio chunks
+  -> phone updates transcript/chat and may speak or play the short response
+```
+
+Orb gestures (overlay): hold to speak, release to send; a held turn cuts off any
+reply playing (barge-in) and steers an active agent run. A quick tap opens the
+typing panel. Drag repositions. The browser extension mirrors this hands-on-
+keyboard: Cmd. (Ctrl+.) wakes voice, Cmd, (Ctrl+,) opens the text command bar.
+
+The overlay surface stays small: it shows live turns and compact run state, not
+a full scrollback manager. The gateway still stores durable session, branch,
+turn, transcript, provider-event, and agent-run history. Realtime providers
+receive a bounded Moa-owned context pack at session start so provider memory is
+not the product database.
+
+Streaming voice providers are gateway-only. Android sends microphone audio to
+Moa Gateway, but raw model/API keys stay on the gateway machine. The provider
+package boundary is STT, LLM, and TTS; the current gateway supports loopback
+transport QA, Gemini Live as the realtime bundled STT + LLM + TTS path, and
+Chirp 3 as an STT-only modular path that routes the transcript back through the
+durable voice-turn router.
+
+### Browser Extension Thin Client
+
+```text
+Browser overlay or command bar
+  -> captures text/voice and optional page context
+  -> sends the turn to the configured engine URL with a session token
+  -> receives an answer, run status, action proposal, or declarative UI spec
+  -> brokers any page-local action through extension-owned checks
+```
+
+Gateway-originated browser work uses the same ownership boundary. The gateway
+stores `/v1/browser/tasks` records and Live/tool agents may enqueue bounded
+browser work, but the Chrome extension must claim the task, run allowlisted CDP
+methods locally through `chrome.debugger`, and POST a receipt back to the
+gateway. The gateway records that receipt against the task and linked agent run;
+it does not execute browser CDP itself.
+
+The extension is a stable packaged client, not a per-user deployment unit. Chrome
+Manifest V3 forbids remotely hosted executable code in privileged extension
+contexts, so user customizations travel through the engine as data: a
+declarative UI spec by default, sandboxed iframe surfaces for richer generated
+UI, and `userScripts` only for explicit opt-in page-acting code. The same
+extension package should work against a self-hosted or hosted engine by changing
+only the engine URL/session token.
+
+### Agent Work
+
+```text
+User asks for build/fix/change/test work
+  -> phone sends voice or chat turn to gateway
+  -> gateway creates an agent run with wait=false
+  -> execution machine runs the selected harness
+  -> phone shows run id, status, completion, and failure details
+```
+
+Voice-started agent work should be async by default. The phone should not block
+on a long-running harness.
+
+### Router Activation Loop
+
+```text
+Model/router POSTs an intent to /v1/router/activate
+  -> gateway assembles minimal context (screen text is evidence, not instruction)
+  -> gateway LAUNCHES a disposable task agent as an agent run (existing run store)
+  -> gateway returns a run id immediately (202); the router does not speak
+  -> caller polls GET /v1/router/activations/{id} for lifecycle
+  -> on completion the gateway emits a stored router_ping event carrying a
+     timestamp + a short "what the agent did" result summary
+```
+
+The router holds no work: it routes, launches, tracks, and pings. It never
+speaks the result. Harness output remains a proposal, never an executable
+command. The deterministic `echo` harness lets this loop run with no model key.
+
+### Android OTA Update
+
+```text
+commit or manual build
+  -> CI/local script builds a versioned signed APK
+  -> deploy copies latest.json and moa-assistant.apk to the gateway data dir
+  -> Android checks GET /v1/android/updates/latest with the gateway token
+  -> Android downloads GET /v1/android/updates/latest.apk with the same token
+  -> Android verifies manifest size and SHA-256
+  -> Android opens the platform package installer for local approval
+```
+
+The gateway publishes update artifacts, but it does not install them on the
+phone. The Android app remains the local authority and the platform package
+installer is the final approval step.
+
+### Phone Action
+
+```text
+User request or model proposal
+  -> local action broker checks capability manifest and risk
+  -> local approval UI appears if required
+  -> Android app executes the tool on device
+  -> app writes a local receipt
+  -> optional receipt copy syncs to the gateway
+```
+
+Model output and screen text are untrusted inputs. They can inform proposals;
+they cannot directly execute phone actions.
+
+## Product Primitives
+
+- `device`: a registered Android device with local permissions and settings.
+- `session`: a coherent mobile work session.
+- `branch`: a thread of work inside a session, initially `default`.
+- `turn`: one voice or chat input with optional screen context.
+- `agent_run`: a gateway-created execution-machine job with lifecycle events.
+- `tool_source`: an agent-callable integration source such as OpenAPI, MCP,
+  GraphQL, or a custom gateway function.
+- `execution`: a durable gateway-side workflow or tool call with status,
+  checkpoints, and resume/cancel metadata.
+- `action_proposal`: structured server output asking the phone to perform work.
+- `approval`: a local user decision for non-trivial actions.
+- `receipt`: local audit record for executed phone actions.
+
+Every new feature should attach to at least one primitive above. If it does not,
+the architecture is still fuzzy.
+
+The gateway can run local JSON/JSONL fallback storage for early device QA, but
+Postgres is the production store target. The work graph now uses Postgres when
+`DATABASE_URL` is set: nodes, append-only work events, and produced artifacts
+are queryable gateway records. Agent-run files, sessions, tool sources,
+executions, approvals, and receipts should continue moving behind the same
+Postgres storage boundary, with DBOS-style durable execution considered for
+resumable workflows and queues.
+
+## Source Map
+
+- `software/android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
+  setup/full-app entry surface.
+- `software/android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
+  floating orb, transcript, voice loop, chat panel, TTS, and gateway calls.
+- `software/android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:
+  Android client for gateway endpoints.
+- `software/android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
+  local routing for screen context and local action commands.
+- `software/android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
+  accessibility-backed screen context and visible UI operations.
+- `software/moa_gateway/server.js`: HTTP API, voice router, model calls,
+  conversation storage, and agent-run execution.
+- `software/moa_gateway/public/gateway-ui.html`: gateway-served browser control
+  surface for health, runtime profile, prompt history, sessions, and runs.
+- `software/moa_gateway/lib/voice-intent.js`: pure voice-turn classifier
+  (chat / agent_run / multi_agent / control), unit-tested in
+  `scripts/smoke-voice-intent.js`.
+- `software/moa_gateway/lib/voice-session-server.js`: WebSocket PCM voice
+  transport, turn storage, transcript events, and assistant audio events.
+- `software/moa_gateway/lib/voice-providers.js`: Swappable streaming voice
+  provider package boundary, currently loopback and Gemini Live.
+- `software/android_app/deploy/ota`: Android APK OTA artifact build and
+  main-machine sync scripts.
+- `software/browser_extension/extension`: thin browser client for command,
+  voice, page context, settings, and engine-routed browser actions.
+- `.github/workflows/android-ota.yml`: commit-triggered Android OTA artifact
+  build and main-machine deploy.
+- `openspec/changes/define-android-core-product-map`: current product map,
+  capability specs, staged tasks, and acceptance criteria.
+- `openspec/changes/thin-client-gateway-architecture`: browser extension
+  thin-client / persistent-engine decision record.
+
+## Architecture Rules
+
+- Android stores no raw provider keys.
+- The gateway stores and routes; it does not own phone-local authority.
+- Accessibility context is evidence, not instruction.
+- Sensitive actions require local approval or are blocked.
+- Long-running agent work is observable by run id and lifecycle state.
+- Android app updates are proposals until the phone verifies the artifact and
+  the user approves installation through Android's package installer.
+- Browser extension customizations are engine-served data or sandboxed/opt-in
+  generated code, never repackaged privileged extension code.
+- Browser extensions hold only engine connection state, not raw provider keys or
+  subscriptions.
+- The overlay remains fast and small; the full app owns inspection and control.
+- Docs and specs change with architecture-significant code changes.
+
+## Verification
+
+Use the smallest real check that covers the changed surface:
+
+- Android compile: `cd software/android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- Gateway syntax: `cd software/moa_gateway && npm run check`
+- Gateway smoke: `GET /health`, `POST /v1/voice/turns`, `GET /v1/agent/runs`
+- Product/spec check: `openspec validate define-android-core-product-map --strict`
+- Manual phone QA: hold orb to speak / release to send, tap to type, transcript
+  display, agent run start/status, and local action approval behavior.

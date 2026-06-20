@@ -1,0 +1,85 @@
+## ADDED Requirements
+
+### Requirement: Always-Available Overlay Control
+The Android app SHALL provide an overlay control that remains available above other apps after the user grants overlay permission.
+
+#### Scenario: Start overlay from app
+- **WHEN** the user grants overlay permission and taps start
+- **THEN** the app displays a draggable assistant orb above the current Android screen
+
+#### Scenario: Use another app while overlay is active
+- **WHEN** the user leaves the Moa app
+- **THEN** the assistant orb remains available without opening the full Moa app
+
+### Requirement: Tap-Based Voice Loop
+The overlay SHALL make the primary voice loop available through simple orb gestures.
+
+#### Scenario: Single tap while idle
+- **WHEN** the user single taps the orb while no command speech is active
+- **THEN** the app starts command speech capture
+- **AND** displays a live transcript overlay
+
+#### Scenario: Single tap while listening
+- **WHEN** the user single taps the orb while command speech is active
+- **THEN** the app submits the best available transcript
+- **AND** starts a fresh listening loop
+
+#### Scenario: Double tap while active
+- **WHEN** the user double taps the orb while listening or speaking
+- **THEN** the app stops recognition and TTS locally
+- **AND** does not send a stop prompt to the gateway
+
+### Requirement: System Assistant Button Launch
+The Android app SHALL expose the overlay voice loop through standard Android
+assistant and voice-command entry points used by system gestures and compatible
+earbud or headset buttons.
+
+#### Scenario: Launch from Android assist action
+- **WHEN** Android launches Moa through `android.intent.action.ASSIST` or
+  `android.intent.action.VOICE_ASSIST`
+- **THEN** the app starts the overlay service
+- **AND** begins a voice turn when overlay and microphone permissions are
+  available
+
+#### Scenario: Launch from earbud voice command action
+- **WHEN** Android launches Moa through `android.intent.action.VOICE_COMMAND`
+  from an earbud or headset assistant gesture
+- **THEN** the app starts the overlay service
+- **AND** begins a voice turn using the same overlay transcript path as an orb
+  tap
+
+#### Scenario: Assistant launch before required permissions
+- **WHEN** Android launches Moa through an assistant or voice-command action
+  before overlay or microphone permission is available
+- **THEN** the app opens the setup surface
+- **AND** preserves the user's intent to start the overlay after permissions are
+  granted
+
+#### Scenario: Media button is not an assistant command
+- **WHEN** a normal headset media play/pause button is routed to the active media
+  session
+- **THEN** Moa does not rely on that media-button event to start an assistant
+  turn
+
+### Requirement: Transcript Visibility
+The Android app SHALL show current speech text while the user is speaking.
+
+#### Scenario: Partial recognition received
+- **WHEN** Android speech recognition emits partial text
+- **THEN** the overlay updates visible transcript text without opening the full chat panel
+
+#### Scenario: Turn is submitted
+- **WHEN** the current voice turn is submitted
+- **THEN** the transcript overlay closes or resets for the next loop
+
+### Requirement: Minimal Spoken Interruption
+The Android app SHALL separate displayed response text from spoken response text.
+
+#### Scenario: Gateway returns display and speak fields
+- **WHEN** the gateway returns a response with `display` and `speak`
+- **THEN** the overlay records or displays the full `display` text
+- **AND** only speaks the shorter `speak` text when voice replies are enabled
+
+#### Scenario: Gateway returns empty speak text
+- **WHEN** a voice turn starts agent work and returns no `speak` text
+- **THEN** the app displays status without speaking a confirmation

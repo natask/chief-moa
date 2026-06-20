@@ -1,0 +1,54 @@
+plugins {
+    id 'com.android.application'
+}
+
+def envOrDefault(String name, String fallback) {
+    def value = System.getenv(name)
+    return value == null || value.trim().isEmpty() ? fallback : value.trim()
+}
+
+def releaseKeystorePath = envOrDefault('MOA_ANDROID_KEYSTORE_PATH', '')
+def hasReleaseSigning = !releaseKeystorePath.isEmpty()
+
+android {
+    namespace 'ai.moa.assistant'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'ai.moa.assistant'
+        minSdk 26
+        targetSdk 35
+        versionCode envOrDefault('MOA_ANDROID_VERSION_CODE', '1').toInteger()
+        versionName envOrDefault('MOA_ANDROID_VERSION_NAME', '0.1.0')
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseKeystorePath)
+                storePassword envOrDefault('MOA_ANDROID_KEYSTORE_PASSWORD', '')
+                keyAlias envOrDefault('MOA_ANDROID_KEY_ALIAS', '')
+                keyPassword envOrDefault('MOA_ANDROID_KEY_PASSWORD', envOrDefault('MOA_ANDROID_KEYSTORE_PASSWORD', ''))
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}

@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Moa Gateway</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f3;
+      --ink: #171713;
+      --muted: #6b6a62;
+      --line: #d9d7cb;
+      --panel: #ffffff;
+      --panel-soft: #efeee6;
+      --ok: #147a4d;
+      --warn: #9b6700;
+      --bad: #b3261e;
+      --accent: #234fce;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    button, input, textarea, select { font: inherit; }
+    button {
+      border: 1px solid #191915;
+      background: #191915;
+      color: #fff;
+      border-radius: 6px;
+      min-height: 36px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+    button.secondary { background: var(--panel); color: var(--ink); border-color: var(--line); }
+    button.danger { background: var(--bad); border-color: var(--bad); }
+    button:disabled { opacity: .55; cursor: default; }
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 6px;
+      padding: 9px 10px;
+      outline: none;
+    }
+    textarea { min-height: 150px; resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+    label { display: block; color: var(--muted); font-size: 12px; font-weight: 700; margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+    code { font-family: var(--mono); font-size: 12px; }
+
+    .shell { max-width: 1240px; margin: 0 auto; padding: 22px; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 0 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, #171713 0 46%, transparent 46%),
+        linear-gradient(135deg, transparent 54%, #234fce 54% 100%),
+        #d7f0df;
+      border: 1px solid #171713;
+      flex: 0 0 auto;
+    }
+    h1 { margin: 0; font-size: 20px; line-height: 1.1; letter-spacing: 0; }
+    .sub { color: var(--muted); margin-top: 3px; font-size: 13px; }
+    .statusline { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 6px 10px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--muted); }
+    .dot.ok { background: var(--ok); }
+    .dot.warn { background: var(--warn); }
+    .dot.bad { background: var(--bad); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+      align-items: start;
+    }
+    .stack { display: grid; gap: 14px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+    h2 { margin: 0; font-size: 13px; letter-spacing: .02em; text-transform: uppercase; }
+    .panel-body { padding: 14px; }
+    .fields { display: grid; gap: 12px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .metric { display: grid; grid-template-columns: 118px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid #ededE6; }
+    .metric:last-child { border-bottom: 0; }
+    .key { color: var(--muted); }
+    .value { min-width: 0; overflow-wrap: anywhere; }
+    .list { display: grid; gap: 8px; }
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fff;
+      min-width: 0;
+    }
+    .item-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+    .item-title { font-weight: 700; overflow-wrap: anywhere; }
+    .item-meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .status { color: var(--muted); font-size: 12px; min-height: 18px; margin-top: 8px; }
+    .status.ok { color: var(--ok); }
+    .status.warn { color: var(--warn); }
+    .status.bad { color: var(--bad); }
+    .empty { color: var(--muted); padding: 12px; border: 1px dashed var(--line); border-radius: 6px; background: #fff; }
+    .mono { font-family: var(--mono); font-size: 12px; }
+    .command { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+
+    @media (max-width: 860px) {
+      .shell { padding: 14px; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .statusline { justify-content: flex-start; }
+      .grid { grid-template-columns: 1fr; }
+      .row { grid-template-columns: 1fr; }
+      .command { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true"></div>
+        <div>
+          <h1>Moa Gateway</h1>
+          <div class="sub" id="originLabel"></div>
+        </div>
+      </div>
+      <div class="statusline">
+        <span class="pill"><span class="dot" id="healthDot"></span><span id="healthLabel">Checking</span></span>
+        <span class="pill"><span class="dot" id="tokenDot"></span><span id="tokenLabel">Token unset</span></span>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="stack">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Connection</h2>
+            <button class="secondary" id="refreshAll">Refresh</button>
+          </div>
+          <div class="panel-body">
+            <div class="fields">
+              <div>
+                <label for="token">Gateway token</label>
+                <input id="token" type="password" autocomplete="off" placeholder="Bearer token" />
+              </div>
+              <div class="actions">
+                <button id="saveToken">Save token</button>
+                <button class="secondary" id="clearToken">Clear</button>
+              </div>
+              <div class="status" id="connectionStatus"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Runtime</h2></div>
+          <div class="panel-body" id="healthBody">
+            <div class="empty">Waiting for gateway health.</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Prompt History</h2>
+            <button class="secondary" id="refreshHistory">Refresh</button>
+          </div>
+          <div class="panel-body">
+            <div class="list" id="historyList"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stack">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Agent Profile</h2>
+            <span class="pill"><span class="dot" id="profileDot"></span><span id="profileState">Unknown</span></span>
+          </div>
+          <div class="panel-body">
+            <div class="fields">
+              <div>
+                <label for="systemPrompt">System prompt</label>
+                <textarea id="systemPrompt" spellcheck="false"></textarea>
+              </div>
+              <div class="row">
+                <div>
+                  <label for="model">Model</label>
+                  <input id="model" type="text" />
+                </div>
+                <div>
+                  <label for="voice">Voice</label>
+                  <input id="voice" type="text" />
+                </div>
+              </div>
+              <div class="row">
+                <div>
+                  <label for="temperature">Temperature</label>
+                  <input id="temperature" type="number" min="0" max="2" step="0.1" />
+                </div>
+                <div>
+                  <label for="voiceMaxChars">Spoken max characters</label>
+                  <input id="voiceMaxChars" type="number" min="1" step="1" />
+                </div>
+              </div>
+              <div>
+                <label for="language">Language</label>
+                <input id="language" type="text" />
+              </div>
+              <div>
+                <label for="profileCommand">Plain-language profile change</label>
+                <div class="command">
+                  <input id="profileCommand" type="text" placeholder='set the system prompt to ..., be terser, reply in Spanish' />
+                  <button id="applyCommand">Apply</button>
+                </div>
+              </div>
+              <div class="actions">
+                <button id="saveProfile">Save profile</button>
+                <button class="secondary" id="reloadProfile">Reload</button>
+                <button class="danger" id="resetProfile">Reset</button>
+              </div>
+              <div class="status" id="profileStatus"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Sessions</h2>
+              <button class="secondary" id="refreshSessions">Refresh</button>
+            </div>
+            <div class="panel-body"><div class="list" id="sessionsList"></div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Agent Runs</h2>
+              <button class="secondary" id="refreshRuns">Refresh</button>
+            </div>
+            <div class="panel-body"><div class="list" id="runsList"></div></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const TOKEN_KEY = "moa.gateway.token";
+    const $ = (id) => document.getElementById(id);
+    const state = { health: null, profile: null };
+
+    $("originLabel").textContent = location.origin;
+    $("token").value = localStorage.getItem(TOKEN_KEY) || "";
+
+    function token() {
+      return $("token").value.trim();
+    }
+
+    function setDot(id, kind) {
+      const dot = $(id);
+      dot.className = `dot ${kind || ""}`.trim();
+    }
+
+    function setStatus(id, text, kind) {
+      const el = $(id);
+      el.textContent = text || "";
+      el.className = `status ${kind || ""}`.trim();
+    }
+
+    function authHeaders(withBody = false) {
+      const headers = {};
+      if (withBody) headers["content-type"] = "application/json";
+      if (token()) headers.authorization = `Bearer ${token()}`;
+      return headers;
+    }
+
+    async function request(path, options = {}) {
+      const resp = await fetch(path, {
+        method: options.method || "GET",
+        headers: authHeaders(options.body !== undefined),
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      });
+      const text = await resp.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text }; }
+      if (!resp.ok) {
+        const error = new Error(data.error || `HTTP ${resp.status}`);
+        error.status = resp.status;
+        throw error;
+      }
+      return data;
+    }
+
+    function renderHealth(data) {
+      state.health = data;
+      setDot("healthDot", data.ok ? "ok" : "bad");
+      $("healthLabel").textContent = data.ok ? "Gateway online" : "Gateway issue";
+      const voice = data.voice_stream && data.voice_stream.provider ? data.voice_stream.provider : {};
+      const harnesses = Array.isArray(data.agent_loop && data.agent_loop.harnesses)
+        ? data.agent_loop.harnesses
+        : [];
+      $("healthBody").innerHTML = [
+        metric("Provider", `${data.provider || ""} / ${data.model || ""}`),
+        metric("Voice", `${voice.provider || "unknown"} / ${voice.model || ""}`),
+        metric("Voice auth", voice.auth || "unknown"),
+        metric("Default harness", (data.agent_loop && data.agent_loop.default_harness) || "unknown"),
+        metric("Harnesses", harnesses.map((h) => `${h.name}:${h.available ? "up" : "down"}`).join(", ") || "none"),
+        metric("Brain", data.brain && data.brain.available ? "available" : "unavailable"),
+      ].join("");
+    }
+
+    function metric(key, value) {
+      return `<div class="metric"><div class="key">${escapeHtml(key)}</div><div class="value">${escapeHtml(value || "")}</div></div>`;
+    }
+
+    async function loadHealth() {
+      try {
+        renderHealth(await request("/health"));
+      } catch (error) {
+        setDot("healthDot", "bad");
+        $("healthLabel").textContent = "Gateway offline";
+        $("healthBody").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderProfile(data) {
+      state.profile = data.profile || {};
+      $("systemPrompt").value = state.profile.system_prompt || "";
+      $("model").value = state.profile.model || "";
+      $("temperature").value = state.profile.temperature ?? "";
+      $("voiceMaxChars").value = state.profile.voice_max_chars ?? "";
+      $("language").value = state.profile.language || "";
+      $("voice").value = state.profile.voice || "";
+      setDot("profileDot", data.is_overridden ? "warn" : "ok");
+      $("profileState").textContent = data.is_overridden ? "Customized" : "Defaults";
+    }
+
+    async function loadProfile() {
+      try {
+        renderProfile(await request("/v1/agent/profile"));
+        setStatus("profileStatus", "Profile loaded.", "ok");
+      } catch (error) {
+        authFailure(error, "profileStatus");
+      }
+    }
+
+    function profilePatchFromForm() {
+      const patch = {};
+      if ($("systemPrompt").value.trim()) patch.system_prompt = $("systemPrompt").value.trim();
+      if ($("model").value.trim()) patch.model = $("model").value.trim();
+      if ($("temperature").value !== "") patch.temperature = Number($("temperature").value);
+      if ($("voiceMaxChars").value !== "") patch.voice_max_chars = Number($("voiceMaxChars").value);
+      if ($("language").value.trim()) patch.language = $("language").value.trim();
+      if ($("voice").value.trim()) patch.voice = $("voice").value.trim();
+      return patch;
+    }
+
+    async function saveProfile(patch, source = "gateway-ui") {
+      if (!Object.keys(patch).length) {
+        setStatus("profileStatus", "Nothing to save.", "warn");
+        return;
+      }
+      try {
+        const data = await request("/v1/agent/profile", { method: "PUT", body: { profile: patch, source } });
+        renderProfile(data);
+        setStatus("profileStatus", "Profile saved. New turns use it immediately.", "ok");
+        await loadHistory();
+      } catch (error) {
+        authFailure(error, "profileStatus");
+      }
+    }
+
+    function patchFromCommand(text) {
+      const raw = String(text || "").trim();
+      const lower = raw.toLowerCase();
+      if (!raw) return null;
+      let match = raw.match(/^(?:set|change|update)\s+(?:the\s+)?system prompt\s+(?:to|as)\s+([\s\S]+)$/i)
+        || raw.match(/^system prompt:\s*([\s\S]+)$/i);
+      if (match) return { patch: { system_prompt: match[1].trim() }, summary: "system prompt" };
+      match = raw.match(/^(?:use|set|change)\s+(?:model|the model)\s+(?:to\s+)?([A-Za-z0-9._:/-]+)$/i);
+      if (match) return { patch: { model: match[1].trim() }, summary: "model" };
+      match = raw.match(/temperature\s+(?:to\s+)?([0-2](?:\.\d+)?)$/i);
+      if (match) return { patch: { temperature: Number(match[1]) }, summary: "temperature" };
+      match = raw.match(/(?:reply|speak|answer)\s+in\s+([A-Za-z][A-Za-z -]{1,38})$/i);
+      if (match) return { patch: { language: match[1].trim() }, summary: "language" };
+      match = raw.match(/(?:voice|max|spoken).{0,24}?(\d{2,4})\s*(?:chars|characters)?$/i);
+      if (match) return { patch: { voice_max_chars: Number(match[1]) }, summary: "spoken length" };
+      if (lower.includes("be terser") || lower.includes("be shorter") || lower.includes("keep it shorter")) {
+        const current = Number(state.profile && state.profile.voice_max_chars) || 280;
+        return { patch: { voice_max_chars: Math.max(60, Math.round(current / 2)) }, summary: "spoken length" };
+      }
+      return null;
+    }
+
+    async function resetProfile() {
+      try {
+        renderProfile(await request("/v1/agent/profile/reset", { method: "POST" }));
+        setStatus("profileStatus", "Profile reset to gateway defaults.", "ok");
+        await loadHistory();
+      } catch (error) {
+        authFailure(error, "profileStatus");
+      }
+    }
+
+    async function loadHistory() {
+      try {
+        const data = await request("/v1/agent/profile/history?system_prompt_only=1&limit=8");
+        const entries = Array.isArray(data.history) ? data.history : [];
+        $("historyList").innerHTML = entries.length ? entries.map((entry) => item(
+          entry.system_prompt || "Prompt update",
+          `${entry.ts || ""} - ${entry.source || "unknown"}`
+        )).join("") : `<div class="empty">No prompt changes recorded.</div>`;
+      } catch (error) {
+        authFailure(error, "historyList", true);
+      }
+    }
+
+    async function loadSessions() {
+      try {
+        const data = await request("/v1/sessions?limit=10");
+        const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+        $("sessionsList").innerHTML = sessions.length ? sessions.map((session) => item(
+          session.session_id || "session",
+          `${session.turn_count || 0} turns - ${session.updated_at || ""}<br>${escapeHtml(session.last_transcript || session.last_reply || "")}`
+        )).join("") : `<div class="empty">No sessions yet.</div>`;
+      } catch (error) {
+        authFailure(error, "sessionsList", true);
+      }
+    }
+
+    async function loadRuns() {
+      try {
+        const data = await request("/v1/agent/runs?limit=10");
+        const runs = Array.isArray(data.runs) ? data.runs : [];
+        $("runsList").innerHTML = runs.length ? runs.map((run) => item(
+          `${run.harness || "run"} - ${run.status || "unknown"}`,
+          `${run.id || ""}<br>${escapeHtml(run.summary || run.output || run.error || run.prompt || "")}`
+        )).join("") : `<div class="empty">No agent runs yet.</div>`;
+      } catch (error) {
+        authFailure(error, "runsList", true);
+      }
+    }
+
+    function item(title, meta) {
+      return `<div class="item"><div class="item-top"><div class="item-title">${escapeHtml(title)}</div></div><div class="item-meta">${meta}</div></div>`;
+    }
+
+    function authFailure(error, targetId, block) {
+      if (error.status === 401) {
+        setDot("tokenDot", "bad");
+        $("tokenLabel").textContent = "Token required";
+        if (block) $(targetId).innerHTML = `<div class="empty">Token required.</div>`;
+        else setStatus(targetId, "Token required or rejected.", "bad");
+        return;
+      }
+      if (block) $(targetId).innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      else setStatus(targetId, error.message, "bad");
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function loadProtected() {
+      setDot("tokenDot", token() ? "ok" : "warn");
+      $("tokenLabel").textContent = token() ? "Token set" : "Token unset";
+      await Promise.allSettled([loadProfile(), loadHistory(), loadSessions(), loadRuns()]);
+    }
+
+    async function refreshAll() {
+      await loadHealth();
+      await loadProtected();
+    }
+
+    $("saveToken").addEventListener("click", async () => {
+      localStorage.setItem(TOKEN_KEY, token());
+      setStatus("connectionStatus", "Token saved in this browser.", "ok");
+      await loadProtected();
+    });
+    $("clearToken").addEventListener("click", async () => {
+      $("token").value = "";
+      localStorage.removeItem(TOKEN_KEY);
+      setStatus("connectionStatus", "Token cleared.", "warn");
+      await loadProtected();
+    });
+    $("refreshAll").addEventListener("click", refreshAll);
+    $("reloadProfile").addEventListener("click", loadProfile);
+    $("saveProfile").addEventListener("click", () => saveProfile(profilePatchFromForm()));
+    $("resetProfile").addEventListener("click", resetProfile);
+    $("refreshHistory").addEventListener("click", loadHistory);
+    $("refreshSessions").addEventListener("click", loadSessions);
+    $("refreshRuns").addEventListener("click", loadRuns);
+    $("applyCommand").addEventListener("click", () => {
+      const parsed = patchFromCommand($("profileCommand").value);
+      if (!parsed) {
+        setStatus("profileStatus", "Could not parse that profile change.", "warn");
+        return;
+      }
+      $("profileCommand").value = "";
+      saveProfile(parsed.patch, `gateway-ui:${parsed.summary}`);
+    });
+    $("profileCommand").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        $("applyCommand").click();
+      }
+    });
+
+    refreshAll();
+    setInterval(loadHealth, 15000);
+  </script>
+</body>
+</html>

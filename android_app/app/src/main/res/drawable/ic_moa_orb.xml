@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MOA overlay orb: brand badge with a moa silhouette (extinct NZ ratite:
+     tiny head + short beak, long high neck carried forward, heavy egg body,
+     two thick legs, no wings). Greens/teal brand palette. 108x108 viewport
+     kept so existing layout/load code (OverlayService, OrbView, MainActivity)
+     works. Bird built from simple primitives: stroked neck + legs, egg body,
+     head circle, short beak triangle, gold eye. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- orb badge: filled rounded background so it reads on any screen -->
+    <path
+        android:fillColor="#0B1712"
+        android:pathData="M27,2h54a25,25 0,0 1,25 25v54a25,25 0,0 1,-25 25H27A25,25 0,0 1,2 81V27A25,25 0,0 1,27 2z" />
+    <!-- dark inner field -->
+    <path
+        android:fillColor="#0F231C"
+        android:pathData="M54,16a38,38 0,1 0,0.1 0z" />
+    <!-- teal ring -->
+    <path
+        android:strokeColor="#61E5C6"
+        android:strokeWidth="3.5"
+        android:pathData="M54,12.5a41.5,41.5 0,1 0,0.1 0z" />
+    <!-- moa legs: two thick sturdy legs -->
+    <path
+        android:strokeColor="#61E5C6"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M49,78 L45.5,91" />
+    <path
+        android:strokeColor="#61E5C6"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M63,78 L66.5,91" />
+    <!-- moa neck: thick, rises from shoulder, carried high and slightly forward -->
+    <path
+        android:strokeColor="#61E5C6"
+        android:strokeWidth="9.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M49,62 C41,50 40,34 46,25" />
+    <!-- egg body: taller than wide -->
+    <path
+        android:fillColor="#61E5C6"
+        android:pathData="M57,42a20,23 0,1 0,0.1 0z" />
+    <!-- tiny head -->
+    <path
+        android:fillColor="#61E5C6"
+        android:pathData="M45,16.5a6.5,6.5 0,1 0,0.1 0z" />
+    <!-- short beak: small blunt triangle pointing forward -->
+    <path
+        android:fillColor="#61E5C6"
+        android:pathData="M39.5,21 L31,23 L39.5,26.5 Z" />
+    <!-- gold eye accent -->
+    <path
+        android:fillColor="#F4D35E"
+        android:pathData="M44,20a2,2 0,1 0,0.1 0z" />
+</vector>
