@@ -17,7 +17,7 @@ leave artifacts that another agent can resume.
 3. Write or update an OpenSpec change.
    - Use OpenSpec for product behavior, APIs, data contracts, and staged tasks.
    - Keep the active product map in
-     `openspec/changes/define-android-core-product-map` until it is archived.
+     `reference/openspec/changes/define-android-core-product-map` until it is archived.
 
 4. Convert the plan into tickets.
    - One ticket is one observable outcome.
@@ -36,6 +36,9 @@ leave artifacts that another agent can resume.
    - Run the narrowest real command that proves the ticket.
    - If verification fails, make the failure visible instead of silently changing
      the plan.
+   - For implementation changes, deploy the committed target after verification:
+     `bash scripts/deploy.sh auto` from the repo root, or the explicit
+     `gateway`, `android`, or `extension` target when only one surface changed.
 
 7. Update the architecture only when it changes.
    - Do not let implementation invent hidden behavior.
@@ -85,4 +88,3 @@ The active implementation path is still the Android core product map:
 4. Add local phone action approvals and receipts.
 5. Build the full-app control center around sessions, runs, approvals, and
    settings.
-

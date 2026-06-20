@@ -94,6 +94,21 @@ Manual reload proof:
    reload icon, and the localhost demo tab refreshes after the extension
    restarts.
 
+Local deployment for an already-loaded unpacked extension:
+
+```sh
+npm run verify
+npm run smoke
+npm run package
+npm run deploy:browser
+```
+
+`deploy:browser` briefly serves the same dev-reload endpoint used by the manual
+bridge. If the unpacked extension has auto-reload enabled from `dev.html`, your
+daily browser reloads the extension from this checkout. If auto-reload has not
+been enabled, the package is still produced under `dist/`, but the browser needs
+the one-time `dev.html` toggle above or a manual `chrome://extensions` reload.
+
 ## Verify it
 
 Run:

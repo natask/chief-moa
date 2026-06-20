@@ -225,37 +225,62 @@ resumable workflows and queues.
 
 ## Source Map
 
-- `software/android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
   setup/full-app entry surface.
-- `software/android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
   floating orb, transcript, voice loop, chat panel, TTS, and gateway calls.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:
   Android client for gateway endpoints.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
   local routing for screen context and local action commands.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
   accessibility-backed screen context and visible UI operations.
-- `software/moa_gateway/server.js`: HTTP API, voice router, model calls,
+- `gateway/server.js`: HTTP API, voice router, model calls,
   conversation storage, and agent-run execution.
-- `software/moa_gateway/public/gateway-ui.html`: gateway-served browser control
+- `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
-- `software/moa_gateway/lib/voice-intent.js`: pure voice-turn classifier
+- `gateway/lib/voice-intent.js`: pure voice-turn classifier
   (chat / agent_run / multi_agent / control), unit-tested in
   `scripts/smoke-voice-intent.js`.
-- `software/moa_gateway/lib/voice-session-server.js`: WebSocket PCM voice
+- `gateway/lib/voice-session-server.js`: WebSocket PCM voice
   transport, turn storage, transcript events, and assistant audio events.
-- `software/moa_gateway/lib/voice-providers.js`: Swappable streaming voice
+- `gateway/lib/voice-providers.js`: Swappable streaming voice
   provider package boundary, currently loopback and Gemini Live.
-- `software/android_app/deploy/ota`: Android APK OTA artifact build and
+- `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
-- `software/browser_extension/extension`: thin browser client for command,
+- `browser_extension/extension`: thin browser client for command,
   voice, page context, settings, and engine-routed browser actions.
-- `.github/workflows/android-ota.yml`: commit-triggered Android OTA artifact
-  build and main-machine deploy.
-- `openspec/changes/define-android-core-product-map`: current product map,
+- `scripts/deploy.sh`: shared deploy entrypoint for gateway, Android OTA,
+  browser extension, and committed-change auto-deploy.
+- `reference/openspec/changes/define-android-core-product-map`: current product map,
   capability specs, staged tasks, and acceptance criteria.
-- `openspec/changes/thin-client-gateway-architecture`: browser extension
+- `reference/openspec/changes/thin-client-gateway-architecture`: browser extension
   thin-client / persistent-engine decision record.
+
+## Deployment Finish Loop
+
+Agents must treat deployment as part of completion for deployable surfaces:
+
+```text
+verify changed surface
+  -> fix failures
+  -> commit the unit
+  -> deploy the changed target
+  -> smoke-check the deployed target
+  -> record any blocker
+```
+
+`scripts/deploy.sh auto` is the repo-level hook target. It deploys only committed
+gateway, Android, and browser-extension changes since each target's last
+successful deploy marker, and skips dirty target files so uncommitted work is not
+published. Explicit deploy targets remain available when a human or agent needs
+one surface: `gateway`, `android`, `extension`, or `all`.
+
+Browser-extension deployment has two parts. The package step creates the Chrome
+Web Store upload artifact under `browser_extension/dist/`. The local-browser step
+serves a short dev-reload signal for an already-loaded unpacked extension; the
+extension reloads in the user's browser only if the dev auto-reload bridge has
+been enabled from `extension/dev.html`.
 
 ## Architecture Rules
 
@@ -277,9 +302,11 @@ resumable workflows and queues.
 
 Use the smallest real check that covers the changed surface:
 
-- Android compile: `cd software/android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
-- Gateway syntax: `cd software/moa_gateway && npm run check`
+- Android compile: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- Gateway syntax: `cd gateway && npm run check`
+- Browser extension: `cd browser_extension && npm run verify && npm run smoke`
 - Gateway smoke: `GET /health`, `POST /v1/voice/turns`, `GET /v1/agent/runs`
-- Product/spec check: `openspec validate define-android-core-product-map --strict`
+- Product/spec check: inspect `reference/openspec/changes/<change>` and run the
+  matching OpenSpec validation if the CLI has been initialized for this checkout.
 - Manual phone QA: hold orb to speak / release to send, tap to type, transcript
   display, agent run start/status, and local action approval behavior.

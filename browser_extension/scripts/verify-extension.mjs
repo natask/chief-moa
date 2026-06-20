@@ -24,6 +24,7 @@ const requiredFiles = [
   "scripts/dev-extension.mjs",
   "scripts/doctor.mjs",
   "scripts/chrome-for-testing.mjs",
+  "scripts/poke-dev-reload.mjs",
   "scripts/smoke-gateway.mjs",
   "scripts/smoke-settings.mjs",
 ];
@@ -60,6 +61,7 @@ for (const file of [
   "extension/dev.js",
   "scripts/dev-extension.mjs",
   "scripts/doctor.mjs",
+  "scripts/poke-dev-reload.mjs",
   "scripts/smoke-extension.mjs",
   "scripts/smoke-tweaks.mjs",
   "scripts/smoke-gateway.mjs",

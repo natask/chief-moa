@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
-# One deploy entrypoint for chief-moa. Default target is the gateway: it is the
-# only live server, so "whenever you change something it gets deployed" means
-# pushing gateway code to the main machine and restarting it.
+# One deploy entrypoint for chief-moa.
 #
-# Drift-aware: it compares local gateway files against the deployed copy and
-# only rsyncs + restarts when they differ, so it is a cheap no-op when nothing
-# changed. Safe to run on every Stop hook.
+# Agents should verify, commit, then deploy. The `auto` target is hook-safe: it
+# looks only at committed target changes since the last successful target deploy
+# and refuses to deploy dirty target files.
 #
 # Usage:
+#   scripts/deploy.sh auto       # deploy committed changed targets
 #   scripts/deploy.sh            # gateway, only if it drifted
-#   scripts/deploy.sh gateway    # same
+#   scripts/deploy.sh gateway    # gateway, only if it drifted
 #   scripts/deploy.sh --force    # gateway, deploy even with no detected drift
 #   scripts/deploy.sh android    # rebuild + sync the Android OTA artifact
-#   scripts/deploy.sh extension  # package the Chrome extension for CWS upload
-#   scripts/deploy.sh all        # gateway (if drifted) + android OTA + extension package
+#   scripts/deploy.sh extension  # verify + package + poke loaded browser reload
+#   scripts/deploy.sh all        # gateway + android OTA + extension deployment
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="${REMOTE:-reclaim@10.147.17.10}"
 REMOTE_GW_DIR="${REMOTE_GW_DIR:-/home/reclaim-ethiopia/moa-assistant/software/moa_gateway}"
-# Files whose change must reach the running gateway. Cheap to hash, covers the
-# server, all lib modules, and the served UI.
+GATEWAY_URL="${GATEWAY_URL:-http://10.147.17.10:8788}"
 log() { printf '[deploy] %s\n' "$*"; }
 
 gateway_drifted() {
@@ -35,7 +33,9 @@ gateway_drifted() {
       "$ROOT_DIR/gateway/package-lock.json" \
       "$REMOTE:$REMOTE_GW_DIR/" 2>/dev/null
     rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/lib/"    "$REMOTE:$REMOTE_GW_DIR/lib/"    2>/dev/null
+    rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/scripts/" "$REMOTE:$REMOTE_GW_DIR/scripts/" 2>/dev/null
     rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/public/" "$REMOTE:$REMOTE_GW_DIR/public/" 2>/dev/null
+    rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/deploy/main-machine/" "$REMOTE:$REMOTE_GW_DIR/deploy/main-machine/" 2>/dev/null
   )" || return 0
   printf '%s\n' "$out" | grep -qvE '(^$|/$)'
 }
@@ -60,18 +60,202 @@ deploy_android() {
   log "android: building + syncing OTA artifact"
   ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
     bash "$ROOT_DIR/android_app/deploy/ota/sync-main-machine.sh"
+  if curl -fsS "$GATEWAY_URL/health" >/dev/null 2>&1; then
+    log "android: gateway health smoke passed at $GATEWAY_URL"
+  else
+    log "android: gateway health smoke skipped or failed at $GATEWAY_URL"
+  fi
+  if [ -n "${MOA_GATEWAY_TOKEN:-}" ]; then
+    curl -fsS -H "Authorization: Bearer $MOA_GATEWAY_TOKEN" \
+      "$GATEWAY_URL/v1/android/updates/latest" >/dev/null
+    log "android: OTA metadata endpoint smoke passed"
+  else
+    log "android: OTA metadata endpoint smoke blocked (MOA_GATEWAY_TOKEN unset)"
+  fi
 }
 
 deploy_extension() {
-  log "extension: packaging Chrome extension for CWS upload"
-  (cd "$ROOT_DIR/browser_extension" && npm run package)
+  log "extension: verifying, smoke testing, packaging, and poking loaded browser reload"
+  (
+    cd "$ROOT_DIR/browser_extension"
+    npm run verify
+    npm run smoke
+    npm run package
+    npm run deploy:browser
+  )
+}
+
+git_head() {
+  git -C "$ROOT_DIR" rev-parse --verify HEAD 2>/dev/null
+}
+
+deploy_state_dir() {
+  local git_dir
+  git_dir="$(git -C "$ROOT_DIR" rev-parse --git-dir 2>/dev/null)" || return 1
+  case "$git_dir" in
+    /*) printf '%s/chief-moa-deploy\n' "$git_dir" ;;
+    *) printf '%s/%s/chief-moa-deploy\n' "$ROOT_DIR" "$git_dir" ;;
+  esac
+}
+
+target_patterns() {
+  case "$1" in
+    android)
+      printf '%s\n' \
+        "android_app/app/" \
+        "android_app/build.gradle" \
+        "android_app/settings.gradle" \
+        "android_app/gradle/" \
+        "android_app/gradlew" \
+        "android_app/deploy/ota/"
+      ;;
+    extension)
+      printf '%s\n' \
+        "browser_extension/extension/" \
+        "browser_extension/fixtures/" \
+        "browser_extension/scripts/" \
+        "browser_extension/package.json" \
+        "browser_extension/pnpm-lock.yaml"
+      ;;
+    gateway)
+      printf '%s\n' \
+        "gateway/server.js" \
+        "gateway/lib/" \
+        "gateway/public/" \
+        "gateway/scripts/" \
+        "gateway/deploy/main-machine/" \
+        "gateway/schema.sql" \
+        "gateway/package.json" \
+        "gateway/package-lock.json"
+      ;;
+  esac
+}
+
+path_matches_target() {
+  local target="$1"
+  local path="$2"
+  local pattern
+  while IFS= read -r pattern; do
+    if [[ "$pattern" == */ ]]; then
+      [[ "$path" == "$pattern"* ]] && return 0
+    else
+      [[ "$path" == "$pattern" ]] && return 0
+    fi
+  done < <(target_patterns "$target")
+  return 1
+}
+
+target_has_path() {
+  local target="$1"
+  local path
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    path_matches_target "$target" "$path" && return 0
+  done
+  return 1
+}
+
+changed_paths_since_deploy() {
+  local target="$1"
+  local head
+  local state_dir
+  local marker
+  local base=""
+
+  head="$(git_head)" || return 1
+  state_dir="$(deploy_state_dir)" || return 1
+  marker="$state_dir/$target.sha"
+
+  if [ -f "$marker" ]; then
+    base="$(tr -d '[:space:]' < "$marker")"
+    if ! git -C "$ROOT_DIR" cat-file -e "$base^{commit}" 2>/dev/null; then
+      base=""
+    fi
+  fi
+
+  if [ -z "$base" ]; then
+    base="$(git -C "$ROOT_DIR" rev-parse --verify HEAD^ 2>/dev/null || true)"
+  fi
+
+  if [ -n "$base" ]; then
+    [ "$base" = "$head" ] && return 0
+    git -C "$ROOT_DIR" diff --name-only "$base..$head"
+  else
+    git -C "$ROOT_DIR" ls-files
+  fi
+}
+
+target_has_committed_changes() {
+  local target="$1"
+  changed_paths_since_deploy "$target" | target_has_path "$target"
+}
+
+target_has_dirty_changes() {
+  local target="$1"
+  local paths
+  paths="$(git -C "$ROOT_DIR" diff --name-only; git -C "$ROOT_DIR" diff --cached --name-only)"
+  printf '%s\n' "$paths" | target_has_path "$target"
+}
+
+mark_deployed() {
+  local target="$1"
+  local head
+  local state_dir
+  head="$(git_head)" || return 0
+  state_dir="$(deploy_state_dir)" || return 0
+  mkdir -p "$state_dir"
+  printf '%s\n' "$head" > "$state_dir/$target.sha"
+}
+
+deploy_target() {
+  case "$1" in
+    gateway) deploy_gateway ;;
+    android) deploy_android ;;
+    extension) deploy_extension ;;
+  esac
+}
+
+deploy_auto() {
+  local target
+  local dirty_targets=""
+  local changed_targets=""
+  local did_deploy=0
+
+  if ! git_head >/dev/null; then
+    log "auto: not in a git worktree with commits; skipping"
+    return 0
+  fi
+
+  for target in gateway android extension; do
+    if target_has_dirty_changes "$target"; then
+      dirty_targets="$dirty_targets $target"
+    elif target_has_committed_changes "$target"; then
+      changed_targets="$changed_targets $target"
+    fi
+  done
+
+  if [ -n "$dirty_targets" ]; then
+    log "auto: uncommitted target changes present:$dirty_targets"
+    log "auto: skipping dirty targets; verify and commit before deployment"
+  fi
+
+  for target in $changed_targets; do
+    deploy_target "$target"
+    mark_deployed "$target"
+    did_deploy=1
+  done
+
+  if [ "$did_deploy" -eq 0 ]; then
+    log "auto: no committed target changes to deploy"
+  fi
 }
 
 case "${1:-gateway}" in
-  gateway|"")        deploy_gateway ;;
-  --force)           deploy_gateway --force ;;
-  android)           deploy_android ;;
-  extension)         deploy_extension ;;
-  all)               deploy_gateway; deploy_android; deploy_extension ;;
-  *) echo "usage: deploy.sh [gateway|--force|android|extension|all]" >&2; exit 2 ;;
+  auto)              deploy_auto ;;
+  gateway|"")        deploy_gateway; mark_deployed gateway ;;
+  --force)           deploy_gateway --force; mark_deployed gateway ;;
+  android)           deploy_android; mark_deployed android ;;
+  extension)         deploy_extension; mark_deployed extension ;;
+  all)               deploy_gateway; mark_deployed gateway; deploy_android; mark_deployed android; deploy_extension; mark_deployed extension ;;
+  *) echo "usage: deploy.sh [auto|gateway|--force|android|extension|all]" >&2; exit 2 ;;
 esac

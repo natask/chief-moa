@@ -54,6 +54,12 @@ cd browser_extension
 npm run verify
 ```
 
+Browser extension local deploy:
+
+```sh
+bash scripts/deploy.sh extension
+```
+
 Android OTA artifact:
 
 ```sh
@@ -64,4 +70,10 @@ Main-machine Android OTA sync:
 
 ```sh
 android_app/deploy/ota/sync-main-machine.sh
+```
+
+Auto-deploy committed target changes:
+
+```sh
+bash scripts/deploy.sh auto
 ```
