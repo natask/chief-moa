@@ -54,6 +54,14 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) for every commi
 (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, …). Commit per unit of
 work, not in one lump.
 
+Completed code, spec, workflow, or verification changes must not be left as an
+uncommitted working tree. Before ending a task, either commit the completed unit
+with a Conventional Commit or explicitly record why it could not be committed.
+When the user asks to deploy, publish, or put changes "onto Git", push the
+committed branch to the configured remote after verification. If the worktree
+contains unrelated user changes, isolate the intended paths into the commit and
+leave unrelated files untouched.
+
 `CHANGELOG.md` (repo root) follows [Keep a Changelog](https://keepachangelog.com/)
 and is **generated from the commit history** with `git-cliff` — do not hand-edit
 it. Regenerate with `git-cliff --unreleased --prepend CHANGELOG.md`. It lists
