@@ -34,6 +34,8 @@ for (const file of requiredFiles) {
 }
 
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
+const backgroundSource = readFileSync("extension/background.js", "utf8");
+const contentSource = readFileSync("extension/content.js", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms"];
 
 if (manifest.manifest_version !== 3) {
@@ -48,6 +50,18 @@ for (const permission of requiredPermissions) {
 
 if (!manifest.commands?.["toggle-agee"]) {
   throw new Error("missing toggle-agee command");
+}
+
+if (backgroundSource.includes('import "./dev-reload.js"')) {
+  throw new Error("background.js must not import the stale always-on dev reload loop");
+}
+
+if (/new\s+WebSocket\s*\(/.test(contentSource)) {
+  throw new Error("content scripts must not open gateway WebSockets; background.js owns voice transport to avoid HTTPS mixed-content blocking");
+}
+
+if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
+  throw new Error("background.js must expose the voiceSessionStart proxy command");
 }
 
 for (const file of [
