@@ -18,6 +18,24 @@ gateway `/v1/voice/turns` endpoint.
 - **WHEN** the user opens the overlay via Cmd+K and submits a command with a gateway configured
 - **THEN** the reply rendered in the overlay originates from `/v1/voice/turns`
 
+### Requirement: Browser surface is not visible chat history
+The extension SHALL present a one-current-intent surface rather than a visible
+chat transcript. Typed replies SHALL replace the user's typed intent in the same
+field. Durable turn history SHALL remain gateway-owned context and SHALL be
+retrieved only when the user asks for it through an intent.
+
+#### Scenario: Typed reply replaces the intent field
+- **WHEN** the user opens the text surface with Cmd+K and submits an intent
+- **THEN** the visible surface shows only the current field/result
+- **AND** the assistant reply or error replaces the typed text instead of
+  appending a visible chat row
+
+#### Scenario: Voice remains icon-first
+- **WHEN** the user starts a browser voice turn with Cmd+.
+- **THEN** the extension indicates listening/thinking/speaking through the Moa
+  mark state
+- **AND** it does not open a transcript or chat-history panel by default
+
 ### Requirement: Describe round trip through gateway
 The extension SHALL render page descriptions that originate from the configured
 gateway `/v1/chat` endpoint.
@@ -33,3 +51,21 @@ user rather than failing silently.
 #### Scenario: Unreachable or unauthorized gateway
 - **WHEN** the gateway is unreachable or rejects the token
 - **THEN** a clear error message renders in the overlay
+
+### Requirement: Browser voice uses gateway streaming voice
+The extension SHALL route browser voice through the configured gateway streaming
+voice protocol and SHALL NOT use browser-native speech recognition or browser
+text-to-speech as the production voice path.
+
+#### Scenario: Browser voice session ticket
+- **WHEN** the extension has a configured gateway URL and token
+- **THEN** it can mint a short-lived `/v1/voice/sessions` ticket from the gateway
+- **AND** use that ticket for a browser WebSocket connection without exposing the
+  long-lived gateway token in the WebSocket URL
+
+#### Scenario: Browser microphone audio reaches the gateway voice provider
+- **WHEN** the user starts a browser voice turn
+- **THEN** the extension captures microphone PCM16 audio and streams it to
+  `/v1/voice/sessions`
+- **AND** assistant audio rendered in the browser originates from the gateway
+  streaming voice response

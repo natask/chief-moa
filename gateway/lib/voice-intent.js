@@ -31,13 +31,61 @@ function canonicalVoice(value) {
   return CORE_VOICES_BY_LOWER.get(String(value || "").trim().toLowerCase()) || null;
 }
 
+// World languages the agent can be configured to speak or understand. `code` is
+// the BCP-47 tag Gemini Live accepts for speech recognition; `keys` are spoken
+// names we match (lowercased, accent-free). Add a row to support a new language
+// — the parser, profile, and live wiring all read from this one table.
 const LANGUAGE_DEFINITIONS = [
-  { label: "Amharic", code: "am-ET", keys: ["amharic"] },
   { label: "English", code: "en-US", keys: ["english"] },
-  { label: "Spanish", code: "es-ES", keys: ["spanish"] },
-  { label: "French", code: "fr-FR", keys: ["french"] },
-  { label: "Arabic", code: "ar", keys: ["arabic"] },
-  { label: "Tigrinya", code: "ti", keys: ["tigrinya"] },
+  { label: "Spanish", code: "es-ES", keys: ["spanish", "espanol", "castellano"] },
+  { label: "French", code: "fr-FR", keys: ["french", "francais"] },
+  { label: "German", code: "de-DE", keys: ["german", "deutsch"] },
+  { label: "Italian", code: "it-IT", keys: ["italian", "italiano"] },
+  { label: "Portuguese", code: "pt-BR", keys: ["portuguese", "portugues"] },
+  { label: "Dutch", code: "nl-NL", keys: ["dutch", "nederlands"] },
+  { label: "Russian", code: "ru-RU", keys: ["russian"] },
+  { label: "Polish", code: "pl-PL", keys: ["polish"] },
+  { label: "Ukrainian", code: "uk-UA", keys: ["ukrainian"] },
+  { label: "Turkish", code: "tr-TR", keys: ["turkish"] },
+  { label: "Arabic", code: "ar-XA", keys: ["arabic"] },
+  { label: "Hebrew", code: "he-IL", keys: ["hebrew"] },
+  { label: "Hindi", code: "hi-IN", keys: ["hindi"] },
+  { label: "Bengali", code: "bn-IN", keys: ["bengali", "bangla"] },
+  { label: "Urdu", code: "ur-PK", keys: ["urdu"] },
+  { label: "Tamil", code: "ta-IN", keys: ["tamil"] },
+  { label: "Telugu", code: "te-IN", keys: ["telugu"] },
+  { label: "Marathi", code: "mr-IN", keys: ["marathi"] },
+  { label: "Gujarati", code: "gu-IN", keys: ["gujarati"] },
+  { label: "Kannada", code: "kn-IN", keys: ["kannada"] },
+  { label: "Malayalam", code: "ml-IN", keys: ["malayalam"] },
+  { label: "Punjabi", code: "pa-IN", keys: ["punjabi"] },
+  { label: "Mandarin", code: "cmn-CN", keys: ["mandarin", "chinese", "putonghua"] },
+  { label: "Cantonese", code: "yue-HK", keys: ["cantonese"] },
+  { label: "Japanese", code: "ja-JP", keys: ["japanese", "nihongo"] },
+  { label: "Korean", code: "ko-KR", keys: ["korean"] },
+  { label: "Vietnamese", code: "vi-VN", keys: ["vietnamese"] },
+  { label: "Thai", code: "th-TH", keys: ["thai"] },
+  { label: "Indonesian", code: "id-ID", keys: ["indonesian", "bahasa indonesia"] },
+  { label: "Malay", code: "ms-MY", keys: ["malay", "bahasa melayu"] },
+  { label: "Filipino", code: "fil-PH", keys: ["filipino", "tagalog"] },
+  { label: "Swahili", code: "sw-KE", keys: ["swahili", "kiswahili"] },
+  { label: "Amharic", code: "am-ET", keys: ["amharic"] },
+  { label: "Tigrinya", code: "ti-ET", keys: ["tigrinya", "tigrigna"] },
+  { label: "Somali", code: "so-SO", keys: ["somali"] },
+  { label: "Hausa", code: "ha-NG", keys: ["hausa"] },
+  { label: "Yoruba", code: "yo-NG", keys: ["yoruba"] },
+  { label: "Igbo", code: "ig-NG", keys: ["igbo"] },
+  { label: "Zulu", code: "zu-ZA", keys: ["zulu"] },
+  { label: "Afrikaans", code: "af-ZA", keys: ["afrikaans"] },
+  { label: "Greek", code: "el-GR", keys: ["greek"] },
+  { label: "Czech", code: "cs-CZ", keys: ["czech"] },
+  { label: "Romanian", code: "ro-RO", keys: ["romanian"] },
+  { label: "Hungarian", code: "hu-HU", keys: ["hungarian"] },
+  { label: "Swedish", code: "sv-SE", keys: ["swedish"] },
+  { label: "Norwegian", code: "nb-NO", keys: ["norwegian"] },
+  { label: "Danish", code: "da-DK", keys: ["danish"] },
+  { label: "Finnish", code: "fi-FI", keys: ["finnish"] },
+  { label: "Persian", code: "fa-IR", keys: ["persian", "farsi"] },
 ];
 
 // "stop / cancel / shut up" — a control utterance, not a request.
@@ -150,19 +198,9 @@ function parseProfileControlIntent(text) {
     };
   }
 
-  const language = languageUpdateFrom(lower);
-  if (language) {
-    return {
-      action: "update",
-      patch: {
-        language: language.code,
-        language_primary: language.primary_code || language.code,
-        language_mode: "explicit",
-        language_output: "primary_only",
-        language_auto_switch: false,
-      },
-      summary: language.label,
-    };
+  const languageIntent = parseLanguageIntent(raw);
+  if (languageIntent) {
+    return { action: "update", patch: languageIntent.patch, summary: languageIntent.summary };
   }
 
   const voice = voiceUpdateFrom(raw);
@@ -191,45 +229,7 @@ function promptUpdateFrom(text) {
   return "";
 }
 
-function languageUpdateFrom(lower) {
-  const isCommand = lower.startsWith("speak ")
-    || lower.startsWith("switch to ")
-    || lower.startsWith("answer in ")
-    || lower.startsWith("respond in ")
-    || lower.startsWith("only speak ")
-    || lower.startsWith("only talk ")
-    || lower.includes("only going to speak")
-    || lower.includes("only gonna speak")
-    || lower.includes("these two languages")
-    || lower.includes("these languages")
-    || lower.includes("do not switch")
-    || lower.includes("don t switch")
-    || lower.includes("don't switch")
-    || lower.includes(" switch to ")
-    || lower.includes(" speak ");
-  if (!isCommand) {
-    return null;
-  }
-  const matched = matchedLanguages(lower);
-  if (matched.length === 0) {
-    return null;
-  }
-  const locked = matched.length > 1
-    || lower.includes("only ")
-    || lower.includes("do not switch")
-    || lower.includes("don t switch")
-    || lower.includes("don't switch")
-    || lower.includes("these two languages")
-    || lower.includes("these languages");
-  const primary = matched[0];
-  return {
-    label: matched.map((language) => language.label).join(" + "),
-    code: matched.map((language) => language.code).join(","),
-    primary_code: primary.code,
-    locked,
-  };
-}
-
+// Find every known language named in a phrase, in spoken order.
 function matchedLanguages(lower) {
   const out = [];
   for (const language of LANGUAGE_DEFINITIONS) {
@@ -241,6 +241,77 @@ function matchedLanguages(lower) {
     }
   }
   return out.sort((a, b) => a.index - b.index).map(({ index, ...language }) => language);
+}
+
+// Which side of the conversation a clause is about:
+//   "input"  -> the language the USER speaks (drives speech recognition)
+//   "output" -> the language the AGENT replies in (drives the reply)
+// The subject decides it: "I/my" + a speaking verb is the user (input); "you" or
+// a bare command verb ("speak X", "respond in X", "switch to X") is the agent
+// (output). "talk to me in X" is output — "me" is the object, not the subject.
+function languageSideOf(clause) {
+  const isInput = /\b(?:i|i'm|im|i am)\b[^.]*\b(?:speak|talk|understand|know|say|use)\b/.test(clause)
+    || /\bmy\s+(?:language|languages|native\s+language|mother\s+tongue)\b/.test(clause);
+  if (isInput) return "input";
+  const isOutput = /\b(?:you|your)\b/.test(clause)
+    || /^\s*(?:can you\s+|please\s+|only\s+|just\s+)*(?:speak|talk|respond|reply|answer|say)\b/.test(clause)
+    || /\b(?:respond|reply|answer|talk|speak)\s+(?:to me\s+)?in\b/.test(clause)
+    || /\bswitch\s+to\b/.test(clause);
+  return isOutput ? "output" : null;
+}
+
+// Parse a language request into input (user) and/or output (agent) sides. One
+// utterance can set both: "I only speak Amharic and you only speak English".
+// Returns { patch, summary } or null when no language is requested.
+function parseLanguageIntent(text) {
+  const raw = String(text || "");
+  const lower = normalizeSpeech(raw);
+  if (!lower) return null;
+  if (!/\blanguages?\b/.test(lower) && matchedLanguages(lower).length === 0) {
+    return null;
+  }
+
+  const input = [];
+  const output = [];
+  let lastSide = null;
+  for (const clause of lower.split(/\s*(?:\band\b|,|;|\bbut\b|\bwhile\b)\s*/)) {
+    if (!clause.trim()) continue;
+    const langs = matchedLanguages(clause);
+    let side = languageSideOf(clause) || lastSide || (langs.length ? "output" : null);
+    if (!side) continue;
+    (side === "input" ? input : output).push(...langs);
+    if (langs.length || languageSideOf(clause)) lastSide = side;
+  }
+
+  const dedupe = (list) => {
+    const seen = new Set();
+    return list.filter((l) => (seen.has(l.code) ? false : seen.add(l.code)));
+  };
+  const inLangs = dedupe(input);
+  const outLangs = dedupe(output);
+  if (inLangs.length === 0 && outLangs.length === 0) return null;
+
+  // "only"/"just"/"don't switch" locks the set; switching is off unless the user
+  // explicitly allows it ("you can switch between ...").
+  const canSwitch = /\b(?:can|may|feel free to|allowed to)\s+switch\b/.test(lower);
+  const locked = /\bonly\b|\bjust\b|don'?t\s+switch|do not switch|these languages|these two languages/.test(lower);
+
+  const patch = {};
+  const parts = [];
+  if (outLangs.length) {
+    patch.language = outLangs.map((l) => l.code).join(",");
+    patch.language_primary = outLangs[0].code;
+    patch.language_mode = "explicit";
+    patch.language_output = "primary_only";
+    patch.language_auto_switch = canSwitch && !locked;
+    parts.push(`reply in ${outLangs.map((l) => l.label).join(" + ")}`);
+  }
+  if (inLangs.length) {
+    patch.input_languages = inLangs.map((l) => l.code).join(",");
+    patch.input_language_primary = inLangs[0].code;
+    parts.push(`understand ${inLangs.map((l) => l.label).join(" + ")}`);
+  }
+  return { patch, summary: parts.join("; ") };
 }
 
 // Change the agent's OWN spoken voice. Three shapes, in priority order:

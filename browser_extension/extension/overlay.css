@@ -28,13 +28,16 @@
   overflow: visible;
   transition: box-shadow 0.3s ease, transform 0.2s ease;
 }
-/* The bird floats with a gentle, always-on bob so it reads as alive. The hop /
+/* The mark floats with a gentle, always-on bob so it reads as alive. The hop /
    shake reactions ride on top by overriding this on the launcher itself. */
 #agee-launcher .agee-bird {
-  width: 31px;
-  height: 31px;
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
   pointer-events: none;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
   animation: agee-bob 2.6s ease-in-out infinite;
 }
 #agee-launcher:hover {
@@ -73,7 +76,7 @@
   animation: agee-busy-glow 1.5s ease-in-out infinite;
 }
 /* Live-state glows mirror the voice orb: listening green, thinking amber,
-   speaking blue. These tint the duck so the page-level launcher carries state. */
+   speaking blue. These tint the mark so the page-level launcher carries state. */
 #agee-root.agee-state-listening #agee-launcher {
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(53, 199, 89, 0.5), 0 0 22px rgba(53, 199, 89, 0.45);
 }
@@ -158,17 +161,17 @@
   display: none;
   pointer-events: auto;
   position: absolute;
-  top: 11%;
+  top: max(14px, env(safe-area-inset-top));
   left: 50%;
-  transform: translateX(-50%) translateY(-6px);
-  width: min(600px, 92vw);
-  background: rgba(16, 16, 20, 0.86);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+  transform: translateX(-50%) translateY(-4px);
+  width: min(560px, calc(100vw - 24px));
+  background: rgba(13, 14, 16, 0.9);
+  -webkit-backdrop-filter: saturate(160%) blur(18px);
+  backdrop-filter: saturate(160%) blur(18px);
   color: #f4f4f6;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(0, 0, 0, 0.34);
   overflow: hidden;
   opacity: 0;
   transition: opacity 0.16s ease, transform 0.16s ease;
@@ -192,7 +195,7 @@
   background: linear-gradient(180deg, #141419 0%, #0d0d0f 100%);
 }
 #agee-root.agee-voicing #agee-voice-state {
-  display: flex;
+  display: none;
 }
 #agee-orb {
   flex: 0 0 auto;
@@ -238,10 +241,19 @@
 }
 #agee-bar {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 18px 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+}
+#agee-panel-mark {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  margin-top: 1px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+  user-select: none;
+  -webkit-user-drag: none;
 }
 #agee-dot {
   width: 8px;
@@ -249,6 +261,7 @@
   border-radius: 50%;
   background: #5a5a62;
   flex: 0 0 auto;
+  margin-top: 10px;
   box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.03);
 }
 #agee-dot.running {
@@ -272,11 +285,29 @@
   border: 0;
   outline: 0;
   color: #f4f4f6;
-  font-size: 17px;
-  letter-spacing: 0.1px;
+  font: inherit;
+  font-size: 15.5px;
+  letter-spacing: 0;
+  line-height: 1.45;
+  min-height: 24px;
+  max-height: 32vh;
+  overflow-y: auto;
+  padding: 2px 0 0;
+  resize: none;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 #agee-input::placeholder {
-  color: #6b6b73;
+  color: #777780;
+}
+#agee-input[readonly] {
+  cursor: default;
+}
+#agee-root.agee-phase-result #agee-input {
+  color: #f1f1f2;
+}
+#agee-root.agee-phase-error #agee-input {
+  color: #ff918a;
 }
 #agee-voice,
 #agee-stop {
@@ -294,6 +325,9 @@
   padding: 9px 12px;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
+#agee-voice {
+  display: none;
+}
 #agee-voice:hover,
 #agee-stop:hover {
   background: rgba(255, 255, 255, 0.08);
@@ -307,17 +341,19 @@
   display: none;
 }
 #agee-stop.visible {
-  display: inline-block;
+  display: none;
   border-color: #6b2a2a;
   color: #ff9b92;
 }
 #agee-log {
-  max-height: 44vh;
+  display: none;
+  max-height: 32vh;
   overflow-y: auto;
   padding: 6px 0;
 }
-#agee-log:empty {
-  display: none;
+#agee-root.agee-confirming #agee-log:not(:empty) {
+  display: block;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 .agee-row {
   padding: 8px 16px;

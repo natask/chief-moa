@@ -1,6 +1,6 @@
 # agee
 
-An open-source, browser-native interface shell. Hit **Cmd/Ctrl+K** or click the on-page control, type or speak, and experiment with an agent surface directly on the website you are using. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
+An open-source, browser-native interface shell. Hit **Cmd/Ctrl+K** or click the on-page control to type, or hit **Cmd/Ctrl+.** to talk, directly on the website you are using. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
 
 ## Principles
 
@@ -14,7 +14,7 @@ An open-source, browser-native interface shell. Hit **Cmd/Ctrl+K** or click the 
 
 MVP - a Chrome (Manifest V3) extension you can load unpacked today.
 
-**Works now:** Cmd+K command palette · Cmd+. voice wake · Cmd+, text command bar · on-page invocation surface · optional browser-native voice dictation · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · per-cue progress in the overlay.
+**Works now:** Cmd+K text intent field · Cmd+. gateway Live voice wake · on-page Moa mark · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · one-current-intent overlay state with no visible scrollback.
 
 **Next:** engine-served declarative UI spec · userScripts opt-in walkthrough · richer voice mode · cross-navigation task continuity · MOA integration · hosted/self-hosted engine switching.
 
@@ -63,8 +63,11 @@ is separate from the quiet flow on purpose:
 4. Open any low-risk page (or run `npm run dev -- --no-browser` and open `http://localhost:7777/fixtures/demo.html`).
 5. Press **Cmd+K** (Mac) / **Ctrl+K**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the agee card or remove the old copy and load [extension/](extension/) again.
 
-The duck floats and wanders the page when idle, glows while it works, and rings
+The Moa mark floats on the page when idle, glows while it works, and rings
 (a short chime plus a ring pulse) when a turn finishes, errors, or needs you.
+Typed replies replace the typed intent in the same field. The extension does not
+render visible chat history; session history stays on the gateway and can be
+queried by asking Moa.
 To override the baked defaults, use the **agee** toolbar icon → Options.
 
 Only while developing the extension package, optionally open
@@ -81,6 +84,7 @@ Run:
 npm run doctor
 npm run verify
 npm run smoke
+cd ../gateway && node scripts/smoke-browser-voice-ticket.js
 ```
 
 `doctor` is the fast operational test for the default gateway setup. It checks
@@ -103,6 +107,12 @@ message path (`snapshot`, `type`, `click`) against the demo page and captures a
 screenshot — no window shown, no focus taken. It exercises the **real** extension;
 if the resolved Chrome ever refuses `--load-extension`, smoke fails loudly rather
 than falling back to a content-script harness.
+
+`smoke-browser-voice-ticket` proves the browser Live voice path at the gateway
+boundary: the extension-style client mints a short-lived ticket over authenticated
+HTTP, opens a headerless WebSocket to `/v1/voice/sessions`, sends PCM16 audio,
+and receives assistant PCM audio back. Browser voice is not Web Speech API
+dictation; provider credentials stay on the gateway.
 
 ## Verify the gateway round-trip
 
@@ -128,16 +138,16 @@ gateway is the live one (`http://10.147.17.10:8788`); override with
    (no token needed). This is the reachability gate.
 2. **Command** — a command submitted in the overlay is sent as `run` →
    `background.js` `POST /v1/voice/turns` (with `Authorization: Bearer <token>`)
-   → the gateway's `display`/`text` reply renders as a **done** row in the
+   → the gateway's `display`/`text` reply replaces the typed field in the
    overlay. The recorder confirms the reply originated from `/v1/voice/turns`.
 3. **Describe** — "describe page" is sent as `describe` → `POST /v1/chat` → the
-   gateway's `text` renders as a **done** row. The recorder confirms it
+   gateway's `text` renders in the same one-current-intent surface. The recorder confirms it
    originated from `/v1/chat`.
 4. **Loud failure** — pointed at the gateway with **no/invalid token**, the same
    command hits `POST /v1/voice/turns`, the gateway returns `401`, and the
-   overlay renders a clear **error** row ("Gateway rejected the token (401).
-   Open agee Options and set a valid Gateway token, then Save.") with a red
-   status dot. The failure is visible, never silent.
+   overlay renders the clear error in the field ("Gateway rejected the token
+   (401). Open agee Options and set a valid Gateway token, then Save.") with a
+   red status dot. The failure is visible, never silent.
 
 The bearer token is read **only** from `AGEE_GATEWAY_TOKEN` at run time (never
 from a file, never printed — see [.env.example](.env.example)). Without it, legs

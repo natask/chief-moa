@@ -67,13 +67,17 @@ Hold the orb (push-to-talk)
 Orb gestures (overlay): hold to speak, release to send; a held turn cuts off any
 reply playing (barge-in) and steers an active agent run. A quick tap opens the
 typing panel. Drag repositions. The browser extension mirrors this hands-on-
-keyboard: Cmd. (Ctrl+.) wakes voice, Cmd, (Ctrl+,) opens the text command bar.
+keyboard: Cmd+K (Ctrl+K) opens the text intent field and Cmd+. (Ctrl+.) wakes
+voice.
 
-The overlay surface stays small: it shows live turns and compact run state, not
-a full scrollback manager. The gateway still stores durable session, branch,
+The overlay surface stays small: it shows the current intent/result and compact
+run state, not a full scrollback manager. Browser text replies replace the typed
+intent in the same field; browser voice is icon-first and does not open a
+transcript panel by default. The gateway still stores durable session, branch,
 turn, transcript, provider-event, and agent-run history. Realtime providers
 receive a bounded Moa-owned context pack at session start so provider memory is
-not the product database.
+not the product database. If the user wants history, they ask Moa for it through
+the same intent surface instead of browsing visible scrollback.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript
@@ -92,11 +96,21 @@ durable voice-turn router.
 
 ```text
 Browser overlay or command bar
-  -> captures text/voice and optional page context
-  -> sends the turn to the configured engine URL with a session token
-  -> receives an answer, run status, action proposal, or declarative UI spec
+  -> captures text or PCM16 microphone audio and optional page context
+  -> sends text turns to the configured engine URL with a session token
+  -> mints a short-lived voice-session ticket for browser WebSocket voice
+  -> streams voice turns to WS /v1/voice/sessions
+  -> receives an answer, streamed assistant audio, run status, action proposal, or declarative UI spec
   -> brokers any page-local action through extension-owned checks
 ```
+
+Browser voice uses the same gateway streaming voice contract as Android, adapted
+for browser WebSocket authentication. The extension authenticates to the gateway
+over normal HTTP with its stored gateway token, receives a one-use
+`/v1/voice/sessions` ticket, streams PCM16 audio to the gateway, and plays
+assistant PCM audio returned by the selected gateway provider. It must not use
+browser Web Speech APIs as the production voice path, and it must not hold raw
+Gemini/OpenAI/Anthropic provider credentials.
 
 Gateway-originated browser work uses the same ownership boundary. The gateway
 stores `/v1/browser/tasks` records and Live/tool agents may enqueue bounded

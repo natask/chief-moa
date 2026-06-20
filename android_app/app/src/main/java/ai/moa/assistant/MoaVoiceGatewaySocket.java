@@ -1,5 +1,7 @@
 package ai.moa.assistant;
 
+import android.util.Log;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -17,6 +19,7 @@ import okhttp3.WebSocketListener;
 import okio.ByteString;
 
 final class MoaVoiceGatewaySocket {
+    private static final String TAG = "MoaVoiceSocket";
     static final String DEFAULT_URL = "ws://10.147.17.10:8788/v1/voice/sessions";
     private static final int CONNECT_TIMEOUT_MS = 3500;
     private static final int WRITE_TIMEOUT_MS = 10000;
@@ -83,6 +86,7 @@ final class MoaVoiceGatewaySocket {
             if (!token.isEmpty()) {
                 builder.header("Authorization", "Bearer " + token);
             }
+            Log.i(TAG, "connect -> " + redactedUrl(url) + " token=" + (token.isEmpty() ? "MISSING" : "set(" + token.length() + ")"));
             webSocket = client.newWebSocket(builder.build(), new Listener());
         }
     }
@@ -197,6 +201,7 @@ final class MoaVoiceGatewaySocket {
         String type = event.optString("type", "").trim();
         switch (type) {
             case "session_ready":
+                Log.i(TAG, "session_ready session_id=" + event.optString("session_id", ""));
                 if (callback != null) {
                     callback.onSessionReady(event.optString("session_id", ""));
                 }
@@ -242,6 +247,7 @@ final class MoaVoiceGatewaySocket {
                 }
                 break;
             case "error":
+                Log.e(TAG, "gateway error event: " + event.optString("message", "gateway error"));
                 if (callback != null) {
                     callback.onGatewayError(event.optString("message", "gateway error"));
                 }
@@ -365,6 +371,7 @@ final class MoaVoiceGatewaySocket {
     private final class Listener extends WebSocketListener {
         @Override
         public void onOpen(WebSocket socket, Response response) {
+            Log.i(TAG, "onOpen HTTP " + (response != null ? response.code() : -1) + " (socket upgraded)");
             if (callback != null) {
                 callback.onSocketOpen();
             }
@@ -382,6 +389,7 @@ final class MoaVoiceGatewaySocket {
 
         @Override
         public void onClosed(WebSocket socket, int code, String reason) {
+            Log.i(TAG, "onClosed code=" + code + " reason=" + reason);
             synchronized (lock) {
                 if (webSocket == socket) {
                     webSocket = null;
@@ -401,6 +409,9 @@ final class MoaVoiceGatewaySocket {
                 }
                 assistantAudioOpen = false;
             }
+            Log.e(TAG, "onFailure HTTP " + (response != null ? response.code() : -1)
+                    + " err=" + (error != null ? error.getClass().getSimpleName() + ":" + cleanError(error) : "none")
+                    + " msg=" + socketFailureMessage(url, error, response), error);
             reportFailure(socketFailureMessage(url, error, response), error);
         }
     }

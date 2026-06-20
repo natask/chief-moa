@@ -23,6 +23,8 @@ const PROFILE_FIELDS = [
   "language_primary",
   "language_output",
   "language_auto_switch",
+  "input_languages",
+  "input_language_primary",
   "voice_provider",
   "stt_provider",
   "reasoning_provider",
@@ -346,6 +348,13 @@ function pickProfileFields(input) {
   if (typeof input.language_auto_switch === "boolean") {
     out.language_auto_switch = input.language_auto_switch;
   }
+  // Languages the USER speaks (drives speech recognition). Separate from the
+  // reply-language fields above, which are what the AGENT speaks.
+  for (const field of ["input_languages", "input_language_primary"]) {
+    if (typeof input[field] === "string" && input[field].trim()) {
+      out[field] = input[field].trim().slice(0, 80);
+    }
+  }
   for (const field of ["voice_provider", "stt_provider", "reasoning_provider", "tts_provider"]) {
     if (typeof input[field] === "string" && input[field].trim()) {
       out[field] = input[field].trim().toLowerCase().replace(/_/g, "-").slice(0, 80);
@@ -386,6 +395,10 @@ function normalizeProfile(defaults) {
     language_primary: languagePrimary,
     language_output: picked.language_output || "primary_only",
     language_auto_switch: picked.language_auto_switch === true,
+    input_languages: picked.input_languages || "en-US",
+    input_language_primary: picked.input_language_primary
+      || (picked.input_languages ? picked.input_languages.split(",")[0].trim() : "")
+      || "en-US",
     voice_provider: picked.voice_provider || "",
     stt_provider: picked.stt_provider || "",
     reasoning_provider: picked.reasoning_provider || "",

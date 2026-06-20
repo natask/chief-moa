@@ -66,6 +66,7 @@ const MODEL_TEMPERATURE = Number(process.env.MODEL_TEMPERATURE || 0.4);
 const VOICE_TTS_MAX_CHARS = Number(process.env.VOICE_TTS_MAX_CHARS || 280);
 const MODEL_LANGUAGE = String(process.env.MODEL_LANGUAGE || "").trim();
 const MAX_BODY_BYTES = 1024 * 1024;
+const VOICE_SESSION_TICKET_TTL_MS = Number(process.env.VOICE_SESSION_TICKET_TTL_MS || 60 * 1000);
 const DEFAULT_HARNESS = process.env.DEFAULT_AGENT_HARNESS || "gemini";
 const HARNESS_WORKDIR = path.resolve(process.env.HARNESS_WORKDIR || REPO_ROOT);
 const AGENT_RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 10 * 60 * 1000);
@@ -82,6 +83,7 @@ const BRAIN_RECALL_LIMIT = Number(process.env.BRAIN_RECALL_LIMIT || 5);
 const BRAIN_CONTEXT_MAX_CHARS = Number(process.env.BRAIN_CONTEXT_MAX_CHARS || 1200);
 const ALLOW_HARNESS_WORKDIR_OUTSIDE_ROOT = process.env.ALLOW_HARNESS_WORKDIR_OUTSIDE_ROOT === "1";
 const activeRuns = new Map();
+const voiceSessionTickets = new Map();
 // Script body for the deterministic `echo` harness. Runs under `node -e`, takes
 // the intent as the trailing arg, and prints a short, structured "what I did"
 // summary to stdout. No model key, no network, no filesystem writes.
@@ -193,6 +195,7 @@ const server = http.createServer(async (request, response) => {
         voice_stream: {
           sessions_dir: voiceSessionServer.sessionsDir,
           endpoint: voiceSessionServer.endpoint,
+          ticket_endpoint: "/v1/voice/session-ticket",
           provider: voiceProvider,
           input_format: {
             encoding: "pcm16",
@@ -663,6 +666,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/voice/session-ticket") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleVoiceSessionTicket(request, response);
+      return;
+    }
+
     // Ambient frame intake for the continuous (rung-3) interaction mode. The
     // client samples the screen on an interval (~200ms target) and posts each
     // frame; the gateway stores it per session. Intake only for now — no model
@@ -701,7 +713,7 @@ server.on("upgrade", (request, socket, head) => {
       rejectUpgrade(socket, 404, "Not Found");
       return;
     }
-    if (!authorized(request)) {
+    if (!authorizedVoiceSessionUpgrade(request, url)) {
       rejectUpgrade(socket, 401, "Unauthorized");
       return;
     }
@@ -1711,6 +1723,27 @@ async function handleVoiceTurn(request, response) {
     writeVoiceTurnRecord({ ...baseRecord, classification: "error", updated_at: new Date().toISOString(), response: payload });
     sendJson(response, 502, payload);
   }
+}
+
+async function handleVoiceSessionTicket(request, response) {
+  cleanupVoiceSessionTickets();
+  const body = await readJsonBody(request);
+  const ticket = randomId("vst");
+  const now = Date.now();
+  const expiresAt = now + Math.max(5_000, VOICE_SESSION_TICKET_TTL_MS);
+  voiceSessionTickets.set(ticket, {
+    expiresAt,
+    source: String(body.source || "browser-extension").slice(0, 80),
+    sessionId: sanitizeOptionalId(body.session_id || body.conversation_id, "default"),
+    issuedAt: new Date(now).toISOString(),
+  });
+  sendJson(response, 201, {
+    ticket,
+    endpoint: voiceSessionServer.endpoint,
+    ws_url: voiceSessionUrlForRequest(request, ticket),
+    expires_at: new Date(expiresAt).toISOString(),
+    expires_in_ms: expiresAt - now,
+  });
 }
 
 async function handleVoiceProfileControl(record, transcript) {
@@ -3379,23 +3412,28 @@ function profileSystemInstruction(profile) {
 
 function profileLanguageInstruction(profile) {
   const allowed = String(profile?.language || profile?.language_primary || "").trim();
-  if (!allowed) {
+  const input = String(profile?.input_languages || profile?.input_language_primary || "").trim();
+  if (!allowed && !input) {
     return "";
   }
   const primary = String(profile?.language_primary || allowed.split(",")[0] || "").trim();
   const output = String(profile?.language_output || "primary_only").trim();
   const autoSwitch = profile?.language_auto_switch === true;
-  return [
-    "Language profile:",
-    `- Allowed language code(s): ${allowed}.`,
-    primary ? `- Primary reply language: ${primary}.` : "",
-    output === "primary_only"
-      ? "- Reply in the primary language unless the user explicitly asks for another allowed language."
-      : "",
-    autoSwitch
-      ? "- You may switch only among the allowed languages when the user clearly switches."
-      : "- Do not switch outside the allowed languages.",
-  ].filter(Boolean).join("\n");
+  const lines = ["Language profile:"];
+  if (allowed) {
+    lines.push(`- Reply only in: ${allowed}.`);
+    if (primary) lines.push(`- Primary reply language: ${primary}.`);
+    if (output === "primary_only") {
+      lines.push("- Reply in the primary language unless the user explicitly asks for another allowed language.");
+    }
+    lines.push(autoSwitch
+      ? "- You may switch only among the allowed reply languages when the user clearly switches."
+      : "- Do not reply outside the allowed languages.");
+  }
+  if (input) {
+    lines.push(`- The user speaks: ${input}. Expect input in these languages; do not assume they understand others.`);
+  }
+  return lines.filter(Boolean).join("\n");
 }
 
 function vertexAccessToken() {
@@ -4020,6 +4058,49 @@ function authorized(request) {
     return true;
   }
   return request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
+}
+
+function authorizedVoiceSessionUpgrade(request, url) {
+  if (authorized(request)) {
+    return true;
+  }
+  const ticket = url.searchParams.get("ticket") || "";
+  return consumeVoiceSessionTicket(ticket);
+}
+
+function consumeVoiceSessionTicket(ticket) {
+  if (!MOA_GATEWAY_TOKEN) {
+    return true;
+  }
+  cleanupVoiceSessionTickets();
+  const key = String(ticket || "");
+  const record = voiceSessionTickets.get(key);
+  if (!record) {
+    return false;
+  }
+  voiceSessionTickets.delete(key);
+  return record.expiresAt >= Date.now();
+}
+
+function cleanupVoiceSessionTickets() {
+  const now = Date.now();
+  for (const [ticket, record] of voiceSessionTickets) {
+    if (!record || record.expiresAt < now) {
+      voiceSessionTickets.delete(ticket);
+    }
+  }
+}
+
+function voiceSessionUrlForRequest(request, ticket) {
+  const forwardedProto = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const proto = forwardedProto || (request.socket?.encrypted ? "https" : "http");
+  const wsProto = proto === "https" ? "wss" : "ws";
+  const host = String(request.headers["x-forwarded-host"] || request.headers.host || `${HOST}:${PORT}`)
+    .split(",")[0]
+    .trim();
+  const url = new URL(`${wsProto}://${host}${voiceSessionServer.endpoint}`);
+  url.searchParams.set("ticket", ticket);
+  return url.toString();
 }
 
 function authorizedAgent(request) {

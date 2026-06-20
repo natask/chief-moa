@@ -472,6 +472,23 @@ async function loadHistory(cfg) {
   return Array.isArray(data?.turns) ? data.turns : [];
 }
 
+async function createVoiceSessionTicket(cfg, signal) {
+  const sessionId = await getStableSessionId();
+  const data = await callGateway(cfg, "/v1/voice/session-ticket", {
+    signal,
+    body: {
+      source: "agee-extension",
+      session_id: sessionId,
+      conversation_id: sessionId,
+    },
+  });
+  return {
+    ...data,
+    session_id: sessionId,
+    conversation_id: sessionId,
+  };
+}
+
 // Conversational turn through the user's gateway (/v1/voice/turns).
 // The gateway classifies chat vs. home-machine agent runs and replies with
 // display text; we render it. Page-DOM actions are a later wave.
@@ -1090,6 +1107,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then((cfg) => loadHistory(cfg))
       .then((turns) => sendResponse({ ok: true, turns }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error), turns: [] }));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionTicket") {
+    getConfig()
+      .then((cfg) => createVoiceSessionTicket(cfg))
+      .then((ticket) => sendResponse({ ok: true, ...ticket }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
   if (msg.cmd === "run" && sender.tab) {

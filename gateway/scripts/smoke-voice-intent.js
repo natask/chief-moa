@@ -57,13 +57,43 @@ assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational 
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
 
-const languageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
-assert.deepStrictEqual(languageLock.patch, {
+const inputLanguageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
+assert.deepStrictEqual(inputLanguageLock.patch, {
+  input_languages: "en-US,am-ET",
+  input_language_primary: "en-US",
+});
+const outputLanguageLock = parseProfileControlIntent("you only speak English and Amharic, don't switch up");
+assert.deepStrictEqual(outputLanguageLock.patch, {
   language: "en-US,am-ET",
   language_primary: "en-US",
   language_mode: "explicit",
   language_output: "primary_only",
   language_auto_switch: false,
+});
+
+// One utterance sets both sides: the user's input language and the agent's reply.
+const bothSides = parseProfileControlIntent("I only speak Amharic and you only speak English");
+assert.deepStrictEqual(bothSides.patch, {
+  language: "en-US",
+  language_primary: "en-US",
+  language_mode: "explicit",
+  language_output: "primary_only",
+  language_auto_switch: false,
+  input_languages: "am-ET",
+  input_language_primary: "am-ET",
+});
+
+// Arbitrary languages beyond the original six resolve to their BCP-47 codes.
+assert.deepStrictEqual(parseProfileControlIntent("respond in Swahili").patch, {
+  language: "sw-KE",
+  language_primary: "sw-KE",
+  language_mode: "explicit",
+  language_output: "primary_only",
+  language_auto_switch: false,
+});
+assert.deepStrictEqual(parseProfileControlIntent("I speak Japanese and Korean").patch, {
+  input_languages: "ja-JP,ko-KR",
+  input_language_primary: "ja-JP",
 });
 
 // forced/hint fields override the heuristics.

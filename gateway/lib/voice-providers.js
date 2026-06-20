@@ -646,6 +646,20 @@ class GeminiLiveVoiceProvider {
     return this.envVoiceName;
   }
 
+  // The speech-recognition language for the NEXT turn: the user's configured
+  // input language (profile.input_language_primary / input_languages), falling
+  // back to the env default. Read fresh so "I only speak X" applies next turn.
+  effectiveInputLanguageCode() {
+    if (this.agentProfile && typeof this.agentProfile.effective === "function") {
+      const profile = this.agentProfile.effective();
+      const primary = String(profile.input_language_primary
+        || String(profile.input_languages || "").split(",")[0]
+        || "").trim();
+      if (primary) return primary;
+    }
+    return this.languageCode;
+  }
+
   effectiveSystemPrompt() {
     const profile = this.agentProfile && typeof this.agentProfile.effective === "function"
       ? this.agentProfile.effective()
@@ -677,7 +691,7 @@ class GeminiLiveVoiceProvider {
       language_profile: this.agentProfile && typeof this.agentProfile.effective === "function"
         ? this.agentProfile.effective().language || ""
         : "",
-      language_code: this.languageCode || null,
+      language_code: this.effectiveInputLanguageCode() || null,
       input_audio_format: {
         encoding: "pcm16",
         sample_rate: 16000,
@@ -1068,8 +1082,9 @@ class GeminiLiveVoiceProvider {
         },
       },
     };
-    if (this.languageCode) {
-      speechConfig.languageCode = this.languageCode;
+    const inputLanguageCode = this.effectiveInputLanguageCode();
+    if (inputLanguageCode) {
+      speechConfig.languageCode = inputLanguageCode;
     }
     const systemParts = [{ text: this.effectiveSystemPrompt() }];
     const contextPrompt = String(turn?.contextPrompt || "").trim();

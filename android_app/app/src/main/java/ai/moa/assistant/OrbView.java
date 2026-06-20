@@ -15,10 +15,10 @@ import android.view.View;
 // and grows the bird a touch instead of lighting up an orb. Holding the orb (the
 // push-to-talk gesture) lights a soft teal glow behind it so the press reads.
 final class OrbView extends View {
-    // Viewport box of the bird inside ic_moa_glyph (108x108). Used to center it.
+    // The moa mark fills its own square frame, so the bird centers on the box.
     private static final float GLYPH_VIEWPORT = 108f;
     private static final float BIRD_CX = 54f;
-    private static final float BIRD_CY = 50.5f;
+    private static final float BIRD_CY = 54f;
 
     private final Drawable bird;
     private final Drawable halo;
@@ -28,8 +28,8 @@ final class OrbView extends View {
 
     OrbView(Context context) {
         super(context);
-        bird = context.getDrawable(R.drawable.ic_moa_glyph);
-        halo = context.getDrawable(R.drawable.ic_moa_glyph);
+        bird = context.getDrawable(R.drawable.moa_mark);
+        halo = context.getDrawable(R.drawable.moa_mark);
         if (halo != null) {
             halo.mutate();
         }

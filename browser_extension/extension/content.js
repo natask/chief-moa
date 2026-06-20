@@ -15,72 +15,54 @@
     open = false,
     voiceState,
     transcriptEl,
-    recognition = null,
+    liveVoice = null,
+    surfacePhase = "idle",
     listening = false,
     dragState = null,
     suppressLauncherClick = false,
-    // The duck is alive: it floats, wanders the page when idle, reacts to state,
-    // and rings when something lands. audioCtx is created lazily on first gesture.
+    // The Moa mark floats, wanders the page when idle, reacts to state, and
+    // rings when something lands. audioCtx is created lazily on first gesture.
     audioCtx = null,
     wanderTimer = null,
     wanderPauseUntil = 0,
-    wanderHover = false,
-    historyLoaded = false;
+    wanderHover = false;
 
-  // The overlay's voice surface runs a small state machine so the screen always
-  // shows whether the agent is up and what it is doing:
+  // The voice path is icon-first. It uses state for launcher glow/audio routing,
+  // not for a visible chat transcript:
   //   idle      - no voice session
-  //   listening - mic open, transcript bar live with the user's words
+  //   listening - mic open
   //   thinking  - utterance submitted, waiting on the gateway
   //   speaking  - reply is being spoken back
   let agentState = "idle";
 
-  // Many cues can be in flight at once: the user keeps talking, each utterance is
-  // its own lane with its own card in the log. cues maps cueId -> { statusEl };
-  // activeCues tracks which are still running so the launcher dot reflects "busy"
-  // without ever blocking a new cue.
+  // The gateway may still identify each turn with a cue id, but the page surface
+  // presents one current intent/result rather than a visible chat history.
   let cueSeq = 0;
+  let currentCueId = null;
   const cues = new Map();
   const activeCues = new Set();
-  // Replies are spoken one after another (parallel cues finishing together must
-  // not talk over each other).
-  const speechQueue = [];
-  let speaking = false;
-
   function build() {
     root = document.createElement("div");
     root.id = "agee-root";
     root.innerHTML = `
-      <button id="agee-launcher" type="button" title="⌘. to talk · ⌘, to type" aria-label="agee">
+      <button id="agee-launcher" type="button" title="⌘K to type · ⌘. to talk" aria-label="Moa">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
-        <svg class="agee-bird" viewBox="0 0 50 50" aria-hidden="true">
-          <g fill="currentColor" stroke="none">
-            <polygon points="9,29 1,33 11,37"/>
-            <ellipse cx="22" cy="29" rx="13" ry="10"/>
-            <circle cx="33" cy="20" r="7"/>
-            <polygon points="40,18 49,19.5 40,23"/>
-          </g>
-          <path d="M14 26 Q 24 33 31 26" fill="none" stroke="#111114" stroke-width="1.6" stroke-linecap="round"/>
-          <circle cx="34.5" cy="18.5" r="1.3" fill="#111114"/>
-          <g stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <line x1="21" y1="38" x2="20" y2="46"/>
-            <line x1="27" y1="38" x2="28" y2="46"/>
-          </g>
-        </svg>
+        <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
       </button>
-      <div id="agee-panel">
+      <div id="agee-panel" role="dialog" aria-label="Moa command">
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
         </div>
         <div id="agee-bar">
+          <img id="agee-panel-mark" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
           <span id="agee-dot"></span>
-          <input id="agee-input" placeholder="Ask agee…  ⌘. to talk" autocomplete="off" />
-          <button id="agee-voice" type="button" title="Speak instruction">Voice</button>
+          <textarea id="agee-input" rows="1" placeholder="Ask Moa" autocomplete="off" spellcheck="true"></textarea>
+          <button id="agee-voice" type="button" title="Start voice">Voice</button>
           <button id="agee-stop" type="button" title="Stop current task">Stop</button>
         </div>
-        <div id="agee-log"></div>
+        <div id="agee-log" aria-hidden="true"></div>
       </div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
@@ -99,21 +81,27 @@
         suppressLauncherClick = false;
         return;
       }
-      if (!open && !anyActive() && !log?.childElementCount) {
-        describePage();
-      } else {
-        toggle(true);
-      }
+      openTextSurface({ fresh: false });
     });
     launcher.addEventListener("pointerdown", startLauncherDrag);
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Enter" && input.value.trim()) {
+      if (e.key === "Enter" && !e.shiftKey && input.value.trim()) {
+        e.preventDefault();
+        if (surfacePhase === "pending") return;
+        if (surfacePhase === "result" || surfacePhase === "error") {
+          input.select();
+          return;
+        }
         submitInstruction(input.value.trim());
       } else if (e.key === "Escape") {
-        toggle(false);
+        closeTextSurface();
       }
+    });
+    input.addEventListener("input", () => {
+      resizeInput();
+      if (surfacePhase !== "pending") setSurfacePhase("editing");
     });
 
     voiceButton.addEventListener("click", (e) => {
@@ -126,11 +114,12 @@
       e.preventDefault();
       e.stopPropagation();
       chrome.runtime.sendMessage({ cmd: "cancel" });
+      stopLiveVoiceTurn("cancel");
       stopSpeaking();
       addLog("agee", "stopping…");
     });
 
-    // Hovering the duck pauses its wandering so it is easy to grab or click; a
+    // Hovering the mark pauses its wandering so it is easy to grab or click; a
     // pointerdown anywhere primes the audio context so the chime can play later
     // (browsers only allow sound after a user gesture).
     launcher.addEventListener("pointerenter", () => {
@@ -208,47 +197,67 @@
   }
 
   function toggle(force) {
+    const was = open;
     open = typeof force === "boolean" ? force : !open;
     if (!root) build();
     root.classList.toggle("agee-open", open);
     if (open) {
+      if (!was) chime("wake"); // pleasant beep when it engages (⌘K / shortcut)
       setTimeout(() => input.focus(), 0);
-      loadConversationHistory();
     }
   }
 
-  function loadConversationHistory() {
-    if (historyLoaded) return;
-    historyLoaded = true;
-    chrome.runtime.sendMessage({ cmd: "history" }).then((response) => {
-      if (!response?.ok || !Array.isArray(response.turns) || response.turns.length === 0) return;
-      renderHistory(response.turns);
-    }).catch(() => {});
+  function openTextSurface({ fresh = false } = {}) {
+    if (!root) build();
+    toggle(true);
+    if (fresh || surfacePhase === "idle" || surfacePhase === "result" || surfacePhase === "error") {
+      setInputText("");
+      setSurfacePhase("editing");
+    }
+    setTimeout(() => {
+      input.focus();
+      if (surfacePhase === "result" || surfacePhase === "error") input.select();
+    }, 0);
   }
 
-  function renderHistory(turns) {
-    if (!log || log.childElementCount) return;
-    const recent = turns.slice(-12);
-    for (const turn of recent) {
-      const userText = pickTurnText(turn, ["user", "transcript", "input", "prompt"]);
-      const assistantText = pickTurnText(turn, ["assistant", "display", "text", "reply", "speak"]);
-      if (userText) log.appendChild(makeRow("you", userText));
-      if (assistantText) log.appendChild(makeRow("done", assistantText));
-    }
-    if (log.childElementCount) log.scrollTop = log.scrollHeight;
+  function closeTextSurface() {
+    toggle(false);
+    if (surfacePhase !== "pending") setSurfacePhase("idle");
   }
 
-  function pickTurnText(turn, fields) {
-    for (const field of fields) {
-      const value = turn?.[field];
-      if (typeof value === "string" && value.trim()) return value.trim();
+  function setSurfacePhase(next) {
+    surfacePhase = next;
+    if (!root) return;
+    for (const phase of ["idle", "editing", "pending", "result", "error"]) {
+      root.classList.toggle(`agee-phase-${phase}`, phase === next);
     }
-    if (Array.isArray(turn?.messages)) {
-      const wanted = fields.includes("user") ? "user" : "assistant";
-      const msg = [...turn.messages].reverse().find((m) => m?.role === wanted && typeof m?.content === "string" && m.content.trim());
-      if (msg) return msg.content.trim();
+    if (input) input.readOnly = next === "pending";
+  }
+
+  function setInputText(text, { select = false } = {}) {
+    if (!input) return;
+    input.value = String(text || "");
+    resizeInput();
+    if (select) {
+      setTimeout(() => {
+        input.focus();
+        input.select();
+      }, 0);
     }
-    return "";
+  }
+
+  function resizeInput() {
+    if (!input) return;
+    input.style.height = "auto";
+    const max = Math.max(96, Math.round(window.innerHeight * 0.32));
+    input.style.height = `${Math.min(input.scrollHeight || 0, max)}px`;
+  }
+
+  function showInlineResult(text, kind, { reveal = open } = {}) {
+    if (!input) return;
+    const fallback = kind === "error" ? "Something went wrong." : "Done.";
+    setInputText(String(text || fallback).trim() || fallback, { select: reveal });
+    setSurfacePhase(kind === "error" ? "error" : "result");
   }
 
   function makeRow(who, text) {
@@ -268,7 +277,8 @@
     if (!log) return Promise.resolve(false);
     if (pendingConfirm) pendingConfirm(false);
     reactLauncher("attention"); // a question needs the user: ring for attention
-    toggle(true);
+    openTextSurface({ fresh: false });
+    root?.classList.add("agee-confirming");
     return new Promise((resolve) => {
       pendingConfirm = resolve;
       const row = document.createElement("div");
@@ -286,6 +296,7 @@
         const ok = button.getAttribute("data-agee-confirm") === "yes";
         pendingConfirm = null;
         row.remove();
+        root?.classList.remove("agee-confirming");
         resolve(ok);
       });
       log.appendChild(row);
@@ -305,7 +316,7 @@
     const dot = root && root.querySelector("#agee-dot");
     if (dot) dot.className = anyActive() ? "running" : lastTerminal;
     if (stopButton) stopButton.classList.toggle("visible", anyActive());
-    // The duck glows while it is working so the user can tell it is busy even
+    // The mark glows while it is working so the user can tell it is busy even
     // with the panel closed. Busy also halts wandering — it stays put and thinks.
     if (launcher) launcher.classList.toggle("agee-busy", anyActive());
   }
@@ -318,8 +329,24 @@
     return `c_${cueSeq}_${Date.now().toString(36)}`;
   }
 
-  function createCue(cueId, label) {
+  function resetVisibleTurn() {
+    if (pendingConfirm) {
+      pendingConfirm(false);
+      pendingConfirm = null;
+      root?.classList.remove("agee-confirming");
+    }
+    if (log) log.replaceChildren();
+    cues.clear();
+    activeCues.clear();
+    lastTerminal = "";
+    currentCueId = null;
+    refreshStatus();
+  }
+
+  function createCue(cueId, label, { presentation = "text" } = {}) {
     if (!log) return;
+    resetVisibleTurn();
+    currentCueId = cueId;
     const card = document.createElement("div");
     card.className = "agee-cue agee-cue-running";
     card.dataset.cue = cueId;
@@ -333,79 +360,56 @@
     card.appendChild(status);
     log.appendChild(card);
     log.scrollTop = log.scrollHeight;
-    cues.set(cueId, { statusEl: status, cardEl: card });
+    cues.set(cueId, { statusEl: status, cardEl: card, labelEl: you, presentation });
     activeCues.add(cueId);
+    if (presentation === "text") {
+      setInputText(label);
+      setSurfacePhase("pending");
+    }
     refreshStatus();
+  }
+
+  function updateCueLabel(cueId, text) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    const entry = cues.get(cueId);
+    if (entry?.labelEl) entry.labelEl.textContent = value;
   }
 
   // Update a cue's status line. kind: "running" | "done" | "error".
   function updateCue(cueId, text, kind) {
     const entry = cues.get(cueId);
     // A message for an unknown cue (e.g. server-generated id) falls back to a row.
-    // Tag the terminal kind so a done row is distinguishable from interim
-    // progress rows (error -> agee-error, done -> agee-done, running -> agee-agee).
+    // Tag the terminal kind so harnesses can distinguish final state from
+    // interim progress in the hidden one-turn ledger.
     if (!entry) {
+      if (cueId && currentCueId && cueId !== currentCueId) return;
       addLog(kind === "error" ? "error" : kind === "done" ? "done" : "agee", text);
+      if (open && kind === "running") setSurfacePhase("pending");
       if (kind === "done" || kind === "error") {
+        if (open) showInlineResult(text, kind);
         lastTerminal = kind;
         refreshStatus();
       }
       return;
     }
     if (typeof text === "string" && text) entry.statusEl.textContent = text;
+    if (entry.presentation === "text" && kind === "running") setSurfacePhase("pending");
     if (kind === "done" || kind === "error") {
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
+      if (entry.presentation === "text") showInlineResult(text, kind);
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
   }
 
-  // Speak replies one at a time so parallel cues finishing together don't overlap.
-  function speak(text) {
-    const t = String(text || "").trim();
-    if (!t) return;
-    speechQueue.push(t);
-    drainSpeech();
-  }
-
-  function drainSpeech() {
-    if (speaking) return;
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    const next = speechQueue.shift();
-    if (!next) {
-      // Nothing left to say: a live voice session falls back to idle so the orb
-      // stops pulsing and the surface settles.
-      if (agentState !== "idle") setAgentState("idle");
-      return;
-    }
-    speaking = true;
-    if (agentState !== "idle") setAgentState("speaking");
-    try {
-      const utterance = new SpeechSynthesisUtterance(next);
-      utterance.lang = navigator.language || "en-US";
-      utterance.onend = utterance.onerror = () => {
-        speaking = false;
-        drainSpeech();
-      };
-      synth.speak(utterance);
-    } catch {
-      speaking = false;
-    }
-  }
-
   function stopSpeaking() {
-    speechQueue.length = 0;
-    speaking = false;
     if (agentState === "speaking") setAgentState("idle");
-    try {
-      window.speechSynthesis && window.speechSynthesis.cancel();
-    } catch {}
   }
 
-  // ---- The duck: sound, reactions, wandering ----------------------------
+  // ---- The mark: sound, reactions, wandering ----------------------------
   // A short synthesized chime so something *rings* when a turn lands. No asset,
   // no network: two quick sine notes. "done" rises (happy), "error" falls,
   // "attention" is a single insistent note (a question needs the user).
@@ -421,7 +425,10 @@
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
     const notes =
-      kind === "error" ? [493.9, 329.6] : kind === "attention" ? [587.3, 587.3] : [659.3, 880.0];
+      kind === "error" ? [493.9, 329.6]
+      : kind === "attention" ? [587.3, 587.3]
+      : kind === "wake" ? [523.25, 783.99] // soft rising fifth, C5 → G5: a friendly "ready"
+      : [659.3, 880.0];
     notes.forEach((freq, i) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -458,7 +465,7 @@
 
   // ---- Wandering --------------------------------------------------------
   // When idle (overlay closed, nothing running, not just dragged or hovered),
-  // the duck glides to a new spot every so often so it feels alive on the page.
+  // the mark glides to a new spot every so often so it feels alive on the page.
   function scheduleWander() {
     clearTimeout(wanderTimer);
     wanderTimer = setTimeout(wanderStep, 5000 + Math.random() * 7000);
@@ -479,7 +486,7 @@
   }
 
   // Glide (not snap) to a target, facing the direction of travel. Wander moves
-  // are not persisted — only a deliberate drag pins the duck (see stopLauncherDrag).
+  // are not persisted — only a deliberate drag pins the mark (see stopLauncherDrag).
   function glideTo(x, y) {
     if (!launcher) return;
     const from = launcher.getBoundingClientRect().left;
@@ -494,16 +501,15 @@
   function submitInstruction(instruction, displayText = instruction) {
     if (!instruction) return;
     const cueId = newCueId();
-    toggle(true);
-    createCue(cueId, displayText);
+    openTextSurface({ fresh: false });
+    createCue(cueId, displayText, { presentation: "text" });
     // A voice-launched turn keeps the agent surface up and moves it to thinking;
     // a typed command leaves the voice surface untouched.
     if (agentState !== "idle") {
       setTranscript(displayText);
       setAgentState("thinking");
     }
-    input.value = "";
-    input.focus(); // immediately ready for the next cue
+    input.focus();
     chrome.runtime.sendMessage({ cmd: "run", instruction, cueId }).catch((error) => {
       updateCue(cueId, String(error?.message || error), "error");
     });
@@ -511,8 +517,8 @@
 
   function describePage() {
     const cueId = newCueId();
-    toggle(true);
-    createCue(cueId, "Describe this page");
+    openTextSurface({ fresh: false });
+    createCue(cueId, "Describe this page", { presentation: "text" });
     chrome.runtime.sendMessage({ cmd: "describe", cueId }).catch((error) => {
       updateCue(cueId, String(error?.message || error), "error");
     });
@@ -541,119 +547,318 @@
     if (next === "idle") setTranscript("");
   }
 
-  // Render the live transcript bar. `interim` softens still-being-heard words so
-  // the user sees speech land word-by-word as the recognizer firms it up.
+  // Render the live transcript bar. `interim` softens words that are still being
+  // finalized by the gateway/provider.
   function setTranscript(text, interim = false) {
     if (!transcriptEl) return;
     transcriptEl.textContent = text || "";
     transcriptEl.classList.toggle("agee-interim", !!interim && !!text);
   }
 
-  function startRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      addLog("error", "Voice input is not available in this browser. Type the instruction instead.");
-      return false;
-    }
-    recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = navigator.language || "en-US";
-    recognition.onstart = () => {
-      setVoiceState(true);
-      setAgentState("listening");
-    };
-    recognition.onerror = (event) => {
-      setVoiceState(false);
-      setAgentState("idle");
-      addLog(
-        "error",
-        event.error === "not-allowed" || event.error === "service-not-allowed"
-          ? "Microphone blocked. Allow mic access for this site, or just type."
-          : `Voice input failed: ${event.error || "unknown error"}`
-      );
-      setTimeout(() => input.focus(), 0);
-    };
-    recognition.onend = () => {
-      setVoiceState(false);
-      // Leave the transcript visible if a turn is mid-flight (thinking/speaking);
-      // only an idle end clears the bar.
-      if (agentState === "listening") setAgentState("idle");
-    };
-    recognition.onresult = (event) => {
-      let firmed = "";
-      let pending = "";
-      for (const result of event.results) {
-        const piece = result[0]?.transcript || "";
-        if (result.isFinal) firmed += piece;
-        else pending += piece;
-      }
-      const transcript = `${firmed} ${pending}`.replace(/\s+/g, " ").trim();
-      // Live transcript bar shows words as they land; interim styling fades the
-      // not-yet-firmed tail. The input bar mirrors it so Enter still works.
-      setTranscript(transcript, !!pending && !firmed.trim());
-      if (transcript) input.value = transcript;
-    };
-    recognition.start();
-    return true;
-  }
-
-  function stopRecognition(submit) {
-    if (recognition) {
-      try {
-        recognition.stop();
-      } catch {}
-      recognition = null;
-    }
-    setVoiceState(false);
-    const text = input.value.trim();
-    if (submit && text) {
-      submitInstruction(text);
-    } else {
-      setTimeout(() => input.focus(), 0);
-    }
-  }
-
-  // Click button: toggle listening, leave transcript in the bar (user hits Enter).
-  function toggleVoice() {
-    if (recognition && listening) {
-      stopRecognition(false);
-      return;
-    }
-    toggle(true);
-    startRecognition();
-  }
-
-  // Dedicated "wake the agent" path (double-tap ⌘). Opens the overlay, shows the
-  // agent surface, and starts listening immediately. Triggering it again while
-  // listening stops and runs what was heard, so the same gesture starts and
-  // finishes a turn.
-  function toggleVoiceSession() {
-    if (recognition && listening) {
-      stopRecognition(true); // second press → run what was heard
-      return;
-    }
-    stopSpeaking(); // barge-in: a new turn cuts off any reply still playing
-    toggle(true);
+  async function startLiveVoiceTurn() {
+    stopSpeaking();
+    closeTextSurface();
+    const cueId = newCueId();
+    createCue(cueId, "Listening...", { presentation: "icon" });
+    updateCue(cueId, "listening...", "running");
+    setVoiceState(true);
     setAgentState("listening");
-    setTranscript("Listening…", true);
-    startRecognition();
+    setTranscript("Listening...", true);
+    setInputText("");
+
+    const state = {
+      cueId,
+      turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      ws: null,
+      stream: null,
+      source: null,
+      processor: null,
+      sampleRate: 0,
+      resample: { offset: 0 },
+      sessionReady: false,
+      committed: false,
+      playbackTime: 0,
+      playbackSources: new Set(),
+      assistantText: "",
+      transcript: "",
+    };
+    liveVoice = state;
+
+    try {
+      const ticket = await chrome.runtime.sendMessage({ cmd: "voiceSessionTicket" });
+      if (!ticket?.ok || !ticket.ws_url) {
+        throw new Error(ticket?.error || "gateway did not return a voice session ticket");
+      }
+
+      state.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      primeAudio();
+      if (!audioCtx) throw new Error("Web Audio is not available in this browser.");
+      state.sampleRate = audioCtx.sampleRate;
+
+      state.ws = new WebSocket(ticket.ws_url);
+      state.ws.binaryType = "arraybuffer";
+      state.ws.onopen = () => {
+        state.ws.send(JSON.stringify({
+          type: "session_start",
+          source: "agee-extension",
+          session_id: ticket.session_id,
+          conversation_id: ticket.conversation_id || ticket.session_id,
+          branch_id: cueId,
+          turn_id: state.turnId,
+          format: {
+            encoding: "pcm16",
+            sample_rate: 16000,
+            channels: 1,
+          },
+        }));
+      };
+      state.ws.onmessage = (event) => handleLiveVoiceMessage(state, event);
+      state.ws.onerror = () => finishLiveVoiceError(state, "Live voice connection failed.");
+      state.ws.onclose = () => {
+        if (liveVoice === state && !state.committed) {
+          finishLiveVoiceError(state, "Live voice connection closed.");
+        }
+      };
+    } catch (error) {
+      finishLiveVoiceError(state, String(error?.message || error));
+    }
   }
 
-  // ---- Hotkeys: ⌘. = voice, ⌘, = text, double-tap ⌘ = voice -----------
+  function startMicrophonePump(state) {
+    if (!state.stream || !audioCtx || state.processor) return;
+    const source = audioCtx.createMediaStreamSource(state.stream);
+    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (event) => {
+      event.outputBuffer.getChannelData(0).fill(0);
+      if (liveVoice !== state || !state.sessionReady || state.committed) return;
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      const inputSamples = event.inputBuffer.getChannelData(0);
+      const pcm = resampleToPcm16(inputSamples, state.sampleRate || audioCtx.sampleRate, 16000, state.resample);
+      if (pcm.byteLength > 0) state.ws.send(pcm);
+    };
+    source.connect(processor);
+    processor.connect(audioCtx.destination);
+    state.source = source;
+    state.processor = processor;
+  }
+
+  function resampleToPcm16(input, inputRate, outputRate, resample) {
+    if (!input?.length || !inputRate || inputRate <= 0) return new ArrayBuffer(0);
+    const ratio = inputRate / outputRate;
+    const samples = [];
+    let index = Math.max(0, Number(resample.offset || 0));
+    while (index < input.length) {
+      const left = Math.floor(index);
+      const right = Math.min(left + 1, input.length - 1);
+      const frac = index - left;
+      const value = input[left] + (input[right] - input[left]) * frac;
+      samples.push(Math.max(-1, Math.min(1, value)));
+      index += ratio;
+    }
+    resample.offset = index - input.length;
+    const pcm = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i += 1) {
+      const sample = samples[i];
+      pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    }
+    return pcm.buffer;
+  }
+
+  function handleLiveVoiceMessage(state, event) {
+    if (event.data instanceof ArrayBuffer) {
+      playLiveAssistantPcm(state, event.data);
+      return;
+    }
+    if (event.data instanceof Blob) {
+      event.data.arrayBuffer().then((buffer) => playLiveAssistantPcm(state, buffer));
+      return;
+    }
+
+    let msg;
+    try {
+      msg = JSON.parse(String(event.data || "{}"));
+    } catch {
+      return;
+    }
+
+    if (msg.type === "session_ready") {
+      state.sessionReady = true;
+      startMicrophonePump(state);
+      updateCue(state.cueId, "listening...", "running");
+      return;
+    }
+    if (msg.type === "profile_applied") {
+      return;
+    }
+    if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
+      const text = String(msg.text || "").trim();
+      if (!text) return;
+      state.transcript = text;
+      setTranscript(text, msg.type === "transcript_partial");
+      updateCueLabel(state.cueId, text);
+      return;
+    }
+    if (msg.type === "assistant_text") {
+      const text = String(msg.text || "").trim();
+      if (!text) return;
+      state.assistantText = text;
+      updateCue(state.cueId, text, "running");
+      return;
+    }
+    if (msg.type === "assistant_audio_start") {
+      setVoiceState(false);
+      setAgentState("speaking");
+      state.playbackTime = Math.max(audioCtx?.currentTime || 0, state.playbackTime || 0) + 0.04;
+      return;
+    }
+    if (msg.type === "assistant_audio_done") {
+      return;
+    }
+    if (msg.type === "turn_done") {
+      finishLiveVoiceDone(state);
+      return;
+    }
+    if (msg.type === "error") {
+      finishLiveVoiceError(state, msg.message || "Live voice failed.");
+    }
+  }
+
+  function playLiveAssistantPcm(state, buffer) {
+    if (!buffer || !buffer.byteLength) return;
+    primeAudio();
+    if (!audioCtx) return;
+    const pcm = new Int16Array(buffer);
+    const audioBuffer = audioCtx.createBuffer(1, pcm.length, 16000);
+    const channel = audioBuffer.getChannelData(0);
+    for (let i = 0; i < pcm.length; i += 1) channel[i] = pcm[i] / 32768;
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtx.destination);
+    state.playbackSources.add(source);
+    source.onended = () => state.playbackSources.delete(source);
+    const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
+    source.start(startAt);
+    state.playbackTime = startAt + audioBuffer.duration;
+  }
+
+  async function commitLiveVoiceTurn() {
+    const state = liveVoice;
+    if (!state) return;
+    state.committed = true;
+    stopLiveCapture(state);
+    setVoiceState(false);
+    setAgentState("thinking");
+    setTranscript(state.transcript || "Thinking...", !state.transcript);
+    updateCue(state.cueId, "thinking...", "running");
+    if (state.ws?.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({ type: "commit_turn", turn_id: state.turnId }));
+    } else {
+      finishLiveVoiceError(state, "Live voice connection was not open.");
+    }
+  }
+
+  function stopLiveVoiceTurn(mode = "stop") {
+    const state = liveVoice;
+    if (!state) return;
+    stopLiveCapture(state);
+    stopLivePlayback(state);
+    try {
+      if (state.ws?.readyState === WebSocket.OPEN && mode === "cancel") {
+        state.ws.send(JSON.stringify({ type: "cancel_turn", turn_id: state.turnId }));
+      }
+    } catch {}
+    try {
+      state.ws?.close(1000, mode);
+    } catch {}
+    if (liveVoice === state) liveVoice = null;
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+  }
+
+  function stopLiveCapture(state) {
+    try {
+      state.processor?.disconnect();
+    } catch {}
+    try {
+      state.source?.disconnect();
+    } catch {}
+    for (const track of state.stream?.getTracks?.() || []) {
+      try {
+        track.stop();
+      } catch {}
+    }
+    state.processor = null;
+    state.source = null;
+    state.stream = null;
+  }
+
+  function stopLivePlayback(state) {
+    for (const source of state.playbackSources || []) {
+      try {
+        source.stop();
+      } catch {}
+    }
+    state.playbackSources?.clear();
+  }
+
+  function finishLiveVoiceDone(state) {
+    if (liveVoice !== state) return;
+    const summary = state.assistantText || "Done.";
+    updateCue(state.cueId, summary, "done");
+    reactLauncher("done");
+    stopLiveCapture(state);
+    try {
+      state.ws?.close(1000, "turn done");
+    } catch {}
+    liveVoice = null;
+    setVoiceState(false);
+    const delayMs = Math.max(0, ((state.playbackTime || 0) - (audioCtx?.currentTime || 0)) * 1000);
+    setTimeout(() => {
+      if (!liveVoice && agentState !== "idle") setAgentState("idle");
+    }, delayMs + 120);
+  }
+
+  function finishLiveVoiceError(state, message) {
+    if (liveVoice !== state) return;
+    updateCue(state.cueId, message, "error");
+    reactLauncher("error");
+    stopLiveVoiceTurn("error");
+  }
+
+  function toggleVoice() {
+    if (liveVoice && listening) {
+      commitLiveVoiceTurn();
+      return;
+    }
+    if (liveVoice) {
+      stopLiveVoiceTurn("cancel");
+    }
+    startLiveVoiceTurn();
+  }
+
+  function toggleVoiceSession() {
+    toggleVoice();
+  }
+
+  // ---- Hotkeys: Cmd/Ctrl+. = voice, Cmd/Ctrl+K = text ------------------
   // Two ways in, both hands-on-keyboard, no clicking:
   //   ⌘.  (or Ctrl+.)         → wake the agent and listen (speech); again to run
-  //   ⌘,  (or Ctrl+,)         → open the text command bar (type)
-  //   double-tap ⌘ (or Ctrl)  → same as ⌘. (kept as a no-chord shortcut)
-  const DOUBLE_TAP_MS = 400;
-  let lastMetaTap = 0;
+  //   ⌘K  (or Ctrl+K)         → open the text command field
 
   function isVoiceHotkey(e) {
     return (e.metaKey || e.ctrlKey) && e.key === ".";
   }
 
   function isTextHotkey(e) {
-    return (e.metaKey || e.ctrlKey) && e.key === ",";
+    return (e.metaKey || e.ctrlKey) && String(e.key || "").toLowerCase() === "k";
   }
 
   window.addEventListener(
@@ -665,34 +870,16 @@
         e.stopPropagation();
         if (!root) build();
         toggleVoiceSession();
-        lastMetaTap = 0;
         return;
       }
-      // ⌘, → text command bar.
+      // ⌘K → text command field.
       if (isTextHotkey(e)) {
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
-        toggle(true);
-        setTimeout(() => input.focus(), 0);
-        lastMetaTap = 0;
+        openTextSurface({ fresh: false });
         return;
       }
-      // Double-tap the bare modifier → voice. A held key (auto-repeat) or any
-      // other key in between resets the window so chords never trigger it.
-      if (e.key === "Meta" || e.key === "Control") {
-        if (e.repeat) return;
-        const now = Date.now();
-        if (now - lastMetaTap < DOUBLE_TAP_MS) {
-          lastMetaTap = 0;
-          if (!root) build();
-          toggleVoiceSession();
-        } else {
-          lastMetaTap = now;
-        }
-        return;
-      }
-      lastMetaTap = 0;
     },
     true
   );
@@ -821,11 +1008,12 @@
         reply({ ok: true });
         return true;
       case "toggle":
-        toggle();
+        if (open) closeTextSurface();
+        else openTextSurface({ fresh: false });
         reply({ ok: true });
         return true;
       case "open":
-        toggle(true);
+        openTextSurface({ fresh: false });
         reply({ ok: true });
         return true;
       case "snapshot":
@@ -838,16 +1026,14 @@
         askInlineConfirm(msg.text || "Allow agee to continue?").then((ok) => reply({ ok }));
         return true;
       case "progress":
-        if (!open) toggle(true);
         updateCue(msg.cueId, msg.text, "running");
         return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");
         reactLauncher("done"); // hop + ring + happy chime
-        speak(msg.speak);
-        // No spoken reply queued: settle the voice surface instead of leaving the
-        // orb stuck on "thinking".
-        if (!speaking && agentState === "thinking") setAgentState("idle");
+        // Text-command replies render in the current card only. Voice replies are
+        // streamed through the Live WebSocket path, not browser text-to-speech.
+        if (agentState === "thinking") setAgentState("idle");
         return false;
       case "error":
         updateCue(msg.cueId, msg.text, "error");
