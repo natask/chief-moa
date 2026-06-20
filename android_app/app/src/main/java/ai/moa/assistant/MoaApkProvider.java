@@ -23,7 +23,7 @@ public final class MoaApkProvider extends ContentProvider {
     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
         File apk = updateApkFile();
         if (!"r".equals(mode) || apk == null || !apk.exists()) {
-            throw new FileNotFoundException("Moa update APK is not available");
+            throw new FileNotFoundException("Aggie update APK is not available");
         }
         return ParcelFileDescriptor.open(apk, ParcelFileDescriptor.MODE_READ_ONLY);
     }

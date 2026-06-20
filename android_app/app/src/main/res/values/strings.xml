@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Chief AG</string>
-    <string name="accessibility_service_description">Chief AG uses screen access to read visible text, identify buttons, and perform user-requested taps, back, and home actions while the assistant overlay is running.</string>
+    <string name="app_name">Aggie</string>
+    <string name="accessibility_service_description">Aggie uses screen access to read visible text, identify buttons, and perform user-requested taps, back, and home actions while the assistant overlay is running.</string>
 </resources>

@@ -28,8 +28,8 @@ final class OrbView extends View {
 
     OrbView(Context context) {
         super(context);
-        bird = context.getDrawable(R.drawable.moa_mark);
-        halo = context.getDrawable(R.drawable.moa_mark);
+        bird = context.getDrawable(R.drawable.agee_mark);
+        halo = context.getDrawable(R.drawable.agee_mark);
         if (halo != null) {
             halo.mutate();
         }

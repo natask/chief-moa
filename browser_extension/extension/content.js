@@ -7,6 +7,7 @@
   // ---- Overlay UI -------------------------------------------------------
   let root,
     launcher,
+    panel,
     input,
     voiceButton,
     stopButton,
@@ -19,14 +20,12 @@
     surfacePhase = "idle",
     listening = false,
     dragState = null,
+    clickTimer = null,
     suppressLauncherClick = false,
-    // The Moa mark floats, wanders the page when idle, reacts to state, and
-    // rings when something lands. audioCtx is created lazily on first gesture.
+    // The Aggie mark stays where the user drops it, reacts to state, and rings
+    // when something lands. audioCtx is created lazily on first gesture.
     audioCtx = null,
-    assistantPlaybackSources = new Set(),
-    wanderTimer = null,
-    wanderPauseUntil = 0,
-    wanderHover = false;
+    assistantPlaybackSources = new Set();
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
   const DEV_RELOAD_POLL_MS = 900;
   let devReloadTimer = null;
@@ -104,20 +103,19 @@
     root = document.createElement("div");
     root.id = "agee-root";
     root.innerHTML = `
-      <button id="agee-launcher" type="button" title="⌘K to type · ⌘. to talk" aria-label="Chief AG">
+      <button id="agee-launcher" type="button" title="Click to type · double-click to talk" aria-label="Aggie">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
       </button>
-      <div id="agee-panel" role="dialog" aria-label="Chief AG command">
+      <div id="agee-panel" role="dialog" aria-label="Aggie command">
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
         </div>
         <div id="agee-bar">
-          <img id="agee-panel-mark" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
           <span id="agee-dot"></span>
-          <textarea id="agee-input" rows="1" placeholder="Ask AG" autocomplete="off" spellcheck="true"></textarea>
+          <textarea id="agee-input" rows="1" placeholder="Ask Aggie" autocomplete="off" spellcheck="true"></textarea>
           <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice">Voice</button>
           <button id="agee-stop" type="button" title="Stop current task" aria-label="Stop current task">Stop</button>
         </div>
@@ -125,6 +123,7 @@
       </div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
+    panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
     voiceButton = root.querySelector("#agee-voice");
     stopButton = root.querySelector("#agee-stop");
@@ -133,6 +132,9 @@
     transcriptEl = root.querySelector("#agee-transcript");
 
     restoreLauncherPosition();
+    // Single click on the mark = text mode (focus the input). Double click =
+    // voice mode (start listening). We detect the double click manually so a
+    // single click does not flash the text surface before voice kicks in.
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -140,9 +142,21 @@
         suppressLauncherClick = false;
         return;
       }
-      openTextSurface({ fresh: false });
+      if (clickTimer) {
+        clearTimeout(clickTimer);
+        clickTimer = null;
+        enableVoiceMode();
+        return;
+      }
+      clickTimer = setTimeout(() => {
+        clickTimer = null;
+        openTextSurface({ fresh: false });
+      }, 280);
     });
     launcher.addEventListener("pointerdown", startLauncherDrag);
+    window.addEventListener("resize", () => {
+      if (open) positionPanel();
+    });
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -178,20 +192,9 @@
       addLog("agee", "stopping…");
     });
 
-    // Hovering the mark pauses its wandering so it is easy to grab or click; a
-    // pointerdown anywhere primes the audio context so the chime can play later
-    // (browsers only allow sound after a user gesture).
-    launcher.addEventListener("pointerenter", () => {
-      wanderHover = true;
-    });
-    launcher.addEventListener("pointerleave", () => {
-      wanderHover = false;
-    });
+    // A pointerdown anywhere primes the audio context so the chime can play
+    // later (browsers only allow sound after a user gesture).
     window.addEventListener("pointerdown", primeAudio, { once: true });
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) scheduleWander();
-    });
-    scheduleWander();
   }
 
   function restoreLauncherPosition() {
@@ -212,6 +215,7 @@
     launcher.style.top = `${nextY}px`;
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
+    if (open) positionPanel(); // keep the surface anchored if the mark moves
     if (persist) chrome.storage.local.set({ ageeLauncherPosition: { x: nextX, y: nextY } });
   }
 
@@ -261,8 +265,38 @@
     if (!root) build();
     root.classList.toggle("agee-open", open);
     if (open) {
+      positionPanel(); // anchor the surface to the mark, not a fixed corner
       if (!was) chime("wake"); // pleasant beep when it engages (⌘K / shortcut)
       setTimeout(() => input.focus(), 0);
+    }
+  }
+
+  // Open the surface and start listening. Double-clicking the mark lands here.
+  function enableVoiceMode() {
+    if (!root) build();
+    toggle(true);
+    if (!listening) toggleVoice();
+  }
+
+  // Anchor the panel to the floating mark so the input opens right where the
+  // agent is. It opens above the mark and grows upward (its bottom stays pinned
+  // just above the mark), so streamed results stack up where the input sits. If
+  // the mark is near the top of the screen, it opens below instead.
+  function positionPanel() {
+    if (!panel || !launcher) return;
+    const lr = launcher.getBoundingClientRect();
+    const gap = 12;
+    const pw = panel.offsetWidth || Math.min(540, window.innerWidth - 24);
+    let left = lr.left + lr.width / 2 - pw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    panel.style.left = `${left}px`;
+    panel.style.right = "auto";
+    if (lr.top > 140) {
+      panel.style.bottom = `${Math.max(8, window.innerHeight - lr.top + gap)}px`;
+      panel.style.top = "auto";
+    } else {
+      panel.style.top = `${lr.bottom + gap}px`;
+      panel.style.bottom = "auto";
     }
   }
 
@@ -348,7 +382,7 @@
           <button type="button" data-agee-confirm="yes">Allow</button>
           <button type="button" data-agee-confirm="no">Cancel</button>
         </div>`;
-      row.querySelector(".agee-confirm-text").textContent = text || "Allow agee to continue?";
+      row.querySelector(".agee-confirm-text").textContent = text || "Allow Aggie to continue?";
       row.addEventListener("click", (event) => {
         const button = event.target.closest("[data-agee-confirm]");
         if (!button) return;
@@ -376,7 +410,7 @@
     if (dot) dot.className = anyActive() ? "running" : lastTerminal;
     if (stopButton) stopButton.classList.toggle("visible", anyActive());
     // The mark glows while it is working so the user can tell it is busy even
-    // with the panel closed. Busy also halts wandering — it stays put and thinks.
+    // with the panel closed.
     if (launcher) launcher.classList.toggle("agee-busy", anyActive());
   }
 
@@ -469,7 +503,7 @@
     if (agentState === "speaking") setAgentState("idle");
   }
 
-  // ---- The mark: sound, reactions, wandering ----------------------------
+  // ---- The mark: sound, reactions ---------------------------------------
   // A short synthesized chime so something *rings* when a turn lands. No asset,
   // no network: two quick sine notes. "done" rises (happy), "error" falls,
   // "attention" is a single insistent note (a question needs the user).
@@ -519,41 +553,6 @@
       ring.classList.add("agee-ring-go");
     }
     chime(kind);
-    // A reaction means something happened: hop in place, then resume roaming.
-    wanderPauseUntil = Date.now() + 2600;
-  }
-
-  // ---- Wandering --------------------------------------------------------
-  // When idle (overlay closed, nothing running, not just dragged or hovered),
-  // the mark glides to a new spot every so often so it feels alive on the page.
-  function scheduleWander() {
-    clearTimeout(wanderTimer);
-    wanderTimer = setTimeout(wanderStep, 5000 + Math.random() * 7000);
-  }
-
-  function wanderStep() {
-    const blocked =
-      !launcher || open || anyActive() || wanderHover || dragState || document.hidden ||
-      Date.now() < wanderPauseUntil;
-    if (!blocked) {
-      const rect = launcher.getBoundingClientRect();
-      const margin = 18;
-      const x = margin + Math.random() * Math.max(0, window.innerWidth - rect.width - margin * 2);
-      const y = margin + Math.random() * Math.max(0, window.innerHeight - rect.height - margin * 2);
-      glideTo(x, y);
-    }
-    scheduleWander();
-  }
-
-  // Glide (not snap) to a target, facing the direction of travel. Wander moves
-  // are not persisted — only a deliberate drag pins the mark (see stopLauncherDrag).
-  function glideTo(x, y) {
-    if (!launcher) return;
-    const from = launcher.getBoundingClientRect().left;
-    launcher.classList.add("agee-gliding");
-    launcher.classList.toggle("agee-face-left", x < from);
-    placeLauncher(x, y, false);
-    setTimeout(() => launcher && launcher.classList.remove("agee-gliding"), 2400);
   }
 
   // Fire a cue. Never blocks on a prior cue — that is the whole point: the user
@@ -1197,7 +1196,7 @@
     }
     try {
       if (el) el.scrollIntoView({ block: "center", behavior: "instant" });
-      if (needsConfirmation(el, req) && !(await askInlineConfirm(`Let agee ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
+      if (needsConfirmation(el, req) && !(await askInlineConfirm(`Let Aggie ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
         return { result: `user cancelled ${req.action}` };
       }
       switch (req.action) {
@@ -1267,7 +1266,7 @@
         act(msg).then(reply);
         return true;
       case "confirm":
-        askInlineConfirm(msg.text || "Allow agee to continue?").then((ok) => reply({ ok }));
+        askInlineConfirm(msg.text || "Allow Aggie to continue?").then((ok) => reply({ ok }));
         return true;
       case "progress":
         updateCue(msg.cueId, msg.text, "running");

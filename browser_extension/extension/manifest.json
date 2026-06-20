@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Chief AG",
+  "name": "Aggie",
   "version": "0.1.1",
   "description": "Open-source browser agent. Cmd+K to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
@@ -44,11 +44,11 @@
         "mac": "Command+K",
         "default": "Ctrl+K"
       },
-      "description": "Open Chief AG command mode"
+      "description": "Open Aggie command mode"
     }
   },
   "action": {
-    "default_title": "Chief AG — open settings",
+    "default_title": "Aggie — open settings",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

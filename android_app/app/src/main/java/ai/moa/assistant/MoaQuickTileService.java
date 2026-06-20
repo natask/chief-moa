@@ -49,7 +49,7 @@ public final class MoaQuickTileService extends TileService {
             return;
         }
 
-        tile.setLabel("Moa");
+        tile.setLabel("Aggie");
         tile.setState(active ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
         tile.updateTile();
     }

@@ -89,7 +89,7 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
   reasoning: Object.freeze({
     gateway: providerRegistryEntry({
       id: "gateway",
-      label: "Moa gateway voice-turn router",
+      label: "Aggie gateway voice-turn router",
       capabilities: {},
       configured: () => true,
     }),
@@ -630,7 +630,7 @@ class GeminiLiveVoiceProvider {
     this.timeoutMs = Math.max(5000, numberFrom(env.VOICE_PROVIDER_TIMEOUT_MS, 60000));
     this.audioIdleCompleteMs = Math.max(500, numberFrom(env.GEMINI_LIVE_AUDIO_IDLE_COMPLETE_MS, 2500));
     this.sendChunkBytes = Math.max(3200, numberFrom(env.GEMINI_LIVE_SEND_CHUNK_BYTES, 32000));
-    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are Moa. Speak tersely. Address the user by their preferred name when known; otherwise avoid titles and honorifics. Never call the user Master. Keep replies short enough for voice.";
+    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are Aggie. Your name is Aggie; if asked who you are, say Aggie — never say you are Gemini or Google. Speak tersely. Address the user plainly with no titles or honorifics — never Master, never Captain. Keep replies short enough for voice.";
   }
 
   // The voice used for the NEXT session/turn: the effective agent profile's
@@ -1119,7 +1119,7 @@ class GeminiLiveVoiceProvider {
         functionDeclarations: [
           {
             name: "launch_agent_run",
-            description: "Start a durable Moa gateway agent run on the home machine for work that should continue outside the live voice response.",
+            description: "Start a durable Aggie gateway agent run on the home machine for work that should continue outside the live voice response.",
             parameters: {
               type: "OBJECT",
               properties: {

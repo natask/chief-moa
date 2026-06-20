@@ -7,6 +7,20 @@ def envOrDefault(String name, String fallback) {
     return value == null || value.trim().isEmpty() ? fallback : value.trim()
 }
 
+def gitSha() {
+    try {
+        def out = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'rev-parse', '--short', 'HEAD'
+            standardOutput = out
+            errorOutput = new ByteArrayOutputStream()
+        }
+        return out.toString().trim()
+    } catch (ignored) {
+        return 'unknown'
+    }
+}
+
 def releaseKeystorePath = envOrDefault('MOA_ANDROID_KEYSTORE_PATH', '')
 def hasReleaseSigning = !releaseKeystorePath.isEmpty()
 
@@ -14,12 +28,17 @@ android {
     namespace 'ai.moa.assistant'
     compileSdk 35
 
+    buildFeatures {
+        buildConfig true
+    }
+
     defaultConfig {
         applicationId 'ai.moa.assistant'
         minSdk 26
         targetSdk 35
         versionCode envOrDefault('MOA_ANDROID_VERSION_CODE', '1').toInteger()
         versionName envOrDefault('MOA_ANDROID_VERSION_NAME', '0.1.0')
+        buildConfigField 'String', 'GIT_SHA', "\"${envOrDefault('MOA_ANDROID_GIT_SHA', gitSha())}\""
     }
 
     signingConfigs {

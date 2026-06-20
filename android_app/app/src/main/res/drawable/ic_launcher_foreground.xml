@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Adaptive-icon foreground: the golden moa mark, inset into the 108dp safe
+<!-- Adaptive-icon foreground: the Aggie mark, inset into the 108dp safe
      zone (~24dp per edge) so the circular/rounded masks never clip the bird. -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
-    android:drawable="@drawable/moa_mark"
+    android:drawable="@drawable/agee_mark"
     android:insetLeft="24dp"
     android:insetRight="24dp"
     android:insetTop="24dp"

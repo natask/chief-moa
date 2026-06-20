@@ -25,12 +25,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 0;
   border-radius: 50%;
-  background:
-    radial-gradient(92% 84% at 31% 22%, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 45%),
-    radial-gradient(120% 120% at 32% 26%, #303039 0%, #151519 56%, #09090b 100%);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  background: transparent;
+  box-shadow: none;
   color: #ffd76a;
   cursor: grab;
   padding: 0;
@@ -42,8 +40,8 @@
 /* The mark floats with a gentle, always-on bob so it reads as alive. The hop /
    shake reactions ride on top by overriding this on the launcher itself. */
 #agee-launcher .agee-bird {
-  width: 39px;
-  height: 39px;
+  width: 52px;
+  height: 52px;
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
@@ -53,8 +51,6 @@
 }
 #agee-launcher:hover {
   transform: scale(1.06);
-  border-color: rgba(255, 215, 106, 0.34);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.46), 0 0 0 4px rgba(255, 215, 106, 0.1);
 }
 #agee-launcher:focus-visible {
   outline: 0;
@@ -63,7 +59,7 @@
 #agee-launcher:active {
   cursor: grabbing;
 }
-/* A soft shadow puddle under the duck grounds it as it floats and glides. */
+/* A soft shadow under the mark grounds it as it floats. */
 #agee-launcher .agee-shadow {
   position: absolute;
   left: 50%;
@@ -77,16 +73,6 @@
   pointer-events: none;
   animation: agee-shadow 2.6s ease-in-out infinite;
 }
-/* Face the way it is gliding. */
-#agee-launcher.agee-face-left .agee-bird {
-  transform: scaleX(-1);
-}
-/* Wander glide: animate position so it drifts instead of snapping. Set only
-   while a wander move is in flight, so a deliberate drag stays instant. */
-#agee-launcher.agee-gliding {
-  transition: left 2.2s cubic-bezier(0.45, 0.05, 0.2, 1),
-    top 2.2s cubic-bezier(0.45, 0.05, 0.2, 1), box-shadow 0.3s ease, transform 0.2s ease;
-}
 /* Busy: a breathing amber halo while a turn is running, panel open or closed. */
 #agee-launcher.agee-busy {
   animation: agee-busy-glow 1.5s ease-in-out infinite;
@@ -94,13 +80,13 @@
 /* Live-state glows mirror the voice orb: listening green, thinking amber,
    speaking blue. These tint the mark so the page-level launcher carries state. */
 #agee-root.agee-state-listening #agee-launcher {
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(53, 199, 89, 0.5), 0 0 22px rgba(53, 199, 89, 0.45);
+  box-shadow: 0 0 26px 6px rgba(53, 199, 89, 0.5);
 }
 #agee-root.agee-state-thinking #agee-launcher {
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(245, 166, 35, 0.5), 0 0 22px rgba(245, 166, 35, 0.45);
+  box-shadow: 0 0 26px 6px rgba(245, 166, 35, 0.5);
 }
 #agee-root.agee-state-speaking #agee-launcher {
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(74, 155, 255, 0.5), 0 0 22px rgba(74, 155, 255, 0.45);
+  box-shadow: 0 0 26px 6px rgba(74, 155, 255, 0.5);
 }
 /* The ring that fires when something lands. Colour carries the kind. */
 #agee-launcher .agee-ring {
@@ -141,8 +127,8 @@
   50% { transform: translateX(-50%) scale(0.82); opacity: 0.2; }
 }
 @keyframes agee-busy-glow {
-  0%, 100% { box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4), 0 0 0 2px rgba(245, 166, 35, 0.35), 0 0 16px rgba(245, 166, 35, 0.3); }
-  50% { box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4), 0 0 0 4px rgba(245, 166, 35, 0.55), 0 0 28px rgba(245, 166, 35, 0.55); }
+  0%, 100% { box-shadow: 0 0 16px 3px rgba(245, 166, 35, 0.3); }
+  50% { box-shadow: 0 0 30px 7px rgba(245, 166, 35, 0.55); }
 }
 @keyframes agee-ring {
   0% { opacity: 0.9; transform: scale(0.8); }
@@ -177,9 +163,9 @@
   display: none;
   pointer-events: auto;
   position: absolute;
-  top: max(14px, env(safe-area-inset-top));
-  left: 50%;
-  transform: translateX(-50%) translateY(-4px);
+  /* left/top (or bottom) are set in JS to anchor the surface to the floating
+     mark; see positionPanel() in content.js. */
+  transform: translateY(-4px);
   width: min(540px, calc(100vw - 24px));
   min-height: 54px;
   box-sizing: border-box;
@@ -198,7 +184,7 @@
 }
 #agee-root.agee-open #agee-panel {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 #agee-root.agee-open #agee-panel {
   display: block;
@@ -262,7 +248,7 @@
 }
 #agee-bar {
   display: grid;
-  grid-template-columns: 30px 10px minmax(0, 1fr) 34px 34px;
+  grid-template-columns: 10px minmax(0, 1fr) 34px 34px;
   align-items: start;
   gap: 9px;
   min-height: 54px;
@@ -536,7 +522,7 @@
     width: calc(100vw - 16px);
   }
   #agee-bar {
-    grid-template-columns: 26px 9px minmax(0, 1fr) 32px 32px;
+    grid-template-columns: 9px minmax(0, 1fr) 32px 32px;
     gap: 7px;
     padding: 8px;
   }

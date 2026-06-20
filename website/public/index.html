@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Chief AG — a voice assistant in your browser</title>
-<meta name="description" content="Chief AG is one assistant for all your agents, across every device, with your data in one place you own. Join the waitlist." />
+<title>Aggie — a voice assistant in your browser</title>
+<meta name="description" content="Aggie is one assistant for all your agents, across every device, with your data in one place you own. Join the waitlist." />
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
-<meta property="og:title" content="Chief AG — a voice assistant in your browser" />
+<meta property="og:title" content="Aggie — a voice assistant in your browser" />
 <meta property="og:url" content="https://agee.app/" />
 <link rel="canonical" href="https://agee.app/" />
 <meta property="og:description" content="One assistant for all your agents, across every device. You speak, it does the work, you stay in control." />
@@ -87,6 +87,40 @@
   .beat h3{font-family:var(--serif);font-style:italic;font-weight:400;font-size:26px;margin:0;color:var(--ink)}
   .beat p{font-family:var(--mono);font-weight:300;font-size:14px;color:var(--graphite);margin:.55em 0 0;line-height:1.65}
 
+  /* bands — motivation + showcase */
+  .band{margin-top:13vh;padding-top:54px;border-top:1px solid var(--hair);max-width:960px}
+  .band .eyebrow{margin-bottom:20px}
+  .band h2{font-size:clamp(30px,4.4vw,52px);line-height:1.02;letter-spacing:-.022em;margin:0;font-weight:300}
+  .band h2 em{font-style:italic;color:var(--signal);font-weight:400}
+  .band .lead{font-size:19px;font-weight:300;color:var(--ink);max-width:54ch;margin:24px 0 0;line-height:1.5}
+  .band .lead .dim{color:var(--graphite)}
+
+  /* grounding — the field is moving here */
+  .ground{margin-top:40px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px;max-width:840px}
+  .ground a{display:block;text-decoration:none;color:inherit;padding:18px 18px 16px;
+    background:rgba(255,255,255,.45);border:1px solid var(--hair);transition:border-color .2s}
+  .ground a:hover{border-color:rgba(229,72,43,.5)}
+  .ground .src{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--graphite)}
+  .ground .claim{font-family:var(--serif);font-size:17px;line-height:1.3;margin-top:10px;color:var(--ink)}
+
+  /* showcase — desktop media frame */
+  .showcase{margin-top:38px}
+  .frame{position:relative;aspect-ratio:16/10;width:100%;max-width:900px;overflow:hidden;
+    border:1px solid var(--hair);background:var(--paper-2);
+    box-shadow:0 18px 44px rgba(0,0,0,.14)}
+  .frame video,.frame img{display:block;width:100%;height:100%;object-fit:cover}
+  .frame .placeholder{position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:10px;
+    background:
+      repeating-linear-gradient(45deg, rgba(0,0,0,.018) 0 14px, transparent 14px 28px),
+      radial-gradient(120% 90% at 50% -10%, rgba(255,255,255,.7), transparent 60%)}
+  .frame .placeholder .dot{width:54px;height:54px;border-radius:50%;background:var(--signal);
+    opacity:.92;box-shadow:0 0 0 12px rgba(229,72,43,.12)}
+  .frame .placeholder .label{font-family:var(--mono);font-size:12px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--graphite)}
+  .caption{font-family:var(--mono);font-size:12px;font-weight:300;color:var(--graphite);
+    margin-top:14px;letter-spacing:.02em}
+
   footer{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:0 28px 40px;
     font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--graphite)}
 
@@ -94,12 +128,14 @@
     .hero{gap:34px;margin-top:5vh}
     .hero-mark{display:none}
     .beats{grid-template-columns:1fr;gap:26px;margin-top:9vh}
+    .band{margin-top:10vh}
+    .ground{grid-template-columns:1fr;gap:14px}
   }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><img src="assets/icon-192.png" alt="" /> Chief AG</div>
+  <div class="top"><img src="assets/icon-192.png" alt="" /> Aggie</div>
 
   <div class="hero">
     <div class="hero-text">
@@ -118,7 +154,7 @@
         <p class="fineprint">One confirmation email. No spam. Unsubscribe anytime.</p>
       </div>
     </div>
-    <img class="hero-mark" src="assets/agee.png" alt="Chief AG" />
+    <img class="hero-mark" src="assets/agee.png" alt="Aggie" />
   </div>
 
   <div class="beats">
@@ -139,9 +175,52 @@
       <p>Self-hosted on your own machine. Your keys, your data. Swap the model under it and your work stays.</p>
     </div>
   </div>
+
+  <!-- WHY NOW · the interaction model is changing -->
+  <section class="band">
+    <p class="eyebrow">Why now</p>
+    <h2>Talking to a machine is moving from turns to <em>time.</em></h2>
+    <p class="lead">Chat is a transcript with a delay: you type, you wait, it answers, you wait.
+      Aggie runs on a clock instead. It listens, watches your screen, and acts while you keep working.
+      <span class="dim">Once it feels like a person in the room, you do not go back.</span></p>
+
+    <div class="ground">
+      <a href="https://thinkingmachines.ai/blog/interaction-models/" target="_blank" rel="noopener">
+        <div class="src">Thinking Machines Lab</div>
+        <div class="claim">Interaction models — built to listen, see, and speak on a clock, not turn by turn.</div>
+      </a>
+      <a href="https://deepmind.google/blog/genie-3-a-new-frontier-for-world-models/" target="_blank" rel="noopener">
+        <div class="src">DeepMind · Genie 3</div>
+        <div class="claim">Real-time worlds you act in. Output stopped being a video. It became a place.</div>
+      </a>
+      <a href="https://ai.google.dev/gemini-api/docs/video-understanding" target="_blank" rel="noopener">
+        <div class="src">The field · 2026</div>
+        <div class="claim">Real-time multimodal is now a category, not a demo. Aggie is built for it.</div>
+      </a>
+    </div>
+  </section>
+
+  <!-- SHOWCASE · the desktop app watches your screen -->
+  <section class="band">
+    <p class="eyebrow">On your desktop</p>
+    <h2>It sees what you see, and <em>does the work.</em></h2>
+    <p class="lead">The Mac app watches your screen as a live feed and acts on it.
+      <span class="dim">Self-hosted, pointed only at your own Aggie. Your screen never leaves your machine.</span></p>
+
+    <div class="showcase">
+      <figure class="frame">
+        <!-- Drop real capture here: assets/heyclicky.mp4 (+ poster). Until then, the placeholder shows. -->
+        <div class="placeholder">
+          <span class="dot"></span>
+          <span class="label">Desktop demo · coming</span>
+        </div>
+      </figure>
+      <p class="caption">Aggie on macOS, watching the screen and doing work in the background.</p>
+    </div>
+  </section>
 </div>
 
-<footer>Chief AG · self-hosted · open source</footer>
+<footer>Aggie · self-hosted · open source</footer>
 
 <script>
 (function(){

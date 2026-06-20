@@ -1,4 +1,4 @@
-// Send a short-lived reload signal to an unpacked Chief AG extension.
+// Send a short-lived reload signal to an unpacked Aggie extension.
 //
 // The extension's dev-reload path polls /__agee-dev/version when enabled from
 // extension/dev.html. This script serves a fresh version briefly, long enough

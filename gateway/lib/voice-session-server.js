@@ -142,7 +142,10 @@ class VoiceSessionConnection {
 
   handleAudio(data) {
     if (!this.turn || this.turn.status !== "recording") {
-      this.sendError("audio frame received before an active recording turn");
+      // Mobile/browser capture can deliver a final buffered PCM chunk after the
+      // client has committed the turn or after a live reply has completed. That
+      // frame is stale input, not a session failure; sending an error here makes
+      // clients tear down continuous voice after one response.
       return;
     }
 

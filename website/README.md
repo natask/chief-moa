@@ -1,6 +1,6 @@
-# Chief AG website
+# Aggie website
 
-The public Chief AG site: a single landing page with the email field above the
+The public Aggie site: a single landing page with the email field above the
 fold, backed by a waitlist signup that stores emails in D1 and sends a
 confirmation email via Resend.
 

@@ -245,10 +245,10 @@ public final class OverlayService extends Service {
 
         NotificationChannel channel = new NotificationChannel(
                 OVERLAY_CHANNEL_ID,
-                "Moa overlay",
+                "Aggie overlay",
                 NotificationManager.IMPORTANCE_LOW
         );
-        channel.setDescription("Keeps the Moa overlay available above other apps.");
+        channel.setDescription("Keeps the Aggie overlay available above other apps.");
         channel.setShowBadge(false);
 
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -272,7 +272,7 @@ public final class OverlayService extends Service {
             builder = new Notification.Builder(this);
         }
         builder.setSmallIcon(R.drawable.ic_moa_orb)
-                .setContentTitle("Moa overlay")
+                .setContentTitle("Aggie overlay")
                 .setContentText("Ready for commands on the current screen.")
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -666,7 +666,7 @@ public final class OverlayService extends Service {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text(assistant ? "Moa" : "You", assistant ? MoaColors.MINT : 0xFFBFA9FF, 10, true);
+        TextView label = text(assistant ? "Aggie" : "You", assistant ? MoaColors.MINT : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(5), 0, dp(5), dp(3));
 
@@ -931,7 +931,7 @@ public final class OverlayService extends Service {
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text("Moa", MoaColors.PAPER, 17, true);
+        TextView label = text("Aggie", MoaColors.PAPER, 17, true);
         label.setLetterSpacing(0.02f);
         copy.addView(label);
         runStatusView = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
@@ -1234,7 +1234,7 @@ public final class OverlayService extends Service {
 
     private void requestAgentRun(String prompt, boolean fromVoice) {
         if (gatewayUrl.isEmpty()) {
-            deliverReply("Agent actions need the Moa gateway. Set the home-machine URL first.", fromVoice);
+            deliverReply("Agent actions need the Aggie gateway. Set the home-machine URL first.", fromVoice);
             return;
         }
 

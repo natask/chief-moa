@@ -16,7 +16,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Run
 
-1. Open Moa on the phone.
+1. Open Aggie on the phone.
 2. Grant `Draw over other apps`.
 3. Grant `Screen access` in Android accessibility settings if you want current-screen context and controlled actions.
 4. Grant microphone access.

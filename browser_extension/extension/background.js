@@ -30,7 +30,7 @@ async function getConfig() {
 // Returns the parsed JSON body for the given path (e.g. "/v1/chat", "/health").
 async function callGateway(cfg, path, { method = "POST", body, signal } = {}) {
   if (!cfg.gatewayUrl) {
-    throw new Error("No gateway URL set. Open agee Options and set the Agent gateway URL.");
+    throw new Error("No gateway URL set. Open Aggie Options and set the Agent gateway URL.");
   }
   const headers = { "content-type": "application/json" };
   if (cfg.gatewayToken) headers.authorization = `Bearer ${cfg.gatewayToken}`;
@@ -44,7 +44,7 @@ async function callGateway(cfg, path, { method = "POST", body, signal } = {}) {
   if (!resp.ok) {
     if (resp.status === 401) {
       throw new Error(
-        "Gateway rejected the token (401). Open agee Options and set a valid Gateway token, then Save."
+        "Gateway rejected the token (401). Open Aggie Options and set a valid Gateway token, then Save."
       );
     }
     throw new Error(`gateway ${resp.status}: ${text.slice(0, 300)}`);
@@ -753,7 +753,7 @@ async function confirmNavigation(tabId, url) {
   try {
     const response = await ask(tabId, {
       cmd: "confirm",
-      text: `Allow agee to navigate from ${from || "this page"} to ${to}?`,
+      text: `Allow Aggie to navigate from ${from || "this page"} to ${to}?`,
     });
     return response?.ok === true;
   } catch {
@@ -848,7 +848,7 @@ async function describePage(tabId, controller, cueId) {
     // Thin client: page description is produced by the user's gateway. There is
     // no in-browser model path.
     if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the agee toolbar icon → Options and set the Agent gateway URL." });
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the Aggie toolbar icon → Options and set the Agent gateway URL." });
       return;
     }
     await describePageViaGateway(tabId, cfg, signal, cueId);
@@ -870,7 +870,7 @@ async function runAgent(tabId, instruction, controller, cueId) {
     // Thin client: every turn is handled by the user's self-hosted gateway.
     // There is no in-browser model path or provider key.
     if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the agee toolbar icon → Options and set the Agent gateway URL." });
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the Aggie toolbar icon → Options and set the Agent gateway URL." });
       return;
     }
 

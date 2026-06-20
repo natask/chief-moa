@@ -133,7 +133,7 @@ public final class MainActivity extends Activity {
         root.addView(eyebrow);
 
         TextView title = new TextView(this);
-        title.setText("Moa lives above\nthe phone.");
+        title.setText("Aggie lives above\nthe phone.");
         title.setTextColor(MoaColors.PAPER);
         title.setTextSize(36);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
@@ -191,7 +191,7 @@ public final class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "Voice agent setup");
 
-        TextView hint = label("Run the Moa gateway on your server, then point this app at it. Model keys stay on the server and chat turns are saved there.", 0xB8EEF8E8, 15, false);
+        TextView hint = label("Run the Aggie gateway on your server, then point this app at it. Model keys stay on the server and chat turns are saved there.", 0xB8EEF8E8, 15, false);
         hint.setLineSpacing(dp(2), 1f);
         hint.setPadding(0, 0, 0, dp(10));
         card.addView(hint);
@@ -229,7 +229,7 @@ public final class MainActivity extends Activity {
     private View actionCard() {
         LinearLayout card = card();
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        addCardTitle(card, "Launch Moa");
+        addCardTitle(card, "Launch Aggie");
 
         overlayButton = primaryButton("Enable overlay permission");
         overlayButton.setOnClickListener(v -> openOverlaySettings());
@@ -264,8 +264,8 @@ public final class MainActivity extends Activity {
         addBullet(card, "Gemini-style live transcript overlay while speaking.");
         addBullet(card, "Mic button uses Android speech recognition only after you press it.");
         addBullet(card, "Screen access reads visible app text and passes it to gateway replies and home-machine agent runs.");
-        addBullet(card, "Assistant calls the self-hosted Moa gateway when configured, with local fallback replies if the server is unavailable.");
-        addBullet(card, "Voice commands that ask Moa to build, fix, change, or test something can run the Gemini harness on the home machine.");
+        addBullet(card, "Assistant calls the self-hosted Aggie gateway when configured, with local fallback replies if the server is unavailable.");
+        addBullet(card, "Voice commands that ask Aggie to build, fix, change, or test something can run the Gemini harness on the home machine.");
         addBullet(card, "Voice-originated replies speak back with Android TextToSpeech.");
         return card;
     }
@@ -528,7 +528,10 @@ public final class MainActivity extends Activity {
                 MoaGatewayClient client = new MoaGatewayClient(gatewayUrl, MoaPrefs.gatewayToken(this));
                 JSONObject manifest = client.latestAndroidUpdate();
                 long remoteVersionCode = manifest.optLong("version_code", 0);
-                if (remoteVersionCode > currentVersionCode()) {
+                String remoteGitSha = manifest.optString("git_sha", "").trim();
+                String currentGitSha = BuildConfig.GIT_SHA == null ? "" : BuildConfig.GIT_SHA.trim();
+                boolean sameSource = !remoteGitSha.isEmpty() && remoteGitSha.equals(currentGitSha);
+                if (!sameSource && remoteVersionCode > currentVersionCode()) {
                     update = manifest;
                     label = "v" + manifest.optString("version_name", String.valueOf(remoteVersionCode)) + " available";
                     color = MoaColors.MINT;

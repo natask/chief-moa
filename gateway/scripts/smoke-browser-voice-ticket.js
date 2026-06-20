@@ -51,6 +51,7 @@ async function main() {
         "ticket response includes a ws:// /v1/voice/sessions URL",
         "headerless browser WebSocket authenticates with the ticket",
         "PCM16 input returns assistant audio and turn_done",
+        "late post-turn PCM is dropped without killing the voice socket",
         browserSourceChecked
           ? "browser production voice source does not use SpeechRecognition/webkitSpeechRecognition/speechSynthesis"
           : "browser source contract skipped because this checkout has only gateway files",
@@ -208,6 +209,7 @@ async function issueTicket(baseUrl) {
 async function runVoiceTurn(wsUrl) {
   const ws = await openClient(wsUrl);
   const seen = new Set();
+  const errors = [];
   let audioBytes = 0;
   try {
     ws.on("message", (data, isBinary) => {
@@ -217,6 +219,7 @@ async function runVoiceTurn(wsUrl) {
       }
       const event = JSON.parse(Buffer.from(data).toString("utf8"));
       seen.add(event.type);
+      if (event.type === "error") errors.push(event.message || "gateway error");
     });
     ws.send(JSON.stringify({
       type: "session_start",
@@ -229,9 +232,12 @@ async function runVoiceTurn(wsUrl) {
     ws.send(generatePcm16Tone(16000, 220, 0.2, 260));
     ws.send(JSON.stringify({ type: "commit_turn" }));
     await waitFor(() => seen.has("turn_done"), "turn_done missing");
+    ws.send(generatePcm16Tone(16000, 220, 0.05, 120));
+    await sleep(120);
     for (const event of ["transcript_final", "assistant_audio_start", "assistant_audio_done"]) {
       assert.ok(seen.has(event), `missing ${event}`);
     }
+    assert.deepEqual(errors, [], "late post-turn audio must not emit a fatal gateway error");
     assert.ok(audioBytes > 0, "assistant audio stream was empty");
   } finally {
     ws.close(1000, "smoke done");
