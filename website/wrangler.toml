@@ -1,4 +1,4 @@
-name = "chief-moa-site"
+name = "agee-app"
 compatibility_date = "2025-06-01"
 pages_build_output_dir = "./public"
 
@@ -12,4 +12,4 @@ database_id = "ea9d4069-22eb-45f1-889f-342d7160cb2b"
 #   RESEND_API_KEY   — Resend API key
 #   RESEND_FROM      — verified sender, e.g. "Moa <hello@yourdomain.com>"
 #   RESEND_REPLY_TO  — optional reply-to address
-# Set them with: npx wrangler pages secret put RESEND_API_KEY --project-name chief-moa-site
+# Set them with: npx wrangler pages secret put RESEND_API_KEY --project-name agee-app

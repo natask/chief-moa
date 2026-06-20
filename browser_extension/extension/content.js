@@ -19,6 +19,9 @@
     liveVoice = null,
     surfacePhase = "idle",
     listening = false,
+    // Conversation mode: once you start talking, the mark keeps listening after
+    // each reply so it works like speaking, not click-to-send. Stop ends it.
+    conversationActive = false,
     dragState = null,
     clickTimer = null,
     suppressLauncherClick = false,
@@ -113,13 +116,13 @@
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
         </div>
+        <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
           <textarea id="agee-input" rows="1" placeholder="Ask Aggie" autocomplete="off" spellcheck="true"></textarea>
           <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice">Voice</button>
           <button id="agee-stop" type="button" title="Stop current task" aria-label="Stop current task">Stop</button>
         </div>
-        <div id="agee-log" aria-hidden="true"></div>
       </div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
@@ -160,21 +163,20 @@
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Enter" && !e.shiftKey && input.value.trim()) {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (surfacePhase === "pending") return;
-        if (surfacePhase === "result" || surfacePhase === "error") {
-          input.select();
-          return;
-        }
-        submitInstruction(input.value.trim());
+        const text = input.value.trim();
+        if (!text) return;
+        // The composer never blocks: fire the message and free the field right
+        // away so the next one can be typed and sent while this turn streams.
+        submitInstruction(text);
       } else if (e.key === "Escape") {
         closeTextSurface();
       }
     });
     input.addEventListener("input", () => {
       resizeInput();
-      if (surfacePhase !== "pending") setSurfacePhase("editing");
+      setSurfacePhase("editing");
     });
 
     voiceButton.addEventListener("click", (e) => {
@@ -303,14 +305,11 @@
   function openTextSurface({ fresh = false } = {}) {
     if (!root) build();
     toggle(true);
-    if (fresh || surfacePhase === "idle" || surfacePhase === "result" || surfacePhase === "error") {
+    if (fresh || surfacePhase === "idle") {
       setInputText("");
       setSurfacePhase("editing");
     }
-    setTimeout(() => {
-      input.focus();
-      if (surfacePhase === "result" || surfacePhase === "error") input.select();
-    }, 0);
+    setTimeout(() => input.focus(), 0);
   }
 
   function closeTextSurface() {
@@ -324,7 +323,15 @@
     for (const phase of ["idle", "editing", "pending", "result", "error"]) {
       root.classList.toggle(`agee-phase-${phase}`, phase === next);
     }
-    if (input) input.readOnly = next === "pending";
+    // The composer stays editable through every phase. Answers live in the cue
+    // cards above, never in the input, so a running turn never locks typing.
+    if (input) input.readOnly = false;
+  }
+
+  // Show the log whenever it holds anything (cards or confirm rows), so streamed
+  // answers stack just above the composer.
+  function syncLogVisibility() {
+    if (root && log) root.classList.toggle("agee-has-log", log.children.length > 0);
   }
 
   function setInputText(text, { select = false } = {}) {
@@ -346,13 +353,6 @@
     input.style.height = `${Math.min(input.scrollHeight || 0, max)}px`;
   }
 
-  function showInlineResult(text, kind, { reveal = open } = {}) {
-    if (!input) return;
-    const fallback = kind === "error" ? "Something went wrong." : "Done.";
-    setInputText(String(text || fallback).trim() || fallback, { select: reveal });
-    setSurfacePhase(kind === "error" ? "error" : "result");
-  }
-
   function makeRow(who, text) {
     const row = document.createElement("div");
     row.className = `agee-row agee-${who}`;
@@ -363,6 +363,7 @@
   function addLog(who, text) {
     if (!log) return;
     log.appendChild(makeRow(who, text));
+    syncLogVisibility();
     log.scrollTop = log.scrollHeight;
   }
 
@@ -422,23 +423,25 @@
     return `c_${cueSeq}_${Date.now().toString(36)}`;
   }
 
-  function resetVisibleTurn() {
-    if (pendingConfirm) {
-      pendingConfirm(false);
-      pendingConfirm = null;
-      root?.classList.remove("agee-confirming");
+  // Cards stack as the user keeps sending. Drop the oldest finished ones past the
+  // cap so the log stays bounded; a running card is never pruned.
+  const MAX_CUE_CARDS = 12;
+  function pruneCueCards() {
+    if (!log) return;
+    const cards = [...log.querySelectorAll(".agee-cue")];
+    let removable = cards.length - MAX_CUE_CARDS;
+    for (const card of cards) {
+      if (removable <= 0) break;
+      const id = card.dataset.cue;
+      if (activeCues.has(id)) continue;
+      card.remove();
+      cues.delete(id);
+      removable -= 1;
     }
-    if (log) log.replaceChildren();
-    cues.clear();
-    activeCues.clear();
-    lastTerminal = "";
-    currentCueId = null;
-    refreshStatus();
   }
 
-  function createCue(cueId, label, { presentation = "text" } = {}) {
+  function createCue(cueId, label, { presentation = "card" } = {}) {
     if (!log) return;
-    resetVisibleTurn();
     currentCueId = cueId;
     const card = document.createElement("div");
     card.className = "agee-cue agee-cue-running";
@@ -452,13 +455,11 @@
     card.appendChild(you);
     card.appendChild(status);
     log.appendChild(card);
-    log.scrollTop = log.scrollHeight;
     cues.set(cueId, { statusEl: status, cardEl: card, labelEl: you, presentation });
     activeCues.add(cueId);
-    if (presentation === "text") {
-      setInputText(label);
-      setSurfacePhase("pending");
-    }
+    pruneCueCards();
+    syncLogVisibility();
+    log.scrollTop = log.scrollHeight;
     refreshStatus();
   }
 
@@ -478,21 +479,17 @@
     if (!entry) {
       if (cueId && currentCueId && cueId !== currentCueId) return;
       addLog(kind === "error" ? "error" : kind === "done" ? "done" : "agee", text);
-      if (open && kind === "running") setSurfacePhase("pending");
       if (kind === "done" || kind === "error") {
-        if (open) showInlineResult(text, kind);
         lastTerminal = kind;
         refreshStatus();
       }
       return;
     }
     if (typeof text === "string" && text) entry.statusEl.textContent = text;
-    if (entry.presentation === "text" && kind === "running") setSurfacePhase("pending");
     if (kind === "done" || kind === "error") {
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
-      if (entry.presentation === "text") showInlineResult(text, kind);
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
@@ -561,7 +558,11 @@
     if (!instruction) return;
     const cueId = newCueId();
     openTextSurface({ fresh: false });
-    createCue(cueId, displayText, { presentation: "text" });
+    createCue(cueId, displayText, { presentation: "card" });
+    // Free the composer at once: clear it, keep it editable, keep focus. The next
+    // message can go while this card streams its answer above.
+    setInputText("");
+    setSurfacePhase("editing");
     // A voice-launched turn keeps the agent surface up and moves it to thinking;
     // a typed command leaves the voice surface untouched.
     if (agentState !== "idle") {
@@ -577,7 +578,7 @@
   function describePage() {
     const cueId = newCueId();
     openTextSurface({ fresh: false });
-    createCue(cueId, "Describe this page", { presentation: "text" });
+    createCue(cueId, "Describe this page", { presentation: "card" });
     chrome.runtime.sendMessage({ cmd: "describe", cueId }).catch((error) => {
       updateCue(cueId, String(error?.message || error), "error");
     });
@@ -619,6 +620,7 @@
   async function startLiveVoiceTurn() {
     stopSpeaking();
     closeTextSurface();
+    conversationActive = true;
     const cueId = newCueId();
     createCue(cueId, "Listening...", { presentation: "icon" });
     updateCue(cueId, "listening...", "running");
@@ -864,6 +866,9 @@
   }
 
   function stopLiveVoiceTurn(mode = "stop") {
+    // Any explicit stop/cancel/error ends conversation mode so the mark does not
+    // re-arm the mic after the current turn tears down.
+    conversationActive = false;
     const state = liveVoice;
     if (!state) return;
     stopLiveCapture(state);
@@ -930,9 +935,17 @@
     } catch {}
     liveVoice = null;
     setVoiceState(false);
+    // Wait for the spoken reply to finish playing, then either listen again (so
+    // the user just keeps talking) or fall back to idle if the conversation was
+    // stopped. Re-arming only after playback ends keeps the reply out of the mic.
     const delayMs = Math.max(0, ((state.playbackTime || 0) - (audioCtx?.currentTime || 0)) * 1000);
     setTimeout(() => {
-      if (!liveVoice && agentState !== "idle") setAgentState("idle");
+      if (liveVoice) return;
+      if (conversationActive) {
+        startLiveVoiceTurn();
+        return;
+      }
+      if (agentState !== "idle") setAgentState("idle");
     }, delayMs + 120);
   }
 
