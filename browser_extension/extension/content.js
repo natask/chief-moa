@@ -27,6 +27,64 @@
     wanderTimer = null,
     wanderPauseUntil = 0,
     wanderHover = false;
+  const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
+  const DEV_RELOAD_POLL_MS = 900;
+  let devReloadTimer = null;
+  let devReloadInFlight = false;
+  let devReloadVersion = null;
+  const PROFILE_LANGUAGE_NAMES = [
+    "english",
+    "spanish",
+    "french",
+    "german",
+    "italian",
+    "portuguese",
+    "dutch",
+    "russian",
+    "polish",
+    "ukrainian",
+    "turkish",
+    "arabic",
+    "hebrew",
+    "hindi",
+    "bengali",
+    "bangla",
+    "urdu",
+    "tamil",
+    "telugu",
+    "mandarin",
+    "chinese",
+    "cantonese",
+    "japanese",
+    "korean",
+    "vietnamese",
+    "thai",
+    "indonesian",
+    "malay",
+    "filipino",
+    "tagalog",
+    "swahili",
+    "amharic",
+    "tigrinya",
+    "tigrigna",
+    "somali",
+    "hausa",
+    "yoruba",
+    "igbo",
+    "zulu",
+    "afrikaans",
+    "greek",
+    "czech",
+    "romanian",
+    "hungarian",
+    "swedish",
+    "norwegian",
+    "danish",
+    "finnish",
+    "persian",
+    "farsi",
+  ];
+  const PROFILE_VOICE_NAMES = ["puck", "charon", "kore", "fenrir", "aoede", "leda", "orus", "zephyr"];
 
   // The voice path is icon-first. It uses state for launcher glow/audio routing,
   // not for a visible chat transcript:
@@ -46,12 +104,12 @@
     root = document.createElement("div");
     root.id = "agee-root";
     root.innerHTML = `
-      <button id="agee-launcher" type="button" title="⌘K to type · ⌘. to talk" aria-label="Moa">
+      <button id="agee-launcher" type="button" title="⌘K to type · ⌘. to talk" aria-label="Chief AG">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
       </button>
-      <div id="agee-panel" role="dialog" aria-label="Moa command">
+      <div id="agee-panel" role="dialog" aria-label="Chief AG command">
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
@@ -59,9 +117,9 @@
         <div id="agee-bar">
           <img id="agee-panel-mark" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
           <span id="agee-dot"></span>
-          <textarea id="agee-input" rows="1" placeholder="Ask Moa" autocomplete="off" spellcheck="true"></textarea>
-          <button id="agee-voice" type="button" title="Start voice">Voice</button>
-          <button id="agee-stop" type="button" title="Stop current task">Stop</button>
+          <textarea id="agee-input" rows="1" placeholder="Ask AG" autocomplete="off" spellcheck="true"></textarea>
+          <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice">Voice</button>
+          <button id="agee-stop" type="button" title="Stop current task" aria-label="Stop current task">Stop</button>
         </div>
         <div id="agee-log" aria-hidden="true"></div>
       </div>`;
@@ -531,6 +589,8 @@
     if (voiceButton) {
       voiceButton.classList.toggle("listening", listening);
       voiceButton.textContent = listening ? "Listening" : "Voice";
+      voiceButton.title = listening ? "Send voice" : "Start voice";
+      voiceButton.setAttribute("aria-label", listening ? "Send voice" : "Start voice");
     }
   }
 
@@ -583,6 +643,7 @@
       playbackSources: new Set(),
       assistantText: "",
       transcript: "",
+      gatewayRouted: false,
     };
     liveVoice = state;
 
@@ -690,6 +751,7 @@
     } catch {
       return;
     }
+    if (liveVoice !== state || state.gatewayRouted) return;
 
     if (msg.type === "session_ready") {
       state.sessionReady = true;
@@ -706,6 +768,9 @@
       state.transcript = text;
       setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
+      if (msg.type === "transcript_final" && shouldRouteLiveTranscriptThroughGateway(text)) {
+        routeLiveTranscriptThroughGateway(state, text);
+      }
       return;
     }
     if (msg.type === "assistant_text") {
@@ -770,6 +835,33 @@
     } else {
       finishLiveVoiceError(state, "Live voice connection was not open.");
     }
+  }
+
+  function routeLiveTranscriptThroughGateway(state, transcript) {
+    if (liveVoice !== state || state.gatewayRouted) return;
+    state.gatewayRouted = true;
+    state.committed = true;
+    stopLiveCapture(state);
+    stopLivePlayback(state);
+    setVoiceState(false);
+    setAgentState("thinking");
+    setTranscript(transcript);
+    updateCueLabel(state.cueId, transcript);
+    updateCue(state.cueId, "updating settings...", "running");
+    try {
+      if (state.ws?.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type: "cancel_turn", turn_id: state.turnId }));
+      }
+    } catch {}
+    try {
+      state.ws?.close(1000, "profile control routed to gateway");
+    } catch {}
+    if (liveVoice === state) liveVoice = null;
+    chrome.runtime.sendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).catch((error) => {
+      updateCue(state.cueId, String(error?.message || error), "error");
+      reactLauncher("error");
+      if (agentState === "thinking") setAgentState("idle");
+    });
   }
 
   function stopLiveVoiceTurn(mode = "stop") {
@@ -865,6 +957,139 @@
 
   function toggleVoiceSession() {
     toggleVoice();
+  }
+
+  function shouldRouteLiveTranscriptThroughGateway(text) {
+    return isProfileControlTranscript(text);
+  }
+
+  function isProfileControlTranscript(text) {
+    const lower = normalizeSpokenCommand(text);
+    if (!lower) return false;
+    return isPromptProfileControl(lower) || isLanguageProfileControl(lower) || isVoiceProfileControl(lower);
+  }
+
+  function isPromptProfileControl(lower) {
+    return lower.includes("what prompt") ||
+      lower.includes("which prompt") ||
+      lower.includes("current prompt") ||
+      /\b(set|change|update)\b.*\b(system )?prompt\b/.test(lower);
+  }
+
+  function isLanguageProfileControl(lower) {
+    if (
+      lower.includes("what language") ||
+      lower.includes("which language") ||
+      lower.includes("language is active") ||
+      /\b(set|change|update|switch)\b.*\blanguage\b/.test(lower)
+    ) {
+      return true;
+    }
+    if (!containsProfileWord(lower, PROFILE_LANGUAGE_NAMES)) return false;
+    return /\b(speak|talk|reply|respond|answer|say)\b/.test(lower) ||
+      lower.includes(" only ") ||
+      lower.startsWith("only ") ||
+      lower.includes("do not switch") ||
+      lower.includes("don t switch") ||
+      lower.includes("dont switch") ||
+      lower.includes("these languages") ||
+      lower.includes("these two languages");
+  }
+
+  function isVoiceProfileControl(lower) {
+    if (
+      lower.includes("what voice") ||
+      lower.includes("which voice") ||
+      /\b(set|change|switch|use|make)\b.*\bvoice\b/.test(lower)
+    ) {
+      return true;
+    }
+    if (lower.includes("sound like") || lower.includes("speak like")) {
+      return /\b(female|woman|girl|feminine|lady|male|man|guy|masculine|boy)\b/.test(lower) ||
+        containsProfileWord(lower, PROFILE_VOICE_NAMES);
+    }
+    return containsProfileWord(lower, PROFILE_VOICE_NAMES) && /\b(use|switch|set|change)\b/.test(lower);
+  }
+
+  function normalizeSpokenCommand(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function containsProfileWord(lower, values) {
+    return values.some((value) => lower.includes(value));
+  }
+
+  async function startDevReloadWatcher() {
+    if (!chrome?.storage?.local) return;
+    const configure = async () => {
+      const cfg = await chrome.storage.local.get({
+        ageeDevReloadEnabled: false,
+        ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
+        ageeDevReloadVersion: null,
+      });
+      devReloadVersion = cfg.ageeDevReloadVersion == null ? null : Number(cfg.ageeDevReloadVersion);
+      if (cfg.ageeDevReloadEnabled) {
+        if (!devReloadTimer) {
+          devReloadTimer = setInterval(() => pollDevReloadFromContent().catch(() => {}), DEV_RELOAD_POLL_MS);
+        }
+        pollDevReloadFromContent().catch(() => {});
+      } else if (devReloadTimer) {
+        clearInterval(devReloadTimer);
+        devReloadTimer = null;
+      }
+    };
+
+    if (chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== "local") return;
+        if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
+          configure().catch(() => {});
+        }
+      });
+    }
+    await configure();
+  }
+
+  async function pollDevReloadFromContent() {
+    if (devReloadInFlight) return;
+    devReloadInFlight = true;
+    try {
+      const cfg = await chrome.storage.local.get({
+        ageeDevReloadEnabled: false,
+        ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
+        ageeDevReloadVersion: null,
+      });
+      if (!cfg.ageeDevReloadEnabled) return;
+      const server = String(cfg.ageeDevReloadServer || DEV_RELOAD_DEFAULT_SERVER).replace(/\/+$/, "");
+      const resp = await fetch(`${server}/__agee-dev/version?ts=${Date.now()}`, { cache: "no-store" });
+      if (!resp.ok) return;
+      const info = await resp.json();
+      const nextVersion = Number(info?.version || 0);
+      const previousVersion = devReloadVersion || Number(cfg.ageeDevReloadVersion || 0) || null;
+      if (!nextVersion) return;
+      if (!previousVersion) {
+        devReloadVersion = nextVersion;
+        await chrome.storage.local.set({ ageeDevReloadVersion: nextVersion });
+        return;
+      }
+      if (nextVersion === previousVersion) return;
+      devReloadVersion = nextVersion;
+      await chrome.runtime.sendMessage({
+        cmd: "devReloadExtension",
+        source: "content-script",
+        server,
+        previousVersion,
+        info,
+      });
+    } catch {
+      // The dev server is optional and usually offline during normal browsing.
+    } finally {
+      devReloadInFlight = false;
+    }
   }
 
   // ---- Hotkeys: Cmd/Ctrl+. = voice, Cmd/Ctrl+K = text ------------------
@@ -1063,4 +1288,5 @@
   });
 
   build();
+  startDevReloadWatcher().catch(() => {});
 })();
