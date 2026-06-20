@@ -259,8 +259,8 @@ public final class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "What this build does");
         addBullet(card, "Floating animated circle over other apps.");
-        addBullet(card, "Single tap or press mic to start one explicit voice turn.");
-        addBullet(card, "Single tap while listening submits the current transcript; double tap stops silently.");
+        addBullet(card, "Tap the orb to type; double-tap to talk, like the browser mark.");
+        addBullet(card, "Double-tap again while listening submits the current transcript.");
         addBullet(card, "Gemini-style live transcript overlay while speaking.");
         addBullet(card, "Mic button uses Android speech recognition only after you press it.");
         addBullet(card, "Screen access reads visible app text and passes it to gateway replies and home-machine agent runs.");
@@ -277,17 +277,17 @@ public final class MainActivity extends Activity {
 
         if (overlayStatus != null) {
             overlayStatus.setText(overlayGranted ? "Ready" : "Needs permission");
-            overlayStatus.setTextColor(overlayGranted ? MoaColors.MINT : MoaColors.GOLD);
+            overlayStatus.setTextColor(overlayGranted ? MoaColors.OK : MoaColors.WARN);
         }
 
         if (accessibilityStatus != null) {
             accessibilityStatus.setText(accessibilityGranted ? "Ready" : "Optional");
-            accessibilityStatus.setTextColor(accessibilityGranted ? MoaColors.MINT : MoaColors.GOLD);
+            accessibilityStatus.setTextColor(accessibilityGranted ? MoaColors.OK : MoaColors.WARN);
         }
 
         if (micStatus != null) {
             micStatus.setText(micGranted ? "Ready" : "Needs permission");
-            micStatus.setTextColor(micGranted ? MoaColors.MINT : MoaColors.GOLD);
+            micStatus.setTextColor(micGranted ? MoaColors.OK : MoaColors.WARN);
         }
 
         if (gatewayStatus != null) {
@@ -393,7 +393,7 @@ public final class MainActivity extends Activity {
         }
 
         receiptsStatus.setText(MoaActionReceiptStore.receipts(this).length() + " local");
-        receiptsStatus.setTextColor(MoaColors.MINT);
+        receiptsStatus.setTextColor(MoaColors.OK);
         if (settingsStatus != null) {
             settingsStatus.setText(MoaPrefs.spokenRepliesEnabled(this) ? "Spoken replies on" : "Text replies");
         }
@@ -432,8 +432,8 @@ public final class MainActivity extends Activity {
                 int runCount = runs == null ? 0 : runs.length();
                 sessionsLabel = sessionCount == 1 ? "1 session" : sessionCount + " sessions";
                 runsLabel = activeRuns > 0 ? activeRuns + " active / " + runCount + " recent" : runCount + " recent";
-                sessionsColor = MoaColors.MINT;
-                runsColor = MoaColors.MINT;
+                sessionsColor = MoaColors.OK;
+                runsColor = MoaColors.OK;
             } catch (Exception ignored) {
             }
 
@@ -465,7 +465,7 @@ public final class MainActivity extends Activity {
         }
         if (receiptsStatus != null) {
             receiptsStatus.setText(MoaActionReceiptStore.receipts(this).length() + " local");
-            receiptsStatus.setTextColor(MoaColors.MINT);
+            receiptsStatus.setTextColor(MoaColors.OK);
         }
     }
 
@@ -500,7 +500,7 @@ public final class MainActivity extends Activity {
                     return;
                 }
                 gatewayStatus.setText(status);
-                gatewayStatus.setTextColor(isReachable ? MoaColors.MINT : MoaColors.GOLD);
+                gatewayStatus.setTextColor(isReachable ? MoaColors.OK : MoaColors.WARN);
             });
         }, "moa-gateway-health").start();
     }
@@ -534,10 +534,10 @@ public final class MainActivity extends Activity {
                 if (!sameSource && remoteVersionCode > currentVersionCode()) {
                     update = manifest;
                     label = "v" + manifest.optString("version_name", String.valueOf(remoteVersionCode)) + " available";
-                    color = MoaColors.MINT;
+                    color = MoaColors.OK;
                 } else {
                     label = "Current";
-                    color = MoaColors.MINT;
+                    color = MoaColors.OK;
                 }
             } catch (Exception ignored) {
                 if (!userInitiated) {
@@ -635,7 +635,7 @@ public final class MainActivity extends Activity {
             startActivity(install);
             if (updateStatus != null) {
                 updateStatus.setText("Installer opened");
-                updateStatus.setTextColor(MoaColors.MINT);
+                updateStatus.setTextColor(MoaColors.OK);
             }
         } catch (ActivityNotFoundException error) {
             if (updateStatus != null) {

@@ -40,9 +40,9 @@ final class PulseDot extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         float radius = Math.min(getWidth(), getHeight()) * 0.3f;
-        paint.setColor(0x4061E5C6);
+        paint.setColor(0x40F4D35E);
         canvas.drawCircle(getWidth() / 2f, getHeight() / 2f, radius * (1.45f + pulse * 0.35f), paint);
-        paint.setColor(MoaColors.MINT);
+        paint.setColor(MoaColors.GOLD);
         canvas.drawCircle(getWidth() / 2f, getHeight() / 2f, radius, paint);
     }
 }

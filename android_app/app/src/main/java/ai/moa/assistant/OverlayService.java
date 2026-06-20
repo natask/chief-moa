@@ -38,6 +38,7 @@ import org.json.JSONObject;
 
 public final class OverlayService extends Service {
     static final String ACTION_ASSIST_BUTTON = "ai.moa.assistant.action.ASSIST_BUTTON";
+    static final String ACTION_COLLAPSE_SURFACES = "ai.moa.assistant.action.COLLAPSE_SURFACES";
     static final String EXTRA_START_VOICE = "ai.moa.assistant.extra.START_VOICE";
 
     private static final int MAX_HISTORY_MESSAGES = 50;
@@ -191,6 +192,10 @@ public final class OverlayService extends Service {
         if (orbView == null) {
             showOrb();
         }
+        if (ACTION_COLLAPSE_SURFACES.equals(intent != null ? intent.getAction() : null)) {
+            collapseInteractiveSurfaces();
+            return START_STICKY;
+        }
         if (shouldStartVoice(intent)) {
             mainHandler.post(this::startContinuousStreamingVoiceTurn);
         }
@@ -279,7 +284,7 @@ public final class OverlayService extends Service {
                 .setShowWhen(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             builder.setCategory(Notification.CATEGORY_SERVICE);
-            builder.setColor(0xFF61E5C6);
+            builder.setColor(0xFFF4D35E);
         }
         return builder.build();
     }
@@ -328,15 +333,13 @@ public final class OverlayService extends Service {
         orbParams.y = dp(164);
         orbView.setOnTouchListener(new MoaOrbTouchListener(
                 this,
-                mainHandler,
                 windowManager,
                 orbView,
                 orbParams,
                 ORB_WINDOW_DP,
                 ORB_EDGE_MARGIN_DP,
                 this::handleOrbSingleTap,
-                this::handleOrbHoldStart,
-                this::handleOrbHoldRelease
+                this::handleOrbDoubleTap
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -489,7 +492,7 @@ public final class OverlayService extends Service {
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(MoaDrawables.roundedGradient(0xF4101D18, 0xF40A1410, dp(24), 0x3361E5C6, dp(1)));
+        card.setBackground(MoaDrawables.roundedGradient(0xF4101D18, 0xF40A1410, dp(24), 0x33F4D35E, dp(1)));
         card.setElevation(dp(26));
         card.setPadding(dp(16), dp(14), dp(16), dp(16));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -565,7 +568,7 @@ public final class OverlayService extends Service {
 
     private void showCurrentScreenContext() {
         if (!actionBroker.isScreenAccessRunning()) {
-            updateVoiceAssistantTranscript("Screen access is off. Enable it in Moa settings.");
+            updateVoiceAssistantTranscript("Screen access is off. Enable it in Aggie settings.");
             return;
         }
         String summary = actionBroker.currentScreenSummary();
@@ -666,7 +669,7 @@ public final class OverlayService extends Service {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text(assistant ? "Aggie" : "You", assistant ? MoaColors.MINT : 0xFFBFA9FF, 10, true);
+        TextView label = text(assistant ? "Aggie" : "You", assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(5), 0, dp(5), dp(3));
 
@@ -748,7 +751,7 @@ public final class OverlayService extends Service {
             case RECOVERING:
                 return MoaColors.GOLD;
             case SPEAKING:
-                return MoaColors.MINT;
+                return MoaColors.GOLD;
             default:
                 return MoaColors.MUTED;
         }
@@ -959,7 +962,7 @@ public final class OverlayService extends Service {
         row.setLayoutParams(rowParams);
 
         composer = new EditText(this);
-        composer.setHint("Message Moa");
+        composer.setHint("Message Aggie");
         composer.setHintTextColor(0x66B8C9C2);
         composer.setTextColor(MoaColors.PAPER);
         composer.setTextSize(15);
@@ -971,7 +974,7 @@ public final class OverlayService extends Service {
         composer.setPadding(dp(12), dp(9), dp(8), dp(9));
         row.addView(composer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        // Round gold send button. 46dp target, teal->mint feel via gold accent.
+        // Round gold send button. 46dp target, gold brand accent.
         TextView send = new TextView(this);
         send.setText("↑");
         send.setTextColor(MoaColors.INK);
@@ -994,7 +997,7 @@ public final class OverlayService extends Service {
 
         messageColumn.removeAllViews();
         if (messages.isEmpty()) {
-            TextView empty = text("Hold the orb to talk. Tap to type.", MoaColors.MUTED, 13, false);
+            TextView empty = text("Tap to type. Double-tap to talk.", MoaColors.MUTED, 13, false);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(28), dp(8), dp(28));
             messageColumn.addView(empty);
@@ -1019,7 +1022,7 @@ public final class OverlayService extends Service {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text(message.assistant ? "moa" : "you", message.assistant ? MoaColors.MINT : 0xFFBFA9FF, 10, true);
+        TextView label = text(message.assistant ? "Aggie" : "You", message.assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(4), 0, dp(4), dp(3));
 
@@ -1510,7 +1513,7 @@ public final class OverlayService extends Service {
     }
 
     private String spokenAgentPrompt(String text) {
-        return "The user spoke this from the Moa Android overlay and expects forward progress, not a chat-only answer.\n\n"
+        return "The user spoke this from the Aggie Android overlay and expects forward progress, not a chat-only answer.\n\n"
                 + "User request:\n"
                 + safe(text)
                 + "\n\nWork in the configured repository. Inspect the current state, make the smallest useful code changes, run the relevant verification, and report the result plainly. Ask for clarification only if the task is genuinely blocked.";
@@ -1536,7 +1539,7 @@ public final class OverlayService extends Service {
             return "Build the debug APK with ./gradlew assembleDebug, then install it with adb install app/build/outputs/apk/debug/app-debug.apk.";
         }
         if (lower.contains("gemini") || lower.contains("replace")) {
-            return "The replacement shape is clear: one always-available Moa circle, local overlay controls, voice capture, and your model gateway behind it.";
+            return "The replacement shape is clear: one always-available Aggie circle, local overlay controls, voice capture, and your model gateway behind it.";
         }
         return "I heard you. The product loop is: capture the command fast, keep context from the current screen, answer in place, and stay out of the way.";
     }
@@ -1570,37 +1573,46 @@ public final class OverlayService extends Service {
         updateMicState();
     }
 
-    // HOLD the orb = voice. Press-and-hold begins a streaming voice turn and
-    // lights the orb (shadow/glow). A held turn cuts off any reply still playing
-    // (barge-in); while an agent is mid-run it steers that run.
-    private void handleOrbHoldStart() {
+    // Used when the full app opens. Keep the foreground service and orb alive,
+    // but remove large overlay surfaces so settings and operational status are
+    // usable without the overlay stealing focus.
+    private void collapseInteractiveSurfaces() {
+        removeTranscriptOverlay();
+        hideKeyboard();
+        removePanel();
+        if (orbView != null) {
+            orbView.setHeld(false);
+        }
+        updateMicState();
+    }
+
+    // DOUBLE-TAP the orb = voice, like the extension mark. The first double-tap
+    // begins a streaming voice turn and lights the orb (glow); the next double-tap
+    // while listening sends what was heard. Starting cuts off any reply still
+    // playing (barge-in); while an agent is mid-run it steers that run.
+    private void handleOrbDoubleTap() {
+        if (streamingVoiceActive()) {
+            // Second double-tap: send the current turn.
+            if (orbView != null) {
+                orbView.setHeld(false);
+            }
+            streamingVoiceController.commitTurn();
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            updateMicState();
+            return;
+        }
+        // First double-tap: start listening.
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
         voiceController.stopQuietly();
         if (orbView != null) {
             orbView.setHeld(true);
         }
-        if (!activeAgentRuns.isEmpty()) {
-            nextStreamingTurnFollowsActiveRun = true;
-        } else {
-            nextStreamingTurnFollowsActiveRun = false;
-        }
+        nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
         resetVoiceTurnTranscript();
         showTranscriptOverlay("");
         setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
         startStreamingVoiceTurn(false);
-    }
-
-    // Releasing the hold sends what was heard and drops the held glow.
-    private void handleOrbHoldRelease() {
-        if (orbView != null) {
-            orbView.setHeld(false);
-        }
-        if (streamingVoiceActive()) {
-            streamingVoiceController.commitTurn();
-            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
-            updateMicState();
-        }
     }
 
     private void cancelStreamingVoice() {
