@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Warm near-black field so the gold moa mark reads on any launcher. -->
+    <color name="ic_launcher_background">#161310</color>
+</resources>
