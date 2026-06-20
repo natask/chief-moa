@@ -209,20 +209,53 @@ function findInstalledAgee() {
   return matches;
 }
 
+function currentManifestVersion() {
+  try {
+    const manifest = readJson(join(extensionDir, "manifest.json"));
+    return String(manifest.version || "");
+  } catch {
+    return "";
+  }
+}
+
+function versionCompare(a, b) {
+  const pa = String(a || "0").split(".").map(Number);
+  const pb = String(b || "0").split(".").map(Number);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const va = Number.isFinite(pa[i]) ? pa[i] : 0;
+    const vb = Number.isFinite(pb[i]) ? pb[i] : 0;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+  }
+  return 0;
+}
+
 function checkBrowserProfiles() {
+  const repoVersion = currentManifestVersion();
   const matches = findInstalledAgee();
   if (!matches.length) {
     warn("no agee extension is registered in common daily-browser profiles");
     info(`load unpacked at: ${extensionDir}`);
+    if (repoVersion) {
+      info(`repo manifest version is ${repoVersion}; if a CWS install is older, bump and re-upload`);
+    }
   } else {
     for (const match of matches) {
       const currentPath = resolve(match.path || "/") === extensionDir;
       const state = match.state === 1 ? "enabled" : `state=${match.state}`;
       const prefix = currentPath ? "PASS" : "WARN";
+      const packed = !match.path || match.path.startsWith("chrome-extension://") || !match.path.includes("/");
+      const source = packed ? "(packed/CWS)" : match.path;
+      const version = match.version || "unknown";
+      const older = repoVersion && version && versionCompare(version, repoVersion) < 0;
       console.log(
-        `[${prefix}] ${match.browser}/${match.profile} has agee id=${match.id} ${state}, version=${match.version || "unknown"}, path=${match.path || "(packed)"}`
+        `[${prefix}] ${match.browser}/${match.profile} has agee id=${match.id} ${state}, version=${version}, source=${source}`
       );
-      if (!currentPath) {
+      if (older) {
+        warn(`installed version ${version} is older than repo version ${repoVersion}; reload or re-upload to Chrome Web Store`);
+      }
+      if (!currentPath && !packed) {
         warn(`that profile is not using this repo extension path: ${extensionDir}`);
       }
     }
