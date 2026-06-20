@@ -1,10 +1,10 @@
-# Moa website
+# Chief AG website
 
-The public Moa site: a single landing page with the email field above the fold,
-backed by a waitlist signup that stores emails in D1 and sends a confirmation
-email via Resend.
+The public Chief AG site: a single landing page with the email field above the
+fold, backed by a waitlist signup that stores emails in D1 and sends a
+confirmation email via Resend.
 
-- Live: https://chief-moa-site.pages.dev
+- Live: https://agee.app (also https://chief-moa-site.pages.dev)
 - Host: Cloudflare Pages (`chief-moa-site`)
 - Store: Cloudflare D1 (`chief-moa-waitlist`), bound as `env.DB`
 - Copy source: `reference/scratch/vision/moa-product-vision.md`
