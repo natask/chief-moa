@@ -6,7 +6,6 @@
 import { getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
 import { parseSettingsIntent, parseProfileQueryIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent } from "./browser-task-intent.js";
-import "./dev-reload.js"; // dev-only: auto-reload on file change when `npm run dev` is up
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
@@ -21,6 +20,7 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 // Keyed by cueId (a per-cue string), each value is { controller, tabId } so we
 // can cancel one cue or all cues on a tab without blocking new ones.
 const tasks = new Map();
+const voiceSessions = new Map();
 
 async function getConfig() {
   return getEffectiveGatewayConfig();
@@ -688,6 +688,153 @@ function throwIfAborted(signal) {
   if (signal?.aborted) throw new Error("Task cancelled.");
 }
 
+function bytesToBase64(buffer) {
+  const bytes = new Uint8Array(buffer || 0);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBuffer(value) {
+  const binary = atob(String(value || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function voiceSessionId() {
+  return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function startVoiceSessionProxy(tabId, { cueId, turnId } = {}) {
+  const cfg = await getConfig();
+  const ticket = await createVoiceSessionTicket(cfg);
+  if (!ticket?.ws_url) throw new Error("gateway did not return a voice session WebSocket URL");
+
+  const id = voiceSessionId();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const ws = new WebSocket(ticket.ws_url);
+    const session = { id, tabId, ws, opened: false };
+    voiceSessions.set(id, session);
+    ws.binaryType = "arraybuffer";
+
+    const failBeforeOpen = (message) => {
+      voiceSessions.delete(id);
+      try {
+        ws.close();
+      } catch {}
+      if (!settled) {
+        settled = true;
+        reject(new Error(message));
+      }
+    };
+
+    ws.onopen = () => {
+      session.opened = true;
+      ws.send(JSON.stringify({
+        type: "session_start",
+        source: "agee-extension",
+        session_id: ticket.session_id,
+        conversation_id: ticket.conversation_id || ticket.session_id,
+        branch_id: cueId,
+        turn_id: turnId,
+        format: {
+          encoding: "pcm16",
+          sample_rate: 16000,
+          channels: 1,
+        },
+      }));
+      settled = true;
+      resolve({
+        voiceSessionId: id,
+        session_id: ticket.session_id,
+        conversation_id: ticket.conversation_id || ticket.session_id,
+      });
+    };
+
+    ws.onmessage = (event) => forwardVoiceSessionEvent(session, event).catch(() => {});
+    ws.onerror = () => {
+      if (!session.opened) {
+        failBeforeOpen("Live voice connection failed.");
+        return;
+      }
+      send(tabId, {
+        cmd: "voiceSessionEvent",
+        voiceSessionId: id,
+        event: { type: "error", message: "Live voice connection failed." },
+      });
+    };
+    ws.onclose = () => {
+      voiceSessions.delete(id);
+      if (!session.opened) {
+        failBeforeOpen("Live voice connection closed.");
+        return;
+      }
+      send(tabId, {
+        cmd: "voiceSessionEvent",
+        voiceSessionId: id,
+        event: { type: "connection_closed" },
+      });
+    };
+  });
+}
+
+async function forwardVoiceSessionEvent(session, event) {
+  if (!voiceSessions.has(session.id)) return;
+  const data = event.data;
+  if (data instanceof ArrayBuffer) {
+    send(session.tabId, { cmd: "voiceSessionEvent", voiceSessionId: session.id, audio: bytesToBase64(data) });
+    return;
+  }
+  if (data instanceof Blob) {
+    const buffer = await data.arrayBuffer();
+    send(session.tabId, { cmd: "voiceSessionEvent", voiceSessionId: session.id, audio: bytesToBase64(buffer) });
+    return;
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(String(data || "{}"));
+  } catch {}
+  send(session.tabId, {
+    cmd: "voiceSessionEvent",
+    voiceSessionId: session.id,
+    event: parsed || { type: "raw", data: String(data || "") },
+  });
+}
+
+function sendVoiceSessionAudio(id, audio) {
+  const session = voiceSessions.get(id);
+  if (!session?.ws || session.ws.readyState !== WebSocket.OPEN) return { ok: false, error: "voice session is not open" };
+  session.ws.send(base64ToBuffer(audio));
+  return { ok: true };
+}
+
+function sendVoiceSessionControl(id, message) {
+  const session = voiceSessions.get(id);
+  if (!session?.ws || session.ws.readyState !== WebSocket.OPEN) return { ok: false, error: "voice session is not open" };
+  session.ws.send(JSON.stringify(message || {}));
+  return { ok: true };
+}
+
+function closeVoiceSession(id, reason = "closed") {
+  const session = voiceSessions.get(id);
+  if (!session) return;
+  voiceSessions.delete(id);
+  try {
+    session.ws.close(1000, reason);
+  } catch {}
+}
+
+function closeTabVoiceSessions(tabId) {
+  for (const session of voiceSessions.values()) {
+    if (session.tabId === tabId) closeVoiceSession(session.id, "tab closed");
+  }
+}
+
 // Persist per-cue state (keyed by cueId) so concurrent cues don't clobber each
 // other. Falls back to a synthetic key when no id is given.
 async function saveTaskState(id, patch) {
@@ -1230,6 +1377,25 @@ async function captureAmbientFrame() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.cmd === "voiceSessionStart" && sender.tab) {
+    startVoiceSessionProxy(sender.tab.id, { cueId: msg.cueId, turnId: msg.turnId })
+      .then((session) => sendResponse({ ok: true, ...session }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionAudio") {
+    sendResponse(sendVoiceSessionAudio(msg.voiceSessionId, msg.audio));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionControl") {
+    sendResponse(sendVoiceSessionControl(msg.voiceSessionId, msg.message));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionClose") {
+    closeVoiceSession(msg.voiceSessionId, String(msg.reason || "closed"));
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.cmd === "devReloadExtension") {
     devReloadConfig()
       .then((cfg) => maybeReloadForDevVersion(msg.info || {}, {
@@ -1311,6 +1477,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Stop the ambient loop if its tab goes away, so it never posts against a dead tab.
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (ambient && ambient.tabId === tabId) stopAmbientCapture();
+  closeTabVoiceSessions(tabId);
 });
 
 chrome.action.onClicked.addListener(async (tab) => {

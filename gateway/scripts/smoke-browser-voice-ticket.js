@@ -86,17 +86,21 @@ function assertBrowserVoiceSourceContract() {
 
   const content = sources["content.js"];
   assert.match(content, /navigator\.mediaDevices\.getUserMedia/, "content script must capture microphone audio");
-  assert.match(content, /new WebSocket\(ticket\.ws_url\)/, "content script must connect with gateway voice-session ticket URL");
-  assert.match(content, /binaryType\s*=\s*["']arraybuffer["']/, "content script must receive assistant audio as binary frames");
+  assert.match(content, /cmd:\s*["']voiceSessionStart["']/, "content script must ask background to open a gateway voice session");
+  assert.match(content, /cmd:\s*["']voiceSessionAudio["']/, "content script must send microphone PCM through the background gateway proxy");
+  assert.match(content, /voiceSessionEvent/, "content script must receive voice-session events from the background gateway proxy");
   assert.match(content, /resampleToPcm16/, "content script must resample microphone audio to PCM16");
-  assert.match(content, /encoding:\s*["']pcm16["']/, "content script must declare PCM16 input encoding");
-  assert.match(content, /sample_rate:\s*16000/, "content script must declare 16kHz input audio");
-  assert.match(content, /state\.ws\.send\(pcm\)/, "content script must stream microphone PCM to the gateway");
+  assert.match(content, /bytesToBase64\(pcm\)/, "content script must pass PCM frames to background without text/transcription APIs");
   assert.match(content, /playLiveAssistantPcm/, "content script must play assistant PCM from the gateway");
 
   const background = sources["background.js"];
   assert.match(background, /\/v1\/voice\/session-ticket/, "background script must mint gateway voice-session tickets");
-  assert.match(background, /voiceSessionTicket/, "background script must broker voice-session tickets to the content script");
+  assert.match(background, /new WebSocket\(ticket\.ws_url\)/, "background script must connect with gateway voice-session ticket URL");
+  assert.match(background, /binaryType\s*=\s*["']arraybuffer["']/, "background script must receive assistant audio as binary frames");
+  assert.match(background, /voiceSessionStart/, "background script must broker voice session startup for content");
+  assert.match(background, /voiceSessionAudio/, "background script must stream content PCM to the gateway");
+  assert.match(background, /encoding:\s*["']pcm16["']/, "background script must declare PCM16 input encoding");
+  assert.match(background, /sample_rate:\s*16000/, "background script must declare 16kHz input audio");
   return true;
 }
 

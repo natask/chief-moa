@@ -88,6 +88,23 @@
   ];
   const PROFILE_VOICE_NAMES = ["puck", "charon", "kore", "fenrir", "aoede", "leda", "orus", "zephyr"];
 
+  function bytesToBase64(buffer) {
+    const bytes = new Uint8Array(buffer || 0);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  function base64ToBuffer(value) {
+    const binary = atob(String(value || ""));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
   // The voice path is icon-first. It uses state for launcher glow/audio routing,
   // not for a visible chat transcript:
   //   idle      - no voice session
@@ -632,7 +649,7 @@
     const state = {
       cueId,
       turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      ws: null,
+      voiceSessionId: null,
       stream: null,
       source: null,
       processor: null,
@@ -649,11 +666,6 @@
     liveVoice = state;
 
     try {
-      const ticket = await chrome.runtime.sendMessage({ cmd: "voiceSessionTicket" });
-      if (!ticket?.ok || !ticket.ws_url) {
-        throw new Error(ticket?.error || "gateway did not return a voice session ticket");
-      }
-
       state.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -667,30 +679,15 @@
       if (!audioCtx) throw new Error("Web Audio is not available in this browser.");
       state.sampleRate = audioCtx.sampleRate;
 
-      state.ws = new WebSocket(ticket.ws_url);
-      state.ws.binaryType = "arraybuffer";
-      state.ws.onopen = () => {
-        state.ws.send(JSON.stringify({
-          type: "session_start",
-          source: "agee-extension",
-          session_id: ticket.session_id,
-          conversation_id: ticket.conversation_id || ticket.session_id,
-          branch_id: cueId,
-          turn_id: state.turnId,
-          format: {
-            encoding: "pcm16",
-            sample_rate: 16000,
-            channels: 1,
-          },
-        }));
-      };
-      state.ws.onmessage = (event) => handleLiveVoiceMessage(state, event);
-      state.ws.onerror = () => finishLiveVoiceError(state, "Live voice connection failed.");
-      state.ws.onclose = () => {
-        if (liveVoice === state && !state.committed) {
-          finishLiveVoiceError(state, "Live voice connection closed.");
-        }
-      };
+      const session = await chrome.runtime.sendMessage({
+        cmd: "voiceSessionStart",
+        cueId,
+        turnId: state.turnId,
+      });
+      if (!session?.ok || !session.voiceSessionId) {
+        throw new Error(session?.error || "gateway did not open a voice session");
+      }
+      state.voiceSessionId = session.voiceSessionId;
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
     }
@@ -703,10 +700,16 @@
     processor.onaudioprocess = (event) => {
       event.outputBuffer.getChannelData(0).fill(0);
       if (liveVoice !== state || !state.sessionReady || state.committed) return;
-      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      if (!state.voiceSessionId) return;
       const inputSamples = event.inputBuffer.getChannelData(0);
       const pcm = resampleToPcm16(inputSamples, state.sampleRate || audioCtx.sampleRate, 16000, state.resample);
-      if (pcm.byteLength > 0) state.ws.send(pcm);
+      if (pcm.byteLength > 0) {
+        chrome.runtime.sendMessage({
+          cmd: "voiceSessionAudio",
+          voiceSessionId: state.voiceSessionId,
+          audio: bytesToBase64(pcm),
+        }).catch(() => {});
+      }
     };
     source.connect(processor);
     processor.connect(audioCtx.destination);
@@ -736,21 +739,31 @@
     return pcm.buffer;
   }
 
-  function handleLiveVoiceMessage(state, event) {
-    if (event.data instanceof ArrayBuffer) {
-      playLiveAssistantPcm(state, event.data);
+  function handleLiveVoiceMessage(state, payload) {
+    if (payload?.audio) {
+      playLiveAssistantPcm(state, base64ToBuffer(payload.audio));
       return;
     }
-    if (event.data instanceof Blob) {
-      event.data.arrayBuffer().then((buffer) => playLiveAssistantPcm(state, buffer));
+    if (payload?.data instanceof ArrayBuffer) {
+      playLiveAssistantPcm(state, payload.data);
+      return;
+    }
+    if (payload?.data instanceof Blob) {
+      payload.data.arrayBuffer().then((buffer) => playLiveAssistantPcm(state, buffer));
       return;
     }
 
     let msg;
-    try {
-      msg = JSON.parse(String(event.data || "{}"));
-    } catch {
-      return;
+    if (payload?.event && typeof payload.event === "object") {
+      msg = payload.event;
+    } else if (payload && typeof payload === "object" && payload.type) {
+      msg = payload;
+    } else {
+      try {
+        msg = JSON.parse(String(payload?.data || payload || "{}"));
+      } catch {
+        return;
+      }
     }
     if (liveVoice !== state || state.gatewayRouted) return;
 
@@ -796,6 +809,10 @@
     }
     if (msg.type === "error") {
       finishLiveVoiceError(state, msg.message || "Live voice failed.");
+      return;
+    }
+    if (msg.type === "connection_closed") {
+      if (!state.committed) finishLiveVoiceError(state, "Live voice connection closed.");
     }
   }
 
@@ -831,8 +848,14 @@
     setAgentState("thinking");
     setTranscript(state.transcript || "Thinking...", !state.transcript);
     updateCue(state.cueId, "thinking...", "running");
-    if (state.ws?.readyState === WebSocket.OPEN) {
-      state.ws.send(JSON.stringify({ type: "commit_turn", turn_id: state.turnId }));
+    if (state.voiceSessionId) {
+      chrome.runtime.sendMessage({
+        cmd: "voiceSessionControl",
+        voiceSessionId: state.voiceSessionId,
+        message: { type: "commit_turn", turn_id: state.turnId },
+      }).then((res) => {
+        if (!res?.ok) finishLiveVoiceError(state, res?.error || "Live voice connection was not open.");
+      }).catch((error) => finishLiveVoiceError(state, String(error?.message || error)));
     } else {
       finishLiveVoiceError(state, "Live voice connection was not open.");
     }
@@ -849,14 +872,8 @@
     setTranscript(transcript);
     updateCueLabel(state.cueId, transcript);
     updateCue(state.cueId, "updating settings...", "running");
-    try {
-      if (state.ws?.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({ type: "cancel_turn", turn_id: state.turnId }));
-      }
-    } catch {}
-    try {
-      state.ws?.close(1000, "profile control routed to gateway");
-    } catch {}
+    sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    closeLiveVoiceSession(state, "profile control routed to gateway");
     if (liveVoice === state) liveVoice = null;
     chrome.runtime.sendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).catch((error) => {
       updateCue(state.cueId, String(error?.message || error), "error");
@@ -873,17 +890,30 @@
     if (!state) return;
     stopLiveCapture(state);
     stopLivePlayback(state);
-    try {
-      if (state.ws?.readyState === WebSocket.OPEN && mode === "cancel") {
-        state.ws.send(JSON.stringify({ type: "cancel_turn", turn_id: state.turnId }));
-      }
-    } catch {}
-    try {
-      state.ws?.close(1000, mode);
-    } catch {}
+    if (mode === "cancel") sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    closeLiveVoiceSession(state, mode);
     if (liveVoice === state) liveVoice = null;
     setVoiceState(false);
     if (agentState !== "idle") setAgentState("idle");
+  }
+
+  function sendLiveVoiceControl(state, message) {
+    if (!state?.voiceSessionId) return;
+    chrome.runtime.sendMessage({
+      cmd: "voiceSessionControl",
+      voiceSessionId: state.voiceSessionId,
+      message,
+    }).catch(() => {});
+  }
+
+  function closeLiveVoiceSession(state, reason) {
+    if (!state?.voiceSessionId) return;
+    chrome.runtime.sendMessage({
+      cmd: "voiceSessionClose",
+      voiceSessionId: state.voiceSessionId,
+      reason,
+    }).catch(() => {});
+    state.voiceSessionId = null;
   }
 
   function stopLiveCapture(state) {
@@ -930,9 +960,7 @@
     updateCue(state.cueId, summary, "done");
     reactLauncher("done");
     stopLiveCapture(state);
-    try {
-      state.ws?.close(1000, "turn done");
-    } catch {}
+    closeLiveVoiceSession(state, "turn done");
     liveVoice = null;
     setVoiceState(false);
     // Wait for the spoken reply to finish playing, then either listen again (so
@@ -1295,6 +1323,11 @@
         updateCue(msg.cueId, msg.text, "error");
         reactLauncher("error"); // shake + ring + falling chime
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
+        return false;
+      case "voiceSessionEvent":
+        if (liveVoice && msg.voiceSessionId === liveVoice.voiceSessionId) {
+          handleLiveVoiceMessage(liveVoice, msg);
+        }
         return false;
     }
   });
