@@ -15,6 +15,14 @@ session memory.
 - **THEN** Moa reconstructs necessary context from stored conversation records
   and summaries rather than relying only on provider-held history
 
+#### Scenario: Live turn is interrupted before completion
+- **WHEN** a live voice turn is interrupted, canceled, or its transport drops
+  before the turn completes
+- **THEN** the gateway stores a canonical turn record marked incomplete with the
+  partial transcript and partial assistant output captured before the cutoff
+- **AND** that partial turn is included in the next live session's Moa-owned
+  context pack so the conversation continues across turns and devices
+
 ### Requirement: Local Audio Artifact Tracking
 The system SHALL track user and assistant audio artifacts associated with each
 voice turn when retention is enabled.

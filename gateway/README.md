@@ -160,6 +160,14 @@ Live or another realtime provider.
 transcript event, streams assistant PCM chunks back, and finishes with
 `turn_done`.
 
+If a Live turn is interrupted, canceled, or the socket drops before completion,
+the gateway still writes a canonical turn record (classified `interrupted`, with
+`references.voice_session.incomplete = true`) holding whatever transcript and
+assistant text streamed before the cutoff. That partial turn shows up in
+`GET /v1/sessions/:id/turns` and is replayed in the next Live session's context
+pack, so an interrupted session on one device continues on another against the
+same dataset. `node scripts/smoke-live-interrupt-handoff.js` proves this path.
+
 The default provider is `loopback`, which returns a fake transcript and local
 test tone for transport QA. To use Vertex AI Express Live as the bundled
 STT + LLM + TTS package on the gateway machine:

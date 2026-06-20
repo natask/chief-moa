@@ -75,6 +75,12 @@ turn, transcript, provider-event, and agent-run history. Realtime providers
 receive a bounded Moa-owned context pack at session start so provider memory is
 not the product database.
 
+A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
+as a canonical conversation turn (marked incomplete) with whatever transcript
+and assistant text the provider produced before the cutoff. That partial turn
+flows into the next session's context pack, so a user can interrupt the model on
+one device and resume the thread on another against the same dataset.
+
 Streaming voice providers are gateway-only. Android sends microphone audio to
 Moa Gateway, but raw model/API keys stay on the gateway machine. The provider
 package boundary is STT, LLM, and TTS; the current gateway supports loopback
