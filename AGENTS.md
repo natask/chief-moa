@@ -1,6 +1,6 @@
 # Agent Operating Contract
 
-This file is for coding agents working in `moa-assistant`.
+This file is for coding agents working in `chief-moa`.
 
 ## Required First Reads
 
