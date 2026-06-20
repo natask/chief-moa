@@ -33,7 +33,7 @@ async function main() {
   let server;
 
   try {
-    await step("browser source uses gateway PCM, not Web Speech APIs", assertBrowserVoiceSourceContract);
+    const browserSourceChecked = await step("browser source uses gateway PCM, not Web Speech APIs", assertBrowserVoiceSourceContract);
     await step("gemini live provider uses microphone audio STT contract", assertGeminiLiveInputAudioContract);
     server = await startGateway({ port, dataDir });
     await step("ticket endpoint rejects missing bearer token", async () => {
@@ -51,7 +51,9 @@ async function main() {
         "ticket response includes a ws:// /v1/voice/sessions URL",
         "headerless browser WebSocket authenticates with the ticket",
         "PCM16 input returns assistant audio and turn_done",
-        "browser production voice source does not use SpeechRecognition/webkitSpeechRecognition/speechSynthesis",
+        browserSourceChecked
+          ? "browser production voice source does not use SpeechRecognition/webkitSpeechRecognition/speechSynthesis"
+          : "browser source contract skipped because this checkout has only gateway files",
         "Gemini Live setup enables input audio transcription and sends realtime PCM input audio",
         "the ticket cannot be reused",
       ],
@@ -66,9 +68,14 @@ async function main() {
 }
 
 function assertBrowserVoiceSourceContract() {
+  const contentPath = path.join(BROWSER_EXTENSION_DIR, "content.js");
+  const backgroundPath = path.join(BROWSER_EXTENSION_DIR, "background.js");
+  if (!fs.existsSync(contentPath) || !fs.existsSync(backgroundPath)) {
+    return false;
+  }
   const sources = {
-    "content.js": fs.readFileSync(path.join(BROWSER_EXTENSION_DIR, "content.js"), "utf8"),
-    "background.js": fs.readFileSync(path.join(BROWSER_EXTENSION_DIR, "background.js"), "utf8"),
+    "content.js": fs.readFileSync(contentPath, "utf8"),
+    "background.js": fs.readFileSync(backgroundPath, "utf8"),
   };
   for (const [file, source] of Object.entries(sources)) {
     assert.doesNotMatch(source, /\bSpeechRecognition\b/, `${file} must not use browser SpeechRecognition`);
@@ -89,6 +96,7 @@ function assertBrowserVoiceSourceContract() {
   const background = sources["background.js"];
   assert.match(background, /\/v1\/voice\/session-ticket/, "background script must mint gateway voice-session tickets");
   assert.match(background, /voiceSessionTicket/, "background script must broker voice-session tickets to the content script");
+  return true;
 }
 
 async function assertGeminiLiveInputAudioContract() {
