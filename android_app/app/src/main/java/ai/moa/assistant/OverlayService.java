@@ -176,7 +176,7 @@ public final class OverlayService extends Service {
             showOrb();
         }
         if (shouldStartVoice(intent)) {
-            mainHandler.postDelayed(() -> startStreamingVoiceTurn(true), 180);
+            mainHandler.post(() -> startStreamingVoiceTurn(true));
         }
         return START_STICKY;
     }

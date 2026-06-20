@@ -7,6 +7,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.widget.Toast;
 
 public final class MoaAssistActivity extends Activity {
     @Override
@@ -23,15 +24,24 @@ public final class MoaAssistActivity extends Activity {
     }
 
     private void handleAssistLaunch() {
-        if (!Settings.canDrawOverlays(this) || !hasMicrophonePermission()) {
-            Intent setup = new Intent(this, MainActivity.class);
-            setup.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            setup.putExtra(MainActivity.EXTRA_START_OVERLAY, true);
-            startActivity(setup);
-            finish();
+        boolean overlayPermissionGranted = Settings.canDrawOverlays(this);
+        boolean microphonePermissionGranted = hasMicrophonePermission();
+        if (MoaAssistLaunchDecision.decide(overlayPermissionGranted, microphonePermissionGranted)
+                == MoaAssistLaunchDecision.Action.SHOW_PERMISSION_HINT) {
+            Toast.makeText(
+                    getApplicationContext(),
+                    MoaAssistLaunchDecision.permissionHint(overlayPermissionGranted, microphonePermissionGranted),
+                    Toast.LENGTH_SHORT
+            ).show();
+            finishAndSuppressAnimation();
             return;
         }
 
+        startVoiceService();
+        finishAndSuppressAnimation();
+    }
+
+    private void startVoiceService() {
         Intent service = new Intent(this, OverlayService.class);
         service.setAction(OverlayService.ACTION_ASSIST_BUTTON);
         service.putExtra(OverlayService.EXTRA_START_VOICE, true);
@@ -40,6 +50,9 @@ public final class MoaAssistActivity extends Activity {
         } else {
             startService(service);
         }
+    }
+
+    private void finishAndSuppressAnimation() {
         finish();
         overridePendingTransition(0, 0);
     }
