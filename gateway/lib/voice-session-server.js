@@ -636,6 +636,14 @@ class VoiceSessionConnection {
     }
 
     const turn = this.turn;
+    const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
+    // Preserve partial conversation data so the next session's context prompt
+    // includes what happened during this turn (transcript + assistant text).
+    // Without this, interrupted/replaced turns vanish from session history and
+    // the follow-up session has no idea what was being discussed or what agent
+    // runs were launched.
+    await this.recordPartialTurn(turn, providerEvents);
+
     if (turn.status !== "recording") {
       turn.status = status;
       await closeAudioStream(turn);
@@ -643,7 +651,7 @@ class VoiceSessionConnection {
       if (turn.liveSession) {
         turn.liveSession.cancel();
       }
-      await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), status === "interrupted" ? "interruption" : "turn_closed", {
+      await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
         status,
       });
       writeTurnMetadata(turn, {
@@ -660,7 +668,7 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
-    await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), status === "interrupted" ? "interruption" : "turn_closed", {
+    await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
       status,
     });
     writeTurnMetadata(turn, {
@@ -668,6 +676,49 @@ class VoiceSessionConnection {
       closed_at: nowIso(),
     });
     this.turn = null;
+  }
+
+  async recordPartialTurn(turn, providerEvents) {
+    if (!this.onTurnCompleted) {
+      return;
+    }
+    const transcript = String(providerEvents?.transcript || "").trim();
+    const assistantText = String(providerEvents?.assistantText || "").trim();
+    if (!transcript && !assistantText) {
+      return;
+    }
+    try {
+      await this.onTurnCompleted({
+        session_id: turn.sessionId,
+        conversation_id: turn.conversationId || turn.sessionId,
+        branch_id: turn.branchId || "default",
+        turn_id: turn.turnId,
+        profile_version: turn.profileVersion || "",
+        source: turn.source,
+        started_at: turn.startedAt,
+        completed_at: nowIso(),
+        transcript,
+        assistant_text: assistantText,
+        provider: turn.providerStatus?.provider || this.voiceProvider.status().provider,
+        model: turn.providerStatus?.model || this.voiceProvider.status().model,
+        audio_format: turn.format,
+        assistant_audio_format: ASSISTANT_AUDIO_FORMAT,
+        audio: {
+          pcm_file: path.basename(turn.pcmPath),
+          bytes: turn.audioBytes,
+          chunks: turn.audioChunks,
+        },
+        assistant_audio: {
+          pcm_file: path.basename(turn.assistantPcmPath),
+          bytes: turn.assistantAudioBytes,
+          chunks: turn.assistantAudioChunks,
+        },
+        transcription_only: false,
+        provider_events: Array.isArray(providerEvents?.events) ? providerEvents.events : [],
+      });
+    } catch {
+      // Partial turn recording is best-effort; never blocks the interruption.
+    }
   }
 
   async recordProviderEvent(turn, providerEvents, type, payload) {
