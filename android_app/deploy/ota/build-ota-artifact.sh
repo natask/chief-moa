@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
-ANDROID_DIR="$ROOT_DIR/software/android_app"
-OUT_DIR="${ANDROID_OTA_OUT_DIR:-$ROOT_DIR/software/moa_gateway/data/android-ota}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ANDROID_DIR="$ROOT_DIR/android_app"
+OUT_DIR="${ANDROID_OTA_OUT_DIR:-$ROOT_DIR/gateway/data/android-ota}"
 VERSION_CODE="${MOA_ANDROID_VERSION_CODE:-$(date +%s)}"
 VERSION_NAME="${MOA_ANDROID_VERSION_NAME:-0.1.$VERSION_CODE}"
 GIT_SHA="${GITHUB_SHA:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)}"

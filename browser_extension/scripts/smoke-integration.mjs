@@ -32,7 +32,8 @@ import { resolveChromeForTesting, quietChromeArgs } from "./chrome-for-testing.m
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 const extensionPath = join(root, "extension");
-const gatewayDir = resolve(root, "..", "moa_gateway");
+const gatewayDir = resolve(root, "..", "gateway");
+const nodeBin = process.env.NODE_BINARY || "node";
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `smoke-integration-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
@@ -111,7 +112,7 @@ async function startGateway(dataDir, port) {
     AGENT_RUN_TIMEOUT_MS: "5000",
     HARNESS_STATUS_TIMEOUT_MS: "200",
   };
-  const server = spawn(process.execPath, ["server.js"], {
+  const server = spawn(nodeBin, ["server.js"], {
     cwd: gatewayDir,
     env,
     stdio: ["ignore", "pipe", "pipe"],

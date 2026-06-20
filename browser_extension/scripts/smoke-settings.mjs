@@ -29,9 +29,10 @@ import { join, resolve } from "node:path";
 import { resolveChromeForTesting, quietChromeArgs } from "./chrome-for-testing.mjs";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
-const repoRoot = resolve(root, "..", "..");
-const gatewayDir = join(repoRoot, "software", "moa_gateway");
+const repoRoot = resolve(root, "..");
+const gatewayDir = join(repoRoot, "gateway");
 const extensionPath = join(root, "extension");
+const nodeBin = process.env.NODE_BINARY || "node";
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `settings-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
@@ -62,7 +63,7 @@ async function waitForFile(path, timeoutMs = 15000) {
 // (not `npm start`) so --env-file-if-exists=.env does NOT load the real .env.
 async function startGateway() {
   mkdirSync(gatewayDataDir, { recursive: true });
-  const child = spawn(process.execPath, ["server.js"], {
+  const child = spawn(nodeBin, ["server.js"], {
     cwd: gatewayDir,
     stdio: ["ignore", "pipe", "pipe"],
     env: {
