@@ -6,6 +6,7 @@
 import { getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
 import { parseSettingsIntent, parseProfileQueryIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent } from "./browser-task-intent.js";
+import "./dev-reload.js"; // dev-only: auto-reload on file change when `npm run dev` is up
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
