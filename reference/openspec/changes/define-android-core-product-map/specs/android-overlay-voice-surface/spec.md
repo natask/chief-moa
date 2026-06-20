@@ -48,6 +48,14 @@ earbud or headset buttons.
 - **AND** begins a voice turn using the same overlay transcript path as an orb
   tap
 
+#### Scenario: Assistant launch keeps listening after replies
+- **WHEN** Android launches Moa through an assistant or voice-command action
+  and the spoken response finishes
+- **THEN** the current response card clears
+- **AND** the overlay starts the next listening turn without requiring a new
+  assistant-button launch
+- **AND** a user stop gesture cancels the continuous loop locally
+
 #### Scenario: Assistant launch before required permissions
 - **WHEN** Android launches Moa through an assistant or voice-command action
   before overlay or microphone permission is available
@@ -71,6 +79,12 @@ The Android app SHALL show current speech text while the user is speaking.
 #### Scenario: Turn is submitted
 - **WHEN** the current voice turn is submitted
 - **THEN** the transcript overlay closes or resets for the next loop
+
+#### Scenario: Assistant response replaces user transcript
+- **WHEN** the assistant response starts for a submitted voice turn
+- **THEN** the visible user transcript fades out
+- **AND** the assistant response appears in the same compact voice surface
+- **AND** previous voice-turn messages are not shown in that surface
 
 ### Requirement: Minimal Spoken Interruption
 The Android app SHALL separate displayed response text from spoken response text.

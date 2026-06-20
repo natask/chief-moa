@@ -11,6 +11,7 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 
 import java.util.ArrayList;
 import java.util.Locale;
@@ -35,6 +36,8 @@ final class MoaVoiceController {
         void onComposerText(String text);
 
         void onVoiceTurn(String text);
+
+        void onSpokenReplyFinished();
     }
 
     private final Context context;
@@ -49,6 +52,8 @@ final class MoaVoiceController {
     private boolean restartCommandAfterSpeech;
     private int listenMode = LISTEN_NONE;
     private String liveTranscript = "";
+    private volatile String activeUtteranceId = "";
+    private int utteranceSequence;
 
     MoaVoiceController(Context context, Callback callback) {
         this.context = context;
@@ -63,6 +68,7 @@ final class MoaVoiceController {
             speechRecognizer = null;
         }
         if (textToSpeech != null) {
+            activeUtteranceId = "";
             textToSpeech.stop();
             textToSpeech.shutdown();
             textToSpeech = null;
@@ -143,6 +149,7 @@ final class MoaVoiceController {
         restartCommandAfterSpeech = false;
         liveTranscript = "";
         callback.onComposerText("");
+        activeUtteranceId = "";
         if (textToSpeech != null) {
             textToSpeech.stop();
         }
@@ -156,11 +163,19 @@ final class MoaVoiceController {
         callback.onRemoveTranscript();
     }
 
-    void speak(String text) {
-        if (!ttsReady || textToSpeech == null) {
-            return;
+    boolean speak(String text) {
+        String value = safe(text);
+        if (value.isEmpty() || !ttsReady || textToSpeech == null) {
+            return false;
         }
-        textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "moa-reply");
+        String utteranceId = "moa-reply-" + (++utteranceSequence);
+        activeUtteranceId = utteranceId;
+        int result = textToSpeech.speak(value, TextToSpeech.QUEUE_FLUSH, null, utteranceId);
+        if (result == TextToSpeech.ERROR) {
+            activeUtteranceId = "";
+            return false;
+        }
+        return true;
     }
 
     private void setupSpeechRecognizer() {
@@ -329,8 +344,36 @@ final class MoaVoiceController {
                 textToSpeech.setLanguage(Locale.US);
                 textToSpeech.setPitch(0.88f);
                 textToSpeech.setSpeechRate(1.02f);
+                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                    @Override
+                    public void onStart(String utteranceId) {
+                    }
+
+                    @Override
+                    public void onDone(String utteranceId) {
+                        finishUtterance(utteranceId);
+                    }
+
+                    @Override
+                    public void onError(String utteranceId) {
+                        finishUtterance(utteranceId);
+                    }
+
+                    @Override
+                    public void onStop(String utteranceId, boolean interrupted) {
+                        finishUtterance(utteranceId);
+                    }
+                });
             }
         });
+    }
+
+    private void finishUtterance(String utteranceId) {
+        if (utteranceId == null || !utteranceId.equals(activeUtteranceId)) {
+            return;
+        }
+        activeUtteranceId = "";
+        mainHandler.post(callback::onSpokenReplyFinished);
     }
 
     private boolean hasMicPermission() {
