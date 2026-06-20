@@ -4,8 +4,11 @@ The public Aggie site: a single landing page with the email field above the
 fold, backed by a waitlist signup that stores emails in D1 and sends a
 confirmation email via Resend.
 
-- Live: https://agee.app (also https://chief-moa-site.pages.dev)
-- Host: Cloudflare Pages (`chief-moa-site`)
+- Live: https://agee.app (also https://agee-app.pages.dev)
+- Host: Cloudflare Pages (`agee-app`) — this project owns the agee.app custom
+  domain and its validated apex cert. The unused `chief-moa-site` project is a
+  spare; it could not get an apex cert without a DNS record we lacked rights to
+  create, so the site lives on `agee-app`.
 - Store: Cloudflare D1 (`chief-moa-waitlist`), bound as `env.DB`
 - Copy source: `reference/scratch/vision/moa-product-vision.md`
 
@@ -34,9 +37,9 @@ Resend is configured. It needs a domain verified in Resend (the free
 2. Set the secrets on the Pages project:
 
 ```sh
-npx wrangler pages secret put RESEND_API_KEY --project-name chief-moa-site
-npx wrangler pages secret put RESEND_FROM    --project-name chief-moa-site   # e.g. "Moa <hello@yourdomain.com>"
-npx wrangler pages secret put RESEND_REPLY_TO --project-name chief-moa-site  # optional
+npx wrangler pages secret put RESEND_API_KEY --project-name agee-app
+npx wrangler pages secret put RESEND_FROM    --project-name agee-app   # e.g. "Aggie <hello@agee.app>"
+npx wrangler pages secret put RESEND_REPLY_TO --project-name agee-app  # optional
 ```
 
 After the secrets are set, new signups get a "Thanks for hopping on the
