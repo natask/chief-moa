@@ -33,7 +33,7 @@ for (const file of requiredFiles) {
 }
 
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
-const requiredPermissions = ["activeTab", "tabs", "scripting", "storage"];
+const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms"];
 
 if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");
@@ -81,6 +81,14 @@ const setupParagraph =
 const voiceIntent = parseSettingsIntent("use the Kore voice", null);
 if (voiceIntent?.patch?.voice !== "Kore") {
   throw new Error("settings parser should accept a direct Kore voice request");
+}
+const languageIntent = parseSettingsIntent("only speak English and Amharic, don't switch up", null);
+if (
+  languageIntent?.patch?.language !== "en-US,am-ET" ||
+  languageIntent?.patch?.language_primary !== "en-US" ||
+  languageIntent?.patch?.language_auto_switch !== false
+) {
+  throw new Error(`settings parser should lock the language profile, got: ${JSON.stringify(languageIntent)}`);
 }
 if (parseSettingsIntent(setupParagraph, null) !== null) {
   throw new Error("settings parser should ignore quoted settings examples inside setup text");

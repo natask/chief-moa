@@ -20,7 +20,18 @@
 
 // Profile fields the gateway accepts. Kept aligned with moa_gateway's
 // lib/agent-profile.js PROFILE_FIELDS; we never invent field names.
-const PROFILE_FIELDS = ["system_prompt", "model", "temperature", "voice_max_chars", "language", "voice"];
+const PROFILE_FIELDS = [
+  "system_prompt",
+  "model",
+  "temperature",
+  "voice_max_chars",
+  "language",
+  "voice",
+  "language_mode",
+  "language_primary",
+  "language_output",
+  "language_auto_switch",
+];
 
 // The Gemini Live core-8 voices the gateway accepts for the agent's OWN spoken
 // voice. Kept aligned with moa_gateway's lib/agent-profile.js CORE_VOICES. Google
@@ -31,6 +42,15 @@ const CORE_VOICES_BY_LOWER = new Map(CORE_VOICES.map((name) => [name.toLowerCase
 // maps to Aoede, a man's voice to Charon.
 const FEMALE_VOICE = "Aoede";
 const MALE_VOICE = "Charon";
+
+const LANGUAGE_DEFINITIONS = [
+  { label: "Amharic", code: "am-ET", keys: ["amharic"] },
+  { label: "English", code: "en-US", keys: ["english"] },
+  { label: "Spanish", code: "es-ES", keys: ["spanish"] },
+  { label: "French", code: "fr-FR", keys: ["french"] },
+  { label: "Arabic", code: "ar", keys: ["arabic"] },
+  { label: "Tigrinya", code: "ti", keys: ["tigrinya"] },
+];
 
 const DEFAULT_VOICE_MAX_CHARS = 280;
 const TERSE_MAX_CHARS = 140;
@@ -86,13 +106,48 @@ function matchVoiceMaxChars(raw) {
 
 // "set language to French" / "reply in Spanish" / "speak English".
 function matchLanguage(raw) {
-  const m =
-    raw.match(/(?:set\s+)?language\s*(?:to|=|:)\s*([a-zA-Z][a-zA-Z \-]{0,38})/i) ||
-    raw.match(/(?:reply|respond|answer|speak|talk)\s+(?:to me\s+)?in\s+([a-zA-Z][a-zA-Z \-]{0,38})/i);
-  if (!m) return null;
-  const value = stripQuotes(m[1].trim());
-  if (!value) return null;
-  return { patch: { language: value }, summary: `language set to ${value}` };
+  const lower = normalizeSpeech(raw);
+  const command =
+    /\b(?:set\s+)?language\s*(?:to|=|:)/i.test(raw) ||
+    /\b(?:reply|respond|answer|speak|talk)\s+(?:to me\s+)?in\b/i.test(raw) ||
+    /\bonly\s+(?:speak|talk|respond|answer)\b/i.test(raw) ||
+    /\b(?:only\s+)?(?:going to|gonna)\s+(?:speak|talk)\b/i.test(raw) ||
+    /\bthese\s+(?:two\s+)?languages\b/i.test(raw) ||
+    /\bdo\s+not\s+switch\b/i.test(raw) ||
+    /\bdon'?t\s+switch\b/i.test(raw);
+  if (!command) return null;
+  const matched = matchedLanguages(lower);
+  if (matched.length === 0) return null;
+  const locked = matched.length > 1 ||
+    /\bonly\b/i.test(raw) ||
+    /\bthese\s+(?:two\s+)?languages\b/i.test(raw) ||
+    /\bdo\s+not\s+switch\b/i.test(raw) ||
+    /\bdon'?t\s+switch\b/i.test(raw);
+  const primary = matched[0];
+  const names = matched.map((language) => language.label).join(" + ");
+  return {
+    patch: {
+      language: matched.map((language) => language.code).join(","),
+      language_primary: primary.code,
+      language_mode: "explicit",
+      language_output: "primary_only",
+      language_auto_switch: false,
+    },
+    summary: locked ? `language locked to ${names}` : `language set to ${names}`,
+  };
+}
+
+function matchedLanguages(lower) {
+  const out = [];
+  for (const language of LANGUAGE_DEFINITIONS) {
+    const indexes = language.keys
+      .map((key) => lower.indexOf(key))
+      .filter((index) => index >= 0);
+    if (indexes.length > 0 && !out.some((item) => item.code === language.code)) {
+      out.push({ ...language, index: Math.min(...indexes) });
+    }
+  }
+  return out.sort((a, b) => a.index - b.index).map(({ index, ...language }) => language);
 }
 
 // Change the agent's OWN spoken voice. Three shapes, in priority order:
@@ -196,6 +251,14 @@ function parseSettingsIntent(text, current) {
     }
   }
   return null;
+}
+
+function normalizeSpeech(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function startsWithSystemPromptSetter(raw) {

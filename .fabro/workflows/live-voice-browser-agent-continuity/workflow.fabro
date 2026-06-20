@@ -1,0 +1,49 @@
+digraph LiveVoiceBrowserAgentContinuity {
+    graph [goal="Profile/context persistence and browser task queue work end to end"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the run artifacts and active OpenSpec files. Produce a concise implementation plan and name the files you will change."
+    ]
+
+    implement_profile [
+        label="Profile + Context",
+        prompt="Implement or verify versioned agent profile and current context query behavior. Preserve the Android/gateway/browser trust boundary."
+    ]
+
+    implement_browser [
+        label="Browser Task Queue",
+        prompt="Implement or verify a bounded gateway browser task queue and extension claim/receipt path. Do not add arbitrary browser execution."
+    ]
+
+    verify_gateway [
+        label="Gateway Check",
+        shape=parallelogram,
+        script="cd gateway && npm run check 2>&1",
+        goal_gate=true
+    ]
+
+    verify_extension [
+        label="Extension Check",
+        shape=parallelogram,
+        script="cd browser_extension && npm run verify 2>&1",
+        goal_gate=true
+    ]
+
+    verify_spec [
+        label="OpenSpec Check",
+        shape=parallelogram,
+        script="tmpdir=\"$(mktemp -d)\"; ln -s \"$PWD/reference/openspec\" \"$tmpdir/openspec\"; cd \"$tmpdir\"; openspec validate provider-agnostic-voice-agent-runtime --strict 2>&1",
+        goal_gate=true
+    ]
+
+    approve [shape=hexagon, label="Approve Result"]
+
+    start -> plan -> implement_profile -> implement_browser -> verify_gateway -> verify_extension -> verify_spec -> approve
+    approve -> exit [label="[A] Accept"]
+    approve -> implement_profile [label="[R] Revise"]
+}

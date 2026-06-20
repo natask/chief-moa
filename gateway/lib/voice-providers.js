@@ -646,6 +646,16 @@ class GeminiLiveVoiceProvider {
     return this.envVoiceName;
   }
 
+  effectiveSystemPrompt() {
+    const profile = this.agentProfile && typeof this.agentProfile.effective === "function"
+      ? this.agentProfile.effective()
+      : null;
+    return [
+      profile?.system_prompt || this.systemPrompt,
+      profileLanguageInstruction(profile),
+    ].filter(Boolean).join("\n\n");
+  }
+
   status() {
     const runtime = voiceRuntimeStatus({
       env: this.env,
@@ -664,6 +674,9 @@ class GeminiLiveVoiceProvider {
       auth: this.authStatus(),
       voice: this.effectiveVoice(),
       voice_default: this.envVoiceName,
+      language_profile: this.agentProfile && typeof this.agentProfile.effective === "function"
+        ? this.agentProfile.effective().language || ""
+        : "",
       language_code: this.languageCode || null,
       input_audio_format: {
         encoding: "pcm16",
@@ -1058,7 +1071,7 @@ class GeminiLiveVoiceProvider {
     if (this.languageCode) {
       speechConfig.languageCode = this.languageCode;
     }
-    const systemParts = [{ text: this.systemPrompt }];
+    const systemParts = [{ text: this.effectiveSystemPrompt() }];
     const contextPrompt = String(turn?.contextPrompt || "").trim();
     if (contextPrompt) {
       systemParts.push({ text: contextPrompt });
@@ -1499,6 +1512,31 @@ function languageCodes(value) {
     .map((entry) => entry.trim())
     .filter(Boolean);
   return codes.length ? Array.from(new Set(codes)).slice(0, 10) : ["en-US"];
+}
+
+function profileLanguageInstruction(profile) {
+  if (!profile || typeof profile !== "object") {
+    return "";
+  }
+  const mode = String(profile.language_mode || "explicit").trim() || "explicit";
+  const primary = String(profile.language_primary || profile.language || "").trim();
+  const configured = languageCodes(profile.language || primary).join(", ");
+  const output = String(profile.language_output || "primary_only").trim() || "primary_only";
+  const autoSwitch = profile.language_auto_switch === true;
+  if (!primary && !configured) {
+    return "";
+  }
+  return [
+    "Moa language profile:",
+    `- mode: ${mode}`,
+    primary ? `- primary language: ${primary}` : "",
+    configured ? `- configured language set: ${configured}` : "",
+    `- output policy: ${output}`,
+    `- automatic durable language switching: ${autoSwitch ? "allowed" : "disabled"}`,
+    autoSwitch
+      ? "You may adapt within the configured language policy."
+      : "Do not change the durable language or output policy unless the user explicitly asks for a profile change.",
+  ].filter(Boolean).join("\n");
 }
 
 function transcriptionText(value) {

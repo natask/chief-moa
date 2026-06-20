@@ -13,6 +13,7 @@ const {
   wantsMultipleAgents,
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
+  parseProfileControlIntent,
   classifyVoiceTurn,
 } = require("../lib/voice-intent");
 
@@ -53,7 +54,17 @@ assert.strictEqual(classifyVoiceTurn({}, "run gemini and claude"), "multi_agent"
 assert.strictEqual(classifyVoiceTurn({}, "/agent ship it"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "agent_run");
+assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
+
+const languageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
+assert.deepStrictEqual(languageLock.patch, {
+  language: "en-US,am-ET",
+  language_primary: "en-US",
+  language_mode: "explicit",
+  language_output: "primary_only",
+  language_auto_switch: false,
+});
 
 // forced/hint fields override the heuristics.
 assert.strictEqual(classifyVoiceTurn({ forced_action: "control" }, "anything"), "control");

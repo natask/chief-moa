@@ -105,6 +105,12 @@ methods locally through `chrome.debugger`, and POST a receipt back to the
 gateway. The gateway records that receipt against the task and linked agent run;
 it does not execute browser CDP itself.
 
+Browser-originated chat and describe turns carry the same gateway session and
+branch identifiers as voice turns. The gateway context APIs expose bounded
+recent voice turns, chat turns, provider events, active/completed runs, profile
+status, and browser task receipts so a later voice session can recover what the
+browser surface did without relying on provider memory.
+
 The extension is a stable packaged client, not a per-user deployment unit. Chrome
 Manifest V3 forbids remotely hosted executable code in privileged extension
 contexts, so user customizations travel through the engine as data: a
@@ -179,6 +185,8 @@ they cannot directly execute phone actions.
 - `branch`: a thread of work inside a session, initially `default`.
 - `turn`: one voice or chat input with optional screen context.
 - `agent_run`: a gateway-created execution-machine job with lifecycle events.
+- `browser_task`: a gateway-created browser work request that a Chrome extension
+  client must claim, execute locally with allowlisted actions, and receipt.
 - `tool_source`: an agent-callable integration source such as OpenAPI, MCP,
   GraphQL, or a custom gateway function.
 - `execution`: a durable gateway-side workflow or tool call with status,

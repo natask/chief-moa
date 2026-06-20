@@ -18,6 +18,28 @@ function normalizeSpeech(value) {
     .trim();
 }
 
+// The Gemini Live core-8 voices the gateway accepts for the agent's OWN spoken
+// voice. Kept aligned with lib/agent-profile.js CORE_VOICES and the browser
+// extension's settings-intent.js. Google labels these by style, not gender, so
+// WE define the gender aliases: a woman's voice maps to Aoede, a man's to Charon.
+const CORE_VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
+const CORE_VOICES_BY_LOWER = new Map(CORE_VOICES.map((name) => [name.toLowerCase(), name]));
+const FEMALE_VOICE = "Aoede";
+const MALE_VOICE = "Charon";
+
+function canonicalVoice(value) {
+  return CORE_VOICES_BY_LOWER.get(String(value || "").trim().toLowerCase()) || null;
+}
+
+const LANGUAGE_DEFINITIONS = [
+  { label: "Amharic", code: "am-ET", keys: ["amharic"] },
+  { label: "English", code: "en-US", keys: ["english"] },
+  { label: "Spanish", code: "es-ES", keys: ["spanish"] },
+  { label: "French", code: "fr-FR", keys: ["french"] },
+  { label: "Arabic", code: "ar", keys: ["arabic"] },
+  { label: "Tigrinya", code: "ti", keys: ["tigrinya"] },
+];
+
 // "stop / cancel / shut up" — a control utterance, not a request.
 function isStopLike(text) {
   const lower = normalizeSpeech(text);
@@ -134,7 +156,7 @@ function parseProfileControlIntent(text) {
       action: "update",
       patch: {
         language: language.code,
-        language_primary: language.code,
+        language_primary: language.primary_code || language.code,
         language_mode: "explicit",
         language_output: "primary_only",
         language_auto_switch: false,
@@ -170,32 +192,93 @@ function promptUpdateFrom(text) {
 }
 
 function languageUpdateFrom(lower) {
-  const languages = [
-    { label: "Amharic", code: "am-ET", keys: ["amharic"] },
-    { label: "English", code: "en-US", keys: ["english", "back to english"] },
-    { label: "Spanish", code: "es-ES", keys: ["spanish"] },
-    { label: "French", code: "fr-FR", keys: ["french"] },
-    { label: "Arabic", code: "ar", keys: ["arabic"] },
-  ];
   const isCommand = lower.startsWith("speak ")
     || lower.startsWith("switch to ")
     || lower.startsWith("answer in ")
     || lower.startsWith("respond in ")
+    || lower.startsWith("only speak ")
+    || lower.startsWith("only talk ")
+    || lower.includes("only going to speak")
+    || lower.includes("only gonna speak")
+    || lower.includes("these two languages")
+    || lower.includes("these languages")
+    || lower.includes("do not switch")
+    || lower.includes("don t switch")
+    || lower.includes("don't switch")
     || lower.includes(" switch to ")
     || lower.includes(" speak ");
   if (!isCommand) {
     return null;
   }
-  return languages.find((language) => language.keys.some((key) => lower.includes(key))) || null;
+  const matched = matchedLanguages(lower);
+  if (matched.length === 0) {
+    return null;
+  }
+  const locked = matched.length > 1
+    || lower.includes("only ")
+    || lower.includes("do not switch")
+    || lower.includes("don t switch")
+    || lower.includes("don't switch")
+    || lower.includes("these two languages")
+    || lower.includes("these languages");
+  const primary = matched[0];
+  return {
+    label: matched.map((language) => language.label).join(" + "),
+    code: matched.map((language) => language.code).join(","),
+    primary_code: primary.code,
+    locked,
+  };
 }
 
-function voiceUpdateFrom(text) {
-  const match = String(text || "").match(/\b(?:switch|change|set|use)\s+(?:your\s+)?voice\s+(?:to|as)?\s*([a-z]+)\b/i);
-  if (!match?.[1]) {
-    return "";
+function matchedLanguages(lower) {
+  const out = [];
+  for (const language of LANGUAGE_DEFINITIONS) {
+    const indexes = language.keys
+      .map((key) => lower.indexOf(key))
+      .filter((index) => index >= 0);
+    if (indexes.length > 0 && !out.some((item) => item.code === language.code)) {
+      out.push({ ...language, index: Math.min(...indexes) });
+    }
   }
-  const value = match[1].trim();
-  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+  return out.sort((a, b) => a.index - b.index).map(({ index, ...language }) => language);
+}
+
+// Change the agent's OWN spoken voice. Three shapes, in priority order:
+//   - explicit core-voice name: "set voice to Aoede", "use the Charon voice".
+//   - bare core-voice name after a switch verb: "switch to Kore", "use Aoede".
+//   - gender alias: "use a female voice"/"sound like a woman" -> Aoede;
+//                   "use a male voice"/"sound like a man"      -> Charon.
+// Returns a canonical core-8 name, or "" when no voice change is requested.
+function voiceUpdateFrom(text) {
+  const raw = String(text || "");
+
+  // Explicit core-voice by name wins, so "use the Charon voice" picks Charon
+  // rather than the male alias.
+  const named =
+    raw.match(/\b(?:use|set|change|switch(?:\s+to)?|make)\b[^.]*?\bvoice\b\s*(?:to|=|:|should be|is|named|called)?\s*([a-zA-Z]+)/i) ||
+    raw.match(/\b(?:use|switch\s+to)\s+(?:the\s+)?([a-zA-Z]+)\s+voice\b/i) ||
+    raw.match(/\b(?:use|set|switch\s+to)\s+voice\s+([a-zA-Z]+)/i);
+  if (named) {
+    const canonical = canonicalVoice(named[1]);
+    if (canonical) return canonical;
+  }
+
+  // Bare core-voice name after a switch verb, with no "voice" word. Safe because
+  // we only accept the fixed core-8 names.
+  const bare = raw.match(/\b(?:switch\s+to|use|set|change\s+to|sound\s+like)\s+(?:the\s+|a\s+|an\s+)?([a-zA-Z]+)\b/i);
+  if (bare) {
+    const canonical = canonicalVoice(bare[1]);
+    if (canonical) return canonical;
+  }
+
+  // Gender aliases: only when the request is clearly about the voice/sound, not
+  // an incidental mention of "man"/"woman".
+  const aboutVoice = /\bvoice\b/i.test(raw) || /\bsound\s+like\b/i.test(raw) || /\bspeak\s+like\b/i.test(raw);
+  if (aboutVoice) {
+    if (/\b(female|woman|girl|feminine|lady)\b/i.test(raw)) return FEMALE_VOICE;
+    if (/\b(male|man|guy|masculine|boy)\b/i.test(raw)) return MALE_VOICE;
+  }
+  return "";
 }
 
 // Route a voice turn. `body` may carry forced_action / intent_hint to override.

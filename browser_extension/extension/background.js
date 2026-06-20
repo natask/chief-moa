@@ -675,10 +675,14 @@ async function describePageViaGateway(tabId, cfg, signal, cueId) {
   throwIfAborted(signal);
   const snap = await ask(tabId, { cmd: "snapshot" });
   throwIfAborted(signal);
+  const sessionId = await getStableSessionId();
   const data = await callGateway(cfg, "/v1/chat", {
     signal,
     body: {
       source: "agee-extension",
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: cueId || "describe",
       screen: snapToScreen(snap),
       messages: [
         { role: "user", content: "Describe this page in 3-5 compact bullets. Include what it is and what the user can do here. Do not claim you took any action." },
