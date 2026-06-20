@@ -676,9 +676,14 @@ class GeminiLiveVoiceProvider {
     const profile = this.agentProfile && typeof this.agentProfile.effective === "function"
       ? this.agentProfile.effective()
       : null;
+    const modality = String(profile?.response_modality || "auto").trim().toLowerCase();
     return [
       profile?.system_prompt || this.systemPrompt,
       profileLanguageInstruction(profile),
+      "If the user tells you to stop, shut up, be quiet, hush, or not to speak, stop talking immediately and say nothing — do not acknowledge it, just go silent.",
+      modality === "text"
+        ? "Reply in text only. Do not speak your replies out loud."
+        : "",
     ].filter(Boolean).join("\n\n");
   }
 
@@ -1103,7 +1108,7 @@ class GeminiLiveVoiceProvider {
     return {
       model: this.modelResource(),
       generationConfig: {
-        responseModalities: ["AUDIO"],
+        responseModalities: this.effectiveResponseModalities(),
         temperature: this.temperature,
         speechConfig,
       },
@@ -1163,7 +1168,7 @@ class GeminiLiveVoiceProvider {
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. LANGUAGE: `language` and `language_primary` are the language YOU reply in; `input_languages` and `input_language_primary` are the language(s) the USER speaks. Modular STT providers may use input languages as recognition hints; Gemini Live native audio infers input language and receives this as Moa context. All language fields take BCP-47 codes (en-US, fr-FR, es-ES, am-ET, ja-JP, sw-KE, ...); comma-separate multiple. Set `language_auto_switch` false to lock. Other fields: system_prompt, model, temperature, voice (Gemini core-8: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                  description: "Profile fields to persist. LANGUAGE: `language` and `language_primary` are the language YOU reply in; `input_languages` and `input_language_primary` are the language(s) the USER speaks. Modular STT providers may use input languages as recognition hints; Gemini Live native audio infers input language and receives this as Moa context. All language fields take BCP-47 codes (en-US, fr-FR, es-ES, am-ET, ja-JP, sw-KE, ...); comma-separate multiple. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how you deliver replies — \"text\" (write, do not speak), \"speech\" (speak out loud), or \"auto\" (match the user: typed -> text, spoken -> speech). Set \"text\" when the user says \"respond in text\"/\"stop speaking, just write\"; set \"speech\" when they say \"talk to me\"/\"use your voice\". Other fields: system_prompt, model, temperature, voice (Gemini core-8: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
                 },
                 reason: {
                   type: "STRING",
