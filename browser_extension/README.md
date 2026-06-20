@@ -72,9 +72,27 @@ To override the baked defaults, use the **agee** toolbar icon → Options.
 
 Only while developing the extension package, optionally open
 `chrome-extension://<extension-id>/dev.html?server=http://localhost:7777` in
-that browser to get the in-page reload bridge for this manual session. This is a
-developer convenience for unpacked-extension work, not an end-user deployment or
-customization path.
+that browser to get the in-page reload bridge for this manual session. Enable
+**Auto-reload this loaded extension from the dev server** there if you want the
+already-loaded unpacked extension to keep watching the local dev server after
+the bridge tab closes. When enabled, active content scripts poll
+`/__agee-dev/version`, the service worker calls `chrome.runtime.reload()` on
+source changes, and localhost tabs refresh after the extension restarts. This is
+a developer convenience for unpacked-extension work, not an end-user deployment
+or customization path.
+
+Manual reload proof:
+
+1. Run `npm run dev -- --no-browser`.
+2. Open `chrome-extension://<extension-id>/dev.html?server=http://localhost:7777`
+   from the unpacked extension loaded out of this repo.
+3. Enable **Auto-reload this loaded extension from the dev server**, then close
+   the dev bridge tab.
+4. Keep `http://localhost:7777/fixtures/demo.html` open and edit a file under
+   [extension/](extension/), for example a harmless text change in `dev.html`.
+5. The loaded extension reloads without clicking the `chrome://extensions`
+   reload icon, and the localhost demo tab refreshes after the extension
+   restarts.
 
 ## Verify it
 

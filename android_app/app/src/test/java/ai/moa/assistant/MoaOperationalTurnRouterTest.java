@@ -30,6 +30,18 @@ public final class MoaOperationalTurnRouterTest {
     }
 
     @Test
+    public void routesProfileControlThroughMoaWithoutForcingAgent() {
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("use the Kore voice"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("switch to a female voice"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("only speak English and Amharic, don't switch up"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("set your system prompt to be terser"));
+        assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("use the Kore voice"));
+        assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("only speak English and Amharic, don't switch up"));
+        assertFalse(MoaOperationalTurnRouter.shouldForceAgent("use the Kore voice"));
+        assertFalse(MoaOperationalTurnRouter.shouldForceAgent("only speak English and Amharic, don't switch up"));
+    }
+
+    @Test
     public void forcesAgentForOperationalSystemQuestions() {
         assertTrue(MoaOperationalTurnRouter.shouldForceAgent("what is going on?"));
         assertTrue(MoaOperationalTurnRouter.shouldForceAgent("mobile gateway status"));

@@ -646,9 +646,9 @@ class GeminiLiveVoiceProvider {
     return this.envVoiceName;
   }
 
-  // The speech-recognition language for the NEXT turn: the user's configured
-  // input language (profile.input_language_primary / input_languages), falling
-  // back to the env default. Read fresh so "I only speak X" applies next turn.
+  // The user's preferred input language for status/context. Gemini Live native
+  // audio infers input language; this is intentionally NOT sent as
+  // speechConfig.languageCode, which configures response speech rather than STT.
   effectiveInputLanguageCode() {
     if (this.agentProfile && typeof this.agentProfile.effective === "function") {
       const profile = this.agentProfile.effective();
@@ -658,6 +658,18 @@ class GeminiLiveVoiceProvider {
       if (primary) return primary;
     }
     return this.languageCode;
+  }
+
+  // Live response modalities for the NEXT turn. The user set response_modality
+  // by talking: "text" -> the model writes, no audio; "speech"/"auto" -> it
+  // speaks (a live session is voice-initiated, so auto means speak). Read fresh
+  // so "respond in text from now on" takes effect on the next turn.
+  effectiveResponseModalities() {
+    if (this.agentProfile && typeof this.agentProfile.effective === "function") {
+      const modality = String(this.agentProfile.effective().response_modality || "").trim().toLowerCase();
+      if (modality === "text") return ["TEXT"];
+    }
+    return ["AUDIO"];
   }
 
   effectiveSystemPrompt() {
@@ -1082,10 +1094,6 @@ class GeminiLiveVoiceProvider {
         },
       },
     };
-    const inputLanguageCode = this.effectiveInputLanguageCode();
-    if (inputLanguageCode) {
-      speechConfig.languageCode = inputLanguageCode;
-    }
     const systemParts = [{ text: this.effectiveSystemPrompt() }];
     const contextPrompt = String(turn?.contextPrompt || "").trim();
     if (contextPrompt) {
@@ -1149,13 +1157,13 @@ class GeminiLiveVoiceProvider {
           },
           {
             name: "update_agent_profile",
-            description: "Persist a requested change to the live assistant profile, such as voice, model, system prompt, language, autonomy, memory policy, or tool policy. Use this when the user asks to change how this agent behaves.",
+            description: "Change your own durable settings for everyone, every session. CALL THIS YOURSELF, without being told to, whenever the user states a preference about how you behave — especially language. If the user says what language THEY speak ('I only speak French', 'I'm talking to you in Amharic now'), set input_languages. If they ask what language YOU reply in ('speak Spanish', 'answer in English', 'switch to Japanese'), set language + language_primary. The user does not need to name a setting; infer it from natural speech in ANY language and persist it. After calling, confirm briefly in your reply.",
             parameters: {
               type: "OBJECT",
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. Supported fields include system_prompt, model, temperature, voice, language, language_mode, language_primary, language_output, language_auto_switch, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, and recovery_mode.",
+                  description: "Profile fields to persist. LANGUAGE: `language` and `language_primary` are the language YOU reply in; `input_languages` and `input_language_primary` are the language(s) the USER speaks. Modular STT providers may use input languages as recognition hints; Gemini Live native audio infers input language and receives this as Moa context. All language fields take BCP-47 codes (en-US, fr-FR, es-ES, am-ET, ja-JP, sw-KE, ...); comma-separate multiple. Set `language_auto_switch` false to lock. Other fields: system_prompt, model, temperature, voice (Gemini core-8: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
                 },
                 reason: {
                   type: "STRING",
@@ -1536,9 +1544,13 @@ function profileLanguageInstruction(profile) {
   const mode = String(profile.language_mode || "explicit").trim() || "explicit";
   const primary = String(profile.language_primary || profile.language || "").trim();
   const configured = languageCodes(profile.language || primary).join(", ");
+  const inputPrimary = String(profile.input_language_primary
+    || String(profile.input_languages || "").split(",")[0]
+    || "").trim();
+  const inputConfigured = languageCodes(profile.input_languages || inputPrimary).join(", ");
   const output = String(profile.language_output || "primary_only").trim() || "primary_only";
   const autoSwitch = profile.language_auto_switch === true;
-  if (!primary && !configured) {
+  if (!primary && !configured && !inputPrimary && !inputConfigured) {
     return "";
   }
   return [
@@ -1546,6 +1558,8 @@ function profileLanguageInstruction(profile) {
     `- mode: ${mode}`,
     primary ? `- primary language: ${primary}` : "",
     configured ? `- configured language set: ${configured}` : "",
+    inputPrimary ? `- user input primary language: ${inputPrimary}` : "",
+    inputConfigured ? `- user input language set: ${inputConfigured}` : "",
     `- output policy: ${output}`,
     `- automatic durable language switching: ${autoSwitch ? "allowed" : "disabled"}`,
     autoSwitch

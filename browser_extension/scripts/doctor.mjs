@@ -13,6 +13,8 @@ const extensionDir = join(root, "extension");
 const configPath = join(extensionDir, "agee.config.json");
 const defaultGatewayUrl = "http://10.147.17.10:8788";
 const staleError = "No gateway URL and no API key set";
+const manifest = readJson(join(extensionDir, "manifest.json"));
+const extensionLabel = manifest.name || "agee";
 
 let failures = 0;
 
@@ -190,6 +192,7 @@ function findInstalledAgee() {
         const extPath = String(ext.path || "");
         const relevant =
           /\bagee\b/i.test(`${name} ${description}`) ||
+          /\bchief\s+ag\b/i.test(`${name} ${description}`) ||
           resolve(extPath || "/") === extensionDir ||
           /moa-assistant\/software\/browser_extension\/extension/.test(extPath);
         if (relevant) {
@@ -235,7 +238,7 @@ function checkBrowserProfiles() {
   const repoVersion = currentManifestVersion();
   const matches = findInstalledAgee();
   if (!matches.length) {
-    warn("no agee extension is registered in common daily-browser profiles");
+    warn(`no ${extensionLabel} / agee extension is registered in common daily-browser profiles`);
     info(`load unpacked at: ${extensionDir}`);
     if (repoVersion) {
       info(`repo manifest version is ${repoVersion}; if a CWS install is older, bump and re-upload`);
@@ -250,7 +253,7 @@ function checkBrowserProfiles() {
       const version = match.version || "unknown";
       const older = repoVersion && version && versionCompare(version, repoVersion) < 0;
       console.log(
-        `[${prefix}] ${match.browser}/${match.profile} has agee id=${match.id} ${state}, version=${version}, source=${source}`
+        `[${prefix}] ${match.browser}/${match.profile} has ${extensionLabel} id=${match.id} ${state}, version=${version}, source=${source}`
       );
       if (older) {
         warn(`installed version ${version} is older than repo version ${repoVersion}; reload or re-upload to Chrome Web Store`);
@@ -274,7 +277,7 @@ function checkBrowserProfiles() {
   }
 }
 
-console.log("agee operational doctor");
+console.log(`${extensionLabel} operational doctor`);
 console.log("");
 
 checkSource();
@@ -284,7 +287,7 @@ checkBrowserProfiles();
 
 console.log("");
 if (failures) {
-  console.log(`agee doctor failed: ${failures} issue(s) need action`);
+  console.log(`${extensionLabel} doctor failed: ${failures} issue(s) need action`);
   process.exit(1);
 }
-console.log("agee doctor passed");
+console.log(`${extensionLabel} doctor passed`);

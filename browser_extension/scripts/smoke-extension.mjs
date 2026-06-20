@@ -219,6 +219,66 @@ async function main() {
     `);
     if (!ping?.tabId) throw new Error("real content script did not answer ping via the service worker");
 
+    const overlayMetrics = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        await chrome.tabs.sendMessage(tabId, { cmd: "open" });
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const root = document.querySelector("#agee-root");
+            const panel = document.querySelector("#agee-panel");
+            const input = document.querySelector("#agee-input");
+            const voice = document.querySelector("#agee-voice");
+            const stop = document.querySelector("#agee-stop");
+            const log = document.querySelector("#agee-log");
+            const voiceState = document.querySelector("#agee-voice-state");
+            if (!root || !panel || !input || !voice || !stop || !log || !voiceState) {
+              return { ok: false, error: "overlay nodes missing" };
+            }
+            const panelRect = panel.getBoundingClientRect();
+            const voiceRect = voice.getBoundingClientRect();
+            const stopStyle = getComputedStyle(stop);
+            const logStyle = getComputedStyle(log);
+            const voiceStateStyle = getComputedStyle(voiceState);
+            const voiceStyle = getComputedStyle(voice);
+            return {
+              ok: true,
+              open: root.classList.contains("agee-open"),
+              panelWidth: Math.round(panelRect.width),
+              panelHeight: Math.round(panelRect.height),
+              viewportWidth: window.innerWidth,
+              voiceWidth: Math.round(voiceRect.width),
+              voiceHeight: Math.round(voiceRect.height),
+              voiceFontSize: voiceStyle.fontSize,
+              stopDisplayWhenIdle: stopStyle.display,
+              logDisplay: logStyle.display,
+              voiceStateDisplay: voiceStateStyle.display,
+              panelOverflowX: panel.scrollWidth > panel.clientWidth + 1,
+              inputOverflowX: input.scrollWidth > input.clientWidth + 1,
+              activeInput: document.activeElement === input,
+            };
+          },
+        });
+        return result?.result;
+      })()
+    `);
+    if (!overlayMetrics?.ok) throw new Error(overlayMetrics?.error || "overlay metrics missing");
+    if (!overlayMetrics.open || !overlayMetrics.activeInput) throw new Error(`overlay did not open and focus input: ${JSON.stringify(overlayMetrics)}`);
+    if (overlayMetrics.panelWidth > Math.min(540, overlayMetrics.viewportWidth - 24) + 1) {
+      throw new Error(`overlay panel exceeded compact width: ${JSON.stringify(overlayMetrics)}`);
+    }
+    if (overlayMetrics.panelHeight > 120 || overlayMetrics.panelOverflowX || overlayMetrics.inputOverflowX) {
+      throw new Error(`overlay compact layout overflowed: ${JSON.stringify(overlayMetrics)}`);
+    }
+    if (overlayMetrics.voiceWidth < 30 || overlayMetrics.voiceHeight < 30 || overlayMetrics.voiceFontSize !== "0px") {
+      throw new Error(`voice control is not stable icon-only UI: ${JSON.stringify(overlayMetrics)}`);
+    }
+    if (overlayMetrics.stopDisplayWhenIdle !== "none" || overlayMetrics.logDisplay !== "none" || overlayMetrics.voiceStateDisplay !== "none") {
+      throw new Error(`overlay exposed hidden history/voice surfaces while idle: ${JSON.stringify(overlayMetrics)}`);
+    }
+
     const workerResult = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
@@ -246,6 +306,7 @@ async function main() {
     console.log(
       `extension smoke passed (REAL extension, headless Chrome for Testing): ` +
         `service worker loaded id=${extensionId}, ${workerResult.elements} elements observed via background->content, ` +
+        `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );
     console.log(`screenshot: ${screenshotPath}`);

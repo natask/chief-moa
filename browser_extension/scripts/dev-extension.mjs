@@ -322,6 +322,7 @@ function printReady() {
     console.log("");
     console.log("[agee-dev] running server only (--no-browser).");
     console.log("[agee-dev] To SEE the extension, load it manually: chrome://extensions -> Load unpacked. See README.");
+    console.log("[agee-dev] For loaded-extension auto-reload, open extension/dev.html?server=" + devUrl + " and enable auto-reload.");
   }
   console.log("");
 }
@@ -383,5 +384,6 @@ function printHelp() {
 Serves the localhost demo, watches extension/ + fixtures/, and reloads the real
 extension in a headless Chrome for Testing instance on file changes. No window
 is shown and focus is never taken. To SEE the extension, load it manually via
-chrome://extensions -> Load unpacked (see README).`);
+chrome://extensions -> Load unpacked. For a visible loaded extension, open the
+extension dev bridge and enable auto-reload (see README).`);
 }

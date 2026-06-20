@@ -55,6 +55,7 @@ assert.strictEqual(classifyVoiceTurn({}, "/agent ship it"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "what voice are you using"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
 
 const inputLanguageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
@@ -94,6 +95,11 @@ assert.deepStrictEqual(parseProfileControlIntent("respond in Swahili").patch, {
 assert.deepStrictEqual(parseProfileControlIntent("I speak Japanese and Korean").patch, {
   input_languages: "ja-JP,ko-KR",
   input_language_primary: "ja-JP",
+});
+
+assert.deepStrictEqual(parseProfileControlIntent("what voice are you using"), {
+  action: "summary",
+  subject: "voice",
 });
 
 // forced/hint fields override the heuristics.

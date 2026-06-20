@@ -12,9 +12,12 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { WebSocket } = require("ws");
+const { WebSocket, WebSocketServer } = require("ws");
+const { createVoiceProvider } = require("../lib/voice-providers");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
+const REPO_ROOT = path.resolve(GATEWAY_DIR, "..");
+const BROWSER_EXTENSION_DIR = path.join(REPO_ROOT, "browser_extension", "extension");
 const TOKEN = "browser-voice-ticket-smoke-token";
 
 main().catch((error) => {
@@ -30,6 +33,8 @@ async function main() {
   let server;
 
   try {
+    await step("browser source uses gateway PCM, not Web Speech APIs", assertBrowserVoiceSourceContract);
+    await step("gemini live provider uses microphone audio STT contract", assertGeminiLiveInputAudioContract);
     server = await startGateway({ port, dataDir });
     await step("ticket endpoint rejects missing bearer token", async () => {
       const response = await fetch(`${baseUrl}/v1/voice/session-ticket`, { method: "POST", body: "{}" });
@@ -46,6 +51,8 @@ async function main() {
         "ticket response includes a ws:// /v1/voice/sessions URL",
         "headerless browser WebSocket authenticates with the ticket",
         "PCM16 input returns assistant audio and turn_done",
+        "browser production voice source does not use SpeechRecognition/webkitSpeechRecognition/speechSynthesis",
+        "Gemini Live setup enables input audio transcription and sends realtime PCM input audio",
         "the ticket cannot be reused",
       ],
     }, null, 2));
@@ -55,6 +62,119 @@ async function main() {
       await onceExit(server, 1500);
     }
     fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function assertBrowserVoiceSourceContract() {
+  const sources = {
+    "content.js": fs.readFileSync(path.join(BROWSER_EXTENSION_DIR, "content.js"), "utf8"),
+    "background.js": fs.readFileSync(path.join(BROWSER_EXTENSION_DIR, "background.js"), "utf8"),
+  };
+  for (const [file, source] of Object.entries(sources)) {
+    assert.doesNotMatch(source, /\bSpeechRecognition\b/, `${file} must not use browser SpeechRecognition`);
+    assert.doesNotMatch(source, /\bwebkitSpeechRecognition\b/, `${file} must not use browser webkitSpeechRecognition`);
+    assert.doesNotMatch(source, /\bspeechSynthesis\b/, `${file} must not use browser speechSynthesis`);
+  }
+
+  const content = sources["content.js"];
+  assert.match(content, /navigator\.mediaDevices\.getUserMedia/, "content script must capture microphone audio");
+  assert.match(content, /new WebSocket\(ticket\.ws_url\)/, "content script must connect with gateway voice-session ticket URL");
+  assert.match(content, /binaryType\s*=\s*["']arraybuffer["']/, "content script must receive assistant audio as binary frames");
+  assert.match(content, /resampleToPcm16/, "content script must resample microphone audio to PCM16");
+  assert.match(content, /encoding:\s*["']pcm16["']/, "content script must declare PCM16 input encoding");
+  assert.match(content, /sample_rate:\s*16000/, "content script must declare 16kHz input audio");
+  assert.match(content, /state\.ws\.send\(pcm\)/, "content script must stream microphone PCM to the gateway");
+  assert.match(content, /playLiveAssistantPcm/, "content script must play assistant PCM from the gateway");
+
+  const background = sources["background.js"];
+  assert.match(background, /\/v1\/voice\/session-ticket/, "background script must mint gateway voice-session tickets");
+  assert.match(background, /voiceSessionTicket/, "background script must broker voice-session tickets to the content script");
+}
+
+async function assertGeminiLiveInputAudioContract() {
+  const received = [];
+  const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(liveServer, "listening");
+
+  liveServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(Buffer.from(data).toString("utf8"));
+      received.push(message);
+
+      if (message.setup) {
+        ws.send(JSON.stringify({ setupComplete: {} }));
+        return;
+      }
+
+      if (message.realtimeInput?.audioStreamEnd) {
+        ws.send(JSON.stringify({
+          serverContent: {
+            inputTranscription: { text: "browser microphone transcript" },
+            outputTranscription: { text: "gateway audio reply" },
+            modelTurn: {
+              parts: [{
+                inlineData: {
+                  mimeType: "audio/pcm;rate=24000",
+                  data: Buffer.alloc(960).toString("base64"),
+                },
+              }],
+            },
+            turnComplete: true,
+          },
+        }));
+      }
+    });
+  });
+
+  try {
+    const { port } = liveServer.address();
+    const provider = createVoiceProvider({
+      env: {
+        VOICE_PROVIDER: "gemini-live",
+        GEMINI_API_KEY: "test-key",
+        GEMINI_LIVE_ENDPOINT: `ws://127.0.0.1:${port}/v1beta/fake-live`,
+        GEMINI_LIVE_MODEL: "fake-live-model",
+      },
+      systemPrompt: "test prompt",
+    });
+    const events = [];
+    let assistantAudioBytes = 0;
+    const liveSession = provider.createLiveTurnSession({
+      format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+    }, {
+      onTranscriptPartial: async (text) => events.push(["transcript_partial", text]),
+      onTranscriptFinal: async (text) => events.push(["transcript_final", text]),
+      onAssistantText: async (text) => events.push(["assistant_text", text]),
+      onAssistantAudioStart: async () => events.push(["assistant_audio_start"]),
+      sendAudio: async (chunk) => {
+        assistantAudioBytes += Buffer.byteLength(chunk);
+      },
+      onAssistantAudioDone: async () => events.push(["assistant_audio_done"]),
+    });
+
+    liveSession.sendAudio(Buffer.alloc(640, 1));
+    liveSession.commit();
+
+    const result = await withTimeout(liveSession.done, 2000);
+    const setup = received.find((message) => message.setup)?.setup;
+    const audioMessage = received.find((message) => message.realtimeInput?.audio);
+    const endIndex = received.findIndex((message) => message.realtimeInput?.audioStreamEnd);
+    const audioIndex = received.findIndex((message) => message.realtimeInput?.audio);
+
+    assert.ok(setup, "Gemini Live provider must send setup");
+    assert.deepEqual(setup.generationConfig?.responseModalities, ["AUDIO"], "Gemini Live response must be provider audio");
+    assert.ok(setup.inputAudioTranscription && typeof setup.inputAudioTranscription === "object", "Gemini Live setup must request input audio transcription");
+    assert.ok(setup.outputAudioTranscription && typeof setup.outputAudioTranscription === "object", "Gemini Live setup must request assistant audio transcription");
+    assert.ok(audioMessage?.realtimeInput?.audio?.data, "Gemini Live provider must send realtime input audio data");
+    assert.equal(audioMessage.realtimeInput.audio.mimeType, "audio/pcm;rate=16000", "Gemini Live input audio must be 16kHz PCM");
+    assert.ok(endIndex > audioIndex, "Gemini Live audioStreamEnd must be sent after input audio");
+    assert.equal(result.transcript, "browser microphone transcript");
+    assert.equal(result.assistant_text, "gateway audio reply");
+    assert.ok(events.some(([type]) => type === "transcript_partial"), "Gemini Live input transcript hook must fire");
+    assert.ok(events.some(([type]) => type === "assistant_text"), "Gemini Live assistant transcript hook must fire");
+    assert.ok(assistantAudioBytes > 0, "Gemini Live assistant PCM audio must be forwarded");
+  } finally {
+    await closeWebSocketServer(liveServer);
   }
 }
 
@@ -193,6 +313,37 @@ async function step(name, fn) {
     error.message = `[${name}] ${error.message}`;
     throw error;
   }
+}
+
+function once(emitter, event) {
+  return new Promise((resolve) => emitter.once(event, resolve));
+}
+
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`timed out after ${ms}ms`));
+    }, ms);
+    promise.then((value) => {
+      clearTimeout(timeout);
+      resolve(value);
+    }, (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+function closeWebSocketServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 async function freePort() {

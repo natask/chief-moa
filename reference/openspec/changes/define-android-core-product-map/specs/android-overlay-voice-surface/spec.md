@@ -97,3 +97,16 @@ The Android app SHALL separate displayed response text from spoken response text
 #### Scenario: Gateway returns empty speak text
 - **WHEN** a voice turn starts agent work and returns no `speak` text
 - **THEN** the app displays status without speaking a confirmation
+
+### Requirement: Spoken Profile Control
+The Android Live voice path SHALL route spoken profile-control requests through
+the gateway profile-control path instead of leaving them as provider-only chat.
+
+#### Scenario: User changes voice or language while using Live voice
+- **WHEN** the user says a profile-control request such as "use the Kore voice"
+  or "only speak English and Amharic"
+- **THEN** Android submits the finalized transcript to `/v1/voice/turns`
+- **AND** the gateway records a `profile_control` turn and persists the new
+  profile version
+- **AND** the next Live voice session starts with that effective profile and the
+  prior session context

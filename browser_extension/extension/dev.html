@@ -39,6 +39,21 @@
         margin: 8px 8px 0 0;
         padding: 10px 14px;
       }
+      label {
+        align-items: center;
+        color: #e7e7ea;
+        display: flex;
+        gap: 8px;
+        margin-top: 18px;
+      }
+      input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+      }
+      .hint {
+        font-size: 13px;
+        margin-top: 6px;
+      }
       #status {
         background: #17191f;
         border: 1px solid #30333a;
@@ -60,6 +75,14 @@
       <p>
         This is intentionally separate from your normal browsing. Use the local
         demo page for extension development, not your active tabs.
+      </p>
+      <label>
+        <input id="auto-reload" type="checkbox" />
+        Auto-reload this loaded extension from the dev server
+      </label>
+      <p class="hint">
+        When enabled, active extension pages poll the local dev server and reload
+        the unpacked extension on file changes, even after this bridge is closed.
       </p>
       <button id="reload-extension">Reload extension now</button>
       <button id="reload-localhost">Reload localhost tabs</button>

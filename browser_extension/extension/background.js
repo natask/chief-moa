@@ -69,8 +69,13 @@ async function gatewayHealth(cfg, signal) {
 // receipt back to the gateway.
 const BROWSER_TASK_CLIENT_ID = `agee-extension-${chrome.runtime.id}`;
 const BROWSER_TASK_POLL_MS = 2000;
+const DEV_RELOAD_ALARM = "agee-dev-reload-poll";
+const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
+const DEV_RELOAD_POLL_MS = 1500;
 let browserTaskPollInFlight = false;
 let browserTaskPollTimer = null;
+let devReloadPollTimer = null;
+let devReloadPollInFlight = false;
 
 function startBrowserTaskPolling() {
   if (!chrome?.storage?.local || !chrome?.alarms || !chrome?.debugger || !chrome?.tabs) return;
@@ -248,10 +253,132 @@ if (chrome?.alarms?.onAlarm) {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === "agee-browser-task-poll") {
       pollBrowserTasks().catch(() => {});
+    } else if (alarm.name === DEV_RELOAD_ALARM) {
+      pollDevReloadVersion("alarm").catch(() => {});
     }
   });
 }
 startBrowserTaskPolling();
+startDevReloadPolling().catch(() => {});
+reloadDevTabsAfterExtensionRestart().catch(() => {});
+
+// ---- Developer auto-reload -----------------------------------------------
+// Disabled by default. The developer bridge (`dev.html`) opts this in by
+// writing ageeDevReloadEnabled + ageeDevReloadServer to storage. Once enabled,
+// the already-loaded extension can notice source edits without keeping the
+// bridge page open: active content scripts poll the dev server and this
+// background worker also polls while awake / via alarms.
+
+async function startDevReloadPolling() {
+  if (!chrome?.storage?.local || !chrome?.alarms) return;
+  const cfg = await devReloadConfig();
+  if (!cfg.enabled) return;
+  ensureDevReloadTimer();
+}
+
+function ensureDevReloadTimer() {
+  if (devReloadPollTimer) return;
+  devReloadPollTimer = setInterval(() => {
+    pollDevReloadVersion("interval").catch(() => {});
+  }, DEV_RELOAD_POLL_MS);
+  chrome.alarms.create(DEV_RELOAD_ALARM, { periodInMinutes: 0.5 });
+  pollDevReloadVersion("startup").catch(() => {});
+}
+
+async function stopDevReloadTimer() {
+  if (devReloadPollTimer) {
+    clearInterval(devReloadPollTimer);
+    devReloadPollTimer = null;
+  }
+  try {
+    await chrome.alarms.clear(DEV_RELOAD_ALARM);
+  } catch {}
+}
+
+async function devReloadConfig() {
+  const stored = await chrome.storage.local.get({
+    ageeDevReloadEnabled: false,
+    ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
+    ageeDevReloadVersion: null,
+  });
+  const server = String(stored.ageeDevReloadServer || DEV_RELOAD_DEFAULT_SERVER).replace(/\/+$/, "");
+  return {
+    enabled: Boolean(stored.ageeDevReloadEnabled),
+    server,
+    version: stored.ageeDevReloadVersion == null ? null : Number(stored.ageeDevReloadVersion),
+  };
+}
+
+async function fetchDevReloadVersion(server) {
+  const resp = await fetch(`${server}/__agee-dev/version?ts=${Date.now()}`, { cache: "no-store" });
+  if (!resp.ok) throw new Error(`dev server returned ${resp.status}`);
+  return resp.json();
+}
+
+async function pollDevReloadVersion(source) {
+  if (devReloadPollInFlight) return;
+  devReloadPollInFlight = true;
+  try {
+    const cfg = await devReloadConfig();
+    if (!cfg.enabled) {
+      await stopDevReloadTimer();
+      return;
+    }
+    const info = await fetchDevReloadVersion(cfg.server);
+    await maybeReloadForDevVersion(info, { server: cfg.server, previousVersion: cfg.version, source });
+  } catch {
+    // Dev server may be offline. Keep quiet; dev.html surfaces connection state.
+  } finally {
+    devReloadPollInFlight = false;
+  }
+}
+
+async function maybeReloadForDevVersion(info, { server, previousVersion, source }) {
+  const nextVersion = Number(info?.version || 0);
+  if (!nextVersion) return;
+  if (!previousVersion) {
+    await chrome.storage.local.set({ ageeDevReloadVersion: nextVersion });
+    return;
+  }
+  if (nextVersion === previousVersion) return;
+  await chrome.storage.local.set({
+    ageeDevReloadVersion: nextVersion,
+    ageeDevReloadPendingLocalhostRefresh: true,
+    ageeDevReloadLastReload: {
+      previousVersion,
+      nextVersion,
+      source,
+      server,
+      at: new Date().toISOString(),
+    },
+  });
+  chrome.runtime.reload();
+}
+
+async function reloadDevTabsAfterExtensionRestart() {
+  if (!chrome?.storage?.local || !chrome?.tabs) return;
+  const { ageeDevReloadPendingLocalhostRefresh } = await chrome.storage.local.get({
+    ageeDevReloadPendingLocalhostRefresh: false,
+  });
+  if (!ageeDevReloadPendingLocalhostRefresh) return;
+  await chrome.storage.local.set({ ageeDevReloadPendingLocalhostRefresh: false });
+  await reloadLocalhostTabs();
+}
+
+async function reloadLocalhostTabs() {
+  const tabs = await chrome.tabs.query({ url: ["http://localhost/*", "http://127.0.0.1/*"] });
+  await Promise.all(tabs.filter((tab) => tab.id).map((tab) => chrome.tabs.reload(tab.id).catch(() => {})));
+}
+
+if (chrome?.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (!changes.ageeDevReloadEnabled && !changes.ageeDevReloadServer) return;
+    const enabled = Boolean(changes.ageeDevReloadEnabled?.newValue);
+    if (enabled) ensureDevReloadTimer();
+    else if (changes.ageeDevReloadEnabled) stopDevReloadTimer().catch(() => {});
+  });
+}
 
 // ---- Router activation loop (the gateway side of a branch) -----------------
 // The sterile router on the gateway launches a disposable agent run and never
@@ -1102,6 +1229,17 @@ async function captureAmbientFrame() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.cmd === "devReloadExtension") {
+    devReloadConfig()
+      .then((cfg) => maybeReloadForDevVersion(msg.info || {}, {
+        server: String(msg.server || cfg.server || DEV_RELOAD_DEFAULT_SERVER).replace(/\/+$/, ""),
+        previousVersion: Number(msg.previousVersion || cfg.version || 0) || null,
+        source: String(msg.source || "message"),
+      }))
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
   if (msg.cmd === "history") {
     getConfig()
       .then((cfg) => loadHistory(cfg))

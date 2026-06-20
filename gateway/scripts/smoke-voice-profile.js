@@ -9,11 +9,13 @@
 //   1. PUT /v1/agent/profile {profile:{voice:"Aoede"}} persists, and a GET
 //      reflects voice=Aoede with is_overridden=true.
 //   2. An invalid voice ("Robot") is rejected — the field is left unchanged.
-//   3. The voice provider reads the effective profile's voice PER SESSION:
+//   3. The voice provider reads the effective profile's voice/language PER SESSION:
 //      - status() reflects the configured voice, and
 //      - the Gemini Live session-config the provider WOULD send carries
-//        speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName = the profile
-//        voice (env default when unset). No real Gemini key, no audio call.
+//        speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName from the runtime
+//        profile, requests input/output transcriptions, and keeps input language
+//        in Moa-owned context instead of misusing speechConfig. No real Gemini
+//        key, no audio call.
 //
 // Boots `node server.js` directly on a throwaway port + token + DATA_DIR so the
 // real .env is never loaded. The voice provider is forced to gemini-live so its
@@ -56,7 +58,7 @@ async function main() {
     await step("health status reflects configured voice", () => assertHealthVoice(baseUrl));
     // Provider-level assertion runs in-process: prove the exact session-config
     // the provider WOULD send to Gemini Live carries the effective voice.
-    await step("provider session-config carries the profile voice", () => assertProviderSessionConfig(dataDir));
+    await step("provider session-config carries the profile voice and language", () => assertProviderSessionConfig(dataDir));
 
     console.log(JSON.stringify({
       ok: true,
@@ -67,7 +69,7 @@ async function main() {
         "PUT voice=Aoede persists; GET reflects voice=Aoede + is_overridden=true",
         "PUT voice=Robot (unknown) is rejected; voice stays Aoede",
         "health voice_stream.provider.voice reflects the configured voice (Aoede)",
-        "provider status() + Gemini Live session-config carry the effective voice; env default when unset",
+        "provider status() + Gemini Live session-config carry the effective voice/language; env default when unset",
       ],
     }, null, 2));
   } finally {
@@ -199,16 +201,47 @@ async function assertProviderSessionConfig(dataDir) {
     "Gemini Live setup must carry Moa-owned durable context",
   );
 
-  // Set the profile voice: the SAME provider instance must pick it up on the
-  // next session with no restart (it reads effective() per call).
-  agentProfile.patch({ voice: "Charon" });
+  // Set the profile voice + language: the SAME provider instance must pick them
+  // up on the next session with no restart (it reads effective() per call).
+  agentProfile.patch({
+    voice: "Charon",
+    language: "en-US,am-ET",
+    language_primary: "en-US",
+    language_output: "primary_only",
+    language_auto_switch: false,
+    input_languages: "am-ET,en-US",
+    input_language_primary: "am-ET",
+  });
   assert.equal(provider.effectiveVoice(), "Charon", "effective voice must follow the profile change with no restart");
+  assert.equal(provider.effectiveInputLanguageCode(), "am-ET", "input language must follow the profile change with no restart");
   assert.equal(provider.status().voice, "Charon", "status() must reflect the new profile voice");
   const setup = provider.setupMessage();
   assert.equal(
     setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName,
     "Charon",
     "session-config must carry the profile voice on the next session",
+  );
+  assert.equal(
+    setup.generationConfig.speechConfig.languageCode,
+    undefined,
+    "Gemini Live native audio must not misuse speechConfig.languageCode as STT configuration",
+  );
+  assert.ok(
+    setup.inputAudioTranscription && typeof setup.inputAudioTranscription === "object",
+    "session-config must request Gemini Live input audio transcription",
+  );
+  const systemText = setup.systemInstruction.parts.map((part) => String(part.text || "")).join("\n");
+  assert.ok(
+    systemText.includes("Moa language profile"),
+    "session-config must carry the durable language profile in the system instruction",
+  );
+  assert.ok(
+    systemText.includes("primary language: en-US"),
+    "session-config must name the primary reply language",
+  );
+  assert.ok(
+    systemText.includes("user input primary language: am-ET"),
+    "session-config must keep the user input language in Moa-owned context",
   );
 }
 

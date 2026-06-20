@@ -1815,6 +1815,9 @@ function profileSummaryText(subject) {
     const language = profile.language || profile.language_primary || "unspecified";
     return `Profile ${version}. Language is ${language}; primary is ${profile.language_primary || "unspecified"}; auto switch is ${profile.language_auto_switch ? "on" : "off"}.`;
   }
+  if (subject === "voice") {
+    return `Profile ${version}. Voice is ${profile.voice || "default"}.`;
+  }
   if (subject === "providers") {
     return `Profile ${version}. Providers: voice ${profile.voice_provider || "default"}, STT ${profile.stt_provider || "default"}, reasoning ${profile.reasoning_provider || "default"}, TTS ${profile.tts_provider || "default"}.`;
   }

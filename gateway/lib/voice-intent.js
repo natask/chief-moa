@@ -88,16 +88,20 @@ const LANGUAGE_DEFINITIONS = [
   { label: "Persian", code: "fa-IR", keys: ["persian", "farsi"] },
 ];
 
-// "stop / cancel / shut up" — a control utterance, not a request.
+// "stop / shut up / be quiet / don't speak" — a control utterance that just
+// silences the agent. It is NOT a request and gets NO spoken reply. Matched on
+// the normalized (punctuation-stripped) form, e.g. "don't speak" -> "don t
+// speak". Exact-set membership, not substring, so "stop the build" stays a real
+// request. "respond in text" is a modality change, not a stop — handled below.
+const STOP_PHRASES = new Set([
+  "stop", "stop it", "stop it now", "stop talking", "stop speaking", "stop responding",
+  "cancel", "never mind", "nevermind",
+  "shut up", "shut it", "shut the fuck up", "shut the hell up",
+  "be quiet", "quiet", "silence", "hush", "enough", "zip it",
+  "dont speak", "don t speak", "do not speak", "dont talk", "don t talk",
+]);
 function isStopLike(text) {
-  const lower = normalizeSpeech(text);
-  return lower === "stop"
-    || lower === "cancel"
-    || lower === "never mind"
-    || lower === "nevermind"
-    || lower === "stop talking"
-    || lower === "stop speaking"
-    || lower === "shut up";
+  return STOP_PHRASES.has(normalizeSpeech(text));
 }
 
 // The user explicitly asked for several agents at once.
@@ -182,6 +186,9 @@ function parseProfileControlIntent(text) {
   if (lower.includes("what language") || lower.includes("which language") || lower.includes("language is active")) {
     return { action: "summary", subject: "language" };
   }
+  if (lower.includes("what voice") || lower.includes("which voice") || lower.includes("voice is active")) {
+    return { action: "summary", subject: "voice" };
+  }
   if (lower.includes("what provider") || lower.includes("which provider") || lower.includes("provider is active")) {
     return { action: "summary", subject: "providers" };
   }
@@ -203,6 +210,15 @@ function parseProfileControlIntent(text) {
     return { action: "update", patch: languageIntent.patch, summary: languageIntent.summary };
   }
 
+  const modality = modalityUpdateFrom(lower);
+  if (modality) {
+    return {
+      action: "update",
+      patch: { response_modality: modality },
+      summary: modality === "text" ? "reply in text" : "reply out loud",
+    };
+  }
+
   const voice = voiceUpdateFrom(raw);
   if (voice) {
     return {
@@ -212,6 +228,28 @@ function parseProfileControlIntent(text) {
     };
   }
 
+  return null;
+}
+
+// How the agent should deliver replies: "text" (write, don't speak) or "speech"
+// (speak out loud). Returns null when the utterance is not about output modality.
+// Operates on normalized text ("don't" -> "don t"). Runs after the language
+// parser, so "respond in French" is language and "respond in text" is modality.
+function modalityUpdateFrom(lower) {
+  if (/\b(?:respond|reply|answer|write|type|put it|send it)\b[^.]*\b(?:in|with|as|via|using)?\s*(?:text|writing|chat)\b/.test(lower)
+    || /\btext\s*(?:only|mode)\b/.test(lower)
+    || /\b(?:just|only)\s+text\b/.test(lower)
+    || /\b(?:don t|do not|dont|stop)\s+(?:speak|speaking|talk|talking)\s+(?:out loud|aloud)\b/.test(lower)
+    || /\b(?:no|without|mute)\s+(?:voice|audio|sound|speech)\b/.test(lower)) {
+    return "text";
+  }
+  if ((/\b(?:out loud|aloud|verbally)\b/.test(lower) && /\b(?:speak|talk|respond|reply|say)\b/.test(lower))
+    || /\b(?:voice|speech|audio)\s*mode\b/.test(lower)
+    || /\b(?:use|with|using)\s+your\s+voice\b/.test(lower)
+    || /\b(?:speak|talk)\s+to\s+me\b/.test(lower)
+    || /\b(?:respond|reply|answer|speak|talk)\b[^.]*\b(?:in|with|via|using)\s*(?:voice|speech|audio)\b/.test(lower)) {
+    return "speech";
+  }
   return null;
 }
 

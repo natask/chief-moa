@@ -84,6 +84,9 @@ as a canonical conversation turn (marked incomplete) with whatever transcript
 and assistant text the provider produced before the cutoff. That partial turn
 flows into the next session's context pack, so a user can interrupt the model on
 one device and resume the thread on another against the same dataset.
+Spoken profile-control requests such as voice and language changes are routed
+through the gateway profile store; Gemini Live reads the effective voice,
+language, and Moa-owned context when the next Live session starts.
 
 Streaming voice providers are gateway-only. Android sends microphone audio to
 Moa Gateway, but raw model/API keys stay on the gateway machine. The provider

@@ -58,6 +58,9 @@
 - [x] 7.2 Add an abstraction boundary for future streaming STT and hosted TTS.
 - [x] 7.3 Add a setting to mute spoken replies while preserving full display text.
 - [x] 7.4 Evaluate hosted TTS only after observability and action boundaries are in place.
+- [x] 7.5 Route Android Live voice profile-control utterances (voice/language
+      changes) through the gateway profile-control path so they persist and
+      apply to the next Live turn with prior context.
 
 ## 8. Verification Harness
 

@@ -25,6 +25,7 @@ const PROFILE_FIELDS = [
   "language_auto_switch",
   "input_languages",
   "input_language_primary",
+  "response_modality",
   "voice_provider",
   "stt_provider",
   "reasoning_provider",
@@ -348,11 +349,20 @@ function pickProfileFields(input) {
   if (typeof input.language_auto_switch === "boolean") {
     out.language_auto_switch = input.language_auto_switch;
   }
-  // Languages the USER speaks (drives speech recognition). Separate from the
-  // reply-language fields above, which are what the AGENT speaks.
+  // Languages the USER speaks. Modular STT providers can use these as direct
+  // language hints; Gemini Live native audio infers input language and receives
+  // these through Moa-owned context instead.
   for (const field of ["input_languages", "input_language_primary"]) {
     if (typeof input[field] === "string" && input[field].trim()) {
       out[field] = input[field].trim().slice(0, 80);
+    }
+  }
+  // How the agent delivers replies: "speech" (speak), "text" (write, no audio),
+  // or "auto" (match the input — typed turn -> text, spoken turn -> speech).
+  if (typeof input.response_modality === "string" && input.response_modality.trim()) {
+    const value = input.response_modality.trim().toLowerCase();
+    if (["speech", "text", "auto"].includes(value)) {
+      out.response_modality = value;
     }
   }
   for (const field of ["voice_provider", "stt_provider", "reasoning_provider", "tts_provider"]) {
@@ -399,6 +409,7 @@ function normalizeProfile(defaults) {
     input_language_primary: picked.input_language_primary
       || (picked.input_languages ? picked.input_languages.split(",")[0].trim() : "")
       || "en-US",
+    response_modality: picked.response_modality || "auto",
     voice_provider: picked.voice_provider || "",
     stt_provider: picked.stt_provider || "",
     reasoning_provider: picked.reasoning_provider || "",
