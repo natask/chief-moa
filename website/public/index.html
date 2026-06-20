@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Moa — a voice assistant in your browser</title>
+<meta name="description" content="Moa is one assistant for all your agents, across every device, with your data in one place you own. Join the waitlist." />
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+<meta property="og:title" content="Moa — a voice assistant in your browser" />
+<meta property="og:description" content="One assistant for all your agents, across every device. You speak, it does the work, you stay in control." />
+<meta property="og:image" content="assets/moa-mark.png" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="assets/moa-mark.png" />
+
+<!--
+  ============================================================================
+  MOA SITE  ·  landing page + waitlist
+  ----------------------------------------------------------------------------
+  One static page. The email field is above the fold; the form posts to
+  /api/waitlist (a Cloudflare Pages Function). Copy is drawn from Nat's
+  reviewed working notes:
+    · reference/scratch/vision/moa-product-vision.md   (the thesis)
+    · reference/scratch/vision/moa-pitch-deck.html      (the beats)
+  No build step, no deck engine.
+  ============================================================================
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+
+<style>
+  :root{
+    --paper:#F4F2EA; --paper-2:#EDEAE0;
+    --ink:#191B1E; --graphite:#7A7D84; --hair:#D8D4C7;
+    --signal:#E5482B;
+    --serif:'Fraunces', Georgia, serif;
+    --mono:'IBM Plex Mono', ui-monospace, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--paper);color:var(--ink)}
+  body{font-family:var(--serif);letter-spacing:-.005em;-webkit-font-smoothing:antialiased}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
+    background:radial-gradient(120% 80% at 85% -10%, rgba(255,255,255,.7), transparent 60%),
+               radial-gradient(100% 70% at 0% 110%, rgba(0,0,0,.025), transparent 55%)}
+
+  .wrap{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:46px 28px 80px}
+
+  .top{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:13px;
+    letter-spacing:.26em;text-transform:uppercase;color:var(--graphite)}
+  .top img{height:34px;width:auto;display:block}
+
+  .hero{display:flex;align-items:center;gap:56px;margin-top:7vh;flex-wrap:wrap}
+  .hero-text{flex:1;min-width:320px}
+  .hero-mark{width:300px;max-width:38vw;flex:none;filter:drop-shadow(0 18px 44px rgba(0,0,0,.20))}
+
+  .eyebrow{font-family:var(--mono);font-size:13px;letter-spacing:.34em;text-transform:uppercase;
+    color:var(--graphite);margin:0 0 26px}
+  h1{font-size:clamp(40px,6.4vw,86px);line-height:.96;letter-spacing:-.025em;margin:0;font-weight:300}
+  h1 em{font-style:italic;color:var(--signal);font-weight:400}
+  .sub{font-size:22px;font-weight:300;color:var(--ink);max-width:34ch;margin:30px 0 0;line-height:1.46}
+  .sub .dim{color:var(--graphite)}
+
+  /* waitlist — email capture, above the fold */
+  .waitlist{margin-top:38px;max-width:34ch}
+  .waitlist form{display:flex;gap:12px;flex-wrap:wrap}
+  .waitlist input[type=email]{flex:1;min-width:240px;font-family:var(--mono);font-size:18px;font-weight:300;
+    color:var(--ink);background:rgba(255,255,255,.55);border:1px solid var(--hair);padding:.72em .9em;outline:none}
+  .waitlist input[type=email]:focus{border-color:rgba(229,72,43,.6)}
+  .waitlist button{font-family:var(--mono);font-size:15px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--paper);background:var(--signal);border:none;padding:.85em 1.6em;cursor:pointer;transition:opacity .2s}
+  .waitlist button:hover{opacity:.88}
+  .waitlist button:disabled{opacity:.5;cursor:default}
+  .waitlist .msg{font-family:var(--mono);font-size:14px;font-weight:300;margin-top:16px;min-height:1.2em;line-height:1.5}
+  .waitlist .msg.ok{color:var(--signal)}
+  .waitlist .msg.err{color:var(--graphite)}
+  .waitlist .fineprint{font-family:var(--mono);font-size:12px;font-weight:300;color:var(--graphite);margin-top:14px}
+
+  /* supporting beats */
+  .beats{margin-top:12vh;display:grid;grid-template-columns:repeat(2,1fr);gap:30px 56px;max-width:920px}
+  .beat h3{font-family:var(--serif);font-style:italic;font-weight:400;font-size:26px;margin:0;color:var(--ink)}
+  .beat p{font-family:var(--mono);font-weight:300;font-size:14px;color:var(--graphite);margin:.55em 0 0;line-height:1.65}
+
+  footer{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:0 28px 40px;
+    font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--graphite)}
+
+  @media (max-width:640px){
+    .hero{gap:34px;margin-top:5vh}
+    .hero-mark{display:none}
+    .beats{grid-template-columns:1fr;gap:26px;margin-top:9vh}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><img src="assets/icon-192.png" alt="" /> Moa</div>
+
+  <div class="hero">
+    <div class="hero-text">
+      <p class="eyebrow">An interactive voice agent</p>
+      <h1>One assistant for all your agents, <em>everywhere you work.</em></h1>
+      <p class="sub">You speak, it does the work, you stay in control.
+        <span class="dim">Across your browser, desktop, and phone, with your data in one place you own.</span></p>
+
+      <div class="waitlist">
+        <form id="waitlistForm" novalidate>
+          <input type="email" id="waitlistEmail" name="email" placeholder="you@example.com"
+            autocomplete="email" required aria-label="Email address" />
+          <button type="submit" id="waitlistSubmit">Join the waitlist</button>
+        </form>
+        <p class="msg" id="waitlistMsg" role="status" aria-live="polite"></p>
+        <p class="fineprint">One confirmation email. No spam. Unsubscribe anytime.</p>
+      </div>
+    </div>
+    <img class="hero-mark" src="assets/moa-mark.png" alt="Moa" />
+  </div>
+
+  <div class="beats">
+    <div class="beat">
+      <h3>One agent, not sessions</h3>
+      <p>Talk to one agent that does everything. It keeps the history, spawns the work, and reports back.</p>
+    </div>
+    <div class="beat">
+      <h3>You steer it by talking</h3>
+      <p>Each task runs in its own background tab. It pings you when it needs a choice. The latest word wins.</p>
+    </div>
+    <div class="beat">
+      <h3>Every device</h3>
+      <p>The same agent across desktop, browser, and phone. Pick up where you left off.</p>
+    </div>
+    <div class="beat">
+      <h3>You own it</h3>
+      <p>Self-hosted on your own machine. Your keys, your data. Swap the model under it and your work stays.</p>
+    </div>
+  </div>
+</div>
+
+<footer>Moa · self-hosted · open source</footer>
+
+<script>
+(function(){
+  var form=document.getElementById('waitlistForm');
+  var email=document.getElementById('waitlistEmail');
+  var submit=document.getElementById('waitlistSubmit');
+  var msg=document.getElementById('waitlistMsg');
+  var emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  form.addEventListener('submit', async function(e){
+    e.preventDefault();
+    var value=(email.value||'').trim();
+    msg.className='msg';
+    if(!emailRe.test(value)){
+      msg.textContent='Enter a valid email address.';
+      msg.classList.add('err');
+      email.focus();
+      return;
+    }
+    submit.disabled=true;
+    var prev=submit.textContent;
+    submit.textContent='…';
+    try{
+      var res=await fetch('/api/waitlist',{
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({email:value}),
+      });
+      var data=await res.json().catch(function(){return {};});
+      if(res.ok){
+        form.style.display='none';
+        msg.textContent=data.message||'You are on the list. Check your inbox.';
+        msg.classList.add('ok');
+      }else{
+        msg.textContent=data.error||'Something went wrong. Try again.';
+        msg.classList.add('err');
+        submit.disabled=false;
+        submit.textContent=prev;
+      }
+    }catch(err){
+      msg.textContent='Network error. Try again.';
+      msg.classList.add('err');
+      submit.disabled=false;
+      submit.textContent=prev;
+    }
+  });
+})();
+</script>
+</body>
+</html>
