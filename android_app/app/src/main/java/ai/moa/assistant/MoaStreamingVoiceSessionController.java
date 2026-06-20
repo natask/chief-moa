@@ -2,12 +2,19 @@ package ai.moa.assistant;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 
 import org.json.JSONObject;
 
 import java.util.UUID;
 
 final class MoaStreamingVoiceSessionController {
+    private static final long AUTO_COMMIT_MIN_RECORDING_MS = 1200;
+    private static final long AUTO_COMMIT_SILENCE_MS = 900;
+    private static final long AUTO_COMMIT_MAX_RECORDING_MS = 9000;
+    private static final long AUTO_COMMIT_CHECK_MS = 250;
+    private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 350;
+
     interface Callback {
         void onSessionStarted(String sessionId, String turnId);
 
@@ -39,8 +46,10 @@ final class MoaStreamingVoiceSessionController {
     private final boolean playbackEnabled;
     private final String requestedSessionId;
     private final String branchId;
+    private final boolean autoCommitOnSilence;
     private final Callback callback;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable autoCommitCheck = this::maybeAutoCommitTurn;
     private final Object lock = new Object();
 
     private MoaAudioCaptureController captureController;
@@ -51,21 +60,28 @@ final class MoaStreamingVoiceSessionController {
     private boolean active;
     private boolean committed;
     private boolean assistantAudioStarted;
+    private long recordingStartedAtMs;
+    private long lastVoiceActivityAtMs;
 
     MoaStreamingVoiceSessionController(Callback callback) {
-        this(MoaVoiceGatewaySocket.DEFAULT_URL, "", true, "", "default", callback);
+        this(MoaVoiceGatewaySocket.DEFAULT_URL, "", true, "", "default", false, callback);
     }
 
     MoaStreamingVoiceSessionController(String gatewayUrl, String gatewayToken, boolean playbackEnabled, Callback callback) {
-        this(gatewayUrl, gatewayToken, playbackEnabled, "", "default", callback);
+        this(gatewayUrl, gatewayToken, playbackEnabled, "", "default", false, callback);
     }
 
     MoaStreamingVoiceSessionController(String gatewayUrl, String gatewayToken, boolean playbackEnabled, String sessionId, String branchId, Callback callback) {
+        this(gatewayUrl, gatewayToken, playbackEnabled, sessionId, branchId, false, callback);
+    }
+
+    MoaStreamingVoiceSessionController(String gatewayUrl, String gatewayToken, boolean playbackEnabled, String sessionId, String branchId, boolean autoCommitOnSilence, Callback callback) {
         this.gatewayUrl = safe(gatewayUrl).isEmpty() ? MoaVoiceGatewaySocket.DEFAULT_URL : safe(gatewayUrl);
         this.gatewayToken = safe(gatewayToken);
         this.playbackEnabled = playbackEnabled;
         this.requestedSessionId = safe(sessionId);
         this.branchId = safe(branchId).isEmpty() ? "default" : safe(branchId);
+        this.autoCommitOnSilence = autoCommitOnSilence;
         this.callback = callback;
     }
 
@@ -95,6 +111,8 @@ final class MoaStreamingVoiceSessionController {
             active = true;
             committed = false;
             assistantAudioStarted = false;
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
             sessionId = requestedSessionId.isEmpty() ? "mobile-" + UUID.randomUUID().toString() : requestedSessionId;
             turnId = "turn_" + UUID.randomUUID().toString();
             playbackController = new MoaAudioPlaybackController(new PlaybackCallback());
@@ -114,10 +132,13 @@ final class MoaStreamingVoiceSessionController {
                 return;
             }
             committed = true;
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
             capture = captureController;
             socket = gatewaySocket;
             currentTurnId = turnId;
         }
+        mainHandler.removeCallbacks(autoCommitCheck);
 
         if (capture != null) {
             capture.stop();
@@ -140,7 +161,10 @@ final class MoaStreamingVoiceSessionController {
             active = false;
             committed = false;
             assistantAudioStarted = false;
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
         }
+        mainHandler.removeCallbacks(autoCommitCheck);
 
         if (capture != null) {
             capture.stop();
@@ -173,7 +197,10 @@ final class MoaStreamingVoiceSessionController {
             assistantAudioStarted = false;
             sessionId = "";
             turnId = "";
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
         }
+        mainHandler.removeCallbacks(autoCommitCheck);
 
         if (capture != null) {
             capture.stop();
@@ -215,6 +242,7 @@ final class MoaStreamingVoiceSessionController {
         }
         if (capture != null) {
             capture.start();
+            scheduleAutoCommitIfNeeded();
         }
     }
 
@@ -227,8 +255,11 @@ final class MoaStreamingVoiceSessionController {
             playback = playbackController;
             active = false;
             committed = false;
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
             shouldStopPlayback = !assistantAudioStarted || !"completed".equals(status);
         }
+        mainHandler.removeCallbacks(autoCommitCheck);
         if (capture != null) {
             capture.stop();
         }
@@ -240,6 +271,77 @@ final class MoaStreamingVoiceSessionController {
 
     private void reportError(String message, Throwable error) {
         post(() -> callback.onError(message, error));
+    }
+
+    private void scheduleAutoCommitIfNeeded() {
+        if (!autoCommitOnSilence) {
+            return;
+        }
+        synchronized (lock) {
+            if (!active || committed) {
+                return;
+            }
+            long now = SystemClock.elapsedRealtime();
+            recordingStartedAtMs = now;
+            lastVoiceActivityAtMs = 0;
+        }
+        mainHandler.removeCallbacks(autoCommitCheck);
+        mainHandler.postDelayed(autoCommitCheck, AUTO_COMMIT_CHECK_MS);
+    }
+
+    private void maybeAutoCommitTurn() {
+        boolean shouldCommit = false;
+        boolean shouldCancel = false;
+        synchronized (lock) {
+            if (!active || committed || !autoCommitOnSilence || recordingStartedAtMs <= 0) {
+                return;
+            }
+            long now = SystemClock.elapsedRealtime();
+            long recordingAge = now - recordingStartedAtMs;
+            boolean heardSpeech = lastVoiceActivityAtMs > 0;
+            boolean silentAfterSpeech = heardSpeech
+                    && recordingAge >= AUTO_COMMIT_MIN_RECORDING_MS
+                    && now - lastVoiceActivityAtMs >= AUTO_COMMIT_SILENCE_MS;
+            boolean maxed = recordingAge >= AUTO_COMMIT_MAX_RECORDING_MS;
+            shouldCommit = silentAfterSpeech || (heardSpeech && maxed);
+            shouldCancel = !heardSpeech && maxed;
+        }
+        if (shouldCommit) {
+            commitTurn();
+            return;
+        }
+        if (shouldCancel) {
+            cancel();
+            return;
+        }
+        mainHandler.postDelayed(autoCommitCheck, AUTO_COMMIT_CHECK_MS);
+    }
+
+    private void markVoiceActivity(byte[] pcm) {
+        if (!autoCommitOnSilence || pcm == null || pcm.length < 2) {
+            return;
+        }
+        if (!hasVoiceActivity(pcm)) {
+            return;
+        }
+        synchronized (lock) {
+            if (active && !committed) {
+                lastVoiceActivityAtMs = SystemClock.elapsedRealtime();
+            }
+        }
+    }
+
+    private static boolean hasVoiceActivity(byte[] pcm) {
+        long total = 0;
+        int samples = 0;
+        for (int i = 0; i + 1 < pcm.length; i += 2) {
+            int low = pcm[i] & 0xff;
+            int high = pcm[i + 1];
+            int sample = (high << 8) | low;
+            total += Math.abs(sample);
+            samples += 1;
+        }
+        return samples > 0 && total / samples >= VOICE_ACTIVITY_AVERAGE_THRESHOLD;
     }
 
     private void post(Runnable runnable) {
@@ -266,6 +368,7 @@ final class MoaStreamingVoiceSessionController {
                 socket = gatewaySocket;
                 shouldSend = active && !committed;
             }
+            markVoiceActivity(pcm);
             if (socket != null && shouldSend && !socket.sendAudio(pcm)) {
                 reportError("Could not send audio frame to voice gateway.", null);
             }
@@ -315,7 +418,10 @@ final class MoaStreamingVoiceSessionController {
                 wasActive = active;
                 active = false;
                 committed = false;
+                recordingStartedAtMs = 0;
+                lastVoiceActivityAtMs = 0;
             }
+            mainHandler.removeCallbacks(autoCommitCheck);
             if (wasActive) {
                 post(() -> callback.onSessionClosed());
             }
@@ -331,7 +437,10 @@ final class MoaStreamingVoiceSessionController {
                 active = false;
                 committed = false;
                 assistantAudioStarted = false;
+                recordingStartedAtMs = 0;
+                lastVoiceActivityAtMs = 0;
             }
+            mainHandler.removeCallbacks(autoCommitCheck);
             if (capture != null) {
                 capture.stop();
             }

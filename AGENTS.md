@@ -42,13 +42,13 @@ For Android-first product work, the active change is usually
 
 ## Verification Defaults
 
-- Android changes: `cd software/android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
-- Gateway changes: `cd software/moa_gateway && npm run check`
+- Android changes: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- Gateway changes: `cd gateway && npm run check`
 - OpenSpec changes: `openspec validate define-android-core-product-map --strict`
 - Runtime behavior: verify with gateway smoke checks or phone QA, whichever is
   closest to the changed behavior.
 
-## Changelog & commits
+## Changelog, commits, and deploys
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) for every commit
 (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, …). Commit per unit of
@@ -57,10 +57,19 @@ work, not in one lump.
 Completed code, spec, workflow, or verification changes must not be left as an
 uncommitted working tree. Before ending a task, either commit the completed unit
 with a Conventional Commit or explicitly record why it could not be committed.
+
+Completed deployable changes must also be deployed through the repo's existing
+deployment path after verification, then smoke-checked against the target. For
+Android app changes, deploy by publishing the OTA artifact to the main-machine
+gateway unless the user explicitly asks for a local-only build. If deployment is
+blocked by missing credentials, failing verification, unavailable network, or a
+non-deployable docs-only change, record the blocker plainly before ending the
+task.
+
 When the user asks to deploy, publish, or put changes "onto Git", push the
-committed branch to the configured remote after verification. If the worktree
-contains unrelated user changes, isolate the intended paths into the commit and
-leave unrelated files untouched.
+committed branch to the configured remote after verification if a remote is
+configured. If the worktree contains unrelated user changes, isolate the
+intended paths into the commit and leave unrelated files untouched.
 
 `CHANGELOG.md` (repo root) follows [Keep a Changelog](https://keepachangelog.com/)
 and is **generated from the commit history** with `git-cliff` — do not hand-edit

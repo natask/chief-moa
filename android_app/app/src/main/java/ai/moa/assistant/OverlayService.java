@@ -176,7 +176,7 @@ public final class OverlayService extends Service {
             showOrb();
         }
         if (shouldStartVoice(intent)) {
-            mainHandler.postDelayed(this::startStreamingVoiceTurn, 180);
+            mainHandler.postDelayed(() -> startStreamingVoiceTurn(true), 180);
         }
         return START_STICKY;
     }
@@ -1476,7 +1476,7 @@ public final class OverlayService extends Service {
         resetVoiceTurnTranscript();
         showTranscriptOverlay("");
         setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
-        startStreamingVoiceTurn();
+        startStreamingVoiceTurn(false);
     }
 
     // Releasing the hold sends what was heard and drops the held glow.
@@ -1512,6 +1512,10 @@ public final class OverlayService extends Service {
     }
 
     private void startStreamingVoiceTurn() {
+        startStreamingVoiceTurn(false);
+    }
+
+    private void startStreamingVoiceTurn(boolean autoCommitOnSilence) {
         loadSettings();
         if (streamingVoiceController != null) {
             streamingVoiceController.destroy();
@@ -1524,7 +1528,7 @@ public final class OverlayService extends Service {
         resetVoiceTurnTranscript();
         final String stableSessionId = conversationId.isEmpty() ? MoaPrefs.conversationId(this) : conversationId;
         updateConversationId(stableSessionId);
-        streamingVoiceController = new MoaStreamingVoiceSessionController(gatewayUrl, gatewayToken, MoaPrefs.spokenRepliesEnabled(this), stableSessionId, "default", new MoaStreamingVoiceSessionController.Callback() {
+        streamingVoiceController = new MoaStreamingVoiceSessionController(gatewayUrl, gatewayToken, MoaPrefs.spokenRepliesEnabled(this), stableSessionId, "default", autoCommitOnSilence, new MoaStreamingVoiceSessionController.Callback() {
             @Override
             public void onSessionStarted(String sessionId, String turnId) {
                 if (!isCurrentStreamingGeneration(generation)) {

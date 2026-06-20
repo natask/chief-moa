@@ -3,6 +3,10 @@ package ai.moa.assistant;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -14,6 +18,8 @@ import okio.ByteString;
 
 final class MoaVoiceGatewaySocket {
     static final String DEFAULT_URL = "ws://10.147.17.10:8788/v1/voice/sessions";
+    private static final int CONNECT_TIMEOUT_MS = 3500;
+    private static final int WRITE_TIMEOUT_MS = 10000;
 
     interface Callback {
         void onSocketOpen();
@@ -62,6 +68,8 @@ final class MoaVoiceGatewaySocket {
         this.token = safe(token);
         this.callback = callback;
         this.client = new OkHttpClient.Builder()
+                .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .writeTimeout(WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS)
                 .build();
     }
@@ -290,11 +298,68 @@ final class MoaVoiceGatewaySocket {
     }
 
     private static String cleanError(Throwable error) {
+        if (error == null) {
+            return "unknown error";
+        }
         String message = error.getMessage();
         if (message == null || message.trim().isEmpty()) {
             return error.getClass().getSimpleName();
         }
         return message.replace('\n', ' ').replace('\r', ' ').trim();
+    }
+
+    private static String socketFailureMessage(String url, Throwable error, Response response) {
+        String target = redactedUrl(url);
+        if (response != null) {
+            int status = response.code();
+            if (status == 401 || status == 403) {
+                return "Voice gateway rejected the socket request (HTTP " + status + "). Save the gateway token in Voice agent setup.";
+            }
+            if (status == 404) {
+                return "Voice gateway did not expose /v1/voice/sessions at " + target + ". Check the gateway URL.";
+            }
+            return "Voice gateway socket failed at " + target + " (HTTP " + status + ").";
+        }
+        if (isTimeout(error)) {
+            return "Could not reach voice gateway at " + target + " within " + CONNECT_TIMEOUT_MS + "ms. Check that the phone is on ZeroTier/VPN or the same network and that the gateway is running.";
+        }
+        if (error instanceof UnknownHostException) {
+            return "Could not resolve voice gateway host for " + target + ". Check the gateway URL.";
+        }
+        if (error instanceof ConnectException) {
+            return "Could not connect to voice gateway at " + target + ". Check that the gateway is running and reachable from this phone.";
+        }
+        return "Voice gateway socket failed at " + target + ": " + cleanError(error) + ".";
+    }
+
+    private static boolean isTimeout(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        if (error instanceof SocketTimeoutException) {
+            return true;
+        }
+        String message = error.getMessage();
+        return message != null && message.toLowerCase(java.util.Locale.US).contains("timeout");
+    }
+
+    private static String redactedUrl(String value) {
+        String fallback = safe(value);
+        try {
+            URI uri = new URI(fallback);
+            StringBuilder builder = new StringBuilder();
+            builder.append(uri.getScheme()).append("://").append(uri.getHost());
+            if (uri.getPort() >= 0) {
+                builder.append(":").append(uri.getPort());
+            }
+            String path = uri.getPath();
+            if (path != null && !path.isEmpty()) {
+                builder.append(path);
+            }
+            return builder.toString();
+        } catch (Exception error) {
+            return fallback;
+        }
     }
 
     private final class Listener extends WebSocketListener {
@@ -336,7 +401,7 @@ final class MoaVoiceGatewaySocket {
                 }
                 assistantAudioOpen = false;
             }
-            reportFailure("Voice gateway socket failed: " + cleanError(error) + ".", error);
+            reportFailure(socketFailureMessage(url, error, response), error);
         }
     }
 }
