@@ -17,7 +17,7 @@ leave artifacts that another agent can resume.
 3. Write or update an OpenSpec change.
    - Use OpenSpec for product behavior, APIs, data contracts, and staged tasks.
    - Keep the active product map in
-     `openspec/changes/define-android-core-product-map` until it is archived.
+     `reference/openspec/changes/define-android-core-product-map` until it is archived.
 
 4. Convert the plan into tickets.
    - One ticket is one observable outcome.

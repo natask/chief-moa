@@ -24,7 +24,7 @@ const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || "http://10.147.17.10:8788")
 const MODEL = process.env.AGEE_MODEL || "claude-opus-4-8";
 const SSH_TARGET = process.env.AGEE_SSH_TARGET || "reclaim@10.147.17.10";
 const SERVICE = process.env.AGEE_SERVICE || "moa-gateway.service";
-const REMOTE_ENV = process.env.AGEE_REMOTE_ENV || "/home/reclaim-ethiopia/moa-assistant/software/moa_gateway/.env";
+const REMOTE_ENV = process.env.AGEE_REMOTE_ENV || "/home/reclaim-ethiopia/moa-assistant/gateway/.env";
 
 function tokenFromEnv() {
   const t = (process.env.MOA_GATEWAY_TOKEN || "").trim();

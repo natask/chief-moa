@@ -14,7 +14,7 @@ proposal before any local action runs.
   implementation, and verification.
 - [AGENTS.md](AGENTS.md): operating contract for coding agents.
 - [reference/openspec](reference/openspec): product maps and specs.
-- [reference/scratch](reference/scratch): working notes and planning context.
+- `scratch/`: local, untracked working notes and planning context.
 
 ## Components
 

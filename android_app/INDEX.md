@@ -1,18 +1,18 @@
 # Moa Android App Index
 
-The Android app lives here: `software/android_app`.
+The Android app lives here: `android_app`.
 
 ## What This App Is
 
 Moa is a native Android overlay assistant. It places a draggable orb above the
 current phone screen, captures speech with Android `SpeechRecognizer`, shows a
-live transcript overlay, sends completed turns to `software/moa_gateway`, and
+live transcript overlay, sends completed turns to `gateway`, and
 can speak replies with Android `TextToSpeech`.
 
 ## Deploy To A Phone
 
 ```sh
-cd software/android_app
+cd android_app
 ./gradlew assembleDebug
 adb devices
 adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -37,7 +37,7 @@ If `adb devices` does not show the phone:
 ## Gateway Setup
 
 ```sh
-cd ../moa_gateway
+cd ../gateway
 cp .env.example .env
 npm start
 ```

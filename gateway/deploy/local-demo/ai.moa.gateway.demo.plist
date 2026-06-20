@@ -7,7 +7,7 @@
   <string>ai.moa.gateway.demo</string>
 
   <key>WorkingDirectory</key>
-  <string>/Users/natnaelkahssay/projs/moa-assistant/software/moa_gateway</string>
+  <string>/Users/natnaelkahssay/projs/moa-assistant/gateway</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -18,7 +18,7 @@
     <string>MOA_GATEWAY_TOKEN=demo-token</string>
     <string>VOICE_PROVIDER=loopback</string>
     <string>/Users/natnaelkahssay/.nvm/versions/node/v22.13.1/bin/node</string>
-    <string>/Users/natnaelkahssay/projs/moa-assistant/software/moa_gateway/server.js</string>
+    <string>/Users/natnaelkahssay/projs/moa-assistant/gateway/server.js</string>
   </array>
 
   <key>RunAtLoad</key>

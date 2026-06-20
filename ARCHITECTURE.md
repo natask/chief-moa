@@ -200,36 +200,36 @@ resumable workflows and queues.
 
 ## Source Map
 
-- `software/android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
   setup/full-app entry surface.
-- `software/android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
   floating orb, transcript, voice loop, chat panel, TTS, and gateway calls.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:
   Android client for gateway endpoints.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
   local routing for screen context and local action commands.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
   accessibility-backed screen context and visible UI operations.
-- `software/moa_gateway/server.js`: HTTP API, voice router, model calls,
+- `gateway/server.js`: HTTP API, voice router, model calls,
   conversation storage, and agent-run execution.
-- `software/moa_gateway/public/gateway-ui.html`: gateway-served browser control
+- `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
-- `software/moa_gateway/lib/voice-intent.js`: pure voice-turn classifier
+- `gateway/lib/voice-intent.js`: pure voice-turn classifier
   (chat / agent_run / multi_agent / control), unit-tested in
   `scripts/smoke-voice-intent.js`.
-- `software/moa_gateway/lib/voice-session-server.js`: WebSocket PCM voice
+- `gateway/lib/voice-session-server.js`: WebSocket PCM voice
   transport, turn storage, transcript events, and assistant audio events.
-- `software/moa_gateway/lib/voice-providers.js`: Swappable streaming voice
+- `gateway/lib/voice-providers.js`: Swappable streaming voice
   provider package boundary, currently loopback and Gemini Live.
-- `software/android_app/deploy/ota`: Android APK OTA artifact build and
+- `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
-- `software/browser_extension/extension`: thin browser client for command,
+- `browser_extension/extension`: thin browser client for command,
   voice, page context, settings, and engine-routed browser actions.
 - `.github/workflows/android-ota.yml`: commit-triggered Android OTA artifact
   build and main-machine deploy.
-- `openspec/changes/define-android-core-product-map`: current product map,
+- `reference/openspec/changes/define-android-core-product-map`: current product map,
   capability specs, staged tasks, and acceptance criteria.
-- `openspec/changes/thin-client-gateway-architecture`: browser extension
+- `reference/openspec/changes/thin-client-gateway-architecture`: browser extension
   thin-client / persistent-engine decision record.
 
 ## Architecture Rules
@@ -252,8 +252,8 @@ resumable workflows and queues.
 
 Use the smallest real check that covers the changed surface:
 
-- Android compile: `cd software/android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
-- Gateway syntax: `cd software/moa_gateway && npm run check`
+- Android compile: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- Gateway syntax: `cd gateway && npm run check`
 - Gateway smoke: `GET /health`, `POST /v1/voice/turns`, `GET /v1/agent/runs`
 - Product/spec check: `openspec validate define-android-core-product-map --strict`
 - Manual phone QA: hold orb to speak / release to send, tap to type, transcript

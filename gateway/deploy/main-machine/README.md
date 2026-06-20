@@ -13,7 +13,7 @@ ws://10.147.17.10:8788/v1/voice/sessions
 Remote project path:
 
 ```text
-/home/reclaim-ethiopia/moa-assistant/software/moa_gateway
+/home/reclaim-ethiopia/moa-assistant/gateway
 ```
 
 Files that must be present there:
@@ -56,7 +56,7 @@ Real Gemini Live audio should be enabled only after that loop works.
 ## Install
 
 ```sh
-cd /home/reclaim-ethiopia/moa-assistant/software/moa_gateway
+cd /home/reclaim-ethiopia/moa-assistant/gateway
 npm ci
 cp deploy/main-machine/env.example .env
 # Edit .env and set MOA_GATEWAY_TOKEN.
@@ -66,7 +66,7 @@ npm run check
 ## Run Directly
 
 ```sh
-cd /home/reclaim-ethiopia/moa-assistant/software/moa_gateway
+cd /home/reclaim-ethiopia/moa-assistant/gateway
 npm start
 ```
 
@@ -99,13 +99,13 @@ From this Mac after ZeroTier works:
 
 ```sh
 curl -fsS http://10.147.17.10:8788/health
-node software/moa_gateway/deploy/main-machine/smoke-voice-session.js ws://10.147.17.10:8788/v1/voice/sessions "$MOA_GATEWAY_TOKEN"
+node gateway/deploy/main-machine/smoke-voice-session.js ws://10.147.17.10:8788/v1/voice/sessions "$MOA_GATEWAY_TOKEN"
 ```
 
 Protected OTA + Gemini Live smoke from this repo:
 
 ```sh
-cd software/moa_gateway
+cd gateway
 MOA_GATEWAY_TOKEN=<token> npm run smoke:main-machine -- http://10.147.17.10:8788
 ```
 
@@ -129,7 +129,7 @@ cd /Users/natnaelkahssay/projs/moa-assistant
 version_code=$(date +%s)
 MOA_ANDROID_VERSION_CODE=$version_code \
 MOA_ANDROID_VERSION_NAME=0.1.$version_code \
-software/android_app/deploy/ota/sync-main-machine.sh
+android_app/deploy/ota/sync-main-machine.sh
 ```
 
 For automatic deploys, configure the GitHub Actions secrets

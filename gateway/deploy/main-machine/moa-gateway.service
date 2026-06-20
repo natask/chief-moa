@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=reclaim
 Group=reclaim
-WorkingDirectory=/home/reclaim/moa-assistant/software/moa_gateway
+WorkingDirectory=/home/reclaim/moa-assistant/gateway
 Environment=NODE_ENV=production
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/reclaim/.local/bin:/home/reclaim/.npm-global/bin
 ExecStart=/usr/bin/env node --env-file-if-exists=.env server.js
@@ -17,7 +17,7 @@ RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/home/reclaim/moa-assistant/software/moa_gateway /home/reclaim/moa-assistant-data/moa_gateway
+ReadWritePaths=/home/reclaim/moa-assistant/gateway /home/reclaim/moa-assistant-data/moa_gateway
 
 [Install]
 WantedBy=multi-user.target

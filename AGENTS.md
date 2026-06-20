@@ -9,11 +9,11 @@ Before changing code, read:
 1. [README.md](README.md)
 2. [ARCHITECTURE.md](ARCHITECTURE.md)
 3. [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md)
-4. The active OpenSpec change or task under `openspec/changes/`
+4. The active OpenSpec change or task under `reference/openspec/changes/`
 5. The source files touched by the task
 
 For Android-first product work, the active change is usually
-`openspec/changes/define-android-core-product-map`.
+`reference/openspec/changes/define-android-core-product-map`.
 
 ## Non-Negotiable Boundaries
 
@@ -42,8 +42,8 @@ For Android-first product work, the active change is usually
 
 ## Verification Defaults
 
-- Android changes: `cd software/android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
-- Gateway changes: `cd software/moa_gateway && npm run check`
+- Android changes: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- Gateway changes: `cd gateway && npm run check`
 - OpenSpec changes: `openspec validate define-android-core-product-map --strict`
 - Runtime behavior: verify with gateway smoke checks or phone QA, whichever is
   closest to the changed behavior.

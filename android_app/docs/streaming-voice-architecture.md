@@ -152,13 +152,13 @@ This state machine belongs in `VoiceSessionController`; UI should render it, not
 The draft implementation should land in these places:
 
 ```text
-software/android_app/app/src/main/java/ai/moa/assistant/
+android_app/app/src/main/java/ai/moa/assistant/
   MoaAudioCaptureController.java
   MoaAudioPlaybackController.java
   MoaVoiceGatewaySocket.java
   MoaStreamingVoiceSessionController.java
 
-software/moa_gateway/
+gateway/
   server.js
   lib/voice-session-server.js
 ```

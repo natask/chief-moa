@@ -2,7 +2,7 @@
 
 This is a submodule of `moa-assistant`. For trust boundaries, architecture, and
 workflow, also read the parent contract:
-`../../AGENTS.md`, `../../ARCHITECTURE.md`, `../../AGENT_WORKFLOW.md`.
+`../AGENTS.md`, `../ARCHITECTURE.md`, `../AGENT_WORKFLOW.md`.
 
 ## Done ledger (scratch/done/LEDGER.md)
 

@@ -34,10 +34,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Gateway
 
-The Android app talks to `software/moa_gateway` instead of putting provider keys on the phone. The gateway saves conversations in its `DATA_DIR` and forwards model calls to OpenAI, LiteLLM, or Ollama.
+The Android app talks to `gateway` instead of putting provider keys on the phone. The gateway saves conversations in its `DATA_DIR` and forwards model calls to OpenAI, LiteLLM, or Ollama.
 
 ```sh
-cd ../moa_gateway
+cd ../gateway
 cp .env.example .env
 # Edit .env and set MODEL_API_KEY or point MODEL_BASE_URL at LiteLLM/Ollama.
 npm start

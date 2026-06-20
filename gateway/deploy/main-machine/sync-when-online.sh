@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REMOTE="${REMOTE:-reclaim@10.147.17.10}"
-REMOTE_DIR="${REMOTE_DIR:-/home/reclaim-ethiopia/moa-assistant/software/moa_gateway}"
+REMOTE_DIR="${REMOTE_DIR:-/home/reclaim-ethiopia/moa-assistant/gateway}"
 REMOTE_DATA_DIR="${REMOTE_DATA_DIR:-/home/reclaim-ethiopia/moa-assistant-data/moa_gateway}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 

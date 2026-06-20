@@ -8,9 +8,9 @@ surface, currently named Agee.
 
 ## Source Trail
 
-- `software/browser_extension/docs/research.md`: prior-art scan and build-vs-
+- `browser_extension/docs/research.md`: prior-art scan and build-vs-
   borrow decision.
-- `software/browser_extension/docs/architecture.md`: current MV3 extension
+- `browser_extension/docs/architecture.md`: current MV3 extension
   boundaries.
 - `scratch/agee-decisions/hotreload-and-customization-20260617/decision.md`:
   hot reload, user customization, and self-modification axes.
@@ -120,14 +120,14 @@ Read:
 - README.md
 - ARCHITECTURE.md
 - AGENTS.md
-- software/browser_extension/README.md
-- software/browser_extension/docs/research.md
-- software/browser_extension/docs/architecture.md
-- software/browser_extension/docs/chrome-agent-surface.md
-- openspec/changes/extension-browser-baseline/
-- openspec/changes/extension-gateway-roundtrip/
-- openspec/changes/extension-settings-voice-control/
-- openspec/changes/gateway-runtime-agent-profile/
+- browser_extension/README.md
+- browser_extension/docs/research.md
+- browser_extension/docs/architecture.md
+- browser_extension/docs/chrome-agent-surface.md
+- reference/openspec/changes/extension-browser-baseline/
+- reference/openspec/changes/extension-gateway-roundtrip/
+- reference/openspec/changes/extension-settings-voice-control/
+- reference/openspec/changes/gateway-runtime-agent-profile/
 
 Task:
 - Implement one observable slice of the browser-based Moa surface.
@@ -140,9 +140,9 @@ Constraints:
 - Keep the extension UI small and page-native.
 
 Verification:
-- cd software/browser_extension && npm run verify
-- cd software/browser_extension && npm run smoke
-- cd software/moa_gateway && npm run check, if gateway routes change
+- cd browser_extension && npm run verify
+- cd browser_extension && npm run smoke
+- cd gateway && npm run check, if gateway routes change
 - openspec validate define-android-core-product-map --strict, if architecture
   or shared product contracts change
 ```
