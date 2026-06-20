@@ -210,6 +210,7 @@ class VoiceSessionConnection {
       providerEvents: null,
       liveSession: null,
       completing: false,
+      recordedCanonical: false,
       contextPrompt: "",
     };
     turn.contextPrompt = this.contextPromptForTurn(turn);
@@ -522,10 +523,68 @@ class VoiceSessionConnection {
     }
   }
 
+  // Persist an interrupted/canceled/closed live turn into the SAME canonical
+  // conversation record path as a completed turn, so whatever transcript or
+  // assistant text the provider produced before the cutoff still carries
+  // forward to the next turn and to the other device. Without this, an
+  // interrupted Gemini Live turn only lands in observability logs and is lost
+  // from the Moa-owned context pack.
+  async recordIncompleteTurn(turn, status) {
+    if (!turn || turn.recordedCanonical || !this.onTurnCompleted) {
+      return;
+    }
+    if (turn.status === "completed") {
+      return;
+    }
+    const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
+    const transcript = String(providerEvents.transcript || "").trim();
+    const assistantText = String(providerEvents.assistantText || "").trim();
+    if (!transcript && !assistantText) {
+      return;
+    }
+    turn.recordedCanonical = true;
+    try {
+      await this.onTurnCompleted({
+        session_id: turn.sessionId,
+        conversation_id: turn.conversationId || turn.sessionId,
+        branch_id: turn.branchId || "default",
+        turn_id: turn.turnId,
+        profile_version: turn.profileVersion || "",
+        source: turn.source,
+        started_at: turn.startedAt,
+        completed_at: nowIso(),
+        transcript,
+        assistant_text: assistantText,
+        provider: turn.providerStatus?.provider || this.voiceProvider.status().provider,
+        model: turn.providerStatus?.model || this.voiceProvider.status().model,
+        audio_format: turn.format,
+        assistant_audio_format: ASSISTANT_AUDIO_FORMAT,
+        audio: {
+          pcm_file: path.basename(turn.pcmPath),
+          bytes: turn.audioBytes,
+          chunks: turn.audioChunks,
+        },
+        assistant_audio: {
+          pcm_file: path.basename(turn.assistantPcmPath),
+          bytes: turn.assistantAudioBytes,
+          chunks: turn.assistantAudioChunks,
+        },
+        incomplete: true,
+        status,
+        provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
+      });
+    } catch (error) {
+      writeTurnMetadata(turn, {
+        canonical_record_error: cleanError(error),
+      });
+    }
+  }
+
   async recordCompletedTurn(turn, providerResult, completed) {
     if (!this.onTurnCompleted) {
       return;
     }
+    turn.recordedCanonical = true;
     try {
       await this.onTurnCompleted({
         session_id: turn.sessionId,
@@ -593,6 +652,7 @@ class VoiceSessionConnection {
       turn.liveSession.cancel();
     }
     await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), "turn_canceled", {});
+    await this.recordIncompleteTurn(turn, "canceled");
     writeTurnMetadata(turn, {
       status: "canceled",
       canceled_at: nowIso(),
@@ -646,6 +706,7 @@ class VoiceSessionConnection {
       await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), status === "interrupted" ? "interruption" : "turn_closed", {
         status,
       });
+      await this.recordIncompleteTurn(turn, status);
       writeTurnMetadata(turn, {
         status,
         closed_at: nowIso(),
@@ -663,6 +724,7 @@ class VoiceSessionConnection {
     await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), status === "interrupted" ? "interruption" : "turn_closed", {
       status,
     });
+    await this.recordIncompleteTurn(turn, status);
     writeTurnMetadata(turn, {
       status,
       closed_at: nowIso(),

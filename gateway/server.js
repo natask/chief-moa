@@ -2832,6 +2832,12 @@ function recordStreamingVoiceTurn(turn) {
   const assistantText = String(turn.assistant_text || "").trim();
   const profileVersion = sanitizeOptionalId(turn.profile_version || agentProfile.currentVersion(), agentProfile.currentVersion());
   const now = turn.completed_at || new Date().toISOString();
+  // An interrupted/canceled/closed live turn is still durable conversation
+  // history: it carries whatever the provider produced before the cutoff so the
+  // next turn (and the other device) can pick up where it left off. It is
+  // classified separately so the context pack can show it was not finished.
+  const incomplete = turn.incomplete === true;
+  const turnStatus = String(turn.status || (incomplete ? "interrupted" : "completed"));
   const baseRecord = {
     id: turnId,
     session_id: sessionId,
@@ -2840,7 +2846,7 @@ function recordStreamingVoiceTurn(turn) {
     profile_version: profileVersion,
     source: String(turn.source || "android-overlay").slice(0, 80),
     transcript,
-    classification: "chat",
+    classification: incomplete ? "interrupted" : "chat",
     screen: null,
     created_at: turn.started_at || now,
     updated_at: now,
@@ -2864,6 +2870,8 @@ function recordStreamingVoiceTurn(turn) {
         assistant_audio: turn.assistant_audio || null,
         provider_events: Array.isArray(turn.provider_events) ? turn.provider_events : [],
         transcription_only: turn.transcription_only === true,
+        incomplete,
+        status: turnStatus,
       },
     },
   });
@@ -2884,9 +2892,10 @@ function voiceLiveContextPrompt(turn) {
     for (const record of records) {
       const user = truncate(String(record.transcript || ""), 480);
       const assistant = truncate(String(record.response?.display || record.response?.speak || record.response?.text || ""), 480);
+      const interrupted = record.references?.voice_session?.incomplete === true || record.classification === "interrupted";
       lines.push(`- user (${record.classification || "turn"}, ${record.profile_version || "profile_unknown"}): ${user || "(empty)"}`);
       if (assistant) {
-        lines.push(`  assistant: ${assistant}`);
+        lines.push(`  assistant${interrupted ? " (interrupted, partial)" : ""}: ${assistant}`);
       }
     }
   }
