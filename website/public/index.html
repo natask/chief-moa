@@ -12,10 +12,10 @@
 <meta property="og:url" content="https://agee.app/" />
 <link rel="canonical" href="https://agee.app/" />
 <meta property="og:description" content="One assistant for all your agents, across every device. You speak, it does the work, you stay in control." />
-<meta property="og:image" content="assets/agee.png" />
+<meta property="og:image" content="assets/moa-mark.png" />
 <meta property="og:type" content="website" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:image" content="assets/agee.png" />
+<meta name="twitter:image" content="assets/moa-mark.png" />
 
 <!--
   ============================================================================
@@ -36,29 +36,25 @@
 
 <style>
   :root{
-    --paper:#F4F2EA; --paper-2:#EDEAE0;
+    --paper:#FFFFFF; --paper-2:#F5F5F5;
     --ink:#191B1E; --graphite:#7A7D84; --hair:#D8D4C7;
     --signal:#E5482B;
     --serif:'Fraunces', Georgia, serif;
     --mono:'IBM Plex Mono', ui-monospace, monospace;
   }
   *{box-sizing:border-box}
-  html,body{margin:0;background:var(--paper);color:var(--ink)}
+  html,body{margin:0;background:#FFFFFF;color:var(--ink)}
   body{font-family:var(--serif);letter-spacing:-.005em;-webkit-font-smoothing:antialiased}
-  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
-    background:radial-gradient(120% 80% at 85% -10%, rgba(255,255,255,.7), transparent 60%),
-               radial-gradient(100% 70% at 0% 110%, rgba(0,0,0,.025), transparent 55%)}
 
   .wrap{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:46px 28px 80px}
 
   .top{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:13px;
     letter-spacing:.26em;text-transform:uppercase;color:var(--graphite)}
-  .top img{height:34px;width:auto;display:block;border-radius:24%}
+  .top img{height:34px;width:auto;display:block}
 
   .hero{display:flex;align-items:center;gap:56px;margin-top:7vh;flex-wrap:wrap}
   .hero-text{flex:1;min-width:320px}
-  .hero-mark{width:300px;max-width:38vw;flex:none;border-radius:22%;
-    box-shadow:0 18px 44px rgba(0,0,0,.22)}
+  .hero-mark{width:300px;max-width:38vw;flex:none}
 
   .eyebrow{font-family:var(--mono);font-size:13px;letter-spacing:.34em;text-transform:uppercase;
     color:var(--graphite);margin:0 0 26px}
@@ -103,23 +99,59 @@
   .ground .src{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--graphite)}
   .ground .claim{font-family:var(--serif);font-size:17px;line-height:1.3;margin-top:10px;color:var(--ink)}
 
-  /* showcase — desktop media frame */
-  .showcase{margin-top:38px}
-  .frame{position:relative;aspect-ratio:16/10;width:100%;max-width:900px;overflow:hidden;
-    border:1px solid var(--hair);background:var(--paper-2);
-    box-shadow:0 18px 44px rgba(0,0,0,.14)}
-  .frame video,.frame img{display:block;width:100%;height:100%;object-fit:cover}
-  .frame .placeholder{position:absolute;inset:0;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;gap:10px;
-    background:
-      repeating-linear-gradient(45deg, rgba(0,0,0,.018) 0 14px, transparent 14px 28px),
-      radial-gradient(120% 90% at 50% -10%, rgba(255,255,255,.7), transparent 60%)}
-  .frame .placeholder .dot{width:54px;height:54px;border-radius:50%;background:var(--signal);
-    opacity:.92;box-shadow:0 0 0 12px rgba(229,72,43,.12)}
-  .frame .placeholder .label{font-family:var(--mono);font-size:12px;letter-spacing:.16em;
-    text-transform:uppercase;color:var(--graphite)}
-  .caption{font-family:var(--mono);font-size:12px;font-weight:300;color:var(--graphite);
-    margin-top:14px;letter-spacing:.02em}
+  /* floating agent — the live overlay, lifted from the browser extension */
+  #ag-root{position:fixed;right:0;bottom:0;z-index:60;pointer-events:none;
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1}
+  #ag-launcher{position:absolute;right:22px;bottom:22px;width:56px;height:56px;
+    display:flex;align-items:center;justify-content:center;border:0;border-radius:50%;
+    background:transparent;padding:0;cursor:pointer;pointer-events:auto;
+    transition:box-shadow .3s ease,transform .2s ease}
+  #ag-launcher:hover{transform:scale(1.06)}
+  #ag-launcher .ag-bird{width:52px;height:52px;object-fit:contain;
+    filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));animation:ag-bob 2.6s ease-in-out infinite}
+  #ag-launcher .ag-shadow{position:absolute;left:50%;bottom:-7px;width:30px;height:7px;
+    transform:translateX(-50%);border-radius:50%;background:rgba(0,0,0,.32);filter:blur(2px);
+    animation:ag-shadow 2.6s ease-in-out infinite}
+  #ag-root.ag-state-listening #ag-launcher{box-shadow:0 0 26px 6px rgba(53,199,89,.5)}
+  #ag-root.ag-state-thinking #ag-launcher{box-shadow:0 0 26px 6px rgba(245,166,35,.5)}
+  #ag-root.ag-state-speaking #ag-launcher{box-shadow:0 0 26px 6px rgba(74,155,255,.5)}
+  @keyframes ag-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+  @keyframes ag-shadow{0%,100%{transform:translateX(-50%) scale(1);opacity:.32}
+    50%{transform:translateX(-50%) scale(.82);opacity:.2}}
+  #ag-panel{position:absolute;right:22px;bottom:92px;width:min(360px,calc(100vw - 44px));
+    box-sizing:border-box;pointer-events:auto;
+    background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015)),rgba(12,13,15,.92);
+    -webkit-backdrop-filter:saturate(150%) blur(18px);backdrop-filter:saturate(150%) blur(18px);
+    color:#f4f4f6;border:1px solid rgba(255,255,255,.14);border-radius:10px;
+    box-shadow:0 18px 52px rgba(0,0,0,.46);overflow:hidden;
+    opacity:0;transform:translateY(6px);transition:opacity .16s ease,transform .16s ease;
+    visibility:hidden}
+  #ag-root.ag-open #ag-panel{opacity:1;transform:translateY(0);visibility:visible}
+  #ag-voice-state{display:flex;align-items:center;gap:12px;padding:14px 18px;
+    border-bottom:1px solid #1d1d20;background:linear-gradient(180deg,#141419,#0d0d0f)}
+  #ag-orb{flex:0 0 auto;width:14px;height:14px;border-radius:50%;background:#555}
+  #ag-root.ag-state-listening #ag-orb{background:#35c759;animation:ag-breathe 1.6s ease-in-out infinite}
+  #ag-root.ag-state-thinking #ag-orb{background:#f5a623;animation:ag-pulse .9s infinite}
+  #ag-root.ag-state-speaking #ag-orb{background:#4a9bff;animation:ag-breathe 1.1s ease-in-out infinite}
+  #ag-transcript{flex:1;min-width:0;font-size:14.5px;line-height:1.45;color:#f2f2f2;min-height:1.45em}
+  @keyframes ag-breathe{0%,100%{box-shadow:0 0 0 0 rgba(74,155,255,.45)}50%{box-shadow:0 0 0 7px rgba(74,155,255,0)}}
+  @keyframes ag-pulse{50%{opacity:.35}}
+  #ag-bar{display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:center;
+    gap:10px;padding:10px 12px}
+  #ag-panel-mark{width:30px;height:30px;object-fit:contain;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))}
+  #ag-input{font:inherit;font-size:15px;color:#9b9ba4;line-height:1.45}
+  #ag-voice{appearance:none;display:inline-flex;align-items:center;justify-content:center;
+    width:34px;height:34px;border:1px solid rgba(255,255,255,.11);border-radius:8px;
+    background:rgba(255,255,255,.045);color:#cfcfd6;cursor:pointer;position:relative}
+  #ag-voice::before{content:"";width:9px;height:14px;box-sizing:border-box;
+    border:2px solid currentColor;border-radius:9px}
+  #ag-voice::after{content:"";position:absolute;left:50%;top:14px;width:16px;height:10px;
+    box-sizing:border-box;border:2px solid currentColor;border-top:0;border-radius:0 0 10px 10px;
+    transform:translateX(-50%);opacity:.82}
+  #ag-root.ag-state-listening #ag-voice{border-color:rgba(53,199,89,.62);color:#a9efba;
+    background:rgba(53,199,89,.12)}
+  @media (prefers-reduced-motion:reduce){
+    #ag-launcher .ag-bird,#ag-launcher .ag-shadow{animation:none}}
 
   footer{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:0 28px 40px;
     font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--graphite)}
@@ -135,7 +167,7 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><img src="assets/icon-192.png" alt="" /> Aggie</div>
+  <div class="top"><img src="assets/moa-mark.png" alt="" /> Aggie</div>
 
   <div class="hero">
     <div class="hero-text">
@@ -154,7 +186,7 @@
         <p class="fineprint">One confirmation email. No spam. Unsubscribe anytime.</p>
       </div>
     </div>
-    <img class="hero-mark" src="assets/agee.png" alt="Aggie" />
+    <img class="hero-mark" src="assets/moa-mark.png" alt="Aggie" />
   </div>
 
   <div class="beats">
@@ -200,27 +232,28 @@
     </div>
   </section>
 
-  <!-- SHOWCASE · the desktop app watches your screen -->
-  <section class="band">
-    <p class="eyebrow">On your desktop</p>
-    <h2>It sees what you see, and <em>does the work.</em></h2>
-    <p class="lead">The Mac app watches your screen as a live feed and acts on it.
-      <span class="dim">Self-hosted, pointed only at your own Aggie. Your screen never leaves your machine.</span></p>
-
-    <div class="showcase">
-      <figure class="frame">
-        <!-- Drop real capture here: assets/heyclicky.mp4 (+ poster). Until then, the placeholder shows. -->
-        <div class="placeholder">
-          <span class="dot"></span>
-          <span class="label">Desktop demo · coming</span>
-        </div>
-      </figure>
-      <p class="caption">Aggie on macOS, watching the screen and doing work in the background.</p>
-    </div>
-  </section>
 </div>
 
 <footer>Aggie · self-hosted · open source</footer>
+
+<!-- FLOATING AGENT · the live overlay, lifted straight from the browser extension -->
+<div id="ag-root" class="ag-state-listening" aria-live="polite">
+  <div id="ag-panel" role="dialog" aria-label="Aggie">
+    <div id="ag-voice-state">
+      <span id="ag-orb"></span>
+      <span id="ag-transcript">Listening…</span>
+    </div>
+    <div id="ag-bar">
+      <img id="ag-panel-mark" src="assets/moa-mark.png" alt="" />
+      <span id="ag-input">Ask Aggie, or just talk</span>
+      <button id="ag-voice" type="button" aria-label="Voice"></button>
+    </div>
+  </div>
+  <button id="ag-launcher" type="button" aria-label="Open Aggie" aria-expanded="false">
+    <span class="ag-shadow"></span>
+    <img class="ag-bird" src="assets/moa-mark.png" alt="" />
+  </button>
+</div>
 
 <script>
 (function(){
@@ -267,6 +300,37 @@
       submit.textContent=prev;
     }
   });
+})();
+</script>
+
+<script>
+// Floating agent: open on click, cycle the live states so the orb reads as alive.
+(function(){
+  var root=document.getElementById('ag-root');
+  var launcher=document.getElementById('ag-launcher');
+  var transcript=document.getElementById('ag-transcript');
+  if(!root||!launcher) return;
+
+  launcher.addEventListener('click', function(){
+    var open=root.classList.toggle('ag-open');
+    launcher.setAttribute('aria-expanded', open?'true':'false');
+  });
+
+  var beats=[
+    {state:'listening', text:'Listening…'},
+    {state:'thinking',  text:'Working on it…'},
+    {state:'speaking',  text:'Done. Opened the report and pinged the team.'}
+  ];
+  var i=0;
+  function step(){
+    var b=beats[i%beats.length];
+    root.classList.remove('ag-state-listening','ag-state-thinking','ag-state-speaking');
+    root.classList.add('ag-state-'+b.state);
+    transcript.textContent=b.text;
+    i++;
+    setTimeout(step, b.state==='speaking'?3400:2400);
+  }
+  step();
 })();
 </script>
 </body>
