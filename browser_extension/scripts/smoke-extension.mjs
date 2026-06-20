@@ -134,7 +134,24 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
   throw new Error(`Timed out waiting for expression: ${expression}; last=${JSON.stringify(lastValue)}`);
 }
 
+function assertVoicePlaybackStopContract() {
+  const source = readFileSync(join(extensionPath, "content.js"), "utf8");
+  if (!/assistantPlaybackSources\s*=\s*new Set\(\)/.test(source)) {
+    throw new Error("content.js must keep a global assistant PCM playback source registry");
+  }
+  if (!/function stopSpeaking\(\)\s*\{\s*stopAllAssistantPlayback\(\);/.test(source)) {
+    throw new Error("stopSpeaking() must stop queued assistant PCM playback, not only update UI state");
+  }
+  if (!/assistantPlaybackSources\.add\(source\)/.test(source)) {
+    throw new Error("assistant PCM buffer sources must register with the global playback stop path");
+  }
+  if (!/if \(liveVoice !== state\) return;/.test(source)) {
+    throw new Error("stale voice-session audio must be ignored after a turn has been replaced");
+  }
+}
+
 async function main() {
+  assertVoicePlaybackStopContract();
   const chromePath = resolveChromeForTesting();
   const { server, port: serverPort } = await serve();
   mkdirSync(profilePath, { recursive: true });

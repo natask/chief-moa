@@ -23,6 +23,7 @@
     // The Moa mark floats, wanders the page when idle, reacts to state, and
     // rings when something lands. audioCtx is created lazily on first gesture.
     audioCtx = null,
+    assistantPlaybackSources = new Set(),
     wanderTimer = null,
     wanderPauseUntil = 0,
     wanderHover = false;
@@ -406,6 +407,7 @@
   }
 
   function stopSpeaking() {
+    stopAllAssistantPlayback();
     if (agentState === "speaking") setAgentState("idle");
   }
 
@@ -733,6 +735,7 @@
 
   function playLiveAssistantPcm(state, buffer) {
     if (!buffer || !buffer.byteLength) return;
+    if (liveVoice !== state) return;
     primeAudio();
     if (!audioCtx) return;
     const pcm = new Int16Array(buffer);
@@ -743,7 +746,11 @@
     source.buffer = audioBuffer;
     source.connect(audioCtx.destination);
     state.playbackSources.add(source);
-    source.onended = () => state.playbackSources.delete(source);
+    assistantPlaybackSources.add(source);
+    source.onended = () => {
+      state.playbackSources.delete(source);
+      assistantPlaybackSources.delete(source);
+    };
     const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
     source.start(startAt);
     state.playbackTime = startAt + audioBuffer.duration;
@@ -802,11 +809,23 @@
 
   function stopLivePlayback(state) {
     for (const source of state.playbackSources || []) {
-      try {
-        source.stop();
-      } catch {}
+      stopAssistantPlaybackSource(source);
     }
     state.playbackSources?.clear();
+  }
+
+  function stopAllAssistantPlayback() {
+    for (const source of [...assistantPlaybackSources]) {
+      stopAssistantPlaybackSource(source);
+    }
+    assistantPlaybackSources.clear();
+  }
+
+  function stopAssistantPlaybackSource(source) {
+    assistantPlaybackSources.delete(source);
+    try {
+      source.stop();
+    } catch {}
   }
 
   function finishLiveVoiceDone(state) {
