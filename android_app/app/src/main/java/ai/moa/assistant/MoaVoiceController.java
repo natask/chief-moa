@@ -145,6 +145,22 @@ final class MoaVoiceController {
         }
     }
 
+    void commitCurrentSpeech() {
+        if (speechRecognizer == null || listenMode != LISTEN_COMMAND) {
+            startCommandListening();
+            return;
+        }
+
+        restartCommandAfterSpeech = false;
+        listening = false;
+        callback.onVoiceStateChanged();
+        try {
+            speechRecognizer.stopListening();
+        } catch (RuntimeException error) {
+            finishCommandTurn(liveTranscript);
+        }
+    }
+
     void stopQuietly() {
         restartCommandAfterSpeech = false;
         liveTranscript = "";

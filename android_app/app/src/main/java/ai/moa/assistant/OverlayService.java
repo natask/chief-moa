@@ -1597,6 +1597,10 @@ public final class OverlayService extends Service {
     // while listening sends what was heard. Starting cuts off any reply still
     // playing (barge-in); while an agent is mid-run it steers that run.
     private void handleOrbDoubleTap() {
+        if (!streamingVoiceAvailable()) {
+            handleLocalVoiceDoubleTap();
+            return;
+        }
         if (streamingVoiceActive()) {
             // Second double-tap: send the current turn.
             if (orbView != null) {
@@ -1619,6 +1623,40 @@ public final class OverlayService extends Service {
         showTranscriptOverlay("");
         setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
         startStreamingVoiceTurn(false);
+    }
+
+    private void handleLocalVoiceDoubleTap() {
+        if (voiceController.isCommandListening()) {
+            if (orbView != null) {
+                orbView.setHeld(false);
+            }
+            voiceController.commitCurrentSpeech();
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            updateMicState();
+            return;
+        }
+
+        startLocalVoiceTurn();
+    }
+
+    private void startLocalVoiceTurn() {
+        continuousVoiceLoop = false;
+        cancelContinuousVoiceRestart();
+        if (streamingVoiceActive()) {
+            cancelStreamingVoice();
+        }
+        if (orbView != null) {
+            orbView.setHeld(true);
+        }
+        nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+        resetVoiceTurnTranscript();
+        showTranscriptOverlay("");
+        setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+        voiceController.startCommandListening();
+    }
+
+    private boolean streamingVoiceAvailable() {
+        return !safe(gatewayUrl).isEmpty() && !safe(gatewayToken).isEmpty();
     }
 
     private void cancelStreamingVoice() {
@@ -1648,6 +1686,10 @@ public final class OverlayService extends Service {
     }
 
     private void startContinuousStreamingVoiceTurn() {
+        if (!streamingVoiceAvailable()) {
+            startLocalVoiceTurn();
+            return;
+        }
         startStreamingVoiceTurn(true, true);
     }
 
@@ -1845,6 +1887,10 @@ public final class OverlayService extends Service {
                     return;
                 }
                 nextStreamingTurnFollowsActiveRun = false;
+                if (isRecoverableStreamingVoiceError(message)) {
+                    recoverStreamingVoiceTurn(generation);
+                    return;
+                }
                 String failure = "Streaming voice failed: " + message;
                 addMessage(true, failure);
                 updateVoiceAssistantTranscript(failure);
@@ -1858,6 +1904,32 @@ public final class OverlayService extends Service {
             }
         });
         streamingVoiceController.startSession();
+    }
+
+    private boolean isRecoverableStreamingVoiceError(String message) {
+        String normalized = safe(message).toLowerCase(Locale.US);
+        return normalized.contains("gemini-live generation was interrupted")
+                || normalized.contains("failed to complete turn: gemini-live");
+    }
+
+    private void recoverStreamingVoiceTurn(int generation) {
+        Log.i(TAG, "recovering from interrupted streaming voice turn");
+        if (!currentStreamingTurnRouted) {
+            recordCurrentStreamingAssistant();
+        }
+        if (streamingVoiceController != null) {
+            streamingVoiceController.destroy();
+            streamingVoiceController = null;
+        }
+        streamingAssistantAudioPlaying = false;
+        pendingContinuousVoiceRestartAfterAudio = false;
+        setVoiceRuntimeState(VoiceRuntimeState.RECOVERING);
+        updateMicState();
+        mainHandler.postDelayed(() -> {
+            if (isCurrentStreamingGeneration(generation)) {
+                showReadyForNextVoiceTurn(generation);
+            }
+        }, 250);
     }
 
     private boolean isCurrentStreamingGeneration(int generation) {

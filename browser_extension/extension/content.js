@@ -574,6 +574,27 @@
     if (log) log.scrollTop = log.scrollHeight;
   }
 
+  function visibleErrorMessage(message) {
+    const text = String(message || "").trim();
+    if (!text) return "";
+    if (/extension context invalidated/i.test(text)) return "";
+    if (/failed to complete turn:\s*gemini-live generation was interrupted/i.test(text)) return "";
+    if (/gemini-live generation was interrupted/i.test(text)) return "";
+    return text;
+  }
+
+  function showCueError(cueId, message, { react = true } = {}) {
+    const text = visibleErrorMessage(message);
+    if (!text) {
+      removeCueCard(cueId);
+      refreshStatus();
+      return false;
+    }
+    updateCue(cueId, text, "error");
+    if (react) reactLauncher("error");
+    return true;
+  }
+
   function stopSpeaking() {
     stopAllAssistantPlayback();
     if (agentState === "speaking") setAgentState("idle");
@@ -673,7 +694,7 @@
     }
     input.focus();
     chrome.runtime.sendMessage({ cmd: "run", instruction, cueId }).catch((error) => {
-      updateCue(cueId, String(error?.message || error), "error");
+      showCueError(cueId, error?.message || error, { react: false });
     });
   }
 
@@ -682,7 +703,7 @@
     openTextSurface({ fresh: false });
     createCue(cueId, "Describe this page", { presentation: "card" });
     chrome.runtime.sendMessage({ cmd: "describe", cueId }).catch((error) => {
-      updateCue(cueId, String(error?.message || error), "error");
+      showCueError(cueId, error?.message || error, { react: false });
     });
   }
 
@@ -976,8 +997,7 @@
     closeLiveVoiceSession(state, "profile control routed to gateway");
     untrackLiveVoiceState(state);
     chrome.runtime.sendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).catch((error) => {
-      updateCue(state.cueId, String(error?.message || error), "error");
-      reactLauncher("error");
+      showCueError(state.cueId, error?.message || error);
       if (agentState === "thinking") setAgentState("idle");
     });
   }
@@ -1155,13 +1175,13 @@
 
   function finishLiveVoiceError(state, message) {
     if (!isLiveVoiceStateActive(state)) return;
-    updateCue(state.cueId, message, "error");
-    reactLauncher("error");
+    const shown = showCueError(state.cueId, message);
     if (liveVoice === state) {
       stopLiveVoiceTurn("error");
     } else {
       stopLiveVoiceState(state, "error");
     }
+    if (!shown && agentState !== "idle") setAgentState("idle");
   }
 
   function toggleVoice() {
@@ -1567,8 +1587,7 @@
         if (agentState === "thinking") setAgentState("idle");
         return false;
       case "error":
-        updateCue(msg.cueId, msg.text, "error");
-        reactLauncher("error"); // shake + ring + falling chime
+        showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
         return false;
       case "voiceSessionEvent":

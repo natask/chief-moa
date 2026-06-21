@@ -541,7 +541,7 @@ async function maybeApplyPageTweak(tabId, instruction, signal, cueId) {
   }
 
   const tweak = result.tweak || {};
-  const summary = `Changed this page — ${tweak.label || "page tweak"} is now saved for ${result.origin || "this site"}.`;
+  const summary = `Changed this page — ${tweak.name || tweak.label || "page tweak"} is now saved for ${result.origin || "this site"}.`;
   send(tabId, { cmd: "done", cueId, summary, speak: summary });
   await saveTaskState(cueId, {
     status: "done",
@@ -559,7 +559,9 @@ function looksLikePageTweak(raw) {
   if (!raw) return false;
   return (
     /\b(hide|remove|get rid of|dismiss|kill)\b/i.test(raw) ||
-    /\b(dark mode|readable|narrow width|make (?:the )?(?:text|font) (?:bigger|larger|smaller))\b/i.test(raw)
+    /\b(dark mode|readable|narrow width|make (?:the )?(?:text|font) (?:bigger|larger|smaller))\b/i.test(raw) ||
+    /\b(?:make|turn|set)\b.*\b(?:it|this|page|site|background|screen)\b.*\bblack\b/i.test(raw) ||
+    /\ball black\b|\bblack (?:page|background|mode|theme)\b/i.test(raw)
   );
 }
 

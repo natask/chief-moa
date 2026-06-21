@@ -403,16 +403,32 @@ final class MoaVoiceGatewaySocket {
 
         @Override
         public void onFailure(WebSocket socket, Throwable error, Response response) {
+            boolean expectedTeardown;
             synchronized (lock) {
+                expectedTeardown = destroyed && isSocketClosed(error);
                 if (webSocket == socket) {
                     webSocket = null;
                 }
                 assistantAudioOpen = false;
+            }
+            if (expectedTeardown) {
+                Log.i(TAG, "socket closed during teardown");
+                return;
             }
             Log.e(TAG, "onFailure HTTP " + (response != null ? response.code() : -1)
                     + " err=" + (error != null ? error.getClass().getSimpleName() + ":" + cleanError(error) : "none")
                     + " msg=" + socketFailureMessage(url, error, response), error);
             reportFailure(socketFailureMessage(url, error, response), error);
         }
+    }
+
+    private static boolean isSocketClosed(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        String message = error.getMessage();
+        return error instanceof java.net.SocketException
+                && message != null
+                && message.toLowerCase(java.util.Locale.US).contains("socket closed");
     }
 }
