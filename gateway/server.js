@@ -2933,6 +2933,7 @@ function recordStreamingVoiceTurn(turn) {
         model: turn.model || "",
         audio: turn.audio || null,
         assistant_audio: turn.assistant_audio || null,
+        playback_policy: turn.playback_policy || {},
         provider_events: Array.isArray(turn.provider_events) ? turn.provider_events : [],
         transcription_only: turn.transcription_only === true,
         incomplete,

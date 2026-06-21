@@ -181,6 +181,7 @@ class VoiceSessionConnection {
     const turnId = sanitizeId(event.turn_id || randomId("turn"), "turn_id");
     const turnDir = path.join(this.sessionsDir, sessionId);
     const format = normalizeFormat(event.format);
+    const playbackPolicy = normalizePlaybackPolicy(event.playback_policy || event.playbackPolicy);
     const startedAt = nowIso();
     const profileVersion = this.profileVersion();
     const providerStatus = this.voiceProvider.status();
@@ -195,6 +196,7 @@ class VoiceSessionConnection {
       providerStatus,
       source: String(event.source || "android-overlay").slice(0, 120),
       format,
+      playbackPolicy,
       turnDir,
       pcmPath: path.join(turnDir, `${turnId}.pcm`),
       assistantPcmPath: path.join(turnDir, `${turnId}.assistant.pcm`),
@@ -239,6 +241,7 @@ class VoiceSessionConnection {
       session_id: sessionId,
       branch_id: branchId,
       turn_id: turnId,
+      playback_policy: playbackPolicy,
     });
     turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     await this.recordProviderEvent(turn, turn.providerEvents, "profile_applied", {
@@ -572,6 +575,7 @@ class VoiceSessionConnection {
           bytes: turn.assistantAudioBytes,
           chunks: turn.assistantAudioChunks,
         },
+        playback_policy: turn.playbackPolicy || {},
         incomplete: true,
         status,
         provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
@@ -614,6 +618,7 @@ class VoiceSessionConnection {
           bytes: turn.assistantAudioBytes,
           chunks: turn.assistantAudioChunks,
         },
+        playback_policy: turn.playbackPolicy || {},
         transcription_only: providerResult?.transcription_only === true,
         provider_events: Array.isArray(turn.providerEvents?.events) ? turn.providerEvents.events : [],
       });
@@ -809,6 +814,13 @@ function normalizeFormat(format) {
   };
 }
 
+function normalizePlaybackPolicy(policy) {
+  const input = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
+  return {
+    assistant_overlap: input.assistant_overlap === true,
+  };
+}
+
 async function closeAudioStream(turn) {
   if (!turn.audioStream) {
     return;
@@ -876,6 +888,7 @@ function writeTurnMetadata(turn, patch) {
     provider_ids: turn.providerStatus?.selected_providers || previous.provider_ids || {},
     source: turn.source,
     input_format: turn.format,
+    playback_policy: turn.playbackPolicy || previous.playback_policy || {},
     status: patch.status || previous.status || turn.status,
     started_at: turn.startedAt,
     updated_at: nowIso(),

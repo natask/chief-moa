@@ -486,6 +486,27 @@
 .agee-cue-error .agee-cue-status {
   color: #ff8278;
 }
+/* A finished card is not kept. After its linger it fades up and out, then the
+   node is removed — the surface holds the current turn, not a transcript. */
+.agee-cue-leaving {
+  animation: agee-cue-out 0.3s ease forwards;
+  pointer-events: none;
+}
+@keyframes agee-cue-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agee-cue-leaving {
+    animation-duration: 0.01s;
+  }
+}
 .agee-confirm {
   color: #f2f2f2;
   border-top: 1px solid #1d1d20;

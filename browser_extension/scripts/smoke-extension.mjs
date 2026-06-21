@@ -136,6 +136,7 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
 
 function assertVoicePlaybackStopContract() {
   const source = readFileSync(join(extensionPath, "content.js"), "utf8");
+  const background = readFileSync(join(extensionPath, "background.js"), "utf8");
   if (!/assistantPlaybackSources\s*=\s*new Set\(\)/.test(source)) {
     throw new Error("content.js must keep a global assistant PCM playback source registry");
   }
@@ -145,8 +146,20 @@ function assertVoicePlaybackStopContract() {
   if (!/assistantPlaybackSources\.add\(source\)/.test(source)) {
     throw new Error("assistant PCM buffer sources must register with the global playback stop path");
   }
-  if (!/if \(liveVoice !== state\) return;/.test(source)) {
-    throw new Error("stale voice-session audio must be ignored after a turn has been replaced");
+  if (!/if \(liveVoice !== state \|\| !state\.sessionReady \|\| state\.committed\) return;/.test(source)) {
+    throw new Error("the active microphone pump must stop when a different live voice turn becomes current");
+  }
+  if (!/liveVoiceBySessionId\s*=\s*new Map\(\)/.test(source)) {
+    throw new Error("content.js must keep active voice sessions addressable by voiceSessionId");
+  }
+  if (!/if \(!preserveAssistantPlayback\)\s*\{\s*stopSpeaking\(\);/.test(source)) {
+    throw new Error("live voice startup must not always stop assistant playback");
+  }
+  if (!/liveVoiceBySessionId\.get\(msg\.voiceSessionId\)/.test(source)) {
+    throw new Error("voice-session events must route to their owning state, not only the newest liveVoice");
+  }
+  if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.test(background)) {
+    throw new Error("background.js must send assistant_overlap playback policy to the gateway");
   }
 }
 

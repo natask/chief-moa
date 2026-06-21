@@ -27,8 +27,11 @@
     suppressLauncherClick = false,
     // The Aggie mark stays where the user drops it, reacts to state, and rings
     // when something lands. audioCtx is created lazily on first gesture.
-    audioCtx = null,
-    assistantPlaybackSources = new Set();
+    audioCtx = null;
+  const assistantPlaybackSources = new Set();
+  const liveVoiceStates = new Set();
+  const liveVoiceBySessionId = new Map();
+  let assistantSpeechOverlap = false;
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
   const DEV_RELOAD_POLL_MS = 900;
   let devReloadTimer = null;
@@ -206,7 +209,7 @@
       e.preventDefault();
       e.stopPropagation();
       chrome.runtime.sendMessage({ cmd: "cancel" });
-      stopLiveVoiceTurn("cancel");
+      stopAllLiveVoiceTurns("cancel");
       stopSpeaking();
       addLog("agee", "stopping…");
     });
@@ -290,11 +293,14 @@
     }
   }
 
-  // Open the surface and start listening. Double-clicking the mark lands here.
+  // Open the surface and toggle the mic. Double-clicking the mark lands here:
+  // first double-click listens, the next one sends the audio.
   function enableVoiceMode() {
     if (!root) build();
     toggle(true);
-    if (!listening) toggleVoice();
+    // Double-click starts listening, and a second double-click while listening
+    // sends the recorded audio so you can immediately speak another message.
+    toggleVoice();
   }
 
   // Anchor the panel to the floating mark so the input opens right where the
@@ -451,14 +457,69 @@
       if (removable <= 0) break;
       const id = card.dataset.cue;
       if (activeCues.has(id)) continue;
-      card.remove();
-      cues.delete(id);
+      removeCueCard(id);
       removable -= 1;
     }
   }
 
+  // The surface is not a chat. A card lives only while its turn is in flight, then
+  // lingers just long enough to read the answer and fades out. A running card is
+  // never auto-dismissed — it waits for its response.
+  const CUE_LINGER_DONE_MS = 6000;
+  const CUE_LINGER_ERROR_MS = 9000;
+
+  function scheduleCueDismiss(cueId, kind) {
+    const entry = cues.get(cueId);
+    if (!entry) return;
+    if (entry.dismissTimer) clearTimeout(entry.dismissTimer);
+    const delay = kind === "error" ? CUE_LINGER_ERROR_MS : CUE_LINGER_DONE_MS;
+    entry.dismissTimer = setTimeout(() => dismissCue(cueId), delay);
+  }
+
+  // Fade a finished card out, then remove it. In-flight cards are left alone.
+  function dismissCue(cueId) {
+    const entry = cues.get(cueId);
+    if (!entry || activeCues.has(cueId)) return;
+    if (entry.dismissTimer) {
+      clearTimeout(entry.dismissTimer);
+      entry.dismissTimer = null;
+    }
+    const card = entry.cardEl;
+    cues.delete(cueId);
+    if (!card) return;
+    card.classList.add("agee-cue-leaving");
+    const finalize = () => {
+      card.remove();
+      syncLogVisibility();
+    };
+    card.addEventListener("animationend", finalize, { once: true });
+    setTimeout(finalize, 400); // fallback if the animation never fires
+  }
+
+  // Remove a card right now, no fade. Used by prune and when a new turn arrives.
+  function removeCueCard(cueId) {
+    const entry = cues.get(cueId);
+    if (entry?.dismissTimer) clearTimeout(entry.dismissTimer);
+    cues.delete(cueId);
+    activeCues.delete(cueId);
+    log?.querySelector(`.agee-cue[data-cue="${cueId}"]`)?.remove();
+  }
+
+  // Sending a new message clears whatever already finished, so only live turns
+  // stay on screen. Running cards are kept — several intents can run at once.
+  function clearFinishedCues() {
+    if (!log) return;
+    for (const card of [...log.querySelectorAll(".agee-cue")]) {
+      const id = card.dataset.cue;
+      if (activeCues.has(id)) continue;
+      removeCueCard(id);
+    }
+    syncLogVisibility();
+  }
+
   function createCue(cueId, label, { presentation = "card" } = {}) {
     if (!log) return;
+    clearFinishedCues(); // a new turn wipes whatever already answered
     currentCueId = cueId;
     const card = document.createElement("div");
     card.className = "agee-cue agee-cue-running";
@@ -507,6 +568,7 @@
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
+      scheduleCueDismiss(cueId, kind); // served → linger briefly, then fade out
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
@@ -515,6 +577,29 @@
   function stopSpeaking() {
     stopAllAssistantPlayback();
     if (agentState === "speaking") setAgentState("idle");
+  }
+
+  function trackLiveVoiceState(state) {
+    if (!state) return;
+    liveVoiceStates.add(state);
+  }
+
+  function attachLiveVoiceSession(state, voiceSessionId) {
+    if (!state) return;
+    if (state.voiceSessionId) liveVoiceBySessionId.delete(state.voiceSessionId);
+    state.voiceSessionId = voiceSessionId || null;
+    if (state.voiceSessionId) liveVoiceBySessionId.set(state.voiceSessionId, state);
+  }
+
+  function untrackLiveVoiceState(state) {
+    if (!state) return;
+    liveVoiceStates.delete(state);
+    if (state.voiceSessionId) liveVoiceBySessionId.delete(state.voiceSessionId);
+    if (liveVoice === state) liveVoice = null;
+  }
+
+  function isLiveVoiceStateActive(state) {
+    return !!state && liveVoiceStates.has(state);
   }
 
   // ---- The mark: sound, reactions ---------------------------------------
@@ -634,8 +719,11 @@
     transcriptEl.classList.toggle("agee-interim", !!interim && !!text);
   }
 
-  async function startLiveVoiceTurn() {
-    stopSpeaking();
+  async function startLiveVoiceTurn(options = {}) {
+    const preserveAssistantPlayback = options.preserveAssistantPlayback === true || assistantSpeechOverlap === true;
+    if (!preserveAssistantPlayback) {
+      stopSpeaking();
+    }
     closeTextSurface();
     conversationActive = true;
     const cueId = newCueId();
@@ -662,7 +750,9 @@
       assistantText: "",
       transcript: "",
       gatewayRouted: false,
+      assistantSpeechOverlap: preserveAssistantPlayback,
     };
+    trackLiveVoiceState(state);
     liveVoice = state;
 
     try {
@@ -683,11 +773,12 @@
         cmd: "voiceSessionStart",
         cueId,
         turnId: state.turnId,
+        assistantOverlap: assistantSpeechOverlap === true,
       });
       if (!session?.ok || !session.voiceSessionId) {
         throw new Error(session?.error || "gateway did not open a voice session");
       }
-      state.voiceSessionId = session.voiceSessionId;
+      attachLiveVoiceSession(state, session.voiceSessionId);
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
     }
@@ -765,11 +856,12 @@
         return;
       }
     }
-    if (liveVoice !== state || state.gatewayRouted) return;
+    if (!isLiveVoiceStateActive(state) || state.gatewayRouted) return;
+    const isCurrentTurn = liveVoice === state;
 
     if (msg.type === "session_ready") {
       state.sessionReady = true;
-      startMicrophonePump(state);
+      if (isCurrentTurn) startMicrophonePump(state);
       updateCue(state.cueId, "listening...", "running");
       return;
     }
@@ -780,9 +872,12 @@
       const text = String(msg.text || "").trim();
       if (!text) return;
       state.transcript = text;
-      setTranscript(text, msg.type === "transcript_partial");
+      if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
-      if (msg.type === "transcript_final" && shouldRouteLiveTranscriptThroughGateway(text)) {
+      if (msg.type === "transcript_final" && isCurrentTurn && applySpeechOverlapPolicyFromTranscript(state, text)) {
+        return;
+      }
+      if (msg.type === "transcript_final" && isCurrentTurn && shouldRouteLiveTranscriptThroughGateway(text)) {
         routeLiveTranscriptThroughGateway(state, text);
       }
       return;
@@ -795,8 +890,10 @@
       return;
     }
     if (msg.type === "assistant_audio_start") {
-      setVoiceState(false);
-      setAgentState("speaking");
+      if (isCurrentTurn) {
+        setVoiceState(false);
+        setAgentState("speaking");
+      }
       state.playbackTime = Math.max(audioCtx?.currentTime || 0, state.playbackTime || 0) + 0.04;
       return;
     }
@@ -808,17 +905,20 @@
       return;
     }
     if (msg.type === "error") {
-      finishLiveVoiceError(state, msg.message || "Live voice failed.");
+      // A turn that dies mid-generation ("failed to complete turn: ...") is not a
+      // dead end: the gateway has already stored the partial turn and will replay
+      // it into the next session. Recover silently instead of surfacing it.
+      recoverLiveVoiceTurn(state, msg.message || "live voice error");
       return;
     }
     if (msg.type === "connection_closed") {
-      if (!state.committed) finishLiveVoiceError(state, "Live voice connection closed.");
+      recoverLiveVoiceTurn(state, "connection closed");
     }
   }
 
   function playLiveAssistantPcm(state, buffer) {
     if (!buffer || !buffer.byteLength) return;
-    if (liveVoice !== state) return;
+    if (!isLiveVoiceStateActive(state)) return;
     primeAudio();
     if (!audioCtx) return;
     const pcm = new Int16Array(buffer);
@@ -841,7 +941,7 @@
 
   async function commitLiveVoiceTurn() {
     const state = liveVoice;
-    if (!state) return;
+    if (!state || !isLiveVoiceStateActive(state)) return;
     state.committed = true;
     stopLiveCapture(state);
     setVoiceState(false);
@@ -862,7 +962,7 @@
   }
 
   function routeLiveTranscriptThroughGateway(state, transcript) {
-    if (liveVoice !== state || state.gatewayRouted) return;
+    if (liveVoice !== state || !isLiveVoiceStateActive(state) || state.gatewayRouted) return;
     state.gatewayRouted = true;
     state.committed = true;
     stopLiveCapture(state);
@@ -874,7 +974,7 @@
     updateCue(state.cueId, "updating settings...", "running");
     sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
     closeLiveVoiceSession(state, "profile control routed to gateway");
-    if (liveVoice === state) liveVoice = null;
+    untrackLiveVoiceState(state);
     chrome.runtime.sendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).catch((error) => {
       updateCue(state.cueId, String(error?.message || error), "error");
       reactLauncher("error");
@@ -887,14 +987,33 @@
     // re-arm the mic after the current turn tears down.
     conversationActive = false;
     const state = liveVoice;
-    if (!state) return;
+    if (!state) {
+      setVoiceState(false);
+      if (agentState !== "idle") setAgentState("idle");
+      return;
+    }
+    stopLiveVoiceState(state, mode);
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+  }
+
+  function stopAllLiveVoiceTurns(mode = "stop") {
+    conversationActive = false;
+    for (const state of [...liveVoiceStates]) {
+      stopLiveVoiceState(state, mode);
+    }
+    liveVoice = null;
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+  }
+
+  function stopLiveVoiceState(state, mode = "stop") {
+    if (!isLiveVoiceStateActive(state)) return;
     stopLiveCapture(state);
     stopLivePlayback(state);
     if (mode === "cancel") sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
     closeLiveVoiceSession(state, mode);
-    if (liveVoice === state) liveVoice = null;
-    setVoiceState(false);
-    if (agentState !== "idle") setAgentState("idle");
+    untrackLiveVoiceState(state);
   }
 
   function sendLiveVoiceControl(state, message) {
@@ -908,11 +1027,13 @@
 
   function closeLiveVoiceSession(state, reason) {
     if (!state?.voiceSessionId) return;
+    const voiceSessionId = state.voiceSessionId;
     chrome.runtime.sendMessage({
       cmd: "voiceSessionClose",
-      voiceSessionId: state.voiceSessionId,
+      voiceSessionId,
       reason,
     }).catch(() => {});
+    liveVoiceBySessionId.delete(voiceSessionId);
     state.voiceSessionId = null;
   }
 
@@ -954,14 +1075,69 @@
     } catch {}
   }
 
+  // A live turn can die mid-generation: the provider interrupts, the socket
+  // drops, or the gateway sends "failed to complete turn". The gateway already
+  // persists that partial turn and replays it inside the NEXT session's context
+  // pack, so we never surface the failure or stop the conversation. We tear the
+  // dead turn down quietly and start a fresh one on the same session id; the
+  // model picks the thread back up with the partial it already produced. A
+  // bounded guard keeps a genuinely broken gateway from respawning forever.
+  let liveVoiceRecoveries = 0;
+  let liveVoiceRecoveryWindowAt = 0;
+  const LIVE_VOICE_MAX_RECOVERIES = 2;
+  const LIVE_VOICE_RECOVERY_WINDOW_MS = 15000;
+
+  function recoverLiveVoiceTurn(state, reason) {
+    if (!isLiveVoiceStateActive(state)) return;
+    const wasCurrentTurn = liveVoice === state;
+    // Tear the dead turn down without a red cue or state churn.
+    stopLiveCapture(state);
+    stopLivePlayback(state);
+    closeLiveVoiceSession(state, reason || "recovering");
+    untrackLiveVoiceState(state);
+    removeCueCard(state.cueId);
+
+    if (!wasCurrentTurn) {
+      return;
+    }
+
+    if (!conversationActive) {
+      // The user already ended the conversation; just settle to idle.
+      setVoiceState(false);
+      if (agentState !== "idle") setAgentState("idle");
+      return;
+    }
+
+    const now = Date.now();
+    if (now - liveVoiceRecoveryWindowAt > LIVE_VOICE_RECOVERY_WINDOW_MS) {
+      liveVoiceRecoveries = 0;
+      liveVoiceRecoveryWindowAt = now;
+    }
+    liveVoiceRecoveries += 1;
+    if (liveVoiceRecoveries > LIVE_VOICE_MAX_RECOVERIES) {
+      // Respawning is not catching — the gateway is down. Surface it once.
+      liveVoiceRecoveries = 0;
+      conversationActive = false;
+      reactLauncher("error");
+      setVoiceState(false);
+      if (agentState !== "idle") setAgentState("idle");
+      return;
+    }
+
+    startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+  }
+
   function finishLiveVoiceDone(state) {
-    if (liveVoice !== state) return;
+    if (!isLiveVoiceStateActive(state)) return;
+    const wasCurrentTurn = liveVoice === state;
+    liveVoiceRecoveries = 0;
     const summary = state.assistantText || "Done.";
     updateCue(state.cueId, summary, "done");
     reactLauncher("done");
     stopLiveCapture(state);
     closeLiveVoiceSession(state, "turn done");
-    liveVoice = null;
+    untrackLiveVoiceState(state);
+    if (!wasCurrentTurn) return;
     setVoiceState(false);
     // Wait for the spoken reply to finish playing, then either listen again (so
     // the user just keeps talking) or fall back to idle if the conversation was
@@ -970,7 +1146,7 @@
     setTimeout(() => {
       if (liveVoice) return;
       if (conversationActive) {
-        startLiveVoiceTurn();
+        startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
         return;
       }
       if (agentState !== "idle") setAgentState("idle");
@@ -978,10 +1154,14 @@
   }
 
   function finishLiveVoiceError(state, message) {
-    if (liveVoice !== state) return;
+    if (!isLiveVoiceStateActive(state)) return;
     updateCue(state.cueId, message, "error");
     reactLauncher("error");
-    stopLiveVoiceTurn("error");
+    if (liveVoice === state) {
+      stopLiveVoiceTurn("error");
+    } else {
+      stopLiveVoiceState(state, "error");
+    }
   }
 
   function toggleVoice() {
@@ -990,9 +1170,13 @@
       return;
     }
     if (liveVoice) {
+      if (assistantSpeechOverlap === true && liveVoice.committed) {
+        startLiveVoiceTurn({ preserveAssistantPlayback: true });
+        return;
+      }
       stopLiveVoiceTurn("cancel");
     }
-    startLiveVoiceTurn();
+    startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
   }
 
   function toggleVoiceSession() {
@@ -1001,6 +1185,69 @@
 
   function shouldRouteLiveTranscriptThroughGateway(text) {
     return isProfileControlTranscript(text);
+  }
+
+  function applySpeechOverlapPolicyFromTranscript(state, text) {
+    const policy = parseAssistantSpeechOverlapIntent(text);
+    if (!policy) return false;
+
+    assistantSpeechOverlap = policy.enabled;
+    state.gatewayRouted = true;
+    state.committed = true;
+    stopLiveCapture(state);
+    sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    closeLiveVoiceSession(state, policy.enabled ? "assistant speech overlap enabled" : "assistant barge-in enabled");
+    untrackLiveVoiceState(state);
+    setVoiceState(false);
+    setTranscript("");
+    updateCueLabel(state.cueId, text);
+    updateCue(
+      state.cueId,
+      policy.enabled
+        ? "Background speech is on for this session."
+        : "Barge-in is back on for this session.",
+      "done"
+    );
+    reactLauncher("done");
+    if (agentState !== "idle") setAgentState("idle");
+    if (conversationActive) {
+      setTimeout(() => {
+        if (!liveVoice && conversationActive) {
+          startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+        }
+      }, 120);
+    }
+    return true;
+  }
+
+  function parseAssistantSpeechOverlapIntent(text) {
+    const lower = normalizeSpokenCommand(text);
+    if (!lower) return null;
+    const disable =
+      lower.includes("turn barge in back on") ||
+      lower.includes("barge in back on") ||
+      lower.includes("stop talking when i talk") ||
+      lower.includes("stop speaking when i speak") ||
+      lower.includes("interrupt yourself when i talk") ||
+      lower.includes("interrupt yourself when i speak") ||
+      lower.includes("do not talk over me") ||
+      lower.includes("dont talk over me");
+    if (disable) return { enabled: false };
+
+    const enable =
+      lower.includes("continue talking even though i") ||
+      lower.includes("keep talking even though i") ||
+      lower.includes("continue talking while i") ||
+      lower.includes("keep talking while i") ||
+      lower.includes("keep speaking while i") ||
+      lower.includes("continue speaking while i") ||
+      lower.includes("talk in the background") ||
+      lower.includes("speak in the background") ||
+      lower.includes("keep talking in the background") ||
+      lower.includes("do not interrupt yourself") ||
+      lower.includes("don t interrupt yourself") ||
+      lower.includes("dont interrupt yourself");
+    return enable ? { enabled: true } : null;
   }
 
   function isProfileControlTranscript(text) {
@@ -1325,8 +1572,9 @@
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
         return false;
       case "voiceSessionEvent":
-        if (liveVoice && msg.voiceSessionId === liveVoice.voiceSessionId) {
-          handleLiveVoiceMessage(liveVoice, msg);
+        {
+          const state = liveVoiceBySessionId.get(msg.voiceSessionId);
+          if (state) handleLiveVoiceMessage(state, msg);
         }
         return false;
     }

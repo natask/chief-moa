@@ -64,6 +64,30 @@ if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
   throw new Error("background.js must expose the voiceSessionStart proxy command");
 }
 
+if (!/recoverLiveVoiceTurn\(state, msg\.message/.test(contentSource)) {
+  throw new Error("a mid-generation live voice error must recover silently (respawn the session), not surface a failure and stop");
+}
+
+if (!/assistantSpeechOverlap\s*=\s*false/.test(contentSource)) {
+  throw new Error("content.js must keep a session-scoped assistant speech overlap policy");
+}
+
+if (!/if \(!preserveAssistantPlayback\)\s*\{\s*stopSpeaking\(\);/.test(contentSource)) {
+  throw new Error("starting a live voice turn must preserve assistant playback when overlap mode is enabled");
+}
+
+if (!/liveVoiceBySessionId\.get\(msg\.voiceSessionId\)/.test(contentSource)) {
+  throw new Error("content.js must route live voice events by voiceSessionId so older speaking turns are not discarded");
+}
+
+if (!/assistantOverlap:\s*assistantSpeechOverlap === true/.test(contentSource)) {
+  throw new Error("content.js must pass assistant overlap policy when opening a voice session");
+}
+
+if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.test(backgroundSource)) {
+  throw new Error("background.js must forward assistant overlap policy into the gateway voice session_start event");
+}
+
 for (const file of [
   "extension/background.js",
   "extension/browser-task-intent.js",

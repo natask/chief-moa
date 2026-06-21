@@ -64,11 +64,13 @@ Hold the orb (push-to-talk)
   -> phone updates transcript/chat and may speak or play the short response
 ```
 
-Orb gestures (overlay): hold to speak, release to send; a held turn cuts off any
-reply playing (barge-in) and steers an active agent run. A quick tap opens the
-typing panel. Drag repositions. The browser extension mirrors this hands-on-
-keyboard: Cmd+K (Ctrl+K) opens the text intent field and Cmd+. (Ctrl+.) wakes
-voice.
+Orb gestures (overlay): hold to speak, release to send; by default a held turn
+cuts off any reply playing (barge-in) and steers an active agent run. A quick
+tap opens the typing panel. Drag repositions. The browser extension mirrors this
+hands-on-keyboard: Cmd+K (Ctrl+K) opens the text intent field and Cmd+.
+(Ctrl+.) wakes voice. Browser voice can opt a session into background assistant
+speech, where starting a new spoken turn opens a new gateway voice turn without
+stopping already queued assistant audio.
 
 The overlay surface stays small: it shows the current intent/result and compact
 run state, not a full scrollback manager. Browser text replies replace the typed
@@ -111,9 +113,13 @@ Browser voice uses the same gateway streaming voice contract as Android, adapted
 for browser WebSocket authentication. The extension authenticates to the gateway
 over normal HTTP with its stored gateway token, receives a one-use
 `/v1/voice/sessions` ticket, streams PCM16 audio to the gateway, and plays
-assistant PCM audio returned by the selected gateway provider. It must not use
-browser Web Speech APIs as the production voice path, and it must not hold raw
-Gemini/OpenAI/Anthropic provider credentials.
+assistant PCM audio returned by the selected gateway provider. Each spoken
+browser utterance gets its own turn id under the stable browser session id. When
+the user enables background assistant speech for the current browser session,
+the extension preserves older voice-session event handling and queued playback
+while it starts the next microphone turn. It must not use browser Web Speech APIs
+as the production voice path, and it must not hold raw Gemini/OpenAI/Anthropic
+provider credentials.
 
 Gateway-originated browser work uses the same ownership boundary. The gateway
 stores `/v1/browser/tasks` records and Live/tool agents may enqueue bounded

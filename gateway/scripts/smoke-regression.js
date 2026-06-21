@@ -358,6 +358,7 @@ async function assertStreamingVoiceSessionPersistence(baseUrl, dataDir) {
   assert.equal(metadata.assistant.provider, "loopback");
   assert.equal(metadata.conversation_id, sessionId);
   assert.equal(metadata.branch_id, branchId);
+  assert.equal(metadata.playback_policy?.assistant_overlap, true, "streaming metadata missing assistant overlap playback policy");
 
   const canonicalPath = path.join(dataDir, "voice-turns", sessionId, `${turnId}.json`);
   assert.ok(fs.existsSync(canonicalPath), "streaming canonical voice-turn record missing");
@@ -370,6 +371,11 @@ async function assertStreamingVoiceSessionPersistence(baseUrl, dataDir) {
   assert.equal(canonical.classification, "chat");
   assert.equal(canonical.response.turn_id, turnId);
   assert.match(String(canonical.response.display || ""), /Streaming voice transport is connected/);
+  assert.equal(
+    canonical.references?.voice_session?.playback_policy?.assistant_overlap,
+    true,
+    "canonical voice-turn reference missing assistant overlap playback policy",
+  );
 
   const history = await getJson(`${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/turns`);
   assert.ok(Array.isArray(history.turns), "streaming session history must be an array");
@@ -396,6 +402,9 @@ function smokeStreamingVoiceSession(target, sessionId, branchId, turnId) {
         branch_id: branchId,
         turn_id: turnId,
         source: "smoke-regression",
+        playback_policy: {
+          assistant_overlap: true,
+        },
         format: {
           encoding: "pcm16",
           sample_rate: 16000,

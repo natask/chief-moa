@@ -44,6 +44,7 @@
 - [x] 6.2 Stop or duck assistant playback when the user begins a new spoken turn during assistant audio. Browser extension now stops queued assistant PCM sources when a new voice turn starts and ignores stale audio after a turn is replaced; Android streaming controller already stops playback on cancel/destroy. Verified 2026-06-20 with `cd browser_extension && npm run verify`, `cd browser_extension && npm run smoke`, `cd gateway && npm run check`, `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`, and a real main-machine voice-session smoke using spoken PCM that emitted transcript, assistant text/audio, and `turn_done`.
 - [ ] 6.3 Preserve active agent-run follow-up routing when the user speaks while an agent run is ongoing.
 - [ ] 6.4 Add phone QA for barge-in or fallback interruption when provider-native barge-in is unavailable.
+- [x] 6.5 Add browser semi-interaction mode: a spoken session command enables background assistant speech so a new browser voice turn can start without stopping already queued assistant audio, while still using one durable session id and distinct turn ids. Verified 2026-06-20 with `cd browser_extension && npm run verify`, `cd browser_extension && npm run smoke`, `cd gateway && npm run check`, and `cd gateway && node scripts/smoke-regression.js`.
 
 ## 7. Safe Mode And Recovery
 

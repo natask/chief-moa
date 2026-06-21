@@ -709,7 +709,7 @@ function voiceSessionId() {
   return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap } = {}) {
   const cfg = await getConfig();
   const ticket = await createVoiceSessionTicket(cfg);
   if (!ticket?.ws_url) throw new Error("gateway did not return a voice session WebSocket URL");
@@ -742,6 +742,9 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId } = {}) {
         conversation_id: ticket.conversation_id || ticket.session_id,
         branch_id: cueId,
         turn_id: turnId,
+        playback_policy: {
+          assistant_overlap: assistantOverlap === true,
+        },
         format: {
           encoding: "pcm16",
           sample_rate: 16000,
@@ -1378,7 +1381,11 @@ async function captureAmbientFrame() {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "voiceSessionStart" && sender.tab) {
-    startVoiceSessionProxy(sender.tab.id, { cueId: msg.cueId, turnId: msg.turnId })
+    startVoiceSessionProxy(sender.tab.id, {
+      cueId: msg.cueId,
+      turnId: msg.turnId,
+      assistantOverlap: msg.assistantOverlap === true,
+    })
       .then((session) => sendResponse({ ok: true, ...session }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
