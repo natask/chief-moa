@@ -370,10 +370,6 @@ public final class OverlayService extends Service {
         if (!Settings.canDrawOverlays(this) || panelView != null) {
             return;
         }
-        if (MainActivity.isVisible()) {
-            collapseInteractiveSurfaces();
-            return;
-        }
 
         loadSettings();
 

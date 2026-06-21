@@ -41,7 +41,6 @@ public final class MainActivity extends Activity {
     static final String EXTRA_START_OVERLAY = "ai.moa.assistant.extra.START_OVERLAY";
 
     private static final int REQUEST_AUDIO = 4101;
-    private static volatile boolean visible;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private TextView overlayStatus;
@@ -99,7 +98,6 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        visible = true;
         updatePermissionState();
         if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
             collapseOverlaySurfaces();
@@ -113,22 +111,6 @@ public final class MainActivity extends Activity {
             startOverlay();
             intent.removeExtra(EXTRA_START_OVERLAY);
         }
-    }
-
-    @Override
-    protected void onPause() {
-        visible = false;
-        super.onPause();
-    }
-
-    @Override
-    protected void onDestroy() {
-        visible = false;
-        super.onDestroy();
-    }
-
-    static boolean isVisible() {
-        return visible;
     }
 
     @Override
