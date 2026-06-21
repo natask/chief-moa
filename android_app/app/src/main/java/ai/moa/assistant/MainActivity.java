@@ -41,6 +41,7 @@ public final class MainActivity extends Activity {
     static final String EXTRA_START_OVERLAY = "ai.moa.assistant.extra.START_OVERLAY";
 
     private static final int REQUEST_AUDIO = 4101;
+    private static volatile boolean visible;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private TextView overlayStatus;
@@ -90,12 +91,19 @@ public final class MainActivity extends Activity {
             gatewayTokenInput.setText(MoaPrefs.gatewayToken(this));
         }
         updatePermissionState();
+        if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
+            collapseOverlaySurfaces();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        visible = true;
         updatePermissionState();
+        if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
+            collapseOverlaySurfaces();
+        }
         if (!autoStartedOverlay && Settings.canDrawOverlays(this)) {
             autoStartedOverlay = true;
             startOverlay();
@@ -105,6 +113,22 @@ public final class MainActivity extends Activity {
             startOverlay();
             intent.removeExtra(EXTRA_START_OVERLAY);
         }
+    }
+
+    @Override
+    protected void onPause() {
+        visible = false;
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        visible = false;
+        super.onDestroy();
+    }
+
+    static boolean isVisible() {
+        return visible;
     }
 
     @Override
@@ -142,7 +166,7 @@ public final class MainActivity extends Activity {
         root.addView(title);
 
         TextView body = new TextView(this);
-        body.setText("Enable draw-over-apps, start the assistant circle, then tap the orb or mic button to record a voice turn.");
+        body.setText("Enable draw-over-apps, start the assistant circle, then tap to type or double-tap to talk.");
         body.setTextColor(0xCCEEF8E8);
         body.setTextSize(15);
         body.setLineSpacing(dp(3), 1f);
@@ -262,7 +286,7 @@ public final class MainActivity extends Activity {
         addBullet(card, "Tap the orb to type; double-tap to talk, like the browser mark.");
         addBullet(card, "Double-tap again while listening submits the current transcript.");
         addBullet(card, "Gemini-style live transcript overlay while speaking.");
-        addBullet(card, "Mic button uses Android speech recognition only after you press it.");
+        addBullet(card, "Voice streams through Gemini Live only after an explicit voice gesture.");
         addBullet(card, "Screen access reads visible app text and passes it to gateway replies and home-machine agent runs.");
         addBullet(card, "Assistant calls the self-hosted Aggie gateway when configured, with local fallback replies if the server is unavailable.");
         addBullet(card, "Voice commands that ask Aggie to build, fix, change, or test something can run the Gemini harness on the home machine.");
@@ -357,6 +381,12 @@ public final class MainActivity extends Activity {
         } else {
             startService(intent);
         }
+    }
+
+    private void collapseOverlaySurfaces() {
+        Intent intent = new Intent(this, OverlayService.class);
+        intent.setAction(OverlayService.ACTION_COLLAPSE_SURFACES);
+        startService(intent);
     }
 
     private void applyIntentConfiguration(Intent intent) {

@@ -3,17 +3,20 @@ package ai.moa.assistant;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 
 import org.json.JSONObject;
 
 import java.util.UUID;
 
 final class MoaStreamingVoiceSessionController {
+    private static final String TAG = "MoaStreamingVoice";
+
     private static final long AUTO_COMMIT_MIN_RECORDING_MS = 1200;
     private static final long AUTO_COMMIT_SILENCE_MS = 900;
-    private static final long AUTO_COMMIT_MAX_RECORDING_MS = 9000;
+    private static final long AUTO_COMMIT_MAX_RECORDING_MS = 6000;
     private static final long AUTO_COMMIT_CHECK_MS = 250;
-    private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 350;
+    private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 900;
 
     interface Callback {
         void onSessionStarted(String sessionId, String turnId);
@@ -60,6 +63,7 @@ final class MoaStreamingVoiceSessionController {
     private boolean active;
     private boolean committed;
     private boolean assistantAudioStarted;
+    private boolean loggedVoiceActivity;
     private long recordingStartedAtMs;
     private long lastVoiceActivityAtMs;
 
@@ -111,6 +115,7 @@ final class MoaStreamingVoiceSessionController {
             active = true;
             committed = false;
             assistantAudioStarted = false;
+            loggedVoiceActivity = false;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
             sessionId = requestedSessionId.isEmpty() ? "mobile-" + UUID.randomUUID().toString() : requestedSessionId;
@@ -132,6 +137,7 @@ final class MoaStreamingVoiceSessionController {
                 return;
             }
             committed = true;
+            Log.i(TAG, "commitTurn turn_id=" + turnId);
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
             capture = captureController;
@@ -161,6 +167,7 @@ final class MoaStreamingVoiceSessionController {
             active = false;
             committed = false;
             assistantAudioStarted = false;
+            loggedVoiceActivity = false;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
         }
@@ -195,6 +202,7 @@ final class MoaStreamingVoiceSessionController {
             active = false;
             committed = false;
             assistantAudioStarted = false;
+            loggedVoiceActivity = false;
             sessionId = "";
             turnId = "";
             recordingStartedAtMs = 0;
@@ -241,6 +249,7 @@ final class MoaStreamingVoiceSessionController {
             capture = captureController;
         }
         if (capture != null) {
+            Log.i(TAG, "startCapture autoCommit=" + autoCommitOnSilence);
             capture.start();
             scheduleAutoCommitIfNeeded();
         }
@@ -255,6 +264,7 @@ final class MoaStreamingVoiceSessionController {
             playback = playbackController;
             active = false;
             committed = false;
+            loggedVoiceActivity = false;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
             shouldStopPlayback = !assistantAudioStarted || !"completed".equals(status);
@@ -307,10 +317,12 @@ final class MoaStreamingVoiceSessionController {
             shouldCancel = !heardSpeech && maxed;
         }
         if (shouldCommit) {
+            Log.i(TAG, "autoCommit turn");
             commitTurn();
             return;
         }
         if (shouldCancel) {
+            Log.i(TAG, "autoCancel turn: no speech detected");
             cancel();
             return;
         }
@@ -327,6 +339,10 @@ final class MoaStreamingVoiceSessionController {
         synchronized (lock) {
             if (active && !committed) {
                 lastVoiceActivityAtMs = SystemClock.elapsedRealtime();
+                if (!loggedVoiceActivity) {
+                    loggedVoiceActivity = true;
+                    Log.i(TAG, "firstVoiceActivity");
+                }
             }
         }
     }
@@ -376,11 +392,13 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onCaptureStarted() {
+            Log.i(TAG, "recordingStarted");
             post(() -> callback.onRecordingStarted());
         }
 
         @Override
         public void onCaptureStopped() {
+            Log.i(TAG, "recordingStopped");
             post(() -> callback.onRecordingStopped());
         }
 
@@ -418,6 +436,7 @@ final class MoaStreamingVoiceSessionController {
                 wasActive = active;
                 active = false;
                 committed = false;
+                loggedVoiceActivity = false;
                 recordingStartedAtMs = 0;
                 lastVoiceActivityAtMs = 0;
             }
@@ -437,6 +456,7 @@ final class MoaStreamingVoiceSessionController {
                 active = false;
                 committed = false;
                 assistantAudioStarted = false;
+                loggedVoiceActivity = false;
                 recordingStartedAtMs = 0;
                 lastVoiceActivityAtMs = 0;
             }
@@ -456,22 +476,26 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onSessionReady(String readySessionId) {
+            Log.i(TAG, "sessionReady");
             startCaptureAfterSessionReady();
             post(() -> callback.onSessionReady(readySessionId));
         }
 
         @Override
         public void onTranscriptPartial(String transcriptTurnId, String text) {
+            Log.i(TAG, "transcriptPartial chars=" + safe(text).length());
             post(() -> callback.onTranscriptPartial(transcriptTurnId, text));
         }
 
         @Override
         public void onTranscriptFinal(String transcriptTurnId, String text) {
+            Log.i(TAG, "transcriptFinal chars=" + safe(text).length());
             post(() -> callback.onTranscriptFinal(transcriptTurnId, text));
         }
 
         @Override
         public void onAssistantText(String assistantTurnId, String text) {
+            Log.i(TAG, "assistantText chars=" + safe(text).length());
             post(() -> callback.onAssistantText(assistantTurnId, text));
         }
 
@@ -482,6 +506,7 @@ final class MoaStreamingVoiceSessionController {
                 playback = playbackController;
                 assistantAudioStarted = true;
             }
+            Log.i(TAG, "assistantAudioStart");
             if (playback != null && playbackEnabled) {
                 playback.start();
             }
@@ -505,6 +530,7 @@ final class MoaStreamingVoiceSessionController {
             synchronized (lock) {
                 playbackToDrain = playbackController;
             }
+            Log.i(TAG, "assistantAudioDone");
             mainHandler.postDelayed(() -> {
                 synchronized (lock) {
                     if (playbackController == playbackToDrain) {
@@ -520,6 +546,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onTurnDone(String completedTurnId, String status, boolean transcriptionOnly) {
+            Log.i(TAG, "turnDone status=" + status + " transcriptionOnly=" + transcriptionOnly);
             handleTurnDone(completedTurnId, status, transcriptionOnly);
         }
 

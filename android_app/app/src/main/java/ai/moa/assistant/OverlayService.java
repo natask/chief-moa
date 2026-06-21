@@ -14,6 +14,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -37,6 +38,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public final class OverlayService extends Service {
+    private static final String TAG = "MoaOverlay";
+
     static final String ACTION_ASSIST_BUTTON = "ai.moa.assistant.action.ASSIST_BUTTON";
     static final String ACTION_COLLAPSE_SURFACES = "ai.moa.assistant.action.COLLAPSE_SURFACES";
     static final String EXTRA_START_VOICE = "ai.moa.assistant.extra.START_VOICE";
@@ -185,6 +188,9 @@ public final class OverlayService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         loadSettings();
+        Log.i(TAG, "onStartCommand id=" + startId
+                + " action=" + (intent == null ? "" : intent.getAction())
+                + " startVoice=" + shouldStartVoice(intent));
         if (!Settings.canDrawOverlays(this)) {
             stopSelf();
             return START_NOT_STICKY;
@@ -362,6 +368,10 @@ public final class OverlayService extends Service {
 
     private void showPanel() {
         if (!Settings.canDrawOverlays(this) || panelView != null) {
+            return;
+        }
+        if (MainActivity.isVisible()) {
+            collapseInteractiveSurfaces();
             return;
         }
 
@@ -1647,6 +1657,10 @@ public final class OverlayService extends Service {
 
     private void startStreamingVoiceTurn(boolean autoCommitOnSilence, boolean continuousLoop) {
         loadSettings();
+        Log.i(TAG, "startStreamingVoiceTurn autoCommit=" + autoCommitOnSilence
+                + " continuousLoop=" + continuousLoop
+                + " gatewayConfigured=" + !safe(gatewayUrl).isEmpty()
+                + " token=" + (safe(gatewayToken).isEmpty() ? "missing" : "set"));
         cancelContinuousVoiceRestart();
         if (streamingVoiceController != null) {
             streamingVoiceController.destroy();
