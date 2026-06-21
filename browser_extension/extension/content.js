@@ -122,6 +122,7 @@
   let currentCueId = null;
   const cues = new Map();
   const activeCues = new Set();
+  const revokedCueIds = new Set();
   function build() {
     root = document.createElement("div");
     root.id = "agee-root";
@@ -140,7 +141,7 @@
         <div id="agee-bar">
           <span id="agee-dot"></span>
           <textarea id="agee-input" rows="1" placeholder="Ask Aggie" autocomplete="off" spellcheck="true"></textarea>
-          <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice">Voice</button>
+          <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice"></button>
           <button id="agee-stop" type="button" title="Stop current task" aria-label="Stop current task">Stop</button>
         </div>
       </div>`;
@@ -211,7 +212,6 @@
       chrome.runtime.sendMessage({ cmd: "cancel" });
       stopAllLiveVoiceTurns("cancel");
       stopSpeaking();
-      addLog("agee", "stopping…");
     });
 
     // A pointerdown anywhere primes the audio context so the chime can play
@@ -502,7 +502,15 @@
     if (entry?.dismissTimer) clearTimeout(entry.dismissTimer);
     cues.delete(cueId);
     activeCues.delete(cueId);
+    entry?.cardEl?.remove();
     log?.querySelector(`.agee-cue[data-cue="${cueId}"]`)?.remove();
+    syncLogVisibility();
+  }
+
+  function rememberRevokedCue(cueId) {
+    if (!cueId) return;
+    revokedCueIds.add(cueId);
+    setTimeout(() => revokedCueIds.delete(cueId), 30000);
   }
 
   // Sending a new message clears whatever already finished, so only live turns
@@ -518,7 +526,20 @@
   }
 
   function createCue(cueId, label, { presentation = "card" } = {}) {
-    if (!log) return;
+    if (presentation === "icon") {
+      currentCueId = cueId;
+      cues.set(cueId, { presentation, label: String(label || "") });
+      activeCues.add(cueId);
+      refreshStatus();
+      return;
+    }
+    materializeCue(cueId, label, "thinking...");
+  }
+
+  function materializeCue(cueId, label, statusText = "thinking...") {
+    if (!log) return null;
+    let entry = cues.get(cueId);
+    if (entry?.cardEl && entry?.statusEl) return entry;
     clearFinishedCues(); // a new turn wipes whatever already answered
     currentCueId = cueId;
     const card = document.createElement("div");
@@ -526,31 +547,42 @@
     card.dataset.cue = cueId;
     const you = document.createElement("div");
     you.className = "agee-row agee-you";
-    you.textContent = label;
+    you.textContent = String(label || entry?.label || "Aggie");
     const status = document.createElement("div");
     status.className = "agee-cue-status";
-    status.textContent = "thinking…";
+    status.textContent = statusText || "";
     card.appendChild(you);
     card.appendChild(status);
     log.appendChild(card);
-    cues.set(cueId, { statusEl: status, cardEl: card, labelEl: you, presentation });
+    entry = {
+      ...(entry || {}),
+      statusEl: status,
+      cardEl: card,
+      labelEl: you,
+      presentation: "card",
+      label: you.textContent,
+    };
+    cues.set(cueId, entry);
     activeCues.add(cueId);
     pruneCueCards();
     syncLogVisibility();
     log.scrollTop = log.scrollHeight;
     refreshStatus();
+    return entry;
   }
 
   function updateCueLabel(cueId, text) {
     const value = String(text || "").trim();
     if (!value) return;
     const entry = cues.get(cueId);
+    if (entry && !entry.labelEl) entry.label = value;
     if (entry?.labelEl) entry.labelEl.textContent = value;
   }
 
   // Update a cue's status line. kind: "running" | "done" | "error".
   function updateCue(cueId, text, kind) {
-    const entry = cues.get(cueId);
+    if (cueId && revokedCueIds.has(cueId)) return;
+    let entry = cues.get(cueId);
     // A message for an unknown cue (e.g. server-generated id) falls back to a row.
     // Tag the terminal kind so harnesses can distinguish final state from
     // interim progress in the hidden one-turn ledger.
@@ -563,6 +595,22 @@
       }
       return;
     }
+    if (!entry.statusEl) {
+      if (kind === "error") {
+        entry = materializeCue(cueId, entry.label || "Voice", text || "Voice failed.");
+      } else if (kind === "done") {
+        activeCues.delete(cueId);
+        cues.delete(cueId);
+        lastTerminal = kind;
+        refreshStatus();
+        syncLogVisibility();
+        return;
+      } else {
+        refreshStatus();
+        return;
+      }
+    }
+    if (!entry?.statusEl) return;
     if (typeof text === "string" && text) entry.statusEl.textContent = text;
     if (kind === "done" || kind === "error") {
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
@@ -711,7 +759,7 @@
     listening = next;
     if (voiceButton) {
       voiceButton.classList.toggle("listening", listening);
-      voiceButton.textContent = listening ? "Listening" : "Voice";
+      voiceButton.textContent = "";
       voiceButton.title = listening ? "Send voice" : "Start voice";
       voiceButton.setAttribute("aria-label", listening ? "Send voice" : "Start voice");
     }
@@ -748,11 +796,10 @@
     closeTextSurface();
     conversationActive = true;
     const cueId = newCueId();
-    createCue(cueId, "Listening...", { presentation: "icon" });
-    updateCue(cueId, "listening...", "running");
+    createCue(cueId, "", { presentation: "icon" });
     setVoiceState(true);
     setAgentState("listening");
-    setTranscript("Listening...", true);
+    setTranscript("");
     setInputText("");
 
     const state = {
@@ -883,10 +930,14 @@
     if (msg.type === "session_ready") {
       state.sessionReady = true;
       if (isCurrentTurn) startMicrophonePump(state);
-      updateCue(state.cueId, "listening...", "running");
+      updateCue(state.cueId, "", "running");
       return;
     }
     if (msg.type === "profile_applied") {
+      return;
+    }
+    if (msg.type === "revoked") {
+      revokeLiveVoiceState(state, msg.reason || "revoked");
       return;
     }
     if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
@@ -967,8 +1018,8 @@
     stopLiveCapture(state);
     setVoiceState(false);
     setAgentState("thinking");
-    setTranscript(state.transcript || "Thinking...", !state.transcript);
-    updateCue(state.cueId, "thinking...", "running");
+    setTranscript(state.transcript || "");
+    updateCue(state.cueId, "", "running");
     if (state.voiceSessionId) {
       chrome.runtime.sendMessage({
         cmd: "voiceSessionControl",
@@ -992,7 +1043,7 @@
     setAgentState("thinking");
     setTranscript(transcript);
     updateCueLabel(state.cueId, transcript);
-    updateCue(state.cueId, "updating settings...", "running");
+    materializeCue(state.cueId, transcript, "updating settings...");
     sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
     closeLiveVoiceSession(state, "profile control routed to gateway");
     untrackLiveVoiceState(state);
@@ -1027,13 +1078,38 @@
     if (agentState !== "idle") setAgentState("idle");
   }
 
+  function revokeLiveVoiceState(state, _reason = "revoked") {
+    conversationActive = false;
+    stopLiveVoiceState(state, "revoked");
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+  }
+
   function stopLiveVoiceState(state, mode = "stop") {
     if (!isLiveVoiceStateActive(state)) return;
     stopLiveCapture(state);
     stopLivePlayback(state);
     if (mode === "cancel") sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
     closeLiveVoiceSession(state, mode);
+    if (mode === "revoked") {
+      rememberRevokedCue(state.cueId);
+      removeCueCard(state.cueId);
+    }
     untrackLiveVoiceState(state);
+  }
+
+  function handleAgentRevoked(msg = {}) {
+    conversationActive = false;
+    const cueIds = Array.isArray(msg.cueIds) ? msg.cueIds : [];
+    for (const cueId of cueIds) {
+      rememberRevokedCue(cueId);
+      removeCueCard(cueId);
+    }
+    stopAllLiveVoiceTurns("revoked");
+    stopSpeaking();
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+    refreshStatus();
   }
 
   function sendLiveVoiceControl(state, message) {
@@ -1589,6 +1665,9 @@
       case "error":
         showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
+        return false;
+      case "agentRevoked":
+        handleAgentRevoked(msg);
         return false;
       case "voiceSessionEvent":
         {

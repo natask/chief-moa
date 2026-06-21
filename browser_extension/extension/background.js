@@ -21,6 +21,7 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 // can cancel one cue or all cues on a tab without blocking new ones.
 const tasks = new Map();
 const voiceSessions = new Map();
+let activeAgentTabId = null;
 
 async function getConfig() {
   return getEffectiveGatewayConfig();
@@ -711,6 +712,41 @@ function voiceSessionId() {
   return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function claimActiveAgentTab(tabId, reason = "another page became active") {
+  if (tabId == null) return;
+  const revokedTabs = new Map();
+
+  for (const [cueId, task] of [...tasks]) {
+    if (task.tabId === tabId) continue;
+    try {
+      task.controller.abort();
+    } catch {}
+    tasks.delete(cueId);
+    if (!revokedTabs.has(task.tabId)) revokedTabs.set(task.tabId, []);
+    revokedTabs.get(task.tabId).push(cueId);
+  }
+
+  for (const oldTabId of revokeOtherTabVoiceSessions(tabId, reason)) {
+    if (!revokedTabs.has(oldTabId)) revokedTabs.set(oldTabId, []);
+  }
+
+  for (const [oldTabId, cueIds] of revokedTabs) {
+    send(oldTabId, { cmd: "agentRevoked", cueIds, reason });
+  }
+  activeAgentTabId = tabId;
+}
+
+function revokeOtherTabVoiceSessions(tabId, reason) {
+  const tabIds = new Set();
+  if (activeAgentTabId != null && activeAgentTabId !== tabId) tabIds.add(activeAgentTabId);
+  for (const [id, session] of [...voiceSessions]) {
+    if (session.tabId === tabId) continue;
+    tabIds.add(session.tabId);
+    closeVoiceSession(id, reason, { revoked: true });
+  }
+  return tabIds;
+}
+
 async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap } = {}) {
   const cfg = await getConfig();
   const ticket = await createVoiceSessionTicket(cfg);
@@ -776,13 +812,27 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap }
     ws.onclose = () => {
       voiceSessions.delete(id);
       if (!session.opened) {
+        if (session.revoked) {
+          if (!settled) {
+            settled = true;
+            resolve({ voiceSessionId: id, revoked: true });
+          }
+          send(tabId, {
+            cmd: "voiceSessionEvent",
+            voiceSessionId: id,
+            event: { type: "revoked", reason: session.closedReason || "revoked" },
+          });
+          return;
+        }
         failBeforeOpen("Live voice connection closed.");
         return;
       }
       send(tabId, {
         cmd: "voiceSessionEvent",
         voiceSessionId: id,
-        event: { type: "connection_closed" },
+        event: session.revoked
+          ? { type: "revoked", reason: session.closedReason || "revoked" }
+          : { type: "connection_closed" },
       });
     };
   });
@@ -825,9 +875,11 @@ function sendVoiceSessionControl(id, message) {
   return { ok: true };
 }
 
-function closeVoiceSession(id, reason = "closed") {
+function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   const session = voiceSessions.get(id);
   if (!session) return;
+  session.closedReason = reason;
+  session.revoked = revoked === true;
   voiceSessions.delete(id);
   try {
     session.ws.close(1000, reason);
@@ -1383,7 +1435,9 @@ async function captureAmbientFrame() {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "voiceSessionStart" && sender.tab) {
-    startVoiceSessionProxy(sender.tab.id, {
+    const tabId = sender.tab.id;
+    claimActiveAgentTab(tabId, "another page voice session started");
+    startVoiceSessionProxy(tabId, {
       cueId: msg.cueId,
       turnId: msg.turnId,
       assistantOverlap: msg.assistantOverlap === true,
@@ -1432,6 +1486,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "run" && sender.tab) {
     const tabId = sender.tab.id;
+    claimActiveAgentTab(tabId, "another page agent turn started");
     const cueId = nextCueId(msg.cueId);
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
@@ -1440,6 +1495,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "branch" && sender.tab) {
     // Router intent: launch a disposable task agent in its OWN background tab.
     const overlayTabId = sender.tab.id;
+    claimActiveAgentTab(overlayTabId, "another page agent turn started");
     const cueId = nextCueId(msg.cueId);
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId: overlayTabId });
@@ -1449,6 +1505,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // BRANCH-TO-TWO: one trigger, N concurrent disposable task agents, each its
     // own background tab + own cue + own gateway router activation.
     const overlayTabId = sender.tab.id;
+    claimActiveAgentTab(overlayTabId, "another page agent turn started");
     const controllersByCue = new Map();
     const branches = msg.branches.map((b) => {
       const cueId = nextCueId(b.cueId);
@@ -1461,6 +1518,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "describe" && sender.tab) {
     const tabId = sender.tab.id;
+    claimActiveAgentTab(tabId, "another page agent turn started");
     const cueId = nextCueId(msg.cueId);
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
@@ -1486,6 +1544,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Stop the ambient loop if its tab goes away, so it never posts against a dead tab.
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (ambient && ambient.tabId === tabId) stopAmbientCapture();
+  if (activeAgentTabId === tabId) activeAgentTabId = null;
   closeTabVoiceSessions(tabId);
 });
 

@@ -117,8 +117,11 @@ assistant PCM audio returned by the selected gateway provider. Each spoken
 browser utterance gets its own turn id under the stable browser session id. When
 the user enables background assistant speech for the current browser session,
 the extension preserves older voice-session event handling and queued playback
-while it starts the next microphone turn. It must not use browser Web Speech APIs
-as the production voice path, and it must not hold raw Gemini/OpenAI/Anthropic
+while it starts the next microphone turn. That overlap is scoped to the active
+page-agent owner: starting a browser agent or voice turn from another tab revokes
+other-tab voice sessions, stops queued assistant playback in those tabs, and
+cancels their browser-local task cues. It must not use browser Web Speech APIs as
+the production voice path, and it must not hold raw Gemini/OpenAI/Anthropic
 provider credentials.
 
 Gateway-originated browser work uses the same ownership boundary. The gateway

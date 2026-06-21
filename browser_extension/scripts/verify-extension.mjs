@@ -88,6 +88,26 @@ if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.te
   throw new Error("background.js must forward assistant overlap policy into the gateway voice session_start event");
 }
 
+if (/Listening\.\.\.|listening\.\.\.|stopping…|stopping\.\.\./.test(contentSource)) {
+  throw new Error("content.js must not render voice lifecycle filler text such as Listening/listening/stopping");
+}
+
+if (!/createCue\(cueId,\s*"",\s*\{\s*presentation:\s*"icon"\s*\}\)/.test(contentSource)) {
+  throw new Error("browser voice start must create a silent icon cue, not a visible listening card");
+}
+
+if (!/function claimActiveAgentTab/.test(backgroundSource) || !/function revokeOtherTabVoiceSessions/.test(backgroundSource)) {
+  throw new Error("background.js must claim one active page-agent tab and revoke other-tab voice sessions");
+}
+
+if (!/cmd:\s*"agentRevoked"/.test(backgroundSource) || !/case "agentRevoked"/.test(contentSource)) {
+  throw new Error("background/content scripts must share an agentRevoked message for cross-tab shutdown");
+}
+
+if (!/event:\s*session\.revoked[\s\S]*type:\s*"revoked"/.test(backgroundSource)) {
+  throw new Error("background.js must tag extension-closed voice sockets as revoked so old tabs do not auto-recover");
+}
+
 for (const file of [
   "extension/background.js",
   "extension/browser-task-intent.js",
