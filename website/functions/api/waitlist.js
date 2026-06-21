@@ -30,6 +30,18 @@ export async function onRequestPost({ request, env }) {
     request.headers.get("x-forwarded-for") ||
     "";
 
+  if (!env.DB) {
+    if (isLocalRequest(request)) {
+      return json(200, {
+        ok: true,
+        emailed: false,
+        stored: false,
+        message: "You are on the list. We will keep in touch.",
+      });
+    }
+    return json(500, { error: "Waitlist storage is not configured." });
+  }
+
   // Store the signup. Duplicate emails are ignored, not errors.
   try {
     await env.DB.prepare(
@@ -79,6 +91,17 @@ async function sendConfirmation(env, to) {
   });
 
   return res.ok;
+}
+
+function isLocalRequest(request) {
+  try {
+    const url = new URL(request.url);
+    return url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "::1";
+  } catch {
+    return false;
+  }
 }
 
 function confirmationText() {
