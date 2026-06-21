@@ -12,8 +12,12 @@ import { parseBrowserTaskIntent } from "./browser-task-intent.js";
 // fills blanks — a value the user typed always wins.
 chrome.runtime.onInstalled.addListener(async () => {
   await seedGatewayConfig();
+  await ensureContentOnOpenTabs();
 });
 void seedGatewayConfig();
+chrome.runtime.onStartup.addListener(() => {
+  ensureContentOnOpenTabs().catch(() => {});
+});
 const MAX_ELEMENTS = 100;
 const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 // Cues run concurrently: the user keeps talking, each utterance is its own lane.
@@ -21,6 +25,7 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 // can cancel one cue or all cues on a tab without blocking new ones.
 const tasks = new Map();
 const voiceSessions = new Map();
+const MAX_PENDING_VOICE_EVENTS = 50;
 let activeAgentTabId = null;
 
 async function getConfig() {
@@ -687,6 +692,12 @@ async function ensureContent(tabId) {
   }
 }
 
+async function ensureContentOnOpenTabs() {
+  if (!chrome?.tabs || !chrome?.scripting) return;
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+  await Promise.allSettled(tabs.filter((tab) => tab.id != null).map((tab) => ensureContent(tab.id)));
+}
+
 function throwIfAborted(signal) {
   if (signal?.aborted) throw new Error("Task cancelled.");
 }
@@ -756,7 +767,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap }
   return new Promise((resolve, reject) => {
     let settled = false;
     const ws = new WebSocket(ticket.ws_url);
-    const session = { id, tabId, ws, opened: false };
+    const session = { id, tabId, ws, opened: false, attached: false, pendingEvents: [] };
     voiceSessions.set(id, session);
     ws.binaryType = "arraybuffer";
 
@@ -803,60 +814,80 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap }
         failBeforeOpen("Live voice connection failed.");
         return;
       }
-      send(tabId, {
-        cmd: "voiceSessionEvent",
-        voiceSessionId: id,
+      deliverVoiceSessionEvent(session, {
         event: { type: "error", message: "Live voice connection failed." },
       });
     };
     ws.onclose = () => {
-      voiceSessions.delete(id);
       if (!session.opened) {
         if (session.revoked) {
           if (!settled) {
             settled = true;
             resolve({ voiceSessionId: id, revoked: true });
           }
-          send(tabId, {
-            cmd: "voiceSessionEvent",
-            voiceSessionId: id,
+          session.closed = true;
+          deliverVoiceSessionEvent(session, {
             event: { type: "revoked", reason: session.closedReason || "revoked" },
           });
+          if (session.attached) voiceSessions.delete(id);
+          else setTimeout(() => voiceSessions.delete(id), 5000);
           return;
         }
         failBeforeOpen("Live voice connection closed.");
         return;
       }
-      send(tabId, {
-        cmd: "voiceSessionEvent",
-        voiceSessionId: id,
+      session.closed = true;
+      deliverVoiceSessionEvent(session, {
         event: session.revoked
           ? { type: "revoked", reason: session.closedReason || "revoked" }
           : { type: "connection_closed" },
       });
+      if (session.attached) voiceSessions.delete(id);
+      else setTimeout(() => voiceSessions.delete(id), 5000);
     };
   });
+}
+
+function deliverVoiceSessionEvent(session, payload) {
+  if (!session) return;
+  const message = { cmd: "voiceSessionEvent", voiceSessionId: session.id, ...payload };
+  if (!session.attached) {
+    session.pendingEvents = session.pendingEvents || [];
+    session.pendingEvents.push(message);
+    if (session.pendingEvents.length > MAX_PENDING_VOICE_EVENTS) session.pendingEvents.shift();
+    return;
+  }
+  send(session.tabId, message);
+}
+
+function attachVoiceSession(id, tabId) {
+  const session = voiceSessions.get(id);
+  if (!session || session.tabId !== tabId) return { ok: false, error: "voice session not found" };
+  session.attached = true;
+  const pendingEvents = session.pendingEvents || [];
+  session.pendingEvents = [];
+  for (const event of pendingEvents) send(session.tabId, event);
+  if (session.closed) voiceSessions.delete(id);
+  return { ok: true, flushed: pendingEvents.length };
 }
 
 async function forwardVoiceSessionEvent(session, event) {
   if (!voiceSessions.has(session.id)) return;
   const data = event.data;
   if (data instanceof ArrayBuffer) {
-    send(session.tabId, { cmd: "voiceSessionEvent", voiceSessionId: session.id, audio: bytesToBase64(data) });
+    deliverVoiceSessionEvent(session, { audio: bytesToBase64(data) });
     return;
   }
   if (data instanceof Blob) {
     const buffer = await data.arrayBuffer();
-    send(session.tabId, { cmd: "voiceSessionEvent", voiceSessionId: session.id, audio: bytesToBase64(buffer) });
+    deliverVoiceSessionEvent(session, { audio: bytesToBase64(buffer) });
     return;
   }
   let parsed = null;
   try {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
-  send(session.tabId, {
-    cmd: "voiceSessionEvent",
-    voiceSessionId: session.id,
+  deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
   });
 }
@@ -1446,6 +1477,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
+  if (msg.cmd === "voiceSessionAttach" && sender.tab) {
+    sendResponse(attachVoiceSession(msg.voiceSessionId, sender.tab.id));
+    return true;
+  }
   if (msg.cmd === "voiceSessionAudio") {
     sendResponse(sendVoiceSessionAudio(msg.voiceSessionId, msg.audio));
     return true;
@@ -1559,10 +1594,10 @@ chrome.action.onClicked.addListener(async (tab) => {
 });
 
 chrome.commands.onCommand.addListener(async (command, tab) => {
-  if (command !== "toggle-agee" || !tab?.id) return;
+  if ((command !== "toggle-agee" && command !== "toggle-agee-voice") || !tab?.id) return;
   try {
     await ensureContent(tab.id);
-    await chrome.tabs.sendMessage(tab.id, { cmd: "open" });
+    await chrome.tabs.sendMessage(tab.id, { cmd: command === "toggle-agee-voice" ? "toggleVoice" : "open" });
   } catch {
     // Restricted browser pages cannot receive content scripts.
   }

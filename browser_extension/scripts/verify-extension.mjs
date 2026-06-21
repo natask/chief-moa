@@ -37,6 +37,7 @@ const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms"];
+const requiredHostPermissions = ["http://*/*", "https://*/*"];
 
 if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");
@@ -48,8 +49,21 @@ for (const permission of requiredPermissions) {
   }
 }
 
+for (const permission of requiredHostPermissions) {
+  if (!manifest.host_permissions?.includes(permission)) {
+    throw new Error(`missing host permission for hotkey content injection: ${permission}`);
+  }
+}
+
 if (!manifest.commands?.["toggle-agee"]) {
   throw new Error("missing toggle-agee command");
+}
+
+if (
+  manifest.commands?.["toggle-agee-voice"]?.suggested_key?.mac !== "Command+Period" ||
+  manifest.commands?.["toggle-agee-voice"]?.suggested_key?.default !== "Ctrl+Period"
+) {
+  throw new Error("missing toggle-agee-voice command for Cmd/Ctrl+Period");
 }
 
 if (backgroundSource.includes('import "./dev-reload.js"')) {
@@ -62,6 +76,24 @@ if (/new\s+WebSocket\s*\(/.test(contentSource)) {
 
 if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
   throw new Error("background.js must expose the voiceSessionStart proxy command");
+}
+
+if (
+  !/command !== "toggle-agee" && command !== "toggle-agee-voice"/.test(backgroundSource) ||
+  !/cmd:\s*command === "toggle-agee-voice" \? "toggleVoice" : "open"/.test(backgroundSource) ||
+  !/case "toggleVoice":/.test(contentSource) ||
+  !/function ensureContentOnOpenTabs/.test(backgroundSource) ||
+  !/chrome\.runtime\.onStartup\.addListener/.test(backgroundSource)
+) {
+  throw new Error("Cmd/Ctrl+Period must be wired through command handling and startup/update content injection");
+}
+
+if (
+  !/cmd === "voiceSessionAttach"/.test(backgroundSource) ||
+  !/pendingEvents/.test(backgroundSource) ||
+  !/cmd:\s*"voiceSessionAttach"/.test(contentSource)
+) {
+  throw new Error("voice session events must be buffered until the content script attaches the session id");
 }
 
 if (!/recoverLiveVoiceTurn\(state, msg\.message/.test(contentSource)) {

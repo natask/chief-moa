@@ -657,7 +657,12 @@
     if (!state) return;
     if (state.voiceSessionId) liveVoiceBySessionId.delete(state.voiceSessionId);
     state.voiceSessionId = voiceSessionId || null;
-    if (state.voiceSessionId) liveVoiceBySessionId.set(state.voiceSessionId, state);
+    if (state.voiceSessionId) {
+      liveVoiceBySessionId.set(state.voiceSessionId, state);
+      chrome.runtime
+        .sendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId })
+        .catch(() => {});
+    }
   }
 
   function untrackLiveVoiceState(state) {
@@ -1641,6 +1646,11 @@
         return true;
       case "open":
         openTextSurface({ fresh: false });
+        reply({ ok: true });
+        return true;
+      case "toggleVoice":
+        if (!root) build();
+        toggleVoiceSession();
         reply({ ok: true });
         return true;
       case "snapshot":

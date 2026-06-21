@@ -218,6 +218,11 @@ async function main() {
     workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
     await workerCdp.send("Runtime.enable");
 
+    const commands = await evaluate(workerCdp, "chrome.commands.getAll()");
+    const voiceCommand = commands.find((command) => command.name === "toggle-agee-voice");
+    if (!voiceCommand) throw new Error(`voice command was not registered: ${JSON.stringify(commands)}`);
+    const voiceShortcut = voiceCommand.shortcut || "page-level listener";
+
     const ping = await waitForEval(workerCdp, `
       (async () => {
         const [tab] = await chrome.tabs.query({ url: "http://localhost/*" });
@@ -318,7 +323,7 @@ async function main() {
 
     console.log(
       `extension smoke passed (REAL extension, headless Chrome for Testing): ` +
-        `service worker loaded id=${extensionId}, ${workerResult.elements} elements observed via background->content, ` +
+        `service worker loaded id=${extensionId}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );

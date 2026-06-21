@@ -11,6 +11,8 @@
   },
   "permissions": ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms"],
   "host_permissions": [
+    "http://*/*",
+    "https://*/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "http://10.147.17.10/*",
@@ -45,6 +47,13 @@
         "default": "Ctrl+K"
       },
       "description": "Open Aggie command mode"
+    },
+    "toggle-agee-voice": {
+      "suggested_key": {
+        "mac": "Command+Period",
+        "default": "Ctrl+Period"
+      },
+      "description": "Start or send Aggie voice"
     }
   },
   "action": {
