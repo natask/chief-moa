@@ -482,6 +482,18 @@ async function assertVoiceChatAndIdempotency(baseUrl, dataDir) {
   assert.equal(persisted.id, body.turn_id);
   assert.equal(persisted.classification, "chat");
   assert.equal(persisted.response.turn_id, body.turn_id);
+
+  const time = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "smoke_session",
+    branch_id: "default",
+    turn_id: "turn_time",
+    transcript: "what time is it",
+    source: "smoke-regression",
+  });
+  assert.equal(time.status, 200);
+  assert.equal(time.json.classification, "chat");
+  assert.match(time.json.display || "", /^It's .+\.$/);
+  assert.doesNotMatch(time.json.display || "", /without a model provider|don't have access/i);
 }
 
 async function assertControlTurn(baseUrl, dataDir) {

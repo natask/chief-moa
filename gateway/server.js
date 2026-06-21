@@ -801,7 +801,7 @@ async function handleChat(request, response) {
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
-  const text = await callModelOrFallback(modelMessages, profile);
+  const text = localUtilityReply(lastUser?.content || "") || await callModelOrFallback(modelMessages, profile);
   const savedMessages = messages.concat([{ role: "assistant", content: text }]);
   const saved = {
     id: conversationId,
@@ -1609,6 +1609,19 @@ async function handleVoiceTurn(request, response) {
     return;
   }
 
+  const utilityReply = localUtilityReply(transcript);
+  if (utilityReply) {
+    const payload = voiceTurnPayload(baseRecord, {
+      speak: capSpeakText(utilityReply, profile.voice_max_chars),
+      display: utilityReply,
+      actions: [],
+      follow_up_expected: false,
+    });
+    writeVoiceTurnRecord({ ...baseRecord, updated_at: new Date().toISOString(), response: payload });
+    sendJson(response, 200, payload);
+    return;
+  }
+
   if (classification === "agent_run" || classification === "multi_agent") {
     if (!authorizedAgent(request)) {
       const payload = voiceTurnPayload(baseRecord, {
@@ -1933,6 +1946,48 @@ async function callModelOrFallback(messages, profile) {
   }
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   return gatewayFallbackReply(lastUser?.content || "");
+}
+
+function localUtilityReply(prompt) {
+  if (isCurrentTimeQuestion(prompt)) {
+    return currentTimeReply();
+  }
+  return "";
+}
+
+function isCurrentTimeQuestion(prompt) {
+  const lower = normalizeSpeech(prompt);
+  return lower === "what time is it"
+    || lower === "what is the time"
+    || lower === "whats the time"
+    || lower === "what time"
+    || lower === "current time"
+    || lower === "tell me the time";
+}
+
+function currentTimeReply(now = new Date()) {
+  const timeZone = gatewayTimeZone();
+  const formatted = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+    timeZone,
+  }).format(now);
+  return `It's ${formatted}.`;
+}
+
+function gatewayTimeZone() {
+  const preferred = String(process.env.MOA_TIME_ZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC").trim();
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: preferred }).format(new Date(0));
+    return preferred;
+  } catch {
+    return "UTC";
+  }
 }
 
 function gatewayFallbackReply(prompt) {
