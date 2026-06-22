@@ -67,3 +67,11 @@
 - [ ] 9.3 Run `openspec validate provider-agnostic-voice-agent-runtime --strict`.
 - [ ] 9.4 Run gateway checks and Android build after the first implementation slice. Gateway verified 2026-06-20 with `cd gateway && npm run check`; Android build not rerun for this gateway/browser slice.
 - [ ] 9.5 Deploy the first implementation slice to the main machine and verify phone E2E over the configured gateway.
+
+## 10. Voice Evidence QA And Forked Agent Sessions
+
+- [ ] 10.1 Add a first-class voice evidence record that links a spoken turn to user audio, expected/observed transcript, assistant text/audio, provider IDs, profile version, retention policy, and pass/fail criteria.
+- [ ] 10.2 Add an audio replay smoke that plays a fixture utterance through the gateway voice runtime, stores the observed transcript and assistant response, and emits a pass/fail verdict against expected criteria.
+- [ ] 10.3 Add non-interrupting forked turn routing: a voice/chat turn can start a new `agent_run` with `wait=false` while existing active runs keep running.
+- [ ] 10.4 Link subsequent user turns to relevant active runs as evidence or instruction, with a stored routing reason; irrelevant forks may self-dismiss with a no-op/dismissed result.
+- [ ] 10.5 Expose active fork/run status so the user can ask which agents are active and what each is doing.

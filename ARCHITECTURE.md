@@ -90,6 +90,13 @@ Spoken profile-control requests such as voice and language changes are routed
 through the gateway profile store; Gemini Live reads the effective voice,
 language, and Moa-owned context when the next Live session starts.
 
+Voice turns can also become replayable verification evidence. When retention is
+enabled, the gateway stores or references the user audio, transcript, assistant
+text, assistant audio, profile version, provider version, and expected-test
+criteria so a later smoke can replay the same utterance through the configured
+voice pipeline and report whether transcription and response behavior still
+match.
+
 Streaming voice providers are gateway-only. Android sends microphone audio to
 Moa Gateway, but raw model/API keys stay on the gateway machine. The provider
 package boundary is STT, LLM, and TTS; the current gateway supports loopback
@@ -163,6 +170,14 @@ User asks for build/fix/change/test work
 Voice-started agent work should be async by default. The phone should not block
 on a long-running harness.
 
+Every user turn is a possible fork. A new spoken or typed message can create a
+new `agent_run` without canceling existing active runs, and subsequent user
+turns can be attached as non-interrupting evidence to relevant active runs. The
+gateway owns the agent-manager decision: route the turn to an existing run,
+launch a new fork, attach it to several active runs, or dismiss it as irrelevant.
+The user must be able to inspect which runs are active and what each is trying
+to accomplish.
+
 ### Router Activation Loop
 
 ```text
@@ -216,6 +231,10 @@ they cannot directly execute phone actions.
 - `branch`: a thread of work inside a session, initially `default`.
 - `turn`: one voice or chat input with optional screen context.
 - `agent_run`: a gateway-created execution-machine job with lifecycle events.
+- `agent_fork`: a turn-linked async `agent_run` that can continue while later
+  user turns create or update other forks.
+- `voice_evidence`: replayable user/assistant audio and transcript artifacts
+  attached to a turn, profile version, provider version, and test criteria.
 - `browser_task`: a gateway-created browser work request that a Chrome extension
   client must claim, execute locally with allowlisted actions, and receipt.
 - `tool_source`: an agent-callable integration source such as OpenAPI, MCP,

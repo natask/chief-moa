@@ -23,6 +23,11 @@ the user can inspect and change by voice.
 - Make Moa-owned session history the canonical record for transcripts, audio,
   assistant messages, provider events, prompt/profile versions, tool proposals,
   active runs, and recovery state.
+- Add replayable voice evidence so captured/user-provided audio, transcripts,
+  assistant text/audio, and expected criteria can become automated QA fixtures.
+- Treat each user turn as a possible non-interrupting agent fork: a new message
+  can launch a new run, route to existing active runs, or be dismissed by the
+  gateway agent manager without stopping prior work.
 - Treat Gemini Live as the first high-quality live provider implementation, not
   the only architecture.
 
@@ -42,6 +47,11 @@ the user can inspect and change by voice.
   turn.
 - `provider-independent-language-state`: Explicit language selection and visible
   language state that does not depend on automatic provider language switching.
+- `voice-evidence-replay-qa`: Replayable voice fixtures that compare input
+  audio transcription, assistant response text, and assistant audio/transcript
+  against expected criteria.
+- `forked-agent-session-routing`: User turns can fork independent agent runs
+  while active runs continue and receive later relevant turns as evidence.
 
 ### Modified Capabilities
 
@@ -58,8 +68,9 @@ the user can inspect and change by voice.
   session storage, profile APIs, provider event logging, and recovery endpoints
   in `software/moa_gateway/server.js` and `software/moa_gateway/lib/*`.
 - Data model: session, branch, turn, audio artifact, provider event, profile
-  version, tool policy, run, approval, and receipt records must be queryable by
-  the gateway and agent harnesses.
+  version, voice evidence fixture, tool policy, run, fork linkage, approval, and
+  receipt records must be queryable by the gateway and agent harnesses.
 - Verification: OpenSpec validation, gateway checks/smokes, Android build,
-  provider-swap smoke tests, and real-phone QA for continuous overlay voice,
-  explicit language changes, interruption, transcript visibility, and recovery.
+  provider-swap smoke tests, audio replay QA, forked-run routing smoke tests,
+  and real-phone QA for continuous overlay voice, explicit language changes,
+  interruption, transcript visibility, and recovery.

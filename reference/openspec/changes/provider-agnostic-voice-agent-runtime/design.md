@@ -32,6 +32,10 @@ conversation storage, agent-run storage, and harness execution.
   autonomy level.
 - Store Moa-owned transcripts, audio artifacts, provider events, prompt/profile
   versions, agent runs, and tool receipts as canonical history.
+- Turn retained user/assistant audio into replayable QA evidence with expected
+  transcript and response criteria.
+- Let each user message fork or update async agent work without stopping
+  already-running agents.
 - Provide recovery controls when the agent behaves badly: safe mode, prompt
   rollback, tool disable, provider switch, cancel active runs, and text-only
   fallback.
@@ -90,6 +94,34 @@ profile state.
 Alternative considered: rely on Gemini Live remote session history. Rejected
 because provider sessions are not a durable product database, are difficult for
 other agents to query, and do not solve cross-provider migration.
+
+### Decision: Voice QA Replays Real Audio Through The Runtime
+
+Voice verification uses replayable evidence records, not only text fixtures.
+When retention is enabled, a turn can store or reference the user audio,
+expected user transcript, assistant text, assistant audio/transcript, profile
+version, provider selection, and pass/fail criteria. A smoke can replay the
+audio through the gateway voice runtime, compare the observed transcript and
+assistant response against the expected criteria, and record a verdict. This
+lets failures show whether capture, STT, reasoning, TTS, or storage regressed.
+
+Alternative considered: test only the transcript HTTP endpoint. Rejected because
+it cannot prove the real audio path, provider transcription, assistant audio, or
+turn storage behavior.
+
+### Decision: User Turns Are Non-Interrupting Agent Fork Opportunities
+
+Every voice or chat turn is first stored as a canonical user event. The gateway
+agent manager then decides whether that event should create a new async
+`agent_run`, attach to one or more active runs as follow-up evidence, route to a
+specific run, or be dismissed as irrelevant. Launching a new fork must not
+cancel already-active work unless the user explicitly asks to cancel it. This
+preserves the user's spoken flow: they can interrupt the conversation surface
+and start another line of work while prior agents keep running.
+
+Alternative considered: make each new user utterance replace or cancel the
+previous agent task. Rejected because it loses long-running delegated work and
+does not match the desired "many active threads" interaction model.
 
 ### Decision: Language Is Explicit Runtime State
 
@@ -166,6 +198,9 @@ tools, or provider state breaks during a live conversation.
 - Persistent audio storage has privacy risk -> Store locally/gateway-side under
   session records with retention settings and visible controls before adding
   broad sync/export behavior.
+- Forked agent runs can create noise -> Require a gateway manager decision and
+  visible active-run status so irrelevant forks can self-dismiss and the user can
+  inspect what is still running.
 
 ## Migration Plan
 
@@ -180,9 +215,13 @@ tools, or provider state breaks during a live conversation.
 5. Add profile update and rollback endpoints, then route spoken control turns
    such as "change your system prompt" and "switch to Amharic" to profile
    changes instead of normal chat.
-6. Add safe mode: cancel/stop controls, tool disable, provider fallback, and
+6. Add replayable audio QA fixtures and a first smoke that exercises the real
+   audio path end to end.
+7. Add non-interrupting forked agent routing so a turn can launch new async work
+   while active runs continue receiving relevant context.
+8. Add safe mode: cancel/stop controls, tool disable, provider fallback, and
    known-good profile rollback.
-7. Add modular provider implementations after the contracts are testable with
+9. Add modular provider implementations after the contracts are testable with
    the existing Gemini Live and loopback providers.
 
 ## Open Questions
@@ -195,3 +234,7 @@ tools, or provider state breaks during a live conversation.
   into the planned Postgres store?
 - How much raw audio retention should be on by default, and what retention UI is
   required before broader user testing?
+- What is the first judge for response correctness: deterministic transcript
+  matching, a gateway-local LLM judge, or both?
+- Should every user turn fan out to active runs by default, or should the
+  manager explicitly route only to relevant runs?
