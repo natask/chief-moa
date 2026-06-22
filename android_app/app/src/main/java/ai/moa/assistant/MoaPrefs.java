@@ -14,6 +14,7 @@ final class MoaPrefs {
     private static final String KEY_CONVERSATION_ID = "conversation_id";
     private static final String KEY_HISTORY_JSON = "history_json";
     private static final String KEY_SPOKEN_REPLIES_ENABLED = "spoken_replies_enabled";
+    private static final String KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED = "spoken_replies_quiet_default_applied";
 
     private MoaPrefs() {
     }
@@ -34,11 +35,22 @@ final class MoaPrefs {
     }
 
     static boolean spokenRepliesEnabled(Context context) {
-        return prefs(context).getBoolean(KEY_SPOKEN_REPLIES_ENABLED, false);
+        SharedPreferences preferences = prefs(context);
+        if (!preferences.getBoolean(KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED, false)) {
+            preferences.edit()
+                    .putBoolean(KEY_SPOKEN_REPLIES_ENABLED, false)
+                    .putBoolean(KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED, true)
+                    .apply();
+            return false;
+        }
+        return preferences.getBoolean(KEY_SPOKEN_REPLIES_ENABLED, false);
     }
 
     static void setSpokenRepliesEnabled(Context context, boolean enabled) {
-        prefs(context).edit().putBoolean(KEY_SPOKEN_REPLIES_ENABLED, enabled).apply();
+        prefs(context).edit()
+                .putBoolean(KEY_SPOKEN_REPLIES_ENABLED, enabled)
+                .putBoolean(KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED, true)
+                .apply();
     }
 
     static String conversationId(Context context) {
