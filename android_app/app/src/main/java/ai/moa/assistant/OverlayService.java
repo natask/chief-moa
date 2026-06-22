@@ -261,6 +261,8 @@ public final class OverlayService extends Service {
         );
         channel.setDescription("Keeps the Aggie overlay available above other apps.");
         channel.setShowBadge(false);
+        channel.setSound(null, null);
+        channel.enableVibration(false);
 
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager != null) {
@@ -287,7 +289,9 @@ public final class OverlayService extends Service {
                 .setContentText("Ready for commands on the current screen.")
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
-                .setShowWhen(false);
+                .setShowWhen(false)
+                .setOnlyAlertOnce(true)
+                .setDefaults(0);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             builder.setCategory(Notification.CATEGORY_SERVICE);
             builder.setColor(0xFFF4D35E);

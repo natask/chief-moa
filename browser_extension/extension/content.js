@@ -26,13 +26,14 @@
     dragState = null,
     clickTimer = null,
     suppressLauncherClick = false,
-    // The Aggie mark stays where the user drops it, reacts to state, and rings
-    // when something lands. audioCtx is created lazily on first gesture.
+    // The Aggie mark stays where the user drops it and reacts visually to state.
+    // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
   const assistantPlaybackSources = new Set();
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
   let assistantSpeechOverlap = false;
+  let uiChimesEnabled = false;
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
   const DEV_RELOAD_POLL_MS = 900;
   let devReloadTimer = null;
@@ -147,6 +148,7 @@
     transcriptEl = root.querySelector("#agee-transcript");
 
     restoreLauncherPosition();
+    restoreUiChimePreference();
     // Single click on the mark = text mode (focus the input). Double click =
     // voice mode (start listening). We detect the double click manually so a
     // single click does not flash the text surface before voice kicks in.
@@ -205,9 +207,13 @@
       stopSpeaking();
     });
 
-    // A pointerdown anywhere primes the audio context so the chime can play
-    // later (browsers only allow sound after a user gesture).
-    window.addEventListener("pointerdown", primeAudio, { once: true });
+    // Explicit voice playback primes audio from the voice path itself.
+  }
+
+  function restoreUiChimePreference() {
+    chrome.storage.local.get({ ageeUiChimesEnabled: false }, ({ ageeUiChimesEnabled }) => {
+      uiChimesEnabled = ageeUiChimesEnabled === true;
+    });
   }
 
   function restoreLauncherPosition() {
@@ -279,7 +285,7 @@
     root.classList.toggle("agee-open", open);
     if (open) {
       positionPanel(); // anchor the surface to the mark, not a fixed corner
-      if (!was) chime("wake"); // pleasant beep when it engages (⌘K / shortcut)
+      if (!was) chime("wake");
       setTimeout(() => input.focus(), 0);
     }
   }
@@ -685,6 +691,7 @@
   }
 
   function chime(kind = "done") {
+    if (!uiChimesEnabled) return;
     primeAudio();
     if (!audioCtx) return;
     const now = audioCtx.currentTime;

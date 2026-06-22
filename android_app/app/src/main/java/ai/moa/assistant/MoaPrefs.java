@@ -34,7 +34,7 @@ final class MoaPrefs {
     }
 
     static boolean spokenRepliesEnabled(Context context) {
-        return prefs(context).getBoolean(KEY_SPOKEN_REPLIES_ENABLED, true);
+        return prefs(context).getBoolean(KEY_SPOKEN_REPLIES_ENABLED, false);
     }
 
     static void setSpokenRepliesEnabled(Context context, boolean enabled) {

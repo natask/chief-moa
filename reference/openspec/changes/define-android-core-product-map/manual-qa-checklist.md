@@ -12,7 +12,7 @@
 - Single tap while recording to submit.
 - Confirm the transcript appears in the overlay/panel history.
 - Confirm the assistant answer appears as text.
-- Disable `Play spoken replies`.
+- Confirm `Play spoken replies` is off by default.
 - Repeat a voice turn and confirm no local TTS/audio playback occurs while text still appears.
 - Enable `Play spoken replies`.
 - Repeat a voice turn and confirm playback occurs.

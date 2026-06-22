@@ -105,7 +105,7 @@ adb shell appops set ai.moa.assistant SYSTEM_ALERT_WINDOW allow
 Manual tests:
 
 1. Open the app and confirm gateway health is reachable.
-2. Confirm `Play spoken replies` is off if testing text-only response display.
+2. Confirm `Play spoken replies` is off by default for a fresh install.
 3. Start overlay voice from the app button.
 4. Speak a short request: "What can you hear right now?"
 5. Confirm user transcript appears in the overlay.
