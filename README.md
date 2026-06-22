@@ -10,6 +10,10 @@ proposal before any local action runs.
 ## Start here
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): system boundary and runtime flows.
+- [ENGINEERING_STRATEGY.md](ENGINEERING_STRATEGY.md): contribution tracks,
+  ownership strategy, and definition of done.
+- [CONTRIBUTING.md](CONTRIBUTING.md): contributor setup, trust boundary, and
+  pull request checklist.
 - [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md): how intent becomes specs, tickets,
   implementation, and verification.
 - [AGENTS.md](AGENTS.md): operating contract for coding agents.

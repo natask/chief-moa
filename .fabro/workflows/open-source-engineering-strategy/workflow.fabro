@@ -1,0 +1,31 @@
+digraph OpenSourceEngineeringStrategy {
+    graph [goal="Contributors can find the owner track, verification command, and done criteria for a Chief Moa change."]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the OpenSpec and intent artifacts. Produce a concise plan and name the files you will change."
+    ]
+
+    implement [
+        label="Implement",
+        prompt="Add contributor and engineering strategy docs, link them from README, and keep changes scoped to repository orientation."
+    ]
+
+    verify [
+        label="Verify",
+        shape=parallelogram,
+        script="fabro validate .fabro/workflows/open-source-engineering-strategy/workflow.fabro 2>&1",
+        goal_gate=true,
+        retry_target=implement
+    ]
+
+    approve [shape=hexagon, label="Approve Result"]
+
+    start -> plan -> implement -> verify -> approve
+    approve -> exit      [label="[A] Accept"]
+    approve -> implement [label="[R] Revise"]
+}
