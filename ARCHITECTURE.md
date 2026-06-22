@@ -137,6 +137,11 @@ recent voice turns, chat turns, provider events, active/completed runs, profile
 status, and browser task receipts so a later voice session can recover what the
 browser surface did without relying on provider memory.
 
+Browser continuous/ambient mode is explicit start/stop. When active, the
+extension samples page context and posts a frame to `POST /v1/voice/frames` on a
+200 ms target interval. The gateway stores those frames as session evidence only;
+this path does not run model calls on the 200 ms cadence.
+
 The extension is a stable packaged client, not a per-user deployment unit. Chrome
 Manifest V3 forbids remotely hosted executable code in privileged extension
 contexts, so user customizations travel through the engine as data: a

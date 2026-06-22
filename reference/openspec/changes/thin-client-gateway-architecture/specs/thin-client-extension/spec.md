@@ -32,3 +32,16 @@ other-tab voice capture/playback and cancel other-tab browser-local task cues.
 #### Scenario: New tab agent revokes old tab activity
 - **WHEN** a user starts a browser agent or voice turn in tab B while tab A has active extension voice/audio or task cues
 - **THEN** tab A stops microphone capture, queued assistant playback, and browser-local task cues before tab B becomes the active page-agent owner
+
+### Requirement: Explicit ambient frame cadence
+The browser extension SHALL expose an explicit ambient start/stop loop that posts
+page-context frame messages to the configured engine at a 200 ms target cadence.
+The loop SHALL treat those frames as evidence intake only, not as direct model
+execution.
+
+#### Scenario: Ambient loop is running
+- **WHEN** the content script starts ambient mode with the default interval
+- **THEN** the background service worker posts repeated `POST /v1/voice/frames`
+  messages carrying the stable session id and monotonically increasing sequence
+  numbers at the 200 ms target cadence
+- **AND** stopping ambient mode cancels the interval locally

@@ -1429,9 +1429,11 @@ async function startAmbientCapture(tabId, intervalMs) {
   if (ambient) stopAmbientCapture();
   const interval = Math.max(AMBIENT_MIN_INTERVAL_MS, Number(intervalMs) || AMBIENT_DEFAULT_INTERVAL_MS);
   const sessionId = await getStableSessionId();
-  ambient = { tabId, timer: null, seq: 0, inFlight: false, sessionId };
+  ambient = { tabId, timer: null, seq: 0, inFlight: false, intervalMs: interval, sessionId };
   send(tabId, { cmd: "ambient", state: "on" });
   ambient.timer = setInterval(() => captureAmbientFrame().catch(() => {}), interval);
+  captureAmbientFrame().catch(() => {});
+  return { ok: true, intervalMs: interval, sessionId };
 }
 
 function stopAmbientCapture() {
@@ -1569,10 +1571,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
   }
   if (msg.cmd === "ambientStart" && sender.tab) {
-    startAmbientCapture(sender.tab.id, msg.intervalMs);
+    const tabId = sender.tab.id;
+    claimActiveAgentTab(tabId, "another page ambient session started");
+    startAmbientCapture(tabId, msg.intervalMs)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
   }
   if (msg.cmd === "ambientStop") {
     stopAmbientCapture();
+    sendResponse({ ok: true });
+    return true;
   }
 });
 

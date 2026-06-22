@@ -26,6 +26,7 @@ const requiredFiles = [
   "scripts/chrome-for-testing.mjs",
   "scripts/poke-dev-reload.mjs",
   "scripts/smoke-gateway.mjs",
+  "scripts/smoke-ambient.mjs",
   "scripts/smoke-settings.mjs",
 ];
 
@@ -140,6 +141,22 @@ if (!/event:\s*session\.revoked[\s\S]*type:\s*"revoked"/.test(backgroundSource))
   throw new Error("background.js must tag extension-closed voice sockets as revoked so old tabs do not auto-recover");
 }
 
+if (!/AMBIENT_DEFAULT_INTERVAL_MS\s*=\s*200/.test(backgroundSource)) {
+  throw new Error("ambient frame loop must default to a 200 ms interval");
+}
+
+if (!/cmd === "ambientStart"/.test(backgroundSource) || !/\/v1\/voice\/frames/.test(backgroundSource)) {
+  throw new Error("background.js must expose ambientStart and post ambient frames to /v1/voice/frames");
+}
+
+if (!/captureAmbientFrame\(\)\.catch\(\(\) => \{\}\);/.test(backgroundSource)) {
+  throw new Error("ambientStart must trigger the first frame immediately before the 200 ms interval");
+}
+
+if (!/case "ambient":/.test(contentSource) || !/agee-ambient/.test(contentSource)) {
+  throw new Error("content.js must acknowledge ambient on/off state from the background");
+}
+
 for (const file of [
   "extension/background.js",
   "extension/browser-task-intent.js",
@@ -153,6 +170,7 @@ for (const file of [
   "scripts/doctor.mjs",
   "scripts/poke-dev-reload.mjs",
   "scripts/smoke-extension.mjs",
+  "scripts/smoke-ambient.mjs",
   "scripts/smoke-tweaks.mjs",
   "scripts/smoke-gateway.mjs",
   "scripts/smoke-settings.mjs",

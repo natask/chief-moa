@@ -19,6 +19,7 @@
     liveVoice = null,
     surfacePhase = "idle",
     listening = false,
+    ambientState = "off",
     // Conversation mode: once you start talking, the mark keeps listening after
     // each reply so it works like speaking, not click-to-send. Stop ends it.
     conversationActive = false,
@@ -791,6 +792,11 @@
     if (!transcriptEl) return;
     transcriptEl.textContent = text || "";
     transcriptEl.classList.toggle("agee-interim", !!interim && !!text);
+  }
+
+  function setAmbientState(next) {
+    ambientState = next === "on" ? "on" : "off";
+    if (root) root.classList.toggle("agee-ambient", ambientState === "on");
   }
 
   async function startLiveVoiceTurn(options = {}) {
@@ -1679,6 +1685,10 @@
       case "agentRevoked":
         handleAgentRevoked(msg);
         return false;
+      case "ambient":
+        setAmbientState(msg.state);
+        reply({ ok: true, state: ambientState });
+        return true;
       case "voiceSessionEvent":
         {
           const state = liveVoiceBySessionId.get(msg.voiceSessionId);

@@ -147,6 +147,12 @@ HTTP, opens a headerless WebSocket to `/v1/voice/sessions`, sends PCM16 audio,
 and receives assistant PCM audio back. Browser voice is not Web Speech API
 dictation; provider credentials stay on the gateway.
 
+`smoke:ambient` proves the 200 ms ambient frame loop with the real extension and
+a throwaway local gateway. It sends `{cmd:"ambientStart", intervalMs:200}` from
+the content script, observes repeated service-worker `POST /v1/voice/frames`
+calls, and confirms the gateway stores the frame records. This is intake only:
+it does not run a model every 200 ms.
+
 ## Verify the gateway round-trip
 
 The overlay does not talk to the model vendor directly. It talks to **your**
