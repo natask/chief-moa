@@ -57,6 +57,15 @@ Recommended mix: A as backbone, B for generated rich UI, C only on explicit
 opt-in. This also resolves the slider deferred in `extension-ui-self-extension`
 (hand-built vs agent-generated): the platform constraint sets the boundary.
 
+## Browser tabs before nested tabs
+
+The browser surface should not become another all-in-one workspace manager. For
+browser-facing project, session, or task lanes, prefer normal browser tabs and
+stable URLs over an internal tab strip or dashboard hierarchy. The extension
+overlay remains the command surface; gateway-served browser pages stay focused
+inspection/control surfaces. Local coding work can still be run directly from a
+terminal when that is the clearer control path.
+
 ## Why route even when the browser could call directly
 
 Durability (the engine survives tab/extension lifecycle), one place for secrets,

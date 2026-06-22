@@ -13,6 +13,7 @@
 
 - [ ] 3.1 Engine serves a per-user declarative UI spec (tier A) the extension renderer interprets; changes live-refresh via the existing `storage.onChanged` pattern.
 - [ ] 3.2 Bound the sandboxed paths: define where tier B (sandboxed iframe) and tier C (`userScripts`, explicit per-extension opt-in) apply and how generated code stays inspectable.
+- [x] 3.3 Keep browser-facing work lanes browser-native: gateway console projects deep-link by URL and expose an explicit browser-tab open path instead of adding nested workspace tabs.
 
 ## 4. Verify
 
