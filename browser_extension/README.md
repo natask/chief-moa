@@ -60,14 +60,17 @@ is separate from the quiet flow on purpose:
    live gateway with that token, and reports whether a daily browser profile has
    agee loaded from this repo path.
 3. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the [extension/](extension/) folder. If agee is already listed, click its reload icon and confirm the path shown in the card is this folder. It stays installed across browser restarts.
-4. Open any low-risk page (or run `npm run dev -- --no-browser` and open `http://localhost:7777/fixtures/demo.html`).
-5. Press **Cmd+K** (Mac) / **Ctrl+K**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the agee card or remove the old copy and load [extension/](extension/) again.
+4. Open the agee toolbar icon → Options → **Grant microphone** once if you plan to use voice. That grant belongs to the extension, not to the websites where the overlay appears.
+5. Open any low-risk page (or run `npm run dev -- --no-browser` and open `http://localhost:7777/fixtures/demo.html`).
+6. Press **Cmd+K** (Mac) / **Ctrl+K**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the agee card or remove the old copy and load [extension/](extension/) again.
 
 The Moa mark floats on the page when idle, glows while it works, and rings
 (a short chime plus a ring pulse) when a turn finishes, errors, or needs you.
 Typed replies replace the typed intent in the same field. The extension does not
 render visible chat history; session history stays on the gateway and can be
 queried by asking Moa.
+Voice uses an extension offscreen document for microphone capture, so websites
+do not need per-site microphone approval for Aggie turns.
 To override the baked defaults, use the **agee** toolbar icon → Options.
 
 Only while developing the extension package, optionally open
@@ -133,7 +136,7 @@ missing or stale.
 
 `verify` checks that the MV3 manifest parses, required files exist, required
 permissions/commands are present, and the extension/harness JavaScript has valid
-syntax.
+syntax. It also fails if microphone capture moves back into the content script.
 
 `smoke` launches headless Chrome for Testing with a throwaway profile, loads the
 real [extension/](extension/), and confirms the agee background **service worker**

@@ -8,6 +8,8 @@ const requiredFiles = [
   "extension/config.js",
   "extension/content.js",
   "extension/tweaks.js",
+  "extension/offscreen.html",
+  "extension/offscreen.js",
   "extension/options.html",
   "extension/options.js",
   "extension/settings-intent.js",
@@ -37,7 +39,10 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
-const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms"];
+const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
+const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
+const optionsSource = readFileSync("extension/options.js", "utf8");
+const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen"];
 const requiredHostPermissions = ["http://*/*", "https://*/*"];
 
 if (manifest.manifest_version !== 3) {
@@ -73,6 +78,26 @@ if (backgroundSource.includes('import "./dev-reload.js"')) {
 
 if (/new\s+WebSocket\s*\(/.test(contentSource)) {
   throw new Error("content scripts must not open gateway WebSockets; background.js owns voice transport to avoid HTTPS mixed-content blocking");
+}
+
+if (/mediaDevices\.getUserMedia/.test(contentSource)) {
+  throw new Error("content scripts must not request microphone permission; offscreen.js owns extension-origin mic capture");
+}
+
+if (!/chrome\.offscreen\.createDocument/.test(backgroundSource) || !/reasons:\s*\[\s*"USER_MEDIA"\s*\]/.test(backgroundSource)) {
+  throw new Error("background.js must create an offscreen USER_MEDIA document for extension-owned microphone capture");
+}
+
+if (!/cmd:\s*"offscreenVoiceCaptureStart"/.test(backgroundSource) || !/cmd === "offscreenVoiceAudio"/.test(backgroundSource)) {
+  throw new Error("background.js must start offscreen voice capture and receive PCM chunks from it");
+}
+
+if (!/navigator\.mediaDevices\.getUserMedia/.test(offscreenSource) || !/offscreenVoiceAudio/.test(offscreenSource)) {
+  throw new Error("offscreen.js must own microphone capture and forward PCM chunks to background.js");
+}
+
+if (!/Grant microphone/.test(optionsHtmlSource) || !/navigator\.mediaDevices\.getUserMedia/.test(optionsSource)) {
+  throw new Error("options page must expose a one-time extension microphone grant path");
 }
 
 if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
@@ -162,6 +187,7 @@ for (const file of [
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content.js",
+  "extension/offscreen.js",
   "extension/tweaks.js",
   "extension/options.js",
   "extension/settings-intent.js",

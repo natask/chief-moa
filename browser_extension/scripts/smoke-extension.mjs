@@ -137,6 +137,7 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
 function assertVoicePlaybackStopContract() {
   const source = readFileSync(join(extensionPath, "content.js"), "utf8");
   const background = readFileSync(join(extensionPath, "background.js"), "utf8");
+  const offscreen = readFileSync(join(extensionPath, "offscreen.js"), "utf8");
   if (!/assistantPlaybackSources\s*=\s*new Set\(\)/.test(source)) {
     throw new Error("content.js must keep a global assistant PCM playback source registry");
   }
@@ -146,8 +147,17 @@ function assertVoicePlaybackStopContract() {
   if (!/assistantPlaybackSources\.add\(source\)/.test(source)) {
     throw new Error("assistant PCM buffer sources must register with the global playback stop path");
   }
-  if (!/if \(liveVoice !== state \|\| !state\.sessionReady \|\| state\.committed\) return;/.test(source)) {
-    throw new Error("the active microphone pump must stop when a different live voice turn becomes current");
+  if (/mediaDevices\.getUserMedia/.test(source)) {
+    throw new Error("content.js must not request page-owned microphone access");
+  }
+  if (!/capture:\s*"extension-offscreen"/.test(source)) {
+    throw new Error("content.js must request extension-owned offscreen microphone capture");
+  }
+  if (!/chrome\.offscreen\.createDocument/.test(background) || !/USER_MEDIA/.test(background)) {
+    throw new Error("background.js must create an offscreen USER_MEDIA document for voice capture");
+  }
+  if (!/navigator\.mediaDevices\.getUserMedia/.test(offscreen) || !/offscreenVoiceAudio/.test(offscreen)) {
+    throw new Error("offscreen.js must own getUserMedia and forward PCM audio to background.js");
   }
   if (!/liveVoiceBySessionId\s*=\s*new Map\(\)/.test(source)) {
     throw new Error("content.js must keep active voice sessions addressable by voiceSessionId");

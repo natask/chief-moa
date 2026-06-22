@@ -65,7 +65,14 @@ text-to-speech as the production voice path.
 
 #### Scenario: Browser microphone audio reaches the gateway voice provider
 - **WHEN** the user starts a browser voice turn
-- **THEN** the extension captures microphone PCM16 audio and streams it to
+- **THEN** the extension captures microphone PCM16 audio from an extension-owned
+  offscreen document and streams it to
   `/v1/voice/sessions`
 - **AND** assistant audio rendered in the browser originates from the gateway
   streaming voice response
+
+#### Scenario: Website does not own the microphone grant
+- **WHEN** the overlay starts voice on a website
+- **THEN** the page content script does not call `getUserMedia`
+- **AND** any microphone approval belongs to the extension origin, not the
+  current website

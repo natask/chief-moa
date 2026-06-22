@@ -26,7 +26,9 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const tasks = new Map();
 const voiceSessions = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
+const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
 let activeAgentTabId = null;
+let creatingOffscreenVoiceDocument = null;
 
 async function getConfig() {
   return getEffectiveGatewayConfig();
@@ -723,6 +725,72 @@ function voiceSessionId() {
   return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+async function hasOffscreenVoiceDocument() {
+  if (!chrome?.offscreen) return false;
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_VOICE_DOCUMENT);
+  if (chrome.runtime.getContexts) {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+      documentUrls: [offscreenUrl],
+    });
+    return contexts.length > 0;
+  }
+  const clients = await self.clients.matchAll();
+  return clients.some((client) => client.url === offscreenUrl);
+}
+
+async function ensureOffscreenVoiceDocument() {
+  if (!chrome?.offscreen?.createDocument) {
+    throw new Error("Extension microphone capture is not supported in this Chrome build.");
+  }
+  if (await hasOffscreenVoiceDocument()) return;
+  if (!creatingOffscreenVoiceDocument) {
+    creatingOffscreenVoiceDocument = chrome.offscreen.createDocument({
+      url: OFFSCREEN_VOICE_DOCUMENT,
+      reasons: ["USER_MEDIA"],
+      justification: "Aggie captures microphone audio from the extension origin and streams it to the configured gateway.",
+    }).finally(() => {
+      creatingOffscreenVoiceDocument = null;
+    });
+  }
+  await creatingOffscreenVoiceDocument;
+}
+
+function extensionMicApprovalMessage(error) {
+  const detail = String(error?.message || error || "").trim();
+  const suffix = detail ? ` (${detail})` : "";
+  return `Aggie needs microphone access for the extension. Open Aggie settings and click "Grant microphone" once.${suffix}`;
+}
+
+async function startOffscreenVoiceCapture(id) {
+  await ensureOffscreenVoiceDocument();
+  const response = await chrome.runtime.sendMessage({
+    cmd: "offscreenVoiceCaptureStart",
+    voiceSessionId: id,
+  });
+  if (!response?.ok) throw new Error(response?.error || "extension microphone capture did not start");
+}
+
+async function stopOffscreenVoiceCapture(id) {
+  if (!chrome?.offscreen) return;
+  if (!(await hasOffscreenVoiceDocument())) return;
+  await chrome.runtime
+    .sendMessage({
+      cmd: "offscreenVoiceCaptureStop",
+      voiceSessionId: id || null,
+    })
+    .catch(() => {});
+}
+
+function handleOffscreenVoiceError(id, error) {
+  const session = voiceSessions.get(id);
+  if (!session) return;
+  deliverVoiceSessionEvent(session, {
+    event: { type: "error", message: extensionMicApprovalMessage(error) },
+  });
+  closeVoiceSession(id, "microphone capture failed");
+}
+
 function claimActiveAgentTab(tabId, reason = "another page became active") {
   if (tabId == null) return;
   const revokedTabs = new Map();
@@ -758,7 +826,7 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
   return tabIds;
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture } = {}) {
   const cfg = await getConfig();
   const ticket = await createVoiceSessionTicket(cfg);
   if (!ticket?.ws_url) throw new Error("gateway did not return a voice session WebSocket URL");
@@ -767,7 +835,16 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap }
   return new Promise((resolve, reject) => {
     let settled = false;
     const ws = new WebSocket(ticket.ws_url);
-    const session = { id, tabId, ws, opened: false, attached: false, pendingEvents: [] };
+    const session = {
+      id,
+      tabId,
+      ws,
+      opened: false,
+      attached: false,
+      pendingEvents: [],
+      capture: capture || "content-script",
+      captureStarted: false,
+    };
     voiceSessions.set(id, session);
     ws.binaryType = "arraybuffer";
 
@@ -887,6 +964,10 @@ async function forwardVoiceSessionEvent(session, event) {
   try {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
+  if (parsed?.type === "session_ready" && session.capture === "extension-offscreen" && !session.captureStarted) {
+    session.captureStarted = true;
+    startOffscreenVoiceCapture(session.id).catch((error) => handleOffscreenVoiceError(session.id, error));
+  }
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
   });
@@ -899,9 +980,12 @@ function sendVoiceSessionAudio(id, audio) {
   return { ok: true };
 }
 
-function sendVoiceSessionControl(id, message) {
+async function sendVoiceSessionControl(id, message) {
   const session = voiceSessions.get(id);
   if (!session?.ws || session.ws.readyState !== WebSocket.OPEN) return { ok: false, error: "voice session is not open" };
+  if (message?.type === "commit_turn" || message?.type === "cancel_turn") {
+    await stopOffscreenVoiceCapture(id);
+  }
   session.ws.send(JSON.stringify(message || {}));
   return { ok: true };
 }
@@ -912,6 +996,7 @@ function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   session.closedReason = reason;
   session.revoked = revoked === true;
   voiceSessions.delete(id);
+  stopOffscreenVoiceCapture(id).catch(() => {});
   try {
     session.ws.close(1000, reason);
   } catch {}
@@ -1467,6 +1552,15 @@ async function captureAmbientFrame() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.cmd === "offscreenVoiceAudio") {
+    sendResponse(sendVoiceSessionAudio(msg.voiceSessionId, msg.audio));
+    return true;
+  }
+  if (msg.cmd === "offscreenVoiceError") {
+    handleOffscreenVoiceError(msg.voiceSessionId, msg.error);
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.cmd === "voiceSessionStart" && sender.tab) {
     const tabId = sender.tab.id;
     claimActiveAgentTab(tabId, "another page voice session started");
@@ -1474,6 +1568,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       cueId: msg.cueId,
       turnId: msg.turnId,
       assistantOverlap: msg.assistantOverlap === true,
+      capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
     })
       .then((session) => sendResponse({ ok: true, ...session }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
@@ -1488,7 +1583,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.cmd === "voiceSessionControl") {
-    sendResponse(sendVoiceSessionControl(msg.voiceSessionId, msg.message));
+    sendVoiceSessionControl(msg.voiceSessionId, msg.message)
+      .then((response) => sendResponse(response))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
   if (msg.cmd === "voiceSessionClose") {

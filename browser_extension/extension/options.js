@@ -4,6 +4,7 @@ import { parseSettingsIntent, PROFILE_FIELDS } from "./settings-intent.js";
 const gatewayUrlEl = document.getElementById("gatewayUrl");
 const gatewayTokenEl = document.getElementById("gatewayToken");
 const statusEl = document.getElementById("status");
+const micStatusEl = document.getElementById("micStatus");
 
 // Runtime agent profile surface.
 const profileStateEl = document.getElementById("profileState");
@@ -40,6 +41,11 @@ function flash(text, ok = true) {
 function flashProfile(text, ok = true) {
   profileStatusEl.textContent = text;
   profileStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
+}
+
+function flashMic(text, ok = true) {
+  micStatusEl.textContent = text;
+  micStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
 }
 
 function gatewayConfig() {
@@ -108,6 +114,51 @@ document.getElementById("testGateway").addEventListener("click", async () => {
     }
   } catch (err) {
     flash(`Gateway reachable; auth check failed: ${String(err.message || err)}`, false);
+  }
+});
+
+async function microphonePermissionState() {
+  if (!navigator.permissions?.query) return "unknown";
+  try {
+    const result = await navigator.permissions.query({ name: "microphone" });
+    return result.state || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+document.getElementById("grantMic").addEventListener("click", async () => {
+  flashMic("Requesting…");
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    flashMic("Microphone granted to Aggie ✓");
+  } catch (err) {
+    flashMic(`Microphone blocked: ${String(err.message || err)}`, false);
+  } finally {
+    for (const track of stream?.getTracks?.() || []) {
+      try {
+        track.stop();
+      } catch {}
+    }
+  }
+});
+
+document.getElementById("checkMic").addEventListener("click", async () => {
+  const state = await microphonePermissionState();
+  if (state === "granted") {
+    flashMic("Microphone already granted ✓");
+  } else if (state === "denied") {
+    flashMic("Microphone blocked. Change site settings for this extension.", false);
+  } else {
+    flashMic("Microphone not granted yet.");
   }
 });
 

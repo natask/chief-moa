@@ -119,8 +119,11 @@ Browser overlay or command bar
 Browser voice uses the same gateway streaming voice contract as Android, adapted
 for browser WebSocket authentication. The extension authenticates to the gateway
 over normal HTTP with its stored gateway token, receives a one-use
-`/v1/voice/sessions` ticket, streams PCM16 audio to the gateway, and plays
-assistant PCM audio returned by the selected gateway provider. Each spoken
+`/v1/voice/sessions` ticket, captures microphone audio from an extension-owned
+offscreen document, streams PCM16 audio to the gateway, and plays assistant PCM
+audio returned by the selected gateway provider. The page overlay is only the
+control surface; websites must not receive microphone permission for Moa voice.
+Each spoken
 browser utterance gets its own turn id under the stable browser session id. When
 the user enables background assistant speech for the current browser session,
 the extension preserves older voice-session event handling and queued playback

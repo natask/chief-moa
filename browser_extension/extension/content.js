@@ -92,16 +92,6 @@
   ];
   const PROFILE_VOICE_NAMES = ["puck", "charon", "kore", "fenrir", "aoede", "leda", "orus", "zephyr"];
 
-  function bytesToBase64(buffer) {
-    const bytes = new Uint8Array(buffer || 0);
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-    }
-    return btoa(binary);
-  }
-
   function base64ToBuffer(value) {
     const binary = atob(String(value || ""));
     const bytes = new Uint8Array(binary.length);
@@ -355,7 +345,13 @@
   // Show the log whenever it holds anything (cards or confirm rows), so streamed
   // answers stack just above the composer.
   function syncLogVisibility() {
-    if (root && log) root.classList.toggle("agee-has-log", log.children.length > 0);
+    if (!root || !log) return;
+    const hasVisibleWork = [...log.children].some((child) => {
+      if (child.classList.contains("agee-confirm")) return true;
+      if (!child.classList.contains("agee-cue")) return false;
+      return !child.classList.contains("agee-cue-done") && !child.classList.contains("agee-cue-error");
+    });
+    root.classList.toggle("agee-has-log", hasVisibleWork);
   }
 
   function setInputText(text, { select = false } = {}) {
@@ -817,11 +813,6 @@
       cueId,
       turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       voiceSessionId: null,
-      stream: null,
-      source: null,
-      processor: null,
-      sampleRate: 0,
-      resample: { offset: 0 },
       sessionReady: false,
       committed: false,
       playbackTime: 0,
@@ -835,24 +826,15 @@
     liveVoice = state;
 
     try {
-      state.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-
       primeAudio();
       if (!audioCtx) throw new Error("Web Audio is not available in this browser.");
-      state.sampleRate = audioCtx.sampleRate;
 
       const session = await chrome.runtime.sendMessage({
         cmd: "voiceSessionStart",
         cueId,
         turnId: state.turnId,
         assistantOverlap: assistantSpeechOverlap === true,
+        capture: "extension-offscreen",
       });
       if (!session?.ok || !session.voiceSessionId) {
         throw new Error(session?.error || "gateway did not open a voice session");
@@ -861,52 +843,6 @@
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
     }
-  }
-
-  function startMicrophonePump(state) {
-    if (!state.stream || !audioCtx || state.processor) return;
-    const source = audioCtx.createMediaStreamSource(state.stream);
-    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-    processor.onaudioprocess = (event) => {
-      event.outputBuffer.getChannelData(0).fill(0);
-      if (liveVoice !== state || !state.sessionReady || state.committed) return;
-      if (!state.voiceSessionId) return;
-      const inputSamples = event.inputBuffer.getChannelData(0);
-      const pcm = resampleToPcm16(inputSamples, state.sampleRate || audioCtx.sampleRate, 16000, state.resample);
-      if (pcm.byteLength > 0) {
-        chrome.runtime.sendMessage({
-          cmd: "voiceSessionAudio",
-          voiceSessionId: state.voiceSessionId,
-          audio: bytesToBase64(pcm),
-        }).catch(() => {});
-      }
-    };
-    source.connect(processor);
-    processor.connect(audioCtx.destination);
-    state.source = source;
-    state.processor = processor;
-  }
-
-  function resampleToPcm16(input, inputRate, outputRate, resample) {
-    if (!input?.length || !inputRate || inputRate <= 0) return new ArrayBuffer(0);
-    const ratio = inputRate / outputRate;
-    const samples = [];
-    let index = Math.max(0, Number(resample.offset || 0));
-    while (index < input.length) {
-      const left = Math.floor(index);
-      const right = Math.min(left + 1, input.length - 1);
-      const frac = index - left;
-      const value = input[left] + (input[right] - input[left]) * frac;
-      samples.push(Math.max(-1, Math.min(1, value)));
-      index += ratio;
-    }
-    resample.offset = index - input.length;
-    const pcm = new Int16Array(samples.length);
-    for (let i = 0; i < samples.length; i += 1) {
-      const sample = samples[i];
-      pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-    }
-    return pcm.buffer;
   }
 
   function handleLiveVoiceMessage(state, payload) {
@@ -940,7 +876,6 @@
 
     if (msg.type === "session_ready") {
       state.sessionReady = true;
-      if (isCurrentTurn) startMicrophonePump(state);
       updateCue(state.cueId, "", "running");
       return;
     }
@@ -1145,20 +1080,10 @@
   }
 
   function stopLiveCapture(state) {
-    try {
-      state.processor?.disconnect();
-    } catch {}
-    try {
-      state.source?.disconnect();
-    } catch {}
-    for (const track of state.stream?.getTracks?.() || []) {
-      try {
-        track.stop();
-      } catch {}
-    }
-    state.processor = null;
-    state.source = null;
-    state.stream = null;
+    // Microphone capture is extension-owned in offscreen.js. Content script
+    // stop paths still call this helper so older lifecycle code stays simple,
+    // but the real capture teardown happens in background.js when the voice
+    // session is committed, canceled, or closed.
   }
 
   function stopLivePlayback(state) {
@@ -1673,13 +1598,17 @@
         return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");
+        setInputText(msg.summary || "Done.");
+        setSurfacePhase("result");
         reactLauncher("done"); // hop + ring + happy chime
-        // Text-command replies render in the current card only. Voice replies are
-        // streamed through the Live WebSocket path, not browser text-to-speech.
+        // Text-command replies replace the field. Voice replies are streamed
+        // through the Live WebSocket path, not browser text-to-speech.
         if (agentState === "thinking") setAgentState("idle");
         return false;
       case "error":
         showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible
+        setInputText(visibleErrorMessage(msg.text));
+        setSurfacePhase("error");
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
         return false;
       case "agentRevoked":

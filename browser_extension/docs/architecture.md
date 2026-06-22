@@ -39,12 +39,15 @@ Responsibilities:
 
 - Render the command overlay.
 - Render the on-page invocation surface.
-- Accept typed and browser-native voice input.
+- Accept typed input and control browser voice state.
 - Collect visible interactable page elements.
 - Execute constrained page actions.
 - Show progress, completion, and errors.
 
-The content script is the only component that touches the page DOM.
+The content script is the only component that touches the page DOM. It must not
+request microphone access from the page origin; browser voice capture belongs to
+the extension offscreen document so Chrome grants the microphone to the
+`chrome-extension://` origin rather than to each website.
 
 Normal pages receive the content script after user invocation through the Manifest `commands` shortcut and `chrome.scripting`. The localhost demo page is the only auto-injected content-script match so automated smoke tests can run without broad all-sites access.
 
@@ -62,10 +65,32 @@ Responsibilities:
   configured gateway.
 - Validate and translate gateway-proposed actions into content-script actions.
 - Handle the extension keyboard command.
+- Own the gateway voice WebSocket proxy and coordinate extension-owned
+  offscreen microphone capture.
 
 The background worker does not hold provider API keys and does not call model
 vendors directly. It holds only the engine URL/session token needed to reach the
 gateway.
+
+### Offscreen Voice Document
+
+Files:
+
+- `extension/offscreen.html`
+- `extension/offscreen.js`
+
+Responsibilities:
+
+- Request microphone audio from the extension origin with `getUserMedia`.
+- Convert microphone samples to PCM16 at 16 kHz.
+- Send PCM chunks back to the background service worker for the existing
+  gateway voice WebSocket.
+- Stop capture when the current voice session is committed, canceled, revoked,
+  or closed.
+
+The offscreen document exists only to keep microphone permission extension-owned.
+If Chrome has not granted microphone access to the extension yet, the user grants
+it from the options page once.
 
 ### Options Page
 
@@ -77,6 +102,7 @@ Files:
 Responsibilities:
 
 - Save the user's gateway URL/token locally.
+- Seed/check the one-time extension microphone permission.
 - Read and write gateway-owned runtime profile fields such as system prompt,
   model selection, temperature, language, and voice settings.
 - Explain that provider credentials live on the gateway, not in the browser.
