@@ -35,6 +35,7 @@ const AGENT_RUNS_DIR = path.join(DATA_DIR, "agent-runs");
 const BROWSER_TASKS_DIR = path.join(DATA_DIR, "browser-tasks");
 const VOICE_TURNS_DIR = path.join(DATA_DIR, "voice-turns");
 const VOICE_PROVIDER_EVENTS_FILE = path.join(DATA_DIR, "voice-provider-events.jsonl");
+const BROKER_EVENTS_DIR = path.join(DATA_DIR, "broker-events");
 // Ambient screen frames for the continuous (rung-3) interaction mode: the client
 // samples the screen on an interval and posts each frame here. Intake only — it
 // stores frames per session so a later merge/feedback step can read the stream.
@@ -101,6 +102,7 @@ fs.mkdirSync(CONVERSATIONS_DIR, { recursive: true });
 fs.mkdirSync(AGENT_RUNS_DIR, { recursive: true });
 fs.mkdirSync(BROWSER_TASKS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_TURNS_DIR, { recursive: true });
+fs.mkdirSync(BROKER_EVENTS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
 
@@ -650,6 +652,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/broker/messages") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleBrokerMessage(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/chat") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -847,6 +858,254 @@ async function handleChat(request, response) {
     profile_version: profileVersion,
     text,
   });
+}
+
+async function handleBrokerMessage(request, response) {
+  const body = await readJsonBody(request);
+  const text = brokerMessageText(body);
+  if (!text) {
+    sendJson(response, 400, { error: "text or transcript is required" });
+    return;
+  }
+  const event = buildBrokerEvent(body, text);
+  const decisions = brokerRouteDecisions(event, body);
+  const stored = {
+    ...event,
+    decisions,
+    updated_at: new Date().toISOString(),
+  };
+  writeBrokerEvent(stored);
+  sendJson(response, 202, {
+    event: stored,
+    decisions,
+  });
+}
+
+function brokerMessageText(body) {
+  return truncate(String(
+    body.text ||
+    body.transcript ||
+    body.message ||
+    body.prompt ||
+    body.input ||
+    "",
+  ).trim(), 16000);
+}
+
+function buildBrokerEvent(body, text) {
+  const now = new Date().toISOString();
+  const sessionId = body.session_id || body.conversation_id
+    ? sanitizeOptionalId(body.session_id || body.conversation_id, "")
+    : "";
+  return {
+    id: sanitizeOptionalId(body.event_id, randomId("broker")),
+    kind: "broker_event",
+    source: String(body.source || body.client?.source || "unknown").slice(0, 120),
+    text,
+    session_id: sessionId,
+    conversation_id: body.conversation_id ? sanitizeOptionalId(body.conversation_id, sessionId || "") : sessionId,
+    branch_id: body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "",
+    project_id: body.project_id ? sanitizeOptionalId(body.project_id, "") : "",
+    subproject_id: body.subproject_id ? sanitizeOptionalId(body.subproject_id, "") : "",
+    profile_version: agentProfile.currentVersion(),
+    evidence_refs: Array.isArray(body.evidence_refs) ? body.evidence_refs.slice(0, 20) : [],
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+function brokerRouteDecisions(event, body = {}) {
+  const decisions = [];
+  const text = String(event.text || "");
+  const lower = normalizeSpeech(text);
+  const explicitSessionId = event.session_id;
+  const explicitProjectId = event.project_id;
+  const explicitRunId = body.agent_run_id ? sanitizeOptionalId(body.agent_run_id, "") : "";
+
+  const sessions = sessionSummaryPayload(50).sessions;
+  for (const session of sessions) {
+    const score = explicitSessionId && session.session_id === explicitSessionId
+      ? 0.98
+      : textOverlapScore(text, `${session.latest_transcript || ""} ${session.session_id || ""} ${session.branch_id || ""}`);
+    if (score >= 0.18) {
+      decisions.push(brokerDecision({
+        targetType: "session",
+        targetId: session.session_id,
+        action: "continue_session",
+        confidence: score,
+        reason: explicitSessionId && session.session_id === explicitSessionId
+          ? "message carried this session_id"
+          : "message overlaps recent session transcript",
+        contextRefs: [{ type: "session", id: session.session_id, branch_id: session.branch_id }],
+        cancellation: "none",
+      }));
+    }
+  }
+
+  for (const project of listProjects()) {
+    const score = explicitProjectId && project.id === explicitProjectId
+      ? 0.98
+      : textOverlapScore(text, `${project.name || ""} ${project.id || ""}`);
+    if (score >= 0.2) {
+      decisions.push(brokerDecision({
+        targetType: "project",
+        targetId: project.id,
+        action: "attach_project_context",
+        confidence: score,
+        reason: explicitProjectId && project.id === explicitProjectId
+          ? "message carried this project_id"
+          : "message overlaps a known project name",
+        contextRefs: [{ type: "project", id: project.id }],
+        cancellation: "none",
+      }));
+    }
+  }
+
+  const activeOrRecentRuns = listAllAgentRuns()
+    .map(summarizeAgentRun)
+    .filter((run) => run.active || !isTerminalRunStatus(run.status))
+    .slice(0, 25);
+  for (const run of activeOrRecentRuns) {
+    const explicit = explicitRunId && run.id === explicitRunId;
+    const fanout = body.fanout_all_active === true || /\b(?:all|every)\b.*\b(?:active|running)\b.*\b(?:agent|thread|run)s?\b/.test(lower);
+    const score = explicit
+      ? 0.99
+      : fanout
+        ? 0.72
+        : textOverlapScore(text, `${run.prompt_preview || ""} ${run.output_preview || ""} ${run.id || ""}`);
+    if (score >= 0.16) {
+      decisions.push(brokerDecision({
+        targetType: "agent_run",
+        targetId: run.id,
+        action: "attach_as_evidence",
+        confidence: score,
+        reason: explicit
+          ? "message carried this agent_run_id"
+          : fanout
+            ? "message asked to reach active/running agents"
+            : "message overlaps active run context",
+        contextRefs: [{ type: "agent_run", id: run.id }],
+        cancellation: "none",
+      }));
+    }
+  }
+
+  const skill = brokerSkillRecommendation(lower);
+  if (skill) {
+    decisions.push(brokerDecision({
+      targetType: "skill",
+      targetId: skill.id,
+      action: "invoke_skill_workflow",
+      confidence: skill.confidence,
+      reason: skill.reason,
+      contextRefs: [{ type: "broker_event", id: event.id }],
+      cancellation: "none",
+    }));
+  }
+
+  if (decisions.length === 0 || brokerLooksLikeNewWork(lower)) {
+    decisions.push(brokerDecision({
+      targetType: "session",
+      targetId: event.session_id || randomId("session"),
+      action: "create_new_fork",
+      confidence: decisions.length === 0 ? 0.62 : 0.48,
+      reason: decisions.length === 0
+        ? "no strong existing session/project/run match"
+        : "message appears to start a distinct line of work",
+      contextRefs: [{ type: "broker_event", id: event.id }],
+      cancellation: "none",
+    }));
+  }
+
+  return decisions
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 12);
+}
+
+function brokerDecision({ targetType, targetId, action, confidence, reason, contextRefs, cancellation }) {
+  return {
+    id: randomId("route"),
+    target_type: targetType,
+    target_id: String(targetId || ""),
+    action,
+    confidence: Math.max(0, Math.min(Number(confidence || 0), 1)),
+    reason,
+    context_refs: contextRefs || [],
+    cancellation_behavior: cancellation || "none",
+    created_at: new Date().toISOString(),
+  };
+}
+
+function brokerSkillRecommendation(lower) {
+  if (/\b(?:research|search online|look up|landscape|compare|comparison|report|explore|find the best|most optimal|optimal path)\b/.test(lower)) {
+    return {
+      id: "landscape-research",
+      confidence: 0.82,
+      reason: "message asks for research/search/comparison/report workflow",
+    };
+  }
+  if (/\b(?:fix|build|implement|code|bug|test|deploy|commit)\b/.test(lower)) {
+    return {
+      id: "coding",
+      confidence: 0.72,
+      reason: "message asks for implementation or verification work",
+    };
+  }
+  if (/\b(?:write|rewrite|edit|draft|copy|essay|post|email)\b/.test(lower)) {
+    return {
+      id: "writing",
+      confidence: 0.68,
+      reason: "message asks for writing or editing workflow",
+    };
+  }
+  return null;
+}
+
+function brokerLooksLikeNewWork(lower) {
+  return /\b(?:start|new|another|different|fork|separate|also|besides)\b/.test(lower);
+}
+
+function textOverlapScore(a, b) {
+  const left = meaningfulTokens(a);
+  const right = meaningfulTokens(b);
+  if (left.length === 0 || right.length === 0) return 0;
+  const rightSet = new Set(right);
+  let hits = 0;
+  for (const token of new Set(left)) {
+    if (rightSet.has(token)) hits += 1;
+  }
+  return hits / Math.max(4, Math.min(new Set(left).size, rightSet.size));
+}
+
+function meaningfulTokens(text) {
+  const stop = new Set(["the", "and", "that", "this", "with", "for", "you", "have", "from", "into", "should", "could", "would", "message", "messages"]);
+  return normalizeSpeech(text)
+    .split(/[^a-z0-9_-]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !stop.has(token))
+    .slice(0, 120);
+}
+
+function writeBrokerEvent(event) {
+  const filePath = path.join(BROKER_EVENTS_DIR, `${sanitizeOptionalId(event.id, randomId("broker"))}.json`);
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(event, null, 2));
+  fs.renameSync(tmpPath, filePath);
+  fs.appendFileSync(path.join(DATA_DIR, "broker-events.jsonl"), JSON.stringify({
+    ts: event.updated_at || event.created_at || new Date().toISOString(),
+    id: event.id,
+    source: event.source,
+    session_id: event.session_id || "",
+    project_id: event.project_id || "",
+    text: truncate(event.text || "", 500),
+    decisions: (event.decisions || []).map((decision) => ({
+      target_type: decision.target_type,
+      target_id: decision.target_id,
+      action: decision.action,
+      confidence: decision.confidence,
+      reason: decision.reason,
+    })),
+  }) + "\n");
 }
 
 function agentProfilePayload(extra = {}) {

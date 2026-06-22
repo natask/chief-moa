@@ -170,6 +170,24 @@ User asks for build/fix/change/test work
 Voice-started agent work should be async by default. The phone should not block
 on a long-running harness.
 
+### Message Broker
+
+```text
+voice or text message
+  -> gateway stores one canonical broker_event
+  -> broker evaluates active sessions, projects, subprojects, runs, and skills
+  -> broker emits route decisions with reasons and cancellation behavior
+  -> downstream chat, voice, skill workflows, or agent runs reference the event
+```
+
+The broker is the durable routing layer before provider/model execution. A user
+message may continue an existing session, attach evidence to active runs, create
+a new fork, invoke a skill workflow, or take the direct-answer path. It does not
+cancel active work merely because a new message arrived. Skill selection is an
+explicit route decision: research-heavy messages can target a research workflow,
+implementation requests can target coding, and simple messages can stay on the
+direct-answer path.
+
 Every user turn is a possible fork. A new spoken or typed message can create a
 new `agent_run` without canceling existing active runs, and subsequent user
 turns can be attached as non-interrupting evidence to relevant active runs. The
@@ -230,6 +248,10 @@ they cannot directly execute phone actions.
 - `session`: a coherent mobile work session.
 - `branch`: a thread of work inside a session, initially `default`.
 - `turn`: one voice or chat input with optional screen context.
+- `broker_event`: one inbound user message stored before routing to sessions,
+  skills, chat, voice, or agent runs.
+- `route_decision`: an inspectable broker decision with target, action,
+  confidence, reason, context refs, and cancellation behavior.
 - `agent_run`: a gateway-created execution-machine job with lifecycle events.
 - `agent_fork`: a turn-linked async `agent_run` that can continue while later
   user turns create or update other forks.
