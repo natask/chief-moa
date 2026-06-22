@@ -103,11 +103,13 @@ npm run package
 npm run deploy:browser
 ```
 
-`deploy:browser` briefly serves the same dev-reload endpoint used by the manual
-bridge. If the unpacked extension has auto-reload enabled from `dev.html`, your
-daily browser reloads the extension from this checkout. If auto-reload has not
-been enabled, the package is still produced under `dist/`, but the browser needs
-the one-time `dev.html` toggle above or a manual `chrome://extensions` reload.
+`deploy:browser` sends a local dev-reload signal. If `npm run dev` is already
+serving `localhost:7777`, deploy asks that running server to bump
+`/__agee-dev/version`; otherwise it briefly serves the endpoint itself. If the
+unpacked extension has auto-reload enabled from `dev.html`, your daily browser
+reloads the extension from this checkout. If auto-reload has not been enabled,
+the package is still produced under `dist/`, but the browser needs the one-time
+`dev.html` toggle above or a manual `chrome://extensions` reload.
 
 ## Verify it
 

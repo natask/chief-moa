@@ -184,6 +184,15 @@ for (const file of [
 
 const { parseSettingsIntent } = await import("../extension/settings-intent.js");
 const { parseBrowserTaskIntent } = await import("../extension/browser-task-intent.js");
+const devExtensionSource = readFileSync("scripts/dev-extension.mjs", "utf8");
+const pokeDevReloadSource = readFileSync("scripts/poke-dev-reload.mjs", "utf8");
+
+if (!/\/__agee-dev\/bump/.test(devExtensionSource) || !/function bumpVersion/.test(devExtensionSource)) {
+  throw new Error("dev-extension.mjs must expose /__agee-dev/bump so deploy can force a reload version");
+}
+if (!/\/__agee-dev\/bump/.test(pokeDevReloadSource) || !/bumpExistingServer/.test(pokeDevReloadSource)) {
+  throw new Error("poke-dev-reload.mjs must ask an already-running dev server to bump its reload version");
+}
 
 const setupParagraph =
   'Open chrome://extensions, find agee, click reload. If it was loaded from elsewhere, remove it and Load unpacked from software/browser_extension/extension/.\n' +

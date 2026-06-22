@@ -35,6 +35,12 @@ const server = createServer((req, res) => {
     sendJson(res, { version, changedAt });
     return;
   }
+  if (url.pathname === "/__agee-dev/bump") {
+    const source = url.searchParams.get("source") || "manual";
+    bumpVersion(`reload-bump:${source}`);
+    sendJson(res, { version, changedAt, source });
+    return;
+  }
 
   const pathname = url.pathname === "/" ? "/fixtures/demo.html" : url.pathname;
   const file = resolve(root, pathname.replace(/^\/+/, ""));
@@ -84,11 +90,15 @@ function watchForChanges() {
 function scheduleVersionBump(changed) {
   if (changeTimer) clearTimeout(changeTimer);
   changeTimer = setTimeout(() => {
-    version = Date.now();
-    changedAt = new Date().toISOString();
-    console.log(`[agee-dev] changed ${changed}; version=${version}`);
-    if (bridge) reloadExtension(changed);
+    bumpVersion(changed);
   }, 120);
+}
+
+function bumpVersion(reason) {
+  version = Date.now();
+  changedAt = new Date().toISOString();
+  console.log(`[agee-dev] changed ${reason}; version=${version}`);
+  if (bridge) reloadExtension(reason);
 }
 
 function injectLiveReload(html) {

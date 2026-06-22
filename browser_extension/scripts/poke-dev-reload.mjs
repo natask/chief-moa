@@ -28,7 +28,24 @@ async function checkExistingServer() {
     if (!resp.ok) return false;
     const info = await resp.json();
     console.log(`[agee-deploy] dev reload endpoint already served version ${info.version || "unknown"}.`);
-    console.log("[agee-deploy] If the unpacked extension has auto-reload enabled, it should already observe source edits.");
+    const bumped = await bumpExistingServer();
+    if (bumped) return true;
+    console.log("[agee-deploy] existing dev server does not expose /__agee-dev/bump; could not force a reload version.");
+    console.log("[agee-deploy] If the unpacked extension has auto-reload enabled, it may still observe source edits from the running dev server.");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function bumpExistingServer() {
+  try {
+    const bumpEndpoint = `http://${host}:${port}/__agee-dev/bump?source=deploy&ts=${Date.now()}`;
+    const resp = await fetch(bumpEndpoint, { method: "POST", cache: "no-store" });
+    if (!resp.ok) return false;
+    const info = await resp.json();
+    console.log(`[agee-deploy] asked existing dev server to bump reload version to ${info.version || "unknown"}.`);
+    console.log("[agee-deploy] If the unpacked extension has auto-reload enabled, it should reload from this checkout.");
     return true;
   } catch {
     return false;
