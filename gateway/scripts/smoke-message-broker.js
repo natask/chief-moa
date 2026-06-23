@@ -3,7 +3,9 @@
 
 // Smoke for the gateway message broker. It proves the broker stores messages,
 // routes explicit continuation to an existing session, recommends research
-// skill workflow when requested, and persists inspectable route decisions.
+// and QA skill workflows when requested, creates focused launcher context packs,
+// attaches evidence to active runs without cancellation, and persists
+// inspectable route decisions.
 
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -32,10 +34,15 @@ async function main() {
     await step("broker auth required", () => assertAuthRequired(baseUrl));
     const sessionId = `broker_session_${Date.now().toString(36)}`;
     await step("seed existing session", () => seedVoiceTurn(baseUrl, sessionId));
+    const activeRunId = await step("seed active run", () => seedActiveAgentRun(dataDir, sessionId));
     const continuation = await step("explicit session routes to continuation", () =>
-      assertContinuationRoute(baseUrl, sessionId));
+      assertContinuationRoute(baseUrl, dataDir, sessionId));
     await step("research message selects skill workflow and fork", () =>
-      assertResearchRoute(baseUrl));
+      assertResearchRoute(baseUrl, dataDir));
+    await step("QA message selects validation workflow", () =>
+      assertQaRoute(baseUrl, dataDir));
+    await step("broker attaches evidence to active run", () =>
+      assertActiveRunAttachment(baseUrl, dataDir, activeRunId));
     await step("broker event persisted", () =>
       assertBrokerLedger(dataDir, continuation.event.id));
 
@@ -48,7 +55,10 @@ async function main() {
         "POST /v1/broker/messages requires a token",
         "broker stores a canonical message event",
         "explicit session_id returns a continue_session decision",
+        "broker decisions create launcher context packs",
         "research/report message returns a landscape-research skill decision",
+        "test/verify message returns a QA skill decision",
+        "active run messages append broker_evidence_attached without cancellation",
         "new work message can recommend create_new_fork without cancellation",
         "broker ledger persists route reasons",
       ],
@@ -82,7 +92,49 @@ async function seedVoiceTurn(baseUrl, sessionId) {
   assert.equal(response.status, 200, JSON.stringify(response.json));
 }
 
-async function assertContinuationRoute(baseUrl, sessionId) {
+function seedActiveAgentRun(dataDir, sessionId) {
+  const now = new Date().toISOString();
+  const runId = `run_broker_active_${Date.now().toString(36)}`;
+  const runDir = path.join(dataDir, "agent-runs");
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, `${runId}.json`), JSON.stringify({
+    id: runId,
+    status: "running",
+    harness: "echo",
+    prompt: "keep working on browser extension broker routing and session context",
+    screen: null,
+    source: "message-broker-smoke",
+    conversation_id: sessionId,
+    profile_version: "profile_smoke",
+    parent_run_id: "",
+    project_id: "",
+    resume_session_id: "",
+    session_id: "",
+    working_dir: GATEWAY_DIR,
+    timeout_ms: 600000,
+    created_at: now,
+    updated_at: now,
+    started_at: now,
+    finished_at: null,
+    exit_code: null,
+    signal: null,
+    stdout: "",
+    stderr: "",
+    output: "",
+    error: "",
+  }, null, 2));
+  fs.writeFileSync(path.join(runDir, `${runId}.events.jsonl`), JSON.stringify({
+    id: "evt_seed",
+    ts: now,
+    type: "started",
+    command: "seed",
+    args: [],
+    cwd: GATEWAY_DIR,
+  }) + "\n");
+  return runId;
+}
+
+async function assertContinuationRoute(baseUrl, dataDir, sessionId) {
   const response = await postJson(`${baseUrl}/v1/broker/messages`, {
     source: "message-broker-smoke",
     session_id: sessionId,
@@ -96,10 +148,18 @@ async function assertContinuationRoute(baseUrl, sessionId) {
   assert.ok(route, `expected continue_session route, got ${JSON.stringify(response.json.decisions)}`);
   assert.equal(route.cancellation_behavior, "none");
   assert.match(route.reason, /session_id|overlaps/);
+  assert.ok(route.context_pack_id, "continue route must reference a context pack");
+  const pack = readContextPack(dataDir, route.context_pack_id);
+  assert.equal(pack.launcher_profile_id, "direct-answer");
+  assert.match(pack.inputs.session_context, /browser extension broker routing/);
+  assert.ok(
+    Array.isArray(response.json.context_packs) && response.json.context_packs.some((candidate) => candidate.id === route.context_pack_id),
+    "broker response must include the generated context pack",
+  );
   return response.json;
 }
 
-async function assertResearchRoute(baseUrl) {
+async function assertResearchRoute(baseUrl, dataDir) {
   const response = await postJson(`${baseUrl}/v1/broker/messages`, {
     source: "message-broker-smoke",
     text: "start a new research report and search online for the most optimal path",
@@ -112,11 +172,59 @@ async function assertResearchRoute(baseUrl) {
       decision.action === "invoke_skill_workflow"),
     `expected landscape-research skill route, got ${JSON.stringify(response.json.decisions)}`,
   );
+  const research = response.json.decisions.find((decision) => decision.target_id === "landscape-research");
+  assert.equal(research.launcher_profile_id, "landscape-research");
+  const pack = readContextPack(dataDir, research.context_pack_id);
+  assert.ok(pack.required_skills.includes("landscape-research"), "research pack must require the landscape-research skill");
+  assert.match(pack.launcher.prompt, /Required skills: landscape-research/);
   assert.ok(
     response.json.decisions.some((decision) => decision.action === "create_new_fork"),
     `expected create_new_fork route, got ${JSON.stringify(response.json.decisions)}`,
   );
   assert.ok(response.json.decisions.every((decision) => decision.cancellation_behavior === "none"));
+}
+
+async function assertQaRoute(baseUrl, dataDir) {
+  const response = await postJson(`${baseUrl}/v1/broker/messages`, {
+    source: "message-broker-smoke",
+    text: "verify this with smoke tests and validation before deploying",
+  });
+  assert.equal(response.status, 202, JSON.stringify(response.json));
+  const qa = response.json.decisions.find((decision) =>
+    decision.target_type === "skill" &&
+    decision.target_id === "qa" &&
+    decision.action === "invoke_skill_workflow");
+  assert.ok(qa, `expected QA skill route, got ${JSON.stringify(response.json.decisions)}`);
+  assert.equal(qa.launcher_profile_id, "qa");
+  const pack = readContextPack(dataDir, qa.context_pack_id);
+  assert.ok(pack.required_skills.includes("test-app"), "QA pack must require the test-app skill");
+  assert.ok(pack.verification.some((item) => item.includes("npm run check")), "QA pack must carry verification commands");
+}
+
+async function assertActiveRunAttachment(baseUrl, dataDir, activeRunId) {
+  const response = await postJson(`${baseUrl}/v1/broker/messages`, {
+    source: "message-broker-smoke",
+    agent_run_id: activeRunId,
+    text: "attach this follow-up to the running browser extension broker agent",
+  });
+  assert.equal(response.status, 202, JSON.stringify(response.json));
+  const route = response.json.decisions.find((decision) =>
+    decision.target_type === "agent_run" &&
+    decision.target_id === activeRunId &&
+    decision.action === "attach_as_evidence");
+  assert.ok(route, `expected active-run evidence route, got ${JSON.stringify(response.json.decisions)}`);
+  assert.equal(route.cancellation_behavior, "none");
+  assert.equal(route.launcher_profile_id, "coding");
+  const pack = readContextPack(dataDir, route.context_pack_id);
+  assert.equal(pack.inputs.target_run.id, activeRunId);
+
+  const eventsPath = path.join(dataDir, "agent-runs", `${activeRunId}.events.jsonl`);
+  const events = fs.readFileSync(eventsPath, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const attached = events.find((event) =>
+    event.type === "broker_evidence_attached" &&
+    event.broker_event_id === response.json.event.id);
+  assert.ok(attached, "target run must receive broker_evidence_attached event");
+  assert.equal(attached.context_pack_id, route.context_pack_id);
 }
 
 function assertBrokerLedger(dataDir, eventId) {
@@ -125,10 +233,18 @@ function assertBrokerLedger(dataDir, eventId) {
   const event = JSON.parse(fs.readFileSync(eventPath, "utf8"));
   assert.equal(event.id, eventId);
   assert.ok(Array.isArray(event.decisions) && event.decisions.length > 0, "broker event must store decisions");
+  assert.ok(Array.isArray(event.context_pack_refs) && event.context_pack_refs.length > 0, "broker event must store context pack refs");
 
   const ledgerPath = path.join(dataDir, "broker-events.jsonl");
   const lines = fs.readFileSync(ledgerPath, "utf8").split("\n").filter(Boolean);
   assert.ok(lines.some((line) => JSON.parse(line).id === eventId), "broker ledger missing event id");
+}
+
+function readContextPack(dataDir, id) {
+  assert.ok(id, "context pack id is required");
+  const packPath = path.join(dataDir, "broker-context-packs", `${id}.json`);
+  assert.ok(fs.existsSync(packPath), `context pack JSON missing: ${id}`);
+  return JSON.parse(fs.readFileSync(packPath, "utf8"));
 }
 
 async function startGateway({ port, dataDir }) {

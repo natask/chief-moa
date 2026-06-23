@@ -29,6 +29,7 @@ gateway_drifted() {
   local out
   out="$(rsync -rcn --out-format='%n' \
       "$ROOT_DIR/gateway/server.js" \
+      "$ROOT_DIR/gateway/agent-launcher-profiles.json" \
       "$ROOT_DIR/gateway/package.json" \
       "$ROOT_DIR/gateway/package-lock.json" \
       "$REMOTE:$REMOTE_GW_DIR/" 2>/dev/null
@@ -120,6 +121,7 @@ target_patterns() {
     gateway)
       printf '%s\n' \
         "gateway/server.js" \
+        "gateway/agent-launcher-profiles.json" \
         "gateway/lib/" \
         "gateway/public/" \
         "gateway/scripts/" \

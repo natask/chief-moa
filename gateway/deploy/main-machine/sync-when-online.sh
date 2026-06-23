@@ -14,6 +14,7 @@ rsync -az \
 
 rsync -az \
   "$ROOT_DIR/server.js" \
+  "$ROOT_DIR/agent-launcher-profiles.json" \
   "$ROOT_DIR/package.json" \
   "$ROOT_DIR/package-lock.json" \
   "$REMOTE:$REMOTE_DIR/"

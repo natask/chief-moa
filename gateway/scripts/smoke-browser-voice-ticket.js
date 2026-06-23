@@ -71,12 +71,14 @@ async function main() {
 function assertBrowserVoiceSourceContract() {
   const contentPath = path.join(BROWSER_EXTENSION_DIR, "content.js");
   const backgroundPath = path.join(BROWSER_EXTENSION_DIR, "background.js");
-  if (!fs.existsSync(contentPath) || !fs.existsSync(backgroundPath)) {
+  const offscreenPath = path.join(BROWSER_EXTENSION_DIR, "offscreen.js");
+  if (!fs.existsSync(contentPath) || !fs.existsSync(backgroundPath) || !fs.existsSync(offscreenPath)) {
     return false;
   }
   const sources = {
     "content.js": fs.readFileSync(contentPath, "utf8"),
     "background.js": fs.readFileSync(backgroundPath, "utf8"),
+    "offscreen.js": fs.readFileSync(offscreenPath, "utf8"),
   };
   for (const [file, source] of Object.entries(sources)) {
     assert.doesNotMatch(source, /\bSpeechRecognition\b/, `${file} must not use browser SpeechRecognition`);
@@ -85,12 +87,10 @@ function assertBrowserVoiceSourceContract() {
   }
 
   const content = sources["content.js"];
-  assert.match(content, /navigator\.mediaDevices\.getUserMedia/, "content script must capture microphone audio");
+  assert.doesNotMatch(content, /navigator\.mediaDevices\.getUserMedia/, "content script must not request page microphone permission");
   assert.match(content, /cmd:\s*["']voiceSessionStart["']/, "content script must ask background to open a gateway voice session");
-  assert.match(content, /cmd:\s*["']voiceSessionAudio["']/, "content script must send microphone PCM through the background gateway proxy");
+  assert.match(content, /capture:\s*["']extension-offscreen["']/, "content script must request extension-owned microphone capture");
   assert.match(content, /voiceSessionEvent/, "content script must receive voice-session events from the background gateway proxy");
-  assert.match(content, /resampleToPcm16/, "content script must resample microphone audio to PCM16");
-  assert.match(content, /bytesToBase64\(pcm\)/, "content script must pass PCM frames to background without text/transcription APIs");
   assert.match(content, /playLiveAssistantPcm/, "content script must play assistant PCM from the gateway");
 
   const background = sources["background.js"];
@@ -98,9 +98,17 @@ function assertBrowserVoiceSourceContract() {
   assert.match(background, /new WebSocket\(ticket\.ws_url\)/, "background script must connect with gateway voice-session ticket URL");
   assert.match(background, /binaryType\s*=\s*["']arraybuffer["']/, "background script must receive assistant audio as binary frames");
   assert.match(background, /voiceSessionStart/, "background script must broker voice session startup for content");
-  assert.match(background, /voiceSessionAudio/, "background script must stream content PCM to the gateway");
+  assert.match(background, /ensureOffscreenVoiceDocument/, "background script must create the extension offscreen voice document");
+  assert.match(background, /startOffscreenVoiceCapture/, "background script must start extension-owned microphone capture");
+  assert.match(background, /offscreenVoiceAudio/, "background script must receive offscreen PCM frames");
   assert.match(background, /encoding:\s*["']pcm16["']/, "background script must declare PCM16 input encoding");
   assert.match(background, /sample_rate:\s*16000/, "background script must declare 16kHz input audio");
+
+  const offscreen = sources["offscreen.js"];
+  assert.match(offscreen, /navigator\.mediaDevices\.getUserMedia/, "offscreen document must capture microphone audio");
+  assert.match(offscreen, /resampleToPcm16/, "offscreen document must resample microphone audio to PCM16");
+  assert.match(offscreen, /bytesToBase64\(pcm\)/, "offscreen document must pass PCM frames to background without text/transcription APIs");
+  assert.match(offscreen, /cmd:\s*["']offscreenVoiceAudio["']/, "offscreen document must send PCM frames through the background gateway proxy");
   return true;
 }
 

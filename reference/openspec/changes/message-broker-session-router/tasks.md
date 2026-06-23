@@ -12,18 +12,18 @@
 
 ## 3. Non-Interrupting Fanout
 
-- [ ] 3.1 Attach a message to relevant active runs without canceling them.
+- [x] 3.1 Attach a message to relevant active runs without canceling them. Implemented by appending `broker_evidence_attached` events to matched active runs.
 - [ ] 3.2 Allow a message to create a new forked run with `wait=false`.
 - [ ] 3.3 Let irrelevant forked runs self-dismiss with a stored no-op reason.
 
 ## 4. Skill Workflow Invocation
 
-- [ ] 4.1 Add skill target metadata for research, coding, QA, design, writing, and direct-answer paths. First deterministic recommendations exist for research, coding, and writing.
-- [ ] 4.2 Build focused skill context packs from broker event + selected session/project context.
+- [x] 4.1 Add skill target metadata for research, coding, QA, design, writing, and direct-answer paths. Implemented in `gateway/agent-launcher-profiles.json`.
+- [x] 4.2 Build focused skill context packs from broker event + selected session/project context. Implemented as broker context packs stored under `DATA_DIR/broker-context-packs` and referenced by route decisions.
 - [ ] 4.3 Add a research workflow path that can fan out search/model passes, refine, and return a report when the broker selects it.
 
 ## 5. Verification
 
-- [ ] 5.1 Add broker smoke coverage for auth, event persistence, existing-session continuation, new-fork recommendation, and active-run attachment. Current smoke covers auth, persistence, existing-session continuation, research skill recommendation, and new-fork recommendation; active-run attachment remains pending.
+- [x] 5.1 Add broker smoke coverage for auth, event persistence, existing-session continuation, new-fork recommendation, and active-run attachment. Current smoke covers auth, persistence, existing-session continuation, context-pack creation, research and QA skill recommendations, new-fork recommendation, and active-run attachment.
 - [x] 5.2 Add OpenSpec validation.
 - [x] 5.3 Update architecture with broker/session/project routing boundaries.
