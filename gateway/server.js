@@ -28,7 +28,7 @@ const {
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8787);
 const GATEWAY_DIR = __dirname;
-const REPO_ROOT = path.resolve(GATEWAY_DIR, "../..");
+const REPO_ROOT = path.resolve(GATEWAY_DIR, "..");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "./data");
 const CONVERSATIONS_DIR = path.join(DATA_DIR, "conversations");
 const AGENT_RUNS_DIR = path.join(DATA_DIR, "agent-runs");
