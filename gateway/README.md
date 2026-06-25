@@ -139,7 +139,8 @@ GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
 - `GET /v1/agent/runs` lists saved runs.
 - `GET /v1/agent/runs/:id` returns one saved run plus JSONL events.
 
-Saved data lives in `DATA_DIR`, defaulting to `software/moa_gateway/data/`.
+Saved data lives in `DATA_DIR`, defaulting to `gateway/data/` when launched
+from the gateway directory.
 
 ## Postgres Work Graph Store
 
