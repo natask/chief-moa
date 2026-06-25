@@ -139,9 +139,12 @@ the extension preserves older voice-session event handling and queued playback
 while it starts the next microphone turn. That overlap is scoped to the active
 page-agent owner: starting a browser agent or voice turn from another tab revokes
 other-tab voice sessions, stops queued assistant playback in those tabs, and
-cancels their browser-local task cues. It must not use browser Web Speech APIs as
-the production voice path, and it must not hold raw Gemini/OpenAI/Anthropic
-provider credentials.
+cancels their browser-local task cues. The active browser-agent owner is shared
+extension/gateway-facing state keyed by the stable browser session, current tab,
+page URL/title, cue/voice-session ids, and latest status/result; it is not
+content-script-local memory. It must not use browser Web Speech APIs as the
+production voice path, and it must not hold raw Gemini/OpenAI/Anthropic provider
+credentials.
 
 Gateway-originated browser work uses the same ownership boundary. The gateway
 stores `/v1/browser/tasks` records and Live/tool agents may enqueue bounded
@@ -286,6 +289,9 @@ they cannot directly execute phone actions.
   such as assistant voice, input languages, reply languages, response modality,
   model behavior, and mission-agent access policy. The global profile applies
   to all devices; device overrides persist only for a named device client.
+- `browser_agent_owner`: the single active browser tab/page/run that may listen,
+  speak, and show browser-local task cues for a browser session; non-owner tabs
+  can show passive status but must not capture voice or claim local cues.
 - `browser_task`: a gateway-created browser work request that a Chrome extension
   client must claim, execute locally with allowlisted actions, and receipt.
 - `tool_source`: an agent-callable integration source such as OpenAPI, MCP,

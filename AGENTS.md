@@ -35,6 +35,10 @@ For Android-first product work, the active change is usually
   acceptance check.
 - Do not use chat as the only record of decisions. Save plans, tickets, or
   notes under OpenSpec or `scratch/agent-loop`.
+- Do not stop after only capturing a note or spec when the user gives product or
+  implementation direction. Complete the smallest coherent implementation,
+  verification, commit, and deploy/blocker loop unless the user explicitly asks
+  for notes only.
 - Keep the overlay fast and small. Put deep inspection, history, settings, and
   approvals in the full Android app.
 - Do not collapse mobile UI, gateway routing, execution-machine work, and

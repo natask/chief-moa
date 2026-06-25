@@ -201,6 +201,7 @@ async function main() {
   let browserCdp;
   let workerCdp;
   let pageCdp;
+  let page2Cdp;
   try {
     const devToolsPort = Number((await waitForFile(join(profilePath, "DevToolsActivePort"))).split("\n")[0]);
 
@@ -230,6 +231,14 @@ async function main() {
     await pageCdp.send("Page.enable");
     await pageCdp.send("Page.navigate", { url: demoUrl });
     await waitForEval(pageCdp, `location.href.startsWith(${JSON.stringify(demoUrl)}) && document.readyState === "complete"`);
+
+    const { targetId: secondTargetId } = await browserCdp.send("Target.createTarget", { url: "about:blank" });
+    const secondPageTarget = await waitForTarget(devToolsPort, (target) => target.type === "page" && target.id === secondTargetId);
+    page2Cdp = new Cdp(secondPageTarget.webSocketDebuggerUrl);
+    await page2Cdp.send("Runtime.enable");
+    await page2Cdp.send("Page.enable");
+    await page2Cdp.send("Page.navigate", { url: `${demoUrl}?owner=2` });
+    await waitForEval(page2Cdp, `location.href.includes(${JSON.stringify("/fixtures/demo.html?owner=2")}) && document.readyState === "complete"`);
 
     // Drive the real background -> content path from the service worker, exactly
     // as production does (background.js uses chrome.tabs.sendMessage). A reply
@@ -384,6 +393,129 @@ async function main() {
     `);
     if (!workerResult?.ok) throw new Error(workerResult?.error || "service-worker smoke failed");
 
+    const ownershipResult = await evaluate(workerCdp, `
+      (async () => {
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const readOwner = async () => {
+          const stored = await chrome.storage.local.get("ageeActiveBrowserAgentOwner");
+          return stored.ageeActiveBrowserAgentOwner || null;
+        };
+        const waitForOwner = async (tabId) => {
+          let last = null;
+          for (let i = 0; i < 60; i += 1) {
+            last = await readOwner();
+            if (last && last.tab_id === tabId) return last;
+            await sleep(100);
+          }
+          return last;
+        };
+        const tabs = await chrome.tabs.query({ url: "http://localhost:*/*" });
+        const demoTabs = tabs.filter((tab) => String(tab.url || "").includes("/fixtures/demo.html"));
+        const tabA = demoTabs.find((tab) => !String(tab.url || "").includes("owner=2"));
+        const tabB = demoTabs.find((tab) => String(tab.url || "").includes("owner=2"));
+        if (!tabA || !tabB) return { ok: false, error: "two demo tabs missing", demoTabs };
+
+        await chrome.storage.local.remove("ageeActiveBrowserAgentOwner");
+        await chrome.tabs.sendMessage(tabA.id, { cmd: "open" });
+        await chrome.tabs.sendMessage(tabB.id, { cmd: "open" });
+        await chrome.scripting.executeScript({
+          target: { tabId: tabA.id },
+          func: () => {
+            window.__ageeLastAgentRevoked = null;
+            window.__ageeBrowserAgentOwner = null;
+            window.__ageeBrowserAgentOwnerState = "unknown";
+          },
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId: tabB.id },
+          func: () => {
+            window.__ageeLastAgentRevoked = null;
+            window.__ageeBrowserAgentOwner = null;
+            window.__ageeBrowserAgentOwnerState = "unknown";
+          },
+        });
+
+        await chrome.scripting.executeScript({
+          target: { tabId: tabA.id },
+          args: [tabA.url],
+          func: (url) => {
+            chrome.runtime.sendMessage({
+              cmd: "branch",
+              cueId: "owner-a",
+              instruction: "cross-tab ownership smoke A",
+              url,
+            }).catch(() => {});
+          },
+        });
+        const ownerA = await waitForOwner(tabA.id);
+
+        await chrome.scripting.executeScript({
+          target: { tabId: tabB.id },
+          func: () => {
+            chrome.runtime.sendMessage({
+              cmd: "run",
+              cueId: "owner-b",
+              instruction: "cross-tab ownership smoke B",
+            }).catch(() => {});
+          },
+        });
+        const ownerB = await waitForOwner(tabB.id);
+        await sleep(350);
+
+        const [stateA] = await chrome.scripting.executeScript({
+          target: { tabId: tabA.id },
+          func: () => {
+            const root = document.querySelector("#agee-root");
+            return {
+              ownerState: window.__ageeBrowserAgentOwnerState || null,
+              owner: window.__ageeBrowserAgentOwner || null,
+              revoked: window.__ageeLastAgentRevoked || null,
+              rootOwner: root?.dataset?.ageeOwner || null,
+              lastRevokedReason: root?.dataset?.ageeLastRevokedReason || "",
+            };
+          },
+        });
+        const [stateB] = await chrome.scripting.executeScript({
+          target: { tabId: tabB.id },
+          func: () => {
+            const root = document.querySelector("#agee-root");
+            return {
+              ownerState: window.__ageeBrowserAgentOwnerState || null,
+              owner: window.__ageeBrowserAgentOwner || null,
+              revoked: window.__ageeLastAgentRevoked || null,
+              rootOwner: root?.dataset?.ageeOwner || null,
+              ownerStatus: root?.dataset?.ageeOwnerStatus || "",
+              ownerCue: root?.dataset?.ageeOwnerCue || "",
+            };
+          },
+        });
+
+        const a = stateA?.result || {};
+        const b = stateB?.result || {};
+        const ok =
+          ownerA?.tab_id === tabA.id &&
+          ownerB?.tab_id === tabB.id &&
+          b.ownerState === "active" &&
+          b.rootOwner === "active" &&
+          a.ownerState !== "active" &&
+          a.rootOwner !== "active" &&
+          Array.isArray(a.revoked?.cueIds) &&
+          a.revoked.cueIds.includes("owner-a");
+        return {
+          ok,
+          tabA: tabA.id,
+          tabB: tabB.id,
+          ownerA,
+          ownerB,
+          stateA: a,
+          stateB: b,
+        };
+      })()
+    `);
+    if (!ownershipResult?.ok) {
+      throw new Error(`cross-tab browser agent ownership smoke failed: ${JSON.stringify(ownershipResult)}`);
+    }
+
     const screenshot = await pageCdp.send("Page.captureScreenshot", { format: "jpeg", quality: 40 });
     if (!screenshot?.data) throw new Error("page screenshot capture failed");
     const screenshotPath = join(artifactsDir, "demo.jpg");
@@ -399,11 +531,13 @@ async function main() {
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
         `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
+        `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );
     console.log(`screenshot: ${screenshotPath}`);
   } finally {
     pageCdp?.close();
+    page2Cdp?.close();
     workerCdp?.close();
     browserCdp?.close();
     server.close();

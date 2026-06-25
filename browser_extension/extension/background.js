@@ -27,6 +27,7 @@ const tasks = new Map();
 const voiceSessions = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
+const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
 const VOICE_AUTO_COMMIT_ENABLED = true;
 const VOICE_AUTO_COMMIT_SILENCE_MS = 900;
 const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
@@ -213,6 +214,18 @@ async function executeGatewayBrowserTask(task) {
 async function browserTaskStartUrl(task) {
   const explicit = allowedBrowserTaskUrl(task?.url);
   if (explicit) return explicit;
+  const owner = await getActiveBrowserAgentOwner();
+  const ownerTabId = Number(owner?.tab_id ?? owner?.tabId);
+  if (Number.isFinite(ownerTabId)) {
+    try {
+      const tab = await chrome.tabs.get(ownerTabId);
+      const ownerUrl = allowedBrowserTaskUrl(tab?.url || owner?.page_url);
+      if (ownerUrl) return ownerUrl;
+    } catch {
+      const ownerUrl = allowedBrowserTaskUrl(owner?.page_url);
+      if (ownerUrl) return ownerUrl;
+    }
+  }
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   return allowedBrowserTaskUrl(active?.url);
 }
@@ -639,6 +652,87 @@ async function getStableDeviceId() {
   return deviceId;
 }
 
+async function getActiveBrowserAgentOwner() {
+  const stored = await chrome.storage.local.get(ACTIVE_BROWSER_AGENT_OWNER_KEY);
+  return stored[ACTIVE_BROWSER_AGENT_OWNER_KEY] || null;
+}
+
+async function setActiveBrowserAgentOwner(tabId, reason = "browser agent owner changed", patch = {}) {
+  if (tabId == null || !chrome?.storage?.local) return null;
+  let tab = null;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {}
+  const sessionId = await getStableSessionId();
+  const owner = {
+    browser_session_id: sessionId,
+    tab_id: tabId,
+    window_id: tab?.windowId ?? patch.window_id ?? null,
+    page_url: tab?.url || patch.page_url || "",
+    page_title: tab?.title || patch.page_title || "",
+    cue_id: patch.cue_id || patch.cueId || null,
+    voice_session_id: patch.voice_session_id || patch.voiceSessionId || null,
+    agent_run_id: patch.agent_run_id || patch.agentRunId || null,
+    status: patch.status || "active",
+    last_result: patch.last_result || patch.lastResult || "",
+    reason,
+    updated_at: new Date().toISOString(),
+  };
+  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: owner });
+  await notifyBrowserAgentOwner(owner);
+  return owner;
+}
+
+async function updateActiveBrowserAgentOwner(patch = {}) {
+  const owner = await getActiveBrowserAgentOwner();
+  if (!owner) return null;
+  const next = {
+    ...owner,
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: next });
+  await notifyBrowserAgentOwner(next);
+  return next;
+}
+
+async function updateActiveBrowserAgentOwnerFromTask(cueId, patch) {
+  if (!patch || patch.tabId == null) return;
+  const owner = await getActiveBrowserAgentOwner();
+  if (!owner || owner.tab_id !== patch.tabId) return;
+  if (owner.cue_id && cueId && owner.cue_id !== cueId) return;
+  await updateActiveBrowserAgentOwner({
+    cue_id: cueId || owner.cue_id || null,
+    status: patch.status || owner.status || "active",
+    last_result: patch.lastResult || owner.last_result || "",
+  });
+}
+
+async function clearActiveBrowserAgentOwner(tabId, reason = "browser agent owner cleared") {
+  const owner = await getActiveBrowserAgentOwner();
+  if (!owner || (tabId != null && owner.tab_id !== tabId)) return;
+  const cleared = {
+    ...owner,
+    status: "cleared",
+    reason,
+    updated_at: new Date().toISOString(),
+  };
+  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: cleared });
+  await notifyBrowserAgentOwner(cleared);
+}
+
+async function notifyBrowserAgentOwner(owner) {
+  if (!chrome?.tabs) return;
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] }).catch(() => []);
+  await Promise.allSettled(tabs.filter((tab) => tab.id != null).map((tab) => (
+    chrome.tabs.sendMessage(tab.id, {
+      cmd: "browserAgentOwnerChanged",
+      owner,
+      isOwner: owner?.tab_id === tab.id && owner?.status !== "cleared",
+    }).catch(() => {})
+  )));
+}
+
 // Read the persisted conversation's ordered turns from the gateway so the
 // overlay can render prior turns when it reopens. Returns [] when nothing is
 // configured/stored yet (a fresh conversation simply has no history).
@@ -851,7 +945,7 @@ function handleOffscreenVoiceError(id, error) {
   closeVoiceSession(id, "microphone capture failed");
 }
 
-function claimActiveAgentTab(tabId, reason = "another page became active") {
+function claimActiveAgentTab(tabId, reason = "another page became active", patch = {}) {
   if (tabId == null) return;
   const revokedTabs = new Map();
 
@@ -873,6 +967,7 @@ function claimActiveAgentTab(tabId, reason = "another page became active") {
     send(oldTabId, { cmd: "agentRevoked", cueIds, reason });
   }
   activeAgentTabId = tabId;
+  setActiveBrowserAgentOwner(tabId, reason, patch).catch(() => {});
 }
 
 function revokeOtherTabVoiceSessions(tabId, reason) {
@@ -1191,6 +1286,7 @@ async function saveTaskState(id, patch) {
       updatedAt: new Date().toISOString(),
     },
   });
+  await updateActiveBrowserAgentOwnerFromTask(id, patch).catch(() => {});
 }
 
 async function captureScreenshot(tabId) {
@@ -1777,14 +1873,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "voiceSessionStart" && sender.tab) {
     const tabId = sender.tab.id;
-    claimActiveAgentTab(tabId, "another page voice session started");
+    claimActiveAgentTab(tabId, "another page voice session started", {
+      cue_id: msg.cueId || null,
+      status: "listening",
+    });
     startVoiceSessionProxy(tabId, {
       cueId: msg.cueId,
       turnId: msg.turnId,
       assistantOverlap: msg.assistantOverlap === true,
       capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
     })
-      .then((session) => sendResponse({ ok: true, ...session }))
+      .then((session) => {
+        if (session?.voiceSessionId) {
+          setActiveBrowserAgentOwner(tabId, "browser voice session started", {
+            cue_id: msg.cueId || null,
+            voice_session_id: session.voiceSessionId,
+            status: "listening",
+          }).catch(() => {});
+        }
+        sendResponse({ ok: true, ...session });
+      })
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
@@ -1834,8 +1942,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "run" && sender.tab) {
     const tabId = sender.tab.id;
-    claimActiveAgentTab(tabId, "another page agent turn started");
     const cueId = nextCueId(msg.cueId);
+    claimActiveAgentTab(tabId, "another page agent turn started", {
+      cue_id: cueId,
+      status: "running",
+    });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
     runAgent(tabId, msg.instruction, controller, cueId);
@@ -1843,8 +1954,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "branch" && sender.tab) {
     // Router intent: launch a disposable task agent in its OWN background tab.
     const overlayTabId = sender.tab.id;
-    claimActiveAgentTab(overlayTabId, "another page agent turn started");
     const cueId = nextCueId(msg.cueId);
+    claimActiveAgentTab(overlayTabId, "another page agent turn started", {
+      cue_id: cueId,
+      status: "running",
+    });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId: overlayTabId });
     runBranchTaskAgent(overlayTabId, msg.instruction, msg.url, controller, cueId);
@@ -1853,7 +1967,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // BRANCH-TO-TWO: one trigger, N concurrent disposable task agents, each its
     // own background tab + own cue + own gateway router activation.
     const overlayTabId = sender.tab.id;
-    claimActiveAgentTab(overlayTabId, "another page agent turn started");
     const controllersByCue = new Map();
     const branches = msg.branches.map((b) => {
       const cueId = nextCueId(b.cueId);
@@ -1862,12 +1975,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       controllersByCue.set(cueId, controller);
       return { instruction: b.instruction, url: b.url, cueId };
     });
+    claimActiveAgentTab(overlayTabId, "another page agent turn started", {
+      cue_id: branches[0]?.cueId || null,
+      status: "running",
+    });
     runBranchFanout(overlayTabId, branches, controllersByCue);
   }
   if (msg.cmd === "describe" && sender.tab) {
     const tabId = sender.tab.id;
-    claimActiveAgentTab(tabId, "another page agent turn started");
     const cueId = nextCueId(msg.cueId);
+    claimActiveAgentTab(tabId, "another page agent turn started", {
+      cue_id: cueId,
+      status: "running",
+    });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
     describePage(tabId, controller, cueId);
@@ -1883,7 +2003,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "ambientStart" && sender.tab) {
     const tabId = sender.tab.id;
-    claimActiveAgentTab(tabId, "another page ambient session started");
+    claimActiveAgentTab(tabId, "another page ambient session started", {
+      status: "ambient",
+    });
     startAmbientCapture(tabId, msg.intervalMs)
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
@@ -1899,7 +2021,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Stop the ambient loop if its tab goes away, so it never posts against a dead tab.
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (ambient && ambient.tabId === tabId) stopAmbientCapture();
-  if (activeAgentTabId === tabId) activeAgentTabId = null;
+  if (activeAgentTabId === tabId) {
+    activeAgentTabId = null;
+    clearActiveBrowserAgentOwner(tabId, "owner tab closed").catch(() => {});
+  }
   closeTabVoiceSessions(tabId);
 });
 

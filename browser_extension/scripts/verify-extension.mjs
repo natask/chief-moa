@@ -181,6 +181,21 @@ if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.te
   throw new Error("background.js must forward assistant overlap policy into the gateway voice session_start event");
 }
 
+if (
+  !/ACTIVE_BROWSER_AGENT_OWNER_KEY\s*=\s*"ageeActiveBrowserAgentOwner"/.test(backgroundSource) ||
+  !/function setActiveBrowserAgentOwner/.test(backgroundSource) ||
+  !/function notifyBrowserAgentOwner/.test(backgroundSource) ||
+  !/cmd:\s*"browserAgentOwnerChanged"/.test(backgroundSource) ||
+  !/case "browserAgentOwnerChanged":/.test(contentSource) ||
+  !/root\.dataset\.ageeOwner/.test(contentSource)
+) {
+  throw new Error("browser agent ownership must be shared across tabs through storage and owner-change messages");
+}
+
+if (!/const owner = await getActiveBrowserAgentOwner\(\);[\s\S]{0,420}chrome\.tabs\.get\(ownerTabId\)/.test(backgroundSource)) {
+  throw new Error("gateway-queued browser tasks must prefer the active owner tab before falling back to the foreground tab");
+}
+
 if (/Listening\.\.\.|listening\.\.\.|stopping…|stopping\.\.\./.test(contentSource)) {
   throw new Error("content.js must not render voice lifecycle filler text such as Listening/listening/stopping");
 }

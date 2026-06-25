@@ -10,3 +10,8 @@
 - [x] 1.9 Auto-commit browser voice turns after speech silence so the user does not need a second click/hotkey to send captured audio.
 - [x] 1.8 Move browser microphone capture to an extension-owned offscreen document so websites do not receive mic permission. Content script now controls UI only; `offscreen.js` owns `getUserMedia`, sends PCM16 chunks to `background.js`, and the options page seeds the extension-origin microphone grant. Verified by `npm run verify` and `npm run smoke`.
 - [x] 1.10 Show browser voice transcript/assistant feedback above the input while keeping the input available, and make one mark click during listening commit the current speech turn.
+- [x] 1.11 Share one browser-agent owner across tabs: store the active owner in
+      `chrome.storage.local`, broadcast owner changes to content scripts, revoke
+      old-tab voice/task cues on transfer, prefer the owner tab for queued
+      browser tasks, and verify with a two-tab real-extension smoke. Verified
+      by `cd browser_extension && npm run verify && npm run smoke`.

@@ -32,6 +32,8 @@
   const assistantPlaybackSources = new Set();
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
+  let browserAgentOwner = null;
+  let browserAgentOwnerState = "unknown";
   let assistantSpeechOverlap = false;
   let uiChimesEnabled = false;
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
@@ -183,6 +185,7 @@
   function build() {
     root = document.createElement("div");
     root.id = "agee-root";
+    root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
       <button id="agee-launcher" type="button" title="Click to type · double-click to talk" aria-label="Aggie">
         <span class="agee-ring" aria-hidden="true"></span>
@@ -1152,6 +1155,15 @@
 
   function handleAgentRevoked(msg = {}) {
     conversationActive = false;
+    window.__ageeLastAgentRevoked = {
+      cueIds: Array.isArray(msg.cueIds) ? msg.cueIds : [],
+      reason: String(msg.reason || ""),
+      at: Date.now(),
+    };
+    if (root) {
+      root.dataset.ageeOwner = "passive";
+      root.dataset.ageeLastRevokedReason = String(msg.reason || "");
+    }
     const cueIds = Array.isArray(msg.cueIds) ? msg.cueIds : [];
     for (const cueId of cueIds) {
       rememberRevokedCue(cueId);
@@ -1162,6 +1174,18 @@
     setVoiceState(false);
     if (agentState !== "idle") setAgentState("idle");
     refreshStatus();
+  }
+
+  function handleBrowserAgentOwnerChanged(msg = {}) {
+    browserAgentOwner = msg.owner || null;
+    browserAgentOwnerState = msg.isOwner ? "active" : browserAgentOwner?.status === "cleared" ? "cleared" : "passive";
+    window.__ageeBrowserAgentOwner = browserAgentOwner;
+    window.__ageeBrowserAgentOwnerState = browserAgentOwnerState;
+    if (!root) return;
+    root.dataset.ageeOwner = browserAgentOwnerState;
+    root.dataset.ageeOwnerStatus = browserAgentOwner?.status || "";
+    root.dataset.ageeOwnerCue = browserAgentOwner?.cue_id || "";
+    root.dataset.ageeOwnerResult = browserAgentOwner?.last_result || "";
   }
 
   function sendLiveVoiceControl(state, message) {
@@ -1780,6 +1804,10 @@
       case "agentRevoked":
         handleAgentRevoked(msg);
         return false;
+      case "browserAgentOwnerChanged":
+        handleBrowserAgentOwnerChanged(msg);
+        reply({ ok: true, ownerState: browserAgentOwnerState });
+        return true;
       case "ambient":
         setAmbientState(msg.state);
         reply({ ok: true, state: ambientState });

@@ -105,3 +105,25 @@ text-to-speech as the production voice path.
   extension from Options or Chrome extension settings
 - **AND** the failure is treated as non-recoverable for that voice turn instead
   of silently respawning Live voice
+
+### Requirement: Browser agent ownership is shared across tabs
+The extension SHALL maintain one active browser-agent owner across tabs for a
+configured engine session. The owner state SHALL live in shared
+extension/gateway-facing state, not only in one page content script.
+
+#### Scenario: Starting work in another tab transfers ownership
+- **WHEN** a browser agent turn, branch task, ambient capture, or voice session
+  starts in tab B while tab A is the active browser-agent owner
+- **THEN** tab B becomes the active owner in shared extension state
+- **AND** tab A receives revocation, stops listening, stops queued assistant
+  playback, and clears browser-local task cues
+- **AND** tab A may show passive status but does not capture microphone audio,
+  play assistant speech, or claim local task cues for the active owner
+
+#### Scenario: Owner state follows page work
+- **WHEN** a browser task has no explicit target URL
+- **THEN** the extension prefers the active owner tab's page URL before falling
+  back to the foreground tab
+- **AND** the latest owner status/result is stored in shared extension state so
+  another tab can answer progress or completion questions without visible chat
+  scrollback
