@@ -405,7 +405,8 @@ if (chrome?.storage?.onChanged) {
 // `parentRunId` threads fan-out lineage so two concurrent activations share a
 // parent. The harness/echo output stays a proposal — we only render its summary.
 async function routerActivate(cfg, { intent, screen, parentRunId, signal }) {
-  const body = { intent, source: "agee-extension" };
+  const deviceId = await getStableDeviceId();
+  const body = { intent, source: "agee-extension", device_id: deviceId };
   if (screen) body.screen = screen;
   if (parentRunId) body.parent_run_id = parentRunId;
   const activation = await callGateway(cfg, "/v1/router/activate", { signal, body });
@@ -440,11 +441,17 @@ async function getGatewayProfile(cfg, signal) {
 
 // Patch + persist a profile change through the gateway (PUT /v1/agent/profile)
 // and cache the authoritative result so the settings surface stays in sync.
-async function putGatewayProfile(cfg, patch, signal, source = "agee-extension") {
+async function putGatewayProfile(cfg, patch, signal, source = "agee-extension", options = {}) {
+  const deviceId = await getStableDeviceId();
   const payload = await callGateway(cfg, "/v1/agent/profile", {
     method: "PUT",
     signal,
-    body: { profile: patch, source },
+    body: {
+      profile: patch,
+      source,
+      scope: options.scope || "global",
+      device_id: deviceId,
+    },
   });
   await chrome.storage.local.set({ [PROFILE_CACHE_KEY]: payload });
   return payload;
@@ -624,6 +631,14 @@ async function getStableSessionId() {
   return sessionId;
 }
 
+async function getStableDeviceId() {
+  const { ageeDeviceId } = await chrome.storage.local.get("ageeDeviceId");
+  if (ageeDeviceId) return ageeDeviceId;
+  const deviceId = `browser_${crypto.randomUUID().replace(/-/g, "")}`;
+  await chrome.storage.local.set({ ageeDeviceId: deviceId });
+  return deviceId;
+}
+
 // Read the persisted conversation's ordered turns from the gateway so the
 // overlay can render prior turns when it reopens. Returns [] when nothing is
 // configured/stored yet (a fresh conversation simply has no history).
@@ -638,10 +653,12 @@ async function loadHistory(cfg) {
 
 async function createVoiceSessionTicket(cfg, signal) {
   const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
   const data = await callGateway(cfg, "/v1/voice/session-ticket", {
     signal,
     body: {
       source: "agee-extension",
+      device_id: deviceId,
       session_id: sessionId,
       conversation_id: sessionId,
     },
@@ -650,6 +667,7 @@ async function createVoiceSessionTicket(cfg, signal) {
     ...data,
     session_id: sessionId,
     conversation_id: sessionId,
+    device_id: deviceId,
   };
 }
 
@@ -674,15 +692,23 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
   // accumulates them (and the overlay can reload them). The cueId becomes the
   // branch_id, preserving per-cue distinction without fragmenting the session.
   const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
   const data = await callGateway(cfg, "/v1/voice/turns", {
     signal,
     body: {
       source: "agee-extension",
+      device_id: deviceId,
       session_id: sessionId,
       conversation_id: sessionId,
       branch_id: cueId,
       all_branches_context: true,
       transcript: instruction,
+      client: {
+        platform: "browser",
+        source: "agee-extension",
+        device_id: deviceId,
+        input: "text",
+      },
       screen,
     },
   });
@@ -907,11 +933,18 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
       ws.send(JSON.stringify({
         type: "session_start",
         source: "agee-extension",
+        device_id: ticket.device_id || "",
         session_id: ticket.session_id,
         conversation_id: ticket.conversation_id || ticket.session_id,
         branch_id: cueId,
         turn_id: turnId,
         all_branches_context: true,
+        client: {
+          platform: "browser",
+          source: "agee-extension",
+          device_id: ticket.device_id || "",
+          input: "voice",
+        },
         playback_policy: {
           assistant_overlap: assistantOverlap === true,
         },
@@ -1284,15 +1317,23 @@ async function describePageViaGateway(tabId, cfg, signal, cueId) {
   const snap = await ask(tabId, { cmd: "snapshot" });
   throwIfAborted(signal);
   const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
   const data = await callGateway(cfg, "/v1/chat", {
     signal,
     body: {
       source: "agee-extension",
+      device_id: deviceId,
       session_id: sessionId,
       conversation_id: sessionId,
       branch_id: cueId || "describe",
       all_branches_context: true,
       screen: snapToScreen(snap),
+      client: {
+        platform: "browser",
+        source: "agee-extension",
+        device_id: deviceId,
+        input: "text",
+      },
       messages: [
         { role: "user", content: "Describe this page in 3-5 compact bullets. Include what it is and what the user can do here. Do not claim you took any action." },
       ],
