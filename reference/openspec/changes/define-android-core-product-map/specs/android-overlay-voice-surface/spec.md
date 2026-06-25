@@ -14,20 +14,19 @@ The Android app SHALL provide an overlay control that remains available above ot
 ### Requirement: Tap-Based Voice Loop
 The overlay SHALL make the primary voice loop available through simple orb gestures.
 
-#### Scenario: Single tap while idle
+#### Scenario: Single tap opens chat menu
 - **WHEN** the user single taps the orb while no command speech is active
-- **THEN** the app opens the text panel for typed input
+- **THEN** the app opens the chat menu for typed input
+- **AND** it does not start, stop, or submit a voice turn
 
-#### Scenario: Double press push-to-talk
-- **WHEN** the user double-presses and holds the orb while no voice turn is active
-- **THEN** the app starts a push-to-talk voice turn
-- **AND** displays a live transcript overlay
-- **AND** releasing the orb submits the best available speech without waiting
-  for the continuous-loop silence timeout
+#### Scenario: Click-and-hold drags orb
+- **WHEN** the user presses the orb, holds, and moves it
+- **THEN** the app repositions the orb
+- **AND** it does not start voice capture or toggle the chat menu
 
-#### Scenario: Long press push-to-talk
-- **WHEN** the user long presses the orb while no voice turn is active
-- **THEN** the app starts a push-to-talk voice turn
+#### Scenario: Double-click-and-hold push-to-talk
+- **WHEN** the user double-clicks and holds the orb while no voice turn is active
+- **THEN** the app starts a push-to-talk voice turn after the second press is held
 - **AND** displays a live transcript overlay
 - **AND** releasing the orb submits the best available speech without waiting
   for the continuous-loop silence timeout
@@ -36,17 +35,6 @@ The overlay SHALL make the primary voice loop available through simple orb gestu
 - **WHEN** the user starts a continuous voice launch path and speaks a short utterance
 - **THEN** the app auto-submits after a short post-speech silence window
 - **AND** keeps the continuous loop eligible to re-arm after the assistant reply
-
-#### Scenario: Single tap while listening
-- **WHEN** the user single taps the orb while the voice loop is listening
-- **THEN** the app submits the best available transcript
-- **AND** does not wait for the silence timeout before submitting
-
-#### Scenario: Single tap while thinking or speaking
-- **WHEN** the user single taps the orb while the voice loop is thinking or
-  speaking
-- **THEN** the app stops recognition and TTS locally
-- **AND** does not send a stop prompt to the gateway
 
 ### Requirement: System Assistant Button Launch
 The Android app SHALL expose the overlay voice loop through standard Android

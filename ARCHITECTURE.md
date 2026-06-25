@@ -64,13 +64,13 @@ Hold the orb (push-to-talk)
   -> phone updates transcript/chat and may speak or play the short response
 ```
 
-Orb gestures (overlay): press-and-hold and double-press-and-hold are the manual
-first paths; recording starts after a short hold threshold or on the second
-press, and release commits the turn without waiting for silence detection. A
-quick tap sends the current speech while listening; otherwise it opens or
-collapses the typing/voice surface. Continuous voice is an optional secondary
-loop for launch paths that do not have a release event, where silence commits
-each turn and the mic re-arms after the reply. Drag repositions. The browser extension
+Orb gestures (overlay): one single tap opens the chat menu, first-press hold and
+drag repositions the orb without starting voice, and double-click-and-hold is
+the manual push-to-talk path. Recording starts only after the second press is
+held briefly, and release commits the turn without waiting for silence
+detection. Continuous voice is an optional secondary loop for launch paths that
+do not have a release event, where silence commits each turn and the mic re-arms
+after the reply. The browser extension
 mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
 Cmd+. (Ctrl+.) wakes voice. Browser voice auto-commits after speech silence and
 then re-arms while conversation mode is active; one click on the Moa mark while

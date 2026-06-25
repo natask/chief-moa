@@ -3,20 +3,21 @@ package ai.moa.assistant;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.WindowManager;
 
 // Orb gestures, matched to the Android overlay contract:
-//   single tap  -> onSingleTap, text mode (open the keyboard / panel)
-//   double press -> onDoublePressStart / onPressToTalkRelease, push-to-talk
-//   long press  -> onLongPressStart / onPressToTalkRelease, push-to-talk
-//   drag        -> reposition the orb, no callback
-// A single tap is confirmed only after the double-tap window passes, so a tap
-// never flashes the text surface before a double press engages voice.
+//   single tap             -> onSingleTap, chat menu
+//   first press and drag   -> reposition the orb, no callback
+//   double-click and hold  -> onDoublePressStart / onPressToTalkRelease
+// A single tap is confirmed only after the double-tap window passes, so the
+// chat menu never flashes before a double-click hold engages voice.
 final class MoaOrbTouchListener implements View.OnTouchListener {
-    private static final long PUSH_TO_TALK_HOLD_MS = 120;
+    private static final long DOUBLE_CLICK_HOLD_MS = 120;
+    private static final long SINGLE_TAP_MAX_MS = ViewConfiguration.getLongPressTimeout();
+    private static final long DOUBLE_TAP_TIMEOUT_MS = ViewConfiguration.getDoubleTapTimeout();
 
     private final Context context;
     private final WindowManager windowManager;
@@ -24,20 +25,27 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final WindowManager.LayoutParams orbParams;
     private final int orbWindowDp;
     private final int edgeMarginDp;
+    private final Runnable onSingleTap;
     private final Runnable onDoublePressStart;
-    private final Runnable onLongPressStart;
     private final Runnable onPressToTalkRelease;
-    private final GestureDetector gestureDetector;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final int touchSlop;
+    private final int doubleTapSlop;
 
     private int startX;
     private int startY;
     private float downX;
     private float downY;
+    private long downTimeMs;
     private boolean moved;
-    private boolean longPressActive;
-    private boolean suppressTapAfterLongPress;
-    private Runnable pendingLongPressStart;
+    private boolean doublePressPending;
+    private boolean doublePressActive;
+    private boolean lastTapCandidate;
+    private long lastTapUpTimeMs;
+    private float lastTapUpX;
+    private float lastTapUpY;
+    private Runnable pendingSingleTap;
+    private Runnable pendingDoublePressStart;
 
     MoaOrbTouchListener(
             Context context,
@@ -48,7 +56,6 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             int edgeMarginDp,
             Runnable onSingleTap,
             Runnable onDoublePressStart,
-            Runnable onLongPressStart,
             Runnable onPressToTalkRelease
     ) {
         this.context = context;
@@ -57,74 +64,48 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.orbParams = orbParams;
         this.orbWindowDp = orbWindowDp;
         this.edgeMarginDp = edgeMarginDp;
+        this.onSingleTap = onSingleTap;
         this.onDoublePressStart = onDoublePressStart;
-        this.onLongPressStart = onLongPressStart;
         this.onPressToTalkRelease = onPressToTalkRelease;
-        this.gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
-            @Override
-            public boolean onSingleTapConfirmed(MotionEvent e) {
-                if (!moved && !longPressActive && !suppressTapAfterLongPress) {
-                    onSingleTap.run();
-                }
-                suppressTapAfterLongPress = false;
-                return true;
-            }
-
-            @Override
-            public boolean onDoubleTap(MotionEvent e) {
-                cancelPendingLongPress();
-                if (!moved && !longPressActive) {
-                    longPressActive = true;
-                    suppressTapAfterLongPress = true;
-                    onDoublePressStart.run();
-                }
-                return true;
-            }
-
-            @Override
-            public void onLongPress(MotionEvent e) {
-                // The platform long-press delay is too slow for push-to-talk.
-                // ACTION_DOWN schedules our shorter hold threshold instead.
-            }
-        });
+        ViewConfiguration viewConfiguration = ViewConfiguration.get(context);
+        this.touchSlop = viewConfiguration.getScaledTouchSlop();
+        this.doubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
     }
 
     @Override
     public boolean onTouch(View view, MotionEvent event) {
         int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
-            cancelPendingLongPress();
             startX = orbParams.x;
             startY = orbParams.y;
             downX = event.getRawX();
             downY = event.getRawY();
+            downTimeMs = event.getEventTime();
             moved = false;
-            longPressActive = false;
-            suppressTapAfterLongPress = false;
-            pendingLongPressStart = () -> {
-                pendingLongPressStart = null;
-                if (!moved && !longPressActive) {
-                    longPressActive = true;
-                    suppressTapAfterLongPress = true;
-                    onLongPressStart.run();
-                }
-            };
-            mainHandler.postDelayed(pendingLongPressStart, PUSH_TO_TALK_HOLD_MS);
+
+            if (isSecondTap(event)) {
+                cancelPendingSingleTap();
+                beginPendingDoublePress();
+            } else {
+                cancelPendingSingleTap();
+                lastTapCandidate = false;
+                doublePressPending = false;
+                doublePressActive = false;
+            }
         }
 
-        gestureDetector.onTouchEvent(event);
         switch (action) {
             case MotionEvent.ACTION_DOWN:
                 return true;
             case MotionEvent.ACTION_MOVE:
-                if (longPressActive) {
+                if (doublePressActive) {
                     return true;
                 }
                 int dx = Math.round(event.getRawX() - downX);
                 int dy = Math.round(event.getRawY() - downY);
-                if (Math.abs(dx) > dp(5) || Math.abs(dy) > dp(5)) {
+                if (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop) {
                     moved = true;
-                    cancelPendingLongPress();
+                    cancelPendingDoublePress();
                 }
                 orbParams.x = clampOrbX(startX + dx);
                 orbParams.y = clampOrbY(startY + dy);
@@ -132,23 +113,88 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
-                cancelPendingLongPress();
-                if (longPressActive) {
-                    longPressActive = false;
+                cancelPendingDoublePress();
+                if (doublePressActive) {
+                    doublePressActive = false;
+                    lastTapCandidate = false;
                     onPressToTalkRelease.run();
+                    return true;
                 }
+                if (doublePressPending) {
+                    doublePressPending = false;
+                    lastTapCandidate = false;
+                    return true;
+                }
+                if (moved || action == MotionEvent.ACTION_CANCEL || event.getEventTime() - downTimeMs > SINGLE_TAP_MAX_MS) {
+                    lastTapCandidate = false;
+                    return true;
+                }
+                scheduleSingleTap(event);
                 return true;
             default:
                 return false;
         }
     }
 
-    private void cancelPendingLongPress() {
-        if (pendingLongPressStart == null) {
+    private boolean isSecondTap(MotionEvent event) {
+        if (!lastTapCandidate || pendingSingleTap == null) {
+            return false;
+        }
+        long elapsedMs = event.getEventTime() - lastTapUpTimeMs;
+        if (elapsedMs < 0 || elapsedMs > DOUBLE_TAP_TIMEOUT_MS) {
+            return false;
+        }
+        float dx = event.getRawX() - lastTapUpX;
+        float dy = event.getRawY() - lastTapUpY;
+        return dx * dx + dy * dy <= doubleTapSlop * doubleTapSlop;
+    }
+
+    private void scheduleSingleTap(MotionEvent event) {
+        cancelPendingSingleTap();
+        lastTapCandidate = true;
+        lastTapUpTimeMs = event.getEventTime();
+        lastTapUpX = event.getRawX();
+        lastTapUpY = event.getRawY();
+        pendingSingleTap = () -> {
+            pendingSingleTap = null;
+            if (lastTapCandidate) {
+                lastTapCandidate = false;
+                onSingleTap.run();
+            }
+        };
+        mainHandler.postDelayed(pendingSingleTap, DOUBLE_TAP_TIMEOUT_MS);
+    }
+
+    private void cancelPendingSingleTap() {
+        if (pendingSingleTap == null) {
             return;
         }
-        mainHandler.removeCallbacks(pendingLongPressStart);
-        pendingLongPressStart = null;
+        mainHandler.removeCallbacks(pendingSingleTap);
+        pendingSingleTap = null;
+    }
+
+    private void beginPendingDoublePress() {
+        doublePressPending = true;
+        lastTapCandidate = false;
+        cancelPendingDoublePress();
+        pendingDoublePressStart = () -> {
+            pendingDoublePressStart = null;
+            if (!doublePressPending || moved) {
+                return;
+            }
+            doublePressPending = false;
+            doublePressActive = true;
+            onDoublePressStart.run();
+        };
+        mainHandler.postDelayed(pendingDoublePressStart, DOUBLE_CLICK_HOLD_MS);
+    }
+
+    private void cancelPendingDoublePress() {
+        if (pendingDoublePressStart == null) {
+            return;
+        }
+        mainHandler.removeCallbacks(pendingDoublePressStart);
+        pendingDoublePressStart = null;
     }
 
     private int clampOrbX(int value) {

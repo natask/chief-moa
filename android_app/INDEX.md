@@ -89,11 +89,9 @@ install is skipped without failing deploy.
 
 ## Assistant Orb Controls
 
-- Drag: move the orb.
-- Single tap: type, or stop/collapse the active voice surface.
-- Double tap: start the continuous voice loop. Silence commits each turn and the
-  mic re-arms after the reply.
-- Long press: show or hide the chat panel.
+- Single tap: open the chat menu.
+- Click and hold while moving: reposition the orb without starting voice.
+- Double-click and hold: start manual voice capture; release to send.
 
 ## Current Server Shape
 

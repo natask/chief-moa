@@ -153,7 +153,7 @@ public final class MainActivity extends Activity {
         root.addView(title);
 
         TextView body = new TextView(this);
-        body.setText("Enable draw-over-apps, start the assistant circle, then tap to type or double-press and hold to talk.");
+        body.setText("Enable draw-over-apps, start the assistant circle, then tap for chat or double-click and hold to talk.");
         body.setTextColor(0xCCEEF8E8);
         body.setTextSize(15);
         body.setLineSpacing(dp(3), 1f);
@@ -281,7 +281,7 @@ public final class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "What this build does");
         addBullet(card, "Floating animated circle over other apps.");
-        addBullet(card, "Tap the orb to type; double-press and hold starts voice capture.");
+        addBullet(card, "Tap the orb for chat; click and hold to move; double-click and hold starts voice capture.");
         addBullet(card, "Release commits the spoken turn without waiting for silence detection.");
         addBullet(card, "Gemini-style live transcript overlay while speaking.");
         addBullet(card, "Manual orb voice sends the released transcript through the gateway voice-turn route.");

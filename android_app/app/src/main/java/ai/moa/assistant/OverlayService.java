@@ -64,7 +64,7 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams orbParams;
     // Two surfaces hang off the orb. TAP opens the chat panel: a polished card
     // with bubbles + composer, the place to read the conversation and type.
-    // HOLD or DOUBLE-PRESS opens the voice surface: a compact native transcript
+    // DOUBLE-CLICK-AND-HOLD opens the voice surface: a compact native transcript
     // card showing live user words and the assistant response as separate rows.
     private View panelView;
     private LinearLayout messageColumn;
@@ -357,8 +357,7 @@ public final class OverlayService extends Service {
                 ORB_EDGE_MARGIN_DP,
                 this::handleOrbSingleTap,
                 this::handleOrbDoublePressStart,
-                this::handleOrbLongPressStart,
-                this::handleOrbLongPressRelease
+                this::handleOrbVoicePressRelease
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -1023,7 +1022,7 @@ public final class OverlayService extends Service {
 
         messageColumn.removeAllViews();
         if (messages.isEmpty()) {
-            TextView empty = text("Tap to type. Double-press and hold to talk.", MoaColors.MUTED, 13, false);
+            TextView empty = text("Tap for chat. Double-click and hold to talk.", MoaColors.MUTED, 13, false);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(28), dp(8), dp(28));
             messageColumn.addView(empty);
@@ -1678,29 +1677,10 @@ public final class OverlayService extends Service {
         return "I heard you. The product loop is: capture the command fast, keep context from the current screen, answer in place, and stay out of the way.";
     }
 
-    // TAP the orb = text. Open the chat panel to read the conversation and type.
-    // If voice is listening, a tap sends the current speech now. Otherwise, a
-    // tap during voice cuts/collapses it. A second idle tap closes the panel.
+    // TAP the orb = chat menu. Voice is reserved for double-click-and-hold, so
+    // a normal click never commits, stops, or starts a spoken turn.
     private void handleOrbSingleTap() {
-        if (streamingVoiceActive() && voiceRuntimeState == VoiceRuntimeState.LISTENING && streamingVoiceController != null) {
-            commitStreamingVoiceTurnNow();
-            return;
-        }
-        if (voiceController.isCommandListening()) {
-            voiceController.commitCurrentSpeech();
-            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
-            updateMicState();
-            return;
-        }
-        if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
-            dismissOverlayUi();
-            return;
-        }
-        togglePanel();
-    }
-
-    private void handleOrbLongPressStart() {
-        startPushToTalkVoiceTurn();
+        showPanel();
     }
 
     private void startPushToTalkVoiceTurn() {
@@ -1711,7 +1691,7 @@ public final class OverlayService extends Service {
         startLocalVoiceTurn(true);
     }
 
-    private void handleOrbLongPressRelease() {
+    private void handleOrbVoicePressRelease() {
         if (!pushToTalkVoiceTurn) {
             return;
         }
@@ -1814,8 +1794,8 @@ public final class OverlayService extends Service {
         updateMicState();
     }
 
-    // DOUBLE-PRESS the orb = manual voice. Capture starts on the second press,
-    // and release commits the turn without waiting for provider silence/VAD.
+    // DOUBLE-CLICK-AND-HOLD the orb = manual voice. Capture starts once the
+    // second press is held briefly, and release commits without provider VAD.
     private void handleOrbDoublePressStart() {
         startPushToTalkVoiceTurn();
     }

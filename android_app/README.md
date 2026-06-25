@@ -1,6 +1,6 @@
 # Moa Android Assistant
 
-Android-first Moa assistant prototype. It is a native app that launches a floating animated circle over the phone screen. Double-press and hold the circle to talk; release sends the captured speech immediately without waiting for silence detection. Tap while it is listening to send the current speech immediately; tap while it is thinking or speaking to stop/collapse the active voice surface. Voice-originated replies can speak back with Android TextToSpeech.
+Android-first Moa assistant prototype. It is a native app that launches a floating animated circle over the phone screen. Single tap opens the chat menu. Press and drag moves the circle. Double-click and hold starts voice mode; release sends the captured speech immediately without waiting for silence detection. Voice-originated replies can speak back with Android TextToSpeech.
 
 ## Build
 
@@ -31,9 +31,9 @@ grant overlay or Accessibility access.
 ## Assistant Orb
 
 - Drag: move the orb.
-- Single tap: type while idle, send the current speech while listening, or stop/collapse the active voice surface while thinking/speaking.
-- Double-press and hold: start voice capture; release to send.
-- Long press: start voice capture; release to send.
+- Single tap: open the chat menu for typed input.
+- Click and hold while moving: reposition the orb without starting voice capture.
+- Double-click and hold: start voice capture; release to send.
 
 ## Gateway
 
