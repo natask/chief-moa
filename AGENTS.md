@@ -1,6 +1,6 @@
 # Agent Operating Contract
 
-This file is for coding agents working in `moa-assistant`.
+This file is for coding agents working in `chief-moa`.
 
 ## Required First Reads
 
@@ -42,8 +42,8 @@ For Android-first product work, the active change is usually
 
 ## Verification Defaults
 
-- Android changes: `cd software/android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
-- Gateway changes: `cd software/moa_gateway && npm run check`
+- Android changes: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- Gateway changes: `cd gateway && npm run check`
 - OpenSpec changes: `openspec validate define-android-core-product-map --strict`
 - Runtime behavior: verify with gateway smoke checks or phone QA, whichever is
   closest to the changed behavior.
