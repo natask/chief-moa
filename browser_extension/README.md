@@ -192,14 +192,15 @@ gateway is the live one (`http://10.147.17.10:8788`); override with
 
 1. **Health** — with the URL configured, `GET /health` returns `200 {ok:true}`
    (no token needed). This is the reachability gate.
-2. **Command** — a command submitted in the overlay is sent as `run` →
+2. **Command** — an ordinary command submitted in the overlay is sent as `run` →
    `background.js` `POST /v1/voice/turns` (with `Authorization: Bearer <token>`)
    → the gateway's `display`/`text` reply renders above the command input without
    clearing or replacing its draft.
    The recorder confirms the reply originated from `/v1/voice/turns`.
-3. **Describe** — "describe page" is sent as `describe` → `POST /v1/chat` → the
-   gateway's `text` renders in the same one-current-intent result surface. The
-   recorder confirms it originated from `/v1/chat`.
+3. **Page context** — "describe page" and page/current-page questions collect
+   page evidence, post it to `/v1/browser/evidence`, then send the turn to
+   `/v1/browser/turns`. The gateway reply renders in the same one-current-intent
+   result surface, and returned actions are proposals only.
 4. **Loud failure** — pointed at the gateway with **no/invalid token**, the same
    command hits `POST /v1/voice/turns`, the gateway returns `401`, and the
    overlay renders the clear error above the preserved input draft with a red status dot.

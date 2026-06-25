@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 const requiredFiles = [
+  "package.json",
   "extension/manifest.json",
   "extension/background.js",
   "extension/browser-task-intent.js",
@@ -31,6 +32,7 @@ const requiredFiles = [
   "scripts/smoke-ambient.mjs",
   "scripts/smoke-settings.mjs",
   "scripts/smoke-live-voice-main.mjs",
+  "scripts/smoke-unified-browser-agent.mjs",
 ];
 
 for (const file of requiredFiles) {
@@ -38,6 +40,7 @@ for (const file of requiredFiles) {
 }
 
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
+const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
@@ -196,6 +199,76 @@ if (!/const owner = await getActiveBrowserAgentOwner\(\);[\s\S]{0,420}chrome\.ta
   throw new Error("gateway-queued browser tasks must prefer the active owner tab before falling back to the foreground tab");
 }
 
+if (
+  !/function runBrowserAgentTurn/.test(backgroundSource) ||
+  !/\/v1\/browser\/evidence/.test(backgroundSource) ||
+  !/\/v1\/browser\/turns/.test(backgroundSource) ||
+  !/browserTurnStatusPath/.test(backgroundSource) ||
+  !/\/v1\/browser\/turns\/\$\{encodeURIComponent\(id\)\}\/status/.test(backgroundSource)
+) {
+  throw new Error("background.js must expose one runBrowserAgentTurn orchestrator using browser evidence, turn, and status routes");
+}
+
+const browserAgentTurnBody = sourceBetween(
+  backgroundSource,
+  /async function runBrowserAgentTurn\(/,
+  /function browserTurnId\(/,
+  "runBrowserAgentTurn"
+);
+if (/executeAction\(|cmd:\s*"act"|Input\.dispatch|Page\.navigate/.test(browserAgentTurnBody)) {
+  throw new Error("runBrowserAgentTurn must not execute browser actions, hidden clicks, draws, or navigation in this slice");
+}
+
+if (!/Gateway proposed \$\{actions\.length\} browser action/.test(backgroundSource) || !/not executed in this slice/.test(backgroundSource)) {
+  throw new Error("browser-agent action proposals must render as inert proposal status, not execute");
+}
+
+if (/function describePageViaGateway/.test(backgroundSource) || /callGateway\(cfg,\s*"\/v1\/chat"/.test(backgroundSource)) {
+  throw new Error("describe page must use runBrowserAgentTurn and /v1/browser/turns, not the old /v1/chat path");
+}
+
+if (
+  !/looksLikePageContextQuestion/.test(backgroundSource) ||
+  !/looksLikePageContextQuestion\(instruction\)[\s\S]{0,140}runBrowserAgentTurn/.test(backgroundSource) ||
+  !/function isPageContextTranscript/.test(contentSource) ||
+  !/isProfileControlTranscript\(text\) \|\| isPageContextTranscript\(text\)/.test(contentSource)
+) {
+  throw new Error("typed and final spoken page/current-page questions must route to the shared browser-agent orchestrator");
+}
+
+if (
+  !/BROWSER_AGENT_PROGRESS_TEXT/.test(backgroundSource) ||
+  !/collecting page context/.test(backgroundSource) ||
+  !/capturing screenshot/.test(backgroundSource) ||
+  !/sending to gateway/.test(backgroundSource) ||
+  !/waiting for answer/.test(backgroundSource) ||
+  !/case "browserAgentProgress":/.test(contentSource)
+) {
+  throw new Error("browser-agent turns must render named progress states through the existing result surface");
+}
+
+if (
+  !/MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS/.test(backgroundSource) ||
+  !/function browserScreenshotEvidence/.test(backgroundSource) ||
+  !/encoding:\s*"omitted"/.test(backgroundSource) ||
+  !/screenshot:\s*screenshotEvidence/.test(backgroundSource)
+) {
+  throw new Error("browser-agent screenshot evidence must be capped or omitted before posting to the gateway");
+}
+
+if (
+  !/snapshotId/.test(contentSource) ||
+  !/viewport:\s*\{/.test(contentSource) ||
+  !/capturedAt:\s*new Date\(\)\.toISOString\(\)/.test(contentSource) ||
+  !/elementSummaries:\s*out\.map/.test(contentSource)
+) {
+  throw new Error("content snapshot must include snapshotId, viewport, capturedAt, and element summaries without removing the existing shape");
+}
+
+if (!packageJson.scripts?.["smoke:unified-browser-agent"]) {
+  throw new Error("package.json must expose smoke:unified-browser-agent");
+}
+
 if (/Listening\.\.\.|listening\.\.\.|stopping…|stopping\.\.\./.test(contentSource)) {
   throw new Error("content.js must not render voice lifecycle filler text such as Listening/listening/stopping");
 }
@@ -349,6 +422,7 @@ for (const file of [
   "scripts/smoke-gateway.mjs",
   "scripts/smoke-settings.mjs",
   "scripts/smoke-live-voice-main.mjs",
+  "scripts/smoke-unified-browser-agent.mjs",
   "scripts/smoke-cdp.mjs",
   "scripts/smoke-integration.mjs",
   "scripts/smoke-history.mjs",
@@ -358,7 +432,7 @@ for (const file of [
 }
 
 const { parseSettingsIntent, looksLikeGatewayProfileControlIntent } = await import("../extension/settings-intent.js");
-const { parseBrowserTaskIntent, parseOpenTabIntent } = await import("../extension/browser-task-intent.js");
+const { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } = await import("../extension/browser-task-intent.js");
 const devExtensionSource = readFileSync("scripts/dev-extension.mjs", "utf8");
 const pokeDevReloadSource = readFileSync("scripts/poke-dev-reload.mjs", "utf8");
 
@@ -426,6 +500,29 @@ if (parseOpenTabIntent("open https://example.com/docs and report the title") !==
 }
 if (parseBrowserTaskIntent(setupParagraph) !== null) {
   throw new Error("browser-task parser should not treat setup text as a browser task");
+}
+for (const text of [
+  "summarize this page",
+  "read the current page",
+  "describe this form",
+  "what am I looking at",
+  "what does this button do?",
+  "check this page for errors",
+]) {
+  if (!looksLikePageContextQuestion(text)) {
+    throw new Error(`page-context detector should accept: ${text}`);
+  }
+}
+for (const text of [
+  "say hello",
+  "open https://example.com/docs in a new tab",
+  "open https://example.com/docs and report the title",
+  "change your voice to Kore",
+  setupParagraph,
+]) {
+  if (looksLikePageContextQuestion(text)) {
+    throw new Error(`page-context detector should ignore: ${text.slice(0, 80)}`);
+  }
 }
 
 console.log("extension verification passed");

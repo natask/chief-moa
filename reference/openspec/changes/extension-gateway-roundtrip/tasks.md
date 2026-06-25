@@ -18,3 +18,30 @@
 - [x] 1.12 Add manual browser mark push-to-talk: holding the mark starts a
       gateway voice session with browser silence auto-commit disabled, releasing
       the mark commits the turn, and the manual turn does not re-arm the mic.
+
+## 2. Unified Browser-Agent Turn Path
+
+- [x] 2.1 Gateway: add `POST /v1/browser/evidence` to accept bounded page
+      evidence from the extension, including URL, title, visible page text,
+      actionable element summaries, and screenshot references.
+- [x] 2.2 Gateway: add `POST /v1/browser/turns` as the canonical browser-agent
+      turn route for typed page questions, describe-page requests, and committed
+      browser voice transcripts.
+- [x] 2.3 Gateway: add `GET /v1/browser/turns/{turn_id}/status` returning named
+      turn states, latest progress text, result text, action proposals, and
+      linked receipts.
+- [x] 2.4 Extension: create one background orchestrator for text questions,
+      committed voice transcripts, and describe-page requests, all using the
+      browser evidence and browser turn endpoints.
+- [x] 2.5 Extension: collect bounded page evidence from the content script before
+      browser-agent turns and preserve the rule that page context is evidence,
+      not instruction.
+- [x] 2.6 Extension: show named progress states in the overlay and remove any
+      reliance on an inert debug symbol as the only operational signal.
+- [ ] 2.7 Extension/gateway: accept bounded click/draw/annotate action proposals
+      as proposals only; keep local validation, approval, execution, and receipts
+      browser-owned. The first implementation slice may store/refuse/defer action
+      execution while preserving the receipt contract.
+- [x] 2.8 QA: add a smoke proving a typed page question and a committed spoken
+      page question both hit `POST /v1/browser/turns`; include describe-page on
+      the same route if the smoke fixture can collect page evidence.

@@ -1,0 +1,54 @@
+digraph UnifiedBrowserAgentPath {
+    graph [goal="Typed and spoken page questions use one browser-agent evidence path"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan_contract [
+        label="Plan Contract",
+        prompt="Read scratch/agent-loop/runs/20260625-040434-unified-browser-agent-path and the relevant OpenSpec files. Produce the shared browser-agent turn, evidence, proposal, receipt, and lifecycle contract before implementation."
+    ]
+
+    update_spec [
+        label="Update OpenSpec",
+        prompt="Add or update OpenSpec requirements for unified typed/spoken browser-agent turns, evidence requests, action proposals, receipts, and visible progress states."
+    ]
+
+    implement_gateway [
+        label="Gateway Contract",
+        prompt="Implement the gateway-side route/task lifecycle only after the contract is stable. Preserve model-routing ownership and do not execute browser-local actions on the gateway."
+    ]
+
+    implement_extension [
+        label="Extension Evidence",
+        prompt="Implement the extension-side shared typed/voice route, active-tab ownership, evidence collection, progress rendering, and receipt posting. Do not put provider keys or model routing in the extension."
+    ]
+
+    verify_gateway [
+        label="Gateway Check",
+        shape=parallelogram,
+        script="cd gateway && npm run check 2>&1",
+        goal_gate=true
+    ]
+
+    verify_extension [
+        label="Extension Verify",
+        shape=parallelogram,
+        script="cd browser_extension && npm run verify 2>&1",
+        goal_gate=true
+    ]
+
+    verify_smoke [
+        label="Browser Smoke",
+        shape=parallelogram,
+        script="cd browser_extension && npm run smoke 2>&1",
+        goal_gate=true
+    ]
+
+    approve [shape=hexagon, label="Approve Result"]
+
+    start -> plan_contract -> update_spec -> implement_gateway -> implement_extension -> verify_gateway -> verify_extension -> verify_smoke -> approve
+    approve -> exit [label="[A] Accept"]
+    approve -> plan_contract [label="[R] Revise"]
+}

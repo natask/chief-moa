@@ -1150,6 +1150,7 @@
 
   function routeLiveTranscriptThroughGateway(state, transcript) {
     if (liveVoice !== state || !isLiveVoiceStateActive(state) || state.gatewayRouted) return;
+    const pageContextTurn = isPageContextTranscript(transcript);
     state.gatewayRouted = true;
     state.committed = true;
     stopLiveCapture(state);
@@ -1158,9 +1159,9 @@
     setAgentState("thinking");
     setTranscript(transcript);
     updateCueLabel(state.cueId, transcript);
-    materializeCue(state.cueId, transcript, "updating settings...");
+    materializeCue(state.cueId, transcript, pageContextTurn ? "collecting page context" : "updating settings...");
     sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
-    closeLiveVoiceSession(state, "profile control routed to gateway");
+    closeLiveVoiceSession(state, pageContextTurn ? "page context routed to browser agent" : "profile control routed to gateway");
     untrackLiveVoiceState(state);
     safeRuntimeSendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).then(() => {
       if (extensionContextInvalidated) removeCueCard(state.cueId);
@@ -1409,7 +1410,22 @@
   }
 
   function shouldRouteLiveTranscriptThroughGateway(text) {
-    return isProfileControlTranscript(text);
+    return isProfileControlTranscript(text) || isPageContextTranscript(text);
+  }
+
+  function isPageContextTranscript(text) {
+    const raw = String(text || "").trim();
+    if (!raw || raw.length > 260 || raw.split(/\r?\n/).length > 3) return false;
+    const lower = raw.toLowerCase();
+    if (/\bwhat\s+(?:am i|are we)\s+(?:looking at|seeing|viewing)\b|\bwhat(?:'s| is)\s+on\s+(?:my|this|the)\s+screen\b/i.test(raw)) {
+      return true;
+    }
+    if (!/\b(?:this|current|visible|open|active)\s+(?:web\s*)?(?:page|site|tab|screen|view|button|form|field|link)\b/i.test(raw)) {
+      return false;
+    }
+    return /\b(?:summari[sz]e|read|describe|check|inspect|analy[sz]e|explain|review|scan)\b/i.test(raw) ||
+      /\b(?:what|where|which|who|why|how|can|does|is|are|should)\b/i.test(lower) ||
+      /\?$/.test(raw);
   }
 
   function applySpeechOverlapPolicyFromTranscript(state, text) {
@@ -1726,6 +1742,12 @@
     return text.replace(/\s+/g, " ").trim().slice(0, 80);
   }
 
+  function snapshotElementSummary(item) {
+    const type = item.type ? ` ${item.type}` : "";
+    const labelText = item.label ? ` ${item.label}` : "";
+    return `[${item.i}] <${item.tag}${type}>${labelText}`;
+  }
+
   const RISKY_TEXT = /\b(delete|remove|submit|send|pay|purchase|buy|checkout|confirm|transfer|withdraw|archive|sign out|log out|logout)\b/i;
 
   function needsConfirmation(el, req) {
@@ -1750,7 +1772,22 @@
       indexed.push(el);
       out.push({ i, tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "", label: label(el) });
     });
-    return { url: location.href, title: document.title, pageText: visiblePageText(), elements: out };
+    return {
+      url: location.href,
+      title: document.title,
+      pageText: visiblePageText(),
+      elements: out,
+      snapshotId: `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      viewport: {
+        width: innerWidth,
+        height: innerHeight,
+        deviceScaleFactor: devicePixelRatio || 1,
+        scrollX,
+        scrollY,
+      },
+      capturedAt: new Date().toISOString(),
+      elementSummaries: out.map(snapshotElementSummary),
+    };
   }
 
   // ---- Action -----------------------------------------------------------
@@ -1849,6 +1886,13 @@
         return true;
       case "progress":
         updateCue(msg.cueId, msg.text, "running");
+        return false;
+      case "browserAgentProgress":
+        updateCue(
+          msg.cueId,
+          msg.text,
+          msg.state === "error" ? "error" : msg.state === "done" ? "done" : "running"
+        );
         return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");
