@@ -7,6 +7,7 @@ import android.util.Log;
 
 import org.json.JSONObject;
 
+import java.util.ArrayDeque;
 import java.util.UUID;
 
 final class MoaStreamingVoiceSessionController {
@@ -17,6 +18,7 @@ final class MoaStreamingVoiceSessionController {
     private static final long AUTO_COMMIT_MAX_RECORDING_MS = 12000;
     private static final long AUTO_COMMIT_CHECK_MS = 100;
     private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 900;
+    private static final int MAX_PENDING_AUDIO_BYTES = MoaAudioCaptureController.SAMPLE_RATE_HZ * 2 * 5;
 
     interface Callback {
         void onSessionStarted(String sessionId, String turnId);
@@ -64,6 +66,11 @@ final class MoaStreamingVoiceSessionController {
     private boolean committed;
     private boolean assistantAudioStarted;
     private boolean loggedVoiceActivity;
+    private boolean sessionReady;
+    private boolean pendingCommitAfterSessionReady;
+    private final ArrayDeque<byte[]> pendingAudioChunks = new ArrayDeque<>();
+    private int pendingAudioBytes;
+    private long capturedAudioBytes;
     private long recordingStartedAtMs;
     private long lastVoiceActivityAtMs;
 
@@ -116,6 +123,10 @@ final class MoaStreamingVoiceSessionController {
             committed = false;
             assistantAudioStarted = false;
             loggedVoiceActivity = false;
+            sessionReady = false;
+            pendingCommitAfterSessionReady = false;
+            clearPendingAudioLocked();
+            capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
             sessionId = requestedSessionId.isEmpty() ? "mobile-" + UUID.randomUUID().toString() : requestedSessionId;
@@ -126,31 +137,37 @@ final class MoaStreamingVoiceSessionController {
             gatewaySocket.connect();
         }
         post(() -> callback.onSessionStarted(sessionId(), turnId()));
+        startCaptureIfNeeded();
     }
 
     void commitTurn() {
         MoaAudioCaptureController capture;
         MoaVoiceGatewaySocket socket;
         String currentTurnId;
+        boolean shouldFinishNow;
+        boolean hasAudio;
         synchronized (lock) {
             if (!active || committed) {
                 return;
             }
             committed = true;
             Log.i(TAG, "commitTurn turn_id=" + turnId);
+            pendingCommitAfterSessionReady = !sessionReady;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
             capture = captureController;
             socket = gatewaySocket;
             currentTurnId = turnId;
+            shouldFinishNow = sessionReady;
+            hasAudio = capturedAudioBytes > 0;
         }
         mainHandler.removeCallbacks(autoCommitCheck);
 
         if (capture != null) {
             capture.stop();
         }
-        if (socket != null && !socket.sendCommitTurn(currentTurnId)) {
-            reportError("Could not send commit_turn to voice gateway.", null);
+        if (shouldFinishNow) {
+            finishCommittedTurn(socket, currentTurnId, hasAudio);
         }
     }
 
@@ -168,6 +185,10 @@ final class MoaStreamingVoiceSessionController {
             committed = false;
             assistantAudioStarted = false;
             loggedVoiceActivity = false;
+            sessionReady = false;
+            pendingCommitAfterSessionReady = false;
+            clearPendingAudioLocked();
+            capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
         }
@@ -203,6 +224,10 @@ final class MoaStreamingVoiceSessionController {
             committed = false;
             assistantAudioStarted = false;
             loggedVoiceActivity = false;
+            sessionReady = false;
+            pendingCommitAfterSessionReady = false;
+            clearPendingAudioLocked();
+            capturedAudioBytes = 0;
             sessionId = "";
             turnId = "";
             recordingStartedAtMs = 0;
@@ -240,7 +265,7 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
-    private void startCaptureAfterSessionReady() {
+    private void startCaptureIfNeeded() {
         MoaAudioCaptureController capture;
         synchronized (lock) {
             if (!active || committed) {
@@ -248,10 +273,51 @@ final class MoaStreamingVoiceSessionController {
             }
             capture = captureController;
         }
-        if (capture != null) {
+        if (capture != null && !capture.isRecording()) {
             Log.i(TAG, "startCapture autoCommit=" + autoCommitOnSilence);
             capture.start();
-            scheduleAutoCommitIfNeeded();
+        }
+    }
+
+    private boolean markSessionReadyAndFlushAudio(MoaVoiceGatewaySocket socket) {
+        if (socket == null) {
+            reportError("Could not send audio to voice gateway.", null);
+            return false;
+        }
+        while (true) {
+            byte[] chunk;
+            synchronized (lock) {
+                chunk = pendingAudioChunks.pollFirst();
+                if (chunk == null) {
+                    pendingAudioBytes = 0;
+                    sessionReady = true;
+                    return true;
+                }
+                pendingAudioBytes = Math.max(0, pendingAudioBytes - chunk.length);
+            }
+            if (socket != null && !socket.sendAudio(chunk)) {
+                reportError("Could not send buffered audio frame to voice gateway.", null);
+                return false;
+            }
+        }
+    }
+
+    private void finishCommittedTurn(MoaVoiceGatewaySocket socket, String currentTurnId, boolean hasAudio) {
+        if (socket == null) {
+            reportError("Could not send commit_turn to voice gateway.", null);
+            return;
+        }
+        if (!markSessionReadyAndFlushAudio(socket)) {
+            return;
+        }
+        if (!hasAudio) {
+            if (!socket.sendCancelTurn(currentTurnId)) {
+                reportError("Could not cancel empty voice turn.", null);
+            }
+            return;
+        }
+        if (!socket.sendCommitTurn(currentTurnId)) {
+            reportError("Could not send commit_turn to voice gateway.", null);
         }
     }
 
@@ -265,6 +331,10 @@ final class MoaStreamingVoiceSessionController {
             active = false;
             committed = false;
             loggedVoiceActivity = false;
+            sessionReady = false;
+            pendingCommitAfterSessionReady = false;
+            clearPendingAudioLocked();
+            capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
             shouldStopPlayback = !assistantAudioStarted || !"completed".equals(status);
@@ -347,6 +417,23 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
+    private void bufferAudioLocked(byte[] pcm) {
+        if (pcm == null || pcm.length == 0) {
+            return;
+        }
+        pendingAudioChunks.addLast(pcm);
+        pendingAudioBytes += pcm.length;
+        while (pendingAudioBytes > MAX_PENDING_AUDIO_BYTES && !pendingAudioChunks.isEmpty()) {
+            byte[] dropped = pendingAudioChunks.removeFirst();
+            pendingAudioBytes = Math.max(0, pendingAudioBytes - dropped.length);
+        }
+    }
+
+    private void clearPendingAudioLocked() {
+        pendingAudioChunks.clear();
+        pendingAudioBytes = 0;
+    }
+
     private static boolean hasVoiceActivity(byte[] pcm) {
         long total = 0;
         int samples = 0;
@@ -380,11 +467,22 @@ final class MoaStreamingVoiceSessionController {
         public void onPcmChunk(byte[] pcm) {
             MoaVoiceGatewaySocket socket;
             boolean shouldSend;
+            boolean shouldBuffer;
             synchronized (lock) {
                 socket = gatewaySocket;
-                shouldSend = active && !committed;
+                shouldSend = active && !committed && sessionReady;
+                shouldBuffer = active && !committed && !sessionReady;
+                if (active && !committed && pcm != null) {
+                    capturedAudioBytes += pcm.length;
+                }
+                if (shouldBuffer) {
+                    bufferAudioLocked(pcm);
+                }
             }
             markVoiceActivity(pcm);
+            if (shouldBuffer) {
+                return;
+            }
             if (socket != null && shouldSend && !socket.sendAudio(pcm)) {
                 reportError("Could not send audio frame to voice gateway.", null);
             }
@@ -393,6 +491,7 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onCaptureStarted() {
             Log.i(TAG, "recordingStarted");
+            scheduleAutoCommitIfNeeded();
             post(() -> callback.onRecordingStarted());
         }
 
@@ -437,6 +536,10 @@ final class MoaStreamingVoiceSessionController {
                 active = false;
                 committed = false;
                 loggedVoiceActivity = false;
+                sessionReady = false;
+                pendingCommitAfterSessionReady = false;
+                clearPendingAudioLocked();
+                capturedAudioBytes = 0;
                 recordingStartedAtMs = 0;
                 lastVoiceActivityAtMs = 0;
             }
@@ -457,6 +560,10 @@ final class MoaStreamingVoiceSessionController {
                 committed = false;
                 assistantAudioStarted = false;
                 loggedVoiceActivity = false;
+                sessionReady = false;
+                pendingCommitAfterSessionReady = false;
+                clearPendingAudioLocked();
+                capturedAudioBytes = 0;
                 recordingStartedAtMs = 0;
                 lastVoiceActivityAtMs = 0;
             }
@@ -476,8 +583,25 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onSessionReady(String readySessionId) {
+            MoaVoiceGatewaySocket socket;
+            String currentTurnId;
+            boolean shouldFinishCommit;
+            boolean hasAudio;
+            synchronized (lock) {
+                socket = gatewaySocket;
+                currentTurnId = turnId;
+                shouldFinishCommit = active && committed && pendingCommitAfterSessionReady;
+                pendingCommitAfterSessionReady = false;
+                hasAudio = capturedAudioBytes > 0;
+            }
             Log.i(TAG, "sessionReady");
-            startCaptureAfterSessionReady();
+            if (shouldFinishCommit) {
+                finishCommittedTurn(socket, currentTurnId, hasAudio);
+            } else {
+                if (markSessionReadyAndFlushAudio(socket)) {
+                    startCaptureIfNeeded();
+                }
+            }
             post(() -> callback.onSessionReady(readySessionId));
         }
 
