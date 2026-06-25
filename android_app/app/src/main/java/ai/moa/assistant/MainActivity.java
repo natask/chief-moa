@@ -148,7 +148,7 @@ public final class MainActivity extends Activity {
         root.addView(title);
 
         TextView body = new TextView(this);
-        body.setText("Enable draw-over-apps, start the assistant circle, then tap to type or double-tap to talk.");
+        body.setText("Enable draw-over-apps, start the assistant circle, then tap to type or double-tap for continuous voice.");
         body.setTextColor(0xCCEEF8E8);
         body.setTextSize(15);
         body.setLineSpacing(dp(3), 1f);
@@ -265,8 +265,8 @@ public final class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "What this build does");
         addBullet(card, "Floating animated circle over other apps.");
-        addBullet(card, "Tap the orb to type; double-tap to talk, like the browser mark.");
-        addBullet(card, "Double-tap again while listening submits the current transcript.");
+        addBullet(card, "Tap the orb to type; double-tap starts continuous voice, like the browser mark.");
+        addBullet(card, "Silence commits each spoken turn and the mic re-arms after the reply.");
         addBullet(card, "Gemini-style live transcript overlay while speaking.");
         addBullet(card, "Voice streams through Gemini Live only after an explicit voice gesture.");
         addBullet(card, "Screen access reads visible app text and passes it to gateway replies and home-machine agent runs.");

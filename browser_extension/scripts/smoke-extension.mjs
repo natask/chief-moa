@@ -310,6 +310,29 @@ async function main() {
       throw new Error(`overlay exposed hidden history/voice surfaces while idle: ${JSON.stringify(overlayMetrics)}`);
     }
 
+    const resultPlacement = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        await chrome.tabs.sendMessage(tabId, { cmd: "done", cueId: "smoke-result-placement", summary: "Smoke reply stays above the input." });
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const input = document.querySelector("#agee-input");
+            const log = document.querySelector("#agee-log");
+            return {
+              inputValue: input ? input.value : null,
+              logText: log ? log.textContent : "",
+            };
+          },
+        });
+        return result?.result;
+      })()
+    `);
+    if (resultPlacement?.inputValue !== "" || !String(resultPlacement?.logText || "").includes("Smoke reply stays above the input.")) {
+      throw new Error(`reply was not kept out of the command input: ${JSON.stringify(resultPlacement)}`);
+    }
+
     const workerResult = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};

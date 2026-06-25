@@ -223,7 +223,8 @@ function configureStorageExpr(url, token) {
 
 // Drive the overlay the way a real submit does: the content script sends
 // { cmd: "run" | "describe" } to the background, which calls the live gateway and
-// posts { cmd: "done"|"error" } back. We then read the replaced field value.
+// posts { cmd: "done"|"error" } back. We then read the result stack and confirm
+// the composer stays clear for the next command.
 function triggerExpr(cmd, instruction) {
   const msg = cmd === "run"
     ? `{ cmd: "run", instruction: ${JSON.stringify(instruction)} }`
@@ -242,8 +243,9 @@ function triggerExpr(cmd, instruction) {
   `;
 }
 
-// Wait for a NEW terminal state in the hidden one-turn ledger, then return the
-// user-visible field value. The visible product surface is not a chat log.
+// Wait for a NEW terminal state in the one-turn result stack, then return the
+// stack text plus the composer value. The visible product surface is not chat
+// history; final cards linger briefly above an empty input.
 function renderedReplyExpr() {
   return `
     (() => {
@@ -399,13 +401,13 @@ async function main() {
       const reply = await waitForEval(pageCdp, renderedReplyExpr(), 20000, { contextId: contentCtx });
       const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/voice/turns"));
       const usedDefaultGateway = call && call.url && String(call.url).startsWith(`${GATEWAY_URL}/`);
-      const didNotShowMissingUrl = !/No gateway URL/i.test(reply?.text || "");
+      const didNotShowMissingUrl = !/No gateway URL/i.test(`${reply?.text || ""} ${reply?.ledgerText || ""}`);
       const reachedGateway = call && (call.status === 401 || call.ok === true);
-      const noVisibleLog = reply?.logVisible === false;
-      if (usedDefaultGateway && didNotShowMissingUrl && reachedGateway && noVisibleLog) {
+      const resultVisible = reply?.logVisible === true && reply?.text === "";
+      if (usedDefaultGateway && didNotShowMissingUrl && reachedGateway && resultVisible) {
         pass(
           "blank URL storage reached the baked gateway",
-          `POST /v1/voice/turns -> HTTP ${call.status}; no missing-URL overlay error; log hidden`,
+          `POST /v1/voice/turns -> HTTP ${call.status}; no missing-URL overlay error; input clear`,
         );
       } else {
         failures++;
@@ -453,9 +455,10 @@ async function main() {
 
       const looksLikeAuthError =
         reply.kind === "error" &&
-        /401|token|unauthor/i.test(reply.text) &&
-        reply.text.trim().length > 0;
-      const noVisibleLog = reply?.logVisible === false;
+        /401|token|unauthor/i.test(reply.ledgerText) &&
+        reply.ledgerText.trim().length > 0 &&
+        reply.text === "";
+      const resultVisible = reply?.logVisible === true;
 
       // Prove it actually reached the live gateway and got a 401 (loud, not silent).
       const got401 = call && call.status === 401;
@@ -463,12 +466,12 @@ async function main() {
       // Prove the overlay dot also reflects the error state (visible signal).
       const dotState = await evaluate(pageCdp, `(() => { const d = document.querySelector("#agee-dot"); return d ? d.className : null; })()`, { contextId: contentCtx });
 
-      if (looksLikeAuthError && got401 && dotState === "error" && noVisibleLog) {
+      if (looksLikeAuthError && got401 && dotState === "error" && resultVisible) {
         pass(
           "unauthorized command rendered a clear error",
-          `gateway POST /v1/voice/turns -> HTTP 401; field error + red dot; log hidden`,
+          `gateway POST /v1/voice/turns -> HTTP 401; result card + red dot; input clear`,
         );
-        console.log(`         overlay error text: "${reply.text.trim()}"`);
+        console.log(`         overlay error text: "${reply.ledgerText.trim()}"`);
       } else {
         failures++;
         console.log(`  [FAIL] expected a loud auth error in the overlay.`);
@@ -495,13 +498,13 @@ async function main() {
         await evaluate(pageCdp, triggerExpr("run", "Say a one word greeting."), { contextId: contentCtx });
         const reply = await waitForEval(pageCdp, renderedReplyExpr(), 60000, { contextId: contentCtx });
         const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/voice/turns"));
-        const ok = reply.kind === "done" && reply.logVisible === false && call && call.ok === true && call.status === 200;
+        const ok = reply.kind === "done" && reply.text === "" && reply.logVisible === true && call && call.ok === true && call.status === 200;
         if (ok) {
           pass(
             "command reply originated from /v1/voice/turns",
-            `gateway POST /v1/voice/turns -> HTTP 200; field replaced; log hidden`,
+            `gateway POST /v1/voice/turns -> HTTP 200; result card rendered; input clear`,
           );
-          console.log(`         overlay reply: "${reply.text.trim().slice(0, 200)}"`);
+          console.log(`         overlay reply: "${reply.ledgerText.trim().slice(0, 200)}"`);
         } else {
           failures++;
           console.log(`  [FAIL] command did not round-trip cleanly through /v1/voice/turns.`);
@@ -516,13 +519,13 @@ async function main() {
         await evaluate(pageCdp, triggerExpr("describe"), { contextId: contentCtx });
         const reply = await waitForEval(pageCdp, renderedReplyExpr(), 60000, { contextId: contentCtx });
         const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/chat"));
-        const ok = reply.kind === "done" && reply.logVisible === false && call && call.ok === true && call.status === 200;
+        const ok = reply.kind === "done" && reply.text === "" && reply.logVisible === true && call && call.ok === true && call.status === 200;
         if (ok) {
           pass(
             "describe reply originated from /v1/chat",
-            `gateway POST /v1/chat -> HTTP 200; field replaced; log hidden`,
+            `gateway POST /v1/chat -> HTTP 200; result card rendered; input clear`,
           );
-          console.log(`         overlay description: "${reply.text.trim().slice(0, 200)}"`);
+          console.log(`         overlay description: "${reply.ledgerText.trim().slice(0, 200)}"`);
         } else {
           failures++;
           console.log(`  [FAIL] describe did not round-trip cleanly through /v1/chat.`);

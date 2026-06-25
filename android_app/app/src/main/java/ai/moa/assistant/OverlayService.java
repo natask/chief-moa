@@ -1555,9 +1555,21 @@ public final class OverlayService extends Service {
     }
 
     // TAP the orb = text. Open the chat panel to read the conversation and type.
-    // If voice is mid-flight, a tap cuts it instead of opening the panel ("shut
-    // up" by touch). A second tap closes the panel.
+    // If voice is listening, a tap sends the current speech now. Otherwise, a
+    // tap during voice cuts/collapses it. A second idle tap closes the panel.
     private void handleOrbSingleTap() {
+        if (streamingVoiceActive() && voiceRuntimeState == VoiceRuntimeState.LISTENING && streamingVoiceController != null) {
+            streamingVoiceController.commitTurn();
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            updateMicState();
+            return;
+        }
+        if (voiceController.isCommandListening()) {
+            voiceController.commitCurrentSpeech();
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            updateMicState();
+            return;
+        }
         if (streamingVoiceActive() || voiceController.isActive() || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
             dismissOverlayUi();
             return;
@@ -1596,10 +1608,9 @@ public final class OverlayService extends Service {
         updateMicState();
     }
 
-    // DOUBLE-TAP the orb = voice, like the extension mark. The first double-tap
-    // begins a streaming voice turn and lights the orb (glow); the next double-tap
-    // while listening sends what was heard. Starting cuts off any reply still
-    // playing (barge-in); while an agent is mid-run it steers that run.
+    // DOUBLE-TAP the orb = voice, like the extension mark. It starts a
+    // continuous streaming loop: speak, pause, let silence commit the turn, hear
+    // the reply, then the mic re-arms. Tap the orb to stop/collapse it.
     private void handleOrbDoubleTap() {
         if (!streamingVoiceAvailable()) {
             handleLocalVoiceDoubleTap();
@@ -1615,9 +1626,7 @@ public final class OverlayService extends Service {
             updateMicState();
             return;
         }
-        // First double-tap: start listening.
-        continuousVoiceLoop = false;
-        cancelContinuousVoiceRestart();
+        // First double-tap: start the continuous conversation loop.
         voiceController.stopQuietly();
         if (orbView != null) {
             orbView.setHeld(true);
@@ -1626,7 +1635,7 @@ public final class OverlayService extends Service {
         resetVoiceTurnTranscript();
         showTranscriptOverlay("");
         setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
-        startStreamingVoiceTurn(false);
+        startContinuousStreamingVoiceTurn();
     }
 
     private void handleLocalVoiceDoubleTap() {

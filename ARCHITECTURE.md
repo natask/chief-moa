@@ -64,22 +64,27 @@ Hold the orb (push-to-talk)
   -> phone updates transcript/chat and may speak or play the short response
 ```
 
-Orb gestures (overlay): hold to speak, release to send; by default a held turn
-cuts off any reply playing (barge-in) and steers an active agent run. A quick
-tap opens the typing panel. Drag repositions. The browser extension mirrors this
-hands-on-keyboard: Cmd+K (Ctrl+K) opens the text intent field and Cmd+.
-(Ctrl+.) wakes voice. Browser voice can opt a session into background assistant
-speech, where starting a new spoken turn opens a new gateway voice turn without
-stopping already queued assistant audio.
+Orb gestures (overlay): double-tap starts a continuous streaming voice loop;
+silence commits each turn and the mic re-arms after the reply. A quick tap sends
+the current speech while the loop is listening; otherwise it opens or collapses
+the typing/voice surface. Drag repositions. The browser extension
+mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
+Cmd+. (Ctrl+.) wakes voice. Browser voice auto-commits after speech silence and
+then re-arms while conversation mode is active; one click on the Moa mark while
+listening commits the current captured speech immediately. Browser voice can opt
+a session into background assistant speech, where starting a new spoken turn
+opens a new gateway voice turn without stopping already queued assistant audio.
 
 The overlay surface stays small: it shows the current intent/result and compact
-run state, not a full scrollback manager. Browser text replies replace the typed
-intent in the same field; browser voice is icon-first and does not open a
-transcript panel by default. The gateway still stores durable session, branch,
-turn, transcript, provider-event, and agent-run history. Realtime providers
-receive a bounded Moa-owned context pack at session start so provider memory is
-not the product database. If the user wants history, they ask Moa for it through
-the same intent surface instead of browsing visible scrollback.
+run state, not a full scrollback manager. Browser text replies render in the
+result stack above the command input; the input clears and stays ready for the
+next command. Browser voice keeps that input available, shows partial/final user
+transcript feedback above it, and streams assistant text into the result stack
+above the input. The gateway still stores durable session, branch, turn, transcript,
+provider-event, and agent-run history. Realtime providers receive a bounded
+Moa-owned context pack at session start so provider memory is not the product
+database. If the user wants history, they ask Moa for it through the same intent
+surface instead of browsing visible scrollback.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript

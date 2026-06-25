@@ -1,6 +1,6 @@
 # Moa Android Assistant
 
-Android-first Moa assistant prototype. It is a native app that launches a floating animated circle over the phone screen. Press the circle or mic button to start one explicit voice turn, press again while listening to submit the current transcript, double tap to stop silently, or long press to open chat. Voice-originated replies can speak back with Android TextToSpeech.
+Android-first Moa assistant prototype. It is a native app that launches a floating animated circle over the phone screen. Double-tap the circle to start a continuous voice loop: speak, pause, hear the reply, and keep talking. Tap while it is listening to send the current speech immediately; tap while it is thinking or speaking to stop/collapse the active voice surface. Voice-originated replies can speak back with Android TextToSpeech.
 
 ## Build
 
@@ -27,9 +27,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ## Assistant Orb
 
 - Drag: move the orb.
-- Single tap while idle: start one explicit voice turn.
-- Single tap while listening: send the current transcript and start the next turn.
-- Double tap: stop listening and speech without a confirmation reply.
+- Single tap: type while idle, send the current speech while listening, or stop/collapse the active voice surface while thinking/speaking.
+- Double tap: start the continuous voice loop.
 - Long press: send a spoken follow-up to the active agent run; if no run is active, open or minimize the chat panel.
 
 ## Gateway
@@ -53,7 +52,7 @@ npm start
 - Overlay chat panel with text input.
 - Android `SpeechRecognizer` mic input.
 - Android `AccessibilityService` screen context for visible text/buttons.
-- Local overlay commands: `/screen`, `/tap <visible label>`, `/back`, and `/home`.
+- Local overlay commands: `/screen`, `/tap <visible label>`, `/back`, `/home`, and `/open app <name>`.
 - Spoken build/fix/change/test commands route to the home-machine Gemini harness through Moa Gateway.
 - Android `TextToSpeech` voice replies.
 - Self-hosted gateway replies with local fallback when the server is unavailable.

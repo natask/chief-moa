@@ -5,7 +5,7 @@
 
 import { getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
 import { parseSettingsIntent, parseProfileQueryIntent } from "./settings-intent.js";
-import { parseBrowserTaskIntent } from "./browser-task-intent.js";
+import { parseBrowserTaskIntent, parseOpenTabIntent } from "./browser-task-intent.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
@@ -27,6 +27,12 @@ const tasks = new Map();
 const voiceSessions = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
+const VOICE_AUTO_COMMIT_ENABLED = true;
+const VOICE_AUTO_COMMIT_SILENCE_MS = 900;
+const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
+const VOICE_AUTO_COMMIT_MAX_RECORDING_MS = 18000;
+const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
+const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
 
@@ -840,11 +846,20 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
       id,
       tabId,
       ws,
+      turnId,
       opened: false,
       attached: false,
       pendingEvents: [],
       capture: capture || "content-script",
       captureStarted: false,
+      autoCommitEnabled: VOICE_AUTO_COMMIT_ENABLED,
+      audioStartedAt: 0,
+      lastSpeechAt: 0,
+      speechMs: 0,
+      recordingMs: 0,
+      committed: false,
+      autoCommitTimer: null,
+      maxCommitTimer: null,
     };
     voiceSessions.set(id, session);
     ws.binaryType = "arraybuffer";
@@ -978,7 +993,9 @@ async function forwardVoiceSessionEvent(session, event) {
 function sendVoiceSessionAudio(id, audio) {
   const session = voiceSessions.get(id);
   if (!session?.ws || session.ws.readyState !== WebSocket.OPEN) return { ok: false, error: "voice session is not open" };
-  session.ws.send(base64ToBuffer(audio));
+  const buffer = base64ToBuffer(audio);
+  noteVoiceSessionAudio(session, buffer);
+  session.ws.send(buffer);
   return { ok: true };
 }
 
@@ -986,6 +1003,8 @@ async function sendVoiceSessionControl(id, message) {
   const session = voiceSessions.get(id);
   if (!session?.ws || session.ws.readyState !== WebSocket.OPEN) return { ok: false, error: "voice session is not open" };
   if (message?.type === "commit_turn" || message?.type === "cancel_turn") {
+    session.committed = true;
+    clearVoiceAutoCommit(session);
     await stopOffscreenVoiceCapture(id);
   }
   session.ws.send(JSON.stringify(message || {}));
@@ -998,10 +1017,99 @@ function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   session.closedReason = reason;
   session.revoked = revoked === true;
   voiceSessions.delete(id);
+  clearVoiceAutoCommit(session);
   stopOffscreenVoiceCapture(id).catch(() => {});
   try {
     session.ws.close(1000, reason);
   } catch {}
+}
+
+function noteVoiceSessionAudio(session, buffer) {
+  if (!session?.autoCommitEnabled || session.committed || !buffer?.byteLength) return;
+  const now = Date.now();
+  const durationMs = Math.max(1, Math.round((buffer.byteLength / 2 / 16000) * 1000));
+  session.audioStartedAt ||= now;
+  session.recordingMs = (session.recordingMs || 0) + durationMs;
+  const activity = pcm16VoiceActivity(buffer);
+  if (activity.speech) {
+    session.lastSpeechAt = now;
+    session.speechMs = (session.speechMs || 0) + durationMs;
+  }
+  if (
+    !activity.speech &&
+    session.lastSpeechAt &&
+    (session.speechMs || 0) >= VOICE_AUTO_COMMIT_MIN_SPEECH_MS &&
+    now - session.lastSpeechAt >= VOICE_AUTO_COMMIT_SILENCE_MS
+  ) {
+    autoCommitVoiceSession(session.id, "silence audio").catch(() => {});
+    return;
+  }
+  if (session.lastSpeechAt) {
+    scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS);
+  }
+  if (session.lastSpeechAt && !session.maxCommitTimer) {
+    session.maxCommitTimer = setTimeout(() => {
+      autoCommitVoiceSession(session.id, "max recording reached").catch(() => {});
+    }, VOICE_AUTO_COMMIT_MAX_RECORDING_MS);
+  }
+}
+
+function pcm16VoiceActivity(buffer) {
+  const view = new DataView(buffer);
+  const samples = Math.floor(buffer.byteLength / 2);
+  if (!samples) return { speech: false, rms: 0, peak: 0 };
+  let sumSquares = 0;
+  let peak = 0;
+  for (let offset = 0; offset + 1 < buffer.byteLength; offset += 2) {
+    const sample = view.getInt16(offset, true) / 32768;
+    const abs = Math.abs(sample);
+    sumSquares += sample * sample;
+    if (abs > peak) peak = abs;
+  }
+  const rms = Math.sqrt(sumSquares / samples);
+  return {
+    speech: rms >= VOICE_ACTIVITY_RMS_THRESHOLD || peak >= VOICE_ACTIVITY_PEAK_THRESHOLD,
+    rms,
+    peak,
+  };
+}
+
+function scheduleVoiceAutoCommit(session, delayMs) {
+  if (!session || session.committed) return;
+  if (session.autoCommitTimer) clearTimeout(session.autoCommitTimer);
+  session.autoCommitTimer = setTimeout(() => {
+    autoCommitVoiceSession(session.id, "silence after speech").catch(() => {});
+  }, Math.max(120, delayMs));
+}
+
+async function autoCommitVoiceSession(id, reason) {
+  const session = voiceSessions.get(id);
+  if (!session || session.committed || !session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+  if (!session.lastSpeechAt || (session.speechMs || 0) < VOICE_AUTO_COMMIT_MIN_SPEECH_MS) {
+    scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS);
+    return;
+  }
+  const silenceMs = Date.now() - session.lastSpeechAt;
+  if (reason !== "max recording reached" && silenceMs < VOICE_AUTO_COMMIT_SILENCE_MS) {
+    scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS - silenceMs);
+    return;
+  }
+  session.committed = true;
+  clearVoiceAutoCommit(session);
+  await stopOffscreenVoiceCapture(id);
+  session.ws.send(JSON.stringify({
+    type: "commit_turn",
+    turn_id: session.turnId,
+    reason: `browser_auto_commit:${reason}`,
+  }));
+}
+
+function clearVoiceAutoCommit(session) {
+  if (!session) return;
+  if (session.autoCommitTimer) clearTimeout(session.autoCommitTimer);
+  if (session.maxCommitTimer) clearTimeout(session.maxCommitTimer);
+  session.autoCommitTimer = null;
+  session.maxCommitTimer = null;
 }
 
 function closeTabVoiceSessions(tabId) {
@@ -1221,6 +1329,9 @@ async function runAgent(tabId, instruction, controller, cueId) {
       await runBranchTaskAgent(tabId, browserTask.instruction, browserTask.url, controller, cueId);
       return;
     }
+    if (await maybeOpenRequestedTab(tabId, instruction, signal, cueId)) {
+      return;
+    }
     await runViaGateway(tabId, instruction, cfg, signal, cueId);
   } catch (err) {
     const message = signal.aborted ? "Task cancelled." : String(err.message || err);
@@ -1229,6 +1340,29 @@ async function runAgent(tabId, instruction, controller, cueId) {
   } finally {
     if (tasks.get(cueId)?.controller === controller) tasks.delete(cueId);
   }
+}
+
+async function maybeOpenRequestedTab(tabId, instruction, signal, cueId) {
+  const intent = parseOpenTabIntent(instruction);
+  if (!intent) return false;
+  throwIfAborted(signal);
+  const url = new URL(intent.url);
+  if (!ALLOWED_NAVIGATION_PROTOCOLS.has(url.protocol)) {
+    send(tabId, { cmd: "error", cueId, text: `Blocked unsupported URL: ${intent.url}` });
+    return true;
+  }
+  const opened = await chrome.tabs.create({ url: url.href, active: true });
+  const summary = `Opened ${opened.url || url.href}.`;
+  send(tabId, { cmd: "done", cueId, summary });
+  await saveTaskState(cueId, {
+    status: "done",
+    instruction,
+    step: 1,
+    tabId,
+    lastResult: summary,
+    openedTabId: opened.id,
+  });
+  return true;
 }
 
 // ---- CDP task agent (router → disposable background-tab agent) -------------

@@ -76,3 +76,12 @@
 - [x] 9.3 Add full-app update check, APK checksum verification, and package-installer handoff.
 - [x] 9.4 Add commit-triggered GitHub Actions build and main-machine OTA deploy workflow.
 - [x] 9.5 Verify with Android debug build, gateway syntax check, OpenSpec validation, and a main-machine OTA smoke test. Verified 2026-06-20: `assembleDebug` BUILD SUCCESSFUL (app-debug.apk produced); `npm run check` ok with all profile/voice checks passing; `openspec validate define-android-core-product-map --strict` valid; OTA endpoint `/v1/android/updates/latest` serves version 0.1.1781720954 (git_sha 9719b68). Note: the served OTA build is from 2026-06-17; publishing a fresh OTA from current HEAD is a separate deploy step.
+
+## 10. Cross-Device Tool Hub
+
+- [ ] 10.1 Define the gateway device-client registry: device id, surface type, session id, online status, local tool manifest, and last heartbeat.
+- [ ] 10.2 Define cross-device tool request/receipt records so a browser turn can request a phone action and a phone turn can request a browser action without bypassing local approval.
+- [ ] 10.3 Add Android device-client heartbeat and a minimal safe local tool manifest including `app.launch`, `system.back`, `system.home`, `screen.summary`, and `screen.tap_text`.
+- [ ] 10.4 Add browser extension device-client heartbeat and a minimal safe local tool manifest including `browser.tab.open`, queued browser task claim/receipt, and page-context snapshot.
+- [ ] 10.5 Add gateway APIs for listing active agents/runs/tool executions from any surface.
+- [ ] 10.6 Add a first cross-device smoke: browser requests Android to speak a short message; Android validates locally, speaks it, and receipts it through the gateway.

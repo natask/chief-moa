@@ -159,6 +159,14 @@
         suppressLauncherClick = false;
         return;
       }
+      if (liveVoice && listening) {
+        if (clickTimer) {
+          clearTimeout(clickTimer);
+          clickTimer = null;
+        }
+        commitLiveVoiceTurn();
+        return;
+      }
       if (clickTimer) {
         clearTimeout(clickTimer);
         clickTimer = null;
@@ -348,15 +356,12 @@
     if (input) input.readOnly = false;
   }
 
-  // Show the log whenever it holds anything (cards or confirm rows), so streamed
-  // answers stack just above the composer.
+  // Show the result stack whenever it holds anything (running, done, error, or
+  // confirm rows), so answers sit above the composer until their linger timer
+  // removes them.
   function syncLogVisibility() {
     if (!root || !log) return;
-    const hasVisibleWork = [...log.children].some((child) => {
-      if (child.classList.contains("agee-confirm")) return true;
-      if (!child.classList.contains("agee-cue")) return false;
-      return !child.classList.contains("agee-cue-done") && !child.classList.contains("agee-cue-error");
-    });
+    const hasVisibleWork = log.children.length > 0;
     root.classList.toggle("agee-has-log", hasVisibleWork);
   }
 
@@ -572,6 +577,17 @@
     log.scrollTop = log.scrollHeight;
     refreshStatus();
     return entry;
+  }
+
+  function ensureVoiceCueCard(state, label = "", statusText = "") {
+    if (!state?.cueId) return null;
+    const entry = cues.get(state.cueId);
+    if (entry?.statusEl) {
+      if (label) updateCueLabel(state.cueId, label);
+      if (statusText) entry.statusEl.textContent = statusText;
+      return entry;
+    }
+    return materializeCue(state.cueId, label || state.transcript || "Voice", statusText || "");
   }
 
   function updateCueLabel(cueId, text) {
@@ -807,7 +823,7 @@
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
-    closeTextSurface();
+    openTextSurface({ fresh: false });
     conversationActive = true;
     const cueId = newCueId();
     createCue(cueId, "", { presentation: "icon" });
@@ -899,6 +915,9 @@
       state.transcript = text;
       if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
+      if (msg.type === "transcript_final" || state.committed) {
+        ensureVoiceCueCard(state, text, "");
+      }
       if (msg.type === "transcript_final" && isCurrentTurn && applySpeechOverlapPolicyFromTranscript(state, text)) {
         return;
       }
@@ -911,6 +930,7 @@
       const text = String(msg.text || "").trim();
       if (!text) return;
       state.assistantText = text;
+      ensureVoiceCueCard(state, state.transcript || "Voice", text);
       updateCue(state.cueId, text, "running");
       return;
     }
@@ -972,6 +992,7 @@
     setVoiceState(false);
     setAgentState("thinking");
     setTranscript(state.transcript || "");
+    if (state.transcript) ensureVoiceCueCard(state, state.transcript, "");
     updateCue(state.cueId, "", "running");
     if (state.voiceSessionId) {
       chrome.runtime.sendMessage({
@@ -1171,6 +1192,7 @@
     const wasCurrentTurn = liveVoice === state;
     liveVoiceRecoveries = 0;
     const summary = state.assistantText || "Done.";
+    ensureVoiceCueCard(state, state.transcript || "Voice", summary);
     updateCue(state.cueId, summary, "done");
     reactLauncher("done");
     stopLiveCapture(state);
@@ -1653,17 +1675,17 @@
         return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");
-        setInputText(msg.summary || "Done.");
-        setSurfacePhase("result");
+        setInputText("");
+        setSurfacePhase("editing");
         reactLauncher("done"); // hop + ring + happy chime
-        // Text-command replies replace the field. Voice replies are streamed
-        // through the Live WebSocket path, not browser text-to-speech.
+        // Replies live in the cue/result surface. The composer stays free for
+        // the next command instead of becoming a chat transcript.
         if (agentState === "thinking") setAgentState("idle");
         return false;
       case "error":
         showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible
-        setInputText(visibleErrorMessage(msg.text));
-        setSurfacePhase("error");
+        setInputText("");
+        setSurfacePhase("editing");
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
         return false;
       case "agentRevoked":

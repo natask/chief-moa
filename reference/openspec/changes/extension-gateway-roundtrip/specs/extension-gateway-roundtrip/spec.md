@@ -15,26 +15,30 @@ The extension SHALL render command replies that originate from the configured
 gateway `/v1/voice/turns` endpoint.
 
 #### Scenario: Command reply from gateway
-- **WHEN** the user opens the overlay via Cmd+K and submits a command with a gateway configured
+- **WHEN** the user opens the overlay via Cmd+, and submits a command with a gateway configured
 - **THEN** the reply rendered in the overlay originates from `/v1/voice/turns`
 
 ### Requirement: Browser surface is not visible chat history
 The extension SHALL present a one-current-intent surface rather than a visible
-chat transcript. Typed replies SHALL replace the user's typed intent in the same
-field. Durable turn history SHALL remain gateway-owned context and SHALL be
-retrieved only when the user asks for it through an intent.
+chat transcript. Typed replies SHALL render in the result stack above the
+command input, and the input SHALL clear for the next command. Durable turn
+history SHALL remain gateway-owned context and SHALL be retrieved only when the
+user asks for it through an intent.
 
-#### Scenario: Typed reply replaces the intent field
-- **WHEN** the user opens the text surface with Cmd+K and submits an intent
-- **THEN** the visible surface shows only the current field/result
-- **AND** the assistant reply or error replaces the typed text instead of
-  appending a visible chat row
+#### Scenario: Typed reply renders above an empty input
+- **WHEN** the user opens the text surface with Cmd+, and submits an intent
+- **THEN** the assistant reply or error renders above the command input
+- **AND** the command input is empty and ready for the next command
 
-#### Scenario: Voice remains icon-first
+#### Scenario: Voice shows live feedback above the input
 - **WHEN** the user starts a browser voice turn with Cmd+.
-- **THEN** the extension indicates listening/thinking/speaking through the Moa
-  mark state
-- **AND** it does not open a transcript or chat-history panel by default
+- **THEN** the extension keeps the command input surface available for typing
+- **AND** displays partial/final user transcript feedback above the input while
+  the user speaks and while the turn is processing
+- **AND** streams assistant text above the input instead of writing it into the
+  command input
+- **AND** it does not show older chat-history turns unless the user explicitly
+  asks for history through an intent
 
 ### Requirement: Describe round trip through gateway
 The extension SHALL render page descriptions that originate from the configured
@@ -70,6 +74,19 @@ text-to-speech as the production voice path.
   `/v1/voice/sessions`
 - **AND** assistant audio rendered in the browser originates from the gateway
   streaming voice response
+
+#### Scenario: Browser voice auto-commits on silence
+- **WHEN** the user starts a browser voice turn and speaks
+- **THEN** the extension commits the turn after speech silence without requiring
+  a second click or hotkey press
+- **AND** conversation mode re-arms listening after the assistant reply unless
+  the user explicitly stops it
+
+#### Scenario: Browser voice sends current speech on mark click
+- **WHEN** the user starts a browser voice turn and clicks the Moa mark once
+  while the extension is listening
+- **THEN** the extension commits the current captured speech turn immediately
+- **AND** leaves the text input available for typed follow-up commands
 
 #### Scenario: Website does not own the microphone grant
 - **WHEN** the overlay starts voice on a website

@@ -109,6 +109,30 @@ raw model output. Rejected because provider/integration credentials and
 execution policy belong behind the gateway, while phone-local authority remains
 on Android.
 
+### Decision: Gateway Is The Hub, Devices Own Local Tool Execution
+
+Moa should use a hub-and-spoke execution model. Android, browser, and future
+desktop clients connect to the gateway as device clients with advertised local
+tool capabilities. A model turn can request a tool, but the gateway routes that
+tool request to the execution environment that owns the authority: phone-local
+app launches and accessibility actions run on Android; tab creation and
+browser-local CDP actions run in the Chrome extension; long-running coding and
+research harnesses run on the execution machine. Each environment returns a
+receipt, and the gateway stores the receipt so any other surface can inspect the
+active/completed work.
+
+This model is bidirectional without making any client omnipotent. From the
+browser, a user can ask the gateway to request a phone action such as speaking a
+message on the phone; Android still receives, validates, executes, and receipts
+that action. From the phone, a user can ask to open or inspect browser tabs; the
+browser extension still owns the tab action and receipt. Agent runs remain
+shared records in the gateway, so the phone can inspect browser-launched agents
+and the browser can inspect phone-launched agents.
+
+Alternative considered: let the gateway directly control every connected
+device. Rejected because it would collapse the trust boundary; the device that
+owns permissions and local state must execute and receipt local actions.
+
 ### Decision: Postgres Becomes The Shared Execution Store
 
 The gateway's current file-backed `DATA_DIR` storage is only an early QA

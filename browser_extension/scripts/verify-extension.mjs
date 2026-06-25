@@ -30,6 +30,7 @@ const requiredFiles = [
   "scripts/smoke-gateway.mjs",
   "scripts/smoke-ambient.mjs",
   "scripts/smoke-settings.mjs",
+  "scripts/smoke-live-voice-main.mjs",
 ];
 
 for (const file of requiredFiles) {
@@ -39,6 +40,7 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
+const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
 const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
@@ -129,6 +131,14 @@ if (!/e\.code === "Comma"/.test(contentSource) || /toLowerCase\(\) === "k"/.test
   throw new Error("text command hotkey must be Cmd/Ctrl+Comma, not Cmd/Ctrl+K");
 }
 
+if (/case "done":[\s\S]{0,180}setInputText\(msg\.summary/.test(contentSource)) {
+  throw new Error("done replies must render in the result surface, not inside the command input");
+}
+
+if (!/VOICE_AUTO_COMMIT_SILENCE_MS/.test(backgroundSource) || !/autoCommitVoiceSession/.test(backgroundSource)) {
+  throw new Error("browser voice must auto-commit microphone turns after speech silence");
+}
+
 if (
   !/cmd === "voiceSessionAttach"/.test(backgroundSource) ||
   !/pendingEvents/.test(backgroundSource) ||
@@ -165,8 +175,20 @@ if (/Listening\.\.\.|listening\.\.\.|stopping…|stopping\.\.\./.test(contentSou
   throw new Error("content.js must not render voice lifecycle filler text such as Listening/listening/stopping");
 }
 
-if (!/createCue\(cueId,\s*"",\s*\{\s*presentation:\s*"icon"\s*\}\)/.test(contentSource)) {
-  throw new Error("browser voice start must create a silent icon cue, not a visible listening card");
+if (!/function ensureVoiceCueCard/.test(contentSource)) {
+  throw new Error("browser voice must promote live transcript/assistant text into the result surface above the input");
+}
+
+if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,220}conversationActive = true;/.test(contentSource)) {
+  throw new Error("browser voice start must keep the input surface open while the user speaks");
+}
+
+if (!/if \(liveVoice && listening\) \{[\s\S]{0,180}commitLiveVoiceTurn\(\);/.test(contentSource)) {
+  throw new Error("single-clicking the launcher while voice is listening must send the current speech turn");
+}
+
+if (!/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {
+  throw new Error("live voice must show the transcript bar while the browser voice surface is active");
 }
 
 if (!/function claimActiveAgentTab/.test(backgroundSource) || !/function revokeOtherTabVoiceSessions/.test(backgroundSource)) {
@@ -215,6 +237,7 @@ for (const file of [
   "scripts/smoke-tweaks.mjs",
   "scripts/smoke-gateway.mjs",
   "scripts/smoke-settings.mjs",
+  "scripts/smoke-live-voice-main.mjs",
   "scripts/smoke-cdp.mjs",
   "scripts/smoke-integration.mjs",
   "scripts/smoke-history.mjs",
@@ -224,7 +247,7 @@ for (const file of [
 }
 
 const { parseSettingsIntent } = await import("../extension/settings-intent.js");
-const { parseBrowserTaskIntent } = await import("../extension/browser-task-intent.js");
+const { parseBrowserTaskIntent, parseOpenTabIntent } = await import("../extension/browser-task-intent.js");
 const devExtensionSource = readFileSync("scripts/dev-extension.mjs", "utf8");
 const pokeDevReloadSource = readFileSync("scripts/poke-dev-reload.mjs", "utf8");
 
@@ -256,6 +279,13 @@ if (parseSettingsIntent(setupParagraph, null) !== null) {
 const taskIntent = parseBrowserTaskIntent("open https://example.com/docs and report the title");
 if (taskIntent?.url !== "https://example.com/docs") {
   throw new Error(`browser-task parser returned unexpected URL: ${taskIntent?.url}`);
+}
+const openTabIntent = parseOpenTabIntent("open https://example.com/docs in a new tab");
+if (openTabIntent?.url !== "https://example.com/docs") {
+  throw new Error(`open-tab parser returned unexpected URL: ${openTabIntent?.url}`);
+}
+if (parseOpenTabIntent("open https://example.com/docs and report the title") !== null) {
+  throw new Error("open/report requests should stay on the browser task-agent path, not direct tab opening");
 }
 if (parseBrowserTaskIntent(setupParagraph) !== null) {
   throw new Error("browser-task parser should not treat setup text as a browser task");

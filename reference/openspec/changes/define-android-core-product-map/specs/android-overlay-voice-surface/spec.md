@@ -16,16 +16,21 @@ The overlay SHALL make the primary voice loop available through simple orb gestu
 
 #### Scenario: Single tap while idle
 - **WHEN** the user single taps the orb while no command speech is active
-- **THEN** the app starts command speech capture
+- **THEN** the app opens the text panel for typed input
+
+#### Scenario: Double tap while idle
+- **WHEN** the user double taps the orb while no voice turn is active
+- **THEN** the app starts the continuous streaming voice loop
 - **AND** displays a live transcript overlay
 
 #### Scenario: Single tap while listening
-- **WHEN** the user single taps the orb while command speech is active
+- **WHEN** the user single taps the orb while the voice loop is listening
 - **THEN** the app submits the best available transcript
-- **AND** starts a fresh listening loop
+- **AND** keeps the continuous loop eligible to re-arm after the assistant reply
 
-#### Scenario: Double tap while active
-- **WHEN** the user double taps the orb while listening or speaking
+#### Scenario: Single tap while thinking or speaking
+- **WHEN** the user single taps the orb while the voice loop is thinking or
+  speaking
 - **THEN** the app stops recognition and TTS locally
 - **AND** does not send a stop prompt to the gateway
 

@@ -8,7 +8,7 @@ import android.view.WindowManager;
 
 // Orb gestures, matched to the browser extension's mark:
 //   single tap  -> onSingleTap, text mode (open the keyboard / panel)
-//   double tap  -> onDoubleTap, voice mode (first tap listens, next sends)
+//   double tap  -> onDoubleTap, voice mode (continuous listen/reply loop)
 //   drag        -> reposition the orb, no callback
 // A single tap is confirmed only after the double-tap window passes, so a tap
 // never flashes the text surface before a double tap engages voice.

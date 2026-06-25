@@ -18,6 +18,16 @@ function parseBrowserTaskIntent(text) {
   return { url, instruction: raw };
 }
 
+function parseOpenTabIntent(text) {
+  const raw = String(text || "").trim();
+  if (!raw || !ACTION_RE.test(raw) || REPORT_RE.test(raw)) {
+    return null;
+  }
+  const url = extractHttpUrl(raw);
+  if (!url) return null;
+  return { url, instruction: raw };
+}
+
 function extractHttpUrl(text) {
   const raw = String(text || "");
   const explicit = raw.match(FULL_HTTP_RE)?.[0];
@@ -46,4 +56,4 @@ function normalizeHttpUrl(value) {
   }
 }
 
-export { parseBrowserTaskIntent, extractHttpUrl };
+export { parseBrowserTaskIntent, parseOpenTabIntent, extractHttpUrl };

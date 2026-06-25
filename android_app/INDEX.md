@@ -72,10 +72,9 @@ main-machine gateway is online.
 ## Assistant Orb Controls
 
 - Drag: move the orb.
-- Single tap while idle: start listening.
-- Single tap while listening: submit the current transcript and start a fresh
-  listening loop.
-- Double tap: stop listening and stop speech output without sending a reply.
+- Single tap: type, or stop/collapse the active voice surface.
+- Double tap: start the continuous voice loop. Silence commits each turn and the
+  mic re-arms after the reply.
 - Long press: show or hide the chat panel.
 
 ## Current Server Shape

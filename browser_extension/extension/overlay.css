@@ -201,7 +201,7 @@
   background: linear-gradient(180deg, #141419 0%, #0d0d0f 100%);
 }
 #agee-root.agee-voicing #agee-voice-state {
-  display: none;
+  display: flex;
 }
 #agee-orb {
   flex: 0 0 auto;
