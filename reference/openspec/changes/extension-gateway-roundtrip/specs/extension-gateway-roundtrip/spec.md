@@ -86,20 +86,25 @@ text-to-speech as the production voice path.
 - **AND** conversation mode re-arms listening after the assistant reply unless
   the user explicitly stops it
 
-#### Scenario: Browser mark push-to-talk commits on release
-- **WHEN** the user presses and holds the browser Moa mark
-- **THEN** the extension starts a manual gateway voice session
+#### Scenario: Browser mark single click opens chat menu
+- **WHEN** the user single clicks the browser Moa mark
+- **THEN** the extension opens the chat menu for typed input
+- **AND** it does not start, stop, or submit a voice turn
+
+#### Scenario: Browser mark click-and-hold drags
+- **WHEN** the user presses the browser Moa mark, holds, and moves it
+- **THEN** the extension repositions the mark
+- **AND** it does not start voice capture or toggle the chat menu
+
+#### Scenario: Browser mark double-click-and-hold push-to-talk commits on release
+- **WHEN** the user double-clicks and holds the browser Moa mark
+- **THEN** the extension starts a manual gateway voice session after the second
+  press is held
 - **AND** the browser background worker disables silence auto-commit for that
   session
 - **AND** releasing the mark commits the current speech turn immediately
 - **AND** the manual turn does not re-arm the microphone after the assistant
   reply
-
-#### Scenario: Browser voice sends current speech on mark click
-- **WHEN** the user starts a browser voice turn and clicks the Moa mark once
-  while the extension is listening
-- **THEN** the extension commits the current captured speech turn immediately
-- **AND** leaves the text input available for typed follow-up commands
 
 #### Scenario: Website does not own the microphone grant
 - **WHEN** the overlay starts voice on a website

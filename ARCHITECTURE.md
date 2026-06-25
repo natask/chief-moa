@@ -73,13 +73,13 @@ do not have a release event, where silence commits each turn and the mic re-arms
 after the reply. The browser extension
 mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
 Cmd+. (Ctrl+.) wakes voice. Browser voice auto-commits after speech silence and
-then re-arms while conversation mode is active; one click on the Moa mark while
-listening commits the current captured speech immediately. Press-and-hold on the
-browser mark starts a manual voice session with browser silence auto-commit
-disabled, and release commits the turn without re-arming the mic. Browser voice
-can opt a session into background assistant speech, where starting a new spoken
-turn opens a new gateway voice turn without stopping already queued assistant
-audio.
+then re-arms while conversation mode is active. The browser mark uses the same
+pointer contract as Android: single click opens the chat menu, first-press hold
+and drag repositions the mark without starting voice, and double-click-and-hold
+starts a manual voice session with browser silence auto-commit disabled. Release
+commits the manual turn without re-arming the mic. Browser voice can opt a
+session into background assistant speech, where starting a new spoken turn opens
+a new gateway voice turn without stopping already queued assistant audio.
 
 The overlay surface stays small: it shows the current intent/result and compact
 run state, not a full scrollback manager. Browser text replies render in the
@@ -416,5 +416,6 @@ Use the smallest real check that covers the changed surface:
 - Gateway smoke: `GET /health`, `POST /v1/voice/turns`, `GET /v1/agent/runs`
 - Product/spec check: inspect `reference/openspec/changes/<change>` and run the
   matching OpenSpec validation if the CLI has been initialized for this checkout.
-- Manual phone QA: hold orb to speak / release to send, tap to type, transcript
-  display, agent run start/status, and local action approval behavior.
+- Manual phone QA: tap orb for chat, drag to move, double-click-and-hold to
+  speak / release to send, transcript display, agent run start/status, and
+  local action approval behavior.

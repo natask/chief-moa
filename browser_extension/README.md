@@ -1,6 +1,6 @@
 # agee
 
-An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or click the on-page control to type, or hit **Cmd/Ctrl+.** to talk, directly on the website you are using. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
+An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or single-click the on-page control to type, drag it to move it, or double-click and hold it to talk directly on the website you are using. **Cmd/Ctrl+.** also starts voice. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
 
 ## Principles
 
@@ -74,9 +74,10 @@ render visible chat history; session history stays on the gateway and can be
 queried by asking Moa.
 Voice uses an extension offscreen document for microphone capture, so websites
 do not need per-site microphone approval for Aggie turns. Spoken turns
-auto-commit after speech silence and re-arm while conversation mode is active;
-clicking the Moa mark once while it is listening commits the current speech
-immediately.
+auto-commit after speech silence and re-arm while conversation mode is active.
+The Moa mark mirrors Android: single click opens the chat menu, click and hold
+while moving drags the mark, and double-click-and-hold starts manual voice mode;
+release commits that manual voice turn immediately.
 If Chrome blocks offscreen microphone capture, the overlay shows a visible
 permission error and opens the Aggie Options page; grant the microphone there or
 set Microphone to Allow for the extension from `chrome://extensions`.

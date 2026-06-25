@@ -9,12 +9,13 @@
 - [x] 1.7 Replace the visible chat/log panel with a one-current-intent browser surface: Cmd+, opens text, Cmd+. starts icon-first voice, replies/errors render above the input without clearing or replacing its draft, and visible history is omitted unless explicitly requested through Moa. Verified by `npm run verify` and `npm run smoke:gateway`.
 - [x] 1.9 Auto-commit browser voice turns after speech silence so the user does not need a second click/hotkey to send captured audio.
 - [x] 1.8 Move browser microphone capture to an extension-owned offscreen document so websites do not receive mic permission. Content script now controls UI only; `offscreen.js` owns `getUserMedia`, sends PCM16 chunks to `background.js`, and the options page seeds the extension-origin microphone grant. Verified by `npm run verify` and `npm run smoke`.
-- [x] 1.10 Show browser voice transcript/assistant feedback above the input while keeping the input available, and make one mark click during listening commit the current speech turn.
+- [x] 1.10 Show browser voice transcript/assistant feedback above the input while keeping the input available; the browser mark single-click path is reserved for opening the chat menu and does not commit current speech.
 - [x] 1.11 Share one browser-agent owner across tabs: store the active owner in
       `chrome.storage.local`, broadcast owner changes to content scripts, revoke
       old-tab voice/task cues on transfer, prefer the owner tab for queued
       browser tasks, and verify with a two-tab real-extension smoke. Verified
       by `cd browser_extension && npm run verify && npm run smoke`.
-- [x] 1.12 Add manual browser mark push-to-talk: holding the mark starts a
-      gateway voice session with browser silence auto-commit disabled, releasing
-      the mark commits the turn, and the manual turn does not re-arm the mic.
+- [x] 1.12 Add manual browser mark push-to-talk: double-clicking and holding the
+      mark starts a gateway voice session with browser silence auto-commit
+      disabled, releasing the mark commits the turn, and the manual turn does
+      not re-arm the mic. A normal click-and-hold is only for moving the mark.

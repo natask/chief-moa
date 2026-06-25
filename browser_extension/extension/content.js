@@ -28,14 +28,19 @@
     holdToTalkTimer = null,
     holdToTalkActive = false,
     holdToTalkPointerId = null,
-    suppressLauncherClick = false,
+    doubleClickHoldPending = false,
+    lastLauncherTap = null,
     // The Aggie mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
   const assistantPlaybackSources = new Set();
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
-  const PUSH_TO_TALK_HOLD_MS = 120;
+  const DOUBLE_CLICK_HOLD_MS = 120;
+  const LAUNCHER_DOUBLE_CLICK_MS = 280;
+  const LAUNCHER_TAP_MAX_MS = 500;
+  const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
+  const LAUNCHER_DRAG_SLOP = 4;
   let browserAgentOwner = null;
   let browserAgentOwnerState = "unknown";
   let assistantSpeechOverlap = false;
@@ -191,7 +196,7 @@
     root.id = "agee-root";
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <button id="agee-launcher" type="button" title="Hold to talk · click to type" aria-label="Aggie">
+      <button id="agee-launcher" type="button" title="Click for chat · drag to move · double-click and hold to talk" aria-label="Aggie">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
@@ -221,34 +226,13 @@
 
     restoreLauncherPosition();
     restoreUiChimePreference();
-    // Single click on the mark = text mode (focus the input). Double click =
-    // voice mode (start listening). We detect the double click manually so a
-    // single click does not flash the text surface before voice kicks in.
+    // Launcher gestures intentionally match the Android orb:
+    //   single click            -> chat menu
+    //   first press + movement  -> drag the mark
+    //   double-click and hold   -> manual push-to-talk
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (suppressLauncherClick) {
-        suppressLauncherClick = false;
-        return;
-      }
-      if (liveVoice && listening) {
-        if (clickTimer) {
-          clearTimeout(clickTimer);
-          clickTimer = null;
-        }
-        commitLiveVoiceTurn();
-        return;
-      }
-      if (clickTimer) {
-        clearTimeout(clickTimer);
-        clickTimer = null;
-        enableVoiceMode();
-        return;
-      }
-      clickTimer = setTimeout(() => {
-        clickTimer = null;
-        openTextSurface({ fresh: false });
-      }, 280);
     });
     launcher.addEventListener("pointerdown", startLauncherDrag);
     window.addEventListener("resize", () => {
@@ -322,16 +306,27 @@
 
   function startLauncherDrag(e) {
     if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
     const rect = launcher.getBoundingClientRect();
     dragState = {
       pointerId: e.pointerId,
+      startTime: e.timeStamp,
       startX: e.clientX,
       startY: e.clientY,
       left: rect.left,
       top: rect.top,
       moved: false,
     };
-    scheduleLauncherPushToTalk(e);
+    if (isLauncherSecondTap(e)) {
+      cancelLauncherTap();
+      scheduleLauncherDoubleClickHold(e);
+    } else {
+      cancelLauncherTap();
+      doubleClickHoldPending = false;
+      holdToTalkActive = false;
+      holdToTalkPointerId = null;
+    }
     launcher.setPointerCapture(e.pointerId);
     launcher.addEventListener("pointermove", moveLauncherDrag);
     launcher.addEventListener("pointerup", stopLauncherDrag);
@@ -343,9 +338,9 @@
     if (holdToTalkActive && e.pointerId === holdToTalkPointerId) return;
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
-    if (Math.abs(dx) + Math.abs(dy) > 4) {
+    if (Math.abs(dx) + Math.abs(dy) > LAUNCHER_DRAG_SLOP) {
       dragState.moved = true;
-      cancelLauncherPushToTalk();
+      cancelLauncherDoubleClickHold();
     }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
   }
@@ -353,47 +348,79 @@
   function stopLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
     const wasHoldToTalk = holdToTalkActive && e.pointerId === holdToTalkPointerId;
+    const wasPendingDoubleClickHold = doubleClickHoldPending && e.pointerId === holdToTalkPointerId;
     const moved = dragState.moved;
+    const downMs = e.timeStamp - dragState.startTime;
     dragState = null;
     launcher.releasePointerCapture(e.pointerId);
     launcher.removeEventListener("pointermove", moveLauncherDrag);
     launcher.removeEventListener("pointerup", stopLauncherDrag);
     launcher.removeEventListener("pointercancel", stopLauncherDrag);
-    cancelLauncherPushToTalk();
+    cancelLauncherDoubleClickHold();
     if (wasHoldToTalk) {
       finishLauncherPushToTalk();
-      suppressLauncherClick = true;
       return;
     }
+    if (wasPendingDoubleClickHold) return;
     if (moved) {
       const rect = launcher.getBoundingClientRect();
       placeLauncher(rect.left, rect.top, true);
-      suppressLauncherClick = true;
+      return;
     }
+    if (e.type === "pointercancel" || downMs > LAUNCHER_TAP_MAX_MS) return;
+    scheduleLauncherTap(e);
   }
 
-  function scheduleLauncherPushToTalk(e) {
-    cancelLauncherPushToTalk();
+  function isLauncherSecondTap(e) {
+    if (!lastLauncherTap || !clickTimer) return false;
+    const elapsed = e.timeStamp - lastLauncherTap.time;
+    if (elapsed < 0 || elapsed > LAUNCHER_DOUBLE_CLICK_MS) return false;
+    const dx = e.clientX - lastLauncherTap.x;
+    const dy = e.clientY - lastLauncherTap.y;
+    return (dx * dx + dy * dy) <= LAUNCHER_DOUBLE_CLICK_SLOP * LAUNCHER_DOUBLE_CLICK_SLOP;
+  }
+
+  function scheduleLauncherTap(e) {
+    cancelLauncherTap();
+    lastLauncherTap = { time: e.timeStamp, x: e.clientX, y: e.clientY };
+    clickTimer = setTimeout(() => {
+      clickTimer = null;
+      const tap = lastLauncherTap;
+      lastLauncherTap = null;
+      if (tap) openTextSurface({ fresh: false });
+    }, LAUNCHER_DOUBLE_CLICK_MS);
+  }
+
+  function cancelLauncherTap() {
+    if (clickTimer) {
+      clearTimeout(clickTimer);
+      clickTimer = null;
+    }
+    lastLauncherTap = null;
+  }
+
+  function scheduleLauncherDoubleClickHold(e) {
+    cancelLauncherDoubleClickHold();
+    doubleClickHoldPending = true;
     holdToTalkPointerId = e.pointerId;
     holdToTalkTimer = setTimeout(() => {
       holdToTalkTimer = null;
-      if (!dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
+      if (!doubleClickHoldPending || !dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
+      doubleClickHoldPending = false;
       holdToTalkActive = true;
-      suppressLauncherClick = true;
-      if (clickTimer) {
-        clearTimeout(clickTimer);
-        clickTimer = null;
-      }
       startLauncherPushToTalk();
-    }, PUSH_TO_TALK_HOLD_MS);
+    }, DOUBLE_CLICK_HOLD_MS);
   }
 
-  function cancelLauncherPushToTalk() {
+  function cancelLauncherDoubleClickHold() {
     if (holdToTalkTimer) {
       clearTimeout(holdToTalkTimer);
       holdToTalkTimer = null;
     }
-    if (!holdToTalkActive) holdToTalkPointerId = null;
+    if (!holdToTalkActive) {
+      holdToTalkPointerId = null;
+      doubleClickHoldPending = false;
+    }
   }
 
   function startLauncherPushToTalk() {
@@ -425,16 +452,6 @@
       if (!was) chime("wake");
       setTimeout(() => input.focus(), 0);
     }
-  }
-
-  // Open the surface and toggle the mic. Double-clicking the mark lands here:
-  // first double-click listens, the next one sends the audio.
-  function enableVoiceMode() {
-    if (!root) build();
-    toggle(true);
-    // Double-click starts listening, and a second double-click while listening
-    // sends the recorded audio so you can immediately speak another message.
-    toggleVoice();
   }
 
   // Anchor the panel to the floating mark so the input opens right where the

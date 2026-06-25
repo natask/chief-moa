@@ -259,8 +259,34 @@ if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*f
   throw new Error("voice button click must open the input surface and prime audio before starting live voice");
 }
 
-if (!/if \(liveVoice && listening\) \{[\s\S]{0,180}commitLiveVoiceTurn\(\);/.test(contentSource)) {
-  throw new Error("single-clicking the launcher while voice is listening must send the current speech turn");
+const launcherClickBody = sourceBetween(
+  contentSource,
+  /launcher\.addEventListener\("click"/,
+  /launcher\.addEventListener\("pointerdown"/,
+  "launcher click handler"
+);
+if (/commitLiveVoiceTurn\(\)|toggleVoice\(\)|startLiveVoiceTurn\(/.test(launcherClickBody)) {
+  throw new Error("single-clicking the launcher must only open the chat menu, not commit or start voice");
+}
+
+const startLauncherDragBody = sourceBetween(
+  contentSource,
+  /function startLauncherDrag\(/,
+  /function moveLauncherDrag\(/,
+  "launcher pointerdown handler"
+);
+if (!/isLauncherSecondTap\(e\)[\s\S]{0,140}scheduleLauncherDoubleClickHold\(e\)/.test(startLauncherDragBody)) {
+  throw new Error("launcher voice must require a double-click-and-hold, not a first-press hold");
+}
+
+const launcherDoubleClickHoldBody = sourceBetween(
+  contentSource,
+  /function scheduleLauncherDoubleClickHold\(/,
+  /function cancelLauncherDoubleClickHold\(/,
+  "launcher double-click-hold handler"
+);
+if (!/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) || !/startLauncherPushToTalk\(\)/.test(launcherDoubleClickHoldBody)) {
+  throw new Error("double-click-and-hold must start launcher push-to-talk after the hold threshold");
 }
 
 if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {
