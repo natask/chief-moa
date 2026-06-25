@@ -13,7 +13,7 @@ Preserved phrases and intent:
 - "The fundamental thing to do is have a broker"
 - "When the message comes in, it looks at all existing sessions and feeds that
   message to them"
-- "the skill gets invoked"
+- "the skill gets invoked" (current product term: workflow directory/package)
 - "a bunch of different models are initiated"
 - "search online using as many search tools as possible"
 - "find and refine the most important information"
@@ -25,6 +25,6 @@ Interpretation:
 
 The broker is not just a model prompt. It is a gateway-owned durable routing
 layer that stores the message, compares it against active work, invokes the
-right skill/workflow, and records why it chose that route. It can be cheap and
+right workflow directory/package, and records why it chose that route. It can be cheap and
 deterministic when obvious, or it can escalate to multi-agent research when the
 message demands it.

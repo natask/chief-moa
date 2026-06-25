@@ -51,16 +51,17 @@ leave artifacts that another agent can resume.
   session with Android build verification.
 - Gateway routes, persistence, harness execution, or model routing: backend
   agent or current session with `npm run check` and endpoint smoke tests.
-- Workflow, skills, ledgers, commands, or agent context packs: workflow agent.
+- Workflow directories, ledgers, commands, or agent context packs: workflow
+  agent.
 - Cross-cutting product behavior: OpenSpec first, then implementation tickets.
 
 The broker's launcher profiles live in `gateway/agent-launcher-profiles.json`,
 not in `AGENTS.md`. When a typed or spoken message is routed through
 `POST /v1/broker/messages`, the gateway creates a bounded context pack for each
-route decision using those profiles. The pack names required skills, files,
-constraints, expected output, and verification. Verify this path with
+route decision using those profiles. The pack names the workflow directory,
+instruction file, files, constraints, expected output, and verification. Verify this path with
 `cd gateway && npm run smoke:message-broker`; it must prove context-pack
-creation, QA/research skill routing, and active-run evidence attachment.
+creation, QA/research workflow routing, and active-run evidence attachment.
 
 ## Context Pack Template
 

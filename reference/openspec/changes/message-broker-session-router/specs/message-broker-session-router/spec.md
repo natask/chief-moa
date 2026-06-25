@@ -2,7 +2,8 @@
 
 ### Requirement: Canonical Broker Event
 The gateway SHALL store each inbound user voice or text message as one
-canonical broker event before routing it to chat, voice, skills, or agent runs.
+canonical broker event before routing it to chat, voice, workflow packages, or
+agent runs.
 
 #### Scenario: Message arrives
 - **WHEN** a user sends a voice transcript or typed message
@@ -35,8 +36,8 @@ arrived.
 - **THEN** it may recommend or create a new forked run with `wait=false`
 - **AND** existing active runs continue unless cancellation is explicit
 
-### Requirement: Skill Workflow Selection
-The broker SHALL be able to select explicit skills/workflows when a message
+### Requirement: Workflow Package Selection
+The broker SHALL be able to select explicit directory-backed workflows when a message
 requires specialized handling.
 
 #### Scenario: Research-heavy message arrives

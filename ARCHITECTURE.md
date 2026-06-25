@@ -178,28 +178,30 @@ on a long-running harness.
 ```text
 voice or text message
   -> gateway stores one canonical broker_event
-  -> broker evaluates active sessions, projects, subprojects, runs, and skills
+  -> broker evaluates active sessions, projects, subprojects, runs, and workflow packages
   -> broker emits route decisions with reasons and cancellation behavior
-  -> downstream chat, voice, skill workflows, or agent runs reference the event
+  -> downstream chat, voice, workflow packages, or agent runs reference the event
 ```
 
 The broker is the durable routing layer before provider/model execution. A user
 message may continue an existing session, attach evidence to active runs, create
-a new fork, invoke a skill workflow, or take the direct-answer path. It does not
-cancel active work merely because a new message arrived. Skill selection is an
-explicit route decision: research-heavy messages can target a research workflow,
-implementation requests can target coding, and simple messages can stay on the
-direct-answer path.
+a new fork, invoke a directory-backed workflow package, or take the
+direct-answer path. It does not cancel active work merely because a new message
+arrived. Workflow selection is an explicit route decision: research-heavy
+messages can target a research workflow, implementation requests can target
+coding, and simple messages can stay on the direct-answer path.
 
 Broker route decisions also materialize launch context packs. The editable
 profile file is `gateway/agent-launcher-profiles.json`: each profile names the
-skills, required files, expected output, and verification checks for routes such
-as direct-answer, coding, QA, research, design, and writing. The gateway stores
-bounded packs under `DATA_DIR/broker-context-packs` and links them from route
-decisions. A pack is launchable context for an explicit `/v1/agent/runs` or
-router activation; it is not itself permission to execute hidden work. When a
-message targets an active run, the gateway appends a `broker_evidence_attached`
-event to that run without canceling it.
+workflow directory, instruction file, required files, expected output, and
+verification checks for routes such as direct-answer, coding, QA, research,
+design, and writing. The workflow directories live under
+`gateway/agent-workflows/<workflow>/`. The gateway stores bounded packs under
+`DATA_DIR/broker-context-packs` and links them from route decisions. A pack is
+launchable context for an explicit `/v1/agent/runs` or router activation; it is
+not itself permission to execute hidden work. When a message targets an active
+run, the gateway appends a `broker_evidence_attached` event to that run without
+canceling it.
 
 Every user turn is a possible fork. A new spoken or typed message can create a
 new `agent_run` without canceling existing active runs, and subsequent user
@@ -262,9 +264,10 @@ they cannot directly execute phone actions.
 - `branch`: a thread of work inside a session, initially `default`.
 - `turn`: one voice or chat input with optional screen context.
 - `broker_event`: one inbound user message stored before routing to sessions,
-  skills, chat, voice, or agent runs.
+  workflow packages, chat, voice, or agent runs.
 - `route_decision`: an inspectable broker decision with target, action,
-  confidence, reason, context refs, and cancellation behavior.
+  confidence, reason, context refs, workflow directory refs, and cancellation
+  behavior.
 - `agent_run`: a gateway-created execution-machine job with lifecycle events.
 - `agent_fork`: a turn-linked async `agent_run` that can continue while later
   user turns create or update other forks.

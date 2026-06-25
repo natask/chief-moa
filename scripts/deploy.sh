@@ -34,6 +34,7 @@ gateway_drifted() {
       "$ROOT_DIR/gateway/package-lock.json" \
       "$REMOTE:$REMOTE_GW_DIR/" 2>/dev/null
     rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/lib/"    "$REMOTE:$REMOTE_GW_DIR/lib/"    2>/dev/null
+    rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/agent-workflows/" "$REMOTE:$REMOTE_GW_DIR/agent-workflows/" 2>/dev/null
     rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/scripts/" "$REMOTE:$REMOTE_GW_DIR/scripts/" 2>/dev/null
     rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/public/" "$REMOTE:$REMOTE_GW_DIR/public/" 2>/dev/null
     rsync -rcn --out-format='%n' "$ROOT_DIR/gateway/deploy/main-machine/" "$REMOTE:$REMOTE_GW_DIR/deploy/main-machine/" 2>/dev/null
@@ -122,6 +123,7 @@ target_patterns() {
       printf '%s\n' \
         "gateway/server.js" \
         "gateway/agent-launcher-profiles.json" \
+        "gateway/agent-workflows/" \
         "gateway/lib/" \
         "gateway/public/" \
         "gateway/scripts/" \

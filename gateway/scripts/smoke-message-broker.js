@@ -3,7 +3,7 @@
 
 // Smoke for the gateway message broker. It proves the broker stores messages,
 // routes explicit continuation to an existing session, recommends research
-// and QA skill workflows when requested, creates focused launcher context packs,
+// and QA workflow packages when requested, creates focused launcher context packs,
 // attaches evidence to active runs without cancellation, and persists
 // inspectable route decisions.
 
@@ -37,7 +37,7 @@ async function main() {
     const activeRunId = await step("seed active run", () => seedActiveAgentRun(dataDir, sessionId));
     const continuation = await step("explicit session routes to continuation", () =>
       assertContinuationRoute(baseUrl, dataDir, sessionId));
-    await step("research message selects skill workflow and fork", () =>
+    await step("research message selects workflow package and fork", () =>
       assertResearchRoute(baseUrl, dataDir));
     await step("QA message selects validation workflow", () =>
       assertQaRoute(baseUrl, dataDir));
@@ -56,8 +56,8 @@ async function main() {
         "broker stores a canonical message event",
         "explicit session_id returns a continue_session decision",
         "broker decisions create launcher context packs",
-        "research/report message returns a landscape-research skill decision",
-        "test/verify message returns a QA skill decision",
+        "research/report message returns a landscape-research workflow decision",
+        "test/verify message returns a QA workflow decision",
         "active run messages append broker_evidence_attached without cancellation",
         "new work message can recommend create_new_fork without cancellation",
         "broker ledger persists route reasons",
@@ -151,6 +151,8 @@ async function assertContinuationRoute(baseUrl, dataDir, sessionId) {
   assert.ok(route.context_pack_id, "continue route must reference a context pack");
   const pack = readContextPack(dataDir, route.context_pack_id);
   assert.equal(pack.launcher_profile_id, "direct-answer");
+  assert.equal(pack.workflow_directory, "gateway/agent-workflows/direct-answer");
+  assert.equal(pack.instruction_file, "gateway/agent-workflows/direct-answer/WORKFLOW.md");
   assert.match(pack.inputs.session_context, /browser extension broker routing/);
   assert.ok(
     Array.isArray(response.json.context_packs) && response.json.context_packs.some((candidate) => candidate.id === route.context_pack_id),
@@ -167,16 +169,17 @@ async function assertResearchRoute(baseUrl, dataDir) {
   assert.equal(response.status, 202, JSON.stringify(response.json));
   assert.ok(
     response.json.decisions.some((decision) =>
-      decision.target_type === "skill" &&
+      decision.target_type === "workflow" &&
       decision.target_id === "landscape-research" &&
-      decision.action === "invoke_skill_workflow"),
-    `expected landscape-research skill route, got ${JSON.stringify(response.json.decisions)}`,
+      decision.action === "invoke_workflow"),
+    `expected landscape-research workflow route, got ${JSON.stringify(response.json.decisions)}`,
   );
   const research = response.json.decisions.find((decision) => decision.target_id === "landscape-research");
   assert.equal(research.launcher_profile_id, "landscape-research");
   const pack = readContextPack(dataDir, research.context_pack_id);
-  assert.ok(pack.required_skills.includes("landscape-research"), "research pack must require the landscape-research skill");
-  assert.match(pack.launcher.prompt, /Required skills: landscape-research/);
+  assert.equal(pack.workflow_directory, "gateway/agent-workflows/landscape-research");
+  assert.equal(pack.instruction_file, "gateway/agent-workflows/landscape-research/WORKFLOW.md");
+  assert.match(pack.launcher.prompt, /Workflow directory: gateway\/agent-workflows\/landscape-research/);
   assert.ok(
     response.json.decisions.some((decision) => decision.action === "create_new_fork"),
     `expected create_new_fork route, got ${JSON.stringify(response.json.decisions)}`,
@@ -191,13 +194,14 @@ async function assertQaRoute(baseUrl, dataDir) {
   });
   assert.equal(response.status, 202, JSON.stringify(response.json));
   const qa = response.json.decisions.find((decision) =>
-    decision.target_type === "skill" &&
+    decision.target_type === "workflow" &&
     decision.target_id === "qa" &&
-    decision.action === "invoke_skill_workflow");
-  assert.ok(qa, `expected QA skill route, got ${JSON.stringify(response.json.decisions)}`);
+    decision.action === "invoke_workflow");
+  assert.ok(qa, `expected QA workflow route, got ${JSON.stringify(response.json.decisions)}`);
   assert.equal(qa.launcher_profile_id, "qa");
   const pack = readContextPack(dataDir, qa.context_pack_id);
-  assert.ok(pack.required_skills.includes("test-app"), "QA pack must require the test-app skill");
+  assert.equal(pack.workflow_directory, "gateway/agent-workflows/qa");
+  assert.equal(pack.instruction_file, "gateway/agent-workflows/qa/WORKFLOW.md");
   assert.ok(pack.verification.some((item) => item.includes("npm run check")), "QA pack must carry verification commands");
 }
 
@@ -215,7 +219,9 @@ async function assertActiveRunAttachment(baseUrl, dataDir, activeRunId) {
   assert.ok(route, `expected active-run evidence route, got ${JSON.stringify(response.json.decisions)}`);
   assert.equal(route.cancellation_behavior, "none");
   assert.equal(route.launcher_profile_id, "coding");
+  assert.equal(route.workflow_directory, "gateway/agent-workflows/coding");
   const pack = readContextPack(dataDir, route.context_pack_id);
+  assert.equal(pack.instruction_file, "gateway/agent-workflows/coding/WORKFLOW.md");
   assert.equal(pack.inputs.target_run.id, activeRunId);
 
   const eventsPath = path.join(dataDir, "agent-runs", `${activeRunId}.events.jsonl`);

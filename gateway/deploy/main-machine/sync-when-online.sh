@@ -6,7 +6,7 @@ REMOTE_DIR="${REMOTE_DIR:-/home/reclaim-ethiopia/moa-assistant/software/moa_gate
 REMOTE_DATA_DIR="${REMOTE_DATA_DIR:-/home/reclaim-ethiopia/moa-assistant-data/moa_gateway}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-ssh -o ConnectTimeout=10 "$REMOTE" "mkdir -p '$REMOTE_DIR/lib' '$REMOTE_DIR/scripts' '$REMOTE_DIR/public' '$REMOTE_DIR/deploy/main-machine' '$REMOTE_DATA_DIR'"
+ssh -o ConnectTimeout=10 "$REMOTE" "mkdir -p '$REMOTE_DIR/lib' '$REMOTE_DIR/agent-workflows' '$REMOTE_DIR/scripts' '$REMOTE_DIR/public' '$REMOTE_DIR/deploy/main-machine' '$REMOTE_DATA_DIR'"
 
 rsync -az \
   "$ROOT_DIR/deploy/main-machine/" \
@@ -24,6 +24,10 @@ rsync -az \
 rsync -az \
   "$ROOT_DIR/lib/" \
   "$REMOTE:$REMOTE_DIR/lib/"
+
+rsync -az \
+  "$ROOT_DIR/agent-workflows/" \
+  "$REMOTE:$REMOTE_DIR/agent-workflows/"
 
 rsync -az \
   "$ROOT_DIR/scripts/" \

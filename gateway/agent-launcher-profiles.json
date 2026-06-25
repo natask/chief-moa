@@ -1,8 +1,9 @@
 {
   "direct-answer": {
     "id": "direct-answer",
-    "description": "Use for simple answers or session continuation when no specialized workflow is needed.",
-    "required_skills": [],
+    "description": "Use for simple answers or session continuation when no larger workflow package is needed.",
+    "workflow_directory": "gateway/agent-workflows/direct-answer",
+    "instruction_file": "gateway/agent-workflows/direct-answer/WORKFLOW.md",
     "context_files": [
       "README.md",
       "ARCHITECTURE.md",
@@ -17,10 +18,8 @@
   "coding": {
     "id": "coding",
     "description": "Use for implementation, bug fixing, deployment, repo workflow, and verification requests.",
-    "required_skills": [
-      "ch",
-      "agent-stack"
-    ],
+    "workflow_directory": "gateway/agent-workflows/coding",
+    "instruction_file": "gateway/agent-workflows/coding/WORKFLOW.md",
     "context_files": [
       "README.md",
       "ARCHITECTURE.md",
@@ -37,10 +36,8 @@
   "qa": {
     "id": "qa",
     "description": "Use for testing, validation, smoke checks, regressions, and runtime QA requests.",
-    "required_skills": [
-      "test-app",
-      "local-background-qa"
-    ],
+    "workflow_directory": "gateway/agent-workflows/qa",
+    "instruction_file": "gateway/agent-workflows/qa/WORKFLOW.md",
     "context_files": [
       "README.md",
       "ARCHITECTURE.md",
@@ -58,10 +55,8 @@
   "landscape-research": {
     "id": "landscape-research",
     "description": "Use for broad research, comparison, online search, prior art, market, and optimal-path questions.",
-    "required_skills": [
-      "landscape-research",
-      "refine"
-    ],
+    "workflow_directory": "gateway/agent-workflows/landscape-research",
+    "instruction_file": "gateway/agent-workflows/landscape-research/WORKFLOW.md",
     "context_files": [
       "README.md",
       "ARCHITECTURE.md",
@@ -71,17 +66,14 @@
     "expected_output": "A sourced research report, comparison, recommendation, and implementation implications.",
     "verification": [
       "record sources and search queries in reference/scratch/landscape-research",
-      "link findings back to an OpenSpec change or scratch ticket"
+      "link findings back to an OpenSpec change or tracked ticket"
     ]
   },
   "design": {
     "id": "design",
     "description": "Use for frontend, visual design, interaction model, and UX QA requests.",
-    "required_skills": [
-      "frontend-design",
-      "design-review",
-      "textproof"
-    ],
+    "workflow_directory": "gateway/agent-workflows/design",
+    "instruction_file": "gateway/agent-workflows/design/WORKFLOW.md",
     "context_files": [
       "README.md",
       "ARCHITECTURE.md",
@@ -96,10 +88,8 @@
   "writing": {
     "id": "writing",
     "description": "Use for writing, editing, copy, posts, emails, docs, and voice/style work.",
-    "required_skills": [
-      "writing-style",
-      "writing-critique"
-    ],
+    "workflow_directory": "gateway/agent-workflows/writing",
+    "instruction_file": "gateway/agent-workflows/writing/WORKFLOW.md",
     "context_files": [
       "README.md",
       "AGENT_WORKFLOW.md"
