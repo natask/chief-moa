@@ -51,4 +51,19 @@ public final class MoaSpeechTranscriptAccumulatorTest {
                 accumulator.update("only the last couple sections get sent")
         );
     }
+
+    @Test
+    public void streamingSegmentsKeepEarlySpeechWhenFinalIsOnlyTail() {
+        MoaSpeechTranscriptAccumulator accumulator = new MoaSpeechTranscriptAccumulator();
+
+        assertEquals("for whatever reason when I speak", accumulator.update("for whatever reason when I speak"));
+        assertEquals(
+                "for whatever reason when I speak what I'm saying doesn't get automatically sent",
+                accumulator.update("what I'm saying doesn't get automatically sent")
+        );
+        assertEquals(
+                "for whatever reason when I speak what I'm saying doesn't get automatically sent",
+                accumulator.update("doesn't get automatically sent")
+        );
+    }
 }

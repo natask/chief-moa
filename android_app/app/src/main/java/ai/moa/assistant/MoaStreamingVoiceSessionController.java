@@ -14,10 +14,10 @@ final class MoaStreamingVoiceSessionController {
     private static final String TAG = "MoaStreamingVoice";
 
     private static final long AUTO_COMMIT_MIN_RECORDING_MS = 650;
-    private static final long AUTO_COMMIT_SILENCE_MS = 450;
+    private static final long AUTO_COMMIT_SILENCE_MS = 700;
     private static final long AUTO_COMMIT_MAX_RECORDING_MS = 12000;
     private static final long AUTO_COMMIT_CHECK_MS = 100;
-    private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 900;
+    private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 450;
     private static final int MAX_PENDING_AUDIO_BYTES = MoaAudioCaptureController.SAMPLE_RATE_HZ * 2 * 5;
 
     interface Callback {

@@ -101,6 +101,7 @@ public final class OverlayService extends Service {
     private boolean currentStreamingTurnRouted;
     private boolean currentStreamingTurnCommitRequested;
     private String currentStreamingTranscript = "";
+    private final MoaSpeechTranscriptAccumulator streamingTranscriptAccumulator = new MoaSpeechTranscriptAccumulator();
     private final Map<String, AgentRunState> activeAgentRuns = new HashMap<>();
     private boolean agentRunPolling;
     private boolean nextManualVoiceFollowsActiveRun;
@@ -184,6 +185,7 @@ public final class OverlayService extends Service {
             }
         });
         loadSettings();
+        refreshVoiceProfile();
         // No sessions: never restore a prior conversation. Clear any history left
         // by an older build so the orb always starts fresh.
         MoaPrefs.setHistoryJson(this, "");
@@ -315,6 +317,39 @@ public final class OverlayService extends Service {
         gatewayUrl = safe(MoaPrefs.gatewayUrl(this));
         gatewayToken = safe(MoaPrefs.gatewayToken(this));
         conversationId = MoaPrefs.conversationId(this);
+        applyCachedVoiceProfile();
+    }
+
+    private void applyCachedVoiceProfile() {
+        if (voiceController != null) {
+            voiceController.setLanguageTags(MoaPrefs.inputLanguageTag(this), MoaPrefs.replyLanguageTag(this));
+        }
+        updateVoiceHeaderState();
+    }
+
+    private void refreshVoiceProfile() {
+        if (gatewayUrl.isEmpty()) {
+            return;
+        }
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        final String deviceId = androidDeviceId();
+        new Thread(() -> {
+            try {
+                JSONObject payload = new MoaGatewayClient(url, token).agentProfile("device", deviceId);
+                JSONObject profile = payload.optJSONObject("profile");
+                if (profile == null) {
+                    return;
+                }
+                String profileJson = profile.toString();
+                mainHandler.post(() -> {
+                    MoaPrefs.setAgentProfileJson(this, profileJson);
+                    applyCachedVoiceProfile();
+                });
+            } catch (Exception ignored) {
+                // Profile refresh is best-effort; cached/default language still works.
+            }
+        }, "moa-voice-profile").start();
     }
 
     // No sessions: live turns stay in memory only for the panel's current view.
@@ -754,22 +789,31 @@ public final class OverlayService extends Service {
     }
 
     private String voiceStateLabel() {
+        String state;
         switch (voiceRuntimeState) {
             case LISTENING:
-                return "Listening";
+                state = "Listening";
+                break;
             case THINKING:
-                return "Thinking";
+                state = "Thinking";
+                break;
             case SPEAKING:
-                return "Speaking";
+                state = "Speaking";
+                break;
             case ERROR:
-                return "Error";
+                state = "Error";
+                break;
             case INTERRUPTED:
-                return "Interrupted";
+                state = "Interrupted";
+                break;
             case RECOVERING:
-                return "Recovering";
+                state = "Recovering";
+                break;
             default:
-                return "";
+                state = "Ready";
+                break;
         }
+        return state + " / " + MoaPrefs.languageStatus(this);
     }
 
     private int voiceStateColor() {
@@ -1242,6 +1286,9 @@ public final class OverlayService extends Service {
             setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
         }
         trackAgentRunsFromResponse(response);
+        if ("profile_control".equals(response.optString("classification", "")) || response.optJSONObject("profile") != null) {
+            refreshVoiceProfile();
+        }
         boolean samplingVoices = maybeStartVoiceSampler(response, fromVoice);
         if (samplingVoices) {
             shouldSpeak = false;
@@ -1863,7 +1910,20 @@ public final class OverlayService extends Service {
         if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
             dismissOverlayUi();
         }
+        loadSettings();
         pushToTalkVoiceTurn = true;
+        if (streamingVoiceAvailable()) {
+            continuousVoiceLoop = false;
+            cancelContinuousVoiceRestart();
+            cancelVoiceSampler();
+            if (orbView != null) {
+                orbView.setHeld(true);
+            }
+            nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+            nextManualVoiceFollowsActiveRun = false;
+            startStreamingVoiceTurn(false, false);
+            return;
+        }
         startLocalVoiceTurn(true);
     }
 
@@ -2056,6 +2116,7 @@ public final class OverlayService extends Service {
         currentStreamingTurnCommitRequested = false;
         currentStreamingAssistantRecorded = false;
         currentStreamingTranscript = "";
+        streamingTranscriptAccumulator.reset();
         streamingAssistantAudioPlaying = false;
         resetVoiceTurnTranscript();
         final String stableSessionId = conversationId.isEmpty() ? MoaPrefs.conversationId(this) : conversationId;
@@ -2109,7 +2170,8 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                currentStreamingTranscript = safe(text);
+                String transcript = streamingTranscriptAccumulator.update(text);
+                currentStreamingTranscript = safe(transcript);
                 updateVoiceUserTranscript(currentStreamingTranscript, currentStreamingTurnCommitRequested);
                 setVoiceRuntimeState(currentStreamingTurnCommitRequested ? VoiceRuntimeState.THINKING : VoiceRuntimeState.LISTENING);
                 if (currentStreamingTurnCommitRequested && shouldRouteStreamingTranscriptThroughMoa(currentStreamingTranscript)) {
@@ -2122,7 +2184,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                String transcript = safe(text);
+                String transcript = safe(streamingTranscriptAccumulator.update(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
                     if (nextStreamingTurnFollowsActiveRun || !activeAgentRuns.isEmpty()) {
@@ -2196,6 +2258,7 @@ public final class OverlayService extends Service {
                     recordCurrentStreamingAssistant();
                 }
                 if ("completed".equals(safe(status))) {
+                    refreshVoiceProfile();
                     if (streamingAssistantAudioPlaying) {
                         pendingContinuousVoiceRestartAfterAudio = true;
                         return;

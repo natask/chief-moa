@@ -193,7 +193,7 @@ public final class MainActivity extends Activity {
         sessionsStatus = statusLine(card, "Sessions", "Checking...");
         runsStatus = statusLine(card, "Runs", "Checking...");
         receiptsStatus = statusLine(card, "Receipts", "Checking...");
-        settingsStatus = statusLine(card, "Settings", MoaPrefs.spokenRepliesEnabled(this) ? "Spoken replies on" : "Text replies");
+        settingsStatus = statusLine(card, "Settings", settingsSummaryText());
 
         Button refresh = secondaryButton("Refresh control center");
         refresh.setOnClickListener(v -> refreshControlCenter());
@@ -442,6 +442,20 @@ public final class MainActivity extends Activity {
         updatePermissionState();
     }
 
+    private String settingsSummaryText() {
+        String speech = MoaPrefs.spokenRepliesEnabled(this) ? "Spoken replies on" : "Text replies";
+        return speech + " / " + MoaPrefs.languageStatus(this);
+    }
+
+    private String androidDeviceId() {
+        String raw = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+        String safe = raw == null ? "" : raw.replaceAll("[^a-zA-Z0-9_-]", "");
+        if (safe.isEmpty()) {
+            safe = "unknown";
+        }
+        return "android_" + safe;
+    }
+
     private void refreshControlCenter() {
         if (sessionsStatus == null || runsStatus == null || receiptsStatus == null) {
             return;
@@ -450,7 +464,7 @@ public final class MainActivity extends Activity {
         receiptsStatus.setText(MoaActionReceiptStore.receipts(this).length() + " local");
         receiptsStatus.setTextColor(MoaColors.OK);
         if (settingsStatus != null) {
-            settingsStatus.setText(MoaPrefs.spokenRepliesEnabled(this) ? "Spoken replies on" : "Text replies");
+            settingsStatus.setText(settingsSummaryText());
         }
 
         String gatewayUrl = MoaPrefs.gatewayUrl(this);
@@ -467,6 +481,7 @@ public final class MainActivity extends Activity {
         new Thread(() -> {
             String sessionsLabel = "Unavailable";
             String runsLabel = "Unavailable";
+            String fetchedProfileJson = "";
             int sessionsColor = MoaColors.GOLD;
             int runsColor = MoaColors.GOLD;
             try {
@@ -489,14 +504,26 @@ public final class MainActivity extends Activity {
                 runsLabel = activeRuns > 0 ? activeRuns + " active / " + runCount + " recent" : runCount + " recent";
                 sessionsColor = MoaColors.OK;
                 runsColor = MoaColors.OK;
+                try {
+                    JSONObject profilePayload = client.agentProfile("device", androidDeviceId());
+                    JSONObject profile = profilePayload.optJSONObject("profile");
+                    if (profile != null) {
+                        fetchedProfileJson = profile.toString();
+                    }
+                } catch (Exception ignored) {
+                }
             } catch (Exception ignored) {
             }
 
             final String nextSessions = sessionsLabel;
             final String nextRuns = runsLabel;
+            final String nextProfileJson = fetchedProfileJson;
             final int nextSessionsColor = sessionsColor;
             final int nextRunsColor = runsColor;
             mainHandler.post(() -> {
+                if (!nextProfileJson.isEmpty()) {
+                    MoaPrefs.setAgentProfileJson(this, nextProfileJson);
+                }
                 if (sessionsStatus != null) {
                     sessionsStatus.setText(nextSessions);
                     sessionsStatus.setTextColor(nextSessionsColor);
@@ -504,6 +531,9 @@ public final class MainActivity extends Activity {
                 if (runsStatus != null) {
                     runsStatus.setText(nextRuns);
                     runsStatus.setTextColor(nextRunsColor);
+                }
+                if (settingsStatus != null) {
+                    settingsStatus.setText(settingsSummaryText());
                 }
             });
         }, "moa-control-center").start();
@@ -521,6 +551,9 @@ public final class MainActivity extends Activity {
         if (receiptsStatus != null) {
             receiptsStatus.setText(MoaActionReceiptStore.receipts(this).length() + " local");
             receiptsStatus.setTextColor(MoaColors.OK);
+        }
+        if (settingsStatus != null) {
+            settingsStatus.setText(settingsSummaryText());
         }
     }
 

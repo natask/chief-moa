@@ -18,7 +18,8 @@
 - [ ] 3.1 Add profile fields for explicit language mode, primary language, output language policy, and `auto_switch=false` default.
 - [ ] 3.2 Translate language state into Gemini Live setup/prompt instructions and provider metadata without allowing silent durable language changes.
 - [ ] 3.3 Add voice intents for switching language and asking which language is active.
-- [ ] 3.4 Show active language state in the Android overlay or full-app settings.
+- [x] 3.4 Show active language state in the Android overlay or full-app settings.
+      Verified 2026-06-25 with `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew testDebugUnitTest` and `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`.
 - [ ] 3.5 Verify real phone behavior: language changes persist across turns and do not change until explicitly changed again.
 
 ## 4. Canonical Voice And Provider Events

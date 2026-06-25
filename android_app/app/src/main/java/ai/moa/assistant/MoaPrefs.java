@@ -3,6 +3,9 @@ package ai.moa.assistant;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import org.json.JSONObject;
+
+import java.util.Locale;
 import java.util.UUID;
 
 final class MoaPrefs {
@@ -15,6 +18,7 @@ final class MoaPrefs {
     private static final String KEY_HISTORY_JSON = "history_json";
     private static final String KEY_SPOKEN_REPLIES_ENABLED = "spoken_replies_enabled";
     private static final String KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED = "spoken_replies_quiet_default_applied";
+    private static final String KEY_AGENT_PROFILE_JSON = "agent_profile_json";
 
     private MoaPrefs() {
     }
@@ -80,8 +84,87 @@ final class MoaPrefs {
         prefs(context).edit().putString(KEY_HISTORY_JSON, historyJson == null ? "" : historyJson).apply();
     }
 
+    static String agentProfileJson(Context context) {
+        return prefs(context).getString(KEY_AGENT_PROFILE_JSON, "");
+    }
+
+    static void setAgentProfileJson(Context context, String profileJson) {
+        prefs(context).edit().putString(KEY_AGENT_PROFILE_JSON, profileJson == null ? "" : profileJson).apply();
+    }
+
+    static String inputLanguageTag(Context context) {
+        JSONObject profile = agentProfile(context);
+        String tag = firstNonEmpty(
+                profile.optString("input_language_primary", ""),
+                firstLanguage(profile.optString("input_languages", "")),
+                profile.optString("language_primary", ""),
+                firstLanguage(profile.optString("language", ""))
+        );
+        return tag.isEmpty() ? Locale.getDefault().toLanguageTag() : tag;
+    }
+
+    static String replyLanguageTag(Context context) {
+        JSONObject profile = agentProfile(context);
+        String tag = firstNonEmpty(
+                profile.optString("language_primary", ""),
+                firstLanguage(profile.optString("language", "")),
+                profile.optString("input_language_primary", ""),
+                firstLanguage(profile.optString("input_languages", ""))
+        );
+        return tag.isEmpty() ? Locale.US.toLanguageTag() : tag;
+    }
+
+    static String languageStatus(Context context) {
+        String input = inputLanguageTag(context);
+        String reply = replyLanguageTag(context);
+        if (input.equalsIgnoreCase(reply)) {
+            return "Language " + input;
+        }
+        return "Hear " + input + " / Reply " + reply;
+    }
+
     private static SharedPreferences prefs(Context context) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static JSONObject agentProfile(Context context) {
+        String raw = agentProfileJson(context);
+        if (raw == null || raw.trim().isEmpty()) {
+            return new JSONObject();
+        }
+        try {
+            return new JSONObject(raw);
+        } catch (Exception ignored) {
+            return new JSONObject();
+        }
+    }
+
+    private static String firstLanguage(String value) {
+        String raw = value == null ? "" : value.trim();
+        if (raw.isEmpty()) {
+            return "";
+        }
+        String[] parts = raw.split(",");
+        for (String part : parts) {
+            String item = part.trim();
+            if (!item.isEmpty()) {
+                return item;
+            }
+        }
+        return "";
+    }
+
+    private static String firstNonEmpty(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            String item = value == null ? "" : value.trim();
+            if (!item.isEmpty()) {
+                return item;
+            }
+        }
+        return "";
     }
 
 }

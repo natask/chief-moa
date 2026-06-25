@@ -54,6 +54,8 @@ final class MoaVoiceController {
     private boolean pendingManualCommit;
     private int listenMode = LISTEN_NONE;
     private String liveTranscript = "";
+    private String recognitionLanguageTag = Locale.getDefault().toLanguageTag();
+    private String replyLanguageTag = Locale.US.toLanguageTag();
     private final MoaSpeechTranscriptAccumulator transcriptAccumulator = new MoaSpeechTranscriptAccumulator();
     private volatile String activeUtteranceId = "";
     private int utteranceSequence;
@@ -88,6 +90,14 @@ final class MoaVoiceController {
 
     boolean isActive() {
         return listenMode != LISTEN_NONE || listening;
+    }
+
+    void setLanguageTags(String inputLanguageTag, String outputLanguageTag) {
+        String input = safe(inputLanguageTag);
+        String output = safe(outputLanguageTag);
+        recognitionLanguageTag = input.isEmpty() ? Locale.getDefault().toLanguageTag() : input;
+        replyLanguageTag = output.isEmpty() ? Locale.US.toLanguageTag() : output;
+        applyTextToSpeechLanguage();
     }
 
     void handlePrimaryTap() {
@@ -406,7 +416,8 @@ final class MoaVoiceController {
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguageTag);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguageTag);
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 700L);
         intent.putExtra(
@@ -424,7 +435,7 @@ final class MoaVoiceController {
         textToSpeech = new TextToSpeech(context, status -> {
             ttsReady = status == TextToSpeech.SUCCESS;
             if (ttsReady) {
-                textToSpeech.setLanguage(Locale.US);
+                applyTextToSpeechLanguage();
                 textToSpeech.setPitch(0.88f);
                 textToSpeech.setSpeechRate(1.02f);
                 textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
@@ -449,6 +460,20 @@ final class MoaVoiceController {
                 });
             }
         });
+    }
+
+    private void applyTextToSpeechLanguage() {
+        if (!ttsReady || textToSpeech == null) {
+            return;
+        }
+        Locale locale = Locale.forLanguageTag(replyLanguageTag);
+        if (locale == null || locale.getLanguage().isEmpty()) {
+            locale = Locale.US;
+        }
+        int result = textToSpeech.setLanguage(locale);
+        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            textToSpeech.setLanguage(Locale.US);
+        }
     }
 
     private void finishUtterance(String utteranceId) {
