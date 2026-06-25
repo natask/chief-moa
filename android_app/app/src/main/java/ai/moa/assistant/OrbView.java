@@ -12,8 +12,8 @@ import android.view.View;
 // The floating Moa lion mark: just the animal, no disc. The dark silhouette would
 // vanish on dark app backgrounds, so a soft light halo (the mark feathered
 // behind itself) gives it contrast on any screen. Listening tints the halo gold
-// and grows the mark a touch instead of lighting up an orb. A double-tap that
-// starts a voice turn lights a soft gold glow behind it so the live state reads.
+// and grows the mark a touch instead of lighting up an orb. A held voice turn
+// lights a soft gold glow behind it so the live state reads.
 final class OrbView extends View {
     // The lion mark fills its own square frame, so the animal centers on the box.
     private static final float GLYPH_VIEWPORT = 108f;
@@ -40,7 +40,7 @@ final class OrbView extends View {
         invalidate();
     }
 
-    // Held = live voice turn engaged (double-tap). Lights the glow and grows a touch.
+    // Held = manual voice turn engaged. Lights the glow and grows a touch.
     void setHeld(boolean held) {
         this.held = held;
         invalidate();

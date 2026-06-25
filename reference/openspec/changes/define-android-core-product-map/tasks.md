@@ -74,7 +74,7 @@
 
 - [x] 8.1 Add gateway smoke commands for health, voice turn, agent run list, and run detail.
 - [x] 8.2 Keep `./gradlew assembleDebug` as Android compile verification.
-- [x] 8.3 Add manual QA checklist for overlay tap, double tap stop, transcript, agent run start, run status, and wake restart.
+- [x] 8.3 Add manual QA checklist for overlay tap, release-to-send voice capture, transcript, agent run start, run status, and wake restart.
 - [x] 8.4 Add manual QA for AirPods/headset assistant gesture: reinstall APK, clear any prior voice-command default, trigger the earbud gesture, select Moa, and verify the overlay transcript starts.
 
 ## 9. Android OTA Deployment

@@ -1,6 +1,6 @@
 # Moa Android Assistant
 
-Android-first Moa assistant prototype. It is a native app that launches a floating animated circle over the phone screen. Double-tap the circle to start a continuous voice loop: speak, pause, hear the reply, and keep talking. Tap while it is listening to send the current speech immediately; tap while it is thinking or speaking to stop/collapse the active voice surface. Voice-originated replies can speak back with Android TextToSpeech.
+Android-first Moa assistant prototype. It is a native app that launches a floating animated circle over the phone screen. Double-press and hold the circle to talk; release sends the captured speech immediately without waiting for silence detection. Tap while it is listening to send the current speech immediately; tap while it is thinking or speaking to stop/collapse the active voice surface. Voice-originated replies can speak back with Android TextToSpeech.
 
 ## Build
 
@@ -32,8 +32,8 @@ grant overlay or Accessibility access.
 
 - Drag: move the orb.
 - Single tap: type while idle, send the current speech while listening, or stop/collapse the active voice surface while thinking/speaking.
-- Double tap: start the continuous voice loop.
-- Long press: send a spoken follow-up to the active agent run; if no run is active, open or minimize the chat panel.
+- Double-press and hold: start voice capture; release to send.
+- Long press: start voice capture; release to send.
 
 ## Gateway
 

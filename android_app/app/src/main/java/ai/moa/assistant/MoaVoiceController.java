@@ -50,6 +50,8 @@ final class MoaVoiceController {
     private boolean listening;
     private boolean ignoreNextSpeechError;
     private boolean restartCommandAfterSpeech;
+    private boolean manualCommitOnly;
+    private boolean pendingManualCommit;
     private int listenMode = LISTEN_NONE;
     private String liveTranscript = "";
     private volatile String activeUtteranceId = "";
@@ -92,7 +94,7 @@ final class MoaVoiceController {
             commitCurrentSpeechThenRestart();
             return;
         }
-        startCommandListening();
+        startCommandListening(false);
     }
 
     void toggleListening() {
@@ -113,10 +115,14 @@ final class MoaVoiceController {
             return;
         }
 
-        startCommandListening();
+        startCommandListening(false);
     }
 
     void startCommandListening() {
+        startCommandListening(false);
+    }
+
+    void startCommandListening(boolean manualCommitOnly) {
         if (speechRecognizer == null) {
             callback.onShowPanelRequested();
             callback.onAssistantMessage("This Android device does not expose speech recognition. Text chat still works.");
@@ -128,6 +134,8 @@ final class MoaVoiceController {
             return;
         }
         liveTranscript = "";
+        this.manualCommitOnly = manualCommitOnly;
+        pendingManualCommit = false;
         callback.onComposerText("");
         listenMode = LISTEN_COMMAND;
         listening = true;
@@ -138,6 +146,8 @@ final class MoaVoiceController {
         } catch (RuntimeException error) {
             listening = false;
             listenMode = LISTEN_NONE;
+            this.manualCommitOnly = false;
+            pendingManualCommit = false;
             liveTranscript = "";
             callback.onVoiceStateChanged();
             callback.onRemoveTranscript();
@@ -147,11 +157,12 @@ final class MoaVoiceController {
 
     void commitCurrentSpeech() {
         if (speechRecognizer == null || listenMode != LISTEN_COMMAND) {
-            startCommandListening();
+            startCommandListening(false);
             return;
         }
 
         restartCommandAfterSpeech = false;
+        pendingManualCommit = manualCommitOnly;
         listening = false;
         callback.onVoiceStateChanged();
         try {
@@ -159,10 +170,19 @@ final class MoaVoiceController {
         } catch (RuntimeException error) {
             finishCommandTurn(liveTranscript);
         }
+        if (manualCommitOnly) {
+            mainHandler.postDelayed(() -> {
+                if (pendingManualCommit && listenMode == LISTEN_COMMAND) {
+                    finishCommandTurn(liveTranscript);
+                }
+            }, 450);
+        }
     }
 
     void stopQuietly() {
         restartCommandAfterSpeech = false;
+        manualCommitOnly = false;
+        pendingManualCommit = false;
         liveTranscript = "";
         callback.onComposerText("");
         activeUtteranceId = "";
@@ -229,7 +249,17 @@ final class MoaVoiceController {
             public void onError(int error) {
                 int mode = listenMode;
                 listening = false;
+                if (mode == LISTEN_COMMAND && manualCommitOnly && pendingManualCommit) {
+                    finishCommandTurn(liveTranscript);
+                    return;
+                }
+                if (mode == LISTEN_COMMAND && manualCommitOnly && isQuietSpeechError(error)) {
+                    callback.onVoiceStateChanged();
+                    return;
+                }
                 listenMode = LISTEN_NONE;
+                manualCommitOnly = false;
+                pendingManualCommit = false;
                 callback.onVoiceStateChanged();
                 if (ignoreNextSpeechError) {
                     ignoreNextSpeechError = false;
@@ -254,12 +284,26 @@ final class MoaVoiceController {
             public void onResults(Bundle results) {
                 int mode = listenMode;
                 listening = false;
-                listenMode = LISTEN_NONE;
-                callback.onVoiceStateChanged();
                 String text = firstSpeechResult(results);
                 if (mode == LISTEN_COMMAND) {
+                    if (manualCommitOnly && !pendingManualCommit) {
+                        if (!text.isEmpty()) {
+                            liveTranscript = text;
+                            callback.onUpdateTranscript(text);
+                            callback.onComposerText(text);
+                        }
+                        callback.onVoiceStateChanged();
+                        return;
+                    }
+                    listenMode = LISTEN_NONE;
+                    callback.onVoiceStateChanged();
                     finishCommandTurn(text);
+                    return;
                 }
+                listenMode = LISTEN_NONE;
+                manualCommitOnly = false;
+                pendingManualCommit = false;
+                callback.onVoiceStateChanged();
             }
 
             @Override
@@ -286,6 +330,11 @@ final class MoaVoiceController {
     private void finishCommandTurn(String recognizedText) {
         boolean restart = restartCommandAfterSpeech;
         restartCommandAfterSpeech = false;
+        manualCommitOnly = false;
+        pendingManualCommit = false;
+        listening = false;
+        listenMode = LISTEN_NONE;
+        callback.onVoiceStateChanged();
 
         String text = safe(recognizedText);
         if (text.isEmpty()) {
@@ -316,11 +365,12 @@ final class MoaVoiceController {
 
     private void commitCurrentSpeechThenRestart() {
         if (speechRecognizer == null || listenMode != LISTEN_COMMAND) {
-            startCommandListening();
+            startCommandListening(false);
             return;
         }
 
         restartCommandAfterSpeech = true;
+        pendingManualCommit = false;
         listening = false;
         callback.onVoiceStateChanged();
         try {
@@ -337,6 +387,8 @@ final class MoaVoiceController {
         }
         listening = false;
         listenMode = LISTEN_NONE;
+        manualCommitOnly = false;
+        pendingManualCommit = false;
         liveTranscript = "";
         callback.onVoiceStateChanged();
     }
@@ -348,8 +400,14 @@ final class MoaVoiceController {
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 700L);
-        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 850L);
-        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 450L);
+        intent.putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                manualCommitOnly ? 60000L : 850L
+        );
+        intent.putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                manualCommitOnly ? 60000L : 450L
+        );
         return intent;
     }
 

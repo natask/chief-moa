@@ -8,13 +8,13 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 
-// Orb gestures, matched to the browser extension's mark:
+// Orb gestures, matched to the Android overlay contract:
 //   single tap  -> onSingleTap, text mode (open the keyboard / panel)
-//   double tap  -> onDoubleTap, voice mode (continuous listen/reply loop)
-//   long press  -> onLongPressStart / onLongPressRelease, push-to-talk
+//   double press -> onDoublePressStart / onPressToTalkRelease, push-to-talk
+//   long press  -> onLongPressStart / onPressToTalkRelease, push-to-talk
 //   drag        -> reposition the orb, no callback
 // A single tap is confirmed only after the double-tap window passes, so a tap
-// never flashes the text surface before a double tap engages voice.
+// never flashes the text surface before a double press engages voice.
 final class MoaOrbTouchListener implements View.OnTouchListener {
     private static final long PUSH_TO_TALK_HOLD_MS = 120;
 
@@ -24,8 +24,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final WindowManager.LayoutParams orbParams;
     private final int orbWindowDp;
     private final int edgeMarginDp;
+    private final Runnable onDoublePressStart;
     private final Runnable onLongPressStart;
-    private final Runnable onLongPressRelease;
+    private final Runnable onPressToTalkRelease;
     private final GestureDetector gestureDetector;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -46,9 +47,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             int orbWindowDp,
             int edgeMarginDp,
             Runnable onSingleTap,
-            Runnable onDoubleTap,
+            Runnable onDoublePressStart,
             Runnable onLongPressStart,
-            Runnable onLongPressRelease
+            Runnable onPressToTalkRelease
     ) {
         this.context = context;
         this.windowManager = windowManager;
@@ -56,8 +57,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.orbParams = orbParams;
         this.orbWindowDp = orbWindowDp;
         this.edgeMarginDp = edgeMarginDp;
+        this.onDoublePressStart = onDoublePressStart;
         this.onLongPressStart = onLongPressStart;
-        this.onLongPressRelease = onLongPressRelease;
+        this.onPressToTalkRelease = onPressToTalkRelease;
         this.gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
@@ -70,8 +72,11 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
 
             @Override
             public boolean onDoubleTap(MotionEvent e) {
-                if (!moved) {
-                    onDoubleTap.run();
+                cancelPendingLongPress();
+                if (!moved && !longPressActive) {
+                    longPressActive = true;
+                    suppressTapAfterLongPress = true;
+                    onDoublePressStart.run();
                 }
                 return true;
             }
@@ -130,7 +135,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 cancelPendingLongPress();
                 if (longPressActive) {
                     longPressActive = false;
-                    onLongPressRelease.run();
+                    onPressToTalkRelease.run();
                 }
                 return true;
             default:

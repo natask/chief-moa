@@ -153,7 +153,7 @@ public final class MainActivity extends Activity {
         root.addView(title);
 
         TextView body = new TextView(this);
-        body.setText("Enable draw-over-apps, start the assistant circle, then tap to type or double-tap for continuous voice.");
+        body.setText("Enable draw-over-apps, start the assistant circle, then tap to type or double-press and hold to talk.");
         body.setTextColor(0xCCEEF8E8);
         body.setTextSize(15);
         body.setLineSpacing(dp(3), 1f);
@@ -281,10 +281,10 @@ public final class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "What this build does");
         addBullet(card, "Floating animated circle over other apps.");
-        addBullet(card, "Tap the orb to type; double-tap starts continuous voice, like the browser mark.");
-        addBullet(card, "Silence commits each spoken turn and the mic re-arms after the reply.");
+        addBullet(card, "Tap the orb to type; double-press and hold starts voice capture.");
+        addBullet(card, "Release commits the spoken turn without waiting for silence detection.");
         addBullet(card, "Gemini-style live transcript overlay while speaking.");
-        addBullet(card, "Voice streams through Gemini Live only after an explicit voice gesture.");
+        addBullet(card, "Manual orb voice sends the released transcript through the gateway voice-turn route.");
         addBullet(card, "Screen access reads visible app text and passes it to gateway replies and home-machine agent runs.");
         addBullet(card, "Assistant calls the self-hosted Aggie gateway when configured, with local fallback replies if the server is unavailable.");
         addBullet(card, "Voice commands that ask Aggie to build, fix, change, or test something can run the Gemini harness on the home machine.");
