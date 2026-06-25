@@ -636,9 +636,19 @@ class GeminiLiveVoiceProvider {
   // The voice used for the NEXT session/turn: the effective agent profile's
   // `voice` when set, otherwise the env default. Read fresh each call so a
   // profile change applies on the next turn without restarting the provider.
-  effectiveVoice() {
-    if (this.agentProfile && typeof this.agentProfile.effective === "function") {
-      const profileVoice = this.agentProfile.effective().voice;
+  profileForTurn(turn) {
+    if (turn?.effectiveProfile && typeof turn.effectiveProfile === "object") {
+      return turn.effectiveProfile;
+    }
+    return this.agentProfile && typeof this.agentProfile.effective === "function"
+      ? this.agentProfile.effective()
+      : null;
+  }
+
+  effectiveVoice(profile) {
+    const effectiveProfile = profile || this.profileForTurn();
+    if (effectiveProfile) {
+      const profileVoice = effectiveProfile.voice;
       if (typeof profileVoice === "string" && profileVoice.trim()) {
         return profileVoice.trim();
       }
@@ -649,11 +659,11 @@ class GeminiLiveVoiceProvider {
   // The user's preferred input language for status/context. Gemini Live native
   // audio infers input language; this is intentionally NOT sent as
   // speechConfig.languageCode, which configures response speech rather than STT.
-  effectiveInputLanguageCode() {
-    if (this.agentProfile && typeof this.agentProfile.effective === "function") {
-      const profile = this.agentProfile.effective();
-      const primary = String(profile.input_language_primary
-        || String(profile.input_languages || "").split(",")[0]
+  effectiveInputLanguageCode(profile) {
+    const effectiveProfile = profile || this.profileForTurn();
+    if (effectiveProfile) {
+      const primary = String(effectiveProfile.input_language_primary
+        || String(effectiveProfile.input_languages || "").split(",")[0]
         || "").trim();
       if (primary) return primary;
     }
@@ -664,23 +674,21 @@ class GeminiLiveVoiceProvider {
   // by talking: "text" -> the model writes, no audio; "speech"/"auto" -> it
   // speaks (a live session is voice-initiated, so auto means speak). Read fresh
   // so "respond in text from now on" takes effect on the next turn.
-  effectiveResponseModalities() {
-    if (this.agentProfile && typeof this.agentProfile.effective === "function") {
-      const modality = String(this.agentProfile.effective().response_modality || "").trim().toLowerCase();
-      if (modality === "text") return ["TEXT"];
-    }
+  effectiveResponseModalities(profile) {
+    const effectiveProfile = profile || this.profileForTurn();
+    const modality = String(effectiveProfile?.response_modality || "").trim().toLowerCase();
+    if (modality === "text") return ["TEXT"];
     return ["AUDIO"];
   }
 
-  effectiveSystemPrompt() {
-    const profile = this.agentProfile && typeof this.agentProfile.effective === "function"
-      ? this.agentProfile.effective()
-      : null;
-    const modality = String(profile?.response_modality || "auto").trim().toLowerCase();
+  effectiveSystemPrompt(profile) {
+    const effectiveProfile = profile || this.profileForTurn();
+    const modality = String(effectiveProfile?.response_modality || "auto").trim().toLowerCase();
     return [
-      profile?.system_prompt || this.systemPrompt,
-      profileIdentityInstruction(profile),
-      profileLanguageInstruction(profile),
+      effectiveProfile?.system_prompt || this.systemPrompt,
+      profileIdentityInstruction(effectiveProfile),
+      missionAccessInstruction(),
+      profileLanguageInstruction(effectiveProfile),
       "If the user tells you to stop, shut up, be quiet, hush, or not to speak, stop talking immediately and say nothing — do not acknowledge it, just go silent.",
       modality === "text"
         ? "Reply in text only. Do not speak your replies out loud."
@@ -1096,14 +1104,15 @@ class GeminiLiveVoiceProvider {
   }
 
   setupMessage(turn) {
+    const profile = this.profileForTurn(turn);
     const speechConfig = {
       voiceConfig: {
         prebuiltVoiceConfig: {
-          voiceName: this.effectiveVoice(),
+          voiceName: this.effectiveVoice(profile),
         },
       },
     };
-    const systemParts = [{ text: this.effectiveSystemPrompt() }];
+    const systemParts = [{ text: this.effectiveSystemPrompt(profile) }];
     const contextPrompt = String(turn?.contextPrompt || "").trim();
     if (contextPrompt) {
       systemParts.push({ text: contextPrompt });
@@ -1112,7 +1121,7 @@ class GeminiLiveVoiceProvider {
     return {
       model: this.modelResource(),
       generationConfig: {
-        responseModalities: this.effectiveResponseModalities(),
+        responseModalities: this.effectiveResponseModalities(profile),
         temperature: this.temperature,
         speechConfig,
       },
@@ -1557,6 +1566,16 @@ function profileIdentityInstruction(profile) {
     `- current assistant name: ${name}`,
     `- if asked who or what you are, say you are ${name}`,
     "- address the user plainly with no titles or honorifics",
+  ].join("\n");
+}
+
+function missionAccessInstruction() {
+  return [
+    "Moa mission-agent access policy:",
+    "- start from yes and look for a path to satisfy the user's request",
+    "- do not answer with a flat refusal; when blocked by missing permission, credentials, integration setup, local approval, or device capability, say: \"Hey, I would like to do that, but I need you to give me access to <specific access>.\"",
+    "- do not claim an action is done until the owning device, gateway, or integration returns a receipt",
+    "- server/model output remains a proposal; local devices still own permissions, approvals, execution, and receipts",
   ].join("\n");
 }
 
