@@ -99,15 +99,21 @@ class VoiceSessionConnection {
     });
   }
 
-  profileVersion() {
+  profileVersion(deviceId = "") {
     const value = this.agentProfile && typeof this.agentProfile.currentVersion === "function"
-      ? this.agentProfile.currentVersion()
+      ? this.agentProfile.currentVersion(deviceId ? { deviceId } : {})
       : "profile_v0001";
     try {
       return sanitizeId(value, "profile_version");
     } catch {
       return "profile_v0001";
     }
+  }
+
+  effectiveProfile(deviceId = "") {
+    return this.agentProfile && typeof this.agentProfile.effective === "function"
+      ? this.agentProfile.effective(deviceId ? { deviceId } : {})
+      : null;
   }
 
   async handleText(data) {
@@ -183,8 +189,10 @@ class VoiceSessionConnection {
     const format = normalizeFormat(event.format);
     const playbackPolicy = normalizePlaybackPolicy(event.playback_policy || event.playbackPolicy);
     const allBranchesContext = event.all_branches_context === true || event.allBranchesContext === true;
+    const deviceId = sanitizeLooseId(event.device_id || event.deviceId || event.client?.device_id || event.client?.deviceId || "");
     const startedAt = nowIso();
-    const profileVersion = this.profileVersion();
+    const profileVersion = this.profileVersion(deviceId);
+    const effectiveProfile = this.effectiveProfile(deviceId);
     const providerStatus = this.voiceProvider.status();
     fs.mkdirSync(turnDir, { recursive: true });
 
@@ -194,7 +202,9 @@ class VoiceSessionConnection {
       branchId,
       turnId,
       profileVersion,
+      effectiveProfile,
       providerStatus,
+      deviceId,
       source: String(event.source || "android-overlay").slice(0, 120),
       format,
       playbackPolicy,
@@ -255,6 +265,7 @@ class VoiceSessionConnection {
       branch_id: branchId,
       turn_id: turnId,
       profile_version: profileVersion,
+      device_id: deviceId,
     });
   }
 
@@ -270,6 +281,7 @@ class VoiceSessionConnection {
         all_branches_context: turn.allBranchesContext === true,
         turn_id: turn.turnId,
         profile_version: turn.profileVersion || "",
+        device_id: turn.deviceId || "",
       }) || "").slice(0, 12000);
     } catch {
       return "";
@@ -440,6 +452,7 @@ class VoiceSessionConnection {
         all_branches_context: turn.allBranchesContext === true,
         turn_id: turn.turnId,
         profile_version: turn.profileVersion || "",
+        device_id: turn.deviceId || "",
         source: turn.source,
       });
       await this.recordProviderEvent(turn, providerEvents, "tool_result", {
@@ -560,6 +573,7 @@ class VoiceSessionConnection {
         branch_id: turn.branchId || "default",
         turn_id: turn.turnId,
         profile_version: turn.profileVersion || "",
+        device_id: turn.deviceId || "",
         source: turn.source,
         started_at: turn.startedAt,
         completed_at: nowIso(),
@@ -603,6 +617,7 @@ class VoiceSessionConnection {
         branch_id: turn.branchId || "default",
         turn_id: turn.turnId,
         profile_version: turn.profileVersion || "",
+        device_id: turn.deviceId || "",
         source: turn.source,
         started_at: turn.startedAt,
         completed_at: nowIso(),
@@ -758,6 +773,7 @@ class VoiceSessionConnection {
       branch_id: turn.branchId || "default",
       turn_id: turn.turnId,
       profile_version: turn.profileVersion || "",
+      device_id: turn.deviceId || "",
       provider: status.provider || "",
       provider_ids: status.selected_providers || {
         native_live: status.provider || "",
@@ -943,6 +959,15 @@ function toBuffer(data) {
     return Buffer.concat(data.map(toBuffer));
   }
   return Buffer.from(data);
+}
+
+function sanitizeLooseId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 160);
 }
 
 function sanitizeId(value, field) {

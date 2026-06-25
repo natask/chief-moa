@@ -3412,7 +3412,7 @@ async function handleLiveVoiceToolCall(call) {
     return liveToolLaunchBrowserAgent(call, args);
   }
   if (name === "update_agent_profile") {
-    return liveToolUpdateAgentProfile(args);
+    return liveToolUpdateAgentProfile(call, args);
   }
   if (name === "get_session_context") {
     return liveToolGetSessionContext(call, args);
@@ -3514,7 +3514,7 @@ function liveToolLaunchBrowserAgent(call, args) {
   };
 }
 
-function liveToolUpdateAgentProfile(args) {
+function liveToolUpdateAgentProfile(call, args) {
   const input = args.profile && typeof args.profile === "object" && !Array.isArray(args.profile)
     ? args.profile
     : args;
@@ -3532,23 +3532,44 @@ function liveToolUpdateAgentProfile(args) {
       supported_fields: agentProfile.fields(),
     };
   }
-  const before = agentProfile.effective();
-  const beforeVersion = agentProfile.currentVersion();
+  const requestedScope = String(args.scope || args.profile_scope || "global").toLowerCase() === "device" ? "device" : "global";
+  const deviceId = normalizeDeviceId(args.device_id || call.device_id || "");
+  if (requestedScope === "device" && !deviceId) {
+    return {
+      ok: false,
+      error: "Hey, I would like to do that, but I need you to give me access to this device's Moa device id.",
+    };
+  }
+  const profileOptions = {
+    scope: requestedScope === "device" ? "device" : "global",
+    deviceId,
+  };
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
   agentProfile.patch(patch, {
     source: "gemini-live-tool",
     reason: String(args.reason || "live_profile_update").slice(0, 80),
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
   });
-  const after = agentProfile.effective();
-  const afterVersion = agentProfile.currentVersion();
+  const after = agentProfile.effective(profileOptions);
+  const afterVersion = agentProfile.currentVersion(profileOptions);
   const changed = agentProfile.fields().filter((field) => before?.[field] !== after?.[field]);
-  recordProfileHistory(before, after, "gemini-live-tool", { beforeVersion, afterVersion });
+  recordProfileHistory(before, after, "gemini-live-tool", {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
   return {
     ok: true,
     type: "agent_profile_updated",
     changed,
     from_profile_version: beforeVersion,
     profile_version: afterVersion,
-    profile: agentProfileRuntimeStatus(),
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId,
+    profile: agentProfileRuntimeStatus(profileOptions),
     application: profileApplicationSemantics(),
   };
 }
