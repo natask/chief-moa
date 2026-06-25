@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Aggie",
   "version": "0.1.1",
-  "description": "Open-source browser agent. Cmd+K to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
+  "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -43,8 +43,8 @@
   "commands": {
     "toggle-agee": {
       "suggested_key": {
-        "mac": "Command+K",
-        "default": "Ctrl+K"
+        "mac": "Command+Comma",
+        "default": "Ctrl+Comma"
       },
       "description": "Open Aggie command mode"
     },

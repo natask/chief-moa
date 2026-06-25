@@ -1037,7 +1037,13 @@ async function captureScreenshot(tabId) {
 
 function elementsText(snap) {
   const lines = (snap.elements || []).slice(0, MAX_ELEMENTS).map((e) => `[${e.i}] <${e.tag}${e.type ? " " + e.type : ""}> ${e.label}`);
-  return `URL: ${snap.url}\nTITLE: ${snap.title}\nINTERACTABLE ELEMENTS:\n${lines.join("\n") || "(none found)"}`;
+  const pageText = truncate(String(snap.pageText || snap.page_text || "").trim(), 2800);
+  return [
+    `URL: ${snap.url}`,
+    `TITLE: ${snap.title}`,
+    pageText ? `VISIBLE PAGE TEXT:\n${pageText}` : "",
+    `INTERACTABLE ELEMENTS:\n${lines.join("\n") || "(none found)"}`,
+  ].filter(Boolean).join("\n");
 }
 
 async function snapshotBlocks(tabId, signal) {

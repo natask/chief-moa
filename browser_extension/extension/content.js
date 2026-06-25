@@ -1418,17 +1418,17 @@
     }
   }
 
-  // ---- Hotkeys: Cmd/Ctrl+. = voice, Cmd/Ctrl+K = text ------------------
+  // ---- Hotkeys: Cmd/Ctrl+. = voice, Cmd/Ctrl+, = text ------------------
   // Two ways in, both hands-on-keyboard, no clicking:
   //   ⌘.  (or Ctrl+.)         → wake the agent and listen (speech); again to run
-  //   ⌘K  (or Ctrl+K)         → open the text command field
+  //   ⌘,  (or Ctrl+,)         → open the text command field
 
   function isVoiceHotkey(e) {
     return (e.metaKey || e.ctrlKey) && e.key === ".";
   }
 
   function isTextHotkey(e) {
-    return (e.metaKey || e.ctrlKey) && String(e.key || "").toLowerCase() === "k";
+    return (e.metaKey || e.ctrlKey) && (e.key === "," || (!e.shiftKey && e.code === "Comma"));
   }
 
   window.addEventListener(
@@ -1442,7 +1442,7 @@
         toggleVoiceSession();
         return;
       }
-      // ⌘K → text command field.
+      // ⌘, → text command field.
       if (isTextHotkey(e)) {
         e.preventDefault();
         e.stopPropagation();
@@ -1457,6 +1457,9 @@
   // ---- Perception -------------------------------------------------------
   const SELECTOR =
     'a[href], button, input:not([type=hidden]), textarea, select, [role=button], [role=link], [role=tab], [role=menuitem], [contenteditable=""], [contenteditable=true], [onclick]';
+  const MAX_VISIBLE_TEXT_CHARS = 5200;
+  const MAX_VISIBLE_TEXT_PARTS = 140;
+  const TEXT_NODE_EXCLUDED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS"]);
 
   function visible(el) {
     const r = el.getBoundingClientRect();
@@ -1464,6 +1467,51 @@
     if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) return false;
     const s = getComputedStyle(el);
     return s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+  }
+
+  function cleanVisibleText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function textNodeVisible(node) {
+    const parent = node?.parentElement;
+    if (!parent || parent.closest("#agee-root") || TEXT_NODE_EXCLUDED_TAGS.has(parent.tagName)) return false;
+    const text = cleanVisibleText(node.nodeValue);
+    if (text.length < 2) return false;
+    const s = getComputedStyle(parent);
+    if (s.visibility === "hidden" || s.display === "none" || s.opacity === "0") return false;
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = Array.from(range.getClientRects());
+      if (typeof range.detach === "function") range.detach();
+      if (!rects.length) return visible(parent);
+      return rects.some((r) => r.width >= 1 && r.height >= 1 && r.bottom >= 0 && r.top <= innerHeight && r.right >= 0 && r.left <= innerWidth);
+    } catch {
+      return visible(parent);
+    }
+  }
+
+  function visiblePageText() {
+    if (!document.body) return "";
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        return textNodeVisible(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+    const parts = [];
+    const seen = new Set();
+    let chars = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = cleanVisibleText(node.nodeValue);
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      parts.push(text);
+      chars += text.length + 1;
+      if (parts.length >= MAX_VISIBLE_TEXT_PARTS || chars >= MAX_VISIBLE_TEXT_CHARS) break;
+    }
+    return parts.join("\n").slice(0, MAX_VISIBLE_TEXT_CHARS);
   }
 
   function label(el) {
@@ -1503,7 +1551,7 @@
       indexed.push(el);
       out.push({ i, tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "", label: label(el) });
     });
-    return { url: location.href, title: document.title, elements: out };
+    return { url: location.href, title: document.title, pageText: visiblePageText(), elements: out };
   }
 
   // ---- Action -----------------------------------------------------------

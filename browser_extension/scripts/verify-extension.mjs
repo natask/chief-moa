@@ -66,6 +66,13 @@ if (!manifest.commands?.["toggle-agee"]) {
 }
 
 if (
+  manifest.commands?.["toggle-agee"]?.suggested_key?.mac !== "Command+Comma" ||
+  manifest.commands?.["toggle-agee"]?.suggested_key?.default !== "Ctrl+Comma"
+) {
+  throw new Error("missing toggle-agee command for Cmd/Ctrl+Comma");
+}
+
+if (
   manifest.commands?.["toggle-agee-voice"]?.suggested_key?.mac !== "Command+Period" ||
   manifest.commands?.["toggle-agee-voice"]?.suggested_key?.default !== "Ctrl+Period"
 ) {
@@ -112,6 +119,14 @@ if (
   !/chrome\.runtime\.onStartup\.addListener/.test(backgroundSource)
 ) {
   throw new Error("Cmd/Ctrl+Period must be wired through command handling and startup/update content injection");
+}
+
+if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {
+  throw new Error("content snapshot must include visible page text, not only actionable elements");
+}
+
+if (!/e\.code === "Comma"/.test(contentSource) || /toLowerCase\(\) === "k"/.test(contentSource)) {
+  throw new Error("text command hotkey must be Cmd/Ctrl+Comma, not Cmd/Ctrl+K");
 }
 
 if (
@@ -222,7 +237,7 @@ if (!/\/__agee-dev\/bump/.test(pokeDevReloadSource) || !/bumpExistingServer/.tes
 
 const setupParagraph =
   'Open chrome://extensions, find agee, click reload. If it was loaded from elsewhere, remove it and Load unpacked from software/browser_extension/extension/.\n' +
-  'On any page, press Cmd+K to open it, and type a request, for example "summarize this page" or "what can you do." You get a response from the gateway. Tell it "use the Kore voice" and it changes its own voice. Ask it to open a page and report something, and it launches a browser agent.';
+  'On any page, press Cmd+, to open it, and type a request, for example "summarize this page" or "what can you do." You get a response from the gateway. Tell it "use the Kore voice" and it changes its own voice. Ask it to open a page and report something, and it launches a browser agent.';
 const voiceIntent = parseSettingsIntent("use the Kore voice", null);
 if (voiceIntent?.patch?.voice !== "Kore") {
   throw new Error("settings parser should accept a direct Kore voice request");

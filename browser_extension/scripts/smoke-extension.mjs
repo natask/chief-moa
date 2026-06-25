@@ -229,6 +229,9 @@ async function main() {
     await workerCdp.send("Runtime.enable");
 
     const commands = await evaluate(workerCdp, "chrome.commands.getAll()");
+    const textCommand = commands.find((command) => command.name === "toggle-agee");
+    if (!textCommand) throw new Error(`text command was not registered: ${JSON.stringify(commands)}`);
+    const textShortcut = textCommand.shortcut || "page-level listener";
     const voiceCommand = commands.find((command) => command.name === "toggle-agee-voice");
     if (!voiceCommand) throw new Error(`voice command was not registered: ${JSON.stringify(commands)}`);
     const voiceShortcut = voiceCommand.shortcut || "page-level listener";
@@ -314,9 +317,13 @@ async function main() {
         const input = snapshot.elements.find((el) => el.tag === "input" && el.label.includes("Type something"));
         const button = snapshot.elements.find((el) => el.tag === "button" && el.label === "Search");
         if (!input || !button) return { ok: false, error: "expected demo controls missing", snapshot };
+        const pageText = String(snapshot.pageText || "");
+        if (!pageText.includes("Use this page for a low-risk extension smoke test") || !pageText.includes("Search query")) {
+          return { ok: false, error: "expected visible page text missing", snapshot };
+        }
         await chrome.tabs.sendMessage(tabId, { cmd: "act", action: "type", index: input.i, text: "browser agent" });
         await chrome.tabs.sendMessage(tabId, { cmd: "act", action: "click", index: button.i });
-        return { ok: true, elements: snapshot.elements.length, url: snapshot.url, title: snapshot.title };
+        return { ok: true, elements: snapshot.elements.length, visibleTextChars: pageText.length, url: snapshot.url, title: snapshot.title };
       })()
     `);
     if (!workerResult?.ok) throw new Error(workerResult?.error || "service-worker smoke failed");
@@ -333,7 +340,8 @@ async function main() {
 
     console.log(
       `extension smoke passed (REAL extension, headless Chrome for Testing): ` +
-        `service worker loaded id=${extensionId}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
+        `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
+        `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );

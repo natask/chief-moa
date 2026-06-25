@@ -63,8 +63,8 @@ Important constraints:
 - A manifest can specify at most four suggested keyboard shortcuts, though users
   can add more manually.
 
-Product implication: do not design around Cmd+K as the guaranteed global
-shortcut. Keep Cmd/Ctrl+K for in-browser invocation, and add a separate global
+Product implication: do not design around Cmd+, as the guaranteed global
+shortcut. Keep Cmd/Ctrl+, for in-browser invocation, and add a separate global
 "summon Agee" command whose default is Chrome-compliant and whose setup screen
 points to `chrome://extensions/shortcuts`.
 

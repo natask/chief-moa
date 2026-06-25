@@ -1,6 +1,6 @@
 # agee
 
-An open-source, browser-native interface shell. Hit **Cmd/Ctrl+K** or click the on-page control to type, or hit **Cmd/Ctrl+.** to talk, directly on the website you are using. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
+An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or click the on-page control to type, or hit **Cmd/Ctrl+.** to talk, directly on the website you are using. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
 
 ## Principles
 
@@ -14,7 +14,7 @@ An open-source, browser-native interface shell. Hit **Cmd/Ctrl+K** or click the 
 
 MVP - a Chrome (Manifest V3) extension you can load unpacked today.
 
-**Works now:** Cmd+K text intent field · Cmd+. gateway Live voice wake · on-page Moa mark · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · one-current-intent overlay state with no visible scrollback.
+**Works now:** Cmd+, text intent field · Cmd+. gateway Live voice wake · on-page Moa mark · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · one-current-intent overlay state with no visible scrollback.
 
 **Next:** engine-served declarative UI spec · userScripts opt-in walkthrough · richer voice mode · cross-navigation task continuity · MOA integration · hosted/self-hosted engine switching.
 
@@ -62,7 +62,7 @@ is separate from the quiet flow on purpose:
 3. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the [extension/](extension/) folder. If agee is already listed, click its reload icon and confirm the path shown in the card is this folder. It stays installed across browser restarts.
 4. Open the agee toolbar icon → Options → **Grant microphone** once if you plan to use voice. That grant belongs to the extension, not to the websites where the overlay appears.
 5. Open any low-risk page (or run `npm run dev -- --no-browser` and open `http://localhost:7777/fixtures/demo.html`).
-6. Press **Cmd+K** (Mac) / **Ctrl+K**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the agee card or remove the old copy and load [extension/](extension/) again.
+6. Press **Cmd+,** (Mac) / **Ctrl+,**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the agee card or remove the old copy and load [extension/](extension/) again.
 
 The Moa mark floats on the page when idle, glows while it works, and rings
 (a short chime plus a ring pulse) when a turn finishes, errors, or needs you.
@@ -202,7 +202,7 @@ absent.
 ## How it fits together
 
 - [extension/manifest.json](extension/manifest.json) — MV3 manifest, no build step.
-- [extension/content.js](extension/content.js) — the Cmd+K overlay, page perception, and action execution (the only part touching the DOM).
+- [extension/content.js](extension/content.js) — the Cmd+, overlay, page perception, and action execution (the only part touching the DOM).
 - [extension/background.js](extension/background.js) — routes turns to the configured gateway, captures screenshots, validates brokered page actions, and handles extension commands.
 - [extension/options.html](extension/options.html) / [options.js](extension/options.js) — gateway URL/token and runtime profile settings that read/write through gateway profile endpoints.
 - [extension/dev.html](extension/dev.html) / [dev.js](extension/dev.js) — developer-only in-page reload bridge for the manual visible dev session.

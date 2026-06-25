@@ -174,7 +174,7 @@ Next hardening step:
 
 ## Agent Loop
 
-1. User opens overlay with Cmd/Ctrl+K through the extension command. On the localhost demo page, the content script shortcut also works directly.
+1. User opens overlay with Cmd/Ctrl+, through the extension command. On the localhost demo page, the content script shortcut also works directly.
 2. User enters a typed or spoken instruction.
 3. Content script sends `{ cmd: "run", instruction }`.
 4. Background asks content script for a fresh snapshot.
@@ -240,7 +240,7 @@ If userScripts are added later, they should be an explicit opt-in path with a wa
 
 - Manifest parses as valid JSON.
 - Extension JavaScript passes syntax checks.
-- Cmd/Ctrl+K works through the Manifest `commands` entry point.
+- Cmd/Ctrl+, works through the Manifest `commands` entry point.
 - Localhost demo content-script path works for automated smoke tests.
 - Developer-only dev bridge reloads the unpacked extension when `extension/`
   files change.

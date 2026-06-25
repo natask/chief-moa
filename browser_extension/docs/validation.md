@@ -5,7 +5,7 @@ The prototype is not validated by existing as code. It needs direct feedback.
 ## Product Questions
 
 - Will anyone install an unpacked extension to try a browser-native interface?
-- Does Cmd/Ctrl+K feel like the right surface?
+- Does Cmd/Ctrl+, feel like the right surface?
 - Does a small movable on-page control feel better than a sidebar?
 - Is bring-your-own-key acceptable to early users?
 - Does open source ownership matter enough to change behavior?
@@ -27,7 +27,7 @@ The prototype is not validated by existing as code. It needs direct feedback.
 3. Run `npm run dev` from the repo.
 4. Open `chrome-extension://<extension-id>/dev.html?server=http://localhost:7777` in a separate extension page.
 5. Open `http://localhost:7777/fixtures/demo.html`, or open another low-risk page.
-6. Press Cmd/Ctrl+K. If Chrome reports a shortcut conflict, set the shortcut at `chrome://extensions/shortcuts`.
+6. Press Cmd/Ctrl+,. If Chrome reports a shortcut conflict, set the shortcut at `chrome://extensions/shortcuts`.
 7. Ask Agee to search for something.
 8. Watch the overlay show progress and execute the first click/type/key sequence.
 
@@ -42,7 +42,7 @@ npm run smoke
 This launches Chrome and verifies:
 
 - The content script loads on the demo page, or the smoke harness injects the same script when local Chrome policy refuses `--load-extension`.
-- Cmd/Ctrl+K opens the overlay.
+- Cmd/Ctrl+, opens the overlay.
 - The content script can type and click on the page.
 - A browser screenshot can be captured.
 
