@@ -3252,6 +3252,7 @@ function liveToolLaunchAgentRun(call, args) {
     prompt: agentPromptWithSessionContext(prompt, {
       sessionId,
       branchId: call.branch_id || "default",
+      allBranches: call.all_branches_context === true || call.allBranchesContext === true,
     }),
   });
   return {
@@ -3287,6 +3288,7 @@ function liveToolLaunchBrowserAgent(call, args) {
     prompt: agentPromptWithSessionContext(prompt, {
       sessionId,
       branchId: call.branch_id || "default",
+      allBranches: call.all_branches_context === true || call.allBranchesContext === true,
     }),
   });
   const task = createBrowserTask({

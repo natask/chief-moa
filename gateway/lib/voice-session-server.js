@@ -182,6 +182,7 @@ class VoiceSessionConnection {
     const turnDir = path.join(this.sessionsDir, sessionId);
     const format = normalizeFormat(event.format);
     const playbackPolicy = normalizePlaybackPolicy(event.playback_policy || event.playbackPolicy);
+    const allBranchesContext = event.all_branches_context === true || event.allBranchesContext === true;
     const startedAt = nowIso();
     const profileVersion = this.profileVersion();
     const providerStatus = this.voiceProvider.status();
@@ -197,6 +198,7 @@ class VoiceSessionConnection {
       source: String(event.source || "android-overlay").slice(0, 120),
       format,
       playbackPolicy,
+      allBranchesContext,
       turnDir,
       pcmPath: path.join(turnDir, `${turnId}.pcm`),
       assistantPcmPath: path.join(turnDir, `${turnId}.assistant.pcm`),
@@ -265,6 +267,7 @@ class VoiceSessionConnection {
         session_id: turn.sessionId,
         conversation_id: turn.conversationId || turn.sessionId,
         branch_id: turn.branchId || "default",
+        all_branches_context: turn.allBranchesContext === true,
         turn_id: turn.turnId,
         profile_version: turn.profileVersion || "",
       }) || "").slice(0, 12000);
@@ -434,6 +437,7 @@ class VoiceSessionConnection {
         session_id: turn.sessionId,
         conversation_id: turn.conversationId || turn.sessionId,
         branch_id: turn.branchId || "default",
+        all_branches_context: turn.allBranchesContext === true,
         turn_id: turn.turnId,
         profile_version: turn.profileVersion || "",
         source: turn.source,

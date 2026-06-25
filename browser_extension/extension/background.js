@@ -655,6 +655,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
       session_id: sessionId,
       conversation_id: sessionId,
       branch_id: cueId,
+      all_branches_context: true,
       transcript: instruction,
       screen,
     },
@@ -868,6 +869,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
         conversation_id: ticket.conversation_id || ticket.session_id,
         branch_id: cueId,
         turn_id: turnId,
+        all_branches_context: true,
         playback_policy: {
           assistant_overlap: assistantOverlap === true,
         },
@@ -1148,6 +1150,7 @@ async function describePageViaGateway(tabId, cfg, signal, cueId) {
       session_id: sessionId,
       conversation_id: sessionId,
       branch_id: cueId || "describe",
+      all_branches_context: true,
       screen: snapToScreen(snap),
       messages: [
         { role: "user", content: "Describe this page in 3-5 compact bullets. Include what it is and what the user can do here. Do not claim you took any action." },

@@ -87,6 +87,40 @@ async function main() {
     assert.equal(chat.branch_id, "browser", "chat response must echo branch id");
     assert.equal(chat.profile_version, liveProfile.profile_version, "chat turn must record current profile version");
 
+    const firstVoice = await postJson(`${baseUrl}/v1/voice/turns`, {
+      source: "agee-extension",
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: "cue_a",
+      turn_id: "voice_browser_cue_a",
+      transcript: "The browser persistence smoke marker is cobalt.",
+    });
+    assert.equal(firstVoice.session_id, sessionId, "first browser voice turn must keep session id");
+    assert.equal(firstVoice.branch_id, "cue_a", "first browser voice turn must keep its cue branch");
+
+    const secondVoice = await postJson(`${baseUrl}/v1/voice/turns`, {
+      source: "agee-extension",
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: "cue_b",
+      turn_id: "voice_browser_cue_b",
+      all_branches_context: true,
+      transcript: "What browser persistence marker did I just give you?",
+    });
+    assert.equal(secondVoice.session_id, sessionId, "second browser voice turn must keep session id");
+    assert.equal(secondVoice.branch_id, "cue_b", "second browser voice turn must keep its cue branch");
+    const turnsLedger = fs.readFileSync(path.join(dataDir, "turns.jsonl"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const secondVoiceLedger = turnsLedger.find((record) => record.voice_turn_id === "voice_browser_cue_b");
+    assert.ok(secondVoiceLedger, "second browser voice turn must be recorded in the turn ledger");
+    assert.match(
+      JSON.stringify(secondVoiceLedger.request_messages || []),
+      /browser persistence smoke marker is cobalt/,
+      "second browser voice request must inject the prior cue's turn into durable context",
+    );
+
     const queued = await postJson(`${baseUrl}/v1/browser/tasks`, {
       source: "gemini-live-tool",
       conversation_id: sessionId,
@@ -143,6 +177,8 @@ async function main() {
     assert.equal(context.profile.voice, "Aoede", "context must expose current profile voice");
     assert.equal(context.profile.language.allowed, "en-US,am-ET", "context must expose allowed language profile");
     assert.ok(context.chat_turns.some((turn) => turn.turn_id === "chat_browser_1"), "context must include browser chat turn");
+    assert.ok(context.turns.some((turn) => turn.turn_id === "voice_browser_cue_a"), "context must include prior browser voice cue");
+    assert.ok(context.turns.some((turn) => turn.turn_id === "voice_browser_cue_b"), "context must include later browser voice cue");
     assert.ok(context.browser_tasks.some((task) => task.id === queued.task.id && task.status === "completed"), "context must include completed browser task");
 
     const latestContext = await getJson(`${baseUrl}/v1/context/latest`);
@@ -160,6 +196,7 @@ async function main() {
         "profile rollback created a new version from a selected prior profile",
         "spoken language lock updated the global profile through /v1/voice/turns",
         "browser /v1/chat turn kept session_id, branch_id, turn_id, and profile_version",
+        "browser voice turns on different cue branches share all-branch durable context",
         "gateway browser task queued, claimed by extension client, and completed by receipt",
         "session context with all_branches includes profile, chat turn, and browser task",
         "latest context includes recent chat turns and browser tasks",
@@ -186,6 +223,7 @@ async function startGateway({ port, dataDir }) {
       PORT: String(port),
       DATA_DIR: dataDir,
       ANDROID_OTA_DIR: path.join(dataDir, "android-ota"),
+      GBRAIN_HOME: path.join(path.dirname(dataDir), "gbrain"),
       MOA_GATEWAY_TOKEN: TOKEN,
       MODEL_PROVIDER: "openai-compatible",
       MODEL_ID: "continuity-smoke-model",
