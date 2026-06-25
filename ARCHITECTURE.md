@@ -146,7 +146,12 @@ audio returned by the selected gateway provider. The page overlay is only the
 control surface; websites must not receive microphone permission for Moa voice.
 Each spoken
 browser utterance gets its own turn id under the stable browser session id. When
-the user enables background assistant speech for the current browser session,
+the user starts a manual mascot push-to-talk turn, the extension starts
+extension-owned capture at hold start, buffers PCM while the gateway voice
+session is not ready, and sends the release/commit only after that buffered
+audio has flushed. The visible browser loop is hold to capture, release to send,
+processing, then response. When the user enables background assistant speech for
+the current browser session,
 the extension preserves older voice-session event handling and queued playback
 while it starts the next microphone turn. That overlap is scoped to the active
 page-agent owner: starting a browser agent or voice turn from another tab revokes
@@ -299,8 +304,9 @@ The gateway is only the registry and queue. It does not press phone buttons,
 open browser tabs, or speak through device speakers by itself. A browser turn
 can request an Android action such as `audio.speak`; Android must still claim,
 validate, execute with local TextToSpeech, and receipt it. An Android turn can
-request browser work such as `browser.tab.open`; the Chrome extension must still
-claim, validate, execute, and receipt it.
+request browser work such as tab list/open/activate/close/reload, page snapshot,
+or bounded `chrome.debugger` CDP actions; the Chrome extension must still claim,
+validate, execute only its advertised local tool, and receipt it.
 
 ## Product Primitives
 
