@@ -6,6 +6,9 @@ regressions, or runtime QA.
 ## Agent Contract
 
 - Identify the touched surface before running broad checks.
+- For Chief Moa cross-surface work, verify by lane: browser voice, browser
+  action/CDP, Android action/accessibility, gateway, workflow/docs, and
+  verification/deploy.
 - Prefer the narrowest command that proves the behavior, then broaden if the
   touched code crosses shared boundaries.
 - Record the exact command, observed result, and blocker if a check fails.
