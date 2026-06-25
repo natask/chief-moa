@@ -11,6 +11,11 @@ const {
   withRequiredVoiceStyle,
 } = require("./lib/agent-profile");
 const { voiceProviderNames } = require("./lib/voice-providers");
+const {
+  profileOptionsPayload,
+  languageOptionsPayload,
+  voiceOptionsPayload,
+} = require("./lib/profile-options");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createBrain } = require("./lib/brain");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
@@ -255,6 +260,15 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       sendAndroidOtaApk(response);
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/profile/options" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, profileOptionsPayload());
       return;
     }
 
@@ -1503,6 +1517,7 @@ function agentProfilePayload(extra = {}, options = {}) {
     defaults: agentProfile.defaults(),
     is_overridden: agentProfile.isOverridden(profileOptions),
     fields: agentProfile.fields(),
+    options_endpoint: "/v1/agent/profile/options",
     ...extra,
   };
 }
@@ -2596,8 +2611,16 @@ function profileSummaryText(subject, options = {}) {
     const language = profile.language || profile.language_primary || "unspecified";
     return `Profile ${version} ${scopeText}. Reply language is ${language}; input language is ${profile.input_languages || "unspecified"}; auto switch is ${profile.language_auto_switch ? "on" : "off"}.`;
   }
+  if (subject === "language_options") {
+    const languages = languageOptionsPayload().map((language) => `${language.label} (${language.code})`).join(", ");
+    return `Profile ${version} ${scopeText}. Supported reply and input languages are: ${languages}. Use comma-separated codes to set more than one.`;
+  }
   if (subject === "voice") {
     return `Profile ${version} ${scopeText}. Voice is ${profile.voice || "default"}.`;
+  }
+  if (subject === "voice_options") {
+    const voices = voiceOptionsPayload().map((voice) => `${voice.id} (${voice.tone_tags.join("/")})`).join(", ");
+    return `Profile ${version} ${scopeText}. Supported voices are: ${voices}. Feminine maps to Aoede; masculine maps to Charon unless you choose a specific voice id.`;
   }
   if (subject === "assistant_name") {
     return `Profile ${version} ${scopeText}. My name is ${profile.assistant_name || "Aggie"}.`;
@@ -3419,6 +3442,13 @@ async function handleLiveVoiceToolCall(call) {
   }
   if (name === "update_agent_profile") {
     return liveToolUpdateAgentProfile(call, args);
+  }
+  if (name === "get_profile_options") {
+    return {
+      ok: true,
+      type: "profile_options",
+      ...profileOptionsPayload(),
+    };
   }
   if (name === "get_session_context") {
     return liveToolGetSessionContext(call, args);

@@ -371,6 +371,12 @@ successful deploy marker, and skips dirty target files so uncommitted work is no
 published. Explicit deploy targets remain available when a human or agent needs
 one surface: `gateway`, `android`, `extension`, or `all`.
 
+Each successful target deploy records a monotonic deploy sequence, git SHA, and
+target version metadata next to the existing deploy marker. Android OTA builds
+generate timestamp version codes; browser-extension releases use
+`browser_extension/extension/manifest.json` and changed extension deploys are
+blocked after the first recorded deploy unless that manifest version has moved.
+
 Browser-extension deployment has two parts. The package step creates the Chrome
 Web Store upload artifact under `browser_extension/dist/`. The local-browser step
 serves a short dev-reload signal for an already-loaded unpacked extension; the

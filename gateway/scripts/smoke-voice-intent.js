@@ -16,6 +16,10 @@ const {
   parseProfileControlIntent,
   classifyVoiceTurn,
 } = require("../lib/voice-intent");
+const {
+  normalizeLanguageListValue,
+  profileOptionsPayload,
+} = require("../lib/profile-options");
 
 // normalizeSpeech: lowercase, strip punctuation, collapse whitespace.
 assert.strictEqual(normalizeSpeech("  Stop, please! "), "stop please");
@@ -64,8 +68,18 @@ assert.strictEqual(classifyVoiceTurn({}, "you are Aggie"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "call yourself The Steward"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what voice are you using"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what language settings are active"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "what languages can you speak"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "what voices can you use"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "use the Kore voice on this device"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
+
+const optionsPayload = profileOptionsPayload();
+assert.ok(optionsPayload.voices.some((voice) => voice.id === "Aoede"), "profile options must expose Aoede");
+assert.ok(optionsPayload.voices.some((voice) => voice.id === "Charon"), "profile options must expose Charon");
+assert.ok(optionsPayload.languages.some((language) => language.code === "am-ET"), "profile options must expose Amharic");
+assert.ok(optionsPayload.languages.some((language) => language.code === "ti-ET"), "profile options must expose Tigrinya");
+assert.equal(normalizeLanguageListValue("English and Amharic"), "en-US,am-ET");
+assert.equal(normalizeLanguageListValue(["Tigrinya", "Amharic"]), "ti-ET,am-ET");
 
 const inputLanguageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
 assert.deepStrictEqual(inputLanguageLock.patch, {
@@ -101,6 +115,13 @@ assert.deepStrictEqual(parseProfileControlIntent("respond in Swahili").patch, {
   language_output: "primary_only",
   language_auto_switch: false,
 });
+assert.deepStrictEqual(parseProfileControlIntent("respond in Tigrinya and Amharic").patch, {
+  language: "ti-ET,am-ET",
+  language_primary: "ti-ET",
+  language_mode: "explicit",
+  language_output: "primary_only",
+  language_auto_switch: false,
+});
 assert.deepStrictEqual(parseProfileControlIntent("I speak Japanese and Korean").patch, {
   input_languages: "ja-JP,ko-KR",
   input_language_primary: "ja-JP",
@@ -124,10 +145,22 @@ assert.deepStrictEqual(parseProfileControlIntent("what voice are you using"), {
   subject: "voice",
   scope: "global",
 });
+assert.deepStrictEqual(parseProfileControlIntent("what languages can you speak"), {
+  action: "summary",
+  subject: "language_options",
+  scope: "global",
+});
+assert.deepStrictEqual(parseProfileControlIntent("what voices can you use"), {
+  action: "summary",
+  subject: "voice_options",
+  scope: "global",
+});
 
 const deviceScopedVoice = parseProfileControlIntent("use the Kore voice on this device");
 assert.equal(deviceScopedVoice.scope, "device");
 assert.deepStrictEqual(deviceScopedVoice.patch, { voice: "Kore" });
+assert.deepStrictEqual(parseProfileControlIntent("use a feminine voice").patch, { voice: "Aoede" });
+assert.deepStrictEqual(parseProfileControlIntent("use a masculine voice").patch, { voice: "Charon" });
 
 const globalScopedLanguage = parseProfileControlIntent("respond in English on all devices");
 assert.equal(globalScopedLanguage.scope, "global");

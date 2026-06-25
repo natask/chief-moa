@@ -76,6 +76,18 @@ The full Android app SHALL let the user configure gateway URL, gateway token, tr
 - **THEN** the gateway updates the global profile used by every device without a
   device override
 
+#### Scenario: Agent lists and validates profile options
+- **WHEN** a surface or agent asks the gateway for supported profile options
+- **THEN** the gateway returns a catalog of valid voices, voice tone metadata,
+  voice aliases, and valid reply/heard language codes
+- **AND** profile writes for voice, reply language, and heard languages persist
+  only catalog-backed values
+- **AND** heard and reply language fields support comma-separated language code
+  lists
+- **AND** the gateway derives provider-primary languages internally from the
+  first selected code rather than exposing primary language as a separate user
+  setting
+
 #### Scenario: Mission agent lacks access
 - **WHEN** the agent is blocked by missing permission, credentials, integration
   setup, local approval, or device capability
@@ -95,3 +107,12 @@ The full Android app SHALL check the configured gateway for a newer app build an
 - **THEN** the app downloads the APK through the gateway token
 - **AND** verifies the APK size and SHA-256 from the manifest
 - **AND** opens Android's package installer instead of silently installing it
+
+#### Scenario: Deploy records surface versions
+- **WHEN** a gateway, Android OTA, or browser extension target deploy completes
+- **THEN** the deploy marker records a monotonic deploy sequence, git SHA, and
+  target version metadata
+- **AND** Android OTA deploys expose a higher generated version code for new
+  artifacts
+- **AND** changed browser-extension deploys require the extension manifest
+  version to advance after the first recorded extension deploy

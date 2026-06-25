@@ -36,6 +36,7 @@ async function main() {
     await step("auth required", () => assertAuthRequired(baseUrl));
     await step("health", () => assertHealth(baseUrl));
     await step("agent profile token guard", () => assertAgentProfileTokenGuard(baseUrl));
+    await step("agent profile options catalog", () => assertAgentProfileOptionsCatalog(baseUrl));
     await step("agent profile runtime cycle", () => assertAgentProfileRuntimeCycle(baseUrl, dataDir));
     await step("agent profile per-request overrides", () => assertAgentProfilePerRequestOverrides(baseUrl, dataDir));
     await step("agent profile device scope", () => assertAgentProfileDeviceScope(baseUrl, dataDir));
@@ -71,6 +72,7 @@ async function main() {
         "auth required",
         "health",
         "agent profile token guard",
+        "agent profile options catalog (valid voices/languages + strict validation)",
         "agent profile runtime cycle (PUT -> turn -> reset, no restart)",
         "agent profile per-request overrides (not persisted)",
         "agent profile device scope (global + current-device overrides)",
@@ -206,6 +208,9 @@ async function assertAgentProfileTokenGuard(baseUrl) {
   const get = await requestJson(`${baseUrl}/v1/agent/profile`, { auth: false });
   assert.equal(get.status, 401, "GET profile must require a token");
 
+  const options = await requestJson(`${baseUrl}/v1/agent/profile/options`, { auth: false });
+  assert.equal(options.status, 401, "GET profile options must require a token");
+
   const put = await putJson(`${baseUrl}/v1/agent/profile`, { system_prompt: "unauthorized" }, { auth: false });
   assert.equal(put.status, 401, "PUT profile must require a token");
 
@@ -222,6 +227,88 @@ async function assertAgentProfileTokenGuard(baseUrl) {
   const authed = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(authed.is_overridden, false, "profile must start at env default");
   assert.equal(authed.profile.model, "smoke-model", "default model must come from env");
+}
+
+async function assertAgentProfileOptionsCatalog(baseUrl) {
+  const catalog = await getJson(`${baseUrl}/v1/agent/profile/options`);
+  assert.equal(catalog.version, "profile-options/v1");
+  assert.ok(catalog.endpoints?.profile === "/v1/agent/profile", "catalog must name the profile endpoint");
+  assert.ok(catalog.endpoints?.options === "/v1/agent/profile/options", "catalog must name the options endpoint");
+  assert.ok(Array.isArray(catalog.voices) && catalog.voices.length >= 8, "catalog must list supported voices");
+  assert.ok(Array.isArray(catalog.languages) && catalog.languages.length >= 40, "catalog must list supported languages");
+
+  const aoede = catalog.voices.find((voice) => voice.id === "Aoede");
+  const charon = catalog.voices.find((voice) => voice.id === "Charon");
+  assert.ok(aoede?.tone_tags?.includes("feminine"), "Aoede must carry feminine tone metadata");
+  assert.ok(charon?.tone_tags?.includes("masculine"), "Charon must carry masculine tone metadata");
+  assert.equal(catalog.fields?.voice?.aliases?.feminine, "Aoede");
+  assert.equal(catalog.fields?.voice?.aliases?.masculine, "Charon");
+  assert.ok(catalog.languages.some((language) => language.code === "en-US" && language.label === "English"));
+  assert.ok(catalog.languages.some((language) => language.code === "am-ET" && language.label === "Amharic"));
+
+  const valid = await putJson(`${baseUrl}/v1/agent/profile`, {
+    source: "smoke-regression",
+    profile: {
+      voice: "feminine",
+      language: "Spanish,French",
+      input_languages: "English,Amharic",
+      language_auto_switch: false,
+    },
+  });
+  assert.equal(valid.status, 200);
+  assert.equal(valid.json.profile.voice, "Aoede", "voice alias must canonicalize to a supported voice id");
+  assert.equal(valid.json.profile.language, "es-ES,fr-FR");
+  assert.equal(valid.json.profile.language_primary, "es-ES", "reply primary must derive from first reply code");
+  assert.equal(valid.json.profile.input_languages, "en-US,am-ET");
+  assert.equal(valid.json.profile.input_language_primary, "en-US", "input primary must derive from first heard code");
+  const versionAfterValid = valid.json.current_version;
+
+  const invalid = await putJson(`${baseUrl}/v1/agent/profile`, {
+    source: "smoke-regression",
+    profile: {
+      voice: "not-a-real-voice",
+      language: "xx-YY",
+      input_languages: "en-US,not-a-language",
+    },
+  });
+  assert.equal(invalid.status, 200);
+  assert.equal(invalid.json.current_version, versionAfterValid, "invalid-only patch must not create a new profile version");
+  assert.equal(invalid.json.profile.voice, "Aoede", "invalid voice must not persist");
+  assert.equal(invalid.json.profile.language, "es-ES,fr-FR", "invalid reply language must not persist");
+  assert.equal(invalid.json.profile.input_languages, "en-US,am-ET", "mixed invalid heard-language list must not persist");
+
+  const languageOptionsTurn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "profile_options_session",
+    branch_id: "default",
+    turn_id: "language_options_turn",
+    source: "smoke-regression",
+    transcript: "what are the different languages I can make you speak",
+  });
+  assert.equal(languageOptionsTurn.status, 200);
+  assert.equal(languageOptionsTurn.json.classification, "profile_control");
+  assert.match(languageOptionsTurn.json.display, /English \(en-US\)/);
+  assert.match(languageOptionsTurn.json.display, /Amharic \(am-ET\)/);
+  assert.equal(languageOptionsTurn.json.actions?.[0]?.subject, "language_options");
+
+  const voiceOptionsTurn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "profile_options_session",
+    branch_id: "default",
+    turn_id: "voice_options_turn",
+    source: "smoke-regression",
+    transcript: "what voices can you use",
+  });
+  assert.equal(voiceOptionsTurn.status, 200);
+  assert.equal(voiceOptionsTurn.json.classification, "profile_control");
+  assert.match(voiceOptionsTurn.json.display, /Aoede/);
+  assert.match(voiceOptionsTurn.json.display, /masculine/);
+  assert.equal(voiceOptionsTurn.json.actions?.[0]?.subject, "voice_options");
+
+  const reset = await postJson(`${baseUrl}/v1/agent/profile/reset`, {
+    source: "smoke-regression",
+    scope: "global",
+  });
+  assert.equal(reset.status, 200);
+  assert.equal(reset.json.is_overridden, false);
 }
 
 async function assertAgentProfileRuntimeCycle(baseUrl, dataDir) {

@@ -8,6 +8,12 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  CORE_VOICES,
+  normalizeLanguageCode,
+  normalizeLanguageList,
+  normalizeVoiceChoice,
+} = require("./profile-options");
 
 const PROFILE_FILENAME = "agent-profile.json";
 const PROFILE_VERSIONS_FILENAME = "agent-profile-versions.json";
@@ -39,21 +45,10 @@ const PROFILE_FIELDS = [
   "recovery_mode",
 ];
 
-// The Gemini Live core voices that are safe on any live model. The agent can
-// switch its OWN spoken voice to one of these by talking to itself; an unknown
-// value is rejected (the field is left unchanged) so a typo never blanks it.
-// Google labels these by style, not gender — gender aliases are defined in the
-// extension's settings-intent parser, which maps to one of these canonical names.
-const CORE_VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
-const CORE_VOICES_BY_LOWER = new Map(CORE_VOICES.map((name) => [name.toLowerCase(), name]));
-
-// Canonicalize a requested voice to its proper-case core-voice name, or return
-// null if it is not one of the core 8 (case-insensitive). Null means "reject".
+// Canonicalize a requested voice to its proper-case core-voice name, including
+// approved tone aliases such as feminine/masculine. Null means "reject".
 function normalizeVoice(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  return CORE_VOICES_BY_LOWER.get(value.trim().toLowerCase()) || null;
+  return normalizeVoiceChoice(value);
 }
 
 function createAgentProfileStore(options) {
@@ -516,7 +511,13 @@ function pickProfileFields(input) {
     }
   }
   if (typeof input.language === "string" && input.language.trim()) {
-    out.language = input.language.trim().slice(0, 40);
+    const list = normalizeLanguageList(input.language);
+    if (list.codes.length > 0 && list.invalid.length === 0) {
+      out.language = list.codes.join(",");
+      if (typeof input.language_primary !== "string" || !input.language_primary.trim()) {
+        out.language_primary = list.codes[0];
+      }
+    }
   }
   if (typeof input.language_mode === "string" && input.language_mode.trim()) {
     const value = input.language_mode.trim().toLowerCase();
@@ -525,7 +526,10 @@ function pickProfileFields(input) {
     }
   }
   if (typeof input.language_primary === "string" && input.language_primary.trim()) {
-    out.language_primary = input.language_primary.trim().slice(0, 40);
+    const primary = normalizeLanguageCode(input.language_primary);
+    if (primary) {
+      out.language_primary = primary;
+    }
   }
   if (typeof input.language_output === "string" && input.language_output.trim()) {
     const value = input.language_output.trim().toLowerCase();
@@ -539,9 +543,19 @@ function pickProfileFields(input) {
   // Languages the USER speaks. Modular STT providers can use these as direct
   // language hints; Gemini Live native audio infers input language and receives
   // these through Moa-owned context instead.
-  for (const field of ["input_languages", "input_language_primary"]) {
-    if (typeof input[field] === "string" && input[field].trim()) {
-      out[field] = input[field].trim().slice(0, 80);
+  if (typeof input.input_languages === "string" && input.input_languages.trim()) {
+    const list = normalizeLanguageList(input.input_languages);
+    if (list.codes.length > 0 && list.invalid.length === 0) {
+      out.input_languages = list.codes.join(",");
+      if (typeof input.input_language_primary !== "string" || !input.input_language_primary.trim()) {
+        out.input_language_primary = list.codes[0];
+      }
+    }
+  }
+  if (typeof input.input_language_primary === "string" && input.input_language_primary.trim()) {
+    const primary = normalizeLanguageCode(input.input_language_primary);
+    if (primary) {
+      out.input_language_primary = primary;
     }
   }
   // How the agent delivers replies: "speech" (speak), "text" (write, no audio),

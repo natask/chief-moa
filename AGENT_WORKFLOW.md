@@ -39,6 +39,8 @@ leave artifacts that another agent can resume.
    - For implementation changes, deploy the committed target after verification:
      `bash scripts/deploy.sh auto` from the repo root, or the explicit
      `gateway`, `android`, or `extension` target when only one surface changed.
+   - Extension releases must bump `browser_extension/extension/manifest.json`;
+     Android OTA builds get deploy-time version codes from the OTA build script.
 
 7. Update the architecture only when it changes.
    - Do not let implementation invent hidden behavior.

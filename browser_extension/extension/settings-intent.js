@@ -47,65 +47,58 @@ const FEMALE_VOICE = "Aoede";
 const MALE_VOICE = "Charon";
 
 const LANGUAGE_DEFINITIONS = [
-  { label: "Amharic", code: "am-ET", keys: ["amharic"] },
   { label: "English", code: "en-US", keys: ["english"] },
-  { label: "Spanish", code: "es-ES", keys: ["spanish"] },
-  { label: "French", code: "fr-FR", keys: ["french"] },
-  { label: "Arabic", code: "ar", keys: ["arabic"] },
-  { label: "Tigrinya", code: "ti", keys: ["tigrinya"] },
+  { label: "Spanish", code: "es-ES", keys: ["spanish", "espanol", "castellano"] },
+  { label: "French", code: "fr-FR", keys: ["french", "francais"] },
+  { label: "German", code: "de-DE", keys: ["german", "deutsch"] },
+  { label: "Italian", code: "it-IT", keys: ["italian", "italiano"] },
+  { label: "Portuguese", code: "pt-BR", keys: ["portuguese", "portugues"] },
+  { label: "Dutch", code: "nl-NL", keys: ["dutch", "nederlands"] },
+  { label: "Russian", code: "ru-RU", keys: ["russian"] },
+  { label: "Polish", code: "pl-PL", keys: ["polish"] },
+  { label: "Ukrainian", code: "uk-UA", keys: ["ukrainian"] },
+  { label: "Turkish", code: "tr-TR", keys: ["turkish"] },
+  { label: "Arabic", code: "ar-XA", keys: ["arabic"] },
+  { label: "Hebrew", code: "he-IL", keys: ["hebrew"] },
+  { label: "Hindi", code: "hi-IN", keys: ["hindi"] },
+  { label: "Bengali", code: "bn-IN", keys: ["bengali", "bangla"] },
+  { label: "Urdu", code: "ur-PK", keys: ["urdu"] },
+  { label: "Tamil", code: "ta-IN", keys: ["tamil"] },
+  { label: "Telugu", code: "te-IN", keys: ["telugu"] },
+  { label: "Marathi", code: "mr-IN", keys: ["marathi"] },
+  { label: "Gujarati", code: "gu-IN", keys: ["gujarati"] },
+  { label: "Kannada", code: "kn-IN", keys: ["kannada"] },
+  { label: "Malayalam", code: "ml-IN", keys: ["malayalam"] },
+  { label: "Punjabi", code: "pa-IN", keys: ["punjabi"] },
+  { label: "Mandarin", code: "cmn-CN", keys: ["mandarin", "chinese", "putonghua"] },
+  { label: "Cantonese", code: "yue-HK", keys: ["cantonese"] },
+  { label: "Japanese", code: "ja-JP", keys: ["japanese", "nihongo"] },
+  { label: "Korean", code: "ko-KR", keys: ["korean"] },
+  { label: "Vietnamese", code: "vi-VN", keys: ["vietnamese"] },
+  { label: "Thai", code: "th-TH", keys: ["thai"] },
+  { label: "Indonesian", code: "id-ID", keys: ["indonesian", "bahasa indonesia"] },
+  { label: "Malay", code: "ms-MY", keys: ["malay", "bahasa melayu"] },
+  { label: "Filipino", code: "fil-PH", keys: ["filipino", "tagalog"] },
+  { label: "Swahili", code: "sw-KE", keys: ["swahili", "kiswahili"] },
+  { label: "Amharic", code: "am-ET", keys: ["amharic"] },
+  { label: "Tigrinya", code: "ti-ET", keys: ["tigrinya", "tigrigna"] },
+  { label: "Somali", code: "so-SO", keys: ["somali"] },
+  { label: "Hausa", code: "ha-NG", keys: ["hausa"] },
+  { label: "Yoruba", code: "yo-NG", keys: ["yoruba"] },
+  { label: "Igbo", code: "ig-NG", keys: ["igbo"] },
+  { label: "Zulu", code: "zu-ZA", keys: ["zulu"] },
+  { label: "Afrikaans", code: "af-ZA", keys: ["afrikaans"] },
+  { label: "Greek", code: "el-GR", keys: ["greek"] },
+  { label: "Czech", code: "cs-CZ", keys: ["czech"] },
+  { label: "Romanian", code: "ro-RO", keys: ["romanian"] },
+  { label: "Hungarian", code: "hu-HU", keys: ["hungarian"] },
+  { label: "Swedish", code: "sv-SE", keys: ["swedish"] },
+  { label: "Norwegian", code: "nb-NO", keys: ["norwegian"] },
+  { label: "Danish", code: "da-DK", keys: ["danish"] },
+  { label: "Finnish", code: "fi-FI", keys: ["finnish"] },
+  { label: "Persian", code: "fa-IR", keys: ["persian", "farsi"] },
 ];
-const GATEWAY_PROFILE_LANGUAGE_NAMES = [
-  "english",
-  "spanish",
-  "french",
-  "german",
-  "italian",
-  "portuguese",
-  "dutch",
-  "russian",
-  "polish",
-  "ukrainian",
-  "turkish",
-  "arabic",
-  "hebrew",
-  "hindi",
-  "bengali",
-  "bangla",
-  "urdu",
-  "tamil",
-  "telugu",
-  "mandarin",
-  "chinese",
-  "cantonese",
-  "japanese",
-  "korean",
-  "vietnamese",
-  "thai",
-  "indonesian",
-  "malay",
-  "filipino",
-  "tagalog",
-  "swahili",
-  "amharic",
-  "tigrinya",
-  "tigrigna",
-  "somali",
-  "hausa",
-  "yoruba",
-  "igbo",
-  "zulu",
-  "afrikaans",
-  "greek",
-  "czech",
-  "romanian",
-  "hungarian",
-  "swedish",
-  "norwegian",
-  "danish",
-  "finnish",
-  "persian",
-  "farsi",
-];
+const GATEWAY_PROFILE_LANGUAGE_NAMES = LANGUAGE_DEFINITIONS.flatMap((language) => language.keys);
 
 const DEFAULT_VOICE_MAX_CHARS = 280;
 const TERSE_MAX_CHARS = 140;
@@ -396,7 +389,13 @@ function isGatewayIdentityControl(lower) {
 function isGatewayLanguageControl(lower) {
   if (
     lower.includes("what language") ||
+    lower.includes("what languages") ||
     lower.includes("which language") ||
+    lower.includes("which languages") ||
+    lower.includes("different languages") ||
+    lower.includes("languages can you") ||
+    lower.includes("languages i can make you") ||
+    lower.includes("languages can i make you") ||
     lower.includes("language is active") ||
     lower.includes("language settings") ||
     /\b(set|change|update|switch)\b.*\blanguage\b/.test(lower)
@@ -417,7 +416,11 @@ function isGatewayLanguageControl(lower) {
 function isGatewayVoiceControl(lower) {
   if (
     lower.includes("what voice") ||
+    lower.includes("what voices") ||
     lower.includes("which voice") ||
+    lower.includes("which voices") ||
+    lower.includes("different voices") ||
+    lower.includes("voices can you") ||
     lower.includes("voice is active") ||
     /\b(set|change|switch|use|make)\b.*\bvoice\b/.test(lower)
   ) {

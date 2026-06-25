@@ -8,6 +8,11 @@
 // classifyVoiceTurn returns one of:
 // "control" | "profile_control" | "multi_agent" | "agent_run" | "chat".
 
+const {
+  LANGUAGE_OPTIONS: LANGUAGE_DEFINITIONS,
+  canonicalVoice,
+} = require("./profile-options");
+
 // Lowercase, strip punctuation, collapse whitespace. The matchers below assume
 // this normalized form for exact-equality and substring checks.
 function normalizeSpeech(value) {
@@ -18,75 +23,8 @@ function normalizeSpeech(value) {
     .trim();
 }
 
-// The Gemini Live core-8 voices the gateway accepts for the agent's OWN spoken
-// voice. Kept aligned with lib/agent-profile.js CORE_VOICES and the browser
-// extension's settings-intent.js. Google labels these by style, not gender, so
-// WE define the gender aliases: a woman's voice maps to Aoede, a man's to Charon.
-const CORE_VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
-const CORE_VOICES_BY_LOWER = new Map(CORE_VOICES.map((name) => [name.toLowerCase(), name]));
 const FEMALE_VOICE = "Aoede";
 const MALE_VOICE = "Charon";
-
-function canonicalVoice(value) {
-  return CORE_VOICES_BY_LOWER.get(String(value || "").trim().toLowerCase()) || null;
-}
-
-// World languages the agent can be configured to speak or understand. `code` is
-// the BCP-47 tag Gemini Live accepts for speech recognition; `keys` are spoken
-// names we match (lowercased, accent-free). Add a row to support a new language
-// — the parser, profile, and live wiring all read from this one table.
-const LANGUAGE_DEFINITIONS = [
-  { label: "English", code: "en-US", keys: ["english"] },
-  { label: "Spanish", code: "es-ES", keys: ["spanish", "espanol", "castellano"] },
-  { label: "French", code: "fr-FR", keys: ["french", "francais"] },
-  { label: "German", code: "de-DE", keys: ["german", "deutsch"] },
-  { label: "Italian", code: "it-IT", keys: ["italian", "italiano"] },
-  { label: "Portuguese", code: "pt-BR", keys: ["portuguese", "portugues"] },
-  { label: "Dutch", code: "nl-NL", keys: ["dutch", "nederlands"] },
-  { label: "Russian", code: "ru-RU", keys: ["russian"] },
-  { label: "Polish", code: "pl-PL", keys: ["polish"] },
-  { label: "Ukrainian", code: "uk-UA", keys: ["ukrainian"] },
-  { label: "Turkish", code: "tr-TR", keys: ["turkish"] },
-  { label: "Arabic", code: "ar-XA", keys: ["arabic"] },
-  { label: "Hebrew", code: "he-IL", keys: ["hebrew"] },
-  { label: "Hindi", code: "hi-IN", keys: ["hindi"] },
-  { label: "Bengali", code: "bn-IN", keys: ["bengali", "bangla"] },
-  { label: "Urdu", code: "ur-PK", keys: ["urdu"] },
-  { label: "Tamil", code: "ta-IN", keys: ["tamil"] },
-  { label: "Telugu", code: "te-IN", keys: ["telugu"] },
-  { label: "Marathi", code: "mr-IN", keys: ["marathi"] },
-  { label: "Gujarati", code: "gu-IN", keys: ["gujarati"] },
-  { label: "Kannada", code: "kn-IN", keys: ["kannada"] },
-  { label: "Malayalam", code: "ml-IN", keys: ["malayalam"] },
-  { label: "Punjabi", code: "pa-IN", keys: ["punjabi"] },
-  { label: "Mandarin", code: "cmn-CN", keys: ["mandarin", "chinese", "putonghua"] },
-  { label: "Cantonese", code: "yue-HK", keys: ["cantonese"] },
-  { label: "Japanese", code: "ja-JP", keys: ["japanese", "nihongo"] },
-  { label: "Korean", code: "ko-KR", keys: ["korean"] },
-  { label: "Vietnamese", code: "vi-VN", keys: ["vietnamese"] },
-  { label: "Thai", code: "th-TH", keys: ["thai"] },
-  { label: "Indonesian", code: "id-ID", keys: ["indonesian", "bahasa indonesia"] },
-  { label: "Malay", code: "ms-MY", keys: ["malay", "bahasa melayu"] },
-  { label: "Filipino", code: "fil-PH", keys: ["filipino", "tagalog"] },
-  { label: "Swahili", code: "sw-KE", keys: ["swahili", "kiswahili"] },
-  { label: "Amharic", code: "am-ET", keys: ["amharic"] },
-  { label: "Tigrinya", code: "ti-ET", keys: ["tigrinya", "tigrigna"] },
-  { label: "Somali", code: "so-SO", keys: ["somali"] },
-  { label: "Hausa", code: "ha-NG", keys: ["hausa"] },
-  { label: "Yoruba", code: "yo-NG", keys: ["yoruba"] },
-  { label: "Igbo", code: "ig-NG", keys: ["igbo"] },
-  { label: "Zulu", code: "zu-ZA", keys: ["zulu"] },
-  { label: "Afrikaans", code: "af-ZA", keys: ["afrikaans"] },
-  { label: "Greek", code: "el-GR", keys: ["greek"] },
-  { label: "Czech", code: "cs-CZ", keys: ["czech"] },
-  { label: "Romanian", code: "ro-RO", keys: ["romanian"] },
-  { label: "Hungarian", code: "hu-HU", keys: ["hungarian"] },
-  { label: "Swedish", code: "sv-SE", keys: ["swedish"] },
-  { label: "Norwegian", code: "nb-NO", keys: ["norwegian"] },
-  { label: "Danish", code: "da-DK", keys: ["danish"] },
-  { label: "Finnish", code: "fi-FI", keys: ["finnish"] },
-  { label: "Persian", code: "fa-IR", keys: ["persian", "farsi"] },
-];
 
 // "stop / shut up / be quiet / don't speak" — a control utterance that just
 // silences the agent. It is NOT a request and gets NO spoken reply. Matched on
@@ -180,6 +118,19 @@ function parseProfileControlIntent(text) {
     return null;
   }
   const scope = profileScopeFromText(lower);
+  const asksForOptions = /\b(?:what|which|list|show|tell me|available|different)\b/.test(lower)
+    || /\bcan\s+(?:you|i)\b/.test(lower);
+
+  if (asksForOptions
+    && /\blanguages?\b/.test(lower)
+    && /\b(?:available|different|support|supported|speak|reply|respond|understand|make you speak|can you speak|can i make you speak)\b/.test(lower)) {
+    return { action: "summary", subject: "language_options", scope };
+  }
+  if (asksForOptions
+    && /\bvoices?\b/.test(lower)
+    && /\b(?:available|different|support|supported|use|choose|select|sound|speak)\b/.test(lower)) {
+    return { action: "summary", subject: "voice_options", scope };
+  }
 
   if (lower.includes("what prompt") || lower.includes("which prompt") || lower.includes("current prompt")) {
     return { action: "summary", subject: "system_prompt", scope };

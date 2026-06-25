@@ -289,6 +289,19 @@ if (
   throw new Error("typed voice/language profile controls must route through /v1/voice/turns and refresh the profile cache");
 }
 
+if (
+  !/\/v1\/agent\/profile\/options/.test(optionsSource) ||
+  !/function renderProfileOptions/.test(optionsSource) ||
+  !/<select id="voiceName">/.test(optionsHtmlSource) ||
+  !/<datalist id="languageOptions">/.test(optionsHtmlSource)
+) {
+  throw new Error("options page must load voice/language choices from the gateway profile-options catalog");
+}
+
+if (/patch\.language_primary/.test(optionsSource) || /patch\.input_language_primary/.test(optionsSource)) {
+  throw new Error("options form must not expose or send primary language fields; the gateway derives them from the first code");
+}
+
 if (!/function claimActiveAgentTab/.test(backgroundSource) || !/function revokeOtherTabVoiceSessions/.test(backgroundSource)) {
   throw new Error("background.js must claim one active page-agent tab and revoke other-tab voice sessions");
 }
@@ -371,6 +384,10 @@ if (
 ) {
   throw new Error(`settings parser should lock the language profile, got: ${JSON.stringify(languageIntent)}`);
 }
+const arabicIntent = parseSettingsIntent("respond in Arabic", null);
+if (arabicIntent?.patch?.language !== "ar-XA") {
+  throw new Error(`settings parser should use gateway-supported Arabic code, got: ${JSON.stringify(arabicIntent)}`);
+}
 if (parseSettingsIntent(setupParagraph, null) !== null) {
   throw new Error("settings parser should ignore quoted settings examples inside setup text");
 }
@@ -387,8 +404,10 @@ for (const text of [
   "your name is Moa",
   "call yourself The Steward",
   "what voice is active",
+  "what voices can you use",
   "what is your name",
   "what language settings are active",
+  "what are the different languages I can make you speak",
 ]) {
   if (!looksLikeGatewayProfileControlIntent(text)) {
     throw new Error(`gateway profile-control detector should accept: ${text}`);

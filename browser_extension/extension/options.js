@@ -18,6 +18,8 @@ const voiceMaxCharsEl = document.getElementById("voiceMaxChars");
 const voiceNameEl = document.getElementById("voiceName");
 const languageEl = document.getElementById("language");
 const inputLanguagesEl = document.getElementById("inputLanguages");
+const languageOptionsEl = document.getElementById("languageOptions");
+const profileCatalogStateEl = document.getElementById("profileCatalogState");
 const profileStatusEl = document.getElementById("profileStatus");
 
 // Cache key written by both this page and background.js after a successful PUT,
@@ -184,6 +186,48 @@ document.getElementById("checkMic").addEventListener("click", async () => {
 // ---- Runtime agent profile -------------------------------------------------
 
 let currentProfile = null; // last effective profile we rendered
+let currentProfileOptions = null;
+
+function renderProfileOptions(payload) {
+  if (!payload || typeof payload !== "object") return;
+  currentProfileOptions = payload;
+  const voices = Array.isArray(payload.voices) ? payload.voices : [];
+  const languages = Array.isArray(payload.languages) ? payload.languages : [];
+  if (voiceNameEl) {
+    const selected = voiceNameEl.value || currentProfile?.voice || "";
+    voiceNameEl.textContent = "";
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "Gateway default";
+    voiceNameEl.append(defaultOption);
+    for (const voice of voices) {
+      const id = String(voice.id || "").trim();
+      if (!id) continue;
+      const option = document.createElement("option");
+      option.value = id;
+      const tags = Array.isArray(voice.tone_tags) ? voice.tone_tags.join(", ") : "";
+      option.textContent = tags ? `${id} - ${tags}` : id;
+      voiceNameEl.append(option);
+    }
+    if (selected && voices.some((voice) => voice.id === selected)) {
+      voiceNameEl.value = selected;
+    }
+  }
+  if (languageOptionsEl) {
+    languageOptionsEl.textContent = "";
+    for (const language of languages) {
+      const code = String(language.code || "").trim();
+      if (!code) continue;
+      const option = document.createElement("option");
+      option.value = code;
+      option.label = String(language.label || code);
+      languageOptionsEl.append(option);
+    }
+  }
+  if (profileCatalogStateEl) {
+    profileCatalogStateEl.textContent = `Loaded ${voices.length} voices and ${languages.length} languages from the gateway catalog.`;
+  }
+}
 
 function renderProfile(payload) {
   const profile = payload?.profile || {};
@@ -211,6 +255,7 @@ async function loadProfile() {
   }
   flashProfile("Loading…");
   try {
+    await loadProfileOptions(url, token);
     const resp = await fetch(`${url}/v1/agent/profile${await profileQuery()}`, { headers: gatewayHeaders(token, false) });
     if (resp.status === 401) {
       profileStateEl.textContent = "Gateway requires a token to read the profile. Add the Gateway token and Save.";
@@ -233,6 +278,25 @@ async function loadProfile() {
       flashProfile(`Gateway offline; showing last known profile`, false);
     } else {
       flashProfile(`Unreachable: ${String(err.message || err)}`, false);
+    }
+  }
+}
+
+async function loadProfileOptions(url, token) {
+  try {
+    const resp = await fetch(`${url}/v1/agent/profile/options`, { headers: gatewayHeaders(token, false) });
+    if (!resp.ok) {
+      if (profileCatalogStateEl) {
+        profileCatalogStateEl.textContent = `Gateway options catalog unavailable (${resp.status}).`;
+      }
+      return;
+    }
+    renderProfileOptions(await resp.json());
+  } catch {
+    if (profileCatalogStateEl) {
+      profileCatalogStateEl.textContent = currentProfileOptions
+        ? "Gateway options catalog offline; using last loaded options."
+        : "Gateway options catalog unavailable.";
     }
   }
 }
@@ -271,14 +335,12 @@ function patchFromForm() {
   const lang = languageEl.value.trim();
   if (lang) {
     patch.language = lang;
-    patch.language_primary = lang.split(",")[0].trim();
     patch.language_mode = "explicit";
     patch.language_output = "primary_only";
   }
   const inputLanguages = inputLanguagesEl?.value.trim();
   if (inputLanguages) {
     patch.input_languages = inputLanguages;
-    patch.input_language_primary = inputLanguages.split(",")[0].trim();
   }
   return patch;
 }

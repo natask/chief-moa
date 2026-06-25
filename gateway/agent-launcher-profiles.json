@@ -25,7 +25,8 @@
       "ARCHITECTURE.md",
       "AGENT_WORKFLOW.md",
       "reference/openspec/changes/define-android-core-product-map",
-      "reference/openspec/changes/message-broker-session-router"
+      "reference/openspec/changes/message-broker-session-router",
+      "reference/openspec/changes/define-aggie-compatible-surface"
     ],
     "expected_output": "A narrow implementation unit with focused verification, a Conventional Commit, and deploy attempt or recorded blocker.",
     "verification": [
@@ -61,7 +62,8 @@
       "README.md",
       "ARCHITECTURE.md",
       "AGENT_WORKFLOW.md",
-      "reference/openspec/changes/message-broker-session-router"
+      "reference/openspec/changes/message-broker-session-router",
+      "reference/openspec/changes/define-aggie-compatible-surface"
     ],
     "expected_output": "A sourced research report, comparison, recommendation, and implementation implications.",
     "verification": [

@@ -94,13 +94,19 @@
     <input id="voiceMaxChars" type="number" min="1" step="10" placeholder="280" />
 
     <label for="voiceName">Voice</label>
-    <input id="voiceName" type="text" placeholder="Kore, Aoede, Charon…" />
+    <select id="voiceName">
+      <option value="">Gateway default</option>
+    </select>
+    <div class="hint" id="profileCatalogState">Voice and language options load from the gateway catalog.</div>
 
     <label for="language">Reply language(s)</label>
-    <input id="language" type="text" placeholder="en-US or en-US,am-ET" />
+    <input id="language" type="text" list="languageOptions" placeholder="en-US or en-US,am-ET" />
+    <div class="hint">Comma-separated BCP-47 codes. The first code is used internally as the provider default.</div>
 
     <label for="inputLanguages">Heard language(s)</label>
-    <input id="inputLanguages" type="text" placeholder="en-US or en-US,am-ET" />
+    <input id="inputLanguages" type="text" list="languageOptions" placeholder="en-US or en-US,am-ET" />
+    <div class="hint">Comma-separated BCP-47 codes for languages you may speak.</div>
+    <datalist id="languageOptions"></datalist>
 
     <div>
       <button id="saveProfile">Save profile to gateway</button>

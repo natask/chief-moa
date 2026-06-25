@@ -64,6 +64,10 @@ Browser extension local deploy:
 bash scripts/deploy.sh extension
 ```
 
+Extension deploys package the version in
+`browser_extension/extension/manifest.json`; bump that version for changed
+extension releases.
+
 Android OTA artifact:
 
 ```sh
@@ -81,3 +85,6 @@ Auto-deploy committed target changes:
 ```sh
 bash scripts/deploy.sh auto
 ```
+
+Deploys record target version metadata under the git deploy marker directory, so
+`scripts/deploy.sh` output shows the deployed version and deploy sequence.

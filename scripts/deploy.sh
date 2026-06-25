@@ -20,6 +20,7 @@ REMOTE="${REMOTE:-reclaim@10.147.17.10}"
 REMOTE_GW_DIR="${REMOTE_GW_DIR:-/home/reclaim-ethiopia/moa-assistant/software/moa_gateway}"
 GATEWAY_URL="${GATEWAY_URL:-http://10.147.17.10:8788}"
 log() { printf '[deploy] %s\n' "$*"; }
+VERSION_STATUS_SCRIPT="$ROOT_DIR/scripts/deploy-version-status.mjs"
 
 adb_path() {
   if command -v adb >/dev/null 2>&1; then
@@ -170,6 +171,11 @@ installed_android_version() {
 }
 
 deploy_extension() {
+  local state_dir
+  state_dir="$(deploy_state_dir 2>/dev/null || true)"
+  if [ -n "$state_dir" ] && target_has_committed_changes extension; then
+    node "$VERSION_STATUS_SCRIPT" assert-extension-bumped "$state_dir"
+  fi
   log "extension: verifying, smoke testing, packaging, and poking loaded browser reload"
   (
     cd "$ROOT_DIR/browser_extension"
@@ -302,9 +308,15 @@ mark_deployed() {
   state_dir="$(deploy_state_dir)" || return 0
   mkdir -p "$state_dir"
   printf '%s\n' "$head" > "$state_dir/$target.sha"
+  node "$VERSION_STATUS_SCRIPT" mark "$state_dir" "$target" "$head" | while IFS= read -r line; do
+    log "$line"
+  done
 }
 
 deploy_target() {
+  node "$VERSION_STATUS_SCRIPT" current "$1" | while IFS= read -r line; do
+    log "$line"
+  done
   case "$1" in
     gateway) deploy_gateway ;;
     android) deploy_android ;;
@@ -349,10 +361,10 @@ deploy_auto() {
 
 case "${1:-gateway}" in
   auto)              deploy_auto ;;
-  gateway|"")        deploy_gateway; mark_deployed gateway ;;
-  --force)           deploy_gateway --force; mark_deployed gateway ;;
-  android)           deploy_android; mark_deployed android ;;
-  extension)         deploy_extension; mark_deployed extension ;;
-  all)               deploy_gateway; mark_deployed gateway; deploy_android; mark_deployed android; deploy_extension; mark_deployed extension ;;
+  gateway|"")        deploy_target gateway; mark_deployed gateway ;;
+  --force)           node "$VERSION_STATUS_SCRIPT" current gateway | while IFS= read -r line; do log "$line"; done; deploy_gateway --force; mark_deployed gateway ;;
+  android)           deploy_target android; mark_deployed android ;;
+  extension)         deploy_target extension; mark_deployed extension ;;
+  all)               deploy_target gateway; mark_deployed gateway; deploy_target android; mark_deployed android; deploy_target extension; mark_deployed extension ;;
   *) echo "usage: deploy.sh [auto|gateway|--force|android|extension|all]" >&2; exit 2 ;;
 esac

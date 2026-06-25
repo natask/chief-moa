@@ -1,0 +1,36 @@
+digraph CatalogBackedProfileOptions {
+    graph [goal="Catalog-backed voice/language profile options with validation and dynamic client discovery."]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Record the requested profile catalog behavior, existing dirty worktree constraints, and acceptance checks."
+    ]
+
+    implement [
+        label="Implement",
+        prompt="Add gateway profile option catalogs, strict validation, browser settings discovery, and focused smoke coverage."
+    ]
+
+    verify [
+        label="Verify",
+        shape=parallelogram,
+        script="cd gateway && npm run smoke:voice-intent && npm run smoke:regression && npm run check 2>&1",
+        goal_gate=true
+    ]
+
+    browser [
+        label="Browser Verify",
+        shape=parallelogram,
+        script="cd browser_extension && npm run verify && npm run smoke:settings 2>&1"
+    ]
+
+    approve [shape=hexagon, label="Approve Result"]
+
+    start -> plan -> implement -> verify -> browser -> approve
+    approve -> exit      [label="[A] Accept"]
+    approve -> implement [label="[R] Revise"]
+}

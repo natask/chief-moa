@@ -65,6 +65,10 @@
       behavior settings either globally for all devices or as current-device
       overrides, and require mission agents to ask for missing access instead of
       giving flat refusals.
+- [x] 7.7 Back hard voice/language settings with a gateway options catalog so
+      agents and clients can list supported voices/languages dynamically, map
+      masculine/feminine tone requests to valid voice ids, and reject unsupported
+      profile values before persistence.
 
 ## 8. Verification Harness
 
@@ -81,6 +85,10 @@
 - [x] 9.4 Add commit-triggered GitHub Actions build and main-machine OTA deploy workflow.
 - [x] 9.5 Verify with Android debug build, gateway syntax check, OpenSpec validation, and a main-machine OTA smoke test. Verified 2026-06-20: `assembleDebug` BUILD SUCCESSFUL (app-debug.apk produced); `npm run check` ok with all profile/voice checks passing; `openspec validate define-android-core-product-map --strict` valid; OTA endpoint `/v1/android/updates/latest` serves version 0.1.1781720954 (git_sha 9719b68). Note: the served OTA build is from 2026-06-17; publishing a fresh OTA from current HEAD is a separate deploy step.
 - [x] 9.6 Keep OTA publish as the deploy source of truth and install the published APK directly over ADB when an authorized phone is connected; skip direct install without failing when no device is available.
+- [x] 9.7 Record deploy version metadata and monotonic target deploy sequences
+      for gateway, Android OTA, and browser extension deploys; require changed
+      browser-extension deploys to advance the manifest version after the first
+      recorded extension deploy.
 
 ## 10. Cross-Device Tool Hub
 

@@ -261,6 +261,29 @@ function configureStorageExpr(url, token) {
   `;
 }
 
+async function configureExtensionStorage(workerCdp, optionsCdp) {
+  let cfg;
+  try {
+    cfg = await evaluate(workerCdp, configureStorageExpr(GATEWAY_URL, GATEWAY_TOKEN));
+  } catch (error) {
+    const optionsHasStorage = await evaluate(optionsCdp, `Boolean(globalThis.chrome?.storage?.local)`).catch(() => false);
+    if (!optionsHasStorage) {
+      throw error;
+    }
+    cfg = await evaluate(optionsCdp, configureStorageExpr(GATEWAY_URL, GATEWAY_TOKEN));
+  }
+  await evaluate(optionsCdp, `
+    (() => {
+      const url = document.querySelector("#gatewayUrl");
+      const token = document.querySelector("#gatewayToken");
+      if (url) url.value = ${JSON.stringify(GATEWAY_URL)};
+      if (token) token.value = ${JSON.stringify(GATEWAY_TOKEN)};
+      return true;
+    })()
+  `);
+  return cfg;
+}
+
 // Drive a typed instruction through the overlay exactly as a real submit does.
 function triggerRunExpr(instruction) {
   return `
@@ -339,26 +362,26 @@ async function main() {
     await workerCdp.send("Runtime.enable");
     await evaluate(workerCdp, INSTALL_FETCH_RECORDER);
 
+    const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
+    browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
+
+    const { targetId } = await browserCdp.send("Target.createTarget", { url: optionsUrl });
+    const optionsTarget = await waitForTarget(devToolsPort, (target) => target.type === "page" && target.id === targetId);
+    optionsCdp = new Cdp(optionsTarget.webSocketDebuggerUrl);
+    await optionsCdp.send("Runtime.enable");
+    await optionsCdp.send("Page.enable");
+    await waitForEval(optionsCdp, `document.readyState === "complete" ? true : null`);
+
     // Configure storage to point at the LOCAL gateway with the throwaway token.
-    const cfg = await evaluate(workerCdp, configureStorageExpr(GATEWAY_URL, GATEWAY_TOKEN));
+    const cfg = await configureExtensionStorage(workerCdp, optionsCdp);
     if (cfg.url !== GATEWAY_URL || !cfg.tokenSet) {
       throw new Error(`storage did not take the local gateway config: ${JSON.stringify(cfg)}`);
     }
-
-    const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
-    browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
 
     // ---- Leg 1.1/1.2 — the settings surface reads the effective profile ----
     console.log("");
     console.log("Leg 1 — settings surface reads the effective profile (GET /v1/agent/profile)");
     {
-      const { targetId } = await browserCdp.send("Target.createTarget", { url: optionsUrl });
-      const optionsTarget = await waitForTarget(devToolsPort, (target) => target.type === "page" && target.id === targetId);
-      optionsCdp = new Cdp(optionsTarget.webSocketDebuggerUrl);
-      await optionsCdp.send("Runtime.enable");
-      await optionsCdp.send("Page.enable");
-      await waitForEval(optionsCdp, `document.readyState === "complete" ? true : null`);
-
       // The page loads its profile on open. Wait for the fields to populate from
       // the gateway's effective profile.
       const sysPrompt = await waitForEval(
@@ -372,20 +395,34 @@ async function main() {
       await evaluate(optionsCdp, INSTALL_FETCH_RECORDER);
       await evaluate(optionsCdp, `document.querySelector("#refreshProfile").click(); true`);
       // Wait for the recorded call to COMPLETE (status filled), not just appear.
+      const optionsCall = await waitForEval(optionsCdp, completedGatewayCallExpr("/v1/agent/profile/options", "GET"), 10000);
       const getCall = await waitForEval(optionsCdp, completedGatewayCallExpr("/v1/agent/profile", "GET"), 10000);
       const maxChars = await evaluate(optionsCdp, `Number(document.querySelector("#voiceMaxChars").value)`);
       const stateText = await evaluate(optionsCdp, `document.querySelector("#profileState").textContent`);
+      const catalogMetrics = await evaluate(optionsCdp, `(() => ({
+        voiceOptions: document.querySelectorAll("#voiceName option").length,
+        languageOptions: document.querySelectorAll("#languageOptions option").length,
+        catalogText: document.querySelector("#profileCatalogState")?.textContent || "",
+      }))()`);
 
-      if (getCall && getCall.ok && getCall.status === 200 && sysPrompt && maxChars > 0) {
+      if (
+        getCall && getCall.ok && getCall.status === 200 &&
+        optionsCall && optionsCall.ok && optionsCall.status === 200 &&
+        sysPrompt && maxChars > 0 &&
+        catalogMetrics.voiceOptions >= 8 &&
+        catalogMetrics.languageOptions >= 40
+      ) {
         pass(
           "settings surface populated from the gateway",
-          `GET /v1/agent/profile -> HTTP 200; voice_max_chars=${maxChars}; state="${stateText.trim()}"`,
+          `GET /v1/agent/profile + /options -> HTTP 200; voice_max_chars=${maxChars}; state="${stateText.trim()}"`,
         );
         console.log(`         system_prompt (first 60): "${sysPrompt.slice(0, 60)}…"`);
+        console.log(`         catalog: ${catalogMetrics.catalogText}`);
       } else {
         failures++;
         console.log(`  [FAIL] settings surface did not populate from GET /v1/agent/profile.`);
         console.log(`         get call: ${JSON.stringify(getCall)}; voice_max_chars=${maxChars}; sysPrompt set=${Boolean(sysPrompt)}`);
+        console.log(`         options call: ${JSON.stringify(optionsCall)}; catalog=${JSON.stringify(catalogMetrics)}`);
       }
       // Remember the starting limit so we can prove it shrinks.
       globalThis.__startMaxChars = maxChars;
