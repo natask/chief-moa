@@ -28,6 +28,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { WebSocket, WebSocketServer } = require("ws");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "voice-profile-smoke-token";
@@ -46,10 +47,13 @@ async function main() {
   const dataDir = path.join(tempDir, "data");
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
+  const wsUrl = `ws://127.0.0.1:${port}/v1/voice/sessions`;
   let server;
+  let fakeLive;
 
   try {
-    server = await startGateway({ port, dataDir });
+    fakeLive = await startFakeLive();
+    server = await startGateway({ port, dataDir, fakeUrl: fakeLive.url });
 
     await step("auth required", () => assertAuthRequired(baseUrl));
     await step("voice field is a profile field", () => assertVoiceIsField(baseUrl));
@@ -60,6 +64,7 @@ async function main() {
     // Provider-level assertion runs in-process: prove the exact session-config
     // the provider WOULD send to Gemini Live carries the effective voice.
     await step("provider session-config carries the profile voice and language", () => assertProviderSessionConfig(dataDir));
+    await step("live transcript profile-control is applied by the gateway", () => assertLiveTranscriptProfileControl(baseUrl, wsUrl, dataDir));
 
     console.log(JSON.stringify({
       ok: true,
@@ -73,12 +78,16 @@ async function main() {
         "health voice_stream.provider.voice reflects the configured voice (Aoede)",
         "provider status() + Gemini Live session-config carry the effective voice/language/assistant name; env default when unset",
         "provider session-config preserves requested honorific/style prompt instructions and adds the address-preference rule",
+        "a completed Gemini Live transcript 'use the Charon voice' is stored as profile_control and persists voice=Charon",
       ],
     }, null, 2));
   } finally {
     if (server) {
       server.kill("SIGTERM");
       await onceExit(server, 1500);
+    }
+    if (fakeLive) {
+      await fakeLive.close();
     }
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -324,11 +333,52 @@ async function assertProviderSessionConfig(dataDir) {
   );
 }
 
-async function startGateway({ port, dataDir }) {
+async function assertLiveTranscriptProfileControl(baseUrl, wsUrl, dataDir) {
+  const sessionId = "voice_profile_live_smoke";
+  const turnId = "live-voice-profile-control";
+  const ws = await openVoiceClient(wsUrl);
+  try {
+    await sendJsonWs(ws, {
+      type: "session_start",
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: "default",
+      turn_id: turnId,
+      source: "voice-profile-smoke-live",
+      format: {
+        encoding: "pcm16",
+        sample_rate: 16000,
+        channels: 1,
+      },
+    });
+    await waitForWsEvent(ws, (event) => event.type === "session_ready" && event.turn_id === turnId);
+    ws.send(Buffer.alloc(640, 1));
+    await sendJsonWs(ws, { type: "commit_turn", turn_id: turnId });
+    await waitForWsEvent(ws, (event) => event.type === "turn_done" && event.turn_id === turnId);
+  } finally {
+    closeWebSocketQuietly(ws);
+  }
+
+  const profile = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(profile.profile.voice, "Charon", `Live transcript profile-control must persist voice=Charon, got ${profile.profile.voice}`);
+
+  const recordPath = path.join(dataDir, "voice-turns", sessionId, `${turnId}.json`);
+  const record = await pollForFileJson(recordPath, 3000);
+  assert.equal(record.classification, "profile_control", `canonical Live turn must be profile_control, got ${record.classification}`);
+  assert.equal(record.response?.classification, "profile_control", "canonical Live response must be profile_control");
+  assert.equal(record.response?.profile?.voice, "Charon", "canonical Live response profile must expose voice=Charon");
+  assert.ok(
+    record.response?.actions?.some((action) => action.type === "profile_update"),
+    `canonical Live response must include a profile_update action, got ${JSON.stringify(record.response?.actions)}`,
+  );
+  assert.equal(record.references?.voice_session?.provider, "gemini-live", "canonical Live turn must preserve provider session reference");
+}
+
+async function startGateway({ port, dataDir, fakeUrl }) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ["server.js"], {
     cwd: GATEWAY_DIR,
-    env: gatewayEnv({ port, dataDir }),
+    env: gatewayEnv({ port, dataDir, fakeUrl }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const logs = collectLogs(server);
@@ -336,10 +386,9 @@ async function startGateway({ port, dataDir }) {
   return server;
 }
 
-function gatewayEnv({ port, dataDir }) {
+function gatewayEnv({ port, dataDir, fakeUrl }) {
   // Secret-free env. Force gemini-live so the provider's status() exposes `voice`;
-  // no GEMINI key is set, so the provider stays unconfigured — we never open a
-  // live session, only read its status and (in-process) its session-config.
+  // a fake Live endpoint and throwaway key keep the real provider untouched.
   return {
     PATH: process.env.PATH || "",
     HOME: process.env.HOME || "",
@@ -354,10 +403,55 @@ function gatewayEnv({ port, dataDir }) {
     MODEL_API_KEY: "",
     OPENAI_API_KEY: "",
     GOOGLE_API_KEY: "",
-    GEMINI_API_KEY: "",
+    GEMINI_API_KEY: fakeUrl ? "test-key" : "",
+    GEMINI_LIVE_ENDPOINT: fakeUrl || "",
     VOICE_PROVIDER: "gemini-live",
     GEMINI_LIVE_VOICE: ENV_DEFAULT_VOICE,
   };
+}
+
+async function startFakeLive() {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await waitForServerListening(server);
+  server.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      let message;
+      try {
+        message = JSON.parse(Buffer.from(data).toString("utf8"));
+      } catch {
+        return;
+      }
+      if (message.setup) {
+        ws.send(JSON.stringify({ setupComplete: {} }));
+        return;
+      }
+      if (message.realtimeInput?.audioStreamEnd) {
+        ws.send(JSON.stringify({
+          serverContent: {
+            inputTranscription: { text: "use the Charon voice" },
+            outputTranscription: { text: "Updated." },
+            turnComplete: true,
+          },
+        }));
+      }
+    });
+  });
+  return {
+    url: `ws://127.0.0.1:${server.address().port}/v1beta/fake-live`,
+    close: () => new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    }),
+  };
+}
+
+function waitForServerListening(server) {
+  return new Promise((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
 }
 
 async function waitForHealth(baseUrl, logs) {
@@ -417,6 +511,90 @@ async function postJson(url, body, options = {}) {
 
 function authHeaders() {
   return { Authorization: `Bearer ${TOKEN}` };
+}
+
+function openVoiceClient(wsUrl) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl, { headers: authHeaders() });
+    const timeout = setTimeout(() => {
+      closeWebSocketQuietly(ws);
+      reject(new Error(`timed out opening ${wsUrl}`));
+    }, 3000);
+    ws.once("open", () => {
+      clearTimeout(timeout);
+      resolve(ws);
+    });
+    ws.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+function sendJsonWs(ws, payload) {
+  return new Promise((resolve, reject) => {
+    ws.send(JSON.stringify(payload), (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+function waitForWsEvent(ws, predicate, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("timed out waiting for voice session event"));
+    }, timeoutMs);
+    const onMessage = (data, isBinary) => {
+      if (isBinary) return;
+      let event;
+      try {
+        event = JSON.parse(Buffer.from(data).toString("utf8"));
+      } catch {
+        return;
+      }
+      if (event.type === "error") {
+        cleanup();
+        reject(new Error(event.message || "voice session returned error"));
+        return;
+      }
+      if (predicate(event)) {
+        cleanup();
+        resolve(event);
+      }
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off("message", onMessage);
+      ws.off("error", onError);
+    };
+    ws.on("message", onMessage);
+    ws.on("error", onError);
+  });
+}
+
+async function pollForFileJson(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    }
+    await sleep(50);
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
+}
+
+function closeWebSocketQuietly(ws) {
+  try {
+    ws.close(1000, "smoke complete");
+  } catch {
+    // Ignore close errors during smoke cleanup.
+  }
 }
 
 async function freePort() {

@@ -3812,7 +3812,7 @@ function writeVoiceTurnRecord(record) {
   }
 }
 
-function recordStreamingVoiceTurn(turn) {
+async function recordStreamingVoiceTurn(turn) {
   const sessionId = sanitizeOptionalId(turn.session_id || turn.conversation_id, "default");
   const conversationId = sanitizeOptionalId(turn.conversation_id || sessionId, sessionId);
   const branchId = sanitizeOptionalId(turn.branch_id, "default");
@@ -3836,6 +3836,9 @@ function recordStreamingVoiceTurn(turn) {
   // classified separately so the context pack can show it was not finished.
   const incomplete = turn.incomplete === true;
   const turnStatus = String(turn.status || (incomplete ? "interrupted" : "completed"));
+  const liveClassification = !incomplete && transcript
+    ? classifyVoiceTurn({ source: turn.source || "voice-live" }, transcript)
+    : "";
   const baseRecord = {
     id: turnId,
     session_id: sessionId,
@@ -3845,13 +3848,44 @@ function recordStreamingVoiceTurn(turn) {
     device_id: deviceId,
     source: String(turn.source || "android-overlay").slice(0, 80),
     transcript,
-    classification: incomplete ? "interrupted" : "chat",
+    classification: liveClassification === "profile_control"
+      ? "profile_control"
+      : (incomplete ? "interrupted" : "chat"),
     screen: null,
     created_at: turn.started_at || now,
     updated_at: now,
     response: null,
     references: {},
   };
+  const voiceSessionReferences = {
+    voice_session: {
+      provider: turn.provider || "",
+      model: turn.model || "",
+      audio: turn.audio || null,
+      assistant_audio: turn.assistant_audio || null,
+      playback_policy: turn.playback_policy || {},
+      provider_events: Array.isArray(turn.provider_events) ? turn.provider_events : [],
+      transcription_only: turn.transcription_only === true,
+      incomplete,
+      status: turnStatus,
+    },
+  };
+  if (!incomplete && liveClassification === "profile_control") {
+    const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
+    const payload = await handleVoiceProfileControl(baseRecord, transcript, profileOptions);
+    writeVoiceTurnRecord({
+      ...baseRecord,
+      classification: payload.classification,
+      response: payload,
+      references: {
+        ...voiceSessionReferences,
+        profile_version: payload.profile_version,
+        from_profile_version: profileVersion,
+      },
+    });
+    return;
+  }
+
   const payload = voiceTurnPayload(baseRecord, {
     speak: "",
     display: assistantText,
@@ -3861,19 +3895,7 @@ function recordStreamingVoiceTurn(turn) {
   writeVoiceTurnRecord({
     ...baseRecord,
     response: payload,
-    references: {
-      voice_session: {
-        provider: turn.provider || "",
-        model: turn.model || "",
-        audio: turn.audio || null,
-        assistant_audio: turn.assistant_audio || null,
-        playback_policy: turn.playback_policy || {},
-        provider_events: Array.isArray(turn.provider_events) ? turn.provider_events : [],
-        transcription_only: turn.transcription_only === true,
-        incomplete,
-        status: turnStatus,
-      },
-    },
+    references: voiceSessionReferences,
   });
 }
 
