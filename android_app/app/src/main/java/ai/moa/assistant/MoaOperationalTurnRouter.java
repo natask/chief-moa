@@ -90,6 +90,9 @@ final class MoaOperationalTurnRouter {
         if (lower.isEmpty()) {
             return false;
         }
+        if (isProfileControlIntent(text)) {
+            return false;
+        }
 
         String[] actionStarts = new String[]{
                 "make ",
@@ -217,9 +220,14 @@ final class MoaOperationalTurnRouter {
     }
 
     private static boolean isVoiceControlIntent(String lower) {
+        if (isVoiceSamplerIntent(lower)) {
+            return true;
+        }
         if (lower.contains("what voice")
+                || lower.contains("what voices")
                 || lower.contains("which voice")
-                || lower.matches(".*\\b(set|change|switch|use|make)\\b.*\\bvoice\\b.*")) {
+                || lower.contains("which voices")
+                || lower.matches(".*\\b(set|change|switch|use|make)\\b.*\\bvoices?\\b.*")) {
             return true;
         }
         if (lower.contains("sound like") || lower.contains("speak like")) {
@@ -237,6 +245,26 @@ final class MoaOperationalTurnRouter {
         }
         return containsAny(lower, PROFILE_VOICE_NAMES)
                 && lower.matches(".*\\b(use|switch|set|change)\\b.*");
+    }
+
+    private static boolean isVoiceSamplerIntent(String lower) {
+        if (!lower.matches(".*\\bvoices?\\b.*")) {
+            return false;
+        }
+        if (lower.matches(".*\\b(sample|samples|sampling|test|try|preview|demo|demonstrate|audition|hear)\\b.*\\bvoices?\\b.*")) {
+            return true;
+        }
+        if (lower.matches(".*\\b(go|run|walk|cycle)\\s+through\\b.*\\bvoices?\\b.*")) {
+            return true;
+        }
+        if (lower.matches(".*\\b(say|speak|read|play)\\b.*\\b(in|with)\\s+(all|every|each)\\s+(of\\s+the\\s+)?voices?\\b.*")) {
+            return true;
+        }
+        if (lower.matches(".*\\b(all|every|each)\\s+(of\\s+the\\s+)?voices?\\b.*")
+                && lower.matches(".*\\b(say|speak|read|play|sample|test|try|preview|demo|go|run|walk|cycle|change|switch)\\b.*")) {
+            return true;
+        }
+        return lower.matches(".*\\bvoices?\\b.*\\b(one\\s+after\\s+(the\\s+)?other|one\\s+by\\s+one|in\\s+order|sequentially)\\b.*");
     }
 
     private static boolean containsAny(String lower, String[] values) {

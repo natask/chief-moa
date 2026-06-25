@@ -856,7 +856,7 @@ class GeminiLiveVoiceProvider {
     const result = () => ({
       provider: this.provider,
       model: this.model,
-      transcript: state.inputTranscript.trim() || "Voice captured.",
+      transcript: state.inputTranscript.trim() || String(turn.syntheticText || "").trim() || "Voice captured.",
       assistant_text: state.outputTranscript.trim(),
       audio_format: CLIENT_AUDIO_FORMAT,
     });
@@ -975,6 +975,29 @@ class GeminiLiveVoiceProvider {
             await readyPromise;
           }
           await sendAudioChunk(value);
+        });
+      },
+      sendText: (text) => {
+        if (closed || state.resolved || state.rejected) {
+          return;
+        }
+        const value = String(text || "").trim();
+        if (!value) {
+          return;
+        }
+        queueProviderTask(async () => {
+          if (!ready) {
+            await readyPromise;
+          }
+          await sendGeminiJson(websocket, {
+            clientContent: {
+              turns: [{
+                role: "user",
+                parts: [{ text: value }],
+              }],
+              turnComplete: true,
+            },
+          });
         });
       },
       commit: () => {
@@ -1183,6 +1206,19 @@ class GeminiLiveVoiceProvider {
             parameters: {
               type: "OBJECT",
               properties: {},
+            },
+          },
+          {
+            name: "start_voice_sampler",
+            description: "Return an ordered voice-sampler plan when the user asks to sample, test, preview, hear, go through, or say something in every supported voice. Do not persist a voice change for this. Each sample must be played as its own Live session because Gemini Live voice selection is session-level.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                sample_text: {
+                  type: "STRING",
+                  description: "Optional phrase the user asked to hear in every voice. Omit when they only said to say something or sample the voices.",
+                },
+              },
             },
           },
           {
@@ -1618,8 +1654,10 @@ function profileControlInstruction(profile) {
     "- You can change your own durable voice, assistant name, language, and response modality by calling update_agent_profile.",
     "- Never say you cannot change your voice when the user asks for a supported voice or profile change.",
     "- If the user names a supported voice, or says masculine/feminine, call update_agent_profile with the concrete voice id. Masculine maps to Charon; feminine maps to Aoede.",
+    "- If the user asks to sample, test, preview, hear, go through, or say something in every supported voice, call start_voice_sampler. Do not persist a voice for sampling.",
     "- If the user asks to change voices but does not say which one, ask which supported voice they want or call get_profile_options.",
     "- Voice changes are persisted by the gateway profile store and normally apply to the next Live turn/session, not to audio that is already being spoken.",
+    "- Voice sampling also uses the next Live sessions: one session per sampled voice.",
     `- Supported voice ids: ${voices}.`,
     currentVoice ? `- Current configured voice: ${currentVoice}.` : "",
   ].filter(Boolean).join("\n");

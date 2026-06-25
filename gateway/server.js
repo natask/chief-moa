@@ -2554,6 +2554,23 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     };
   }
 
+  if (intent.action === "sample") {
+    const sampler = voiceSamplerAction({ sampleText: intent.sample_text });
+    const speak = voiceSamplerSpeakText(sampler);
+    const display = voiceSamplerDisplayText(sampler);
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak,
+        display,
+        actions: [sampler],
+        follow_up_expected: false,
+      }),
+      profile_version: agentProfile.currentVersion(profileOptions),
+      profile: agentProfileRuntimeStatus(profileOptions),
+    };
+  }
+
   if (intent.action === "clarify") {
     const message = profileClarificationText(intent.subject, profileOptions);
     return {
@@ -2613,6 +2630,47 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     application,
     profile: agentProfileRuntimeStatus(profileOptions),
   };
+}
+
+const DEFAULT_VOICE_SAMPLE_TEXT = "This is a Moa voice sample.";
+
+function voiceSamplerAction(options = {}) {
+  const requestedText = truncate(String(options.sampleText || options.sample_text || "").trim().replace(/\s+/g, " "), 220);
+  const baseText = requestedText || DEFAULT_VOICE_SAMPLE_TEXT;
+  const voices = voiceOptionsPayload().map((voice, index) => ({
+    ...voice,
+    order: index + 1,
+    sample_text: `This is ${voice.id}. ${baseText}`,
+  }));
+  return {
+    type: "voice_sampler",
+    status: "ready",
+    version: "voice-sampler/v1",
+    count: voices.length,
+    sample_text: baseText,
+    execution_owner: "client_voice_surface",
+    provider_boundary: "gemini_live_voice_is_session_level",
+    application: {
+      profile_persisted: false,
+      applies: "one_live_session_per_sample",
+      current_session: "unchanged",
+    },
+    voices,
+  };
+}
+
+function voiceSamplerSpeakText(sampler) {
+  const names = sampler.voices.map((voice) => voice.id).join(", ");
+  return `Starting voice sampler for ${sampler.count} voices: ${names}.`;
+}
+
+function voiceSamplerDisplayText(sampler) {
+  const lines = sampler.voices.map((voice) => `${voice.order}. ${voice.id} - ${voice.description}`);
+  return [
+    voiceSamplerSpeakText(sampler),
+    "Each sample uses a separate Live voice session; this does not change the saved voice.",
+    ...lines,
+  ].join("\n");
 }
 
 function profileSummaryText(subject, options = {}) {
@@ -3483,6 +3541,9 @@ async function handleLiveVoiceToolCall(call) {
       ...profileOptionsPayload(),
     };
   }
+  if (name === "start_voice_sampler") {
+    return liveToolStartVoiceSampler(args);
+  }
   if (name === "get_session_context") {
     return liveToolGetSessionContext(call, args);
   }
@@ -3640,6 +3701,16 @@ function liveToolUpdateAgentProfile(call, args) {
     device_id: profileOptions.deviceId,
     profile: agentProfileRuntimeStatus(profileOptions),
     application: profileApplicationSemantics(),
+  };
+}
+
+function liveToolStartVoiceSampler(args) {
+  const sampler = voiceSamplerAction({ sampleText: args.sample_text || args.text || args.phrase });
+  return {
+    ok: true,
+    type: "voice_sampler",
+    message: voiceSamplerSpeakText(sampler),
+    sampler,
   };
 }
 

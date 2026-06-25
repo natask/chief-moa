@@ -129,3 +129,14 @@ the gateway profile-control path instead of leaving them as provider-only chat.
   profile version
 - **AND** the next Live voice session starts with that effective profile and the
   prior session context
+
+#### Scenario: User asks to sample every voice
+- **WHEN** the user says a voice-sampling request such as "go through all the
+  voices" or "say hello in every voice"
+- **THEN** Android submits the finalized transcript to `/v1/voice/turns`
+- **AND** the gateway returns a `voice_sampler` action containing the ordered
+  supported voice catalog and per-voice sample text
+- **AND** Android plays the samples by opening one text-only Live voice session
+  per voice with a session-only voice override
+- **AND** the saved profile voice remains unchanged unless the user chooses a
+  specific voice

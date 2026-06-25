@@ -112,6 +112,10 @@ final class MoaVoiceGatewaySocket {
     }
 
     boolean sendSessionStart(String sessionId, String turnId, String branchId) {
+        return sendSessionStart(sessionId, turnId, branchId, null, "android-overlay");
+    }
+
+    boolean sendSessionStart(String sessionId, String turnId, String branchId, JSONObject profileOverride, String source) {
         try {
             JSONObject format = new JSONObject();
             format.put("encoding", MoaAudioCaptureController.ENCODING);
@@ -125,10 +129,26 @@ final class MoaVoiceGatewaySocket {
             body.put("branch_id", safe(branchId).isEmpty() ? "default" : safe(branchId));
             body.put("turn_id", turnId);
             body.put("format", format);
-            body.put("source", "android-overlay");
+            body.put("source", safe(source).isEmpty() ? "android-overlay" : safe(source));
+            if (profileOverride != null && profileOverride.length() > 0) {
+                body.put("profile_override", profileOverride);
+            }
             return sendJson(body);
         } catch (JSONException error) {
             reportFailure("Could not build session_start event.", error);
+            return false;
+        }
+    }
+
+    boolean sendTextTurn(String turnId, String text) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("type", "text_turn");
+            body.put("turn_id", turnId);
+            body.put("text", safe(text));
+            return sendJson(body);
+        } catch (JSONException error) {
+            reportFailure("Could not build text_turn event.", error);
             return false;
         }
     }

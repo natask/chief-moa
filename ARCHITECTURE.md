@@ -104,6 +104,12 @@ language, and Moa-owned context when the next Live session starts. Profile
 settings are hard settings: global changes apply to every device, while
 device-scoped changes persist as per-device overrides layered on top of the
 global profile for the current phone or browser client.
+Voice discovery and voice sampling use the same profile-control surface. The
+gateway owns the canonical supported voice catalog and returns a `voice_sampler`
+action when the user asks to sample, test, preview, or go through all voices.
+Android owns playback: it consumes that action by opening one text-only Live
+session per sample with a session-only voice override, so samples do not mutate
+the saved profile voice.
 
 Voice turns can also become replayable verification evidence. When retention is
 enabled, the gateway stores or references the user audio, transcript, assistant

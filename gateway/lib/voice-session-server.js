@@ -9,6 +9,7 @@ const {
   createVoiceProvider,
   generatePcm16Tone: generateProviderTone,
 } = require("./voice-providers");
+const { canonicalVoice } = require("./profile-options");
 
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
@@ -139,6 +140,10 @@ class VoiceSessionConnection {
       await this.handleCommitTurn(event);
       return;
     }
+    if (type === "text_turn") {
+      await this.handleTextTurn(event);
+      return;
+    }
     if (type === "cancel_turn") {
       await this.handleCancelTurn(event);
       return;
@@ -192,7 +197,7 @@ class VoiceSessionConnection {
     const deviceId = sanitizeLooseId(event.device_id || event.deviceId || event.client?.device_id || event.client?.deviceId || "");
     const startedAt = nowIso();
     const profileVersion = this.profileVersion(deviceId);
-    const effectiveProfile = this.effectiveProfile(deviceId);
+    const effectiveProfile = effectiveProfileForSession(this.effectiveProfile(deviceId), event);
     const providerStatus = this.voiceProvider.status();
     fs.mkdirSync(turnDir, { recursive: true });
 
@@ -229,6 +234,7 @@ class VoiceSessionConnection {
       completing: false,
       recordedCanonical: false,
       contextPrompt: "",
+      syntheticText: "",
     };
     turn.contextPrompt = this.contextPromptForTurn(turn);
 
@@ -314,6 +320,61 @@ class VoiceSessionConnection {
       const providerResult = turn.liveSession
         ? await commitLiveSession(turn)
         : await this.voiceProvider.processTurn(turn, providerHooks);
+      if (this.turn !== turn || turn.completing) {
+        return;
+      }
+      turn.completing = true;
+      await this.completeTurnWithProviderResult(turn, providerEvents, providerResult);
+    } catch (error) {
+      turn.status = "error";
+      await closeAssistantAudioStream(turn);
+      await this.recordProviderEvent(turn, providerEvents, "turn_error", {
+        error: cleanError(error),
+      });
+      writeTurnMetadata(turn, {
+        status: "error",
+        error: cleanError(error),
+      });
+      this.sendError(`failed to complete turn: ${cleanError(error)}`);
+    } finally {
+      this.responding = false;
+    }
+  }
+
+  async handleTextTurn(event) {
+    if (this.responding) {
+      this.sendError("turn is already being committed");
+      return;
+    }
+
+    const turn = this.currentTurnFor(event.turn_id);
+    if (!turn) {
+      return;
+    }
+    if (turn.status !== "recording") {
+      this.sendError(`turn is not recordable: ${turn.status}`);
+      return;
+    }
+
+    const text = String(event.text || event.prompt || "").trim().replace(/\s+/g, " ").slice(0, 1000);
+    if (!text) {
+      this.sendError("text_turn requires text");
+      return;
+    }
+    if (!turn.liveSession || typeof turn.liveSession.sendText !== "function") {
+      this.sendError("voice provider does not support text_turn");
+      return;
+    }
+
+    this.responding = true;
+    const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
+    turn.providerEvents = providerEvents;
+
+    try {
+      turn.status = "committed";
+      turn.syntheticText = text;
+      await closeAudioStream(turn);
+      const providerResult = await commitLiveTextSession(turn, text);
       if (this.turn !== turn || turn.completing) {
         return;
       }
@@ -860,6 +921,25 @@ function normalizePlaybackPolicy(policy) {
   };
 }
 
+function effectiveProfileForSession(profile, event) {
+  const base = profile && typeof profile === "object" ? profile : {};
+  const override = event?.profile_override && typeof event.profile_override === "object" && !Array.isArray(event.profile_override)
+    ? event.profile_override
+    : event?.profileOverride && typeof event.profileOverride === "object" && !Array.isArray(event.profileOverride)
+      ? event.profileOverride
+      : {};
+  const next = { ...base };
+  const voice = canonicalVoice(String(override.voice || event?.voice || ""));
+  if (voice) {
+    next.voice = voice;
+  }
+  const modality = String(override.response_modality || override.responseModality || "").trim().toLowerCase();
+  if (modality === "speech" || modality === "text" || modality === "auto") {
+    next.response_modality = modality;
+  }
+  return next;
+}
+
 async function closeAudioStream(turn) {
   if (!turn.audioStream) {
     return;
@@ -875,6 +955,11 @@ async function closeAudioStream(turn) {
 
 async function commitLiveSession(turn) {
   turn.liveSession.commit();
+  return turn.liveSession.done;
+}
+
+async function commitLiveTextSession(turn, text) {
+  turn.liveSession.sendText(text);
   return turn.liveSession.done;
 }
 

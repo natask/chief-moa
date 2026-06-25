@@ -90,6 +90,7 @@ public final class OverlayService extends Service {
     private Runnable pendingContinuousVoiceRestart;
     private MoaVoiceController voiceController;
     private MoaStreamingVoiceSessionController streamingVoiceController;
+    private MoaVoiceSamplePlayer voiceSamplePlayer;
     private boolean panelOpen;
     private boolean nextVoiceRunsAgent;
     private static volatile boolean running;
@@ -224,6 +225,10 @@ public final class OverlayService extends Service {
         if (streamingVoiceController != null) {
             streamingVoiceController.destroy();
             streamingVoiceController = null;
+        }
+        if (voiceSamplePlayer != null) {
+            voiceSamplePlayer.destroy();
+            voiceSamplePlayer = null;
         }
         super.onDestroy();
     }
@@ -841,7 +846,7 @@ public final class OverlayService extends Service {
         cancelAutoDismiss();
         pendingAutoDismiss = () -> {
             pendingAutoDismiss = null;
-            if (!streamingVoiceActive() && !voiceController.isActive()) {
+            if (!streamingVoiceActive() && !voiceController.isActive() && voiceSamplePlayer == null) {
                 removeTranscriptOverlay();
             }
         };
@@ -1233,12 +1238,100 @@ public final class OverlayService extends Service {
             setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
         }
         trackAgentRunsFromResponse(response);
+        boolean samplingVoices = maybeStartVoiceSampler(response, fromVoice);
+        if (samplingVoices) {
+            shouldSpeak = false;
+            speaking = true;
+        }
         if (shouldSpeak && MoaPrefs.spokenRepliesEnabled(this) && voiceController.isIdle()) {
             speaking = voiceController.speak(speakText);
         }
         if (fromVoice && !speaking) {
             holdVoiceReplyThenContinueOrDismiss();
         }
+    }
+
+    private boolean maybeStartVoiceSampler(JSONObject response, boolean fromVoice) {
+        if (!fromVoice || !MoaPrefs.spokenRepliesEnabled(this)) {
+            return false;
+        }
+        JSONObject sampler = voiceSamplerActionFrom(response);
+        if (sampler == null) {
+            return false;
+        }
+        JSONArray voices = sampler.optJSONArray("voices");
+        if (voices == null || voices.length() == 0) {
+            return false;
+        }
+        if (voiceSamplePlayer != null) {
+            voiceSamplePlayer.destroy();
+            voiceSamplePlayer = null;
+        }
+        loadSettings();
+        final int total = voices.length();
+        voiceSamplePlayer = new MoaVoiceSamplePlayer(gatewayUrl, gatewayToken, conversationId, voices, new MoaVoiceSamplePlayer.Callback() {
+            @Override
+            public void onSampleStarted(String voiceId, int index, int total) {
+                mainHandler.post(() -> {
+                    updateVoiceAssistantTranscript("Sampling " + voiceId + " (" + index + "/" + total + ")");
+                    setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
+                    updateMicState();
+                });
+            }
+
+            @Override
+            public void onSampleText(String voiceId, String text) {
+                mainHandler.post(() -> {
+                    if (!safe(text).isEmpty()) {
+                        updateVoiceAssistantTranscript(text);
+                    }
+                });
+            }
+
+            @Override
+            public void onSampleDone(String voiceId, int index, int total) {
+            }
+
+            @Override
+            public void onComplete() {
+                mainHandler.post(() -> {
+                    voiceSamplePlayer = null;
+                    updateVoiceAssistantTranscript("Voice sampler finished.");
+                    setVoiceRuntimeState(VoiceRuntimeState.READY);
+                    holdVoiceReplyThenContinueOrDismiss();
+                });
+            }
+
+            @Override
+            public void onError(String message, Throwable error) {
+                mainHandler.post(() -> {
+                    voiceSamplePlayer = null;
+                    String failure = "Voice sampler failed: " + safe(message);
+                    addMessage(true, failure);
+                    updateVoiceAssistantTranscript(failure);
+                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+                    holdVoiceReplyThenContinueOrDismiss();
+                });
+            }
+        });
+        updateVoiceAssistantTranscript("Starting voice sampler (" + total + " voices).");
+        setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
+        voiceSamplePlayer.start();
+        return true;
+    }
+
+    private JSONObject voiceSamplerActionFrom(JSONObject response) {
+        JSONArray actions = response.optJSONArray("actions");
+        if (actions == null) {
+            return null;
+        }
+        for (int i = 0; i < actions.length(); i++) {
+            JSONObject action = actions.optJSONObject(i);
+            if (action != null && "voice_sampler".equals(action.optString("type", ""))) {
+                return action;
+            }
+        }
+        return null;
     }
 
     private void requestGatewayReply(String userText, boolean fromVoice) {
@@ -1599,7 +1692,7 @@ public final class OverlayService extends Service {
             updateMicState();
             return;
         }
-        if (streamingVoiceActive() || voiceController.isActive() || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
+        if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
             dismissOverlayUi();
             return;
         }
@@ -1611,7 +1704,7 @@ public final class OverlayService extends Service {
     }
 
     private void startPushToTalkVoiceTurn() {
-        if (streamingVoiceActive() || voiceController.isActive() || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
+        if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
             dismissOverlayUi();
         }
         pushToTalkVoiceTurn = true;
@@ -1696,6 +1789,7 @@ public final class OverlayService extends Service {
         if (streamingVoiceActive()) {
             cancelStreamingVoice();
         }
+        cancelVoiceSampler();
         voiceController.stopQuietly();
         removeTranscriptOverlay();
         hideKeyboard();
@@ -1710,6 +1804,7 @@ public final class OverlayService extends Service {
     // but remove large overlay surfaces so settings and operational status are
     // usable without the overlay stealing focus.
     private void collapseInteractiveSurfaces() {
+        cancelVoiceSampler();
         removeTranscriptOverlay();
         hideKeyboard();
         removePanel();
@@ -1731,6 +1826,7 @@ public final class OverlayService extends Service {
         if (streamingVoiceActive()) {
             cancelStreamingVoice();
         }
+        cancelVoiceSampler();
         if (orbView != null) {
             orbView.setHeld(true);
         }
@@ -1759,6 +1855,13 @@ public final class OverlayService extends Service {
             return;
         }
         voiceController.stopQuietly();
+    }
+
+    private void cancelVoiceSampler() {
+        if (voiceSamplePlayer != null) {
+            voiceSamplePlayer.destroy();
+            voiceSamplePlayer = null;
+        }
     }
 
     private void setComposerText(String text) {
@@ -2107,7 +2210,7 @@ public final class OverlayService extends Service {
 
     private void updateMicState() {
         if (orbView != null) {
-            orbView.setListening(voiceController.isActive() || streamingVoiceActive());
+            orbView.setListening(voiceController.isActive() || streamingVoiceActive() || voiceSamplePlayer != null);
         }
     }
 

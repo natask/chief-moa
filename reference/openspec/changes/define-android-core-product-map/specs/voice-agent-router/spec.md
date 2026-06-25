@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Gateway-Owned Voice Classification
-The gateway SHALL classify each completed voice turn into one of `chat`, `agent_run`, `multi_agent`, or `control`.
+The gateway SHALL classify each completed voice turn into one of `chat`, `agent_run`, `multi_agent`, `profile_control`, or `control`.
 
 #### Scenario: Normal question
 - **WHEN** the user submits a spoken question without clear agent-work language
@@ -17,6 +17,14 @@ The gateway SHALL classify each completed voice turn into one of `chat`, `agent_
 - **WHEN** the user explicitly asks for multiple agents or named agent pairs
 - **THEN** the gateway classifies the turn as `multi_agent`
 - **AND** creates more than one run when the configured harnesses are available
+
+#### Scenario: Voice catalog sampling requested
+- **WHEN** the user asks to sample, test, preview, hear, or go through every
+  supported voice
+- **THEN** the gateway classifies the turn as `profile_control`
+- **AND** returns a `voice_sampler` action with all supported voices in provider
+  order and per-voice sample text
+- **AND** does not persist a voice profile change from the sampling request
 
 ### Requirement: Durable Voice Turn Event
 The gateway SHALL store each accepted voice turn as a durable event associated with session, branch, turn, source, transcript, classification, and downstream references.

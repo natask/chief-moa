@@ -60,11 +60,13 @@ async function main() {
     await step("valid voice persists + is_overridden", () => assertValidVoice(baseUrl));
     await step("invalid voice is rejected", () => assertInvalidVoiceRejected(baseUrl));
     await step("spoken assistant-name control persists with terse confirmation", () => assertAssistantNameControl(baseUrl));
+    await step("spoken voice sampler returns all supported voices without persisting", () => assertVoiceSamplerControl(baseUrl));
     await step("health status reflects configured voice", () => assertHealthVoice(baseUrl));
     // Provider-level assertion runs in-process: prove the exact session-config
     // the provider WOULD send to Gemini Live carries the effective voice.
     await step("provider session-config carries the profile voice and language", () => assertProviderSessionConfig(dataDir));
     await step("live transcript profile-control is applied by the gateway", () => assertLiveTranscriptProfileControl(baseUrl, wsUrl, dataDir));
+    await step("text-only voice sample sessions use per-session voice override", () => assertTextOnlyVoiceSampleSession(wsUrl, fakeLive));
 
     console.log(JSON.stringify({
       ok: true,
@@ -75,10 +77,12 @@ async function main() {
         "PUT voice=Aoede persists; GET reflects voice=Aoede + is_overridden=true",
         "PUT voice=Robot (unknown) is rejected; voice stays Aoede",
         "POST /v1/voice/turns 'your name is Moa' persists assistant_name=Moa and replies 'Yes. I am now Moa.'",
+        "POST /v1/voice/turns 'go through all the voices' returns a voice_sampler action with all core voices and no persisted voice change",
         "health voice_stream.provider.voice reflects the configured voice (Aoede)",
         "provider status() + Gemini Live session-config carry the effective voice/language/assistant name; env default when unset",
         "provider session-config preserves requested honorific/style prompt instructions and adds the address-preference rule",
         "a completed Gemini Live transcript 'use the Charon voice' is stored as profile_control, persists voice=Charon, and corrects a provider refusal",
+        "a text_turn sample session sends Gemini clientContent with a session-only voice override",
       ],
     }, null, 2));
   } finally {
@@ -178,6 +182,39 @@ async function assertAssistantNameControl(baseUrl) {
 function assertNoHelpFiller(value) {
   const text = String(value || "").toLowerCase();
   assert.ok(!/how can i help/.test(text), `reply must not contain help filler: ${value}`);
+}
+
+async function assertVoiceSamplerControl(baseUrl) {
+  const before = await getJson(`${baseUrl}/v1/agent/profile`);
+  const beforeVoice = before.profile.voice;
+  const turn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "voice-profile-smoke",
+    turn_id: "voice-sampler",
+    transcript: "go through all the voices and say hello there in every voice",
+    source: "voice-profile-smoke",
+  });
+  assert.equal(turn.status, 200, `voice sampler turn must succeed: ${JSON.stringify(turn.json)}`);
+  assert.equal(turn.json.classification, "profile_control", "voice sampler utterance must route as profile_control");
+  const sampler = turn.json.actions?.find((action) => action.type === "voice_sampler");
+  assert.ok(sampler, `voice sampler action missing: ${JSON.stringify(turn.json.actions)}`);
+  assert.equal(sampler.version, "voice-sampler/v1");
+  assert.equal(sampler.execution_owner, "client_voice_surface");
+  assert.equal(sampler.application?.profile_persisted, false);
+  assert.equal(sampler.application?.applies, "one_live_session_per_sample");
+  assert.equal(sampler.count, 8, `voice sampler must include all 8 voices, got ${sampler.count}`);
+  assert.deepEqual(
+    sampler.voices.map((voice) => voice.id),
+    ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"],
+  );
+  assert.ok(
+    sampler.voices.every((voice) => String(voice.sample_text || "").startsWith(`This is ${voice.id}.`)),
+    `each sample must name its voice: ${JSON.stringify(sampler.voices)}`,
+  );
+  assert.equal(sampler.sample_text, "hello there");
+  assert.match(turn.json.display, /Each sample uses a separate Live voice session/);
+
+  const after = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(after.profile.voice, beforeVoice, "voice sampler must not persist a voice change");
 }
 
 async function assertHealthVoice(baseUrl) {
@@ -408,6 +445,66 @@ async function assertLiveTranscriptProfileControl(baseUrl, wsUrl, dataDir) {
   );
 }
 
+async function assertTextOnlyVoiceSampleSession(wsUrl, fakeLive) {
+  fakeLive.messages.length = 0;
+  const sessionId = "voice_sample_text_smoke";
+  const turnId = "text-voice-sample";
+  const sampleText = "This is Puck. hello there";
+  const ws = await openVoiceClient(wsUrl);
+  try {
+    await sendJsonWs(ws, {
+      type: "session_start",
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: "default",
+      turn_id: turnId,
+      source: "voice-profile-smoke-sampler",
+      profile_override: {
+        voice: "Puck",
+        response_modality: "speech",
+      },
+      format: {
+        encoding: "pcm16",
+        sample_rate: 16000,
+        channels: 1,
+      },
+    });
+    await waitForWsEvent(ws, (event) => event.type === "session_ready" && event.turn_id === turnId);
+    const assistantPromise = waitForWsEvent(ws, (event) => event.type === "assistant_text" && event.turn_id === turnId);
+    const donePromise = waitForWsEvent(ws, (event) => event.type === "turn_done" && event.turn_id === turnId);
+    await sendJsonWs(ws, {
+      type: "text_turn",
+      turn_id: turnId,
+      text: sampleText,
+    });
+    const assistant = await assistantPromise;
+    assert.match(assistant.text, /sampled text turn/i);
+    await donePromise;
+  } finally {
+    closeWebSocketQuietly(ws);
+  }
+
+  const setup = fakeLive.messages.find((message) => message.setup);
+  assert.ok(setup, `fake Live must receive setup, got ${JSON.stringify(fakeLive.messages)}`);
+  assert.equal(
+    setup.setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName,
+    "Puck",
+    "text-only sample session must use the session profile_override voice",
+  );
+  assert.deepEqual(
+    setup.setup.generationConfig.responseModalities,
+    ["AUDIO"],
+    "text-only sample session must force speech output even if durable profile changes later",
+  );
+  const clientContent = fakeLive.messages.find((message) => message.clientContent);
+  assert.ok(clientContent, `fake Live must receive clientContent, got ${JSON.stringify(fakeLive.messages)}`);
+  assert.equal(
+    clientContent.clientContent.turns?.[0]?.parts?.[0]?.text,
+    sampleText,
+    "text_turn must send the sample text to Gemini Live clientContent",
+  );
+}
+
 async function startGateway({ port, dataDir, fakeUrl }) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ["server.js"], {
@@ -446,6 +543,7 @@ function gatewayEnv({ port, dataDir, fakeUrl }) {
 
 async function startFakeLive() {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const messages = [];
   await waitForServerListening(server);
   server.on("connection", (ws) => {
     ws.on("message", (data) => {
@@ -455,8 +553,18 @@ async function startFakeLive() {
       } catch {
         return;
       }
+      messages.push(message);
       if (message.setup) {
         ws.send(JSON.stringify({ setupComplete: {} }));
+        return;
+      }
+      if (message.clientContent) {
+        ws.send(JSON.stringify({
+          serverContent: {
+            outputTranscription: { text: "sampled text turn" },
+            turnComplete: true,
+          },
+        }));
         return;
       }
       if (message.realtimeInput?.audioStreamEnd) {
@@ -472,6 +580,7 @@ async function startFakeLive() {
   });
   return {
     url: `ws://127.0.0.1:${server.address().port}/v1beta/fake-live`,
+    messages,
     close: () => new Promise((resolve, reject) => {
       server.close((error) => {
         if (error) reject(error);

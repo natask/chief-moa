@@ -118,6 +118,16 @@ function parseProfileControlIntent(text) {
     return null;
   }
   const scope = profileScopeFromText(lower);
+  const voiceSampleText = voiceSampleTextFrom(raw);
+  if (wantsVoiceSampling(lower)) {
+    return {
+      action: "sample",
+      subject: "voice_options",
+      summary: "voice sampler",
+      sample_text: voiceSampleText,
+      scope,
+    };
+  }
   const asksForOptions = /\b(?:what|which|list|show|tell me|available|different)\b/.test(lower)
     || /\bcan\s+(?:you|i)\b/.test(lower);
 
@@ -423,8 +433,58 @@ function voiceUpdateFrom(text) {
   return "";
 }
 
+function wantsVoiceSampling(lower) {
+  if (!/\bvoices?\b/.test(lower)) {
+    return false;
+  }
+  if (/\b(?:sample|samples|sampling|test|try|preview|demo|demonstrate|audition|hear)\b[^.]*\bvoices?\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:go|run|walk|cycle)\s+through\b[^.]*\bvoices?\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:all|every|each)\s+(?:of\s+the\s+)?voices?\b/.test(lower)
+    && /\b(?:say|speak|read|play|sample|test|try|preview|demo|go|run|walk|cycle|change|switch)\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:say|speak|read|play)\b[^.]*\b(?:in|with)\s+(?:all|every|each)\s+(?:of\s+the\s+)?voices?\b/.test(lower)) {
+    return true;
+  }
+  if (/\bvoices?\b[^.]*\b(?:one\s+after\s+(?:the\s+)?other|one\s+by\s+one|in\s+order|sequentially)\b/.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+function voiceSampleTextFrom(text) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const quoted = raw.match(/["'`](.+?)["'`]/);
+  if (quoted?.[1]) {
+    return normalizeVoiceSampleText(quoted[1]);
+  }
+  const sayMatch = raw.match(/\b(?:say|read|speak)\s+(.+?)\s+(?:in|with)\s+(?:all|every|each)\s+(?:of\s+the\s+)?voices?\b/i);
+  if (sayMatch?.[1]) {
+    return normalizeVoiceSampleText(sayMatch[1]);
+  }
+  return "";
+}
+
+function normalizeVoiceSampleText(value) {
+  const text = String(value || "")
+    .trim()
+    .replace(/^["'`]+|["'`.!,?;:]+$/g, "")
+    .replace(/\s+/g, " ");
+  if (!text || /^(?:something|anything|a thing|one thing|some text)$/i.test(text)) {
+    return "";
+  }
+  return text.slice(0, 220);
+}
+
 function needsVoiceChoice(lower) {
-  return /\b(?:change|switch|set|choose|pick|select|use|make)\b[^.]*\b(?:your\s+|the\s+|my\s+)?voice\b/.test(lower)
+  return /\b(?:change|switch|set|choose|pick|select|use|make)\b[^.]*\b(?:your\s+|the\s+|my\s+)?voices?\b/.test(lower)
     || /\b(?:different|another|new)\s+voice\b/.test(lower)
     || /\bvoice\b[^.]*\b(?:different|another|new)\b/.test(lower);
 }
