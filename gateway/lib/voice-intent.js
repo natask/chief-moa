@@ -197,6 +197,15 @@ function parseProfileControlIntent(text) {
     };
   }
 
+  if (needsVoiceChoice(lower)) {
+    return {
+      action: "clarify",
+      subject: "voice",
+      summary: "voice",
+      scope,
+    };
+  }
+
   return null;
 }
 
@@ -412,6 +421,12 @@ function voiceUpdateFrom(text) {
     if (/\b(male|man|guy|masculine|boy)\b/i.test(raw)) return MALE_VOICE;
   }
   return "";
+}
+
+function needsVoiceChoice(lower) {
+  return /\b(?:change|switch|set|choose|pick|select|use|make)\b[^.]*\b(?:your\s+|the\s+|my\s+)?voice\b/.test(lower)
+    || /\b(?:different|another|new)\s+voice\b/.test(lower)
+    || /\bvoice\b[^.]*\b(?:different|another|new)\b/.test(lower);
 }
 
 // Route a voice turn. `body` may carry forced_action / intent_hint to override.

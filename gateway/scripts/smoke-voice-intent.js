@@ -71,6 +71,8 @@ assert.strictEqual(classifyVoiceTurn({}, "what language settings are active"), "
 assert.strictEqual(classifyVoiceTurn({}, "what languages can you speak"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what voices can you use"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "use the Kore voice on this device"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "change your voice"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "change my voice"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
 
 const optionsPayload = profileOptionsPayload();
@@ -161,6 +163,12 @@ assert.equal(deviceScopedVoice.scope, "device");
 assert.deepStrictEqual(deviceScopedVoice.patch, { voice: "Kore" });
 assert.deepStrictEqual(parseProfileControlIntent("use a feminine voice").patch, { voice: "Aoede" });
 assert.deepStrictEqual(parseProfileControlIntent("use a masculine voice").patch, { voice: "Charon" });
+assert.deepStrictEqual(parseProfileControlIntent("change your voice"), {
+  action: "clarify",
+  subject: "voice",
+  summary: "voice",
+  scope: "global",
+});
 
 const globalScopedLanguage = parseProfileControlIntent("respond in English on all devices");
 assert.equal(globalScopedLanguage.scope, "global");

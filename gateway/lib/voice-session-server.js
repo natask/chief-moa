@@ -512,7 +512,18 @@ class VoiceSessionConnection {
     if (transcript && !providerEvents.transcriptFinalSent) {
       await providerHooks.onTranscriptFinal(transcript);
     }
-    if (assistantText && !providerEvents.assistantTextSent) {
+
+    const canonicalRecord = await this.recordCompletedTurn(turn, providerResult, {
+      transcript,
+      assistantText,
+      assistantAudioFormat,
+    });
+    const profileControlText = profileControlAssistantText(canonicalRecord);
+    if (profileControlText) {
+      if (String(providerEvents.assistantText || "").trim() !== profileControlText) {
+        await providerHooks.onAssistantText(profileControlText);
+      }
+    } else if (assistantText && !providerEvents.assistantTextSent) {
       await providerHooks.onAssistantText(assistantText);
     }
     if (providerEvents.assistantAudioStarted && !providerEvents.assistantAudioDone) {
@@ -521,11 +532,7 @@ class VoiceSessionConnection {
     await this.recordProviderEvent(turn, providerEvents, "turn_completed", {
       transcript,
       assistant_text: assistantText,
-    });
-    await this.recordCompletedTurn(turn, providerResult, {
-      transcript,
-      assistantText,
-      assistantAudioFormat,
+      gateway_assistant_text: profileControlText || "",
     });
     await this.sendEvent({
       type: "turn_done",
@@ -567,7 +574,7 @@ class VoiceSessionConnection {
     }
     turn.recordedCanonical = true;
     try {
-      await this.onTurnCompleted({
+      return await this.onTurnCompleted({
         session_id: turn.sessionId,
         conversation_id: turn.conversationId || turn.sessionId,
         branch_id: turn.branchId || "default",
@@ -602,16 +609,17 @@ class VoiceSessionConnection {
       writeTurnMetadata(turn, {
         canonical_record_error: cleanError(error),
       });
+      return null;
     }
   }
 
   async recordCompletedTurn(turn, providerResult, completed) {
     if (!this.onTurnCompleted) {
-      return;
+      return null;
     }
     turn.recordedCanonical = true;
     try {
-      await this.onTurnCompleted({
+      return await this.onTurnCompleted({
         session_id: turn.sessionId,
         conversation_id: turn.conversationId || turn.sessionId,
         branch_id: turn.branchId || "default",
@@ -645,6 +653,7 @@ class VoiceSessionConnection {
       writeTurnMetadata(turn, {
         canonical_record_error: cleanError(error),
       });
+      return null;
     }
   }
 
@@ -809,6 +818,16 @@ class VoiceSessionConnection {
       message,
     }));
   }
+}
+
+function profileControlAssistantText(record) {
+  if (!record || typeof record !== "object") {
+    return "";
+  }
+  if (record.classification !== "profile_control" && record.response?.classification !== "profile_control") {
+    return "";
+  }
+  return String(record.response?.display || record.response?.speak || record.display || record.speak || "").trim();
 }
 
 function normalizeFormat(format) {

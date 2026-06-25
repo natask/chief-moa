@@ -2554,6 +2554,21 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     };
   }
 
+  if (intent.action === "clarify") {
+    const message = profileClarificationText(intent.subject, profileOptions);
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak: message,
+        display: message,
+        actions: [{ type: "profile_clarification", subject: intent.subject }],
+        follow_up_expected: true,
+      }),
+      profile_version: agentProfile.currentVersion(profileOptions),
+      profile: agentProfileRuntimeStatus(profileOptions),
+    };
+  }
+
   const before = agentProfile.effective(profileOptions);
   const beforeVersion = agentProfile.currentVersion(profileOptions);
   agentProfile.patch(intent.patch, {
@@ -2632,6 +2647,16 @@ function profileSummaryText(subject, options = {}) {
     return `Profile ${version}. Tool policy is ${profile.tool_policy}; autonomy is ${profile.autonomy_level}.`;
   }
   return `Profile ${version} is active.`;
+}
+
+function profileClarificationText(subject, options = {}) {
+  if (subject === "voice") {
+    const version = agentProfile.currentVersion(options);
+    const scopeText = options.scope === "device" ? "on this device" : "on all devices";
+    const voices = voiceOptionsPayload().map((voice) => voice.id).join(", ");
+    return `I can change my voice ${scopeText}. Pick one of: ${voices}. You can also say masculine or feminine. Profile version is ${version}.`;
+  }
+  return "Tell me which profile setting to change.";
 }
 
 async function callModel(messages, profile) {
@@ -3847,8 +3872,9 @@ async function recordStreamingVoiceTurn(turn) {
   const conversationId = sanitizeOptionalId(turn.conversation_id || sessionId, sessionId);
   const branchId = sanitizeOptionalId(turn.branch_id, "default");
   const turnId = sanitizeOptionalId(turn.turn_id, randomId("turn"));
-  if (readVoiceTurnRecord(sessionId, turnId)?.response) {
-    return;
+  const existing = readVoiceTurnRecord(sessionId, turnId);
+  if (existing?.response) {
+    return existing;
   }
 
   const transcript = truncate(String(turn.transcript || ""), 16000);
@@ -3903,7 +3929,7 @@ async function recordStreamingVoiceTurn(turn) {
   if (!incomplete && liveClassification === "profile_control") {
     const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
     const payload = await handleVoiceProfileControl(baseRecord, transcript, profileOptions);
-    writeVoiceTurnRecord({
+    const canonicalRecord = {
       ...baseRecord,
       classification: payload.classification,
       response: payload,
@@ -3912,8 +3938,9 @@ async function recordStreamingVoiceTurn(turn) {
         profile_version: payload.profile_version,
         from_profile_version: profileVersion,
       },
-    });
-    return;
+    };
+    writeVoiceTurnRecord(canonicalRecord);
+    return canonicalRecord;
   }
 
   const payload = voiceTurnPayload(baseRecord, {
@@ -3922,11 +3949,13 @@ async function recordStreamingVoiceTurn(turn) {
     actions: [],
     follow_up_expected: false,
   });
-  writeVoiceTurnRecord({
+  const canonicalRecord = {
     ...baseRecord,
     response: payload,
     references: voiceSessionReferences,
-  });
+  };
+  writeVoiceTurnRecord(canonicalRecord);
+  return canonicalRecord;
 }
 
 function voiceLiveContextPrompt(turn) {

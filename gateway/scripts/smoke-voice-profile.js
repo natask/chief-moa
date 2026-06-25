@@ -78,7 +78,7 @@ async function main() {
         "health voice_stream.provider.voice reflects the configured voice (Aoede)",
         "provider status() + Gemini Live session-config carry the effective voice/language/assistant name; env default when unset",
         "provider session-config preserves requested honorific/style prompt instructions and adds the address-preference rule",
-        "a completed Gemini Live transcript 'use the Charon voice' is stored as profile_control and persists voice=Charon",
+        "a completed Gemini Live transcript 'use the Charon voice' is stored as profile_control, persists voice=Charon, and corrects a provider refusal",
       ],
     }, null, 2));
   } finally {
@@ -308,6 +308,14 @@ async function assertProviderSessionConfig(dataDir) {
     "session-config must carry the durable language profile in the system instruction",
   );
   assert.ok(
+    systemText.includes("Never say you cannot change your voice"),
+    "session-config must tell Live voice not to refuse supported profile voice changes",
+  );
+  assert.ok(
+    systemText.includes("Supported voice ids: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr."),
+    "session-config must carry the supported voice catalog in the profile-control instruction",
+  );
+  assert.ok(
     systemText.includes("primary language: en-US"),
     "session-config must name the primary reply language",
   );
@@ -337,6 +345,16 @@ async function assertLiveTranscriptProfileControl(baseUrl, wsUrl, dataDir) {
   const sessionId = "voice_profile_live_smoke";
   const turnId = "live-voice-profile-control";
   const ws = await openVoiceClient(wsUrl);
+  const events = [];
+  const collectEvent = (data, isBinary) => {
+    if (isBinary) return;
+    try {
+      events.push(JSON.parse(Buffer.from(data).toString("utf8")));
+    } catch {
+      // Ignore non-JSON test noise.
+    }
+  };
+  ws.on("message", collectEvent);
   try {
     await sendJsonWs(ws, {
       type: "session_start",
@@ -356,6 +374,7 @@ async function assertLiveTranscriptProfileControl(baseUrl, wsUrl, dataDir) {
     await sendJsonWs(ws, { type: "commit_turn", turn_id: turnId });
     await waitForWsEvent(ws, (event) => event.type === "turn_done" && event.turn_id === turnId);
   } finally {
+    ws.off("message", collectEvent);
     closeWebSocketQuietly(ws);
   }
 
@@ -372,6 +391,21 @@ async function assertLiveTranscriptProfileControl(baseUrl, wsUrl, dataDir) {
     `canonical Live response must include a profile_update action, got ${JSON.stringify(record.response?.actions)}`,
   );
   assert.equal(record.references?.voice_session?.provider, "gemini-live", "canonical Live turn must preserve provider session reference");
+  const assistantTexts = events
+    .filter((event) => event.type === "assistant_text" && event.turn_id === turnId)
+    .map((event) => String(event.text || ""));
+  assert.ok(
+    assistantTexts.some((text) => text.includes("I can't change my voice")),
+    `fake provider refusal should be observed before correction, got ${JSON.stringify(assistantTexts)}`,
+  );
+  assert.ok(
+    assistantTexts.some((text) => text.includes("Updated voice Charon")),
+    `gateway must send deterministic profile-control correction, got ${JSON.stringify(assistantTexts)}`,
+  );
+  assert.ok(
+    !String(assistantTexts[assistantTexts.length - 1] || "").includes("can't change my voice"),
+    `last assistant_text must not be the provider refusal, got ${JSON.stringify(assistantTexts)}`,
+  );
 }
 
 async function startGateway({ port, dataDir, fakeUrl }) {
@@ -429,7 +463,7 @@ async function startFakeLive() {
         ws.send(JSON.stringify({
           serverContent: {
             inputTranscription: { text: "use the Charon voice" },
-            outputTranscription: { text: "Updated." },
+            outputTranscription: { text: "I can't change my voice." },
             turnComplete: true,
           },
         }));

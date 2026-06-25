@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { WebSocket } = require("ws");
 const { safeSystemPromptForProvider } = require("./agent-profile");
+const { voiceOptionsPayload } = require("./profile-options");
 
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
@@ -689,6 +690,7 @@ class GeminiLiveVoiceProvider {
       safeSystemPromptForProvider(effectiveProfile, this.systemPrompt),
       profileIdentityInstruction(effectiveProfile),
       missionAccessInstruction(),
+      profileControlInstruction(effectiveProfile),
       profileLanguageInstruction(effectiveProfile),
       "If the user tells you to stop, shut up, be quiet, hush, or not to speak, stop talking immediately and say nothing — do not acknowledge it, just go silent.",
       modality === "text"
@@ -1595,6 +1597,21 @@ function missionAccessInstruction() {
     "- do not claim an action is done until the owning device, gateway, or integration returns a receipt",
     "- server/model output remains a proposal; local devices still own permissions, approvals, execution, and receipts",
   ].join("\n");
+}
+
+function profileControlInstruction(profile) {
+  const currentVoice = String(profile?.voice || "").trim();
+  const voices = voiceOptionsPayload().map((voice) => voice.id).join(", ");
+  return [
+    "Moa profile-control tools:",
+    "- You can change your own durable voice, assistant name, language, and response modality by calling update_agent_profile.",
+    "- Never say you cannot change your voice when the user asks for a supported voice or profile change.",
+    "- If the user names a supported voice, or says masculine/feminine, call update_agent_profile with the concrete voice id. Masculine maps to Charon; feminine maps to Aoede.",
+    "- If the user asks to change voices but does not say which one, ask which supported voice they want or call get_profile_options.",
+    "- Voice changes are persisted by the gateway profile store and normally apply to the next Live turn/session, not to audio that is already being spoken.",
+    `- Supported voice ids: ${voices}.`,
+    currentVoice ? `- Current configured voice: ${currentVoice}.` : "",
+  ].filter(Boolean).join("\n");
 }
 
 function profileLanguageInstruction(profile) {
