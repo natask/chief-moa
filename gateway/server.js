@@ -2337,10 +2337,11 @@ async function handleVoiceTurn(request, response) {
 
   if (classification === "agent_run" || classification === "multi_agent") {
     if (!authorizedAgent(request)) {
+      const message = "Hey, I would like to do that, but I need you to give me access to the Aggie gateway token.";
       const payload = voiceTurnPayload(baseRecord, {
         classification: "agent_run_blocked",
-        speak: "Agent runs need the gateway token.",
-        display: "Agent runs need the gateway token.",
+        speak: message,
+        display: message,
         actions: [],
         follow_up_expected: false,
       });
@@ -2450,7 +2451,7 @@ async function handleVoiceTurn(request, response) {
     });
     sendJson(response, 200, payload);
   } catch (error) {
-    const fallback = "Gateway could not answer that voice turn.";
+    const fallback = "Hey, I would like to answer that, but I need you to give me access to a configured model provider on the gateway.";
     const payload = voiceTurnPayload(baseRecord, {
       classification: "error",
       speak: fallback,
@@ -2758,15 +2759,15 @@ function gatewayTimeZone() {
 function gatewayFallbackReply(prompt) {
   const lower = normalizeSpeech(prompt);
   if (lower.includes("gateway") || lower.includes("server")) {
-    return "The gateway is running, but no model provider is configured. I can still store voice turns and route explicit agent runs.";
+    return "Yes. The gateway is running. Hey, I would like to answer with the model too, but I need you to give me access to a configured model provider.";
   }
   if (lower.includes("agent") || lower.includes("run") || lower.includes("build") || lower.includes("fix")) {
-    return "I can route that as an agent run when the gateway token and harness are enabled.";
+    return "Yes. I can route that as an agent run when you give me access to the gateway token and an enabled harness.";
   }
   if (lower.includes("voice") || lower.includes("talk") || lower.includes("transcript")) {
-    return "Voice capture is working through the Android overlay. The server router is ready; configure a model provider for full chat answers.";
+    return "Yes. Voice capture is working through the overlay. Hey, I would like to answer fully, but I need you to give me access to a configured model provider.";
   }
-  return "I heard you. The local gateway is running without a model provider, so I saved the turn and can route explicit agent work.";
+  return "Yes. I heard you and saved the turn. Hey, I would like to answer fully, but I need you to give me access to a configured model provider.";
 }
 
 function createAgentRun(body) {
@@ -3817,6 +3818,7 @@ function recordStreamingVoiceTurn(turn) {
 
   const transcript = truncate(String(turn.transcript || ""), 16000);
   const assistantText = String(turn.assistant_text || "").trim();
+  const deviceId = normalizeDeviceId(turn.device_id || turn.deviceId || "");
   // Capture memory-worthy statements ("my name is X", "remember that …") from
   // live voice transcripts the same way the HTTP voice-turn handler does, so
   // identity and preference facts are stored regardless of the voice path used.
@@ -3835,6 +3837,7 @@ function recordStreamingVoiceTurn(turn) {
     conversation_id: conversationId,
     branch_id: branchId,
     profile_version: profileVersion,
+    device_id: deviceId,
     source: String(turn.source || "android-overlay").slice(0, 80),
     transcript,
     classification: incomplete ? "interrupted" : "chat",
@@ -3872,6 +3875,7 @@ function recordStreamingVoiceTurn(turn) {
 function voiceLiveContextPrompt(turn) {
   const sessionId = sanitizeOptionalId(turn.session_id || turn.conversation_id, "default");
   const branchId = sanitizeOptionalId(turn.branch_id, "default");
+  const deviceId = normalizeDeviceId(turn.device_id || turn.deviceId || "");
   const allBranches = turn.all_branches_context === true || turn.allBranchesContext === true;
   const branchFilter = allBranches ? "" : branchId;
   const records = listVoiceTurnRecordsForSession(sessionId, branchFilter).slice(-10);
@@ -3930,10 +3934,10 @@ function voiceLiveContextPrompt(turn) {
       lines.push(`- ${task.id}: ${task.status} url=${task.url || "(current tab)"} instruction=${truncate(String(task.instruction || ""), 240)}`);
     }
   }
-  const profile = agentProfileRuntimeStatus();
+  const profile = agentProfileRuntimeStatus({ scope: deviceId ? "device" : "global", deviceId });
   lines.push(
     "",
-    `Active profile: ${profile.current_version}; voice_provider=${profile.providers.voice_provider}; stt=${profile.providers.stt_provider}; reasoning=${profile.providers.reasoning_provider}; tts=${profile.providers.tts_provider}.`
+    `Active profile: ${profile.current_version}; scope=${profile.scope}; device_id=${profile.device_id || ""}; voice=${profile.voice || "default"}; input_languages=${profile.language.input || ""}; reply_languages=${profile.language.allowed || profile.language.primary || ""}; voice_provider=${profile.providers.voice_provider}; stt=${profile.providers.stt_provider}; reasoning=${profile.providers.reasoning_provider}; tts=${profile.providers.tts_provider}.`
   );
   return truncate(lines.join("\n"), 7000);
 }

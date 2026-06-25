@@ -1175,13 +1175,21 @@ class GeminiLiveVoiceProvider {
           },
           {
             name: "update_agent_profile",
-            description: "Change your own durable settings for everyone, every session. CALL THIS YOURSELF, without being told to, whenever the user states a preference about how you behave — especially language. If the user says what language THEY speak ('I only speak French', 'I'm talking to you in Amharic now'), set input_languages. If they ask what language YOU reply in ('speak Spanish', 'answer in English', 'switch to Japanese'), set language + language_primary. The user does not need to name a setting; infer it from natural speech in ANY language and persist it. After calling, confirm briefly in your reply.",
+            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a preference about how you behave — especially voice and language. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. If the user says what language THEY speak ('I only speak French', 'I'm talking to you in Amharic now'), set input_languages. If they ask what language YOU reply in ('speak Spanish', 'answer in English', 'switch to Japanese'), set language + language_primary. The user does not need to name a setting; infer it from natural speech in ANY language and persist it. After calling, confirm briefly in your reply.",
             parameters: {
               type: "OBJECT",
               properties: {
                 profile: {
                   type: "OBJECT",
                   description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". LANGUAGE: `language` and `language_primary` are the language YOU reply in; `input_languages` and `input_language_primary` are the language(s) the USER speaks. Modular STT providers may use input languages as recognition hints; Gemini Live native audio infers input language and receives this as Moa context. All language fields take BCP-47 codes (en-US, fr-FR, es-ES, am-ET, ja-JP, sw-KE, ...); comma-separate multiple. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how you deliver replies — \"text\" (write, do not speak), \"speech\" (speak out loud), or \"auto\" (match the user: typed -> text, spoken -> speech). Set \"text\" when the user says \"respond in text\"/\"stop speaking, just write\"; set \"speech\" when they say \"talk to me\"/\"use your voice\". Other fields: system_prompt, assistant_name, model, temperature, voice (Gemini core-8: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                },
+                scope: {
+                  type: "STRING",
+                  description: "global for all devices, or device for only the current device.",
+                },
+                device_id: {
+                  type: "STRING",
+                  description: "Optional explicit current device id. Usually omit; Moa supplies the current turn's device id.",
                 },
                 reason: {
                   type: "STRING",
