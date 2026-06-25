@@ -54,6 +54,7 @@ final class MoaVoiceController {
     private boolean pendingManualCommit;
     private int listenMode = LISTEN_NONE;
     private String liveTranscript = "";
+    private final MoaSpeechTranscriptAccumulator transcriptAccumulator = new MoaSpeechTranscriptAccumulator();
     private volatile String activeUtteranceId = "";
     private int utteranceSequence;
 
@@ -134,6 +135,7 @@ final class MoaVoiceController {
             return;
         }
         liveTranscript = "";
+        transcriptAccumulator.reset();
         this.manualCommitOnly = manualCommitOnly;
         pendingManualCommit = false;
         callback.onComposerText("");
@@ -149,6 +151,7 @@ final class MoaVoiceController {
             this.manualCommitOnly = false;
             pendingManualCommit = false;
             liveTranscript = "";
+            transcriptAccumulator.reset();
             callback.onVoiceStateChanged();
             callback.onRemoveTranscript();
             callback.onAssistantMessage("Voice could not start: " + cleanError(error) + ".");
@@ -184,6 +187,7 @@ final class MoaVoiceController {
         manualCommitOnly = false;
         pendingManualCommit = false;
         liveTranscript = "";
+        transcriptAccumulator.reset();
         callback.onComposerText("");
         activeUtteranceId = "";
         if (textToSpeech != null) {
@@ -275,6 +279,7 @@ final class MoaVoiceController {
                 callback.onRemoveTranscript();
                 if (mode == LISTEN_COMMAND && isQuietSpeechError(error)) {
                     liveTranscript = "";
+                    transcriptAccumulator.reset();
                     return;
                 }
                 callback.onAssistantMessage("Voice stopped: " + speechError(error) + ". You can still type here.");
@@ -286,6 +291,7 @@ final class MoaVoiceController {
                 listening = false;
                 String text = firstSpeechResult(results);
                 if (mode == LISTEN_COMMAND) {
+                    text = transcriptAccumulator.update(text);
                     if (manualCommitOnly && !pendingManualCommit) {
                         if (!text.isEmpty()) {
                             liveTranscript = text;
@@ -308,7 +314,7 @@ final class MoaVoiceController {
 
             @Override
             public void onPartialResults(Bundle partialResults) {
-                String text = firstSpeechResult(partialResults);
+                String text = transcriptAccumulator.update(firstSpeechResult(partialResults));
                 if (!text.isEmpty()) {
                     liveTranscript = text;
                 }
@@ -340,7 +346,9 @@ final class MoaVoiceController {
         if (text.isEmpty()) {
             text = safe(liveTranscript);
         }
+        text = transcriptAccumulator.update(text);
         liveTranscript = "";
+        transcriptAccumulator.reset();
         callback.onComposerText("");
 
         if (isStopCommand(text)) {
@@ -390,6 +398,7 @@ final class MoaVoiceController {
         manualCommitOnly = false;
         pendingManualCommit = false;
         liveTranscript = "";
+        transcriptAccumulator.reset();
         callback.onVoiceStateChanged();
     }
 

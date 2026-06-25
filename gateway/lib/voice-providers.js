@@ -1738,13 +1738,97 @@ function base64url(value) {
 }
 
 function appendTranscript(current, addition) {
-  const left = String(current || "").trim();
-  const right = String(addition || "").trim();
+  const left = normalizeTranscriptSpaces(current);
+  const right = normalizeTranscriptSpaces(addition);
   if (!right) return left;
   if (!left) return right;
-  if (right.startsWith(left)) return right;
-  if (left.endsWith(right)) return left;
-  return `${left} ${right}`.replace(/\s+/g, " ").trim();
+
+  const leftTokens = transcriptTokens(left);
+  const rightTokens = transcriptTokens(right);
+  if (leftTokens.length && rightTokens.length) {
+    if (sameTranscriptTokens(leftTokens, rightTokens)) {
+      return right.length >= left.length ? right : left;
+    }
+    if (startsWithTranscriptTokens(rightTokens, leftTokens)) {
+      return right;
+    }
+    if (endsWithTranscriptTokens(leftTokens, rightTokens)) {
+      return left;
+    }
+
+    const overlap = transcriptTokenOverlap(leftTokens, rightTokens);
+    if (overlap > 0) {
+      if (overlap >= rightTokens.length) {
+        return left;
+      }
+      return normalizeTranscriptSpaces(`${left} ${right.slice(rightTokens[overlap].start)}`);
+    }
+  }
+
+  return normalizeTranscriptSpaces(`${left} ${right}`);
+}
+
+function transcriptTokenOverlap(left, right) {
+  const max = Math.min(left.length, right.length);
+  for (let count = max; count > 0; count -= 1) {
+    let matches = true;
+    for (let i = 0; i < count; i += 1) {
+      if (left[left.length - count + i].value !== right[i].value) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return count;
+    }
+  }
+  return 0;
+}
+
+function sameTranscriptTokens(left, right) {
+  return left.length === right.length && startsWithTranscriptTokens(left, right);
+}
+
+function startsWithTranscriptTokens(value, prefix) {
+  if (prefix.length > value.length) {
+    return false;
+  }
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (value[i].value !== prefix[i].value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function endsWithTranscriptTokens(value, suffix) {
+  if (suffix.length > value.length) {
+    return false;
+  }
+  const offset = value.length - suffix.length;
+  for (let i = 0; i < suffix.length; i += 1) {
+    if (value[offset + i].value !== suffix[i].value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function transcriptTokens(value) {
+  const tokens = [];
+  const pattern = /[\p{L}\p{N}]+/gu;
+  let match;
+  while ((match = pattern.exec(String(value || "")))) {
+    tokens.push({
+      value: match[0].toLocaleLowerCase("en-US"),
+      start: match.index,
+    });
+  }
+  return tokens;
+}
+
+function normalizeTranscriptSpaces(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
 }
 
 function parseJsonMessage(data) {

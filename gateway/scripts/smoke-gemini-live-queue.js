@@ -30,7 +30,17 @@ async function main() {
       if (message.realtimeInput?.audioStreamEnd) {
         ws.send(JSON.stringify({
           serverContent: {
-            inputTranscription: { text: "hello gateway" },
+            inputTranscription: { text: "the first couple sections are not" },
+          },
+        }));
+        ws.send(JSON.stringify({
+          serverContent: {
+            inputTranscription: { text: "not properly sent" },
+          },
+        }));
+        ws.send(JSON.stringify({
+          serverContent: {
+            inputTranscription: { text: "only the last couple sections get sent" },
             outputTranscription: { text: "ready" },
             modelTurn: {
               parts: [{
@@ -88,7 +98,10 @@ async function main() {
     assert.ok(setupIndex >= 0, "provider must send setup");
     assert.ok(audioIndex > setupIndex, "queued audio must be sent after setup");
     assert.ok(endIndex > audioIndex, "audioStreamEnd must be sent after queued audio");
-    assert.equal(result.transcript, "hello gateway");
+    assert.equal(
+      result.transcript,
+      "the first couple sections are not properly sent only the last couple sections get sent",
+    );
     assert.equal(result.assistant_text, "ready");
     assert.ok(assistantAudioBytes > 0, "inline assistant audio must be forwarded");
     assert.ok(events.some(([type]) => type === "transcript_partial"), "transcript hook must fire");
