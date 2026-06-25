@@ -981,7 +981,7 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
   return tabIds;
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit } = {}) {
   const cfg = await getConfig();
   const ticket = await createVoiceSessionTicket(cfg);
   if (!ticket?.ws_url) throw new Error("gateway did not return a voice session WebSocket URL");
@@ -1000,7 +1000,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
       pendingEvents: [],
       capture: capture || "content-script",
       captureStarted: false,
-      autoCommitEnabled: VOICE_AUTO_COMMIT_ENABLED,
+      autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
       audioStartedAt: 0,
       lastSpeechAt: 0,
       speechMs: 0,
@@ -1882,6 +1882,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       turnId: msg.turnId,
       assistantOverlap: msg.assistantOverlap === true,
       capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
+      autoCommit: msg.autoCommit !== false,
     })
       .then((session) => {
         if (session?.voiceSessionId) {

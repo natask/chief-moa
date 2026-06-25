@@ -105,6 +105,7 @@ public final class OverlayService extends Service {
     private String lastActiveAgentRunId = "";
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
+    private boolean pushToTalkVoiceTurn;
     private boolean pendingContinuousVoiceRestartAfterAudio;
     private boolean streamingAssistantAudioPlaying;
 
@@ -349,7 +350,9 @@ public final class OverlayService extends Service {
                 ORB_WINDOW_DP,
                 ORB_EDGE_MARGIN_DP,
                 this::handleOrbSingleTap,
-                this::handleOrbDoubleTap
+                this::handleOrbDoubleTap,
+                this::handleOrbLongPressStart,
+                this::handleOrbLongPressRelease
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -1595,6 +1598,47 @@ public final class OverlayService extends Service {
         togglePanel();
     }
 
+    private void handleOrbLongPressStart() {
+        if (streamingVoiceActive() || voiceController.isActive() || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
+            dismissOverlayUi();
+        }
+        pushToTalkVoiceTurn = true;
+        voiceController.stopQuietly();
+        if (orbView != null) {
+            orbView.setHeld(true);
+        }
+        nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+        resetVoiceTurnTranscript();
+        showTranscriptOverlay("");
+        setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+        if (streamingVoiceAvailable()) {
+            startStreamingVoiceTurn(false, false);
+            return;
+        }
+        startLocalVoiceTurn();
+    }
+
+    private void handleOrbLongPressRelease() {
+        if (!pushToTalkVoiceTurn) {
+            return;
+        }
+        pushToTalkVoiceTurn = false;
+        if (orbView != null) {
+            orbView.setHeld(false);
+        }
+        if (streamingVoiceActive() && streamingVoiceController != null) {
+            commitStreamingVoiceTurnNow();
+            return;
+        }
+        if (voiceController.isCommandListening()) {
+            voiceController.commitCurrentSpeech();
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            updateMicState();
+            return;
+        }
+        updateMicState();
+    }
+
     private void commitStreamingVoiceTurnNow() {
         MoaStreamingVoiceSessionController controller = streamingVoiceController;
         if (controller == null) {
@@ -1645,6 +1689,7 @@ public final class OverlayService extends Service {
     // Close every overlay surface except the orb: the chat panel, the voice
     // transcript card, and any live voice turn. Hide the keyboard too.
     private void dismissOverlayUi() {
+        pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
@@ -1677,6 +1722,7 @@ public final class OverlayService extends Service {
     // continuous streaming loop: speak, pause, let silence commit the turn, hear
     // the reply, then the mic re-arms. Tap the orb to stop/collapse it.
     private void handleOrbDoubleTap() {
+        pushToTalkVoiceTurn = false;
         if (!streamingVoiceAvailable()) {
             handleLocalVoiceDoubleTap();
             return;
@@ -1736,6 +1782,7 @@ public final class OverlayService extends Service {
     }
 
     private void cancelStreamingVoice() {
+        pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {

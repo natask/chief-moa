@@ -86,6 +86,15 @@ text-to-speech as the production voice path.
 - **AND** conversation mode re-arms listening after the assistant reply unless
   the user explicitly stops it
 
+#### Scenario: Browser mark push-to-talk commits on release
+- **WHEN** the user presses and holds the browser Moa mark
+- **THEN** the extension starts a manual gateway voice session
+- **AND** the browser background worker disables silence auto-commit for that
+  session
+- **AND** releasing the mark commits the current speech turn immediately
+- **AND** the manual turn does not re-arm the microphone after the assistant
+  reply
+
 #### Scenario: Browser voice sends current speech on mark click
 - **WHEN** the user starts a browser voice turn and clicks the Moa mark once
   while the extension is listening

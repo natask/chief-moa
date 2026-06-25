@@ -23,6 +23,18 @@ The overlay SHALL make the primary voice loop available through simple orb gestu
 - **THEN** the app starts the continuous streaming voice loop
 - **AND** displays a live transcript overlay
 
+#### Scenario: Long press push-to-talk
+- **WHEN** the user long presses the orb while no voice turn is active
+- **THEN** the app starts a push-to-talk voice turn
+- **AND** displays a live transcript overlay
+- **AND** releasing the orb submits the best available speech without waiting
+  for the continuous-loop silence timeout
+
+#### Scenario: Continuous loop commits after short silence
+- **WHEN** the user double taps the orb and speaks a short utterance
+- **THEN** the app auto-submits after a short post-speech silence window
+- **AND** keeps the continuous loop eligible to re-arm after the assistant reply
+
 #### Scenario: Single tap while listening
 - **WHEN** the user single taps the orb while the voice loop is listening
 - **THEN** the app submits the best available transcript

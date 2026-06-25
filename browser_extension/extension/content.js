@@ -25,6 +25,9 @@
     conversationActive = false,
     dragState = null,
     clickTimer = null,
+    holdToTalkTimer = null,
+    holdToTalkActive = false,
+    holdToTalkPointerId = null,
     suppressLauncherClick = false,
     // The Aggie mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
@@ -32,6 +35,7 @@
   const assistantPlaybackSources = new Set();
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
+  const PUSH_TO_TALK_HOLD_MS = 120;
   let browserAgentOwner = null;
   let browserAgentOwnerState = "unknown";
   let assistantSpeechOverlap = false;
@@ -187,7 +191,7 @@
     root.id = "agee-root";
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <button id="agee-launcher" type="button" title="Click to type · double-click to talk" aria-label="Aggie">
+      <button id="agee-launcher" type="button" title="Hold to talk · click to type" aria-label="Aggie">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
@@ -327,6 +331,7 @@
       top: rect.top,
       moved: false,
     };
+    scheduleLauncherPushToTalk(e);
     launcher.setPointerCapture(e.pointerId);
     launcher.addEventListener("pointermove", moveLauncherDrag);
     launcher.addEventListener("pointerup", stopLauncherDrag);
@@ -335,24 +340,78 @@
 
   function moveLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
+    if (holdToTalkActive && e.pointerId === holdToTalkPointerId) return;
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
-    if (Math.abs(dx) + Math.abs(dy) > 4) dragState.moved = true;
+    if (Math.abs(dx) + Math.abs(dy) > 4) {
+      dragState.moved = true;
+      cancelLauncherPushToTalk();
+    }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
   }
 
   function stopLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
+    const wasHoldToTalk = holdToTalkActive && e.pointerId === holdToTalkPointerId;
     const moved = dragState.moved;
     dragState = null;
     launcher.releasePointerCapture(e.pointerId);
     launcher.removeEventListener("pointermove", moveLauncherDrag);
     launcher.removeEventListener("pointerup", stopLauncherDrag);
     launcher.removeEventListener("pointercancel", stopLauncherDrag);
+    cancelLauncherPushToTalk();
+    if (wasHoldToTalk) {
+      finishLauncherPushToTalk();
+      suppressLauncherClick = true;
+      return;
+    }
     if (moved) {
       const rect = launcher.getBoundingClientRect();
       placeLauncher(rect.left, rect.top, true);
       suppressLauncherClick = true;
+    }
+  }
+
+  function scheduleLauncherPushToTalk(e) {
+    cancelLauncherPushToTalk();
+    holdToTalkPointerId = e.pointerId;
+    holdToTalkTimer = setTimeout(() => {
+      holdToTalkTimer = null;
+      if (!dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
+      holdToTalkActive = true;
+      suppressLauncherClick = true;
+      if (clickTimer) {
+        clearTimeout(clickTimer);
+        clickTimer = null;
+      }
+      startLauncherPushToTalk();
+    }, PUSH_TO_TALK_HOLD_MS);
+  }
+
+  function cancelLauncherPushToTalk() {
+    if (holdToTalkTimer) {
+      clearTimeout(holdToTalkTimer);
+      holdToTalkTimer = null;
+    }
+    if (!holdToTalkActive) holdToTalkPointerId = null;
+  }
+
+  function startLauncherPushToTalk() {
+    openTextSurface({ fresh: false });
+    primeAudio();
+    if (liveVoice) stopLiveVoiceTurn("cancel");
+    startLiveVoiceTurn({
+      preserveAssistantPlayback: assistantSpeechOverlap === true,
+      conversation: false,
+      autoCommit: false,
+    });
+  }
+
+  function finishLauncherPushToTalk() {
+    holdToTalkActive = false;
+    holdToTalkPointerId = null;
+    if (liveVoice && listening) {
+      commitLiveVoiceTurn();
     }
   }
 
@@ -896,6 +955,7 @@
     }
     openTextSurface({ fresh: false });
     conversationActive = true;
+    if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
     createCue(cueId, "", { presentation: "icon" });
     setVoiceState(true);
@@ -928,6 +988,7 @@
         turnId: state.turnId,
         assistantOverlap: assistantSpeechOverlap === true,
         capture: "extension-offscreen",
+        autoCommit: options.autoCommit !== false,
       });
       if (extensionContextInvalidated) {
         stopLiveVoiceState(state, "context invalidated");
@@ -939,6 +1000,7 @@
         throw new Error(session?.error || "gateway did not open a voice session");
       }
       attachLiveVoiceSession(state, session.voiceSessionId);
+      if (state.commitWhenReady) commitLiveVoiceTurn();
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
     }
@@ -1082,7 +1144,7 @@
         if (!res?.ok) finishLiveVoiceError(state, res?.error || "Live voice connection was not open.");
       }).catch((error) => finishLiveVoiceError(state, String(error?.message || error)));
     } else {
-      finishLiveVoiceError(state, "Live voice connection was not open.");
+      state.commitWhenReady = true;
     }
   }
 

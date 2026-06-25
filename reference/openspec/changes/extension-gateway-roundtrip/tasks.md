@@ -15,3 +15,6 @@
       old-tab voice/task cues on transfer, prefer the owner tab for queued
       browser tasks, and verify with a two-tab real-extension smoke. Verified
       by `cd browser_extension && npm run verify && npm run smoke`.
+- [x] 1.12 Add manual browser mark push-to-talk: holding the mark starts a
+      gateway voice session with browser silence auto-commit disabled, releasing
+      the mark commits the turn, and the manual turn does not re-arm the mic.

@@ -58,22 +58,27 @@ matches the proposal.
 ```text
 Hold the orb (push-to-talk)
   -> Android captures either a SpeechRecognizer transcript or PCM16 audio chunks
-  -> release sends the turn: POST /v1/voice/turns or WS /v1/voice/sessions
+  -> release sends the turn immediately: POST /v1/voice/turns or WS /v1/voice/sessions
   -> gateway routes through configured provider packages
   -> gateway returns speak/display text or transcript + assistant audio chunks
   -> phone updates transcript/chat and may speak or play the short response
 ```
 
-Orb gestures (overlay): double-tap starts a continuous streaming voice loop;
+Orb gestures (overlay): press-and-hold is the manual first path; recording starts
+after a short hold threshold and release commits the turn without waiting for
+silence detection. Double-tap starts an optional continuous streaming voice loop;
 silence commits each turn and the mic re-arms after the reply. A quick tap sends
 the current speech while the loop is listening; otherwise it opens or collapses
 the typing/voice surface. Drag repositions. The browser extension
 mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
 Cmd+. (Ctrl+.) wakes voice. Browser voice auto-commits after speech silence and
 then re-arms while conversation mode is active; one click on the Moa mark while
-listening commits the current captured speech immediately. Browser voice can opt
-a session into background assistant speech, where starting a new spoken turn
-opens a new gateway voice turn without stopping already queued assistant audio.
+listening commits the current captured speech immediately. Press-and-hold on the
+browser mark starts a manual voice session with browser silence auto-commit
+disabled, and release commits the turn without re-arming the mic. Browser voice
+can opt a session into background assistant speech, where starting a new spoken
+turn opens a new gateway voice turn without stopping already queued assistant
+audio.
 
 The overlay surface stays small: it shows the current intent/result and compact
 run state, not a full scrollback manager. Browser text replies render in the
