@@ -34,6 +34,8 @@ const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
 const VOICE_AUTO_COMMIT_MAX_RECORDING_MS = 18000;
 const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
 const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
+const VOICE_PREROLL_MAX_MS = 30000;
+const MAX_PENDING_VOICE_AUDIO_BYTES = 16000 * 2 * (VOICE_PREROLL_MAX_MS / 1000);
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
 
@@ -169,6 +171,23 @@ async function executeBrowserToolRequest(request) {
   const tool = String(request?.tool || "");
   const input = request?.input && typeof request.input === "object" ? request.input : {};
   try {
+    if (tool === "browser.tab.list") {
+      const tabs = await chrome.tabs.query({ currentWindow: input.current_window !== false });
+      return {
+        ok: true,
+        summary: `Browser has ${tabs.length} tabs in scope.`,
+        result: {
+          tabs: tabs.map((tab) => ({
+            tab_id: tab.id || null,
+            window_id: tab.windowId || null,
+            active: tab.active === true,
+            title: tab.title || "",
+            url: tab.url || "",
+          })),
+        },
+        local_receipt: { tool, success: true },
+      };
+    }
     if (tool === "browser.tab.open") {
       const url = allowedBrowserTaskUrl(input.url || input.href || input.target);
       if (!url) {
@@ -179,6 +198,48 @@ async function executeBrowserToolRequest(request) {
         ok: true,
         summary: `Browser opened ${tab.url || url}.`,
         result: { tab_id: tab.id || null, url: tab.url || url },
+        local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "browser.tab.activate") {
+      const tabId = Number(input.tab_id ?? input.tabId);
+      if (!Number.isFinite(tabId)) {
+        return { ok: false, error: "browser.tab.activate requires tab_id", summary: "Browser tab activate request was missing a tab id." };
+      }
+      const tab = await chrome.tabs.update(tabId, { active: true });
+      if (tab?.windowId != null) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+      return {
+        ok: true,
+        summary: `Activated browser tab ${tabId}.`,
+        result: { tab_id: tabId, title: tab?.title || "", url: tab?.url || "" },
+        local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "browser.tab.close") {
+      const tabIds = Array.isArray(input.tab_ids)
+        ? input.tab_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+        : [Number(input.tab_id ?? input.tabId)].filter((value) => Number.isFinite(value));
+      if (!tabIds.length) {
+        return { ok: false, error: "browser.tab.close requires tab_id", summary: "Browser tab close request was missing a tab id." };
+      }
+      await chrome.tabs.remove(tabIds);
+      return {
+        ok: true,
+        summary: `Closed ${tabIds.length} browser tab${tabIds.length === 1 ? "" : "s"}.`,
+        result: { tab_ids: tabIds },
+        local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "browser.tab.reload") {
+      const tabId = Number(input.tab_id ?? input.tabId);
+      if (!Number.isFinite(tabId)) {
+        return { ok: false, error: "browser.tab.reload requires tab_id", summary: "Browser tab reload request was missing a tab id." };
+      }
+      await chrome.tabs.reload(tabId, { bypassCache: input.bypass_cache === true });
+      return {
+        ok: true,
+        summary: `Reloaded browser tab ${tabId}.`,
+        result: { tab_id: tabId },
         local_receipt: { tool, success: true },
       };
     }
@@ -194,6 +255,23 @@ async function executeBrowserToolRequest(request) {
         summary: `Captured page snapshot for ${snap?.title || active.title || "active tab"}.`,
         result: { screen: snapToScreen(snap) },
         local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "browser.cdp.execute") {
+      const requestedTabId = Number(input.tab_id ?? input.tabId);
+      const tab = Number.isFinite(requestedTabId)
+        ? await chrome.tabs.get(requestedTabId)
+        : (await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []))[0];
+      if (!tab?.id) {
+        return { ok: false, error: "no target tab", summary: "No browser tab was available for CDP execution." };
+      }
+      const actions = Array.isArray(input.cdp_actions) ? input.cdp_actions : Array.isArray(input.actions) ? input.actions : [];
+      const result = await executeCdpActionsOnTab(tab.id, actions);
+      return {
+        ok: result.ok,
+        summary: `Executed ${result.action_results.length} CDP browser action${result.action_results.length === 1 ? "" : "s"} on ${tab.title || "active tab"}.`,
+        result,
+        local_receipt: { tool, success: result.ok },
       };
     }
     if (tool === "browser.task.claim") {
@@ -293,6 +371,66 @@ async function executeGatewayBrowserTask(task) {
         // already gone
       }
     }
+  }
+}
+
+async function executeCdpActionsOnTab(tabId, actions) {
+  let attached = false;
+  const target = { tabId };
+  const actionResults = [];
+  let pageState = null;
+  let screenshot = null;
+  try {
+    await debuggerAttach(target);
+    attached = true;
+    await debuggerSend(target, "Page.enable");
+    await debuggerSend(target, "Runtime.enable");
+    const cdpActions = Array.isArray(actions) && actions.length ? actions : defaultBrowserTaskActions();
+    for (const action of cdpActions) {
+      const method = String(action?.method || "");
+      const params = action?.params && typeof action.params === "object" ? { ...action.params } : {};
+      if (!isAllowedQueuedCdpMethod(method)) {
+        actionResults.push({ method, ok: false, error: "blocked CDP method" });
+        continue;
+      }
+      if (method === "Page.navigate") {
+        const url = allowedBrowserTaskUrl(params.url);
+        if (!url) {
+          actionResults.push({ method, ok: false, error: "blocked or invalid navigation URL" });
+          continue;
+        }
+        params.url = url;
+      }
+      try {
+        const result = await debuggerSend(target, method, params);
+        if (method === "Page.navigate") await waitForBackgroundTabLoad(tabId);
+        if (method === "Page.captureScreenshot") {
+          screenshot = { format: params.format || "png", bytes: result?.data ? result.data.length : 0 };
+        }
+        actionResults.push({ method, ok: true, value: compactCdpResult(result) });
+      } catch (error) {
+        actionResults.push({ method, ok: false, error: String(error?.message || error) });
+      }
+    }
+    pageState = await readCdpPageState(target).catch(() => null);
+    return {
+      ok: actionResults.every((result) => result.ok !== false),
+      tab_id: tabId,
+      action_results: actionResults,
+      page_state: pageState,
+      screenshot,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message || error),
+      tab_id: tabId,
+      action_results: actionResults,
+      page_state: pageState,
+      screenshot,
+    };
+  } finally {
+    if (attached) await debuggerDetach(target);
   }
 }
 
@@ -420,7 +558,12 @@ async function heartbeatDeviceClient() {
 
 function browserLocalToolManifest() {
   return [
+    { tool: "browser.tab.list", risk: "read_only", approval: "none" },
     { tool: "browser.tab.open", risk: "navigation", approval: "implicit_user_command" },
+    { tool: "browser.tab.activate", risk: "navigation", approval: "implicit_user_command" },
+    { tool: "browser.tab.close", risk: "destructive_browser_local", approval: "implicit_user_command" },
+    { tool: "browser.tab.reload", risk: "navigation", approval: "implicit_user_command" },
+    { tool: "browser.cdp.execute", risk: "browser_local_debugger", approval: "implicit_user_command" },
     { tool: "browser.task.claim", risk: "browser_local", approval: "none" },
     { tool: "page.snapshot", risk: "read_only", approval: "none" },
   ];
@@ -1136,6 +1279,11 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
       pendingEvents: [],
       capture: capture || "content-script",
       captureStarted: false,
+      captureStartRequested: false,
+      sessionReady: false,
+      pendingAudio: [],
+      pendingAudioBytes: 0,
+      pendingControlMessage: null,
       autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
       audioStartedAt: 0,
       lastSpeechAt: 0,
@@ -1147,9 +1295,19 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
     };
     voiceSessions.set(id, session);
     ws.binaryType = "arraybuffer";
+    if (session.capture === "extension-offscreen") {
+      session.captureStartRequested = true;
+      startOffscreenVoiceCapture(id)
+        .then(() => {
+          if (voiceSessions.get(id) === session && !session.closed) session.captureStarted = true;
+        })
+        .catch((error) => handleOffscreenVoiceError(id, error));
+    }
 
     const failBeforeOpen = (message) => {
       voiceSessions.delete(id);
+      clearPendingVoiceSessionAudio(session);
+      stopOffscreenVoiceCapture(id).catch(() => {});
       try {
         ws.close();
       } catch {}
@@ -1219,6 +1377,9 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
             resolve({ voiceSessionId: id, revoked: true });
           }
           session.closed = true;
+          clearVoiceAutoCommit(session);
+          clearPendingVoiceSessionAudio(session);
+          stopOffscreenVoiceCapture(id).catch(() => {});
           deliverVoiceSessionEvent(session, {
             event: { type: "revoked", reason: session.closedReason || "revoked" },
           });
@@ -1230,6 +1391,9 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
         return;
       }
       session.closed = true;
+      clearVoiceAutoCommit(session);
+      clearPendingVoiceSessionAudio(session);
+      stopOffscreenVoiceCapture(id).catch(() => {});
       deliverVoiceSessionEvent(session, {
         event: session.revoked
           ? { type: "revoked", reason: session.closedReason || "revoked" }
@@ -1254,6 +1418,7 @@ function markVoiceSessionSendFailed(session, reason = "send failed") {
   session.closedReason = reason;
   voiceSessions.delete(session.id);
   clearVoiceAutoCommit(session);
+  clearPendingVoiceSessionAudio(session);
   stopOffscreenVoiceCapture(session.id).catch(() => {});
   try {
     session.ws?.close(1000, reason);
@@ -1280,6 +1445,44 @@ function sendVoiceSessionBinary(session, buffer) {
     markVoiceSessionSendFailed(session);
     return false;
   }
+}
+
+function enqueuePendingVoiceSessionAudio(session, buffer) {
+  if (!session || !buffer?.byteLength) return;
+  session.pendingAudio ||= [];
+  session.pendingAudio.push(buffer);
+  session.pendingAudioBytes = (session.pendingAudioBytes || 0) + buffer.byteLength;
+  while (session.pendingAudioBytes > MAX_PENDING_VOICE_AUDIO_BYTES && session.pendingAudio.length) {
+    const dropped = session.pendingAudio.shift();
+    session.pendingAudioBytes = Math.max(0, session.pendingAudioBytes - (dropped?.byteLength || 0));
+  }
+}
+
+function flushPendingVoiceSessionAudio(session) {
+  if (!voiceSessionSocketOpen(session)) return false;
+  const pending = session.pendingAudio || [];
+  while (pending.length) {
+    const buffer = pending.shift();
+    session.pendingAudioBytes = Math.max(0, (session.pendingAudioBytes || 0) - (buffer?.byteLength || 0));
+    if (buffer?.byteLength && !sendVoiceSessionBinary(session, buffer)) return false;
+  }
+  session.pendingAudio = [];
+  session.pendingAudioBytes = 0;
+  return true;
+}
+
+function clearPendingVoiceSessionAudio(session) {
+  if (!session) return;
+  session.pendingAudio = [];
+  session.pendingAudioBytes = 0;
+  session.pendingControlMessage = null;
+}
+
+function flushPendingVoiceSessionControl(session) {
+  if (!session?.pendingControlMessage) return true;
+  const message = session.pendingControlMessage;
+  session.pendingControlMessage = null;
+  return sendVoiceSessionJson(session, message);
 }
 
 function deliverVoiceSessionEvent(session, payload) {
@@ -1321,9 +1524,18 @@ async function forwardVoiceSessionEvent(session, event) {
   try {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
-  if (parsed?.type === "session_ready" && session.capture === "extension-offscreen" && !session.captureStarted) {
-    session.captureStarted = true;
-    startOffscreenVoiceCapture(session.id).catch((error) => handleOffscreenVoiceError(session.id, error));
+  if (parsed?.type === "session_ready") {
+    session.sessionReady = true;
+    if (session.capture === "extension-offscreen" && !session.captureStarted && !session.captureStartRequested) {
+      session.captureStartRequested = true;
+      startOffscreenVoiceCapture(session.id)
+        .then(() => {
+          if (voiceSessions.get(session.id) === session && !session.closed) session.captureStarted = true;
+        })
+        .catch((error) => handleOffscreenVoiceError(session.id, error));
+    }
+    if (!flushPendingVoiceSessionAudio(session)) return;
+    if (!flushPendingVoiceSessionControl(session)) return;
   }
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
@@ -1332,21 +1544,45 @@ async function forwardVoiceSessionEvent(session, event) {
 
 function sendVoiceSessionAudio(id, audio) {
   const session = voiceSessions.get(id);
-  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  if (!session || session.closed || voiceSessions.get(session.id) !== session) {
+    return { ok: false, error: "voice session is not open" };
+  }
   const buffer = base64ToBuffer(audio);
   noteVoiceSessionAudio(session, buffer);
+  if (!session.sessionReady || !voiceSessionSocketOpen(session)) {
+    enqueuePendingVoiceSessionAudio(session, buffer);
+    return { ok: true, buffered: true };
+  }
+  if (session.pendingAudioBytes > 0) {
+    enqueuePendingVoiceSessionAudio(session, buffer);
+    if (!flushPendingVoiceSessionAudio(session)) return { ok: false, error: "voice session is not open" };
+    return { ok: true };
+  }
   if (!sendVoiceSessionBinary(session, buffer)) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
 
 async function sendVoiceSessionControl(id, message) {
   const session = voiceSessions.get(id);
-  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  if (!session || session.closed || voiceSessions.get(session.id) !== session) {
+    return { ok: false, error: "voice session is not open" };
+  }
   if (message?.type === "commit_turn" || message?.type === "cancel_turn") {
     session.committed = true;
     clearVoiceAutoCommit(session);
     await stopOffscreenVoiceCapture(id);
   }
+  if (message?.type === "commit_turn") {
+    session.pendingControlMessage = message || {};
+    if (!session.sessionReady) return { ok: true, queued: true };
+    if (!flushPendingVoiceSessionAudio(session)) return { ok: false, error: "voice session is not open" };
+    if (!flushPendingVoiceSessionControl(session)) return { ok: false, error: "voice session is not open" };
+    return { ok: true };
+  }
+  if (message?.type === "cancel_turn") {
+    clearPendingVoiceSessionAudio(session);
+  }
+  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
   if (!sendVoiceSessionJson(session, message || {})) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
@@ -1358,6 +1594,7 @@ function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   session.revoked = revoked === true;
   voiceSessions.delete(id);
   clearVoiceAutoCommit(session);
+  clearPendingVoiceSessionAudio(session);
   stopOffscreenVoiceCapture(id).catch(() => {});
   try {
     session.ws.close(1000, reason);
