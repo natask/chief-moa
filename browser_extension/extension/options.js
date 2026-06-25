@@ -10,11 +10,14 @@ const micStatusEl = document.getElementById("micStatus");
 const profileStateEl = document.getElementById("profileState");
 const changeBoxEl = document.getElementById("changeBox");
 const talkResultEl = document.getElementById("talkResult");
+const profileScopeEl = document.getElementById("profileScope");
 const systemPromptEl = document.getElementById("systemPrompt");
 const profileModelEl = document.getElementById("profileModel");
 const temperatureEl = document.getElementById("temperature");
 const voiceMaxCharsEl = document.getElementById("voiceMaxChars");
+const voiceNameEl = document.getElementById("voiceName");
 const languageEl = document.getElementById("language");
+const inputLanguagesEl = document.getElementById("inputLanguages");
 const profileStatusEl = document.getElementById("profileStatus");
 
 // Cache key written by both this page and background.js after a successful PUT,
@@ -60,6 +63,22 @@ function gatewayHeaders(token, withBody) {
   if (withBody) headers["content-type"] = "application/json";
   if (token) headers.authorization = `Bearer ${token}`;
   return headers;
+}
+
+async function getStableDeviceId() {
+  const { ageeDeviceId } = await chrome.storage.local.get("ageeDeviceId");
+  if (ageeDeviceId) return ageeDeviceId;
+  const deviceId = `browser_${crypto.randomUUID().replace(/-/g, "")}`;
+  await chrome.storage.local.set({ ageeDeviceId: deviceId });
+  return deviceId;
+}
+
+async function profileQuery() {
+  if (profileScopeEl?.value !== "device") {
+    return "";
+  }
+  const deviceId = await getStableDeviceId();
+  return `?scope=device&device_id=${encodeURIComponent(deviceId)}`;
 }
 
 document.getElementById("save").addEventListener("click", async () => {
@@ -173,10 +192,12 @@ function renderProfile(payload) {
   profileModelEl.value = profile.model || "";
   temperatureEl.value = profile.temperature ?? "";
   voiceMaxCharsEl.value = profile.voice_max_chars ?? "";
+  if (voiceNameEl) voiceNameEl.value = profile.voice || "";
   languageEl.value = profile.language || "";
+  if (inputLanguagesEl) inputLanguagesEl.value = profile.input_languages || "";
   const overridden = Boolean(payload?.is_overridden);
   profileStateEl.innerHTML =
-    `In effect on the gateway: <span class="badge ${overridden ? "overridden" : ""}">` +
+    `In effect ${payload?.scope === "device" ? "on this device" : "on the gateway"}: <span class="badge ${overridden ? "overridden" : ""}">` +
     `${overridden ? "customized" : "gateway defaults"}</span>`;
 }
 
@@ -190,7 +211,7 @@ async function loadProfile() {
   }
   flashProfile("Loading…");
   try {
-    const resp = await fetch(`${url}/v1/agent/profile`, { headers: gatewayHeaders(token, false) });
+    const resp = await fetch(`${url}/v1/agent/profile${await profileQuery()}`, { headers: gatewayHeaders(token, false) });
     if (resp.status === 401) {
       profileStateEl.textContent = "Gateway requires a token to read the profile. Add the Gateway token and Save.";
       flashProfile("401 — token required", false);
@@ -218,14 +239,16 @@ async function loadProfile() {
 
 // Patch + persist a profile change through the gateway, then re-render from the
 // gateway's authoritative response. Shared by the form save and the talk path.
-async function applyProfilePatch(patch) {
+async function applyProfilePatch(patch, options = {}) {
   const { url, token } = gatewayConfig();
   if (!url) throw new Error("Set the gateway URL first.");
   if (!patch || Object.keys(patch).length === 0) throw new Error("Nothing to change.");
+  const scope = options.scope === "device" ? "device" : (profileScopeEl?.value === "device" ? "device" : "global");
+  const deviceId = await getStableDeviceId();
   const resp = await fetch(`${url}/v1/agent/profile`, {
     method: "PUT",
     headers: gatewayHeaders(token, true),
-    body: JSON.stringify({ profile: patch }),
+    body: JSON.stringify({ profile: patch, scope, device_id: deviceId, source: "agee-options" }),
   });
   if (resp.status === 401) throw new Error("Gateway rejected the token (401).");
   if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
@@ -243,8 +266,20 @@ function patchFromForm() {
   if (model) patch.model = model;
   if (temperatureEl.value !== "") patch.temperature = Number(temperatureEl.value);
   if (voiceMaxCharsEl.value !== "") patch.voice_max_chars = Number(voiceMaxCharsEl.value);
+  const voice = voiceNameEl?.value.trim();
+  if (voice) patch.voice = voice;
   const lang = languageEl.value.trim();
-  if (lang) patch.language = lang;
+  if (lang) {
+    patch.language = lang;
+    patch.language_primary = lang.split(",")[0].trim();
+    patch.language_mode = "explicit";
+    patch.language_output = "primary_only";
+  }
+  const inputLanguages = inputLanguagesEl?.value.trim();
+  if (inputLanguages) {
+    patch.input_languages = inputLanguages;
+    patch.input_language_primary = inputLanguages.split(",")[0].trim();
+  }
   return patch;
 }
 
@@ -260,6 +295,7 @@ document.getElementById("saveProfile").addEventListener("click", async () => {
 });
 
 document.getElementById("refreshProfile").addEventListener("click", loadProfile);
+profileScopeEl?.addEventListener("change", loadProfile);
 
 document.getElementById("resetProfile").addEventListener("click", async () => {
   const { url, token } = gatewayConfig();
@@ -271,7 +307,12 @@ document.getElementById("resetProfile").addEventListener("click", async () => {
   try {
     const resp = await fetch(`${url}/v1/agent/profile/reset`, {
       method: "POST",
-      headers: gatewayHeaders(token, false),
+      headers: gatewayHeaders(token, true),
+      body: JSON.stringify({
+        scope: profileScopeEl?.value === "device" ? "device" : "global",
+        device_id: await getStableDeviceId(),
+        source: "agee-options",
+      }),
     });
     if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
     const payload = await resp.json();
@@ -299,7 +340,7 @@ async function applyTalk(text) {
   }
   talkResultEl.textContent = "Applying…";
   try {
-    await applyProfilePatch(intent.patch);
+    await applyProfilePatch(intent.patch, { scope: intent.scope });
     changeBoxEl.value = "";
     talkResultEl.textContent = `Applied: ${intent.summary}.`;
   } catch (err) {

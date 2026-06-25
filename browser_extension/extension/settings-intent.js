@@ -31,6 +31,9 @@ const PROFILE_FIELDS = [
   "language_primary",
   "language_output",
   "language_auto_switch",
+  "input_languages",
+  "input_language_primary",
+  "response_modality",
 ];
 
 // The Gemini Live core-8 voices the gateway accepts for the agent's OWN spoken
@@ -287,9 +290,10 @@ const MATCHERS = [
 function parseSettingsIntent(text, current) {
   const raw = String(text || "").trim();
   if (!raw) return null;
+  const scope = profileScopeFromText(raw);
   const explicitSystemPrompt = matchSystemPrompt(raw);
   if (explicitSystemPrompt && startsWithSystemPromptSetter(raw)) {
-    return explicitSystemPrompt;
+    return withScope(explicitSystemPrompt, scope);
   }
   if (looksLikeInstructionalExample(raw)) {
     return null;
@@ -299,10 +303,28 @@ function parseSettingsIntent(text, current) {
   for (const matcher of MATCHERS) {
     const result = matcher(raw, current);
     if (result && hasUsableFields(result.patch)) {
-      return result;
+      return withScope(result, scope);
     }
   }
   return null;
+}
+
+function withScope(result, scope) {
+  return scope ? { ...result, scope } : result;
+}
+
+function profileScopeFromText(raw) {
+  const lower = normalizeSpeech(raw);
+  if (/\b(?:all|every)\s+(?:device|devices|surface|surfaces|client|clients)\b/.test(lower)
+    || /\b(?:globally|global|everywhere|for everyone|all sessions)\b/.test(lower)) {
+    return "global";
+  }
+  if (/\b(?:this|current|only this|just this)\s+(?:device|phone|browser|surface|client)\b/.test(lower)
+    || /\b(?:on|for)\s+(?:this|my)\s+(?:device|phone|browser)\b/.test(lower)
+    || /\b(?:here only|just here|only here)\b/.test(lower)) {
+    return "device";
+  }
+  return "";
 }
 
 function normalizeSpeech(value) {

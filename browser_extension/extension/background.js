@@ -491,7 +491,7 @@ async function maybeApplySettingsChange(tabId, instruction, cfg, signal, cueId) 
   send(tabId, { cmd: "progress", cueId, text: "updating settings…" });
   throwIfAborted(signal);
 
-  await putGatewayProfile(cfg, intent.patch, signal, "agee-extension");
+  await putGatewayProfile(cfg, intent.patch, signal, "agee-extension", { scope: intent.scope || "global" });
   const summary = `Settings updated — ${intent.summary}. It takes effect on the next turn.`;
   send(tabId, { cmd: "done", cueId, summary });
   await saveTaskState(cueId, { status: "done", instruction, step: 1, lastResult: summary.slice(0, 400), tabId });

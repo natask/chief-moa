@@ -64,6 +64,7 @@ assert.strictEqual(classifyVoiceTurn({}, "you are Aggie"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "call yourself The Steward"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what voice are you using"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what language settings are active"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "use the Kore voice on this device"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
 
 const inputLanguageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
@@ -122,6 +123,20 @@ assert.deepStrictEqual(parseProfileControlIntent("what voice are you using"), {
   action: "summary",
   subject: "voice",
   scope: "global",
+});
+
+const deviceScopedVoice = parseProfileControlIntent("use the Kore voice on this device");
+assert.equal(deviceScopedVoice.scope, "device");
+assert.deepStrictEqual(deviceScopedVoice.patch, { voice: "Kore" });
+
+const globalScopedLanguage = parseProfileControlIntent("respond in English on all devices");
+assert.equal(globalScopedLanguage.scope, "global");
+assert.deepStrictEqual(globalScopedLanguage.patch, {
+  language: "en-US",
+  language_primary: "en-US",
+  language_mode: "explicit",
+  language_output: "primary_only",
+  language_auto_switch: false,
 });
 
 assert.deepStrictEqual(parseProfileControlIntent("your name is Moa").patch, {

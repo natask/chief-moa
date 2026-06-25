@@ -61,6 +61,10 @@
 - [x] 7.5 Route Android Live voice profile-control utterances (voice/language
       changes) through the gateway profile-control path so they persist and
       apply to the next Live turn with prior context.
+- [x] 7.6 Persist hard voice, heard-language, reply-language, and response
+      behavior settings either globally for all devices or as current-device
+      overrides, and require mission agents to ask for missing access instead of
+      giving flat refusals.
 
 ## 8. Verification Harness
 

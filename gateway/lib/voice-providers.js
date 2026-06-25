@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { WebSocket } = require("ws");
+const { safeSystemPromptForProvider } = require("./agent-profile");
 
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
@@ -685,7 +686,7 @@ class GeminiLiveVoiceProvider {
     const effectiveProfile = profile || this.profileForTurn();
     const modality = String(effectiveProfile?.response_modality || "auto").trim().toLowerCase();
     return [
-      effectiveProfile?.system_prompt || this.systemPrompt,
+      safeSystemPromptForProvider(effectiveProfile, this.systemPrompt),
       profileIdentityInstruction(effectiveProfile),
       missionAccessInstruction(),
       profileLanguageInstruction(effectiveProfile),

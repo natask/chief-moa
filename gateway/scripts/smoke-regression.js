@@ -38,6 +38,7 @@ async function main() {
     await step("agent profile token guard", () => assertAgentProfileTokenGuard(baseUrl));
     await step("agent profile runtime cycle", () => assertAgentProfileRuntimeCycle(baseUrl, dataDir));
     await step("agent profile per-request overrides", () => assertAgentProfilePerRequestOverrides(baseUrl, dataDir));
+    await step("agent profile device scope", () => assertAgentProfileDeviceScope(baseUrl, dataDir));
     await step("streaming voice persistence", () => assertStreamingVoiceSessionPersistence(baseUrl, dataDir));
     await step("voice chat and idempotency", () => assertVoiceChatAndIdempotency(baseUrl, dataDir));
     await step("control voice turn", () => assertControlTurn(baseUrl, dataDir));
@@ -72,6 +73,7 @@ async function main() {
         "agent profile token guard",
         "agent profile runtime cycle (PUT -> turn -> reset, no restart)",
         "agent profile per-request overrides (not persisted)",
+        "agent profile device scope (global + current-device overrides)",
         "streaming voice persistence",
         "voice chat",
         "voice turn idempotency",
@@ -331,6 +333,93 @@ async function assertAgentProfilePerRequestOverrides(baseUrl, dataDir) {
   const reset = await postJson(`${baseUrl}/v1/agent/profile/reset`, {});
   assert.equal(reset.status, 200);
   assert.equal(reset.json.is_overridden, false);
+}
+
+async function assertAgentProfileDeviceScope(baseUrl, dataDir) {
+  const deviceA = "browser_device_a";
+  const deviceB = "android_device_b";
+
+  const globalPut = await putJson(`${baseUrl}/v1/agent/profile`, {
+    source: "smoke-regression",
+    scope: "global",
+    profile: {
+      voice: "Charon",
+      language: "en-US",
+      language_primary: "en-US",
+      input_languages: "en-US",
+      input_language_primary: "en-US",
+    },
+  });
+  assert.equal(globalPut.status, 200);
+  assert.equal(globalPut.json.scope, "global");
+  assert.equal(globalPut.json.profile.voice, "Charon");
+
+  const devicePut = await putJson(`${baseUrl}/v1/agent/profile`, {
+    source: "smoke-regression",
+    scope: "device",
+    device_id: deviceA,
+    profile: {
+      voice: "Kore",
+      input_languages: "am-ET",
+      input_language_primary: "am-ET",
+    },
+  });
+  assert.equal(devicePut.status, 200);
+  assert.equal(devicePut.json.scope, "device");
+  assert.equal(devicePut.json.device_id, deviceA);
+  assert.equal(devicePut.json.profile.voice, "Kore");
+  assert.equal(devicePut.json.profile.language, "en-US", "device override must inherit global reply language");
+  assert.equal(devicePut.json.profile.input_languages, "am-ET", "device override must replace heard language");
+
+  const globalProfile = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(globalProfile.profile.voice, "Charon", "global profile must not pick up device override");
+  assert.equal(globalProfile.profile.input_languages, "en-US", "global heard language must remain unchanged");
+
+  const deviceProfile = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceA}`);
+  assert.equal(deviceProfile.scope, "device");
+  assert.equal(deviceProfile.profile.voice, "Kore");
+  assert.equal(deviceProfile.profile.input_languages, "am-ET");
+
+  const otherDeviceProfile = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceB}`);
+  assert.equal(otherDeviceProfile.profile.voice, "Charon", "other devices should inherit global voice");
+  assert.equal(otherDeviceProfile.profile.input_languages, "en-US", "other devices should inherit global input language");
+
+  const spokenDeviceUpdate = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "profile_scope_session",
+    branch_id: "default",
+    turn_id: "device_profile_voice_turn",
+    source: "smoke-regression",
+    device_id: deviceA,
+    transcript: "respond in Amharic on this device",
+  });
+  assert.equal(spokenDeviceUpdate.status, 200);
+  assert.equal(spokenDeviceUpdate.json.classification, "profile_control");
+  assert.equal(spokenDeviceUpdate.json.profile.scope, "device");
+  assert.equal(spokenDeviceUpdate.json.profile.device_id, deviceA);
+  assert.equal(spokenDeviceUpdate.json.profile.language.allowed, "am-ET");
+
+  const afterSpokenDevice = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceA}`);
+  assert.equal(afterSpokenDevice.profile.language, "am-ET", "spoken profile control must update only this device");
+  const afterSpokenGlobal = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(afterSpokenGlobal.profile.language, "en-US", "spoken device update must not mutate global reply language");
+
+  const versionsPath = path.join(dataDir, "agent-profile-device-overrides.json");
+  assert.ok(fs.existsSync(versionsPath), "device override file must persist to disk");
+
+  const resetDevice = await postJson(`${baseUrl}/v1/agent/profile/reset`, {
+    source: "smoke-regression",
+    scope: "device",
+    device_id: deviceA,
+  });
+  assert.equal(resetDevice.status, 200);
+  assert.equal(resetDevice.json.profile.voice, "Charon", "device reset should reveal inherited global voice");
+
+  const resetGlobal = await postJson(`${baseUrl}/v1/agent/profile/reset`, {
+    source: "smoke-regression",
+    scope: "global",
+  });
+  assert.equal(resetGlobal.status, 200);
+  assert.equal(resetGlobal.json.is_overridden, false);
 }
 
 async function assertStreamingVoiceSessionPersistence(baseUrl, dataDir) {

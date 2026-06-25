@@ -62,6 +62,27 @@ The full Android app SHALL let the user configure gateway URL, gateway token, tr
 - **WHEN** the user turns off spoken replies
 - **THEN** voice turns still display full text while TTS remains silent
 
+#### Scenario: Hard voice and language settings persist
+- **WHEN** the user changes the assistant voice, heard language, or reply language
+- **THEN** the gateway persists the change as a hard runtime profile setting
+- **AND** the setting applies on later turns without restarting the gateway
+
+#### Scenario: User scopes a profile setting
+- **WHEN** the user asks to save a voice or language setting for this device
+- **THEN** the gateway stores a device-scoped override for the current device id
+- **AND** other devices continue to use the all-devices profile unless they have
+  their own override
+- **WHEN** the user asks to save the setting for all devices
+- **THEN** the gateway updates the global profile used by every device without a
+  device override
+
+#### Scenario: Mission agent lacks access
+- **WHEN** the agent is blocked by missing permission, credentials, integration
+  setup, local approval, or device capability
+- **THEN** it names the specific access it needs instead of giving a flat refusal
+- **AND** it still treats server/model output as a proposal until the owning
+  device or integration returns a receipt
+
 ### Requirement: Android OTA Updates
 The full Android app SHALL check the configured gateway for a newer app build and install only after local verification and user approval.
 

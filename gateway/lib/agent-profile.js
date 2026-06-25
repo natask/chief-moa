@@ -698,11 +698,15 @@ function isNoHonorificRule(text) {
 }
 
 function hasNoHonorificRule(lowerText) {
-  return isNoHonorificRule(lowerText)
+  const hasPlainNoHonorificRule = isNoHonorificRule(lowerText)
     || lowerText.includes("avoid titles")
     || lowerText.includes("avoid honorifics")
     || lowerText.includes("no titles or honorifics")
     || lowerText.includes("never call the user master");
+  return hasPlainNoHonorificRule
+    && lowerText.includes("master")
+    && lowerText.includes("sir")
+    && lowerText.includes("captain");
 }
 
 function freeze(profile) {

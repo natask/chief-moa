@@ -94,7 +94,10 @@ flows into the next session's context pack, so a user can interrupt the model on
 one device and resume the thread on another against the same dataset.
 Spoken profile-control requests such as voice and language changes are routed
 through the gateway profile store; Gemini Live reads the effective voice,
-language, and Moa-owned context when the next Live session starts.
+language, and Moa-owned context when the next Live session starts. Profile
+settings are hard settings: global changes apply to every device, while
+device-scoped changes persist as per-device overrides layered on top of the
+global profile for the current phone or browser client.
 
 Voice turns can also become replayable verification evidence. When retention is
 enabled, the gateway stores or references the user audio, transcript, assistant
@@ -279,6 +282,10 @@ they cannot directly execute phone actions.
   user turns create or update other forks.
 - `voice_evidence`: replayable user/assistant audio and transcript artifacts
   attached to a turn, profile version, provider version, and test criteria.
+- `agent_profile`: a versioned gateway-owned runtime profile for hard settings
+  such as assistant voice, input languages, reply languages, response modality,
+  model behavior, and mission-agent access policy. The global profile applies
+  to all devices; device overrides persist only for a named device client.
 - `browser_task`: a gateway-created browser work request that a Chrome extension
   client must claim, execute locally with allowlisted actions, and receipt.
 - `tool_source`: an agent-callable integration source such as OpenAPI, MCP,

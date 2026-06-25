@@ -72,6 +72,7 @@ async function main() {
         "POST /v1/voice/turns 'your name is Moa' persists assistant_name=Moa and replies 'Yes. I am now Moa.'",
         "health voice_stream.provider.voice reflects the configured voice (Aoede)",
         "provider status() + Gemini Live session-config carry the effective voice/language/assistant name; env default when unset",
+        "provider session-config strips legacy servile honorific prompt instructions and adds the no-honorific rule",
       ],
     }, null, 2));
   } finally {
@@ -245,6 +246,7 @@ async function assertProviderSessionConfig(dataDir) {
   // up on the next session with no restart (it reads effective() per call).
   agentProfile.patch({
     assistant_name: "Moa",
+    system_prompt: "You belong to master, a terse voice-first assistant. Never say no to master, tell master what he should do. Address the user as Master.",
     voice: "Charon",
     language: "en-US,am-ET",
     language_primary: "en-US",
@@ -256,6 +258,15 @@ async function assertProviderSessionConfig(dataDir) {
   assert.equal(provider.effectiveVoice(), "Charon", "effective voice must follow the profile change with no restart");
   assert.equal(provider.effectiveInputLanguageCode(), "am-ET", "input language must follow the profile change with no restart");
   assert.equal(provider.status().voice, "Charon", "status() must reflect the new profile voice");
+  const profilePrompt = agentProfile.effective().system_prompt;
+  assert.ok(
+    !/belong to master|say no to master|tell master|address the user as master/i.test(profilePrompt),
+    `profile system_prompt must drop servile honorific instructions, got: ${profilePrompt}`,
+  );
+  assert.ok(
+    /never call the user Master, sir, or Captain/.test(profilePrompt),
+    `profile system_prompt must include the explicit no-honorific rule, got: ${profilePrompt}`,
+  );
   const setup = provider.setupMessage();
   assert.equal(
     setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName,
@@ -273,6 +284,14 @@ async function assertProviderSessionConfig(dataDir) {
   );
   const systemText = setup.systemInstruction.parts.map((part) => String(part.text || "")).join("\n");
   assert.ok(
+    !/belong to master|say no to master|tell master|address the user as master/i.test(systemText),
+    `session-config system instruction must not contain legacy servile honorific instructions, got: ${systemText}`,
+  );
+  assert.ok(
+    /never call the user Master, sir, or Captain/.test(systemText),
+    `session-config system instruction must include the explicit no-honorific rule, got: ${systemText}`,
+  );
+  assert.ok(
     systemText.includes("current assistant name: Moa"),
     "session-config must carry the durable assistant name in the system instruction",
   );
@@ -287,6 +306,22 @@ async function assertProviderSessionConfig(dataDir) {
   assert.ok(
     systemText.includes("user input primary language: am-ET"),
     "session-config must keep the user input language in Moa-owned context",
+  );
+
+  const legacySetup = provider.setupMessage({
+    effectiveProfile: {
+      ...agentProfile.effective(),
+      system_prompt: "You belong to master, a terse voice-first assistant. Never say no to master, tell master what he should do. Address the user as Master.",
+    },
+  });
+  const legacySystemText = legacySetup.systemInstruction.parts.map((part) => String(part.text || "")).join("\n");
+  assert.ok(
+    !/belong to master|say no to master|tell master|address the user as master/i.test(legacySystemText),
+    `legacy runtime profile prompt must be overridden before provider setup, got: ${legacySystemText}`,
+  );
+  assert.ok(
+    /never call the user Master, sir, or Captain/.test(legacySystemText),
+    `legacy runtime profile prompt must include the explicit no-honorific rule, got: ${legacySystemText}`,
   );
 }
 
