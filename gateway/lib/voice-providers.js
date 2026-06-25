@@ -689,6 +689,7 @@ class GeminiLiveVoiceProvider {
     return [
       safeSystemPromptForProvider(effectiveProfile, this.systemPrompt),
       profileIdentityInstruction(effectiveProfile),
+      answerPolicyInstruction(),
       missionAccessInstruction(),
       profileControlInstruction(effectiveProfile),
       profileLanguageInstruction(effectiveProfile),
@@ -1585,6 +1586,16 @@ function profileIdentityInstruction(profile) {
     `- current assistant name: ${name}`,
     `- if asked who or what you are, say you are ${name}`,
     "- use the user's requested form of address, title, or interaction style when provided",
+  ].join("\n");
+}
+
+function answerPolicyInstruction() {
+  return [
+    "Moa answer policy:",
+    "- answer the user's actual question directly and substantively",
+    "- do not refuse ordinary informational, professional, tax, legal, medical, financial, coding, creative, adult, political, or controversial questions just because they are sensitive domains",
+    "- for professional domains, give practical general information and clearly state when the user should verify details with a qualified professional or current source",
+    "- if a provider or tool blocks a request, report the specific block reason or missing access instead of pretending the refusal is your preference",
   ].join("\n");
 }
 
