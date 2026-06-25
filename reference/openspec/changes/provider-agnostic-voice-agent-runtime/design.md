@@ -152,9 +152,13 @@ changes can update provider setup for future turns, and native live providers
 that support mid-session instruction updates can receive changes immediately.
 Providers that do not support this are restarted or updated on the next turn.
 
-The profile includes system prompt, required voice style, language settings,
-model/reasoning provider, STT provider, TTS provider, allowed tools, approval
-policy, autonomy level, memory policy, active workspace, and recovery mode.
+The profile includes assistant name/identity, system prompt, required voice
+style, language settings, model/reasoning provider, STT provider, TTS provider,
+allowed tools, approval policy, autonomy level, memory policy, active workspace,
+and recovery mode. Spoken identity changes such as "your name is X", "you are
+X", and "call yourself X" are profile-control updates, not chat turns; the
+gateway confirms them tersely and regenerates provider prompts from the durable
+profile state.
 
 Alternative considered: keep the prompt as an environment variable only.
 Rejected because the user needs to steer behavior while speaking and recover

@@ -21,6 +21,22 @@ REMOTE_GW_DIR="${REMOTE_GW_DIR:-/home/reclaim-ethiopia/moa-assistant/software/mo
 GATEWAY_URL="${GATEWAY_URL:-http://10.147.17.10:8788}"
 log() { printf '[deploy] %s\n' "$*"; }
 
+adb_path() {
+  if command -v adb >/dev/null 2>&1; then
+    command -v adb
+    return 0
+  fi
+  if [ -n "${ANDROID_HOME:-}" ] && [ -x "$ANDROID_HOME/platform-tools/adb" ]; then
+    printf '%s\n' "$ANDROID_HOME/platform-tools/adb"
+    return 0
+  fi
+  if [ -x "$HOME/Library/Android/sdk/platform-tools/adb" ]; then
+    printf '%s\n' "$HOME/Library/Android/sdk/platform-tools/adb"
+    return 0
+  fi
+  return 1
+}
+
 gateway_drifted() {
   # Authoritative drift check: ask rsync (the same tool sync-when-online uses)
   # what it WOULD transfer, by content checksum (-c), without changing anything
@@ -62,6 +78,7 @@ deploy_android() {
   log "android: building + syncing OTA artifact"
   ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
     bash "$ROOT_DIR/android_app/deploy/ota/sync-main-machine.sh"
+  direct_install_android
   if curl -fsS "$GATEWAY_URL/health" >/dev/null 2>&1; then
     log "android: gateway health smoke passed at $GATEWAY_URL"
   else
@@ -73,6 +90,82 @@ deploy_android() {
     log "android: OTA metadata endpoint smoke passed"
   else
     log "android: OTA metadata endpoint smoke blocked (MOA_GATEWAY_TOKEN unset)"
+  fi
+}
+
+direct_install_android() {
+  local adb
+  local apk="$ROOT_DIR/gateway/data/android-ota/moa-assistant.apk"
+  local devices
+  local serial
+  local failures=0
+
+  if [ ! -f "$apk" ]; then
+    apk="$ROOT_DIR/android_app/app/build/outputs/apk/debug/app-debug.apk"
+  fi
+  if [ ! -f "$apk" ]; then
+    log "android: direct install skipped (APK not found)"
+    return 0
+  fi
+  if ! adb="$(adb_path)"; then
+    log "android: direct install skipped (adb not found)"
+    return 0
+  fi
+
+  "$adb" start-server >/dev/null 2>&1 || true
+  devices="$("$adb" devices | awk 'NR > 1 && $2 == "device" { print $1 }')"
+  if [ -z "$devices" ]; then
+    log "android: direct install skipped (no authorized ADB devices)"
+    return 0
+  fi
+
+  while IFS= read -r serial; do
+    [ -z "$serial" ] && continue
+    log "android: direct installing $(basename "$apk") to $serial"
+    if "$adb" -s "$serial" install -r -d "$apk" >/dev/null; then
+      log "android: installed on $serial $(installed_android_version "$adb" "$serial")"
+    else
+      log "android: direct install failed on $serial"
+      failures=$((failures + 1))
+    fi
+  done <<EOF
+$devices
+EOF
+
+  [ "$failures" -eq 0 ]
+}
+
+installed_android_version() {
+  local adb="$1"
+  local serial="$2"
+  local version
+  version="$("$adb" -s "$serial" shell dumpsys package ai.moa.assistant 2>/dev/null | awk '
+    /versionCode=/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^versionCode=/) {
+          split($i, value, "=")
+          version_code = value[2]
+        }
+      }
+    }
+    /versionName=/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^versionName=/) {
+          split($i, value, "=")
+          version_name = value[2]
+        }
+      }
+    }
+    END {
+      if (version_code || version_name) {
+        printf "(versionCode=%s versionName=%s)", version_code, version_name
+      }
+    }
+  ' | tr -d '\r')"
+  if [ -n "$version" ]; then
+    printf '%s\n' "$version"
+  else
+    printf '%s\n' "(version unavailable)"
   fi
 }
 

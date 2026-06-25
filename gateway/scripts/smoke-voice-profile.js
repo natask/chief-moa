@@ -55,6 +55,7 @@ async function main() {
     await step("voice field is a profile field", () => assertVoiceIsField(baseUrl));
     await step("valid voice persists + is_overridden", () => assertValidVoice(baseUrl));
     await step("invalid voice is rejected", () => assertInvalidVoiceRejected(baseUrl));
+    await step("spoken assistant-name control persists with terse confirmation", () => assertAssistantNameControl(baseUrl));
     await step("health status reflects configured voice", () => assertHealthVoice(baseUrl));
     // Provider-level assertion runs in-process: prove the exact session-config
     // the provider WOULD send to Gemini Live carries the effective voice.
@@ -68,8 +69,9 @@ async function main() {
         "`voice` is one of the profile fields",
         "PUT voice=Aoede persists; GET reflects voice=Aoede + is_overridden=true",
         "PUT voice=Robot (unknown) is rejected; voice stays Aoede",
+        "POST /v1/voice/turns 'your name is Moa' persists assistant_name=Moa and replies 'Yes. I am now Moa.'",
         "health voice_stream.provider.voice reflects the configured voice (Aoede)",
-        "provider status() + Gemini Live session-config carry the effective voice/language; env default when unset",
+        "provider status() + Gemini Live session-config carry the effective voice/language/assistant name; env default when unset",
       ],
     }, null, 2));
   } finally {
@@ -129,6 +131,44 @@ async function assertInvalidVoiceRejected(baseUrl) {
 
   const after = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(after.profile.voice, "Aoede", `invalid voice must leave voice unchanged at Aoede, got ${after.profile.voice}`);
+}
+
+async function assertAssistantNameControl(baseUrl) {
+  const turn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "voice-profile-smoke",
+    turn_id: "assistant-name-update",
+    transcript: "your name is Moa",
+    source: "voice-profile-smoke",
+  });
+  assert.equal(turn.status, 200, `assistant-name voice turn must succeed: ${JSON.stringify(turn.json)}`);
+  assert.equal(turn.json.classification, "profile_control", "assistant-name utterance must route as profile_control");
+  assert.equal(turn.json.speak, "Yes. I am now Moa.", `unexpected assistant-name confirmation: ${turn.json.speak}`);
+  assert.equal(turn.json.display, "Yes. I am now Moa.", "display must match the terse confirmation");
+  assert.equal(turn.json.profile?.assistant_name, "Moa", "voice turn payload profile must expose assistant_name=Moa");
+  assertNoServileFiller(turn.json.speak);
+
+  const profile = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(profile.profile.assistant_name, "Moa", `GET profile must persist assistant_name=Moa, got ${profile.profile.assistant_name}`);
+
+  const summary = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "voice-profile-smoke",
+    turn_id: "assistant-name-summary",
+    transcript: "what is your name",
+    source: "voice-profile-smoke",
+  });
+  assert.equal(summary.status, 200, `assistant-name summary turn must succeed: ${JSON.stringify(summary.json)}`);
+  assert.equal(summary.json.classification, "profile_control", "assistant-name summary must route as profile_control");
+  assert.ok(
+    /My name is Moa\./.test(summary.json.speak),
+    `assistant-name summary must reflect persisted name, got ${summary.json.speak}`,
+  );
+  assertNoServileFiller(summary.json.speak);
+}
+
+function assertNoServileFiller(value) {
+  const text = String(value || "").toLowerCase();
+  assert.ok(!/\b(master|sir|captain)\b/.test(text), `reply must not contain servile title: ${value}`);
+  assert.ok(!/how can i help/.test(text), `reply must not contain help filler: ${value}`);
 }
 
 async function assertHealthVoice(baseUrl) {
@@ -204,6 +244,7 @@ async function assertProviderSessionConfig(dataDir) {
   // Set the profile voice + language: the SAME provider instance must pick them
   // up on the next session with no restart (it reads effective() per call).
   agentProfile.patch({
+    assistant_name: "Moa",
     voice: "Charon",
     language: "en-US,am-ET",
     language_primary: "en-US",
@@ -231,6 +272,10 @@ async function assertProviderSessionConfig(dataDir) {
     "session-config must request Gemini Live input audio transcription",
   );
   const systemText = setup.systemInstruction.parts.map((part) => String(part.text || "")).join("\n");
+  assert.ok(
+    systemText.includes("current assistant name: Moa"),
+    "session-config must carry the durable assistant name in the system instruction",
+  );
   assert.ok(
     systemText.includes("Moa language profile"),
     "session-config must carry the durable language profile in the system instruction",
@@ -313,6 +358,19 @@ async function requestJson(url, options = {}) {
 async function putJson(url, body, options = {}) {
   const response = await fetch(url, {
     method: "PUT",
+    headers: {
+      ...(options.auth === false ? {} : authHeaders()),
+      "content-type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(body),
+  });
+  const json = await response.json();
+  return { status: response.status, json };
+}
+
+async function postJson(url, body, options = {}) {
+  const response = await fetch(url, {
+    method: "POST",
     headers: {
       ...(options.auth === false ? {} : authHeaders()),
       "content-type": "application/json; charset=utf-8",

@@ -224,8 +224,9 @@ function configureStorageExpr(url, token) {
 // Drive the overlay the way a real submit does: the content script sends
 // { cmd: "run" | "describe" } to the background, which calls the live gateway and
 // posts { cmd: "done"|"error" } back. We then read the result stack and confirm
-// the composer stays clear for the next command.
+// the composer draft was not cleared or replaced by the response.
 function triggerExpr(cmd, instruction) {
+  const draft = cmd === "run" ? `draft:${instruction}` : "draft:describe";
   const msg = cmd === "run"
     ? `{ cmd: "run", instruction: ${JSON.stringify(instruction)} }`
     : `{ cmd: "describe" }`;
@@ -233,7 +234,13 @@ function triggerExpr(cmd, instruction) {
     (() => {
       // Mark the log length so we can detect the NEW rendered row.
       const log = document.querySelector("#agee-log");
+      const input = document.querySelector("#agee-input");
       window.__ageeRowsBefore = log ? log.childElementCount : 0;
+      window.__ageeExpectedDraft = ${JSON.stringify(draft)};
+      if (input) {
+        input.value = window.__ageeExpectedDraft;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
       // Fire-and-forget like the overlay does; swallow the channel-closed
       // rejection (the real result arrives via a separate tabs.sendMessage
       // -> our onMessage "done"/"error" handler, not via this reply).
@@ -245,7 +252,7 @@ function triggerExpr(cmd, instruction) {
 
 // Wait for a NEW terminal state in the one-turn result stack, then return the
 // stack text plus the composer value. The visible product surface is not chat
-// history; final cards linger briefly above an empty input.
+// history; final cards linger above a draft input that responses must not touch.
 function renderedReplyExpr() {
   return `
     (() => {
@@ -255,13 +262,14 @@ function renderedReplyExpr() {
       const before = window.__ageeRowsBefore || 0;
       const rows = [...log.children].slice(before);
       const fieldText = input ? input.value : "";
+      const expectedDraft = window.__ageeExpectedDraft || "";
       const logVisible = getComputedStyle(log).display !== "none";
       // Find the latest terminal state, ignoring the "you" echo and interim
       // progress rows.
       for (let i = rows.length - 1; i >= 0; i--) {
         const row = rows[i];
-        if (row.classList.contains("agee-done")) return { kind: "done", text: fieldText, ledgerText: row.textContent, logVisible };
-        if (row.classList.contains("agee-error")) return { kind: "error", text: fieldText, ledgerText: row.textContent, logVisible };
+        if (row.classList.contains("agee-done")) return { kind: "done", text: fieldText, expectedDraft, ledgerText: row.textContent, logVisible };
+        if (row.classList.contains("agee-error")) return { kind: "error", text: fieldText, expectedDraft, ledgerText: row.textContent, logVisible };
       }
       return null;
     })()
@@ -403,11 +411,11 @@ async function main() {
       const usedDefaultGateway = call && call.url && String(call.url).startsWith(`${GATEWAY_URL}/`);
       const didNotShowMissingUrl = !/No gateway URL/i.test(`${reply?.text || ""} ${reply?.ledgerText || ""}`);
       const reachedGateway = call && (call.status === 401 || call.ok === true);
-      const resultVisible = reply?.logVisible === true && reply?.text === "";
+      const resultVisible = reply?.logVisible === true && reply?.text === reply?.expectedDraft;
       if (usedDefaultGateway && didNotShowMissingUrl && reachedGateway && resultVisible) {
         pass(
           "blank URL storage reached the baked gateway",
-          `POST /v1/voice/turns -> HTTP ${call.status}; no missing-URL overlay error; input clear`,
+          `POST /v1/voice/turns -> HTTP ${call.status}; no missing-URL overlay error; draft preserved`,
         );
       } else {
         failures++;
@@ -457,7 +465,7 @@ async function main() {
         reply.kind === "error" &&
         /401|token|unauthor/i.test(reply.ledgerText) &&
         reply.ledgerText.trim().length > 0 &&
-        reply.text === "";
+        reply.text === reply.expectedDraft;
       const resultVisible = reply?.logVisible === true;
 
       // Prove it actually reached the live gateway and got a 401 (loud, not silent).
@@ -469,7 +477,7 @@ async function main() {
       if (looksLikeAuthError && got401 && dotState === "error" && resultVisible) {
         pass(
           "unauthorized command rendered a clear error",
-          `gateway POST /v1/voice/turns -> HTTP 401; result card + red dot; input clear`,
+          `gateway POST /v1/voice/turns -> HTTP 401; result card + red dot; draft preserved`,
         );
         console.log(`         overlay error text: "${reply.ledgerText.trim()}"`);
       } else {
@@ -498,11 +506,11 @@ async function main() {
         await evaluate(pageCdp, triggerExpr("run", "Say a one word greeting."), { contextId: contentCtx });
         const reply = await waitForEval(pageCdp, renderedReplyExpr(), 60000, { contextId: contentCtx });
         const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/voice/turns"));
-        const ok = reply.kind === "done" && reply.text === "" && reply.logVisible === true && call && call.ok === true && call.status === 200;
+        const ok = reply.kind === "done" && reply.text === reply.expectedDraft && reply.logVisible === true && call && call.ok === true && call.status === 200;
         if (ok) {
           pass(
             "command reply originated from /v1/voice/turns",
-            `gateway POST /v1/voice/turns -> HTTP 200; result card rendered; input clear`,
+            `gateway POST /v1/voice/turns -> HTTP 200; result card rendered; draft preserved`,
           );
           console.log(`         overlay reply: "${reply.ledgerText.trim().slice(0, 200)}"`);
         } else {
@@ -519,11 +527,11 @@ async function main() {
         await evaluate(pageCdp, triggerExpr("describe"), { contextId: contentCtx });
         const reply = await waitForEval(pageCdp, renderedReplyExpr(), 60000, { contextId: contentCtx });
         const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/chat"));
-        const ok = reply.kind === "done" && reply.text === "" && reply.logVisible === true && call && call.ok === true && call.status === 200;
+        const ok = reply.kind === "done" && reply.text === reply.expectedDraft && reply.logVisible === true && call && call.ok === true && call.status === 200;
         if (ok) {
           pass(
             "describe reply originated from /v1/chat",
-            `gateway POST /v1/chat -> HTTP 200; result card rendered; input clear`,
+            `gateway POST /v1/chat -> HTTP 200; result card rendered; draft preserved`,
           );
           console.log(`         overlay description: "${reply.ledgerText.trim().slice(0, 200)}"`);
         } else {

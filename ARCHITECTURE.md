@@ -77,14 +77,15 @@ opens a new gateway voice turn without stopping already queued assistant audio.
 
 The overlay surface stays small: it shows the current intent/result and compact
 run state, not a full scrollback manager. Browser text replies render in the
-result stack above the command input; the input clears and stays ready for the
-next command. Browser voice keeps that input available, shows partial/final user
-transcript feedback above it, and streams assistant text into the result stack
-above the input. The gateway still stores durable session, branch, turn, transcript,
-provider-event, and agent-run history. Realtime providers receive a bounded
-Moa-owned context pack at session start so provider memory is not the product
-database. If the user wants history, they ask Moa for it through the same intent
-surface instead of browsing visible scrollback.
+result stack above the command input; replies, errors, and voice state never
+clear or replace the user's current input draft. Browser voice keeps that input
+available, shows partial/final user transcript feedback above it, and streams
+assistant text into the result stack above the input. The gateway still stores
+durable session, branch, turn, transcript, provider-event, and agent-run
+history. Realtime providers receive a bounded Moa-owned context pack at session
+start so provider memory is not the product database. If the user wants history,
+they ask Moa for it through the same intent surface instead of browsing visible
+scrollback.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript

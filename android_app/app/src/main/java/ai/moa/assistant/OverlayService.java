@@ -742,6 +742,12 @@ public final class OverlayService extends Service {
 
     private String voiceStateLabel() {
         switch (voiceRuntimeState) {
+            case LISTENING:
+                return "Listening";
+            case THINKING:
+                return "Thinking";
+            case SPEAKING:
+                return "Speaking";
             case ERROR:
                 return "Error";
             case INTERRUPTED:
@@ -760,6 +766,7 @@ public final class OverlayService extends Service {
             case INTERRUPTED:
             case RECOVERING:
                 return MoaColors.GOLD;
+            case THINKING:
             case SPEAKING:
                 return MoaColors.GOLD;
             default:
@@ -1559,9 +1566,7 @@ public final class OverlayService extends Service {
     // tap during voice cuts/collapses it. A second idle tap closes the panel.
     private void handleOrbSingleTap() {
         if (streamingVoiceActive() && voiceRuntimeState == VoiceRuntimeState.LISTENING && streamingVoiceController != null) {
-            streamingVoiceController.commitTurn();
-            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
-            updateMicState();
+            commitStreamingVoiceTurnNow();
             return;
         }
         if (voiceController.isCommandListening()) {
@@ -1575,6 +1580,53 @@ public final class OverlayService extends Service {
             return;
         }
         togglePanel();
+    }
+
+    private void commitStreamingVoiceTurnNow() {
+        MoaStreamingVoiceSessionController controller = streamingVoiceController;
+        if (controller == null) {
+            return;
+        }
+        currentStreamingTurnCommitRequested = true;
+        String transcript = visibleVoiceContent(currentStreamingTranscript);
+        if (!transcript.isEmpty()) {
+            updateVoiceUserTranscript(transcript, true);
+        } else {
+            showTranscriptOverlay("");
+        }
+        setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+        updateMicState();
+        if (routeCommittedStreamingTranscriptIfNeeded(transcript)) {
+            return;
+        }
+        controller.commitTurn();
+    }
+
+    private boolean routeCommittedStreamingTranscriptIfNeeded(String transcript) {
+        String value = safe(transcript);
+        if (value.isEmpty() || currentStreamingTurnRouted) {
+            return false;
+        }
+        if (nextStreamingTurnFollowsActiveRun || !activeAgentRuns.isEmpty()) {
+            currentStreamingTurnRouted = true;
+            currentStreamingTurnCommitRequested = false;
+            nextStreamingTurnFollowsActiveRun = false;
+            addMessage(false, value);
+            updateVoiceUserTranscript(value, true);
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            requestAgentRunFollowUp(value, true);
+            MoaStreamingVoiceSessionController controller = streamingVoiceController;
+            if (controller != null) {
+                controller.cancel();
+            }
+            updateMicState();
+            return true;
+        }
+        if (shouldRouteStreamingTranscriptThroughMoa(value)) {
+            routeStreamingTranscriptThroughMoa(value);
+            return true;
+        }
+        return false;
     }
 
     // Close every overlay surface except the orb: the chat panel, the voice
@@ -1621,9 +1673,7 @@ public final class OverlayService extends Service {
             if (orbView != null) {
                 orbView.setHeld(false);
             }
-            streamingVoiceController.commitTurn();
-            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
-            updateMicState();
+            commitStreamingVoiceTurnNow();
             return;
         }
         // First double-tap: start the continuous conversation loop.
@@ -1776,8 +1826,8 @@ public final class OverlayService extends Service {
                     return;
                 }
                 currentStreamingTranscript = safe(text);
-                updateVoiceUserTranscript(currentStreamingTranscript, false);
-                setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+                updateVoiceUserTranscript(currentStreamingTranscript, currentStreamingTurnCommitRequested);
+                setVoiceRuntimeState(currentStreamingTurnCommitRequested ? VoiceRuntimeState.THINKING : VoiceRuntimeState.LISTENING);
                 if (currentStreamingTurnCommitRequested && shouldRouteStreamingTranscriptThroughMoa(currentStreamingTranscript)) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript);
                 }
@@ -2005,6 +2055,7 @@ public final class OverlayService extends Service {
         if (controller != null) {
             controller.cancel();
         }
+        updateMicState();
     }
 
     private void showReadyForNextVoiceTurn(int generation) {

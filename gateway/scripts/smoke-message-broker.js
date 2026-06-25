@@ -25,12 +25,13 @@ main().catch((error) => {
 async function main() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-message-broker-smoke-"));
   const dataDir = path.join(tempDir, "data");
+  const fakeGemini = writeFakeHarness(tempDir, "fake-gemini.sh");
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   let server;
 
   try {
-    server = await startGateway({ port, dataDir });
+    server = await startGateway({ port, dataDir, fakeGemini });
     await step("broker auth required", () => assertAuthRequired(baseUrl));
     const sessionId = `broker_session_${Date.now().toString(36)}`;
     await step("seed existing session", () => seedVoiceTurn(baseUrl, sessionId));
@@ -43,6 +44,8 @@ async function main() {
       assertQaRoute(baseUrl, dataDir));
     await step("broker attaches evidence to active run", () =>
       assertActiveRunAttachment(baseUrl, dataDir, activeRunId));
+    await step("broker follow-up does not cancel active run", () =>
+      assertRuntimeActiveRunFollowUp(baseUrl, dataDir, sessionId));
     await step("broker event persisted", () =>
       assertBrokerLedger(dataDir, continuation.event.id));
 
@@ -59,6 +62,7 @@ async function main() {
         "research/report message returns a landscape-research workflow decision",
         "test/verify message returns a QA workflow decision",
         "active run messages append broker_evidence_attached without cancellation",
+        "a second user turn while an agent run is active leaves the run active",
         "new work message can recommend create_new_fork without cancellation",
         "broker ledger persists route reasons",
       ],
@@ -233,6 +237,59 @@ async function assertActiveRunAttachment(baseUrl, dataDir, activeRunId) {
   assert.equal(attached.context_pack_id, route.context_pack_id);
 }
 
+async function assertRuntimeActiveRunFollowUp(baseUrl, dataDir, sessionId) {
+  const runResponse = await postJson(`${baseUrl}/v1/agent/runs`, {
+    source: "message-broker-smoke",
+    conversation_id: sessionId,
+    harness: "gemini",
+    wait: false,
+    prompt: "SLEEP_BROKER keep working on canonical voice session transcript storage",
+  });
+  assert.equal(runResponse.status, 202, JSON.stringify(runResponse.json));
+  const runId = runResponse.json.run.id;
+  await waitForRunStatus(baseUrl, runId, "running");
+
+  const response = await postJson(`${baseUrl}/v1/broker/messages`, {
+    source: "message-broker-smoke",
+    session_id: sessionId,
+    agent_run_id: runId,
+    transcript: "second turn: attach this evidence about transcript partials and finals to the active run",
+    evidence_refs: [{ type: "voice_turn", session_id: sessionId, turn_id: "follow_up_turn" }],
+  });
+  assert.equal(response.status, 202, JSON.stringify(response.json));
+  const route = response.json.decisions.find((decision) =>
+    decision.target_type === "agent_run" &&
+    decision.target_id === runId &&
+    decision.action === "attach_as_evidence");
+  assert.ok(route, `expected active run evidence route, got ${JSON.stringify(response.json.decisions)}`);
+  assert.equal(route.cancellation_behavior, "none");
+  assert.match(route.reason, /agent_run_id/);
+  assert.ok(route.context_pack_id, "active run evidence route must include a context pack");
+
+  const after = await getJson(`${baseUrl}/v1/agent/runs/${runId}`);
+  assert.equal(after.run.status, "running", "broker follow-up must not cancel or replace the active run");
+  assert.equal(after.active, true, "run must remain active after broker follow-up");
+  assert.ok(!after.events.some((event) => event.type === "cancel_requested"), "broker follow-up must not request cancellation");
+  assert.ok(!after.events.some((event) => event.type === "canceled"), "broker follow-up must not cancel the active run");
+  const attached = after.events.find((event) =>
+    event.type === "broker_evidence_attached" &&
+    event.broker_event_id === response.json.event.id);
+  assert.ok(attached, "active run must receive broker_evidence_attached event");
+  assert.equal(attached.reason, route.reason);
+  assert.match(attached.text, /transcript partials and finals/);
+
+  const eventPath = path.join(dataDir, "broker-events", `${response.json.event.id}.json`);
+  const stored = JSON.parse(fs.readFileSync(eventPath, "utf8"));
+  const storedRoute = stored.decisions.find((decision) => decision.id === route.id);
+  assert.ok(storedRoute, "broker event must persist the route decision");
+  assert.equal(storedRoute.reason, route.reason);
+  assert.equal(storedRoute.cancellation_behavior, "none");
+  assert.deepEqual(stored.evidence_refs, [{ type: "voice_turn", session_id: sessionId, turn_id: "follow_up_turn" }]);
+
+  const terminal = await waitForRunTerminal(baseUrl, runId);
+  assert.equal(terminal.run.status, "completed");
+}
+
 function assertBrokerLedger(dataDir, eventId) {
   const eventPath = path.join(dataDir, "broker-events", `${eventId}.json`);
   assert.ok(fs.existsSync(eventPath), "broker event JSON missing");
@@ -253,7 +310,7 @@ function readContextPack(dataDir, id) {
   return JSON.parse(fs.readFileSync(packPath, "utf8"));
 }
 
-async function startGateway({ port, dataDir }) {
+async function startGateway({ port, dataDir, fakeGemini }) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ["server.js"], {
     cwd: GATEWAY_DIR,
@@ -266,6 +323,9 @@ async function startGateway({ port, dataDir }) {
       DATA_DIR: dataDir,
       ANDROID_OTA_DIR: path.join(dataDir, "android-ota"),
       MOA_GATEWAY_TOKEN: TOKEN,
+      DEFAULT_AGENT_HARNESS: "gemini",
+      GEMINI_BIN: fakeGemini,
+      AGENT_RUN_TIMEOUT_MS: "8000",
       MODEL_PROVIDER: "openai-compatible",
       MODEL_ID: "message-broker-smoke-model",
       MODEL_API_KEY: "",
@@ -280,6 +340,45 @@ async function startGateway({ port, dataDir }) {
   return server;
 }
 
+function writeFakeHarness(tempDir, fileName) {
+  const filePath = path.join(tempDir, fileName);
+  fs.writeFileSync(filePath, [
+    "#!/usr/bin/env sh",
+    "if [ \"$1\" = \"-v\" ] || [ \"$1\" = \"--version\" ]; then echo 'fake-gemini 0.0.0'; exit 0; fi",
+    "case \"$*\" in *SLEEP_BROKER*) sleep 2; echo 'fake broker harness completed'; exit 0;; esac",
+    "echo 'fake broker harness completed'",
+  ].join("\n"));
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+async function waitForRunStatus(baseUrl, runId, status) {
+  const deadline = Date.now() + 5000;
+  let last;
+  while (Date.now() < deadline) {
+    last = await getJson(`${baseUrl}/v1/agent/runs/${runId}`);
+    if (last.run.status === status) {
+      return last;
+    }
+    await sleep(100);
+  }
+  throw new Error(`run ${runId} did not reach ${status}; last=${JSON.stringify(last)}`);
+}
+
+async function waitForRunTerminal(baseUrl, runId) {
+  const terminal = new Set(["completed", "failed", "timed-out", "canceled"]);
+  const deadline = Date.now() + 7000;
+  let last;
+  while (Date.now() < deadline) {
+    last = await getJson(`${baseUrl}/v1/agent/runs/${runId}`);
+    if (terminal.has(last.run.status)) {
+      return last;
+    }
+    await sleep(100);
+  }
+  throw new Error(`run ${runId} did not finish; last=${JSON.stringify(last)}`);
+}
+
 async function postJson(url, body) {
   const response = await fetch(url, {
     method: "POST",
@@ -290,6 +389,13 @@ async function postJson(url, body) {
     body: JSON.stringify(body),
   });
   return { status: response.status, json: await response.json() };
+}
+
+async function getJson(url) {
+  const response = await fetch(url, { headers: authHeaders() });
+  const json = await response.json();
+  assert.ok(response.status >= 200 && response.status < 300, `${url} returned ${response.status}: ${JSON.stringify(json)}`);
+  return json;
 }
 
 function authHeaders() {

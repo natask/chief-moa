@@ -55,7 +55,15 @@ assert.strictEqual(classifyVoiceTurn({}, "/agent ship it"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "only process English and Amharic"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "change your language to Amharic"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "your name is Moa"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "you are Aggie"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "call yourself The Steward"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what voice are you using"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "what language settings are active"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
 
 const inputLanguageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
@@ -97,9 +105,40 @@ assert.deepStrictEqual(parseProfileControlIntent("I speak Japanese and Korean").
   input_language_primary: "ja-JP",
 });
 
+assert.deepStrictEqual(parseProfileControlIntent("only process English and Amharic").patch, {
+  input_languages: "en-US,am-ET",
+  input_language_primary: "en-US",
+});
+
+assert.deepStrictEqual(parseProfileControlIntent("speak Amharic and English").patch, {
+  language: "am-ET,en-US",
+  language_primary: "am-ET",
+  language_mode: "explicit",
+  language_output: "primary_only",
+  language_auto_switch: false,
+});
+
 assert.deepStrictEqual(parseProfileControlIntent("what voice are you using"), {
   action: "summary",
   subject: "voice",
+  scope: "global",
+});
+
+assert.deepStrictEqual(parseProfileControlIntent("your name is Moa").patch, {
+  assistant_name: "Moa",
+});
+assert.strictEqual(parseProfileControlIntent("your name is Moa").confirmation, "Yes. I am now Moa.");
+assert.deepStrictEqual(parseProfileControlIntent("you are Aggie").patch, {
+  assistant_name: "Aggie",
+});
+assert.deepStrictEqual(parseProfileControlIntent("call yourself The Steward").patch, {
+  assistant_name: "The Steward",
+});
+assert.strictEqual(parseProfileControlIntent("your name is Captain"), null);
+assert.deepStrictEqual(parseProfileControlIntent("what is your name"), {
+  action: "summary",
+  subject: "assistant_name",
+  scope: "global",
 });
 
 // forced/hint fields override the heuristics.

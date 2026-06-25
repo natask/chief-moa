@@ -109,6 +109,16 @@ if (!/Grant microphone/.test(optionsHtmlSource) || !/navigator\.mediaDevices\.ge
   throw new Error("options page must expose a one-time extension microphone grant path");
 }
 
+if (
+  !/microphone_capture_failed/.test(backgroundSource) ||
+  !/recoverable:\s*false/.test(backgroundSource) ||
+  !/chrome:\/\/extensions\/\?id=\$\{chrome\.runtime\.id\}/.test(backgroundSource) ||
+  !/chrome\.runtime\.openOptionsPage/.test(backgroundSource) ||
+  !/msg\.recoverable === false \|\| msg\.code === "microphone_capture_failed"/.test(contentSource)
+) {
+  throw new Error("extension offscreen microphone failures must be explicit, non-recoverable, and guide the user to grant extension microphone permission");
+}
+
 if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
   throw new Error("background.js must expose the voiceSessionStart proxy command");
 }
@@ -179,16 +189,89 @@ if (!/function ensureVoiceCueCard/.test(contentSource)) {
   throw new Error("browser voice must promote live transcript/assistant text into the result surface above the input");
 }
 
+function sourceBetween(source, startPattern, endPattern, label) {
+  const start = source.search(startPattern);
+  if (start < 0) throw new Error(`could not find ${label} start`);
+  const rest = source.slice(start);
+  const end = rest.search(endPattern);
+  if (end < 0) throw new Error(`could not find ${label} end`);
+  return rest.slice(0, end);
+}
+
+if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(contentSource)) {
+  throw new Error("browser voice partial transcripts must render as cue cards above the input");
+}
+
+if (!/function isIdentityProfileControl/.test(contentSource) || !/your name/.test(contentSource) || !/call\|name/.test(contentSource)) {
+  throw new Error("browser Live voice must route spoken assistant-name changes through the gateway profile-control path");
+}
+
 if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,220}conversationActive = true;/.test(contentSource)) {
   throw new Error("browser voice start must keep the input surface open while the user speaks");
+}
+
+const openTextSurfaceBody = sourceBetween(
+  contentSource,
+  /function openTextSurface\(/,
+  /function closeTextSurface\(/,
+  "openTextSurface"
+);
+if (/surfacePhase === "idle"[\s\S]{0,100}setInputText\(\s*""/.test(openTextSurfaceBody)) {
+  throw new Error("openTextSurface({ fresh: false }) must preserve hidden typed drafts");
+}
+
+const submitInstructionBody = sourceBetween(
+  contentSource,
+  /function submitInstruction\(/,
+  /function describePage\(/,
+  "submitInstruction"
+);
+if (/setInputText\(\s*""/.test(submitInstructionBody)) {
+  throw new Error("submitting a typed command must not clear the draft buffer");
+}
+
+const startLiveVoiceTurnBody = sourceBetween(
+  contentSource,
+  /async function startLiveVoiceTurn\(/,
+  /function handleLiveVoiceMessage\(/,
+  "startLiveVoiceTurn"
+);
+if (/setInputText\(\s*""/.test(startLiveVoiceTurnBody)) {
+  throw new Error("starting browser voice must not clear an existing typed draft");
+}
+
+if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(contentSource)) {
+  throw new Error("voice button click must open the input surface and prime audio before starting live voice");
 }
 
 if (!/if \(liveVoice && listening\) \{[\s\S]{0,180}commitLiveVoiceTurn\(\);/.test(contentSource)) {
   throw new Error("single-clicking the launcher while voice is listening must send the current speech turn");
 }
 
-if (!/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {
-  throw new Error("live voice must show the transcript bar while the browser voice surface is active");
+if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {
+  throw new Error("browser voice must not show a separate top voice-state strip");
+}
+
+if (!/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*none;/.test(overlayCssSource)) {
+  throw new Error("top voice-state strip must stay hidden during browser voice");
+}
+
+const doneMessageCase = sourceBetween(contentSource, /case "done":/, /case "error":/, "done message case");
+const errorMessageCase = sourceBetween(contentSource, /case "error":/, /case "agentRevoked":/, "error message case");
+if (/setInputText\(\s*""/.test(doneMessageCase) || /setInputText\(\s*""/.test(errorMessageCase)) {
+  throw new Error("browser replies and errors must render above the composer without clearing typed drafts");
+}
+
+if (!/function safeRuntimeSendMessage/.test(contentSource) || !/function safeStorageLocalGet/.test(contentSource) || !/function safeStorageLocalSet/.test(contentSource)) {
+  throw new Error("content.js must guard runtime and storage calls against stale extension contexts");
+}
+
+if (
+  !/looksLikeGatewayProfileControlIntent/.test(backgroundSource) ||
+  !/function maybeRouteGatewayProfileControl/.test(backgroundSource) ||
+  !/data\?\.classification === "profile_control"/.test(backgroundSource)
+) {
+  throw new Error("typed voice/language profile controls must route through /v1/voice/turns and refresh the profile cache");
 }
 
 if (!/function claimActiveAgentTab/.test(backgroundSource) || !/function revokeOtherTabVoiceSessions/.test(backgroundSource)) {
@@ -246,7 +329,7 @@ for (const file of [
   execFileSync(process.execPath, ["--check", file], { stdio: "inherit" });
 }
 
-const { parseSettingsIntent } = await import("../extension/settings-intent.js");
+const { parseSettingsIntent, looksLikeGatewayProfileControlIntent } = await import("../extension/settings-intent.js");
 const { parseBrowserTaskIntent, parseOpenTabIntent } = await import("../extension/browser-task-intent.js");
 const devExtensionSource = readFileSync("scripts/dev-extension.mjs", "utf8");
 const pokeDevReloadSource = readFileSync("scripts/poke-dev-reload.mjs", "utf8");
@@ -275,6 +358,26 @@ if (
 }
 if (parseSettingsIntent(setupParagraph, null) !== null) {
   throw new Error("settings parser should ignore quoted settings examples inside setup text");
+}
+if (looksLikeGatewayProfileControlIntent(setupParagraph)) {
+  throw new Error("gateway profile-control detector should ignore quoted settings examples inside setup text");
+}
+for (const text of [
+  "use the Kore voice",
+  "switch to Aoede",
+  "respond only in English",
+  "speak Amharic and English",
+  "only process English and Amharic",
+  "change your language to Amharic",
+  "your name is Moa",
+  "call yourself The Steward",
+  "what voice is active",
+  "what is your name",
+  "what language settings are active",
+]) {
+  if (!looksLikeGatewayProfileControlIntent(text)) {
+    throw new Error(`gateway profile-control detector should accept: ${text}`);
+  }
 }
 const taskIntent = parseBrowserTaskIntent("open https://example.com/docs and report the title");
 if (taskIntent?.url !== "https://example.com/docs") {

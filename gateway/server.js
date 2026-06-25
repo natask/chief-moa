@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { createVoiceSessionServer } = require("./lib/voice-session-server");
-const { createAgentProfileStore } = require("./lib/agent-profile");
+const { createAgentProfileStore, normalizeDeviceId } = require("./lib/agent-profile");
 const { voiceProviderNames } = require("./lib/voice-providers");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createBrain } = require("./lib/brain");
@@ -116,6 +116,7 @@ const agentProfile = createAgentProfileStore({
   dataDir: DATA_DIR,
   defaults: {
     system_prompt: SYSTEM_PROMPT,
+    assistant_name: "Aggie",
     model: MODEL_ID,
     temperature: MODEL_TEMPERATURE,
     voice_max_chars: VOICE_TTS_MAX_CHARS,
@@ -257,7 +258,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, agentAuthError());
         return;
       }
-      sendJson(response, 200, agentProfilePayload());
+      sendJson(response, 200, agentProfilePayload({}, profileOptionsFromUrl(url)));
       return;
     }
 
@@ -287,9 +288,15 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, agentAuthError());
         return;
       }
+      const profileOptions = profileOptionsFromUrl(url);
       sendJson(response, 200, {
-        current_version: agentProfile.currentVersion(),
-        versions: agentProfile.versions({ limit: Number(url.searchParams.get("limit") || 50) }),
+        current_version: agentProfile.currentVersion(profileOptions),
+        scope: profileOptions.scope,
+        device_id: profileOptions.deviceId || "",
+        versions: agentProfile.versions({
+          limit: Number(url.searchParams.get("limit") || 50),
+          deviceId: profileOptions.deviceId,
+        }),
       });
       return;
     }
@@ -308,8 +315,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, agentAuthError());
         return;
       }
-      agentProfile.reset({ source: "api", reason: "reset" });
-      sendJson(response, 200, agentProfilePayload({ application: profileApplicationSemantics() }));
+      await handleAgentProfileReset(request, response);
       return;
     }
 
@@ -798,14 +804,16 @@ async function handleChat(request, response) {
   const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id || conversationId, conversationId);
   const branchId = sanitizeOptionalId(body.branch_id, "default");
   const turnId = sanitizeOptionalId(body.turn_id, randomId("chat"));
+  const deviceId = profileDeviceIdFromBody(body);
+  const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
   const messages = normalizeMessages(body.messages);
   if (messages.length === 0) {
     sendJson(response, 400, { error: "messages must contain at least one user message" });
     return;
   }
 
-  const profileVersion = agentProfile.currentVersion();
-  const profile = agentProfile.effectiveWithOverrides(body.profile_overrides);
+  const profileVersion = agentProfile.currentVersion(profileOptions);
+  const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
   const screenContext = formatScreenContext(body.screen);
   // Recall the user's facts/persona from the Brain before answering, keyed off
   // the latest user message, and prepend it as a bounded system-context block
@@ -830,6 +838,7 @@ async function handleChat(request, response) {
     session_id: sessionId,
     branch_id: branchId,
     turn_id: turnId,
+    device_id: deviceId,
     source: body.source || "unknown",
     model: profile.model,
     profile_version: profileVersion,
@@ -846,6 +855,7 @@ async function handleChat(request, response) {
     branch_id: branchId,
     turn_id: turnId,
     source: saved.source,
+    device_id: deviceId,
     model: profile.model,
     profile_version: profileVersion,
     user_text: lastUser?.content || "",
@@ -911,6 +921,8 @@ function buildBrokerEvent(body, text) {
   const sessionId = body.session_id || body.conversation_id
     ? sanitizeOptionalId(body.session_id || body.conversation_id, "")
     : "";
+  const deviceId = profileDeviceIdFromBody(body);
+  const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
   return {
     id: sanitizeOptionalId(body.event_id, randomId("broker")),
     kind: "broker_event",
@@ -919,9 +931,10 @@ function buildBrokerEvent(body, text) {
     session_id: sessionId,
     conversation_id: body.conversation_id ? sanitizeOptionalId(body.conversation_id, sessionId || "") : sessionId,
     branch_id: body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "",
+    device_id: deviceId,
     project_id: body.project_id ? sanitizeOptionalId(body.project_id, "") : "",
     subproject_id: body.subproject_id ? sanitizeOptionalId(body.subproject_id, "") : "",
-    profile_version: agentProfile.currentVersion(),
+    profile_version: agentProfile.currentVersion(profileOptions),
     evidence_refs: Array.isArray(body.evidence_refs) ? body.evidence_refs.slice(0, 20) : [],
     created_at: now,
     updated_at: now,
@@ -1426,24 +1439,83 @@ function writeBrokerEvent(event) {
   }) + "\n");
 }
 
-function agentProfilePayload(extra = {}) {
+function profileOptionsFromUrl(url) {
+  const requestedScope = String(url.searchParams.get("scope") || url.searchParams.get("profile_scope") || "global").toLowerCase();
+  const deviceId = normalizeDeviceId(url.searchParams.get("device_id") || url.searchParams.get("deviceId") || "");
   return {
-    profile: agentProfile.effective(),
-    profile_version: agentProfile.currentVersion(),
-    current_version: agentProfile.currentVersion(),
+    scope: requestedScope === "device" && deviceId ? "device" : "global",
+    requested_scope: requestedScope === "device" ? "device" : "global",
+    deviceId,
+  };
+}
+
+function profileDeviceIdFromBody(body) {
+  return normalizeDeviceId(
+    body?.device_id
+      || body?.deviceId
+      || body?.client?.device_id
+      || body?.client?.deviceId
+      || body?.client_id
+      || "",
+  );
+}
+
+function profileScopeFromBody(body, fallback = "global") {
+  const raw = String(body?.scope || body?.profile_scope || body?.client?.profile_scope || fallback || "global").toLowerCase();
+  return raw === "device" || raw === "current_device" || raw === "this_device" ? "device" : "global";
+}
+
+function profileOptionsFromBody(body, fallbackScope = "global") {
+  const deviceId = profileDeviceIdFromBody(body);
+  const requestedScope = profileScopeFromBody(body, fallbackScope);
+  return {
+    scope: requestedScope === "device" && deviceId ? "device" : "global",
+    requested_scope: requestedScope,
+    deviceId,
+  };
+}
+
+function requireDeviceScope(response, options) {
+  if (options.requested_scope === "device" && !options.deviceId) {
+    sendJson(response, 400, { error: "device_id is required for device-scoped profile changes" });
+    return false;
+  }
+  return true;
+}
+
+function agentProfilePayload(extra = {}, options = {}) {
+  const profileOptions = {
+    scope: options.scope === "device" && options.deviceId ? "device" : "global",
+    deviceId: normalizeDeviceId(options.deviceId || options.device_id || ""),
+  };
+  return {
+    profile: agentProfile.effective(profileOptions),
+    profile_version: agentProfile.currentVersion(profileOptions),
+    current_version: agentProfile.currentVersion(profileOptions),
+    global_version: agentProfile.currentVersion(),
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId || "",
     defaults: agentProfile.defaults(),
-    is_overridden: agentProfile.isOverridden(),
+    is_overridden: agentProfile.isOverridden(profileOptions),
     fields: agentProfile.fields(),
     ...extra,
   };
 }
 
-function agentProfileRuntimeStatus() {
-  const profile = agentProfile.effective();
+function agentProfileRuntimeStatus(options = {}) {
+  const profileOptions = {
+    scope: options.scope === "device" && options.deviceId ? "device" : "global",
+    deviceId: normalizeDeviceId(options.deviceId || options.device_id || ""),
+  };
+  const profile = agentProfile.effective(profileOptions);
   return {
-    current_version: agentProfile.currentVersion(),
-    is_overridden: agentProfile.isOverridden(),
+    current_version: agentProfile.currentVersion(profileOptions),
+    global_version: agentProfile.currentVersion(),
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId || "",
+    is_overridden: agentProfile.isOverridden(profileOptions),
     model: profile.model,
+    assistant_name: profile.assistant_name,
     voice: profile.voice,
     voice_max_chars: profile.voice_max_chars,
     system_prompt_preview: truncate(profile.system_prompt || "", 240),
@@ -1451,6 +1523,8 @@ function agentProfileRuntimeStatus() {
       allowed: profile.language || "",
       mode: profile.language_mode,
       primary: profile.language_primary || profile.language || "",
+      input: profile.input_languages || "",
+      input_primary: profile.input_language_primary || "",
       output: profile.language_output,
       auto_switch: profile.language_auto_switch === true,
     },
@@ -1504,13 +1578,52 @@ async function handleAgentProfilePut(request, response) {
   const patch = body && typeof body === "object"
     ? (body.profile || body.profile_overrides || body)
     : {};
-  const before = agentProfile.effective();
-  const beforeVersion = agentProfile.currentVersion();
-  agentProfile.patch(patch, { source: body?.source || "api", reason: "patch" });
-  const after = agentProfile.effective();
-  const afterVersion = agentProfile.currentVersion();
-  recordProfileHistory(before, after, body?.source, { beforeVersion, afterVersion });
-  sendJson(response, 200, agentProfilePayload({ application: profileApplicationSemantics() }));
+  const profileOptions = profileOptionsFromBody(body, "global");
+  if (!requireDeviceScope(response, profileOptions)) {
+    return;
+  }
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
+  agentProfile.patch(patch, {
+    source: body?.source || "api",
+    reason: "patch",
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const after = agentProfile.effective(profileOptions);
+  const afterVersion = agentProfile.currentVersion(profileOptions);
+  recordProfileHistory(before, after, body?.source, {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  sendJson(response, 200, agentProfilePayload({ application: profileApplicationSemantics() }, profileOptions));
+}
+
+async function handleAgentProfileReset(request, response) {
+  const body = await readJsonBody(request);
+  const profileOptions = profileOptionsFromBody(body, "global");
+  if (!requireDeviceScope(response, profileOptions)) {
+    return;
+  }
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
+  agentProfile.reset({
+    source: body?.source || "api",
+    reason: "reset",
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const after = agentProfile.effective(profileOptions);
+  const afterVersion = agentProfile.currentVersion(profileOptions);
+  recordProfileHistory(before, after, body?.source || "reset", {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  sendJson(response, 200, agentProfilePayload({ application: profileApplicationSemantics() }, profileOptions));
 }
 
 async function handleAgentProfileRollback(request, response) {
@@ -1546,6 +1659,8 @@ function recordProfileHistory(before, after, source, versions = {}) {
     prev_system_prompt: before?.system_prompt || "",
     from_profile_version: versions.beforeVersion || "",
     profile_version: versions.afterVersion || agentProfile.currentVersion(),
+    scope: versions.scope || "global",
+    device_id: versions.deviceId || "",
     profile: after,
   };
   try {
@@ -2139,6 +2254,8 @@ async function handleVoiceTurn(request, response) {
   const conversationId = sanitizeOptionalId(body.conversation_id || sessionId, sessionId);
   const branchId = sanitizeOptionalId(body.branch_id, "default");
   const turnId = sanitizeOptionalId(body.turn_id, randomId("turn"));
+  const deviceId = profileDeviceIdFromBody(body);
+  const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
   const existing = readVoiceTurnRecord(sessionId, turnId);
   if (existing?.response) {
     sendJson(response, 200, existing.response);
@@ -2148,8 +2265,8 @@ async function handleVoiceTurn(request, response) {
   const source = String(body.source || body.client?.source || "android-overlay").slice(0, 80);
   const screen = summarizeScreen(body.screen || body.context?.screen);
   const classification = classifyVoiceTurn(body, transcript);
-  const profileVersion = agentProfile.currentVersion();
-  const profile = agentProfile.effectiveWithOverrides(body.profile_overrides);
+  const profileVersion = agentProfile.currentVersion(profileOptions);
+  const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
   // Capture memory-worthy statements ("call me Bob", "talk to me like a baller")
   // to the Brain deterministically, before we branch on classification, so a
   // fact lands even when the turn is a control/agent turn that never hits the
@@ -2166,6 +2283,7 @@ async function handleVoiceTurn(request, response) {
       ? Object.keys(body.profile_overrides)
       : [],
     source,
+    device_id: deviceId,
     transcript: truncate(transcript, 16000),
     classification,
     screen,
@@ -2189,7 +2307,7 @@ async function handleVoiceTurn(request, response) {
   }
 
   if (classification === "profile_control") {
-    const payload = await handleVoiceProfileControl(baseRecord, transcript);
+    const payload = await handleVoiceProfileControl(baseRecord, transcript, profileOptions);
     writeVoiceTurnRecord({
       ...baseRecord,
       classification: payload.classification,
@@ -2355,6 +2473,7 @@ async function handleVoiceSessionTicket(request, response) {
     expiresAt,
     source: String(body.source || "browser-extension").slice(0, 80),
     sessionId: sanitizeOptionalId(body.session_id || body.conversation_id, "default"),
+    deviceId: profileDeviceIdFromBody(body),
     issuedAt: new Date(now).toISOString(),
   });
   sendJson(response, 201, {
@@ -2363,23 +2482,44 @@ async function handleVoiceSessionTicket(request, response) {
     ws_url: voiceSessionUrlForRequest(request, ticket),
     expires_at: new Date(expiresAt).toISOString(),
     expires_in_ms: expiresAt - now,
+    device_id: profileDeviceIdFromBody(body),
   });
 }
 
-async function handleVoiceProfileControl(record, transcript) {
+async function handleVoiceProfileControl(record, transcript, turnProfileOptions = {}) {
   const intent = parseProfileControlIntent(transcript);
   if (!intent) {
+    const message = "Hey, I would like to do that, but I need you to say which voice, input language, or reply language to change.";
     return voiceTurnPayload(record, {
       classification: "profile_control",
-      speak: "I could not parse that profile change.",
-      display: "I could not parse that profile change.",
+      speak: message,
+      display: message,
       actions: [],
       follow_up_expected: false,
     });
   }
+  const profileOptions = {
+    scope: intent.scope === "device" && turnProfileOptions.deviceId ? "device" : "global",
+    requested_scope: intent.scope || "global",
+    deviceId: turnProfileOptions.deviceId || "",
+  };
+  if (profileOptions.requested_scope === "device" && !profileOptions.deviceId) {
+    const message = "Hey, I would like to do that, but I need you to give me access to this device's Moa device id.";
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak: message,
+        display: message,
+        actions: [{ type: "profile_update_blocked", reason: "missing_device_id" }],
+        follow_up_expected: false,
+      }),
+      profile_version: agentProfile.currentVersion(),
+      profile: agentProfileRuntimeStatus(),
+    };
+  }
 
   if (intent.action === "summary") {
-    const summary = profileSummaryText(intent.subject);
+    const summary = profileSummaryText(intent.subject, profileOptions);
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -2388,22 +2528,34 @@ async function handleVoiceProfileControl(record, transcript) {
         actions: [{ type: "profile_summary", subject: intent.subject }],
         follow_up_expected: false,
       }),
-      profile_version: agentProfile.currentVersion(),
-      profile: agentProfileRuntimeStatus(),
+      profile_version: agentProfile.currentVersion(profileOptions),
+      profile: agentProfileRuntimeStatus(profileOptions),
     };
   }
 
-  const before = agentProfile.effective();
-  const beforeVersion = agentProfile.currentVersion();
-  agentProfile.patch(intent.patch, { source: "voice", reason: "voice_profile_control" });
-  const after = agentProfile.effective();
-  const afterVersion = agentProfile.currentVersion();
-  recordProfileHistory(before, after, "voice", { beforeVersion, afterVersion });
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
+  agentProfile.patch(intent.patch, {
+    source: "voice",
+    reason: "voice_profile_control",
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const after = agentProfile.effective(profileOptions);
+  const afterVersion = agentProfile.currentVersion(profileOptions);
+  recordProfileHistory(before, after, "voice", {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
   const changed = beforeVersion !== afterVersion;
   const application = profileApplicationSemantics();
-  const display = changed
-    ? `Updated ${intent.summary || "profile"}. Profile version is ${afterVersion}; applies ${application.applies.replace(/_/g, " ")}.`
-    : `No profile change applied. Profile version is still ${afterVersion}.`;
+  const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
+  const display = intent.confirmation
+    || (changed
+      ? `Updated ${intent.summary || "profile"} ${scopeText}. Profile version is ${afterVersion}; applies ${application.applies.replace(/_/g, " ")}.`
+      : `That profile setting is already active ${scopeText}. Profile version is still ${afterVersion}.`);
   return {
     ...voiceTurnPayload(record, {
       classification: "profile_control",
@@ -2414,6 +2566,8 @@ async function handleVoiceProfileControl(record, transcript) {
         changed,
         profile_version: afterVersion,
         from_profile_version: beforeVersion,
+        scope: profileOptions.scope,
+        device_id: profileOptions.deviceId,
         application,
       }],
       follow_up_expected: false,
@@ -2421,22 +2575,26 @@ async function handleVoiceProfileControl(record, transcript) {
     profile_version: afterVersion,
     from_profile_version: beforeVersion,
     application,
-    profile: agentProfileRuntimeStatus(),
+    profile: agentProfileRuntimeStatus(profileOptions),
   };
 }
 
-function profileSummaryText(subject) {
-  const profile = agentProfile.effective();
-  const version = agentProfile.currentVersion();
+function profileSummaryText(subject, options = {}) {
+  const profile = agentProfile.effective(options);
+  const version = agentProfile.currentVersion(options);
+  const scopeText = options.scope === "device" ? "on this device" : "on all devices";
   if (subject === "system_prompt") {
-    return `Profile ${version}. Current system prompt: ${truncate(profile.system_prompt || "(empty)", 220)}`;
+    return `Profile ${version} ${scopeText}. Current system prompt: ${truncate(profile.system_prompt || "(empty)", 220)}`;
   }
   if (subject === "language") {
     const language = profile.language || profile.language_primary || "unspecified";
-    return `Profile ${version}. Language is ${language}; primary is ${profile.language_primary || "unspecified"}; auto switch is ${profile.language_auto_switch ? "on" : "off"}.`;
+    return `Profile ${version} ${scopeText}. Reply language is ${language}; input language is ${profile.input_languages || "unspecified"}; auto switch is ${profile.language_auto_switch ? "on" : "off"}.`;
   }
   if (subject === "voice") {
-    return `Profile ${version}. Voice is ${profile.voice || "default"}.`;
+    return `Profile ${version} ${scopeText}. Voice is ${profile.voice || "default"}.`;
+  }
+  if (subject === "assistant_name") {
+    return `Profile ${version} ${scopeText}. My name is ${profile.assistant_name || "Aggie"}.`;
   }
   if (subject === "providers") {
     return `Profile ${version}. Providers: voice ${profile.voice_provider || "default"}, STT ${profile.stt_provider || "default"}, reasoning ${profile.reasoning_provider || "default"}, TTS ${profile.tts_provider || "default"}.`;
@@ -2994,6 +3152,39 @@ function harnessDefinitions() {
           args.push("--permission-mode", process.env.CLAUDE_PERMISSION_MODE || "plan");
         }
         args.push(run.prompt);
+        return args;
+      },
+    },
+    hermes: {
+      command: () => process.env.HERMES_BIN || "hermes",
+      versionArgs: ["--version"],
+      args: (run) => {
+        const args = [];
+        if (process.env.HERMES_PROVIDER) {
+          args.push("--provider", process.env.HERMES_PROVIDER);
+        }
+        if (process.env.HERMES_MODEL) {
+          args.push("--model", process.env.HERMES_MODEL);
+        }
+        if (process.env.HERMES_TOOLSETS) {
+          args.push("--toolsets", process.env.HERMES_TOOLSETS);
+        }
+        if (process.env.HERMES_SKILLS) {
+          args.push("--skills", process.env.HERMES_SKILLS);
+        }
+        if (run.resume_session_id) {
+          args.push("--resume", run.resume_session_id);
+        }
+        if (process.env.HERMES_WORKTREE === "1") {
+          args.push("--worktree");
+        }
+        if (process.env.HERMES_ACCEPT_HOOKS !== "0") {
+          args.push("--accept-hooks");
+        }
+        if (process.env.HERMES_YOLO === "1") {
+          args.push("--yolo");
+        }
+        args.push("--oneshot", run.prompt);
         return args;
       },
     },
@@ -4203,8 +4394,34 @@ function vertexPayload(messages, profile) {
 function profileSystemInstruction(profile) {
   return [
     profile?.system_prompt || SYSTEM_PROMPT,
+    profileIdentityInstruction(profile),
+    missionAccessInstruction(),
     profileLanguageInstruction(profile),
   ].filter(Boolean).join("\n\n");
+}
+
+function missionAccessInstruction() {
+  return [
+    "Mission-agent access policy:",
+    "- Start from yes and look for a path to satisfy the user's request.",
+    "- Do not answer with a flat refusal. When blocked by missing permission, credentials, integration setup, local approval, or device capability, say: \"Hey, I would like to do that, but I need you to give me access to <specific access>.\"",
+    "- Do not claim an action is done until the owning device, gateway, or integration returns a receipt.",
+    "- Server/model output remains a proposal; local devices still own permissions, approvals, execution, and receipts.",
+  ].join("\n");
+}
+
+function profileIdentityInstruction(profile) {
+  const name = String(profile?.assistant_name || "Aggie").trim();
+  if (!name) {
+    return "";
+  }
+  return [
+    "Assistant identity profile:",
+    "- This identity profile overrides any older name in the base prompt.",
+    `- Your current name is ${name}.`,
+    `- If asked who or what you are, say you are ${name}.`,
+    "- Address the user plainly with no titles or honorifics.",
+  ].join("\n");
 }
 
 function profileLanguageInstruction(profile) {
@@ -4973,6 +5190,16 @@ function credentialHint(name) {
     if (fs.existsSync(path.join(process.env.HOME || "", ".claude"))) return "claude_home";
     return "not_detected";
   }
+  if (name === "hermes") {
+    if (
+      process.env.HERMES_INFERENCE_PROVIDER ||
+      process.env.HERMES_INFERENCE_MODEL ||
+      process.env.HERMES_PROVIDER ||
+      process.env.HERMES_MODEL
+    ) return "hermes_env";
+    if (fs.existsSync(path.join(process.env.HOME || "", ".hermes"))) return "hermes_home";
+    return "not_detected";
+  }
   return "unknown";
 }
 
@@ -5028,6 +5255,10 @@ function redactHarnessArgs(harness, args) {
   }
   if (harness === "claude") {
     return args.map((arg, index) => index === args.length - 1 ? "[prompt]" : arg);
+  }
+  if (harness === "hermes") {
+    const promptIndex = args.indexOf("--oneshot");
+    return args.map((arg, index) => index === promptIndex + 1 ? "[prompt]" : arg);
   }
   return args;
 }

@@ -70,8 +70,22 @@ async function main() {
     assert.equal(languageTurn.profile.language.allowed, "en-US,am-ET", "spoken language lock must persist allowed languages");
     assert.equal(languageTurn.profile.language.primary, "en-US", "spoken language lock must keep first-mentioned language as primary");
     assert.equal(languageTurn.profile.language.auto_switch, false, "spoken language lock must disable auto-switch");
-    const liveProfile = await getJson(`${baseUrl}/v1/agent/profile`);
+    let liveProfile = await getJson(`${baseUrl}/v1/agent/profile`);
     assert.equal(liveProfile.profile_version, languageTurn.profile_version, "profile endpoint must reflect the spoken language update version");
+
+    const inputLanguageTurn = await postJson(`${baseUrl}/v1/voice/turns`, {
+      source: "live-browser-continuity-smoke",
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: "profile",
+      turn_id: "voice_profile_input_language_1",
+      transcript: "Only process English and Amharic.",
+    });
+    assert.equal(inputLanguageTurn.classification, "profile_control", "spoken input-language lock must route as profile_control");
+    const inputLanguageProfile = await getJson(`${baseUrl}/v1/agent/profile`);
+    assert.equal(inputLanguageProfile.profile.input_languages, "en-US,am-ET", "spoken process-language lock must persist input languages");
+    assert.equal(inputLanguageProfile.profile.input_language_primary, "en-US", "spoken process-language lock must persist first input language as primary");
+    liveProfile = inputLanguageProfile;
 
     const chat = await postJson(`${baseUrl}/v1/chat`, {
       source: "agee-extension",
@@ -195,6 +209,7 @@ async function main() {
         "profile update created a durable version",
         "profile rollback created a new version from a selected prior profile",
         "spoken language lock updated the global profile through /v1/voice/turns",
+        "spoken process-language lock updated input language hints through /v1/voice/turns",
         "browser /v1/chat turn kept session_id, branch_id, turn_id, and profile_version",
         "browser voice turns on different cue branches share all-branch durable context",
         "gateway browser task queued, claimed by extension client, and completed by receipt",

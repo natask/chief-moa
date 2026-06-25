@@ -168,6 +168,15 @@ function assertVoicePlaybackStopContract() {
   if (!/liveVoiceBySessionId\.get\(msg\.voiceSessionId\)/.test(source)) {
     throw new Error("voice-session events must route to their owning state, not only the newest liveVoice");
   }
+  if (!/function safeRuntimeSendMessage/.test(source) || !/function safeStorageLocalGet/.test(source) || !/function safeStorageLocalSet/.test(source)) {
+    throw new Error("content.js must guard runtime and storage calls against stale extension contexts");
+  }
+  if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(source)) {
+    throw new Error("voice button click must open the input surface and prime audio before starting live voice");
+  }
+  if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(source)) {
+    throw new Error("live voice transcript must render in cue cards above the input");
+  }
   if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.test(background)) {
     throw new Error("background.js must send assistant_overlap playback policy to the gateway");
   }
@@ -274,6 +283,9 @@ async function main() {
             const logStyle = getComputedStyle(log);
             const voiceStateStyle = getComputedStyle(voiceState);
             const voiceStyle = getComputedStyle(voice);
+            root.classList.add("agee-voicing", "agee-state-listening");
+            const voiceStateDisplayWhenVoicing = getComputedStyle(voiceState).display;
+            root.classList.remove("agee-voicing", "agee-state-listening");
             return {
               ok: true,
               open: root.classList.contains("agee-open"),
@@ -286,6 +298,7 @@ async function main() {
               stopDisplayWhenIdle: stopStyle.display,
               logDisplay: logStyle.display,
               voiceStateDisplay: voiceStateStyle.display,
+              voiceStateDisplayWhenVoicing,
               panelOverflowX: panel.scrollWidth > panel.clientWidth + 1,
               inputOverflowX: input.scrollWidth > input.clientWidth + 1,
               activeInput: document.activeElement === input,
@@ -309,10 +322,23 @@ async function main() {
     if (overlayMetrics.stopDisplayWhenIdle !== "none" || overlayMetrics.logDisplay !== "none" || overlayMetrics.voiceStateDisplay !== "none") {
       throw new Error(`overlay exposed hidden history/voice surfaces while idle: ${JSON.stringify(overlayMetrics)}`);
     }
+    if (overlayMetrics.voiceStateDisplayWhenVoicing !== "none") {
+      throw new Error(`overlay exposed separate top voice strip during voice: ${JSON.stringify(overlayMetrics)}`);
+    }
 
     const resultPlacement = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const input = document.querySelector("#agee-input");
+            if (input) {
+              input.value = "draft must stay";
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          },
+        });
         await chrome.tabs.sendMessage(tabId, { cmd: "done", cueId: "smoke-result-placement", summary: "Smoke reply stays above the input." });
         await new Promise((resolve) => setTimeout(resolve, 80));
         const [result] = await chrome.scripting.executeScript({
@@ -320,17 +346,24 @@ async function main() {
           func: () => {
             const input = document.querySelector("#agee-input");
             const log = document.querySelector("#agee-log");
+            const cue = log ? log.querySelector(".agee-cue, .agee-row") : null;
+            const inputRect = input?.getBoundingClientRect();
+            const cueRect = cue?.getBoundingClientRect();
             return {
               inputValue: input ? input.value : null,
               logText: log ? log.textContent : "",
+              cueAboveInput: !!(inputRect && cueRect && cueRect.bottom <= inputRect.top + 1),
             };
           },
         });
         return result?.result;
       })()
     `);
-    if (resultPlacement?.inputValue !== "" || !String(resultPlacement?.logText || "").includes("Smoke reply stays above the input.")) {
-      throw new Error(`reply was not kept out of the command input: ${JSON.stringify(resultPlacement)}`);
+    if (resultPlacement?.inputValue !== "draft must stay" || !String(resultPlacement?.logText || "").includes("Smoke reply stays above the input.")) {
+      throw new Error(`reply changed the command input draft: ${JSON.stringify(resultPlacement)}`);
+    }
+    if (!resultPlacement?.cueAboveInput) {
+      throw new Error(`result cue did not render above the command input: ${JSON.stringify(resultPlacement)}`);
     }
 
     const workerResult = await evaluate(workerCdp, `

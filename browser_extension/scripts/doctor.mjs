@@ -191,10 +191,11 @@ function findInstalledAgee() {
         const description = String(manifest.description || "");
         const extPath = String(ext.path || "");
         const relevant =
+          /\baggie\b/i.test(`${name} ${description}`) ||
           /\bagee\b/i.test(`${name} ${description}`) ||
           /\bchief\s+ag\b/i.test(`${name} ${description}`) ||
           resolve(extPath || "/") === extensionDir ||
-          /moa-assistant\/software\/browser_extension\/extension/.test(extPath);
+          /moa-assistant\/(?:software\/)?browser_extension\/extension/.test(extPath);
         if (relevant) {
           matches.push({
             browser,

@@ -24,13 +24,14 @@ async function main() {
   const otaDir = path.join(tempDir, "android-ota");
   const fakeGemini = writeFakeHarness(tempDir, "fake-gemini.sh", "gemini");
   const fakeCodex = writeFakeHarness(tempDir, "fake-codex.sh", "codex");
+  const fakeHermes = writeFakeHarness(tempDir, "fake-hermes.sh", "hermes");
   const port = await freePort();
   let baseUrl = `http://127.0.0.1:${port}`;
   let server;
   const completedRunIds = [];
 
   try {
-    server = await startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex });
+    server = await startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes });
 
     await step("auth required", () => assertAuthRequired(baseUrl));
     await step("health", () => assertHealth(baseUrl));
@@ -44,6 +45,7 @@ async function main() {
     await step("duplicate agent turn", async () => completedRunIds.push(await assertDuplicateAgentTurnDoesNotStartAnotherRun(baseUrl)));
     await step("multi-agent voice turn", async () => completedRunIds.push(...await assertMultiAgentVoiceTurn(baseUrl)));
     await step("direct async agent run", async () => completedRunIds.push(await assertDirectAsyncAgentRun(baseUrl, dataDir)));
+    await step("hermes agent run", async () => completedRunIds.push(await assertHermesAgentRun(baseUrl, dataDir)));
     await step("agent run follow-up", async () => completedRunIds.push(await assertAgentRunFollowUp(baseUrl, dataDir, completedRunIds[completedRunIds.length - 1])));
     await step("canceled agent run", async () => completedRunIds.push(await assertCanceledAgentRun(baseUrl, dataDir)));
     await step("failed agent run", async () => completedRunIds.push(await assertFailedAgentRun(baseUrl, dataDir)));
@@ -58,7 +60,7 @@ async function main() {
 
     const restartPort = await freePort();
     baseUrl = `http://127.0.0.1:${restartPort}`;
-    server = await startGateway({ port: restartPort, dataDir, otaDir, fakeGemini, fakeCodex });
+    server = await startGateway({ port: restartPort, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes });
     await step("restart persistence", () => assertRestartPersistence(baseUrl, completedRunIds));
 
     console.log(JSON.stringify({
@@ -108,11 +110,11 @@ async function step(name, fn) {
   }
 }
 
-async function startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex }) {
+async function startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes }) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ["server.js"], {
     cwd: GATEWAY_DIR,
-    env: gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex }),
+    env: gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const logs = collectLogs(server);
@@ -120,7 +122,7 @@ async function startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex }) {
   return server;
 }
 
-function gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex }) {
+function gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes }) {
   return {
     PATH: process.env.PATH || "",
     HOME: process.env.HOME || "",
@@ -133,6 +135,7 @@ function gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex }) {
     DEFAULT_AGENT_HARNESS: "gemini",
     GEMINI_BIN: fakeGemini,
     CODEX_BIN: fakeCodex,
+    HERMES_BIN: fakeHermes,
     MODEL_PROVIDER: "openai-compatible",
     MODEL_BASE_URL: "https://api.openai.com/v1",
     MODEL_ID: "smoke-model",
@@ -173,6 +176,9 @@ async function assertHealth(baseUrl) {
   assert.equal(health.ok, true);
   assert.equal(health.agent_loop.default_harness, "gemini");
   assert.equal(health.agent_loop.token_required, true);
+  const hermes = (health.agent_loop.harnesses || []).find((harness) => harness.name === "hermes");
+  assert.ok(hermes, "hermes harness must be registered");
+  assert.equal(hermes.available, true, "fake hermes harness must be available");
   assert.equal(health.android_ota.configured, false);
   const voiceProvider = health.voice_stream?.provider;
   assert.ok(voiceProvider, "health must expose voice_stream.provider");
@@ -626,6 +632,28 @@ async function assertDirectAsyncAgentRun(baseUrl, dataDir) {
     conversation_id: "smoke_session",
   });
   return response.json.run.id;
+}
+
+async function assertHermesAgentRun(baseUrl, dataDir) {
+  const response = await postJson(`${baseUrl}/v1/agent/runs`, {
+    source: "smoke-regression",
+    conversation_id: "smoke_hermes_session",
+    harness: "hermes",
+    wait: false,
+    prompt: "use Hermes to build a tiny smoke change",
+  });
+
+  assert.equal(response.status, 202);
+  const runId = response.json.run.id;
+  const detail = await waitForRunTerminal(baseUrl, runId);
+  assert.equal(detail.run.status, "completed");
+  assert.match(detail.run.output || "", /fake harness completed: hermes/);
+  assertPersistedRun(dataDir, runId, {
+    status: "completed",
+    harness: "hermes",
+    conversation_id: "smoke_hermes_session",
+  });
+  return runId;
 }
 
 async function assertCanceledAgentRun(baseUrl, dataDir) {

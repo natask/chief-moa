@@ -92,6 +92,71 @@
     "farsi",
   ];
   const PROFILE_VOICE_NAMES = ["puck", "charon", "kore", "fenrir", "aoede", "leda", "orus", "zephyr"];
+  let extensionContextInvalidated = false;
+
+  function markExtensionContextInvalidated(error) {
+    const message = String(error?.message || error || "");
+    if (!/extension context invalidated|context invalidated/i.test(message)) return false;
+    extensionContextInvalidated = true;
+    return true;
+  }
+
+  function canCallExtensionApi() {
+    if (extensionContextInvalidated) return false;
+    try {
+      if (typeof chrome === "undefined") {
+        extensionContextInvalidated = true;
+        return false;
+      }
+      if (!chrome?.runtime?.id) {
+        extensionContextInvalidated = true;
+        return false;
+      }
+      return true;
+    } catch (error) {
+      markExtensionContextInvalidated(error);
+      return false;
+    }
+  }
+
+  function safeRuntimeSendMessage(message) {
+    if (!canCallExtensionApi() || !chrome?.runtime?.sendMessage) return Promise.resolve(null);
+    try {
+      return Promise.resolve(chrome.runtime.sendMessage(message)).catch((error) => {
+        if (markExtensionContextInvalidated(error)) return null;
+        throw error;
+      });
+    } catch (error) {
+      if (markExtensionContextInvalidated(error)) return Promise.resolve(null);
+      return Promise.reject(error);
+    }
+  }
+
+  function safeStorageLocalGet(defaults) {
+    if (!canCallExtensionApi() || !chrome?.storage?.local?.get) return Promise.resolve(defaults);
+    try {
+      return Promise.resolve(chrome.storage.local.get(defaults)).catch((error) => {
+        if (markExtensionContextInvalidated(error)) return defaults;
+        throw error;
+      });
+    } catch (error) {
+      if (markExtensionContextInvalidated(error)) return Promise.resolve(defaults);
+      return Promise.reject(error);
+    }
+  }
+
+  function safeStorageLocalSet(items) {
+    if (!canCallExtensionApi() || !chrome?.storage?.local?.set) return Promise.resolve(null);
+    try {
+      return Promise.resolve(chrome.storage.local.set(items)).catch((error) => {
+        if (markExtensionContextInvalidated(error)) return null;
+        throw error;
+      });
+    } catch (error) {
+      if (markExtensionContextInvalidated(error)) return Promise.resolve(null);
+      return Promise.reject(error);
+    }
+  }
 
   function base64ToBuffer(value) {
     const binary = atob(String(value || ""));
@@ -189,8 +254,8 @@
         e.preventDefault();
         const text = input.value.trim();
         if (!text) return;
-        // The composer never blocks: fire the message and free the field right
-        // away so the next one can be typed and sent while this turn streams.
+        // The composer is a draft buffer. Fire the message without clearing the
+        // field so whatever the user was typing stays visible while it streams.
         submitInstruction(text);
       } else if (e.key === "Escape") {
         closeTextSurface();
@@ -204,13 +269,15 @@
     voiceButton.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      openTextSurface({ fresh: false });
+      primeAudio();
       toggleVoice();
     });
 
     stopButton.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      chrome.runtime.sendMessage({ cmd: "cancel" });
+      safeRuntimeSendMessage({ cmd: "cancel" });
       stopAllLiveVoiceTurns("cancel");
       stopSpeaking();
     });
@@ -219,18 +286,18 @@
   }
 
   function restoreUiChimePreference() {
-    chrome.storage.local.get({ ageeUiChimesEnabled: false }, ({ ageeUiChimesEnabled }) => {
+    safeStorageLocalGet({ ageeUiChimesEnabled: false }).then(({ ageeUiChimesEnabled }) => {
       uiChimesEnabled = ageeUiChimesEnabled === true;
-    });
+    }).catch(() => {});
   }
 
   function restoreLauncherPosition() {
-    chrome.storage.local.get({ ageeLauncherPosition: null }, ({ ageeLauncherPosition }) => {
+    safeStorageLocalGet({ ageeLauncherPosition: null }).then(({ ageeLauncherPosition }) => {
       if (!launcher || !ageeLauncherPosition) return;
       const { x, y } = ageeLauncherPosition;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
       placeLauncher(x, y, false);
-    });
+    }).catch(() => {});
   }
 
   function placeLauncher(x, y, persist) {
@@ -243,7 +310,7 @@
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
     if (open) positionPanel(); // keep the surface anchored if the mark moves
-    if (persist) chrome.storage.local.set({ ageeLauncherPosition: { x: nextX, y: nextY } });
+    if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
   }
 
   function startLauncherDrag(e) {
@@ -333,7 +400,7 @@
   function openTextSurface({ fresh = false } = {}) {
     if (!root) build();
     toggle(true);
-    if (fresh || surfacePhase === "idle") {
+    if (fresh) {
       setInputText("");
       setSurfacePhase("editing");
     }
@@ -678,8 +745,7 @@
     state.voiceSessionId = voiceSessionId || null;
     if (state.voiceSessionId) {
       liveVoiceBySessionId.set(state.voiceSessionId, state);
-      chrome.runtime
-        .sendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId })
+      safeRuntimeSendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId })
         .catch(() => {});
     }
   }
@@ -755,9 +821,8 @@
     const cueId = newCueId();
     openTextSurface({ fresh: false });
     createCue(cueId, displayText, { presentation: "card" });
-    // Free the composer at once: clear it, keep it editable, keep focus. The next
-    // message can go while this card streams its answer above.
-    setInputText("");
+    // Keep the composer as a draft buffer. Responses render above it and must
+    // not clear or replace whatever the user is typing.
     setSurfacePhase("editing");
     // A voice-launched turn keeps the agent surface up and moves it to thinking;
     // a typed command leaves the voice surface untouched.
@@ -766,7 +831,9 @@
       setAgentState("thinking");
     }
     input.focus();
-    chrome.runtime.sendMessage({ cmd: "run", instruction, cueId }).catch((error) => {
+    safeRuntimeSendMessage({ cmd: "run", instruction, cueId }).then(() => {
+      if (extensionContextInvalidated) removeCueCard(cueId);
+    }).catch((error) => {
       showCueError(cueId, error?.message || error, { react: false });
     });
   }
@@ -775,7 +842,9 @@
     const cueId = newCueId();
     openTextSurface({ fresh: false });
     createCue(cueId, "Describe this page", { presentation: "card" });
-    chrome.runtime.sendMessage({ cmd: "describe", cueId }).catch((error) => {
+    safeRuntimeSendMessage({ cmd: "describe", cueId }).then(() => {
+      if (extensionContextInvalidated) removeCueCard(cueId);
+    }).catch((error) => {
       showCueError(cueId, error?.message || error, { react: false });
     });
   }
@@ -790,9 +859,8 @@
     }
   }
 
-  // Drive the visible "agent is up" surface. Adds a class on the root so the
-  // orb, transcript bar, and panel chrome reflect the live phase. The transcript
-  // bar is only present while listening or just-submitted; it clears on idle.
+  // Drive voice state on the root. The top strip stays hidden; live transcript
+  // and assistant text render in cue cards above the input.
   function setAgentState(next) {
     agentState = next;
     if (!root) return;
@@ -801,12 +869,12 @@
     }
     const voicing = next !== "idle";
     root.classList.toggle("agee-voicing", voicing);
-    if (voiceState) voiceState.setAttribute("aria-hidden", voicing ? "false" : "true");
+    if (voiceState) voiceState.setAttribute("aria-hidden", "true");
     if (next === "idle") setTranscript("");
   }
 
-  // Render the live transcript bar. `interim` softens words that are still being
-  // finalized by the gateway/provider.
+  // Keep the legacy transcript node inert; visible voice feedback lives in
+  // cue cards above the input so the draft buffer remains untouched.
   function setTranscript(text, interim = false) {
     if (!transcriptEl) return;
     transcriptEl.textContent = text || "";
@@ -830,7 +898,6 @@
     setVoiceState(true);
     setAgentState("listening");
     setTranscript("");
-    setInputText("");
 
     const state = {
       cueId,
@@ -852,13 +919,19 @@
       primeAudio();
       if (!audioCtx) throw new Error("Web Audio is not available in this browser.");
 
-      const session = await chrome.runtime.sendMessage({
+      const session = await safeRuntimeSendMessage({
         cmd: "voiceSessionStart",
         cueId,
         turnId: state.turnId,
         assistantOverlap: assistantSpeechOverlap === true,
         capture: "extension-offscreen",
       });
+      if (extensionContextInvalidated) {
+        stopLiveVoiceState(state, "context invalidated");
+        setVoiceState(false);
+        if (agentState !== "idle") setAgentState("idle");
+        return;
+      }
       if (!session?.ok || !session.voiceSessionId) {
         throw new Error(session?.error || "gateway did not open a voice session");
       }
@@ -915,9 +988,7 @@
       state.transcript = text;
       if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
-      if (msg.type === "transcript_final" || state.committed) {
-        ensureVoiceCueCard(state, text, "");
-      }
+      ensureVoiceCueCard(state, text, "");
       if (msg.type === "transcript_final" && isCurrentTurn && applySpeechOverlapPolicyFromTranscript(state, text)) {
         return;
       }
@@ -950,6 +1021,10 @@
       return;
     }
     if (msg.type === "error") {
+      if (msg.recoverable === false || msg.code === "microphone_capture_failed") {
+        finishLiveVoiceError(state, msg.message || "Live voice microphone capture failed.");
+        return;
+      }
       // A turn that dies mid-generation ("failed to complete turn: ...") is not a
       // dead end: the gateway has already stored the partial turn and will replay
       // it into the next session. Recover silently instead of surfacing it.
@@ -995,11 +1070,12 @@
     if (state.transcript) ensureVoiceCueCard(state, state.transcript, "");
     updateCue(state.cueId, "", "running");
     if (state.voiceSessionId) {
-      chrome.runtime.sendMessage({
+      safeRuntimeSendMessage({
         cmd: "voiceSessionControl",
         voiceSessionId: state.voiceSessionId,
         message: { type: "commit_turn", turn_id: state.turnId },
       }).then((res) => {
+        if (!res && extensionContextInvalidated) return;
         if (!res?.ok) finishLiveVoiceError(state, res?.error || "Live voice connection was not open.");
       }).catch((error) => finishLiveVoiceError(state, String(error?.message || error)));
     } else {
@@ -1021,7 +1097,9 @@
     sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
     closeLiveVoiceSession(state, "profile control routed to gateway");
     untrackLiveVoiceState(state);
-    chrome.runtime.sendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).catch((error) => {
+    safeRuntimeSendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).then(() => {
+      if (extensionContextInvalidated) removeCueCard(state.cueId);
+    }).catch((error) => {
       showCueError(state.cueId, error?.message || error);
       if (agentState === "thinking") setAgentState("idle");
     });
@@ -1088,7 +1166,7 @@
 
   function sendLiveVoiceControl(state, message) {
     if (!state?.voiceSessionId) return;
-    chrome.runtime.sendMessage({
+    safeRuntimeSendMessage({
       cmd: "voiceSessionControl",
       voiceSessionId: state.voiceSessionId,
       message,
@@ -1098,7 +1176,7 @@
   function closeLiveVoiceSession(state, reason) {
     if (!state?.voiceSessionId) return;
     const voiceSessionId = state.voiceSessionId;
-    chrome.runtime.sendMessage({
+    safeRuntimeSendMessage({
       cmd: "voiceSessionClose",
       voiceSessionId,
       reason,
@@ -1314,7 +1392,7 @@
   function isProfileControlTranscript(text) {
     const lower = normalizeSpokenCommand(text);
     if (!lower) return false;
-    return isPromptProfileControl(lower) || isLanguageProfileControl(lower) || isVoiceProfileControl(lower);
+    return isPromptProfileControl(lower) || isIdentityProfileControl(lower) || isLanguageProfileControl(lower) || isVoiceProfileControl(lower);
   }
 
   function isPromptProfileControl(lower) {
@@ -1322,6 +1400,15 @@
       lower.includes("which prompt") ||
       lower.includes("current prompt") ||
       /\b(set|change|update)\b.*\b(system )?prompt\b/.test(lower);
+  }
+
+  function isIdentityProfileControl(lower) {
+    return lower.includes("what is your name") ||
+      lower.includes("what s your name") ||
+      lower.includes("who are you") ||
+      /\byour name\b\s*(is|should be|will be)\b/.test(lower) ||
+      /\b(call|name) yourself\b/.test(lower) ||
+      /\b(you are|youre)\b\s+(now\s+)?(called\s+|named\s+)?/.test(lower);
   }
 
   function isLanguageProfileControl(lower) {
@@ -1372,9 +1459,9 @@
   }
 
   async function startDevReloadWatcher() {
-    if (!chrome?.storage?.local) return;
+    if (!canCallExtensionApi() || !chrome?.storage?.local) return;
     const configure = async () => {
-      const cfg = await chrome.storage.local.get({
+      const cfg = await safeStorageLocalGet({
         ageeDevReloadEnabled: false,
         ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
         ageeDevReloadVersion: null,
@@ -1392,12 +1479,16 @@
     };
 
     if (chrome.storage.onChanged) {
-      chrome.storage.onChanged.addListener((changes, area) => {
-        if (area !== "local") return;
-        if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
-          configure().catch(() => {});
-        }
-      });
+      try {
+        chrome.storage.onChanged.addListener((changes, area) => {
+          if (area !== "local") return;
+          if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
+            configure().catch(() => {});
+          }
+        });
+      } catch (error) {
+        markExtensionContextInvalidated(error);
+      }
     }
     await configure();
   }
@@ -1406,7 +1497,7 @@
     if (devReloadInFlight) return;
     devReloadInFlight = true;
     try {
-      const cfg = await chrome.storage.local.get({
+      const cfg = await safeStorageLocalGet({
         ageeDevReloadEnabled: false,
         ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
         ageeDevReloadVersion: null,
@@ -1421,12 +1512,12 @@
       if (!nextVersion) return;
       if (!previousVersion) {
         devReloadVersion = nextVersion;
-        await chrome.storage.local.set({ ageeDevReloadVersion: nextVersion });
+        await safeStorageLocalSet({ ageeDevReloadVersion: nextVersion });
         return;
       }
       if (nextVersion === previousVersion) return;
       devReloadVersion = nextVersion;
-      await chrome.runtime.sendMessage({
+      await safeRuntimeSendMessage({
         cmd: "devReloadExtension",
         source: "content-script",
         server,
@@ -1675,7 +1766,6 @@
         return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");
-        setInputText("");
         setSurfacePhase("editing");
         reactLauncher("done"); // hop + ring + happy chime
         // Replies live in the cue/result surface. The composer stays free for
@@ -1684,7 +1774,6 @@
         return false;
       case "error":
         showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible
-        setInputText("");
         setSurfacePhase("editing");
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
         return false;

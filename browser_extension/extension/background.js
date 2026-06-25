@@ -4,7 +4,7 @@
 // owns model routing and credentials.
 
 import { getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
-import { parseSettingsIntent, parseProfileQueryIntent } from "./settings-intent.js";
+import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent, parseOpenTabIntent } from "./browser-task-intent.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
@@ -526,6 +526,26 @@ async function maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId) {
   return true;
 }
 
+// Voice/language/profile controls belong in the canonical gateway turn router,
+// even when typed. That path stores a profile_control turn and applies the
+// versioned profile update/query. Keep the direct PUT fallback below for older
+// extension-only tweaks the gateway parser does not yet understand.
+async function maybeRouteGatewayProfileControl(tabId, instruction, cfg, signal, cueId) {
+  if (!looksLikeGatewayProfileControlIntent(instruction)) {
+    return false;
+  }
+  const data = await runViaGateway(tabId, instruction, cfg, signal, cueId);
+  if (data?.classification === "profile_control") {
+    try {
+      const profilePayload = await getGatewayProfile(cfg, signal);
+      await chrome.storage.local.set({ [PROFILE_CACHE_KEY]: profilePayload });
+    } catch {
+      // The profile-control turn already completed; cache refresh is best-effort.
+    }
+  }
+  return true;
+}
+
 // Page tweaks are local-first page customizations, handled by tweaks.js in the
 // content world. This is deliberately before the model turn: bounded CSS tweaks
 // such as "hide the sidebar" should happen immediately, stay inspectable, and
@@ -682,6 +702,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
     tabId,
     lastResult: `[${data.classification || "chat"}] ${summary.slice(0, 400)}`,
   });
+  return data;
 }
 
 function send(tabId, msg) {
@@ -766,7 +787,7 @@ async function ensureOffscreenVoiceDocument() {
 function extensionMicApprovalMessage(error) {
   const detail = String(error?.message || error || "").trim();
   const suffix = detail ? ` (${detail})` : "";
-  return `Aggie needs microphone access for the extension. Open Aggie settings and click "Grant microphone" once.${suffix}`;
+  return `Aggie could not open the extension microphone. Open the Aggie toolbar icon > Options, click "Grant microphone", and allow microphone access for the extension. If Chrome has blocked it, open chrome://extensions/?id=${chrome.runtime.id}, choose Details or Site settings, set Microphone to Allow, then start voice again.${suffix}`;
 }
 
 async function startOffscreenVoiceCapture(id) {
@@ -792,8 +813,14 @@ async function stopOffscreenVoiceCapture(id) {
 function handleOffscreenVoiceError(id, error) {
   const session = voiceSessions.get(id);
   if (!session) return;
+  chrome.runtime.openOptionsPage?.().catch(() => {});
   deliverVoiceSessionEvent(session, {
-    event: { type: "error", message: extensionMicApprovalMessage(error) },
+    event: {
+      type: "error",
+      code: "microphone_capture_failed",
+      recoverable: false,
+      message: extensionMicApprovalMessage(error),
+    },
   });
   closeVoiceSession(id, "microphone capture failed");
 }
@@ -1316,6 +1343,9 @@ async function runAgent(tabId, instruction, controller, cueId) {
     // the system prompt to …"). Either is handled through the profile
     // endpoints instead of running a conversational turn.
     if (await maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId)) {
+      return;
+    }
+    if (await maybeRouteGatewayProfileControl(tabId, instruction, cfg, signal, cueId)) {
       return;
     }
     if (await maybeApplySettingsChange(tabId, instruction, cfg, signal, cueId)) {

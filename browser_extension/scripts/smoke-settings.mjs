@@ -9,7 +9,9 @@
 //   2.1/2.2  a typed settings-intent ("be terser") routed through the REAL
 //            on-page overlay -> background.js -> PUT /v1/agent/profile changes
 //            the profile (voice_max_chars shrinks).
-//   2.3/3.1  the open settings surface refreshes LIVE (no manual reload) to show
+//   2.3      a typed voice/language control ("speak Amharic and English") routes
+//            through /v1/voice/turns as profile_control and persists.
+//   2.4/3.1  the open settings surface refreshes LIVE (no manual reload) to show
 //            the new value.
 //   3.2      the changed setting takes effect on the NEXT gateway turn with no
 //            restart: a voice turn's spoken reply is capped to the new limit.
@@ -479,6 +481,45 @@ async function main() {
         console.log(`         rendered: ${JSON.stringify(reply)}`);
         console.log(`         put call: ${JSON.stringify(putCall)}`);
         console.log(`         gateway profile after: voice_max_chars=${newMaxChars} is_overridden=${after.is_overridden}`);
+      }
+    }
+
+    // ---- Leg 2b — language profile control uses /v1/voice/turns -----------
+    console.log("");
+    console.log('Leg 2b — typed "speak Amharic and English" routes through /v1/voice/turns as profile_control');
+    {
+      await evaluate(pageCdp, triggerRunExpr("speak Amharic and English"), { contextId: contentCtx });
+      const reply = await waitForEval(pageCdp, renderedReplyExpr(), 20000, { contextId: contentCtx });
+      const voiceTurnCall = await evaluate(workerCdp, lastGatewayCallExpr("/v1/voice/turns", "POST"));
+      const after = await fetch(`${GATEWAY_URL}/v1/agent/profile`, {
+        headers: { authorization: `Bearer ${GATEWAY_TOKEN}` },
+      }).then((r) => r.json());
+      const liveLanguage = await waitForEval(
+        optionsCdp,
+        `(() => document.querySelector("#language").value === "am-ET,en-US" ? "am-ET,en-US" : null)()`,
+        10000,
+      );
+
+      const ok =
+        reply.kind === "done" &&
+        /updated reply in amharic \+ english/i.test(reply.text) &&
+        voiceTurnCall && voiceTurnCall.ok && voiceTurnCall.status === 200 &&
+        after.profile.language === "am-ET,en-US" &&
+        after.profile.language_primary === "am-ET" &&
+        after.profile.language_auto_switch === false &&
+        liveLanguage === "am-ET,en-US";
+      if (ok) {
+        pass(
+          "typed language control applied through the gateway turn router",
+          `POST /v1/voice/turns -> profile_control; language=am-ET,en-US; options surface refreshed live`,
+        );
+      } else {
+        failures++;
+        console.log(`  [FAIL] "speak Amharic and English" did not apply through /v1/voice/turns.`);
+        console.log(`         rendered: ${JSON.stringify(reply)}`);
+        console.log(`         voice turn call: ${JSON.stringify(voiceTurnCall)}`);
+        console.log(`         gateway profile after: ${JSON.stringify(after.profile)}`);
+        console.log(`         options language: ${liveLanguage}`);
       }
     }
 

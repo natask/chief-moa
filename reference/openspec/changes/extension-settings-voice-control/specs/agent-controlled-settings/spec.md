@@ -15,8 +15,8 @@ than only answering conversationally.
 
 #### Scenario: Browser Live voice settings change is applied
 - **WHEN** the user speaks a settings change through Chrome Live voice, such as
-  "use the Kore voice" or "only speak English and Amharic"
+  "use the Kore voice", "only speak English and Amharic", or "your name is Moa"
 - **THEN** the extension routes the finalized transcript through the existing
   settings/profile-control path
 - **AND** the gateway persists the profile update
-- **AND** the next Live voice turn uses the updated voice or language profile
+- **AND** the next Live voice turn uses the updated identity, voice, or language profile

@@ -51,6 +51,58 @@ const LANGUAGE_DEFINITIONS = [
   { label: "Arabic", code: "ar", keys: ["arabic"] },
   { label: "Tigrinya", code: "ti", keys: ["tigrinya"] },
 ];
+const GATEWAY_PROFILE_LANGUAGE_NAMES = [
+  "english",
+  "spanish",
+  "french",
+  "german",
+  "italian",
+  "portuguese",
+  "dutch",
+  "russian",
+  "polish",
+  "ukrainian",
+  "turkish",
+  "arabic",
+  "hebrew",
+  "hindi",
+  "bengali",
+  "bangla",
+  "urdu",
+  "tamil",
+  "telugu",
+  "mandarin",
+  "chinese",
+  "cantonese",
+  "japanese",
+  "korean",
+  "vietnamese",
+  "thai",
+  "indonesian",
+  "malay",
+  "filipino",
+  "tagalog",
+  "swahili",
+  "amharic",
+  "tigrinya",
+  "tigrigna",
+  "somali",
+  "hausa",
+  "yoruba",
+  "igbo",
+  "zulu",
+  "afrikaans",
+  "greek",
+  "czech",
+  "romanian",
+  "hungarian",
+  "swedish",
+  "norwegian",
+  "danish",
+  "finnish",
+  "persian",
+  "farsi",
+];
 
 const DEFAULT_VOICE_MAX_CHARS = 280;
 const TERSE_MAX_CHARS = 140;
@@ -295,6 +347,72 @@ function parseProfileQueryIntent(text) {
   return asksHistory ? { kind: "prompt_history" } : null;
 }
 
+function looksLikeGatewayProfileControlIntent(text) {
+  const raw = String(text || "").trim();
+  if (looksLikeInstructionalExample(raw)) return false;
+  const lower = normalizeSpeech(raw);
+  if (!lower) return false;
+  return isGatewayPromptControl(lower) || isGatewayIdentityControl(lower) || isGatewayLanguageControl(lower) || isGatewayVoiceControl(lower);
+}
+
+function isGatewayPromptControl(lower) {
+  return lower.includes("what prompt") ||
+    lower.includes("which prompt") ||
+    lower.includes("current prompt") ||
+    /\b(set|change|update)\b.*\b(system )?prompt\b/.test(lower);
+}
+
+function isGatewayIdentityControl(lower) {
+  return lower.includes("what is your name") ||
+    lower.includes("what s your name") ||
+    lower.includes("who are you") ||
+    /\byour name\b\s*(is|should be|will be)\b/.test(lower) ||
+    /\b(call|name) yourself\b/.test(lower) ||
+    /\b(you are|youre)\b\s+(now\s+)?(called\s+|named\s+)?/.test(lower);
+}
+
+function isGatewayLanguageControl(lower) {
+  if (
+    lower.includes("what language") ||
+    lower.includes("which language") ||
+    lower.includes("language is active") ||
+    lower.includes("language settings") ||
+    /\b(set|change|update|switch)\b.*\blanguage\b/.test(lower)
+  ) {
+    return true;
+  }
+  if (!containsProfileWord(lower, GATEWAY_PROFILE_LANGUAGE_NAMES)) return false;
+  return /\b(speak|talk|reply|respond|answer|say|process|understand|listen|recognize|restrict|select|allow)\b/.test(lower) ||
+    lower.includes(" only ") ||
+    lower.startsWith("only ") ||
+    lower.includes("do not switch") ||
+    lower.includes("don t switch") ||
+    lower.includes("dont switch") ||
+    lower.includes("these languages") ||
+    lower.includes("these two languages");
+}
+
+function isGatewayVoiceControl(lower) {
+  if (
+    lower.includes("what voice") ||
+    lower.includes("which voice") ||
+    lower.includes("voice is active") ||
+    /\b(set|change|switch|use|make)\b.*\bvoice\b/.test(lower)
+  ) {
+    return true;
+  }
+  if (lower.includes("sound like") || lower.includes("speak like")) {
+    return /\b(female|woman|girl|feminine|lady|male|man|guy|masculine|boy)\b/.test(lower) ||
+      containsProfileWord(lower, CORE_VOICES.map((name) => name.toLowerCase()));
+  }
+  return containsProfileWord(lower, CORE_VOICES.map((name) => name.toLowerCase())) &&
+    /\b(use|switch|set|change)\b/.test(lower);
+}
+
+function containsProfileWord(lower, words) {
+  return words.some((word) => lower.includes(word));
+}
+
 function numberOr(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -306,4 +424,4 @@ function stripQuotes(value) {
   return (quoted ? quoted[1] : trimmed).trim();
 }
 
-export { parseSettingsIntent, parseProfileQueryIntent, PROFILE_FIELDS };
+export { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent, PROFILE_FIELDS };

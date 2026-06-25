@@ -17,12 +17,16 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ## Run
 
 1. Open Aggie on the phone.
-2. Grant `Draw over other apps`.
-3. Grant `Screen access` in Android accessibility settings if you want current-screen context and controlled actions.
-4. Grant microphone access.
+2. Grant `Draw over other apps`. The setup screen opens Aggie's overlay permission page; Android requires you to allow it there.
+3. Grant microphone access when Android prompts, or tap `Enable microphone`.
+4. Grant `Screen access` in Android accessibility settings for current-screen context and controlled actions. If Android blocks the toggle with restricted settings, open App info for Aggie, tap the three-dot menu, choose `Allow restricted settings`, return, then enable Screen access.
 5. Set the Moa Gateway URL. The development default is `http://10.147.17.6:8787` for this Mac over ZeroTier. Use `http://10.147.17.10:8788` when the main-machine gateway is online.
 6. Tap `Start assistant circle`.
 7. Leave the app. The Moa circle stays over the screen.
+
+The setup screen lists every missing requirement. Aggie can request microphone
+permission and open the exact Android settings pages, but it cannot silently
+grant overlay or Accessibility access.
 
 ## Assistant Orb
 
@@ -56,6 +60,18 @@ npm start
 - Spoken build/fix/change/test commands route to the home-machine Gemini harness through Moa Gateway.
 - Android `TextToSpeech` voice replies.
 - Self-hosted gateway replies with local fallback when the server is unavailable.
+
+## Deploy
+
+Repo-level Android deploy keeps publishing the OTA artifact and also installs
+the same APK directly over ADB when an authorized device is connected:
+
+```sh
+bash ../scripts/deploy.sh android
+```
+
+If no ADB device is connected or authorized, deploy logs that direct install was
+skipped and leaves the OTA artifact available through the gateway.
 
 ## Action Runtime
 

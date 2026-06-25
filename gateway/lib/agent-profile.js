@@ -11,9 +11,11 @@ const path = require("node:path");
 
 const PROFILE_FILENAME = "agent-profile.json";
 const PROFILE_VERSIONS_FILENAME = "agent-profile-versions.json";
+const DEVICE_OVERRIDES_FILENAME = "agent-profile-device-overrides.json";
 // Only these fields may be patched/persisted/overridden; anything else is ignored.
 const PROFILE_FIELDS = [
   "system_prompt",
+  "assistant_name",
   "model",
   "temperature",
   "voice_max_chars",
@@ -57,24 +59,32 @@ function createAgentProfileStore(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
   const profilePath = path.join(dataDir, PROFILE_FILENAME);
   const versionsPath = path.join(dataDir, PROFILE_VERSIONS_FILENAME);
+  const deviceOverridesPath = path.join(dataDir, DEVICE_OVERRIDES_FILENAME);
   // The env default is computed once at boot; it is the immutable baseline.
   const defaults = freeze(normalizeProfile(options?.defaults || {}));
 
   fs.mkdirSync(dataDir, { recursive: true });
 
   let state = loadVersionState({ profilePath, versionsPath, defaults });
+  let deviceState = loadDeviceOverrideState(deviceOverridesPath);
 
-  function effective() {
-    return { ...currentVersionRecord().profile };
+  function effective(options = {}) {
+    const profile = { ...currentVersionRecord().profile };
+    const deviceId = normalizeDeviceId(options?.deviceId || options?.device_id);
+    if (!deviceId) {
+      return profile;
+    }
+    const patch = currentDevicePatch(deviceId);
+    return Object.keys(patch).length > 0 ? mergeProfile(profile, patch) : profile;
   }
 
-  function isOverridden() {
-    return !profilesEqual(currentVersionRecord().profile, defaults);
+  function isOverridden(options = {}) {
+    return !profilesEqual(effective(options), defaults);
   }
 
   // Merge a per-request override onto the effective profile WITHOUT persisting.
-  function effectiveWithOverrides(overrides) {
-    const base = effective();
+  function effectiveWithOverrides(overrides, options = {}) {
+    const base = effective(options);
     const patch = pickProfileFields(overrides);
     return Object.keys(patch).length > 0 ? mergeProfile(base, patch) : base;
   }
@@ -84,7 +94,11 @@ function createAgentProfileStore(options) {
   function patch(updates, metadata = {}) {
     const next = pickProfileFields(updates);
     if (Object.keys(next).length === 0) {
-      return effective();
+      return effective(metadata);
+    }
+    const deviceId = normalizeDeviceId(metadata.deviceId || metadata.device_id);
+    if (metadata.scope === "device" && deviceId) {
+      return patchDevice(deviceId, next, metadata);
     }
     const before = currentVersionRecord();
     const profile = mergeProfile(before.profile, next);
@@ -102,6 +116,10 @@ function createAgentProfileStore(options) {
 
   // Return to the env default by appending a new version.
   function reset(metadata = {}) {
+    const deviceId = normalizeDeviceId(metadata.deviceId || metadata.device_id);
+    if (metadata.scope === "device" && deviceId) {
+      return resetDevice(deviceId, metadata);
+    }
     const before = currentVersionRecord();
     if (!profilesEqual(before.profile, defaults)) {
       appendVersion(defaults, {
@@ -130,11 +148,21 @@ function createAgentProfileStore(options) {
     return effective();
   }
 
-  function currentVersion() {
-    return currentVersionRecord().version;
+  function currentVersion(options = {}) {
+    const globalVersion = currentVersionRecord().version;
+    const deviceId = normalizeDeviceId(options?.deviceId || options?.device_id);
+    if (!deviceId) {
+      return globalVersion;
+    }
+    const deviceVersion = currentDeviceVersion(deviceId);
+    return deviceVersion ? `${globalVersion}_${deviceVersion}` : globalVersion;
   }
 
   function listVersions(options = {}) {
+    const deviceId = normalizeDeviceId(options.deviceId || options.device_id);
+    if (deviceId) {
+      return listDeviceVersions(deviceId, options);
+    }
     const limit = Math.max(1, Math.min(Number(options.limit || state.versions.length) || state.versions.length, 500));
     const records = state.versions.slice().reverse().slice(0, limit);
     return records.map(publicVersionRecord);
@@ -172,9 +200,105 @@ function createAgentProfileStore(options) {
     return entry;
   }
 
+  function patchDevice(deviceId, next, metadata) {
+    const entry = ensureDeviceEntry(deviceId);
+    const beforePatch = currentDevicePatch(deviceId);
+    const patch = mergePatch(beforePatch, next);
+    if (patchesEqual(beforePatch, patch)) {
+      return effective({ deviceId });
+    }
+    appendDeviceVersion(deviceId, patch, {
+      source: metadata.source || "api",
+      reason: metadata.reason || "device_patch",
+      parent_version: entry.current_version || "",
+      changed: changedPatchFields(beforePatch, patch),
+    });
+    return effective({ deviceId });
+  }
+
+  function resetDevice(deviceId, metadata) {
+    const beforePatch = currentDevicePatch(deviceId);
+    if (Object.keys(beforePatch).length === 0) {
+      return effective({ deviceId });
+    }
+    const entry = ensureDeviceEntry(deviceId);
+    appendDeviceVersion(deviceId, {}, {
+      source: metadata.source || "api",
+      reason: metadata.reason || "device_reset",
+      parent_version: entry.current_version || "",
+      changed: changedPatchFields(beforePatch, {}),
+    });
+    return effective({ deviceId });
+  }
+
+  function ensureDeviceEntry(deviceId) {
+    const id = normalizeDeviceId(deviceId);
+    if (!id) {
+      throw new Error("device id is required");
+    }
+    deviceState.devices[id] = deviceState.devices[id] || { current_version: "", versions: [] };
+    return deviceState.devices[id];
+  }
+
+  function currentDeviceRecord(deviceId) {
+    const id = normalizeDeviceId(deviceId);
+    const entry = id ? deviceState.devices[id] : null;
+    if (!entry || !Array.isArray(entry.versions) || entry.versions.length === 0) {
+      return null;
+    }
+    return entry.versions.find((version) => version.version === entry.current_version) || entry.versions[entry.versions.length - 1];
+  }
+
+  function currentDevicePatch(deviceId) {
+    return { ...(currentDeviceRecord(deviceId)?.patch || {}) };
+  }
+
+  function currentDeviceVersion(deviceId) {
+    return currentDeviceRecord(deviceId)?.version || "";
+  }
+
+  function appendDeviceVersion(deviceId, patch, metadata) {
+    const id = normalizeDeviceId(deviceId);
+    const entry = ensureDeviceEntry(id);
+    const now = new Date().toISOString();
+    const sequence = nextSequence(entry.versions);
+    const versionEntry = {
+      version: deviceVersionId(sequence),
+      sequence,
+      created_at: now,
+      source: cleanSource(metadata?.source),
+      reason: String(metadata?.reason || "device_patch").slice(0, 80),
+      parent_version: metadata?.parent_version || entry.current_version || "",
+      changed: Array.isArray(metadata?.changed) ? metadata.changed : [],
+      patch: pickProfileFields(patch),
+    };
+    entry.versions.push(versionEntry);
+    entry.current_version = versionEntry.version;
+    persistDeviceOverrideState(deviceOverridesPath, deviceState);
+    return versionEntry;
+  }
+
+  function listDeviceVersions(deviceId, options = {}) {
+    const entry = deviceState.devices[normalizeDeviceId(deviceId)];
+    const versions = Array.isArray(entry?.versions) ? entry.versions : [];
+    const limit = Math.max(1, Math.min(Number(options.limit || versions.length) || versions.length || 1, 500));
+    return versions.slice().reverse().slice(0, limit).map((version) => ({
+      version: version.version,
+      sequence: version.sequence,
+      created_at: version.created_at,
+      source: version.source,
+      reason: version.reason,
+      parent_version: version.parent_version,
+      changed: version.changed,
+      patch: { ...(version.patch || {}) },
+      profile: mergeProfile(currentVersionRecord().profile, version.patch || {}),
+    }));
+  }
+
   return {
     profilePath,
     versionsPath,
+    deviceOverridesPath,
     defaults: () => ({ ...defaults }),
     effective,
     effectiveWithOverrides,
@@ -185,6 +309,7 @@ function createAgentProfileStore(options) {
     currentVersion,
     versions: listVersions,
     fields: () => PROFILE_FIELDS.slice(),
+    normalizeDeviceId,
   };
 }
 
@@ -264,6 +389,48 @@ function loadVersionsFile(versionsPath, defaults) {
   }
 }
 
+function loadDeviceOverrideState(deviceOverridesPath) {
+  const empty = { devices: {} };
+  if (!fs.existsSync(deviceOverridesPath)) {
+    return empty;
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(deviceOverridesPath, "utf8"));
+    const devices = {};
+    const incoming = raw?.devices && typeof raw.devices === "object" && !Array.isArray(raw.devices)
+      ? raw.devices
+      : {};
+    for (const [rawDeviceId, entry] of Object.entries(incoming)) {
+      const deviceId = normalizeDeviceId(rawDeviceId);
+      if (!deviceId) continue;
+      const versions = Array.isArray(entry?.versions)
+        ? entry.versions.map((version, index) => {
+          const sequence = Number(version.sequence || index + 1);
+          return {
+            version: String(version.version || deviceVersionId(sequence)),
+            sequence,
+            created_at: typeof version.created_at === "string" ? version.created_at : new Date().toISOString(),
+            source: cleanSource(version.source),
+            reason: String(version.reason || "loaded").slice(0, 80),
+            parent_version: String(version.parent_version || ""),
+            changed: Array.isArray(version.changed) ? version.changed.filter((field) => PROFILE_FIELDS.includes(field)) : [],
+            patch: pickProfileFields(version.patch || version.profile || {}),
+          };
+        })
+        : [];
+      devices[deviceId] = {
+        current_version: versions.some((version) => version.version === entry?.current_version)
+          ? String(entry.current_version)
+          : (versions[versions.length - 1]?.version || ""),
+        versions,
+      };
+    }
+    return { devices };
+  } catch {
+    return empty;
+  }
+}
+
 function loadLegacyPersisted(profilePath) {
   if (!fs.existsSync(profilePath)) {
     return null;
@@ -285,6 +452,12 @@ function persistState({ versionsPath, profilePath, state, defaults }) {
   writeLegacyCurrent(profilePath, state, defaults);
 }
 
+function persistDeviceOverrideState(deviceOverridesPath, deviceState) {
+  const tmpPath = `${deviceOverridesPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(deviceState, null, 2));
+  fs.renameSync(tmpPath, deviceOverridesPath);
+}
+
 function writeLegacyCurrent(profilePath, state, defaults) {
   const current = state.versions.find((entry) => entry.version === state.current_version) || state.versions[state.versions.length - 1];
   const patch = diffProfile(defaults, current.profile);
@@ -303,6 +476,10 @@ function mergeProfile(base, patch) {
   return { ...base, ...pickProfileFields(patch) };
 }
 
+function mergePatch(base, patch) {
+  return { ...pickProfileFields(base), ...pickProfileFields(patch) };
+}
+
 // Coerce and keep only known fields with usable values. Unknown keys, empty
 // strings, and invalid numbers are dropped so a patch never blanks a field.
 function pickProfileFields(input) {
@@ -312,6 +489,12 @@ function pickProfileFields(input) {
   const out = {};
   if (typeof input.system_prompt === "string" && input.system_prompt.trim()) {
     out.system_prompt = input.system_prompt.trim();
+  }
+  if (typeof input.assistant_name === "string" && input.assistant_name.trim()) {
+    const name = normalizeAssistantName(input.assistant_name);
+    if (name) {
+      out.assistant_name = name;
+    }
   }
   if (typeof input.model === "string" && input.model.trim()) {
     out.model = input.model.trim();
@@ -394,6 +577,7 @@ function normalizeProfile(defaults) {
   const languagePrimary = picked.language_primary || picked.language || "en-US";
   return {
     system_prompt: picked.system_prompt || "",
+    assistant_name: picked.assistant_name || "Aggie",
     model: picked.model || "",
     temperature: picked.temperature !== undefined ? picked.temperature : 0.4,
     voice_max_chars: picked.voice_max_chars !== undefined ? picked.voice_max_chars : 280,
@@ -421,6 +605,26 @@ function normalizeProfile(defaults) {
   };
 }
 
+function normalizeAssistantName(value) {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/^["'`]+|["'`.!,?;:]+$/g, "")
+    .replace(/\s+/g, " ");
+  if (!cleaned) {
+    return "";
+  }
+  if (cleaned.length > 80) {
+    return "";
+  }
+  if (/\b(?:master|sir|captain)\b/i.test(cleaned)) {
+    return "";
+  }
+  if (!/[A-Za-z0-9]/.test(cleaned)) {
+    return "";
+  }
+  return cleaned;
+}
+
 function freeze(profile) {
   return Object.freeze({ ...profile });
 }
@@ -429,8 +633,16 @@ function profilesEqual(left, right) {
   return PROFILE_FIELDS.every((field) => left?.[field] === right?.[field]);
 }
 
+function patchesEqual(left, right) {
+  return PROFILE_FIELDS.every((field) => (left?.[field] || undefined) === (right?.[field] || undefined));
+}
+
 function changedFields(before, after) {
   return PROFILE_FIELDS.filter((field) => before?.[field] !== after?.[field]);
+}
+
+function changedPatchFields(before, after) {
+  return PROFILE_FIELDS.filter((field) => (before?.[field] || undefined) !== (after?.[field] || undefined));
 }
 
 function diffProfile(defaults, profile) {
@@ -449,6 +661,20 @@ function nextSequence(versions) {
 
 function versionId(sequence) {
   return `profile_v${String(Math.max(1, Number(sequence) || 1)).padStart(4, "0")}`;
+}
+
+function deviceVersionId(sequence) {
+  return `device_profile_v${String(Math.max(1, Number(sequence) || 1)).padStart(4, "0")}`;
+}
+
+function normalizeDeviceId(value) {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+  return cleaned || "";
 }
 
 function cleanSource(source) {
@@ -474,4 +700,6 @@ module.exports = {
   PROFILE_FIELDS,
   CORE_VOICES,
   normalizeVoice,
+  normalizeAssistantName,
+  normalizeDeviceId,
 };

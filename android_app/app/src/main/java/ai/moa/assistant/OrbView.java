@@ -9,13 +9,13 @@ import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 
-// The floating Agee mark: just the animal, no disc. The dark silhouette would
+// The floating Moa lion mark: just the animal, no disc. The dark silhouette would
 // vanish on dark app backgrounds, so a soft light halo (the mark feathered
 // behind itself) gives it contrast on any screen. Listening tints the halo gold
 // and grows the mark a touch instead of lighting up an orb. A double-tap that
 // starts a voice turn lights a soft gold glow behind it so the live state reads.
 final class OrbView extends View {
-    // The moa mark fills its own square frame, so the bird centers on the box.
+    // The lion mark fills its own square frame, so the animal centers on the box.
     private static final float GLYPH_VIEWPORT = 108f;
     private static final float BIRD_CX = 54f;
     private static final float BIRD_CY = 54f;
@@ -28,8 +28,8 @@ final class OrbView extends View {
 
     OrbView(Context context) {
         super(context);
-        bird = context.getDrawable(R.drawable.agee_mark);
-        halo = context.getDrawable(R.drawable.agee_mark);
+        bird = context.getDrawable(R.drawable.moa_mark);
+        halo = context.getDrawable(R.drawable.moa_mark);
         if (halo != null) {
             halo.mutate();
         }

@@ -11,6 +11,21 @@ The full Android app SHALL expose setup state for overlay permission, microphone
 - **WHEN** the gateway exposes harness status
 - **THEN** the app shows which configured harnesses are available for agent runs
 
+#### Scenario: Missing Android access is visible
+- **WHEN** overlay permission, microphone permission, or Screen access is missing
+- **THEN** the setup surface lists the missing requirements
+- **AND** it requests microphone access directly when Android allows it
+- **AND** it opens the Android draw-over-apps settings for overlay permission
+- **AND** it does not claim it can silently grant Accessibility access
+
+#### Scenario: Restricted settings blocks Screen access
+- **WHEN** Android prevents enabling Screen access because restricted settings
+  are blocked
+- **THEN** the setup surface tells the user to open App info for Aggie, tap the
+  three-dot menu, choose Allow restricted settings, return, and enable Screen
+  access
+- **AND** it offers an App info button alongside the Screen access button
+
 ### Requirement: Session Inspection
 The full Android app SHALL expose the current mobile session and recent voice turns.
 

@@ -149,6 +149,7 @@ final class MoaOperationalTurnRouter {
             return false;
         }
         return isPromptControlIntent(lower)
+                || isIdentityControlIntent(lower)
                 || isLanguageControlIntent(lower)
                 || isVoiceControlIntent(lower);
     }
@@ -186,6 +187,15 @@ final class MoaOperationalTurnRouter {
                 || lower.matches(".*\\b(set|change|update)\\b.*\\b(system )?prompt\\b.*");
     }
 
+    private static boolean isIdentityControlIntent(String lower) {
+        return lower.contains("what is your name")
+                || lower.contains("what s your name")
+                || lower.contains("who are you")
+                || lower.matches(".*\\byour name\\b\\s*(is|should be|will be).*")
+                || lower.matches(".*\\b(call|name) yourself\\b.*")
+                || lower.matches(".*\\b(you are|youre)\\b\\s+(now\\s+)?(called\\s+|named\\s+)?.*");
+    }
+
     private static boolean isLanguageControlIntent(String lower) {
         if (lower.contains("what language")
                 || lower.contains("which language")
@@ -196,7 +206,7 @@ final class MoaOperationalTurnRouter {
         if (!containsAny(lower, PROFILE_LANGUAGE_NAMES)) {
             return false;
         }
-        return lower.matches(".*\\b(speak|talk|reply|respond|answer|say)\\b.*")
+        return lower.matches(".*\\b(speak|talk|reply|respond|answer|say|process|understand|listen|recognize|restrict|select|allow)\\b.*")
                 || lower.contains(" only ")
                 || lower.startsWith("only ")
                 || lower.contains("do not switch")

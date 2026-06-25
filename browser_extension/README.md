@@ -66,8 +66,8 @@ is separate from the quiet flow on purpose:
 
 The Moa mark floats on the page when idle, glows while it works, and rings
 (a short chime plus a ring pulse) when a turn finishes, errors, or needs you.
-Typed replies render above the command input; the input clears and stays ready
-for the next command. Voice keeps the same input surface available: partial and
+Typed replies render above the command input; responses, errors, and voice turns
+never clear or replace the draft in the command input. Voice keeps the same input surface available: partial and
 final transcript feedback appears above the input while you speak, and assistant
 text streams into the result stack above the input. The extension does not
 render visible chat history; session history stays on the gateway and can be
@@ -77,6 +77,9 @@ do not need per-site microphone approval for Aggie turns. Spoken turns
 auto-commit after speech silence and re-arm while conversation mode is active;
 clicking the Moa mark once while it is listening commits the current speech
 immediately.
+If Chrome blocks offscreen microphone capture, the overlay shows a visible
+permission error and opens the Aggie Options page; grant the microphone there or
+set Microphone to Allow for the extension from `chrome://extensions`.
 Explicit open-tab commands such as `open https://example.com in a new tab`
 create a browser tab locally; open-and-report requests still run through the
 background browser task path with receipts.
@@ -191,14 +194,15 @@ gateway is the live one (`http://10.147.17.10:8788`); override with
    (no token needed). This is the reachability gate.
 2. **Command** — a command submitted in the overlay is sent as `run` →
    `background.js` `POST /v1/voice/turns` (with `Authorization: Bearer <token>`)
-   → the gateway's `display`/`text` reply renders above a cleared command input.
+   → the gateway's `display`/`text` reply renders above the command input without
+   clearing or replacing its draft.
    The recorder confirms the reply originated from `/v1/voice/turns`.
 3. **Describe** — "describe page" is sent as `describe` → `POST /v1/chat` → the
    gateway's `text` renders in the same one-current-intent result surface. The
    recorder confirms it originated from `/v1/chat`.
 4. **Loud failure** — pointed at the gateway with **no/invalid token**, the same
    command hits `POST /v1/voice/turns`, the gateway returns `401`, and the
-   overlay renders the clear error above the cleared input with a red status dot.
+   overlay renders the clear error above the preserved input draft with a red status dot.
    The failure is visible, never silent.
 
 The bearer token is read **only** from `AGEE_GATEWAY_TOKEN` at run time (never

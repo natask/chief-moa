@@ -179,21 +179,25 @@ function parseProfileControlIntent(text) {
   if (!lower) {
     return null;
   }
+  const scope = profileScopeFromText(lower);
 
   if (lower.includes("what prompt") || lower.includes("which prompt") || lower.includes("current prompt")) {
-    return { action: "summary", subject: "system_prompt" };
+    return { action: "summary", subject: "system_prompt", scope };
   }
   if (lower.includes("what language") || lower.includes("which language") || lower.includes("language is active")) {
-    return { action: "summary", subject: "language" };
+    return { action: "summary", subject: "language", scope };
   }
   if (lower.includes("what voice") || lower.includes("which voice") || lower.includes("voice is active")) {
-    return { action: "summary", subject: "voice" };
+    return { action: "summary", subject: "voice", scope };
+  }
+  if (lower.includes("what is your name") || lower.includes("what s your name") || lower.includes("who are you")) {
+    return { action: "summary", subject: "assistant_name", scope };
   }
   if (lower.includes("what provider") || lower.includes("which provider") || lower.includes("provider is active")) {
-    return { action: "summary", subject: "providers" };
+    return { action: "summary", subject: "providers", scope };
   }
   if (lower.includes("what tool mode") || lower.includes("which tool mode") || lower.includes("autonomy mode")) {
-    return { action: "summary", subject: "tool_policy" };
+    return { action: "summary", subject: "tool_policy", scope };
   }
 
   const prompt = promptUpdateFrom(raw);
@@ -202,12 +206,24 @@ function parseProfileControlIntent(text) {
       action: "update",
       patch: { system_prompt: prompt },
       summary: "system prompt",
+      scope,
+    };
+  }
+
+  const assistantName = assistantNameUpdateFrom(raw);
+  if (assistantName) {
+    return {
+      action: "update",
+      patch: { assistant_name: assistantName },
+      summary: "assistant name",
+      confirmation: `Yes. I am now ${assistantName}.`,
+      scope,
     };
   }
 
   const languageIntent = parseLanguageIntent(raw);
   if (languageIntent) {
-    return { action: "update", patch: languageIntent.patch, summary: languageIntent.summary };
+    return { action: "update", patch: languageIntent.patch, summary: languageIntent.summary, scope };
   }
 
   const modality = modalityUpdateFrom(lower);
@@ -216,6 +232,7 @@ function parseProfileControlIntent(text) {
       action: "update",
       patch: { response_modality: modality },
       summary: modality === "text" ? "reply in text" : "reply out loud",
+      scope,
     };
   }
 
@@ -225,10 +242,67 @@ function parseProfileControlIntent(text) {
       action: "update",
       patch: { voice },
       summary: `voice ${voice}`,
+      scope,
     };
   }
 
   return null;
+}
+
+function profileScopeFromText(lower) {
+  if (/\b(?:all|every)\s+(?:device|devices|surface|surfaces|client|clients)\b/.test(lower)
+    || /\b(?:globally|global|everywhere|for everyone|all sessions)\b/.test(lower)) {
+    return "global";
+  }
+  if (/\b(?:this|current|only this|just this)\s+(?:device|phone|browser|surface|client)\b/.test(lower)
+    || /\b(?:on|for)\s+(?:this|my)\s+(?:device|phone|browser)\b/.test(lower)
+    || /\b(?:here only|just here|only here)\b/.test(lower)) {
+    return "device";
+  }
+  return "global";
+}
+
+function assistantNameUpdateFrom(text) {
+  const raw = String(text || "").trim();
+  const patterns = [
+    /\b(?:your\s+name)\s+(?:is|should\s+be|will\s+be|=|:)\s+(.+)$/i,
+    /\b(?:call|name)\s+yourself\s+(.+)$/i,
+    /\b(?:you\s+are|you're|youre)\s+(?:now\s+)?(?:called\s+|named\s+)?(.+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    const name = normalizeAssistantNameCandidate(match?.[1] || "");
+    if (name) {
+      return name;
+    }
+  }
+  return "";
+}
+
+function normalizeAssistantNameCandidate(value) {
+  let candidate = String(value || "")
+    .trim()
+    .replace(/\s+(?:from\s+now\s+on|going\s+forward|now|please)$/i, "")
+    .replace(/^["'`]+|["'`.!,?;:]+$/g, "")
+    .replace(/\s+/g, " ");
+  if (!candidate) {
+    return "";
+  }
+  candidate = candidate.replace(/^(?:a|an)\s+/i, "");
+  const lower = normalizeSpeech(candidate);
+  if (!lower) {
+    return "";
+  }
+  if (/\b(?:master|sir|captain)\b/.test(lower)) {
+    return "";
+  }
+  if (candidate.length > 80 || candidate.split(/\s+/).length > 4) {
+    return "";
+  }
+  if (!/[A-Za-z0-9]/.test(candidate)) {
+    return "";
+  }
+  return candidate;
 }
 
 // How the agent should deliver replies: "text" (write, don't speak) or "speech"
@@ -289,7 +363,9 @@ function matchedLanguages(lower) {
 // (output). "talk to me in X" is output — "me" is the object, not the subject.
 function languageSideOf(clause) {
   const isInput = /\b(?:i|i'm|im|i am)\b[^.]*\b(?:speak|talk|understand|know|say|use)\b/.test(clause)
-    || /\bmy\s+(?:language|languages|native\s+language|mother\s+tongue)\b/.test(clause);
+    || /\bmy\s+(?:language|languages|native\s+language|mother\s+tongue)\b/.test(clause)
+    || /^\s*(?:can you\s+|please\s+|only\s+|just\s+)*(?:process|understand|listen|recognize)\b/.test(clause)
+    || /\b(?:input|process|understand|listen|recognize)\s+(?:only\s+)?(?:these\s+)?languages?\b/.test(clause);
   if (isInput) return "input";
   const isOutput = /\b(?:you|your)\b/.test(clause)
     || /^\s*(?:can you\s+|please\s+|only\s+|just\s+)*(?:speak|talk|respond|reply|answer|say)\b/.test(clause)

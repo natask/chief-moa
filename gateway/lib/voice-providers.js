@@ -679,6 +679,7 @@ class GeminiLiveVoiceProvider {
     const modality = String(profile?.response_modality || "auto").trim().toLowerCase();
     return [
       profile?.system_prompt || this.systemPrompt,
+      profileIdentityInstruction(profile),
       profileLanguageInstruction(profile),
       "If the user tells you to stop, shut up, be quiet, hush, or not to speak, stop talking immediately and say nothing — do not acknowledge it, just go silent.",
       modality === "text"
@@ -705,6 +706,9 @@ class GeminiLiveVoiceProvider {
       auth: this.authStatus(),
       voice: this.effectiveVoice(),
       voice_default: this.envVoiceName,
+      assistant_name: this.agentProfile && typeof this.agentProfile.effective === "function"
+        ? this.agentProfile.effective().assistant_name || ""
+        : "",
       language_profile: this.agentProfile && typeof this.agentProfile.effective === "function"
         ? this.agentProfile.effective().language || ""
         : "",
@@ -1168,7 +1172,7 @@ class GeminiLiveVoiceProvider {
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. LANGUAGE: `language` and `language_primary` are the language YOU reply in; `input_languages` and `input_language_primary` are the language(s) the USER speaks. Modular STT providers may use input languages as recognition hints; Gemini Live native audio infers input language and receives this as Moa context. All language fields take BCP-47 codes (en-US, fr-FR, es-ES, am-ET, ja-JP, sw-KE, ...); comma-separate multiple. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how you deliver replies — \"text\" (write, do not speak), \"speech\" (speak out loud), or \"auto\" (match the user: typed -> text, spoken -> speech). Set \"text\" when the user says \"respond in text\"/\"stop speaking, just write\"; set \"speech\" when they say \"talk to me\"/\"use your voice\". Other fields: system_prompt, model, temperature, voice (Gemini core-8: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". LANGUAGE: `language` and `language_primary` are the language YOU reply in; `input_languages` and `input_language_primary` are the language(s) the USER speaks. Modular STT providers may use input languages as recognition hints; Gemini Live native audio infers input language and receives this as Moa context. All language fields take BCP-47 codes (en-US, fr-FR, es-ES, am-ET, ja-JP, sw-KE, ...); comma-separate multiple. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how you deliver replies — \"text\" (write, do not speak), \"speech\" (speak out loud), or \"auto\" (match the user: typed -> text, spoken -> speech). Set \"text\" when the user says \"respond in text\"/\"stop speaking, just write\"; set \"speech\" when they say \"talk to me\"/\"use your voice\". Other fields: system_prompt, assistant_name, model, temperature, voice (Gemini core-8: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
                 },
                 reason: {
                   type: "STRING",
@@ -1540,6 +1544,20 @@ function languageCodes(value) {
     .map((entry) => entry.trim())
     .filter(Boolean);
   return codes.length ? Array.from(new Set(codes)).slice(0, 10) : ["en-US"];
+}
+
+function profileIdentityInstruction(profile) {
+  const name = String(profile?.assistant_name || "Aggie").trim();
+  if (!name) {
+    return "";
+  }
+  return [
+    "Moa identity profile:",
+    "- this identity profile overrides any older name in the base prompt",
+    `- current assistant name: ${name}`,
+    `- if asked who or what you are, say you are ${name}`,
+    "- address the user plainly with no titles or honorifics",
+  ].join("\n");
 }
 
 function profileLanguageInstruction(profile) {

@@ -48,12 +48,14 @@ public final class MainActivity extends Activity {
     private TextView micStatus;
     private TextView gatewayStatus;
     private TextView updateStatus;
+    private TextView requirementsSummary;
     private TextView sessionsStatus;
     private TextView runsStatus;
     private TextView receiptsStatus;
     private TextView settingsStatus;
     private Button overlayButton;
     private Button accessibilityButton;
+    private Button appInfoButton;
     private Button micButton;
     private Button startButton;
     private Button stopButton;
@@ -63,6 +65,7 @@ public final class MainActivity extends Activity {
     private CheckBox spokenRepliesInput;
     private JSONObject pendingUpdate;
     private boolean autoStartedOverlay;
+    private boolean requestedMicOnStartup;
     private int gatewayHealthGeneration;
     private int updateCheckGeneration;
 
@@ -76,6 +79,7 @@ public final class MainActivity extends Activity {
 
         applyIntentConfiguration(getIntent());
         setContentView(createContent());
+        maybeRequestMicPermission();
     }
 
     @Override
@@ -90,6 +94,7 @@ public final class MainActivity extends Activity {
             gatewayTokenInput.setText(MoaPrefs.gatewayToken(this));
         }
         updatePermissionState();
+        maybeRequestMicPermission();
         if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
             collapseOverlaySurfaces();
         }
@@ -173,6 +178,10 @@ public final class MainActivity extends Activity {
         micStatus = statusLine(card, "Microphone", "Checking...");
         gatewayStatus = statusLine(card, "Model gateway", "Checking...");
         updateStatus = statusLine(card, "App update", "Checking...");
+        requirementsSummary = label("", 0xCDEEF8E8, 14, false);
+        requirementsSummary.setLineSpacing(dp(2), 1f);
+        requirementsSummary.setPadding(0, dp(12), 0, 0);
+        card.addView(requirementsSummary);
         return card;
     }
 
@@ -240,14 +249,21 @@ public final class MainActivity extends Activity {
         overlayButton = primaryButton("Enable overlay permission");
         overlayButton.setOnClickListener(v -> openOverlaySettings());
         card.addView(overlayButton);
+        addHint(card, "Draw over other apps is required for the floating orb. This button opens Aggie's overlay permission screen; Android still requires you to allow it.");
 
         accessibilityButton = primaryButton("Enable screen access");
         accessibilityButton.setOnClickListener(v -> openAccessibilitySettings());
         card.addView(accessibilityButton);
+        addHint(card, "Screen access is required for current-screen context and controlled screen actions. If Android blocks the toggle with restricted settings, open App info for Aggie, tap the three-dot menu, Allow restricted settings, return, then enable Screen access.");
+
+        appInfoButton = secondaryButton("Open Aggie app info");
+        appInfoButton.setOnClickListener(v -> openAppInfoSettings());
+        card.addView(appInfoButton);
 
         micButton = secondaryButton("Enable microphone");
         micButton.setOnClickListener(v -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO));
         card.addView(micButton);
+        addHint(card, "Microphone is requested directly when Android allows it. Voice still starts only after an explicit orb or assistant gesture.");
 
         startButton = primaryButton("Start assistant circle");
         startButton.setOnClickListener(v -> startOverlay());
@@ -282,18 +298,22 @@ public final class MainActivity extends Activity {
         boolean micGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
 
         if (overlayStatus != null) {
-            overlayStatus.setText(overlayGranted ? "Ready" : "Needs permission");
+            overlayStatus.setText(overlayGranted ? "Ready" : "Needs draw-over-apps");
             overlayStatus.setTextColor(overlayGranted ? MoaColors.OK : MoaColors.WARN);
         }
 
         if (accessibilityStatus != null) {
-            accessibilityStatus.setText(accessibilityGranted ? "Ready" : "Optional");
+            accessibilityStatus.setText(accessibilityGranted ? "Ready" : "Needs Screen access");
             accessibilityStatus.setTextColor(accessibilityGranted ? MoaColors.OK : MoaColors.WARN);
         }
 
         if (micStatus != null) {
-            micStatus.setText(micGranted ? "Ready" : "Needs permission");
+            micStatus.setText(micGranted ? "Ready" : "Needs microphone");
             micStatus.setTextColor(micGranted ? MoaColors.OK : MoaColors.WARN);
+        }
+
+        if (requirementsSummary != null) {
+            requirementsSummary.setText(requirementsSummary(overlayGranted, accessibilityGranted, micGranted));
         }
 
         if (gatewayStatus != null) {
@@ -326,6 +346,10 @@ public final class MainActivity extends Activity {
             accessibilityButton.setVisibility(accessibilityGranted ? View.GONE : View.VISIBLE);
         }
 
+        if (appInfoButton != null) {
+            appInfoButton.setVisibility(accessibilityGranted ? View.GONE : View.VISIBLE);
+        }
+
         if (micButton != null) {
             micButton.setVisibility(micGranted ? View.GONE : View.VISIBLE);
         }
@@ -350,6 +374,25 @@ public final class MainActivity extends Activity {
 
     private void openAccessibilitySettings() {
         startActivity(MoaAccessibilityService.settingsIntent());
+    }
+
+    private void openAppInfoSettings() {
+        Intent intent = new Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getPackageName())
+        );
+        startActivity(intent);
+    }
+
+    private void maybeRequestMicPermission() {
+        if (requestedMicOnStartup) {
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        requestedMicOnStartup = true;
+        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO);
     }
 
     private void startOverlay() {
@@ -755,6 +798,34 @@ public final class MainActivity extends Activity {
         bullet.setLineSpacing(dp(2), 1f);
         bullet.setPadding(0, dp(5), 0, dp(5));
         parent.addView(bullet);
+    }
+
+    private void addHint(LinearLayout parent, String text) {
+        TextView hint = label(text, 0xAEEEF8E8, 13, false);
+        hint.setLineSpacing(dp(2), 1f);
+        hint.setPadding(0, dp(6), 0, dp(8));
+        parent.addView(hint);
+    }
+
+    private String requirementsSummary(boolean overlayGranted, boolean accessibilityGranted, boolean micGranted) {
+        StringBuilder missing = new StringBuilder();
+        appendMissing(missing, overlayGranted, "Draw over other apps");
+        appendMissing(missing, accessibilityGranted, "Screen access");
+        appendMissing(missing, micGranted, "Microphone");
+        if (missing.length() == 0) {
+            return "Required access is ready. Start the assistant circle when you want Aggie above other apps.";
+        }
+        return "Missing: " + missing + ". Aggie can request microphone access, but Android requires you to approve overlay and Screen access in system settings.";
+    }
+
+    private void appendMissing(StringBuilder builder, boolean granted, String label) {
+        if (granted) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append(", ");
+        }
+        builder.append(label);
     }
 
     private EditText textInput(String hint, String value, int inputType) {

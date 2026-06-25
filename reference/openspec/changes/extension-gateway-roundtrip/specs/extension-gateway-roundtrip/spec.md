@@ -21,14 +21,16 @@ gateway `/v1/voice/turns` endpoint.
 ### Requirement: Browser surface is not visible chat history
 The extension SHALL present a one-current-intent surface rather than a visible
 chat transcript. Typed replies SHALL render in the result stack above the
-command input, and the input SHALL clear for the next command. Durable turn
-history SHALL remain gateway-owned context and SHALL be retrieved only when the
-user asks for it through an intent.
+command input, and assistant replies, errors, and voice events SHALL NOT clear
+or replace the user's current input draft. Durable turn history SHALL remain
+gateway-owned context and SHALL be retrieved only when the user asks for it
+through an intent.
 
-#### Scenario: Typed reply renders above an empty input
+#### Scenario: Typed reply preserves the draft
 - **WHEN** the user opens the text surface with Cmd+, and submits an intent
 - **THEN** the assistant reply or error renders above the command input
-- **AND** the command input is empty and ready for the next command
+- **AND** the command input still contains whatever draft text was present
+  before the response arrived
 
 #### Scenario: Voice shows live feedback above the input
 - **WHEN** the user starts a browser voice turn with Cmd+.
@@ -37,6 +39,8 @@ user asks for it through an intent.
   the user speaks and while the turn is processing
 - **AND** streams assistant text above the input instead of writing it into the
   command input
+- **AND** it does not clear or replace any typed input draft during listening,
+  commit, done, or error states
 - **AND** it does not show older chat-history turns unless the user explicitly
   asks for history through an intent
 
@@ -93,3 +97,11 @@ text-to-speech as the production voice path.
 - **THEN** the page content script does not call `getUserMedia`
 - **AND** any microphone approval belongs to the extension origin, not the
   current website
+
+#### Scenario: Extension microphone capture is blocked
+- **WHEN** Chrome blocks microphone capture in the extension offscreen document
+- **THEN** the overlay renders a visible microphone permission error
+- **AND** the error tells the user to grant microphone access to the Aggie
+  extension from Options or Chrome extension settings
+- **AND** the failure is treated as non-recoverable for that voice turn instead
+  of silently respawning Live voice

@@ -189,9 +189,8 @@
 #agee-root.agee-open #agee-panel {
   display: block;
 }
-/* Voice surface: the visible "agent is up" banner. Hidden until a voice session
-   starts; the orb color + pulse carry the live phase, the transcript bar shows
-   the user's words as they land. */
+/* Legacy voice strip. Browser voice now renders transcript and assistant text
+   in cue cards above the input, so this top strip stays hidden in all phases. */
 #agee-voice-state {
   display: none;
   align-items: center;
@@ -201,7 +200,7 @@
   background: linear-gradient(180deg, #141419 0%, #0d0d0f 100%);
 }
 #agee-root.agee-voicing #agee-voice-state {
-  display: flex;
+  display: none;
 }
 #agee-orb {
   flex: 0 0 auto;
