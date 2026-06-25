@@ -61,6 +61,28 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject deviceHeartbeat(JSONObject body) throws Exception {
+        String responseText = postJson(apiEndpoint("/v1/device-clients/heartbeat"), body.toString(), 15000);
+        return new JSONObject(responseText);
+    }
+
+    JSONObject claimToolRequest(JSONObject body) throws Exception {
+        String responseText = postJson(apiEndpoint("/v1/tool/requests/claim"), body.toString(), 15000);
+        if (responseText.trim().isEmpty()) {
+            return new JSONObject();
+        }
+        return new JSONObject(responseText);
+    }
+
+    JSONObject toolRequestReceipt(String requestId, JSONObject body) throws Exception {
+        String id = safe(requestId).replaceAll("[^a-zA-Z0-9_-]", "");
+        if (id.isEmpty()) {
+            throw new IllegalArgumentException("tool request id is required");
+        }
+        String responseText = postJson(apiEndpoint("/v1/tool/requests/" + id + "/receipts"), body.toString(), 15000);
+        return new JSONObject(responseText);
+    }
+
     void downloadLatestAndroidUpdate(File destination) throws Exception {
         downloadFile(apiEndpoint("/v1/android/updates/latest.apk"), destination, 120000);
     }

@@ -196,6 +196,17 @@ if (!/const owner = await getActiveBrowserAgentOwner\(\);[\s\S]{0,420}chrome\.ta
   throw new Error("gateway-queued browser tasks must prefer the active owner tab before falling back to the foreground tab");
 }
 
+if (
+  !/\/v1\/device-clients\/heartbeat/.test(backgroundSource) ||
+  !/function browserLocalToolManifest/.test(backgroundSource) ||
+  !/browser\.tab\.open/.test(backgroundSource) ||
+  !/\/v1\/tool\/requests\/claim/.test(backgroundSource) ||
+  !/function maybeRequestAndroidSpeak/.test(backgroundSource) ||
+  !/tool:\s*"audio\.speak"/.test(backgroundSource)
+) {
+  throw new Error("extension must heartbeat as a browser device client and queue/claim cross-device tool requests");
+}
+
 if (/Listening\.\.\.|listening\.\.\.|stopping…|stopping\.\.\./.test(contentSource)) {
   throw new Error("content.js must not render voice lifecycle filler text such as Listening/listening/stopping");
 }

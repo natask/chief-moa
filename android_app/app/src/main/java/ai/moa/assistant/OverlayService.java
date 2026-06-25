@@ -53,6 +53,7 @@ public final class OverlayService extends Service {
     private static final long VOICE_USER_EXIT_MS = 150;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
+    private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -110,6 +111,8 @@ public final class OverlayService extends Service {
     private boolean pushToTalkVoiceTurn;
     private boolean pendingContinuousVoiceRestartAfterAudio;
     private boolean streamingAssistantAudioPlaying;
+    private boolean deviceClientLoopRunning;
+    private boolean deviceClientPollInFlight;
 
     private enum VoiceRuntimeState {
         READY,
@@ -186,6 +189,7 @@ public final class OverlayService extends Service {
         MoaPrefs.setHistoryJson(this, "");
         promoteToForeground();
         showOrb();
+        startDeviceClientLoop();
     }
 
     @Override
@@ -230,6 +234,7 @@ public final class OverlayService extends Service {
             voiceSamplePlayer.destroy();
             voiceSamplePlayer = null;
         }
+        deviceClientLoopRunning = false;
         super.onDestroy();
     }
 
@@ -1459,6 +1464,177 @@ public final class OverlayService extends Service {
         return new MoaGatewayClient(gatewayUrl, gatewayToken);
     }
 
+    private void startDeviceClientLoop() {
+        if (deviceClientLoopRunning) {
+            return;
+        }
+        deviceClientLoopRunning = true;
+        mainHandler.post(this::pollDeviceClientThenSchedule);
+    }
+
+    private void pollDeviceClientThenSchedule() {
+        if (!deviceClientLoopRunning) {
+            return;
+        }
+        pollDeviceClientOnce();
+        mainHandler.postDelayed(this::pollDeviceClientThenSchedule, DEVICE_CLIENT_POLL_MS);
+    }
+
+    private void pollDeviceClientOnce() {
+        if (deviceClientPollInFlight) {
+            return;
+        }
+        loadSettings();
+        if (gatewayUrl.isEmpty()) {
+            return;
+        }
+
+        JSONObject heartbeat;
+        JSONObject claim;
+        try {
+            heartbeat = deviceClientHeartbeatBody();
+            claim = deviceClientClaimBody();
+        } catch (JSONException error) {
+            return;
+        }
+
+        deviceClientPollInFlight = true;
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        new Thread(() -> {
+            try {
+                MoaGatewayClient client = new MoaGatewayClient(url, token);
+                client.deviceHeartbeat(heartbeat);
+                JSONObject claimed = client.claimToolRequest(claim);
+                JSONObject request = claimed.optJSONObject("request");
+                if (request != null && !request.optString("id", "").trim().isEmpty()) {
+                    mainHandler.post(() -> executeClaimedToolRequest(request));
+                }
+            } catch (Exception ignored) {
+                // The device heartbeat is best-effort background infrastructure.
+            } finally {
+                deviceClientPollInFlight = false;
+            }
+        }, "moa-device-client").start();
+    }
+
+    private JSONObject deviceClientHeartbeatBody() throws JSONException {
+        JSONObject body = new JSONObject();
+        body.put("device_id", androidDeviceId());
+        body.put("surface_type", "android");
+        body.put("session_id", conversationId);
+        body.put("status", "online");
+        body.put("local_tool_manifest", androidLocalToolManifest());
+
+        JSONObject metadata = new JSONObject();
+        metadata.put("source", "android-overlay");
+        metadata.put("screen_access_enabled", actionBroker.isScreenAccessEnabled());
+        metadata.put("screen_access_running", actionBroker.isScreenAccessRunning());
+        metadata.put("overlay_running", true);
+        body.put("metadata", metadata);
+        return body;
+    }
+
+    private JSONObject deviceClientClaimBody() throws JSONException {
+        JSONObject body = new JSONObject();
+        body.put("device_id", androidDeviceId());
+        body.put("surface_type", "android");
+        body.put("local_tool_manifest", androidLocalToolManifest());
+        return body;
+    }
+
+    private JSONArray androidLocalToolManifest() throws JSONException {
+        JSONArray manifest = new JSONArray();
+        putToolManifestItem(manifest, "app.launch", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "system.back", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "system.home", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "screen.summary", "read_only", "none");
+        putToolManifestItem(manifest, "screen.tap_text", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "audio.speak", "local_output", "implicit_user_command");
+        return manifest;
+    }
+
+    private void putToolManifestItem(JSONArray manifest, String tool, String risk, String approval) throws JSONException {
+        JSONObject item = new JSONObject();
+        item.put("tool", tool);
+        item.put("risk", risk);
+        item.put("approval", approval);
+        manifest.put(item);
+    }
+
+    private void executeClaimedToolRequest(JSONObject request) {
+        String requestId = safe(request.optString("id", ""));
+        String tool = safe(request.optString("tool", ""));
+        JSONObject input = request.optJSONObject("input");
+        if (input == null) {
+            input = new JSONObject();
+        }
+        ToolRequestExecution execution;
+        if ("audio.speak".equals(tool)) {
+            execution = executeAudioSpeakRequest(input);
+        } else {
+            MoaActionBroker.ToolExecutionResult result = actionBroker.executeToolRequest(tool, input);
+            execution = new ToolRequestExecution(result.success, result.reply, result.receipt);
+        }
+
+        String message = execution.success
+                ? "Cross-device request completed: " + execution.summary
+                : "Cross-device request failed: " + execution.summary;
+        addMessage(true, message);
+        if (!requestId.isEmpty()) {
+            postToolRequestReceipt(requestId, execution);
+        }
+    }
+
+    private ToolRequestExecution executeAudioSpeakRequest(JSONObject input) {
+        String text = safe(input.optString("text", input.optString("message", input.optString("utterance", ""))));
+        if (text.isEmpty()) {
+            JSONObject receipt = MoaActionReceiptStore.record(this, "audio.speak", "local_output", "implicit_user_command", "", false, "Speech text is required.");
+            return new ToolRequestExecution(false, "Speech text is required.", receipt);
+        }
+        boolean spoken = voiceController != null && voiceController.speak(text);
+        JSONObject receipt = MoaActionReceiptStore.record(
+                this,
+                "audio.speak",
+                "local_output",
+                "implicit_user_command",
+                "device_speaker",
+                spoken,
+                spoken ? "Spoke requested text." : "TextToSpeech was unavailable."
+        );
+        return new ToolRequestExecution(spoken, spoken ? "Spoke requested text." : "TextToSpeech was unavailable.", receipt);
+    }
+
+    private void postToolRequestReceipt(String requestId, ToolRequestExecution execution) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("device_id", androidDeviceId());
+            body.put("ok", execution.success);
+            body.put("summary", execution.summary);
+            if (!execution.success) {
+                body.put("error", execution.summary);
+            }
+            JSONObject result = new JSONObject();
+            result.put("reply", execution.summary);
+            body.put("result", result);
+            if (execution.receipt != null) {
+                body.put("local_receipt", execution.receipt);
+            }
+        } catch (JSONException error) {
+            return;
+        }
+
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        new Thread(() -> {
+            try {
+                new MoaGatewayClient(url, token).toolRequestReceipt(requestId, body);
+            } catch (Exception ignored) {
+                // The local action already happened and was recorded locally.
+            }
+        }, "moa-tool-receipt").start();
+    }
+
     private void trackAgentRunsFromResponse(JSONObject response) {
         if (response == null) {
             return;
@@ -2263,6 +2439,18 @@ public final class OverlayService extends Service {
                     : Math.min(parentSize, maxHeight);
             int cappedHeight = View.MeasureSpec.makeMeasureSpec(cap, View.MeasureSpec.AT_MOST);
             super.onMeasure(widthMeasureSpec, cappedHeight);
+        }
+    }
+
+    private static final class ToolRequestExecution {
+        final boolean success;
+        final String summary;
+        final JSONObject receipt;
+
+        ToolRequestExecution(boolean success, String summary, JSONObject receipt) {
+            this.success = success;
+            this.summary = summary == null ? "" : summary.trim();
+            this.receipt = receipt;
         }
     }
 

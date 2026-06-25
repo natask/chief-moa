@@ -281,9 +281,32 @@ User request or model proposal
 Model output and screen text are untrusted inputs. They can inform proposals;
 they cannot directly execute phone actions.
 
+### Cross-Device Tool Hub
+
+```text
+Android or browser client
+  -> heartbeats to the gateway with device id, surface type, session id, and
+     local tool manifest
+other surface or agent
+  -> creates a gateway tool_request for a target device or surface
+target client
+  -> claims only requests matching its advertised local tools
+  -> validates and executes the local action inside that client boundary
+  -> posts a receipt back to the gateway
+```
+
+The gateway is only the registry and queue. It does not press phone buttons,
+open browser tabs, or speak through device speakers by itself. A browser turn
+can request an Android action such as `audio.speak`; Android must still claim,
+validate, execute with local TextToSpeech, and receipt it. An Android turn can
+request browser work such as `browser.tab.open`; the Chrome extension must still
+claim, validate, execute, and receipt it.
+
 ## Product Primitives
 
 - `device`: a registered Android device with local permissions and settings.
+- `device_client`: a connected Android, browser, or future desktop surface that
+  heartbeats its online state and local tool manifest to the gateway.
 - `session`: a coherent mobile work session.
 - `branch`: a thread of work inside a session, initially `default`.
 - `turn`: one voice or chat input with optional screen context.
@@ -308,6 +331,8 @@ they cannot directly execute phone actions.
   client must claim, execute locally with allowlisted actions, and receipt.
 - `tool_source`: an agent-callable integration source such as OpenAPI, MCP,
   GraphQL, or a custom gateway function.
+- `tool_request`: a gateway-queued request for a specific device or surface to
+  run one advertised local tool and post a receipt.
 - `execution`: a durable gateway-side workflow or tool call with status,
   checkpoints, and resume/cancel metadata.
 - `action_proposal`: structured server output asking the phone to perform work.
@@ -338,7 +363,8 @@ resumable workflows and queues.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
   accessibility-backed screen context and visible UI operations.
 - `gateway/server.js`: HTTP API, voice router, model calls,
-  conversation storage, and agent-run execution.
+  conversation storage, agent-run execution, device-client registry, and
+  cross-device tool-request queue.
 - `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
 - `gateway/lib/voice-intent.js`: pure voice-turn classifier

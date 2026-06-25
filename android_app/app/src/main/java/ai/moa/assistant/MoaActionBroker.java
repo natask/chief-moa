@@ -94,6 +94,76 @@ final class MoaActionBroker {
         return LocalActionResult.notHandled();
     }
 
+    ToolExecutionResult executeToolRequest(String tool, JSONObject input) {
+        String name = safe(tool).toLowerCase(Locale.US);
+        JSONObject args = input == null ? new JSONObject() : input;
+
+        if ("screen.summary".equals(name)) {
+            Capability capability = CAPABILITIES.get("screen.summary");
+            if (!MoaAccessibilityService.isRunning()) {
+                JSONObject receipt = recordReceipt(capability, "", false, "Screen access is not running.");
+                return ToolExecutionResult.done(false, "Screen access is not running.", receipt);
+            }
+            String summary = MoaAccessibilityService.currentScreenSummary();
+            if (summary.isEmpty()) {
+                JSONObject receipt = recordReceipt(capability, "", false, "No visible screen text was available.");
+                return ToolExecutionResult.done(false, "No visible screen text was available.", receipt);
+            }
+            JSONObject receipt = recordReceipt(capability, "", true, "Screen summary returned.");
+            return ToolExecutionResult.done(true, "Current screen: " + summary, receipt);
+        }
+
+        if ("screen.tap_text".equals(name)) {
+            Capability capability = CAPABILITIES.get("screen.tap_text");
+            String label = safe(args.optString("text", args.optString("label", args.optString("target", ""))));
+            if (label.isEmpty()) {
+                JSONObject receipt = recordReceipt(capability, "", false, "Visible label is required.");
+                return ToolExecutionResult.done(false, "Visible label is required.", receipt);
+            }
+            if (!MoaAccessibilityService.isRunning()) {
+                JSONObject receipt = recordReceipt(capability, label, false, "Screen access is not running.");
+                return ToolExecutionResult.done(false, "Screen access is not running.", receipt);
+            }
+            boolean clicked = MoaAccessibilityService.clickByText(label);
+            JSONObject receipt = recordReceipt(capability, label, clicked, clicked ? "Tapped visible label." : "No visible clickable match.");
+            return ToolExecutionResult.done(clicked, clicked ? "Tapped \"" + label + "\"." : "No visible clickable item matched \"" + label + "\".", receipt);
+        }
+
+        if ("system.back".equals(name)) {
+            Capability capability = CAPABILITIES.get("system.back");
+            if (!MoaAccessibilityService.isRunning()) {
+                JSONObject receipt = recordReceipt(capability, "", false, "Screen access is not running.");
+                return ToolExecutionResult.done(false, "Screen access is not running.", receipt);
+            }
+            boolean success = MoaAccessibilityService.performBack();
+            JSONObject receipt = recordReceipt(capability, "", success, success ? "Pressed back." : "Back action failed.");
+            return ToolExecutionResult.done(success, success ? "Pressed back." : "Back action failed.", receipt);
+        }
+
+        if ("system.home".equals(name)) {
+            Capability capability = CAPABILITIES.get("system.home");
+            if (!MoaAccessibilityService.isRunning()) {
+                JSONObject receipt = recordReceipt(capability, "", false, "Screen access is not running.");
+                return ToolExecutionResult.done(false, "Screen access is not running.", receipt);
+            }
+            boolean success = MoaAccessibilityService.performHome();
+            JSONObject receipt = recordReceipt(capability, "", success, success ? "Pressed home." : "Home action failed.");
+            return ToolExecutionResult.done(success, success ? "Pressed home." : "Home action failed.", receipt);
+        }
+
+        if ("app.launch".equals(name)) {
+            String target = safe(args.optString("app", args.optString("name", args.optString("target", args.optString("package", "")))));
+            if (target.isEmpty()) {
+                Capability capability = CAPABILITIES.get("app.launch");
+                JSONObject receipt = recordReceipt(capability, "", false, "App target is required.");
+                return ToolExecutionResult.done(false, "App target is required.", receipt);
+            }
+            return openLauncherAppForTool(target);
+        }
+
+        return ToolExecutionResult.done(false, "Unsupported local tool: " + name + ".", null);
+    }
+
     JSONObject screenSnapshot() {
         return MoaAccessibilityService.currentScreenSnapshot();
     }
@@ -149,20 +219,24 @@ final class MoaActionBroker {
         return capability == null || "blocked".equals(capability.approval);
     }
 
-    private void recordReceipt(Capability capability, String target, boolean success, String result) {
+    private JSONObject recordReceipt(Capability capability, String target, boolean success, String result) {
         if (capability == null) {
-            return;
+            return null;
         }
-        MoaActionReceiptStore.record(context, capability.tool, capability.risk, capability.approval, target, success, result);
+        return MoaActionReceiptStore.record(context, capability.tool, capability.risk, capability.approval, target, success, result);
     }
 
     private LocalActionResult openLauncherApp(String target) {
+        return LocalActionResult.handled(openLauncherAppForTool(target).reply);
+    }
+
+    private ToolExecutionResult openLauncherAppForTool(String target) {
         Capability capability = CAPABILITIES.get("app.launch");
         PackageManager packageManager = context.getPackageManager();
         List<AppCandidate> matches = matchingLauncherApps(packageManager, target);
         if (matches.isEmpty()) {
-            recordReceipt(capability, target, false, "No matching launcher app.");
-            return LocalActionResult.handled("I could not find an installed app matching \"" + target + "\".");
+            JSONObject receipt = recordReceipt(capability, target, false, "No matching launcher app.");
+            return ToolExecutionResult.done(false, "I could not find an installed app matching \"" + target + "\".", receipt);
         }
         if (matches.size() > 1) {
             StringBuilder names = new StringBuilder();
@@ -172,8 +246,8 @@ final class MoaActionBroker {
                 }
                 names.append(matches.get(i).label);
             }
-            recordReceipt(capability, target, false, "Multiple launcher app matches.");
-            return LocalActionResult.handled("I found multiple apps matching \"" + target + "\": " + names + ". Say the full app name.");
+            JSONObject receipt = recordReceipt(capability, target, false, "Multiple launcher app matches.");
+            return ToolExecutionResult.done(false, "I found multiple apps matching \"" + target + "\": " + names + ". Say the full app name.", receipt);
         }
 
         AppCandidate app = matches.get(0);
@@ -186,11 +260,11 @@ final class MoaActionBroker {
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             context.startActivity(launchIntent);
-            recordReceipt(capability, app.label, true, "Opened launcher app.");
-            return LocalActionResult.handled("Opened " + app.label + ".");
+            JSONObject receipt = recordReceipt(capability, app.label, true, "Opened launcher app.");
+            return ToolExecutionResult.done(true, "Opened " + app.label + ".", receipt);
         } catch (RuntimeException error) {
-            recordReceipt(capability, app.label, false, "Launch failed.");
-            return LocalActionResult.handled("I could not open " + app.label + ".");
+            JSONObject receipt = recordReceipt(capability, app.label, false, "Launch failed.");
+            return ToolExecutionResult.done(false, "I could not open " + app.label + ".", receipt);
         }
     }
 
@@ -281,6 +355,22 @@ final class MoaActionBroker {
 
         static LocalActionResult notHandled() {
             return new LocalActionResult(false, "");
+        }
+    }
+
+    static final class ToolExecutionResult {
+        final boolean success;
+        final String reply;
+        final JSONObject receipt;
+
+        private ToolExecutionResult(boolean success, String reply, JSONObject receipt) {
+            this.success = success;
+            this.reply = reply == null ? "" : reply;
+            this.receipt = receipt;
+        }
+
+        static ToolExecutionResult done(boolean success, String reply, JSONObject receipt) {
+            return new ToolExecutionResult(success, reply, receipt);
         }
     }
 

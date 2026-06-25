@@ -43,6 +43,8 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || "./data");
 const CONVERSATIONS_DIR = path.join(DATA_DIR, "conversations");
 const AGENT_RUNS_DIR = path.join(DATA_DIR, "agent-runs");
 const BROWSER_TASKS_DIR = path.join(DATA_DIR, "browser-tasks");
+const DEVICE_CLIENTS_FILE = path.join(DATA_DIR, "device-clients.json");
+const TOOL_REQUESTS_DIR = path.join(DATA_DIR, "tool-requests");
 const VOICE_TURNS_DIR = path.join(DATA_DIR, "voice-turns");
 const VOICE_PROVIDER_EVENTS_FILE = path.join(DATA_DIR, "voice-provider-events.jsonl");
 const BROKER_EVENTS_DIR = path.join(DATA_DIR, "broker-events");
@@ -113,6 +115,7 @@ let cachedVertexToken = { value: "", expiresAt: 0 };
 fs.mkdirSync(CONVERSATIONS_DIR, { recursive: true });
 fs.mkdirSync(AGENT_RUNS_DIR, { recursive: true });
 fs.mkdirSync(BROWSER_TASKS_DIR, { recursive: true });
+fs.mkdirSync(TOOL_REQUESTS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_TURNS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_EVENTS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
@@ -235,6 +238,12 @@ const server = http.createServer(async (request, response) => {
           token_required: !ALLOW_AGENT_WITHOUT_TOKEN,
         },
         android_ota: androidOtaHealth(),
+        device_hub: {
+          registry_file: DEVICE_CLIENTS_FILE,
+          tool_requests_dir: TOOL_REQUESTS_DIR,
+          device_count: listDeviceClients().length,
+          pending_tool_requests: listToolRequests({ status: "pending", limit: 100 }).length,
+        },
         brain: {
           available: brain.available(),
           recall_limit: BRAIN_RECALL_LIMIT,
@@ -469,6 +478,72 @@ const server = http.createServer(async (request, response) => {
       }
       const id = url.pathname.slice("/v1/browser/tasks/".length, -"/receipts".length);
       await handleBrowserTaskReceipt(request, response, id);
+      return;
+    }
+
+    if (url.pathname === "/v1/device-clients" && request.method === "GET") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, { devices: listDeviceClients() });
+      return;
+    }
+
+    if (url.pathname === "/v1/device-clients/heartbeat" && request.method === "POST") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleDeviceClientHeartbeat(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/tool/requests" && request.method === "GET") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, {
+        requests: listToolRequests({
+          status: url.searchParams.get("status") || "",
+          targetDeviceId: url.searchParams.get("target_device_id") || url.searchParams.get("device_id") || "",
+          sourceDeviceId: url.searchParams.get("source_device_id") || "",
+          limit: Number(url.searchParams.get("limit") || 25),
+        }),
+      });
+      return;
+    }
+
+    if (url.pathname === "/v1/tool/requests" && request.method === "POST") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleCreateToolRequest(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/tool/requests/claim" && request.method === "POST") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleClaimToolRequest(request, response);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/tool/requests/") &&
+      url.pathname.endsWith("/receipts")
+    ) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const id = url.pathname.slice("/v1/tool/requests/".length, -"/receipts".length);
+      await handleToolRequestReceipt(request, response, id);
       return;
     }
 
@@ -3877,6 +3952,106 @@ async function handleBrowserTaskReceipt(request, response, id) {
   sendJson(response, 200, { task: summarizeBrowserTask(task), receipt });
 }
 
+async function handleDeviceClientHeartbeat(request, response) {
+  const body = await readJsonBody(request);
+  let device;
+  try {
+    device = upsertDeviceClient(body);
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+    return;
+  }
+  sendJson(response, 200, {
+    device,
+    pending_request_count: claimableToolRequestsForDevice(device).length,
+    requests_endpoint: "/v1/tool/requests/claim",
+  });
+}
+
+async function handleCreateToolRequest(request, response) {
+  const body = await readJsonBody(request);
+  let toolRequest;
+  try {
+    toolRequest = createToolRequest(body);
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+    return;
+  }
+  sendJson(response, 202, { request: summarizeToolRequest(toolRequest, { includeInput: true }) });
+}
+
+async function handleClaimToolRequest(request, response) {
+  const body = await readJsonBody(request);
+  const deviceId = normalizeDeviceId(body.device_id || body.deviceId || body.client_id || body.clientId || "");
+  if (!deviceId) {
+    sendJson(response, 400, { error: "device_id is required" });
+    return;
+  }
+
+  let device = readDeviceClientsMap()[deviceId];
+  if (!device && (body.surface_type || body.surfaceType || body.local_tool_manifest || body.tool_manifest || body.capabilities)) {
+    try {
+      device = upsertDeviceClient(body);
+    } catch (error) {
+      sendJson(response, 400, { error: cleanError(error) });
+      return;
+    }
+  }
+  if (!device) {
+    sendJson(response, 404, { error: "device client has not heartbeated" });
+    return;
+  }
+
+  const task = claimNextToolRequest(device);
+  if (!task) {
+    sendJson(response, 204, {});
+    return;
+  }
+  sendJson(response, 200, { request: summarizeToolRequest(task, { includeInput: true }) });
+}
+
+async function handleToolRequestReceipt(request, response, id) {
+  const requestId = sanitizeId(id);
+  if (!fs.existsSync(toolRequestPath(requestId))) {
+    sendJson(response, 404, { error: "tool request not found" });
+    return;
+  }
+
+  const body = await readJsonBody(request);
+  const current = readToolRequest(requestId);
+  const deviceId = normalizeDeviceId(body.device_id || body.deviceId || "");
+  if (deviceId && current.target_device_id && deviceId !== current.target_device_id) {
+    sendJson(response, 403, { error: "receipt device_id does not match request target" });
+    return;
+  }
+  if (deviceId && current.claimed_by && deviceId !== current.claimed_by) {
+    sendJson(response, 403, { error: "receipt device_id does not match request claimant" });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const ok = body.ok !== false && !body.error;
+  const receipt = {
+    id: randomId("receipt"),
+    ts: now,
+    ok,
+    device_id: deviceId || current.claimed_by || current.target_device_id || "",
+    summary: truncate(String(body.summary || ""), 2000),
+    error: body.error ? truncate(String(body.error), 2000) : "",
+    result: sanitizeToolJson(body.result ?? body.output ?? null),
+    local_receipt: sanitizeToolJson(body.local_receipt || body.localReceipt || null),
+  };
+  const receipts = Array.isArray(current.receipts) ? current.receipts.concat([receipt]) : [receipt];
+  const next = updateToolRequest(requestId, {
+    status: ok ? "completed" : "failed",
+    updated_at: now,
+    finished_at: now,
+    receipts,
+    error: receipt.error,
+  });
+  sendJson(response, 200, { request: summarizeToolRequest(next), receipt });
+}
+
 function summarizeVoiceResponse(response) {
   if (!response || typeof response !== "object") {
     return "";
@@ -4971,6 +5146,326 @@ function summarizeBrowserTask(task, options = {}) {
   };
 }
 
+function upsertDeviceClient(body) {
+  const deviceId = normalizeDeviceId(body.device_id || body.deviceId || body.client_id || body.clientId || "");
+  if (!deviceId) {
+    throw new Error("device_id is required");
+  }
+  const now = new Date().toISOString();
+  const clients = readDeviceClientsMap();
+  const previous = clients[deviceId] || {};
+  const device = {
+    id: deviceId,
+    device_id: deviceId,
+    surface_type: sanitizeSurfaceType(body.surface_type || body.surfaceType || previous.surface_type || "unknown"),
+    session_id: body.session_id ? sanitizeOptionalId(body.session_id, previous.session_id || "default") : previous.session_id || "",
+    status: sanitizeDeviceStatus(body.status || "online"),
+    online: body.online !== false,
+    local_tool_manifest: sanitizeLocalToolManifest(
+      body.local_tool_manifest || body.localToolManifest || body.tool_manifest || body.capabilities || previous.local_tool_manifest || [],
+    ),
+    metadata: sanitizeToolJson(body.metadata || body.client || {}),
+    last_heartbeat_at: now,
+    first_seen_at: previous.first_seen_at || now,
+    updated_at: now,
+  };
+  clients[deviceId] = device;
+  writeDeviceClientsMap(clients);
+  return device;
+}
+
+function readDeviceClientsMap() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(DEVICE_CLIENTS_FILE, "utf8"));
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      return raw;
+    }
+  } catch {
+    // Fresh gateway data dir.
+  }
+  return {};
+}
+
+function writeDeviceClientsMap(clients) {
+  const tmpPath = `${DEVICE_CLIENTS_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(clients, null, 2));
+  fs.renameSync(tmpPath, DEVICE_CLIENTS_FILE);
+}
+
+function listDeviceClients() {
+  return Object.values(readDeviceClientsMap())
+    .map(summarizeDeviceClient)
+    .sort((a, b) => String(b.last_heartbeat_at).localeCompare(String(a.last_heartbeat_at)));
+}
+
+function summarizeDeviceClient(device) {
+  const nowMs = Date.now();
+  const heartbeatMs = Date.parse(device.last_heartbeat_at || "");
+  const stale = Number.isFinite(heartbeatMs) ? nowMs - heartbeatMs > 90_000 : true;
+  return {
+    id: device.device_id || device.id,
+    device_id: device.device_id || device.id,
+    surface_type: device.surface_type || "unknown",
+    session_id: device.session_id || "",
+    status: stale ? "stale" : device.status || "online",
+    online: device.online !== false && !stale,
+    local_tool_manifest: sanitizeLocalToolManifest(device.local_tool_manifest || []),
+    metadata: sanitizeToolJson(device.metadata || {}),
+    first_seen_at: device.first_seen_at || "",
+    last_heartbeat_at: device.last_heartbeat_at || "",
+    updated_at: device.updated_at || device.last_heartbeat_at || "",
+  };
+}
+
+function sanitizeDeviceStatus(value) {
+  const status = String(value || "online").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  return status || "online";
+}
+
+function sanitizeSurfaceType(value) {
+  const surface = String(value || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/^_+|_+$/g, "");
+  return surface || "unknown";
+}
+
+function sanitizeLocalToolManifest(value) {
+  const items = [];
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const normalized = sanitizeLocalToolManifestItem(item);
+      if (normalized) items.push(normalized);
+    }
+  } else if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value).slice(0, 80)) {
+      const normalized = sanitizeLocalToolManifestItem(
+        item && typeof item === "object" && !Array.isArray(item) ? { tool: key, ...item } : { tool: key },
+      );
+      if (normalized) items.push(normalized);
+    }
+  }
+
+  const seen = new Set();
+  return items
+    .filter((item) => {
+      if (seen.has(item.tool)) return false;
+      seen.add(item.tool);
+      return true;
+    })
+    .slice(0, 80);
+}
+
+function sanitizeLocalToolManifestItem(item) {
+  if (typeof item === "string") {
+    const tool = sanitizeToolName(item);
+    return tool ? { tool, risk: "unknown", approval: "unknown" } : null;
+  }
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const tool = sanitizeToolName(item.tool || item.name || item.id || "");
+  if (!tool) return null;
+  return {
+    tool,
+    risk: String(item.risk || "unknown").slice(0, 80),
+    approval: String(item.approval || item.approval_mode || "unknown").slice(0, 80),
+    description: item.description ? truncate(String(item.description), 240) : undefined,
+  };
+}
+
+function sanitizeToolName(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_.:-]/g, "").slice(0, 120);
+}
+
+function createToolRequest(body) {
+  const tool = sanitizeToolName(body.tool || body.name || "");
+  if (!tool) {
+    throw new Error("tool is required");
+  }
+  const now = new Date().toISOString();
+  const sourceDeviceId = normalizeDeviceId(body.source_device_id || body.sourceDeviceId || body.device_id || body.deviceId || "");
+  let targetDeviceId = normalizeDeviceId(body.target_device_id || body.targetDeviceId || "");
+  const targetSurfaceRaw = body.target_surface_type || body.targetSurfaceType || body.surface_type || "";
+  const targetSurfaceType = targetSurfaceRaw ? sanitizeSurfaceType(targetSurfaceRaw) : "";
+  if (!targetDeviceId) {
+    const device = findDeviceClientForTool({ surfaceType: targetSurfaceType, tool });
+    targetDeviceId = device?.device_id || device?.id || "";
+  }
+  if (!targetDeviceId && !targetSurfaceType) {
+    throw new Error("target_device_id or target_surface_type is required");
+  }
+
+  const requestRecord = {
+    id: randomId("treq"),
+    status: "pending",
+    tool,
+    input: sanitizeToolJson(body.input || body.arguments || {}),
+    source: String(body.source || "api").slice(0, 120),
+    source_device_id: sourceDeviceId,
+    source_surface_type: body.source_surface_type || body.sourceSurfaceType
+      ? sanitizeSurfaceType(body.source_surface_type || body.sourceSurfaceType)
+      : "",
+    target_device_id: targetDeviceId,
+    target_surface_type: targetSurfaceType,
+    session_id: body.session_id ? sanitizeOptionalId(body.session_id, "default") : "",
+    branch_id: body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default",
+    instruction: truncate(String(body.instruction || body.reason || ""), 2000),
+    claimed_by: "",
+    claimed_at: "",
+    lease_expires_at: "",
+    receipts: [],
+    error: "",
+    created_at: now,
+    updated_at: now,
+    finished_at: "",
+  };
+  writeToolRequest(requestRecord);
+  return requestRecord;
+}
+
+function findDeviceClientForTool({ surfaceType, tool }) {
+  const targetSurface = sanitizeSurfaceType(surfaceType || "");
+  return listDeviceClients()
+    .filter((device) => device.online)
+    .filter((device) => !targetSurface || device.surface_type === targetSurface)
+    .filter((device) => deviceSupportsTool(device, tool))
+    .sort((a, b) => String(b.last_heartbeat_at).localeCompare(String(a.last_heartbeat_at)))[0] || null;
+}
+
+function deviceSupportsTool(device, tool) {
+  const safeTool = sanitizeToolName(tool);
+  return sanitizeLocalToolManifest(device.local_tool_manifest || [])
+    .some((item) => item.tool === safeTool);
+}
+
+function claimNextToolRequest(device) {
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const task = claimableToolRequestsForDevice(device, nowMs)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))[0];
+  if (!task) return null;
+  return updateToolRequest(task.id, {
+    status: "claimed",
+    claimed_by: device.device_id || device.id,
+    target_device_id: task.target_device_id || device.device_id || device.id,
+    claimed_at: now,
+    lease_expires_at: new Date(nowMs + 60_000).toISOString(),
+    updated_at: now,
+  });
+}
+
+function claimableToolRequestsForDevice(device, nowMs = Date.now()) {
+  return listAllToolRequests().filter((requestRecord) =>
+    isToolRequestClaimableByDevice(requestRecord, device, nowMs));
+}
+
+function isToolRequestClaimableByDevice(requestRecord, device, nowMs) {
+  if (!device || device.online === false) return false;
+  if (!deviceSupportsTool(device, requestRecord.tool)) return false;
+  if (requestRecord.target_device_id && requestRecord.target_device_id !== (device.device_id || device.id)) {
+    return false;
+  }
+  if (!requestRecord.target_device_id && requestRecord.target_surface_type && requestRecord.target_surface_type !== device.surface_type) {
+    return false;
+  }
+  if (requestRecord.status === "pending") return true;
+  if (requestRecord.status !== "claimed") return false;
+  const expires = Date.parse(requestRecord.lease_expires_at || "");
+  return Number.isFinite(expires) && expires < nowMs;
+}
+
+function listToolRequests({ status = "", targetDeviceId = "", sourceDeviceId = "", limit = 25 } = {}) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 25, 100));
+  const target = normalizeDeviceId(targetDeviceId || "");
+  const source = normalizeDeviceId(sourceDeviceId || "");
+  return listAllToolRequests()
+    .filter((requestRecord) => !status || requestRecord.status === status)
+    .filter((requestRecord) => !target || requestRecord.target_device_id === target)
+    .filter((requestRecord) => !source || requestRecord.source_device_id === source)
+    .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
+    .slice(0, safeLimit)
+    .map(summarizeToolRequest);
+}
+
+function listAllToolRequests() {
+  if (!fs.existsSync(TOOL_REQUESTS_DIR)) {
+    return [];
+  }
+  return fs.readdirSync(TOOL_REQUESTS_DIR)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(TOOL_REQUESTS_DIR, name), "utf8"));
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function summarizeToolRequest(requestRecord, options = {}) {
+  return {
+    id: requestRecord.id,
+    status: requestRecord.status,
+    tool: requestRecord.tool,
+    input: options.includeInput ? sanitizeToolJson(requestRecord.input || {}) : undefined,
+    source: requestRecord.source || "",
+    source_device_id: requestRecord.source_device_id || "",
+    source_surface_type: requestRecord.source_surface_type || "",
+    target_device_id: requestRecord.target_device_id || "",
+    target_surface_type: requestRecord.target_surface_type || "",
+    session_id: requestRecord.session_id || "",
+    branch_id: requestRecord.branch_id || "default",
+    instruction: requestRecord.instruction || "",
+    claimed_by: requestRecord.claimed_by || "",
+    claimed_at: requestRecord.claimed_at || "",
+    lease_expires_at: requestRecord.lease_expires_at || "",
+    receipt_count: Array.isArray(requestRecord.receipts) ? requestRecord.receipts.length : 0,
+    latest_receipt: Array.isArray(requestRecord.receipts) && requestRecord.receipts.length
+      ? requestRecord.receipts[requestRecord.receipts.length - 1]
+      : null,
+    error: requestRecord.error || "",
+    created_at: requestRecord.created_at,
+    updated_at: requestRecord.updated_at,
+    finished_at: requestRecord.finished_at || "",
+  };
+}
+
+function toolRequestPath(id) {
+  return path.join(TOOL_REQUESTS_DIR, `${sanitizeId(id)}.json`);
+}
+
+function readToolRequest(id) {
+  return JSON.parse(fs.readFileSync(toolRequestPath(id), "utf8"));
+}
+
+function writeToolRequest(requestRecord) {
+  const filePath = toolRequestPath(requestRecord.id);
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(requestRecord, null, 2));
+  fs.renameSync(tmpPath, filePath);
+}
+
+function updateToolRequest(id, patch) {
+  const requestRecord = readToolRequest(id);
+  const next = { ...requestRecord, ...patch };
+  writeToolRequest(next);
+  return next;
+}
+
+function sanitizeToolJson(value, depth = 0) {
+  if (depth > 5) return null;
+  if (value == null || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return truncate(value, 4000);
+  if (Array.isArray(value)) {
+    return value.slice(0, 40).map((item) => sanitizeToolJson(item, depth + 1));
+  }
+  if (typeof value === "object") {
+    const output = {};
+    for (const [key, item] of Object.entries(value).slice(0, 80)) {
+      output[String(key).slice(0, 120)] = sanitizeToolJson(item, depth + 1);
+    }
+    return output;
+  }
+  return String(value).slice(0, 200);
+}
+
 function sessionSummaryPayload(limit) {
   const safeLimit = Math.max(1, Math.min(limit || 25, 100));
   const turns = readVoiceTurnLedger();
@@ -5032,6 +5527,8 @@ function latestContextPayload() {
     recent_provider_events: readProviderEventLedger({ limit: 50 }),
     recent_runs: runs,
     recent_browser_tasks: listBrowserTasks({ limit: 25 }),
+    device_clients: listDeviceClients(),
+    recent_tool_requests: listToolRequests({ limit: 25 }),
   };
 }
 

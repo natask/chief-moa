@@ -88,19 +88,25 @@ const BROWSER_TASK_POLL_MS = 2000;
 const DEV_RELOAD_ALARM = "agee-dev-reload-poll";
 const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
 const DEV_RELOAD_POLL_MS = 1500;
+const DEVICE_CLIENT_HEARTBEAT_MS = 15000;
 let browserTaskPollInFlight = false;
 let browserTaskPollTimer = null;
+let browserToolRequestPollInFlight = false;
 let devReloadPollTimer = null;
 let devReloadPollInFlight = false;
+let deviceClientHeartbeatTimer = null;
+let deviceClientHeartbeatInFlight = false;
 
 function startBrowserTaskPolling() {
   if (!chrome?.storage?.local || !chrome?.alarms || !chrome?.debugger || !chrome?.tabs) return;
   if (browserTaskPollTimer) return;
   browserTaskPollTimer = setInterval(() => {
     pollBrowserTasks().catch(() => {});
+    pollBrowserToolRequests().catch(() => {});
   }, BROWSER_TASK_POLL_MS);
   chrome.alarms.create("agee-browser-task-poll", { periodInMinutes: 0.5 });
   pollBrowserTasks().catch(() => {});
+  pollBrowserToolRequests().catch(() => {});
 }
 
 async function pollBrowserTasks() {
@@ -126,6 +132,85 @@ async function pollBrowserTasks() {
     // reported as receipts when a task was claimed.
   } finally {
     browserTaskPollInFlight = false;
+  }
+}
+
+async function pollBrowserToolRequests() {
+  if (browserToolRequestPollInFlight) return;
+  browserToolRequestPollInFlight = true;
+  try {
+    const cfg = await getConfig();
+    if (!cfg.gatewayUrl) return;
+    const deviceId = await getStableDeviceId();
+    const claimed = await callGateway(cfg, "/v1/tool/requests/claim", {
+      body: {
+        device_id: deviceId,
+        surface_type: "browser_extension",
+        local_tool_manifest: browserLocalToolManifest(),
+      },
+    });
+    const request = claimed?.request;
+    if (!request?.id) return;
+    const receipt = await executeBrowserToolRequest(request);
+    await callGateway(cfg, `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, {
+      body: {
+        device_id: deviceId,
+        ...receipt,
+      },
+    });
+  } catch {
+    // Background polling stays quiet; claimed work reports through receipts.
+  } finally {
+    browserToolRequestPollInFlight = false;
+  }
+}
+
+async function executeBrowserToolRequest(request) {
+  const tool = String(request?.tool || "");
+  const input = request?.input && typeof request.input === "object" ? request.input : {};
+  try {
+    if (tool === "browser.tab.open") {
+      const url = allowedBrowserTaskUrl(input.url || input.href || input.target);
+      if (!url) {
+        return { ok: false, error: "blocked or invalid browser.tab.open URL", summary: "Browser tab open request was blocked." };
+      }
+      const tab = await chrome.tabs.create({ url, active: true });
+      return {
+        ok: true,
+        summary: `Browser opened ${tab.url || url}.`,
+        result: { tab_id: tab.id || null, url: tab.url || url },
+        local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "page.snapshot") {
+      const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+      if (!active?.id) {
+        return { ok: false, error: "no active tab", summary: "No active browser tab was available." };
+      }
+      await ensureContent(active.id);
+      const snap = await ask(active.id, { cmd: "snapshot" });
+      return {
+        ok: true,
+        summary: `Captured page snapshot for ${snap?.title || active.title || "active tab"}.`,
+        result: { screen: snapToScreen(snap) },
+        local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "browser.task.claim") {
+      return {
+        ok: true,
+        summary: "Browser queued-task claim loop is active.",
+        local_receipt: { tool, success: true },
+      };
+    }
+    return { ok: false, error: `unsupported browser tool: ${tool}`, summary: `Unsupported browser tool: ${tool}` };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message || error),
+      summary: `Browser tool request failed: ${tool}`,
+      local_receipt: { tool, success: false },
+    };
   }
 }
 
@@ -281,6 +366,7 @@ if (chrome?.alarms?.onAlarm) {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === "agee-browser-task-poll") {
       pollBrowserTasks().catch(() => {});
+      pollBrowserToolRequests().catch(() => {});
     } else if (alarm.name === DEV_RELOAD_ALARM) {
       pollDevReloadVersion("alarm").catch(() => {});
     }
@@ -288,7 +374,57 @@ if (chrome?.alarms?.onAlarm) {
 }
 startBrowserTaskPolling();
 startDevReloadPolling().catch(() => {});
+startDeviceClientHeartbeat().catch(() => {});
 reloadDevTabsAfterExtensionRestart().catch(() => {});
+
+// ---- Gateway device-client heartbeat --------------------------------------
+// The gateway is the shared registry; the extension advertises only browser-local
+// capabilities. It does not execute phone actions and it never stores provider
+// keys.
+async function startDeviceClientHeartbeat() {
+  if (!chrome?.storage?.local) return;
+  if (deviceClientHeartbeatTimer) return;
+  deviceClientHeartbeatTimer = setInterval(() => {
+    heartbeatDeviceClient().catch(() => {});
+  }, DEVICE_CLIENT_HEARTBEAT_MS);
+  heartbeatDeviceClient().catch(() => {});
+}
+
+async function heartbeatDeviceClient() {
+  if (deviceClientHeartbeatInFlight) return;
+  deviceClientHeartbeatInFlight = true;
+  try {
+    const cfg = await getConfig();
+    if (!cfg.gatewayUrl) return;
+    const deviceId = await getStableDeviceId();
+    const sessionId = await getStableSessionId();
+    const owner = await getActiveBrowserAgentOwner();
+    await callGateway(cfg, "/v1/device-clients/heartbeat", {
+      body: {
+        device_id: deviceId,
+        surface_type: "browser_extension",
+        session_id: sessionId,
+        status: "online",
+        local_tool_manifest: browserLocalToolManifest(),
+        metadata: {
+          source: "agee-extension",
+          extension_id: chrome.runtime.id,
+          active_owner: owner || null,
+        },
+      },
+    });
+  } finally {
+    deviceClientHeartbeatInFlight = false;
+  }
+}
+
+function browserLocalToolManifest() {
+  return [
+    { tool: "browser.tab.open", risk: "navigation", approval: "implicit_user_command" },
+    { tool: "browser.task.claim", risk: "browser_local", approval: "none" },
+    { tool: "page.snapshot", risk: "read_only", approval: "none" },
+  ];
+}
 
 // ---- Developer auto-reload -----------------------------------------------
 // Disabled by default. The developer bridge (`dev.html`) opts this in by
@@ -1488,6 +1624,9 @@ async function runAgent(tabId, instruction, controller, cueId) {
     if (await maybeApplySettingsChange(tabId, instruction, cfg, signal, cueId)) {
       return;
     }
+    if (await maybeRequestAndroidSpeak(tabId, instruction, cfg, signal, cueId)) {
+      return;
+    }
     if (await maybeApplyPageTweak(tabId, instruction, signal, cueId)) {
       return;
     }
@@ -1507,6 +1646,68 @@ async function runAgent(tabId, instruction, controller, cueId) {
   } finally {
     if (tasks.get(cueId)?.controller === controller) tasks.delete(cueId);
   }
+}
+
+async function maybeRequestAndroidSpeak(tabId, instruction, cfg, signal, cueId) {
+  const text = parseAndroidSpeakIntent(instruction);
+  if (!text) return false;
+  await saveTaskState(cueId, { status: "running", instruction, step: 0, lastResult: "queueing Android speech request", tabId });
+  send(tabId, { cmd: "progress", cueId, text: "sending to phone…" });
+  throwIfAborted(signal);
+
+  const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
+  const data = await callGateway(cfg, "/v1/tool/requests", {
+    signal,
+    body: {
+      source: "agee-extension",
+      source_device_id: deviceId,
+      source_surface_type: "browser_extension",
+      target_surface_type: "android",
+      tool: "audio.speak",
+      input: { text },
+      session_id: sessionId,
+      branch_id: cueId || "browser",
+      instruction,
+    },
+  });
+  const request = data?.request || {};
+  const target = request.target_device_id
+    ? `for ${request.target_device_id}`
+    : "for the next Android client heartbeat";
+  const summary = `Queued Android speech request ${request.id || ""} ${target}.`;
+  send(tabId, { cmd: "done", cueId, summary });
+  await saveTaskState(cueId, {
+    status: "done",
+    instruction,
+    step: 1,
+    tabId,
+    lastResult: summary,
+    toolRequestId: request.id || "",
+  });
+  return true;
+}
+
+function parseAndroidSpeakIntent(instruction) {
+  const value = String(instruction || "").trim();
+  if (!value) return "";
+  const lower = value.toLowerCase();
+  if (!/\b(?:android|phone|mobile)\b/.test(lower)) return "";
+  if (!/\b(?:say|speak|read|announce)\b/.test(lower)) return "";
+
+  const quoted = value.match(/["“”']([^"“”']{1,500})["“”']/);
+  if (quoted?.[1]) return quoted[1].trim();
+
+  const patterns = [
+    /\b(?:android|phone|mobile)\b.*?\b(?:say|speak|read|announce)\b\s*:?\s*(.+)$/i,
+    /\b(?:say|speak|read|announce)\b\s+(.+?)\s+\b(?:on|from|through)\b\s+(?:the\s+)?(?:android|phone|mobile)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    const text = match?.[1]?.trim();
+    if (text) return text.replace(/[.?!]\s*$/, "").slice(0, 500);
+  }
+  return "";
 }
 
 async function maybeOpenRequestedTab(tabId, instruction, signal, cueId) {
