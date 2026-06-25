@@ -72,7 +72,7 @@ async function main() {
         "POST /v1/voice/turns 'your name is Moa' persists assistant_name=Moa and replies 'Yes. I am now Moa.'",
         "health voice_stream.provider.voice reflects the configured voice (Aoede)",
         "provider status() + Gemini Live session-config carry the effective voice/language/assistant name; env default when unset",
-        "provider session-config strips legacy servile honorific prompt instructions and adds the no-honorific rule",
+        "provider session-config preserves requested honorific/style prompt instructions and adds the address-preference rule",
       ],
     }, null, 2));
   } finally {
@@ -146,7 +146,7 @@ async function assertAssistantNameControl(baseUrl) {
   assert.equal(turn.json.speak, "Yes. I am now Moa.", `unexpected assistant-name confirmation: ${turn.json.speak}`);
   assert.equal(turn.json.display, "Yes. I am now Moa.", "display must match the terse confirmation");
   assert.equal(turn.json.profile?.assistant_name, "Moa", "voice turn payload profile must expose assistant_name=Moa");
-  assertNoServileFiller(turn.json.speak);
+  assertNoHelpFiller(turn.json.speak);
 
   const profile = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(profile.profile.assistant_name, "Moa", `GET profile must persist assistant_name=Moa, got ${profile.profile.assistant_name}`);
@@ -163,12 +163,11 @@ async function assertAssistantNameControl(baseUrl) {
     /My name is Moa\./.test(summary.json.speak),
     `assistant-name summary must reflect persisted name, got ${summary.json.speak}`,
   );
-  assertNoServileFiller(summary.json.speak);
+  assertNoHelpFiller(summary.json.speak);
 }
 
-function assertNoServileFiller(value) {
+function assertNoHelpFiller(value) {
   const text = String(value || "").toLowerCase();
-  assert.ok(!/\b(master|sir|captain)\b/.test(text), `reply must not contain servile title: ${value}`);
   assert.ok(!/how can i help/.test(text), `reply must not contain help filler: ${value}`);
 }
 
@@ -260,12 +259,12 @@ async function assertProviderSessionConfig(dataDir) {
   assert.equal(provider.status().voice, "Charon", "status() must reflect the new profile voice");
   const profilePrompt = agentProfile.effective().system_prompt;
   assert.ok(
-    !/belong to master|say no to master|tell master|address the user as master/i.test(profilePrompt),
-    `profile system_prompt must drop servile honorific instructions, got: ${profilePrompt}`,
+    /belong to master|say no to master|tell master|address the user as master/i.test(profilePrompt),
+    `profile system_prompt must preserve user-requested honorific/style instructions, got: ${profilePrompt}`,
   );
   assert.ok(
-    /never call the user Master, sir, or Captain/.test(profilePrompt),
-    `profile system_prompt must include the explicit no-honorific rule, got: ${profilePrompt}`,
+    /requested form of address, title, or roleplay style/i.test(profilePrompt),
+    `profile system_prompt must include the address-preference style rule, got: ${profilePrompt}`,
   );
   const setup = provider.setupMessage();
   assert.equal(
@@ -284,12 +283,12 @@ async function assertProviderSessionConfig(dataDir) {
   );
   const systemText = setup.systemInstruction.parts.map((part) => String(part.text || "")).join("\n");
   assert.ok(
-    !/belong to master|say no to master|tell master|address the user as master/i.test(systemText),
-    `session-config system instruction must not contain legacy servile honorific instructions, got: ${systemText}`,
+    /belong to master|say no to master|tell master|address the user as master/i.test(systemText),
+    `session-config system instruction must preserve user-requested honorific/style instructions, got: ${systemText}`,
   );
   assert.ok(
-    /never call the user Master, sir, or Captain/.test(systemText),
-    `session-config system instruction must include the explicit no-honorific rule, got: ${systemText}`,
+    /requested form of address, title, or roleplay style/i.test(systemText),
+    `session-config system instruction must include the address-preference style rule, got: ${systemText}`,
   );
   assert.ok(
     systemText.includes("current assistant name: Moa"),
@@ -316,12 +315,12 @@ async function assertProviderSessionConfig(dataDir) {
   });
   const legacySystemText = legacySetup.systemInstruction.parts.map((part) => String(part.text || "")).join("\n");
   assert.ok(
-    !/belong to master|say no to master|tell master|address the user as master/i.test(legacySystemText),
-    `legacy runtime profile prompt must be overridden before provider setup, got: ${legacySystemText}`,
+    /belong to master|say no to master|tell master|address the user as master/i.test(legacySystemText),
+    `legacy runtime profile prompt must preserve user-requested honorific/style instructions, got: ${legacySystemText}`,
   );
   assert.ok(
-    /never call the user Master, sir, or Captain/.test(legacySystemText),
-    `legacy runtime profile prompt must include the explicit no-honorific rule, got: ${legacySystemText}`,
+    /requested form of address, title, or roleplay style/i.test(legacySystemText),
+    `legacy runtime profile prompt must include the address-preference style rule, got: ${legacySystemText}`,
   );
 }
 

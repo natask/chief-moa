@@ -293,9 +293,6 @@ function normalizeAssistantNameCandidate(value) {
   if (!lower) {
     return "";
   }
-  if (/\b(?:master|sir|captain)\b/.test(lower)) {
-    return "";
-  }
   if (candidate.length > 80 || candidate.split(/\s+/).length > 4) {
     return "";
   }

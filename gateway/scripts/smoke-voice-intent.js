@@ -149,7 +149,9 @@ assert.deepStrictEqual(parseProfileControlIntent("you are Aggie").patch, {
 assert.deepStrictEqual(parseProfileControlIntent("call yourself The Steward").patch, {
   assistant_name: "The Steward",
 });
-assert.strictEqual(parseProfileControlIntent("your name is Captain"), null);
+assert.deepStrictEqual(parseProfileControlIntent("your name is Captain").patch, {
+  assistant_name: "Captain",
+});
 assert.deepStrictEqual(parseProfileControlIntent("what is your name"), {
   action: "summary",
   subject: "assistant_name",

@@ -12,7 +12,7 @@ const path = require("node:path");
 const PROFILE_FILENAME = "agent-profile.json";
 const PROFILE_VERSIONS_FILENAME = "agent-profile-versions.json";
 const DEVICE_OVERRIDES_FILENAME = "agent-profile-device-overrides.json";
-const REQUIRED_VOICE_STYLE_RULE = "Voice style requirement: speak tersely. Address the user plainly with no titles or honorifics; never call the user Master, sir, or Captain.";
+const REQUIRED_VOICE_STYLE_RULE = "Voice style requirement: speak tersely. Honor the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
 // Only these fields may be patched/persisted/overridden; anything else is ignored.
 const PROFILE_FIELDS = [
   "system_prompt",
@@ -620,9 +620,6 @@ function normalizeAssistantName(value) {
   if (cleaned.length > 80) {
     return "";
   }
-  if (/\b(?:master|sir|captain)\b/i.test(cleaned)) {
-    return "";
-  }
   if (!/[A-Za-z0-9]/.test(cleaned)) {
     return "";
   }
@@ -630,7 +627,7 @@ function normalizeAssistantName(value) {
 }
 
 function normalizeSystemPromptField(value) {
-  const prompt = sanitizeDeprecatedHonorific(value);
+  const prompt = String(value || "").trim();
   return prompt ? withRequiredVoiceStyle(prompt) : "";
 }
 
@@ -639,74 +636,21 @@ function safeSystemPromptForProvider(profile, fallback = "") {
 }
 
 function withRequiredVoiceStyle(prompt, fallback = "") {
-  const sanitized = sanitizeDeprecatedHonorific(String(prompt || "").trim());
-  const fallbackPrompt = sanitizeDeprecatedHonorific(String(fallback || "").trim());
-  const value = sanitized || fallbackPrompt || "You are Aggie.";
+  const value = String(prompt || "").trim() || String(fallback || "").trim() || "You are Aggie.";
   const lower = value.toLowerCase();
   const hasTerseStyle = lower.includes("terse") || lower.includes("tersely");
-  if (hasTerseStyle && hasNoHonorificRule(lower)) {
+  if (hasTerseStyle && hasAddressPreferenceRule(lower)) {
     return value;
   }
   return [value, REQUIRED_VOICE_STYLE_RULE].join("\n\n");
 }
 
-function sanitizeDeprecatedHonorific(prompt) {
-  return String(prompt || "")
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map((chunk) => chunk.trim())
-    .filter((chunk) => chunk && !isDeprecatedHonorificInstruction(chunk))
-    .map(sanitizeDeprecatedHonorificWords)
-    .join(" ")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
-
-function isDeprecatedHonorificInstruction(value) {
-  const text = String(value || "").trim();
-  if (!/\b(?:master|sir|captain)\b/i.test(text)) {
-    return false;
-  }
-  if (isNoHonorificRule(text)) {
-    return false;
-  }
-  return [
-    /\baddress\s+(?:the\s+)?user\s+as\s+(?:master|sir|captain)\b/i,
-    /\bcall\s+(?:the\s+)?user\s+(?:master|sir|captain)\b/i,
-    /\brefer\s+to\s+(?:the\s+)?user\s+as\s+(?:master|sir|captain)\b/i,
-    /\bgreet\s+(?:the\s+)?user\s+as\s+(?:master|sir|captain)\b/i,
-    /\byou\s+belong\s+to\s+(?:the\s+)?(?:master|sir|captain)\b/i,
-    /\bnever\s+say\s+no\s+to\s+(?:the\s+)?(?:master|sir|captain)\b/i,
-    /\btell\s+(?:the\s+)?(?:master|sir|captain)\b/i,
-    /\b(?:obey|serve)\s+(?:the\s+)?(?:master|sir|captain)\b/i,
-    /\b(?:the\s+)?user\s+is\s+(?:your\s+)?(?:master|sir|captain)\b/i,
-    /\b(?:my|your)\s+(?:master|sir|captain)\b/i,
-  ].some((pattern) => pattern.test(text));
-}
-
-function sanitizeDeprecatedHonorificWords(value) {
-  const text = String(value || "");
-  if (isNoHonorificRule(text)) {
-    return text;
-  }
-  return text.replace(/\b(?:master|sir|captain)\b/gi, "the user");
-}
-
-function isNoHonorificRule(text) {
-  return /\b(?:never|do not|don't)\b[^.!?\n]*(?:call|address|refer\s+to|greet)[^.!?\n]*(?:master|sir|captain)/i.test(text)
-    || /\b(?:avoid|without|no)\b[^.!?\n]*(?:titles?|honorifics?)/i.test(text)
-    || /\bno\s+titles?\s+or\s+honorifics?\b/i.test(text);
-}
-
-function hasNoHonorificRule(lowerText) {
-  const hasPlainNoHonorificRule = isNoHonorificRule(lowerText)
-    || lowerText.includes("avoid titles")
-    || lowerText.includes("avoid honorifics")
-    || lowerText.includes("no titles or honorifics")
-    || lowerText.includes("never call the user master");
-  return hasPlainNoHonorificRule
-    && lowerText.includes("master")
-    && lowerText.includes("sir")
-    && lowerText.includes("captain");
+function hasAddressPreferenceRule(lowerText) {
+  return lowerText.includes("requested form of address")
+    || lowerText.includes("requested title")
+    || lowerText.includes("roleplay style")
+    || lowerText.includes("user's requested")
+    || lowerText.includes("users requested");
 }
 
 function freeze(profile) {
@@ -788,6 +732,5 @@ module.exports = {
   normalizeDeviceId,
   normalizeSystemPromptField,
   safeSystemPromptForProvider,
-  sanitizeDeprecatedHonorific,
   withRequiredVoiceStyle,
 };

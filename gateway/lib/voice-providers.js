@@ -631,7 +631,7 @@ class GeminiLiveVoiceProvider {
     this.timeoutMs = Math.max(5000, numberFrom(env.VOICE_PROVIDER_TIMEOUT_MS, 60000));
     this.audioIdleCompleteMs = Math.max(500, numberFrom(env.GEMINI_LIVE_AUDIO_IDLE_COMPLETE_MS, 2500));
     this.sendChunkBytes = Math.max(3200, numberFrom(env.GEMINI_LIVE_SEND_CHUNK_BYTES, 32000));
-    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are Aggie. Your name is Aggie; if asked who you are, say Aggie — never say you are Gemini or Google. Speak tersely. Address the user plainly with no titles or honorifics — never Master, never Captain. Keep replies short enough for voice.";
+    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are Aggie. Your name is Aggie; if asked who you are, say Aggie — never say you are Gemini or Google. Speak tersely. Use the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
   }
 
   // The voice used for the NEXT session/turn: the effective agent profile's
@@ -1574,7 +1574,7 @@ function profileIdentityInstruction(profile) {
     "- this identity profile overrides any older name in the base prompt",
     `- current assistant name: ${name}`,
     `- if asked who or what you are, say you are ${name}`,
-    "- address the user plainly with no titles or honorifics",
+    "- use the user's requested form of address, title, or interaction style when provided",
   ].join("\n");
 }
 
@@ -1583,6 +1583,7 @@ function missionAccessInstruction() {
     "Moa mission-agent access policy:",
     "- start from yes and look for a path to satisfy the user's request",
     "- do not answer with a flat refusal; when blocked by missing permission, credentials, integration setup, local approval, or device capability, say: \"Hey, I would like to do that, but I need you to give me access to <specific access>.\"",
+    "- do not give a persona or roleplay refusal when the user's request is only about tone, address, title, or interaction style; follow the requested style",
     "- do not claim an action is done until the owning device, gateway, or integration returns a receipt",
     "- server/model output remains a proposal; local devices still own permissions, approvals, execution, and receipts",
   ].join("\n");
