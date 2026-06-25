@@ -12,6 +12,7 @@ const path = require("node:path");
 const PROFILE_FILENAME = "agent-profile.json";
 const PROFILE_VERSIONS_FILENAME = "agent-profile-versions.json";
 const DEVICE_OVERRIDES_FILENAME = "agent-profile-device-overrides.json";
+const REQUIRED_VOICE_STYLE_RULE = "Voice style requirement: speak tersely. Address the user plainly with no titles or honorifics; never call the user Master, sir, or Captain.";
 // Only these fields may be patched/persisted/overridden; anything else is ignored.
 const PROFILE_FIELDS = [
   "system_prompt",
@@ -373,7 +374,7 @@ function loadVersionsFile(versionsPath, defaults) {
         parent_version: String(entry.parent_version || ""),
         rollback_from_version: String(entry.rollback_from_version || ""),
         changed: Array.isArray(entry.changed) ? entry.changed.filter((field) => PROFILE_FIELDS.includes(field)) : [],
-        profile: normalizeProfile({ ...defaults, ...(entry.profile || {}) }),
+        profile: mergeProfile(defaults, entry.profile || {}),
       };
     });
     if (versions.length === 0) {
@@ -488,7 +489,10 @@ function pickProfileFields(input) {
   }
   const out = {};
   if (typeof input.system_prompt === "string" && input.system_prompt.trim()) {
-    out.system_prompt = input.system_prompt.trim();
+    const prompt = normalizeSystemPromptField(input.system_prompt);
+    if (prompt) {
+      out.system_prompt = prompt;
+    }
   }
   if (typeof input.assistant_name === "string" && input.assistant_name.trim()) {
     const name = normalizeAssistantName(input.assistant_name);
@@ -625,6 +629,82 @@ function normalizeAssistantName(value) {
   return cleaned;
 }
 
+function normalizeSystemPromptField(value) {
+  const prompt = sanitizeDeprecatedHonorific(value);
+  return prompt ? withRequiredVoiceStyle(prompt) : "";
+}
+
+function safeSystemPromptForProvider(profile, fallback = "") {
+  return withRequiredVoiceStyle(profile?.system_prompt || "", fallback);
+}
+
+function withRequiredVoiceStyle(prompt, fallback = "") {
+  const sanitized = sanitizeDeprecatedHonorific(String(prompt || "").trim());
+  const fallbackPrompt = sanitizeDeprecatedHonorific(String(fallback || "").trim());
+  const value = sanitized || fallbackPrompt || "You are Aggie.";
+  const lower = value.toLowerCase();
+  const hasTerseStyle = lower.includes("terse") || lower.includes("tersely");
+  if (hasTerseStyle && hasNoHonorificRule(lower)) {
+    return value;
+  }
+  return [value, REQUIRED_VOICE_STYLE_RULE].join("\n\n");
+}
+
+function sanitizeDeprecatedHonorific(prompt) {
+  return String(prompt || "")
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((chunk) => chunk.trim())
+    .filter((chunk) => chunk && !isDeprecatedHonorificInstruction(chunk))
+    .map(sanitizeDeprecatedHonorificWords)
+    .join(" ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function isDeprecatedHonorificInstruction(value) {
+  const text = String(value || "").trim();
+  if (!/\b(?:master|sir|captain)\b/i.test(text)) {
+    return false;
+  }
+  if (isNoHonorificRule(text)) {
+    return false;
+  }
+  return [
+    /\baddress\s+(?:the\s+)?user\s+as\s+(?:master|sir|captain)\b/i,
+    /\bcall\s+(?:the\s+)?user\s+(?:master|sir|captain)\b/i,
+    /\brefer\s+to\s+(?:the\s+)?user\s+as\s+(?:master|sir|captain)\b/i,
+    /\bgreet\s+(?:the\s+)?user\s+as\s+(?:master|sir|captain)\b/i,
+    /\byou\s+belong\s+to\s+(?:the\s+)?(?:master|sir|captain)\b/i,
+    /\bnever\s+say\s+no\s+to\s+(?:the\s+)?(?:master|sir|captain)\b/i,
+    /\btell\s+(?:the\s+)?(?:master|sir|captain)\b/i,
+    /\b(?:obey|serve)\s+(?:the\s+)?(?:master|sir|captain)\b/i,
+    /\b(?:the\s+)?user\s+is\s+(?:your\s+)?(?:master|sir|captain)\b/i,
+    /\b(?:my|your)\s+(?:master|sir|captain)\b/i,
+  ].some((pattern) => pattern.test(text));
+}
+
+function sanitizeDeprecatedHonorificWords(value) {
+  const text = String(value || "");
+  if (isNoHonorificRule(text)) {
+    return text;
+  }
+  return text.replace(/\b(?:master|sir|captain)\b/gi, "the user");
+}
+
+function isNoHonorificRule(text) {
+  return /\b(?:never|do not|don't)\b[^.!?\n]*(?:call|address|refer\s+to|greet)[^.!?\n]*(?:master|sir|captain)/i.test(text)
+    || /\b(?:avoid|without|no)\b[^.!?\n]*(?:titles?|honorifics?)/i.test(text)
+    || /\bno\s+titles?\s+or\s+honorifics?\b/i.test(text);
+}
+
+function hasNoHonorificRule(lowerText) {
+  return isNoHonorificRule(lowerText)
+    || lowerText.includes("avoid titles")
+    || lowerText.includes("avoid honorifics")
+    || lowerText.includes("no titles or honorifics")
+    || lowerText.includes("never call the user master");
+}
+
 function freeze(profile) {
   return Object.freeze({ ...profile });
 }
@@ -702,4 +782,8 @@ module.exports = {
   normalizeVoice,
   normalizeAssistantName,
   normalizeDeviceId,
+  normalizeSystemPromptField,
+  safeSystemPromptForProvider,
+  sanitizeDeprecatedHonorific,
+  withRequiredVoiceStyle,
 };

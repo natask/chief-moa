@@ -1198,6 +1198,7 @@ public final class OverlayService extends Service {
         JSONObject client = new JSONObject();
         client.put("platform", "android");
         client.put("source", "android-overlay");
+        client.put("device_id", androidDeviceId());
         client.put("input", fromVoice ? "voice" : "text");
         client.put("intent_hint", forcedAgent ? "agent_run" : "unknown");
         body.put("client", client);
@@ -1263,6 +1264,7 @@ public final class OverlayService extends Service {
             JSONObject body = new JSONObject();
             body.put("conversation_id", conversationId);
             body.put("source", "android-overlay");
+            body.put("device_id", androidDeviceId());
             body.put("wait", false);
             body.put("prompt", truncatePrompt(actionBroker.promptWithScreenContext(prompt)));
             actionBroker.putScreenContext(body);
@@ -1298,6 +1300,7 @@ public final class OverlayService extends Service {
             JSONObject body = new JSONObject();
             body.put("conversation_id", conversationId);
             body.put("source", "android-overlay");
+            body.put("device_id", androidDeviceId());
             body.put("prompt", text);
             actionBroker.putScreenContext(body);
             requestBody = body;
@@ -1324,6 +1327,7 @@ public final class OverlayService extends Service {
         JSONObject body = new JSONObject();
         body.put("conversation_id", conversationId);
         body.put("source", "android-overlay");
+        body.put("device_id", androidDeviceId());
         actionBroker.putScreenContext(body);
 
         JSONArray history = new JSONArray();
@@ -1337,6 +1341,15 @@ public final class OverlayService extends Service {
         }
         body.put("messages", history);
         return body;
+    }
+
+    private String androidDeviceId() {
+        String raw = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+        String safe = raw == null ? "" : raw.replaceAll("[^a-zA-Z0-9_-]", "");
+        if (safe.isEmpty()) {
+            safe = "unknown";
+        }
+        return "android_" + safe;
     }
 
     private MoaGatewayClient gatewayClient() {

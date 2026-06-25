@@ -65,6 +65,13 @@
     <p class="sub">How the agent behaves on every gateway turn. Read live from the gateway and written back to it; takes effect on the next turn with no restart.</p>
     <div class="profile-state" id="profileState">Loading profile from the gateway…</div>
 
+    <label for="profileScope">Save profile changes for</label>
+    <select id="profileScope">
+      <option value="global">All devices</option>
+      <option value="device">This device</option>
+    </select>
+    <div class="hint">All devices updates the gateway-wide profile. This device stores an override for this browser only.</div>
+
     <label for="changeBox">Change a setting by talking to the agent</label>
     <div class="talk-box">
       <input id="changeBox" type="text" placeholder='e.g. "be terser", "set the system prompt to …", "use model gpt-4o-mini"' autocomplete="off" />
@@ -86,8 +93,14 @@
     <label for="voiceMaxChars">Spoken reply max characters</label>
     <input id="voiceMaxChars" type="number" min="1" step="10" placeholder="280" />
 
-    <label for="language">Language</label>
-    <input id="language" type="text" placeholder="(gateway default)" />
+    <label for="voiceName">Voice</label>
+    <input id="voiceName" type="text" placeholder="Kore, Aoede, Charon…" />
+
+    <label for="language">Reply language(s)</label>
+    <input id="language" type="text" placeholder="en-US or en-US,am-ET" />
+
+    <label for="inputLanguages">Heard language(s)</label>
+    <input id="inputLanguages" type="text" placeholder="en-US or en-US,am-ET" />
 
     <div>
       <button id="saveProfile">Save profile to gateway</button>
