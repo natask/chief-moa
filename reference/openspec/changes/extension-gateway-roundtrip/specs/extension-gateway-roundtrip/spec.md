@@ -112,6 +112,15 @@ text-to-speech as the production voice path.
 - **AND** any microphone approval belongs to the extension origin, not the
   current website
 
+#### Scenario: Browser offscreen microphone capture uses AudioWorklet
+- **WHEN** the extension captures microphone audio from the offscreen document
+- **THEN** the offscreen capture path uses `AudioWorkletNode` plus an extension
+  owned worklet module to collect audio frames
+- **AND** the production capture path does not use deprecated
+  `ScriptProcessorNode`/`createScriptProcessor`
+- **AND** the background worker receives PCM chunks from the offscreen document
+  before forwarding them to the gateway voice WebSocket
+
 #### Scenario: Extension microphone capture is blocked
 - **WHEN** Chrome blocks microphone capture in the extension offscreen document
 - **THEN** the overlay renders a visible microphone permission error
@@ -119,6 +128,21 @@ text-to-speech as the production voice path.
   extension from Options or Chrome extension settings
 - **AND** the failure is treated as non-recoverable for that voice turn instead
   of silently respawning Live voice
+
+#### Scenario: Voice WebSocket sends only while open and current
+- **WHEN** a voice session is revoked, closed, or replaced while microphone
+  capture and auto-commit callbacks are still unwinding
+- **THEN** the background worker checks that the socket is the current open
+  session before sending JSON or audio frames
+- **AND** callbacks for closed sessions return a normal "not open" result
+  instead of attempting to send on a CLOSING/CLOSED WebSocket
+
+#### Scenario: Browser page has one Aggie root after reinjection
+- **WHEN** Chrome reinjects the content script after extension reload, browser
+  restart, update, or a manual script reinjection
+- **THEN** the page contains exactly one top-level Aggie root by default
+- **AND** stale duplicate `#agee-root` nodes are removed
+- **AND** the extension does not inject Aggie roots into iframes
 
 ### Requirement: Browser agent ownership is shared across tabs
 The extension SHALL maintain one active browser-agent owner across tabs for a

@@ -138,6 +138,7 @@ function assertVoicePlaybackStopContract() {
   const source = readFileSync(join(extensionPath, "content.js"), "utf8");
   const background = readFileSync(join(extensionPath, "background.js"), "utf8");
   const offscreen = readFileSync(join(extensionPath, "offscreen.js"), "utf8");
+  const offscreenWorklet = readFileSync(join(extensionPath, "offscreen-audio-worklet.js"), "utf8");
   if (!/assistantPlaybackSources\s*=\s*new Set\(\)/.test(source)) {
     throw new Error("content.js must keep a global assistant PCM playback source registry");
   }
@@ -158,6 +159,14 @@ function assertVoicePlaybackStopContract() {
   }
   if (!/navigator\.mediaDevices\.getUserMedia/.test(offscreen) || !/offscreenVoiceAudio/.test(offscreen)) {
     throw new Error("offscreen.js must own getUserMedia and forward PCM audio to background.js");
+  }
+  if (
+    !/audioWorklet\.addModule/.test(offscreen) ||
+    !/new\s+AudioWorkletNode/.test(offscreen) ||
+    /createScriptProcessor|ScriptProcessorNode/.test(offscreen) ||
+    !/registerProcessor\("aggie-voice-capture"/.test(offscreenWorklet)
+  ) {
+    throw new Error("offscreen microphone capture must use AudioWorklet, not deprecated ScriptProcessorNode capture");
   }
   if (!/liveVoiceBySessionId\s*=\s*new Map\(\)/.test(source)) {
     throw new Error("content.js must keep active voice sessions addressable by voiceSessionId");
@@ -268,6 +277,33 @@ async function main() {
     `);
     if (!ping?.tabId) throw new Error("real content script did not answer ping via the service worker");
 
+    const singleRootResult = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const duplicate = document.createElement("div");
+            duplicate.id = "agee-root";
+            duplicate.dataset.stale = "true";
+            document.body.appendChild(duplicate);
+          },
+        });
+        await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => ({
+            rootCount: document.querySelectorAll("#agee-root").length,
+            staleCount: document.querySelectorAll('#agee-root[data-stale="true"]').length,
+          }),
+        });
+        return result?.result;
+      })()
+    `);
+    if (singleRootResult?.rootCount !== 1 || singleRootResult?.staleCount !== 0) {
+      throw new Error(`content reinjection did not collapse duplicate Aggie roots: ${JSON.stringify(singleRootResult)}`);
+    }
+
     const overlayMetrics = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
@@ -297,6 +333,7 @@ async function main() {
             root.classList.remove("agee-voicing", "agee-state-listening");
             return {
               ok: true,
+              rootCount: document.querySelectorAll("#agee-root").length,
               open: root.classList.contains("agee-open"),
               panelWidth: Math.round(panelRect.width),
               panelHeight: Math.round(panelRect.height),
@@ -318,6 +355,7 @@ async function main() {
       })()
     `);
     if (!overlayMetrics?.ok) throw new Error(overlayMetrics?.error || "overlay metrics missing");
+    if (overlayMetrics.rootCount !== 1) throw new Error(`expected one Aggie root, got: ${JSON.stringify(overlayMetrics)}`);
     if (!overlayMetrics.open || !overlayMetrics.activeInput) throw new Error(`overlay did not open and focus input: ${JSON.stringify(overlayMetrics)}`);
     if (overlayMetrics.panelWidth > Math.min(540, overlayMetrics.viewportWidth - 24) + 1) {
       throw new Error(`overlay panel exceeded compact width: ${JSON.stringify(overlayMetrics)}`);

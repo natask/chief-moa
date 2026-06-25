@@ -1,8 +1,23 @@
 // agee - content script. Owns the on-page surface, perceives the page, executes actions.
 
 (() => {
-  if (window.__ageeLoaded) return;
+  const AGGIE_ROOT_ID = "agee-root";
+  const existingAggies = () => Array.from(document.querySelectorAll(`#${AGGIE_ROOT_ID}`));
+  const pruneDuplicateAggies = () => {
+    const nodes = existingAggies();
+    const keep = nodes.find((node) => node.querySelector("#agee-launcher")) || nodes[0] || null;
+    for (const node of nodes) {
+      if (node !== keep) node.remove();
+    }
+  };
+
+  if (window.top !== window) return;
+  if (window.__ageeLoaded) {
+    pruneDuplicateAggies();
+    return;
+  }
   window.__ageeLoaded = true;
+  existingAggies().forEach((node) => node.remove());
 
   // ---- Overlay UI -------------------------------------------------------
   let root,

@@ -10,6 +10,7 @@ const requiredFiles = [
   "extension/tweaks.js",
   "extension/offscreen.html",
   "extension/offscreen.js",
+  "extension/offscreen-audio-worklet.js",
   "extension/options.html",
   "extension/options.js",
   "extension/settings-intent.js",
@@ -42,6 +43,7 @@ const backgroundSource = readFileSync("extension/background.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
 const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
+const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen"];
@@ -103,6 +105,61 @@ if (!/cmd:\s*"offscreenVoiceCaptureStart"/.test(backgroundSource) || !/cmd === "
 
 if (!/navigator\.mediaDevices\.getUserMedia/.test(offscreenSource) || !/offscreenVoiceAudio/.test(offscreenSource)) {
   throw new Error("offscreen.js must own microphone capture and forward PCM chunks to background.js");
+}
+
+if (
+  !/audioWorklet\.addModule/.test(offscreenSource) ||
+  !/new\s+AudioWorkletNode/.test(offscreenSource) ||
+  !/offscreen-audio-worklet\.js/.test(offscreenSource) ||
+  /createScriptProcessor|ScriptProcessorNode/.test(offscreenSource) ||
+  !/registerProcessor\("aggie-voice-capture"/.test(offscreenWorkletSource) ||
+  !/postMessage\(\{\s*samples\s*\}/.test(offscreenWorkletSource)
+) {
+  throw new Error("offscreen microphone capture must use AudioWorklet, not deprecated ScriptProcessorNode capture");
+}
+
+if (
+  !/function voiceSessionSocketOpen/.test(backgroundSource) ||
+  !/function sendVoiceSessionJson/.test(backgroundSource) ||
+  !/function sendVoiceSessionBinary/.test(backgroundSource)
+) {
+  throw new Error("background.js must guard voice WebSocket sends behind OPEN/current-session checks");
+}
+
+const voiceTransportBody = sourceBetween(
+  backgroundSource,
+  /async function startVoiceSessionProxy\(/,
+  /function deliverVoiceSessionEvent\(/,
+  "voice session transport"
+);
+const safeJsonSendBody = sourceBetween(
+  backgroundSource,
+  /function sendVoiceSessionJson\(/,
+  /function sendVoiceSessionBinary\(/,
+  "safe JSON voice send"
+);
+const safeBinarySendBody = sourceBetween(
+  backgroundSource,
+  /function sendVoiceSessionBinary\(/,
+  /function deliverVoiceSessionEvent\(/,
+  "safe binary voice send"
+);
+const unsafeVoiceTransportBody = voiceTransportBody
+  .replace(safeJsonSendBody, "")
+  .replace(safeBinarySendBody, "");
+if (/session\.ws\.send/.test(unsafeVoiceTransportBody)) {
+  throw new Error("voice WebSocket sends must go through safe send helpers");
+}
+
+if (
+  !/const AGGIE_ROOT_ID\s*=\s*"agee-root"/.test(contentSource) ||
+  !/window\.top !== window/.test(contentSource) ||
+  !/function pruneDuplicateAggies|const pruneDuplicateAggies/.test(contentSource) ||
+  !/querySelector\("#agee-launcher"\)/.test(contentSource) ||
+  !/node !== keep/.test(contentSource) ||
+  !/existingAggies\(\)\.forEach/.test(contentSource)
+) {
+  throw new Error("content.js must keep one Aggie root per top-level page after reinjection");
 }
 
 if (!/Grant microphone/.test(optionsHtmlSource) || !/navigator\.mediaDevices\.getUserMedia/.test(optionsSource)) {
@@ -373,6 +430,7 @@ for (const file of [
   "extension/config.js",
   "extension/content.js",
   "extension/offscreen.js",
+  "extension/offscreen-audio-worklet.js",
   "extension/tweaks.js",
   "extension/options.js",
   "extension/settings-intent.js",

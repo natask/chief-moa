@@ -19,3 +19,11 @@
       mark starts a gateway voice session with browser silence auto-commit
       disabled, releasing the mark commits the turn, and the manual turn does
       not re-arm the mic. A normal click-and-hold is only for moving the mark.
+- [x] 1.13 Guard browser voice WebSocket sends so revoked or closed sessions do
+      not call `send` on CLOSING/CLOSED sockets. Verified by `npm run verify`.
+- [x] 1.14 Replace offscreen `ScriptProcessorNode` microphone capture with an
+      `AudioWorkletNode` worklet path that still forwards PCM16 chunks to the
+      background worker. Verified by `npm run verify`.
+- [x] 1.15 Keep exactly one Aggie root on each top-level page after extension
+      reload/reinjection, while blocking iframe duplicates. Verified by
+      `npm run verify` and `npm run smoke`.

@@ -41,7 +41,10 @@ function stopCapture(sessionId = null) {
   if (!capture) return;
   if (sessionId && capture.voiceSessionId !== sessionId) return;
   try {
-    capture.processor?.disconnect();
+    capture.worklet?.port?.close?.();
+  } catch {}
+  try {
+    capture.worklet?.disconnect();
   } catch {}
   try {
     capture.source?.disconnect();
@@ -61,42 +64,66 @@ async function startCapture(voiceSessionId) {
   if (!voiceSessionId) throw new Error("missing voice session id");
   stopCapture();
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
-  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextCtor) throw new Error("Web Audio is not available in this browser.");
+  let stream = null;
+  let audioCtx = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) throw new Error("Web Audio is not available in this browser.");
 
-  const audioCtx = new AudioContextCtor();
-  const sampleRate = audioCtx.sampleRate;
-  const resample = { offset: 0 };
-  const source = audioCtx.createMediaStreamSource(stream);
-  const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-  const capture = { voiceSessionId, stream, audioCtx, source, processor, sampleRate, resample };
-  activeCapture = capture;
+    audioCtx = new AudioContextCtor();
+    if (!audioCtx.audioWorklet?.addModule) {
+      throw new Error("AudioWorklet microphone capture is not available in this browser.");
+    }
+    await audioCtx.audioWorklet.addModule(chrome.runtime.getURL("offscreen-audio-worklet.js"));
 
-  processor.onaudioprocess = (event) => {
-    event.outputBuffer.getChannelData(0).fill(0);
-    if (activeCapture !== capture) return;
-    const inputSamples = event.inputBuffer.getChannelData(0);
-    const pcm = resampleToPcm16(inputSamples, sampleRate, 16000, resample);
-    if (pcm.byteLength <= 0) return;
-    chrome.runtime
-      .sendMessage({
-        cmd: "offscreenVoiceAudio",
-        voiceSessionId,
-        audio: bytesToBase64(pcm),
-      })
-      .catch(() => {});
-  };
+    const sampleRate = audioCtx.sampleRate;
+    const resample = { offset: 0 };
+    const source = audioCtx.createMediaStreamSource(stream);
+    const worklet = new AudioWorkletNode(audioCtx, "aggie-voice-capture", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    const capture = { voiceSessionId, stream, audioCtx, source, worklet, sampleRate, resample };
+    activeCapture = capture;
 
-  source.connect(processor);
-  processor.connect(audioCtx.destination);
+    worklet.port.onmessage = (event) => {
+      if (activeCapture !== capture) return;
+      const inputSamples = event.data?.samples;
+      if (!(inputSamples instanceof Float32Array) || inputSamples.length <= 0) return;
+      const pcm = resampleToPcm16(inputSamples, sampleRate, 16000, resample);
+      if (pcm.byteLength <= 0) return;
+      chrome.runtime
+        .sendMessage({
+          cmd: "offscreenVoiceAudio",
+          voiceSessionId,
+          audio: bytesToBase64(pcm),
+        })
+        .catch(() => {});
+    };
+
+    source.connect(worklet);
+    worklet.connect(audioCtx.destination);
+  } catch (error) {
+    for (const track of stream?.getTracks?.() || []) {
+      try {
+        track.stop();
+      } catch {}
+    }
+    try {
+      await audioCtx?.close();
+    } catch {}
+    if (activeCapture?.voiceSessionId === voiceSessionId) activeCapture = null;
+    throw error;
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

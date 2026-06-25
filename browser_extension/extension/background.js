@@ -1160,8 +1160,11 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
     };
 
     ws.onopen = () => {
-      session.opened = true;
-      ws.send(JSON.stringify({
+      if (!voiceSessionSocketOpen(session)) {
+        failBeforeOpen(session.revoked ? "Live voice session was revoked." : "Live voice connection closed.");
+        return;
+      }
+      const started = sendVoiceSessionJson(session, {
         type: "session_start",
         source: "agee-extension",
         device_id: ticket.device_id || "",
@@ -1184,7 +1187,12 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
           sample_rate: 16000,
           channels: 1,
         },
-      }));
+      });
+      if (!started) {
+        failBeforeOpen("Live voice connection failed.");
+        return;
+      }
+      session.opened = true;
       settled = true;
       resolve({
         voiceSessionId: id,
@@ -1231,6 +1239,47 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
       else setTimeout(() => voiceSessions.delete(id), 5000);
     };
   });
+}
+
+function voiceSessionSocketOpen(session) {
+  return !!session
+    && !session.closed
+    && voiceSessions.get(session.id) === session
+    && session.ws?.readyState === WebSocket.OPEN;
+}
+
+function markVoiceSessionSendFailed(session, reason = "send failed") {
+  if (!session || session.closed) return;
+  session.closed = true;
+  session.closedReason = reason;
+  voiceSessions.delete(session.id);
+  clearVoiceAutoCommit(session);
+  stopOffscreenVoiceCapture(session.id).catch(() => {});
+  try {
+    session.ws?.close(1000, reason);
+  } catch {}
+}
+
+function sendVoiceSessionJson(session, message) {
+  if (!voiceSessionSocketOpen(session)) return false;
+  try {
+    session.ws.send(JSON.stringify(message || {}));
+    return true;
+  } catch {
+    markVoiceSessionSendFailed(session);
+    return false;
+  }
+}
+
+function sendVoiceSessionBinary(session, buffer) {
+  if (!voiceSessionSocketOpen(session)) return false;
+  try {
+    session.ws.send(buffer);
+    return true;
+  } catch {
+    markVoiceSessionSendFailed(session);
+    return false;
+  }
 }
 
 function deliverVoiceSessionEvent(session, payload) {
@@ -1283,22 +1332,22 @@ async function forwardVoiceSessionEvent(session, event) {
 
 function sendVoiceSessionAudio(id, audio) {
   const session = voiceSessions.get(id);
-  if (!session?.ws || session.ws.readyState !== WebSocket.OPEN) return { ok: false, error: "voice session is not open" };
+  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
   const buffer = base64ToBuffer(audio);
   noteVoiceSessionAudio(session, buffer);
-  session.ws.send(buffer);
+  if (!sendVoiceSessionBinary(session, buffer)) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
 
 async function sendVoiceSessionControl(id, message) {
   const session = voiceSessions.get(id);
-  if (!session?.ws || session.ws.readyState !== WebSocket.OPEN) return { ok: false, error: "voice session is not open" };
+  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
   if (message?.type === "commit_turn" || message?.type === "cancel_turn") {
     session.committed = true;
     clearVoiceAutoCommit(session);
     await stopOffscreenVoiceCapture(id);
   }
-  session.ws.send(JSON.stringify(message || {}));
+  if (!sendVoiceSessionJson(session, message || {})) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
 
@@ -1375,7 +1424,7 @@ function scheduleVoiceAutoCommit(session, delayMs) {
 
 async function autoCommitVoiceSession(id, reason) {
   const session = voiceSessions.get(id);
-  if (!session || session.committed || !session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+  if (!session || session.committed || !voiceSessionSocketOpen(session)) return;
   if (!session.lastSpeechAt || (session.speechMs || 0) < VOICE_AUTO_COMMIT_MIN_SPEECH_MS) {
     scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS);
     return;
@@ -1388,11 +1437,11 @@ async function autoCommitVoiceSession(id, reason) {
   session.committed = true;
   clearVoiceAutoCommit(session);
   await stopOffscreenVoiceCapture(id);
-  session.ws.send(JSON.stringify({
+  sendVoiceSessionJson(session, {
     type: "commit_turn",
     turn_id: session.turnId,
     reason: `browser_auto_commit:${reason}`,
-  }));
+  });
 }
 
 function clearVoiceAutoCommit(session) {
