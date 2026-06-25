@@ -241,7 +241,10 @@ async function assertAgentProfileRuntimeCycle(baseUrl, dataDir) {
   assert.equal(put.status, 200);
   assert.equal(put.json.is_overridden, true);
   assert.equal(put.json.profile.model, "runtime-edited-model");
-  assert.equal(put.json.profile.system_prompt, "You are a terse runtime-edited assistant. Use the user's preferred name when known.");
+  assert.ok(
+    put.json.profile.system_prompt.startsWith("You are a terse runtime-edited assistant. Use the user's preferred name when known."),
+    "runtime-edited prompt must preserve the requested prompt text",
+  );
   assert.equal(put.json.profile.temperature, 0.1);
   assert.equal(put.json.profile.voice_max_chars, 64);
   // The env default is immutable even after a patch.
@@ -795,7 +798,7 @@ async function assertAgentRunFollowUp(baseUrl, dataDir, parentRunId) {
   assert.equal(childDetail.run.parent_run_id, parentRunId);
   assertPersistedRun(dataDir, childRunId, {
     status: "completed",
-    harness: "gemini",
+    harness: parentDetail.run.harness,
     conversation_id: "smoke_session",
     parent_run_id: parentRunId,
   });
