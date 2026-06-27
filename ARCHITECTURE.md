@@ -312,6 +312,9 @@ claim, validate, execute, and receipt it.
 - `turn`: one voice or chat input with optional screen context.
 - `broker_event`: one inbound user message stored before routing to sessions,
   workflow packages, chat, voice, or agent runs.
+- `product_event`: one canonical append-only event in the self-hostable event
+  substrate, carrying origin, stream, version, actor, authority, causation,
+  correlation, idempotency, payload, blob refs, and CRDT refs.
 - `route_decision`: an inspectable broker decision with target, action,
   confidence, reason, context refs, workflow directory refs, and cancellation
   behavior.
@@ -347,8 +350,14 @@ Postgres is the production store target. The work graph now uses Postgres when
 `DATABASE_URL` is set: nodes, append-only work events, and produced artifacts
 are queryable gateway records. Agent-run files, sessions, tool sources,
 executions, approvals, and receipts should continue moving behind the same
-Postgres storage boundary, with DBOS-style durable execution considered for
-resumable workflows and queues.
+Postgres storage boundary. The gateway also exposes the first product event
+substrate slice: `/v1/events` appends and queries canonical `product_events`,
+with the same envelope persisted to a local `product-events.jsonl` fallback when
+Postgres is not configured. Chat turns, voice turns, profile changes, agent-run
+events, browser tasks, tool requests, receipts, work events, and work artifacts
+now mirror into that substrate while legacy read paths remain intact. DBOS-style
+durable execution remains a separate consideration for resumable workflows and
+queues.
 
 ## Source Map
 
@@ -367,6 +376,10 @@ resumable workflows and queues.
   cross-device tool-request queue.
 - `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
+- `gateway/lib/event-substrate.js`: product event substrate adapter for
+  Postgres `product_events` or local `product-events.jsonl`.
+- `gateway/schema.sql`: Postgres schema for work graph records, product events,
+  projection checkpoints, event blobs, and sync import checkpoints.
 - `gateway/lib/voice-intent.js`: pure voice-turn classifier
   (chat / agent_run / multi_agent / control), unit-tested in
   `scripts/smoke-voice-intent.js`.

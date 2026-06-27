@@ -107,3 +107,69 @@ create table if not exists artifacts (
 create index if not exists artifacts_node_idx   on artifacts(node_id, created_at desc);
 create index if not exists artifacts_kind_idx   on artifacts(kind, created_at desc);
 create index if not exists artifacts_search_idx on artifacts using gin(search);
+
+-- product event substrate ------------------------------------------------------
+-- Canonical product events are separate from work-graph node events above. The
+-- work-graph events table is scoped to a worker node; product_events is the
+-- cross-surface audit/sync substrate for sessions, turns, browser/device
+-- receipts, profile changes, imports, and future projection rebuilds.
+create table if not exists product_events (
+  event_id             text primary key,
+  origin_id            text not null,
+  stream_id            text not null,
+  stream_version       bigint not null,
+  event_type           text not null,
+  event_schema_version integer not null default 1,
+  occurred_at          timestamptz not null,
+  recorded_at          timestamptz not null default now(),
+  actor                jsonb not null default '{}'::jsonb,
+  authority            jsonb not null default '{}'::jsonb,
+  causation_id         text,
+  correlation_id       text,
+  idempotency_key      text,
+  payload              jsonb not null default '{}'::jsonb,
+  blob_refs            jsonb not null default '[]'::jsonb,
+  crdt_refs            jsonb not null default '[]'::jsonb,
+  signature            text,
+  unique (origin_id, stream_id, stream_version)
+);
+create unique index if not exists product_events_idempotency_idx
+  on product_events(idempotency_key)
+  where idempotency_key is not null and idempotency_key <> '';
+create index if not exists product_events_type_idx
+  on product_events(event_type, recorded_at desc);
+create index if not exists product_events_stream_idx
+  on product_events(origin_id, stream_id, stream_version);
+create index if not exists product_events_correlation_idx
+  on product_events(correlation_id)
+  where correlation_id is not null and correlation_id <> '';
+
+create table if not exists projection_checkpoints (
+  projection_name    text primary key,
+  projection_version integer not null default 1,
+  origin_id          text not null default '',
+  stream_id          text not null default '',
+  stream_version     bigint not null default 0,
+  event_id           text,
+  state              jsonb not null default '{}'::jsonb,
+  updated_at         timestamptz not null default now()
+);
+
+create table if not exists event_blobs (
+  digest      text primary key,
+  media_type  text not null default 'application/octet-stream',
+  byte_size   bigint not null default 0,
+  storage_ref text not null,
+  metadata    jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now()
+);
+
+create table if not exists event_sync_imports (
+  origin_id       text not null,
+  peer_id         text not null,
+  stream_id       text not null default '',
+  stream_version  bigint not null default 0,
+  event_id        text,
+  imported_at     timestamptz not null default now(),
+  primary key (origin_id, peer_id, stream_id)
+);

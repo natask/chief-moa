@@ -1,17 +1,17 @@
 ## 1. Substrate Contract
 
-- [ ] 1.1 Write the canonical event-envelope TypeScript schema and validator.
-- [ ] 1.2 Add Postgres DDL for event streams, projection checkpoints, blobs, and sync imports.
-- [ ] 1.3 Add local JSON/SQLite-compatible fallback serialization using the same envelope.
-- [ ] 1.4 Split `stream_version`, `event_schema_version`, and `projection_version`.
+- [x] 1.1 Write the canonical event-envelope gateway schema and validator.
+- [x] 1.2 Add Postgres DDL for event streams, projection checkpoints, blobs, and sync imports.
+- [x] 1.3 Add local JSON/SQLite-compatible fallback serialization using the same envelope.
+- [x] 1.4 Split `stream_version`, `event_schema_version`, and `projection_version`.
 
 ## 2. Gateway Event Migration
 
-- [ ] 2.1 Mirror voice turns and provider events into the event substrate.
-- [ ] 2.2 Mirror chat turns and broker events into the event substrate.
-- [ ] 2.3 Mirror agent run lifecycle/events into the event substrate.
-- [ ] 2.4 Mirror browser tasks, tool requests, approvals, and receipts into the event substrate.
-- [ ] 2.5 Mirror work-graph events/artifacts or link the existing Postgres work graph as a projection source.
+- [x] 2.1 Mirror voice turns and provider-event summaries into the event substrate.
+- [x] 2.2 Mirror chat turns and broker events into the event substrate.
+- [x] 2.3 Mirror agent run lifecycle/events into the event substrate.
+- [x] 2.4 Mirror browser tasks, tool requests, and receipts into the event substrate. Approval events are still pending.
+- [x] 2.5 Mirror work-graph events/artifacts or link the existing Postgres work graph as a projection source.
 
 ## 3. Projections
 
@@ -48,8 +48,8 @@
 
 ## 8. Verification
 
-- [ ] 8.1 Gateway: `cd gateway && npm run check`.
-- [ ] 8.2 Gateway smoke: event append/query/projection rebuild/import idempotency.
+- [x] 8.1 Gateway: `cd gateway && npm run check`.
+- [x] 8.2 Gateway smoke: event append/query and idempotency. Projection rebuild/import smoke is still pending.
 - [ ] 8.3 Android receipt sync: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`.
 - [ ] 8.4 Browser receipt sync: `cd browser_extension && npm run verify && npm run smoke`.
 - [ ] 8.5 Deploy changed surfaces with `bash scripts/deploy.sh auto` after implementation commits.

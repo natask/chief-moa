@@ -20,6 +20,7 @@ const { createUiSpecStore } = require("./lib/ui-spec");
 const { createBrain } = require("./lib/brain");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
+const { createEventSubstrateStore } = require("./lib/event-substrate");
 const {
   buildEvaluatorMessages,
   parseFinal: parsePresentationFinal,
@@ -161,6 +162,12 @@ const workGraph = createWorkGraphStore({
   databaseUrl: process.env.DATABASE_URL,
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
 });
+const eventSubstrate = createEventSubstrateStore({
+  dataDir: DATA_DIR,
+  databaseUrl: process.env.DATABASE_URL,
+  schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
+  originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
+});
 
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
@@ -238,6 +245,7 @@ const server = http.createServer(async (request, response) => {
           token_required: !ALLOW_AGENT_WITHOUT_TOKEN,
         },
         android_ota: androidOtaHealth(),
+        event_substrate: await eventSubstrateStatus(),
         device_hub: {
           registry_file: DEVICE_CLIENTS_FILE,
           tool_requests_dir: TOOL_REQUESTS_DIR,
@@ -553,6 +561,44 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, await supervisorStatusPayload());
+      return;
+    }
+
+    if (url.pathname === "/v1/events/status" && request.method === "GET") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, { event_substrate: await eventSubstrateStatus() });
+      return;
+    }
+
+    if (url.pathname === "/v1/events" && request.method === "GET") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, {
+        events: await eventSubstrate.listEvents({
+          event_type: url.searchParams.get("event_type") || url.searchParams.get("eventType") || "",
+          event_type_prefix: url.searchParams.get("event_type_prefix") || url.searchParams.get("eventTypePrefix") || "",
+          stream_id: url.searchParams.get("stream_id") || url.searchParams.get("streamId") || "",
+          origin_id: url.searchParams.get("origin_id") || url.searchParams.get("originId") || "",
+          correlation_id: url.searchParams.get("correlation_id") || url.searchParams.get("correlationId") || "",
+          idempotency_key: url.searchParams.get("idempotency_key") || url.searchParams.get("idempotencyKey") || "",
+          order: url.searchParams.get("order") || "",
+          limit: Number(url.searchParams.get("limit") || 100),
+        }),
+      });
+      return;
+    }
+
+    if (url.pathname === "/v1/events" && request.method === "POST") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleCreateProductEvent(request, response);
       return;
     }
 
@@ -957,6 +1003,7 @@ async function handleChat(request, response) {
     screen: saved.screen,
     response_text: text,
   }) + "\n");
+  await recordChatTurnProductEvent(saved, lastUser?.content || "", text);
 
   sendJson(response, 200, {
     conversation_id: conversationId,
@@ -966,6 +1013,163 @@ async function handleChat(request, response) {
     profile_version: profileVersion,
     text,
   });
+}
+
+async function recordProductEvent(input) {
+  return eventSubstrate.appendEvent(input);
+}
+
+function recordProductEventBestEffort(input) {
+  eventSubstrate.appendEvent(input).catch((error) => {
+    console.warn(`event substrate mirror failed: ${cleanError(error)}`);
+  });
+}
+
+function productSessionStreamId(sessionId) {
+  return `session:${sanitizeOptionalId(sessionId, "default")}`;
+}
+
+function productRunStreamId(runId) {
+  return `run:${sanitizeOptionalId(runId, "unknown")}`;
+}
+
+async function recordChatTurnProductEvent(saved, userText, responseText) {
+  await recordProductEvent({
+    event_type: "chat.turn.completed",
+    stream_id: productSessionStreamId(saved.session_id),
+    idempotency_key: `chat:${saved.session_id}:${saved.turn_id}:completed`,
+    occurred_at: saved.updated_at,
+    actor: { kind: "user", id: saved.device_id || saved.source || "chat" },
+    correlation_id: saved.turn_id,
+    payload: {
+      conversation_id: saved.id,
+      session_id: saved.session_id,
+      branch_id: saved.branch_id || "default",
+      turn_id: saved.turn_id,
+      source: saved.source || "",
+      device_id: saved.device_id || "",
+      model: saved.model || "",
+      profile_version: saved.profile_version || "",
+      user_text: truncate(String(userText || ""), 4000),
+      response_text: truncate(String(responseText || ""), 4000),
+    },
+  });
+}
+
+async function recordBrokerProductEvent(event) {
+  await recordProductEvent({
+    event_type: "broker.event.routed",
+    stream_id: event.session_id ? productSessionStreamId(event.session_id) : `broker:${event.id}`,
+    idempotency_key: `broker:${event.id}:routed`,
+    occurred_at: event.updated_at || event.created_at,
+    actor: { kind: "user", id: event.device_id || event.source || "broker" },
+    correlation_id: event.id,
+    payload: {
+      id: event.id,
+      source: event.source || "",
+      session_id: event.session_id || "",
+      branch_id: event.branch_id || "",
+      project_id: event.project_id || "",
+      profile_version: event.profile_version || "",
+      text: truncate(String(event.text || ""), 4000),
+      decisions: (event.decisions || []).map((decision) => ({
+        id: decision.id,
+        target_type: decision.target_type,
+        target_id: decision.target_id,
+        action: decision.action,
+        confidence: decision.confidence,
+        reason: decision.reason,
+      })),
+      context_pack_refs: event.context_pack_refs || [],
+    },
+  });
+}
+
+async function recordVoiceTurnAcceptedProductEvent(record) {
+  await recordProductEvent({
+    event_type: "voice.turn.accepted",
+    stream_id: productSessionStreamId(record.session_id),
+    idempotency_key: `voice:${record.session_id}:${record.id}:accepted`,
+    occurred_at: record.created_at,
+    actor: { kind: "user", id: record.device_id || record.source || "voice" },
+    correlation_id: record.id,
+    payload: {
+      session_id: record.session_id,
+      conversation_id: record.conversation_id,
+      branch_id: record.branch_id || "default",
+      turn_id: record.id,
+      source: record.source || "",
+      device_id: record.device_id || "",
+      classification: record.classification || "",
+      profile_version: record.profile_version || "",
+      transcript: truncate(String(record.transcript || ""), 4000),
+      screen: record.screen || null,
+    },
+  });
+}
+
+async function recordVoiceTurnCompletedProductEvent(record) {
+  if (!record?.response) return;
+  await recordProductEvent({
+    event_type: "voice.turn.completed",
+    stream_id: productSessionStreamId(record.session_id),
+    idempotency_key: `voice:${record.session_id}:${record.id}:completed`,
+    occurred_at: record.updated_at || record.created_at,
+    actor: { kind: "gateway", id: "voice-router" },
+    correlation_id: record.id,
+    payload: {
+      session_id: record.session_id,
+      conversation_id: record.conversation_id,
+      branch_id: record.branch_id || "default",
+      turn_id: record.id,
+      source: record.source || "",
+      device_id: record.device_id || "",
+      classification: record.classification || "",
+      profile_version: record.profile_version || "",
+      transcript: truncate(String(record.transcript || ""), 4000),
+      response: {
+        display: truncate(String(record.response.display || record.response.text || ""), 4000),
+        speak: truncate(String(record.response.speak || ""), 1200),
+        action_count: Array.isArray(record.response.actions) ? record.response.actions.length : 0,
+        actions: Array.isArray(record.response.actions) ? record.response.actions.slice(0, 20) : [],
+      },
+      references: {
+        agent_run_ids: record.references?.agent_run_ids || [],
+        conversation_id: record.references?.conversation_id || "",
+        voice_session_status: record.references?.voice_session?.status || "",
+        voice_session_provider: record.references?.voice_session?.provider || "",
+      },
+    },
+  });
+  await recordVoiceProviderEventsProductEvent(record);
+}
+
+async function recordVoiceProviderEventsProductEvent(record) {
+  const providerEvents = Array.isArray(record.references?.voice_session?.provider_events)
+    ? record.references.voice_session.provider_events
+    : [];
+  if (providerEvents.length === 0) return;
+  await recordProductEvent({
+    event_type: "voice.provider_events.recorded",
+    stream_id: productSessionStreamId(record.session_id),
+    idempotency_key: `voice:${record.session_id}:${record.id}:provider-events:${providerEvents.length}`,
+    occurred_at: record.updated_at || record.created_at,
+    actor: { kind: "gateway", id: "voice-provider" },
+    correlation_id: record.id,
+    payload: {
+      session_id: record.session_id,
+      branch_id: record.branch_id || "default",
+      turn_id: record.id,
+      provider: record.references?.voice_session?.provider || "",
+      event_count: providerEvents.length,
+      event_types: providerEvents.map((event) => String(event.type || "")).filter(Boolean).slice(0, 80),
+    },
+  });
+}
+
+async function writeCompletedVoiceTurnRecord(record) {
+  writeVoiceTurnRecord(record);
+  await recordVoiceTurnCompletedProductEvent(record);
 }
 
 async function handleBrokerMessage(request, response) {
@@ -992,6 +1196,7 @@ async function handleBrokerMessage(request, response) {
   };
   writeBrokerEvent(stored);
   attachBrokerEvidenceToRuns(stored);
+  await recordBrokerProductEvent(stored);
   sendJson(response, 202, {
     event: stored,
     decisions,
@@ -1761,9 +1966,30 @@ function recordProfileHistory(before, after, source, versions = {}) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.appendFileSync(PROFILE_HISTORY_FILE, `${JSON.stringify(entry)}\n`);
+    recordProductEventBestEffort({
+      event_type: "profile.changed",
+      stream_id: profileStreamId(entry.scope, entry.device_id),
+      idempotency_key: `profile:${entry.scope}:${entry.device_id || "global"}:${entry.profile_version}`,
+      occurred_at: entry.ts,
+      actor: { kind: "gateway", id: entry.source },
+      payload: {
+        source: entry.source,
+        changed: entry.changed,
+        system_prompt_changed: entry.system_prompt_changed,
+        from_profile_version: entry.from_profile_version,
+        profile_version: entry.profile_version,
+        scope: entry.scope,
+        device_id: entry.device_id,
+        profile: entry.profile,
+      },
+    });
   } catch {
     // History is best-effort; a write failure must never break a profile change.
   }
+}
+
+function profileStreamId(scope, deviceId) {
+  return scope === "device" && deviceId ? `profile:device:${deviceId}` : "profile:global";
 }
 
 // Read recent profile-change history, newest first. `limit` caps the rows;
@@ -1805,6 +2031,31 @@ function defaultVoiceProviderProfile() {
     reasoning_provider: names.reasoning || names.llm || "loopback",
     tts_provider: names.tts || "loopback",
   };
+}
+
+async function handleCreateProductEvent(request, response) {
+  const body = await readJsonBody(request);
+  try {
+    const event = await eventSubstrate.appendEvent({
+      ...body,
+      actor: body.actor || { kind: "gateway", id: "api" },
+    });
+    sendJson(response, 201, { event });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function eventSubstrateStatus() {
+  try {
+    return await eventSubstrate.storageInfo();
+  } catch (error) {
+    return {
+      mode: "error",
+      error: cleanError(error),
+      postgres_configured: Boolean(process.env.DATABASE_URL),
+    };
+  }
 }
 
 async function handleCreateProject(request, response) {
@@ -2283,6 +2534,15 @@ async function handleCreateWorkEvent(request, response) {
       type: body.type,
       payload: body.payload,
     });
+    await recordProductEvent({
+      event_type: "work.event.recorded",
+      stream_id: `work:${event.node_id}`,
+      idempotency_key: `work:${event.node_id}:${event.seq}`,
+      occurred_at: event.ts,
+      actor: { kind: "agent", id: event.run_id || "worker" },
+      correlation_id: event.run_id || "",
+      payload: event,
+    });
     sendJson(response, 201, { event });
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
@@ -2299,6 +2559,24 @@ async function handleCreateWorkArtifact(request, response) {
       title: body.title,
       body: body.body || body.text || body.markdown,
       refs: body.refs,
+    });
+    await recordProductEvent({
+      event_type: "work.artifact.created",
+      stream_id: artifact.node_id ? `work:${artifact.node_id}` : `artifact:${artifact.id}`,
+      idempotency_key: `work-artifact:${artifact.id}`,
+      occurred_at: artifact.created_at,
+      actor: { kind: "agent", id: artifact.run_id || "worker" },
+      correlation_id: artifact.run_id || "",
+      payload: {
+        id: artifact.id,
+        node_id: artifact.node_id || "",
+        run_id: artifact.run_id || "",
+        kind: artifact.kind,
+        title: artifact.title,
+        body: truncate(String(artifact.body || ""), 8000),
+        refs: artifact.refs || {},
+        created_at: artifact.created_at,
+      },
     });
     sendJson(response, 201, { artifact });
   } catch (error) {
@@ -2388,6 +2666,7 @@ async function handleVoiceTurn(request, response) {
     references: {},
   };
   writeVoiceTurnRecord(baseRecord);
+  await recordVoiceTurnAcceptedProductEvent(baseRecord);
 
   if (classification === "control") {
     const payload = voiceTurnPayload(baseRecord, {
@@ -2396,14 +2675,14 @@ async function handleVoiceTurn(request, response) {
       actions: [{ type: "control", name: "stop" }],
       follow_up_expected: false,
     });
-    writeVoiceTurnRecord({ ...baseRecord, updated_at: new Date().toISOString(), response: payload });
+    await writeCompletedVoiceTurnRecord({ ...baseRecord, updated_at: new Date().toISOString(), response: payload });
     sendJson(response, 200, payload);
     return;
   }
 
   if (classification === "profile_control") {
     const payload = await handleVoiceProfileControl(baseRecord, transcript, profileOptions);
-    writeVoiceTurnRecord({
+    await writeCompletedVoiceTurnRecord({
       ...baseRecord,
       classification: payload.classification,
       updated_at: new Date().toISOString(),
@@ -2425,7 +2704,7 @@ async function handleVoiceTurn(request, response) {
       actions: [],
       follow_up_expected: false,
     });
-    writeVoiceTurnRecord({ ...baseRecord, updated_at: new Date().toISOString(), response: payload });
+    await writeCompletedVoiceTurnRecord({ ...baseRecord, updated_at: new Date().toISOString(), response: payload });
     sendJson(response, 200, payload);
     return;
   }
@@ -2440,7 +2719,7 @@ async function handleVoiceTurn(request, response) {
         actions: [],
         follow_up_expected: false,
       });
-      writeVoiceTurnRecord({ ...baseRecord, classification: "agent_run_blocked", updated_at: new Date().toISOString(), response: payload });
+      await writeCompletedVoiceTurnRecord({ ...baseRecord, classification: "agent_run_blocked", updated_at: new Date().toISOString(), response: payload });
       sendJson(response, 401, payload);
       return;
     }
@@ -2472,7 +2751,7 @@ async function handleVoiceTurn(request, response) {
       agent_runs: runs.map(summarizeAgentRun),
       follow_up_expected: false,
     });
-    writeVoiceTurnRecord({
+    await writeCompletedVoiceTurnRecord({
       ...baseRecord,
       updated_at: new Date().toISOString(),
       response: payload,
@@ -2538,7 +2817,7 @@ async function handleVoiceTurn(request, response) {
       actions: [],
       follow_up_expected: false,
     });
-    writeVoiceTurnRecord({
+    await writeCompletedVoiceTurnRecord({
       ...baseRecord,
       updated_at: now,
       response: payload,
@@ -2554,7 +2833,7 @@ async function handleVoiceTurn(request, response) {
       actions: [],
       follow_up_expected: false,
     });
-    writeVoiceTurnRecord({ ...baseRecord, classification: "error", updated_at: new Date().toISOString(), response: payload });
+    await writeCompletedVoiceTurnRecord({ ...baseRecord, classification: "error", updated_at: new Date().toISOString(), response: payload });
     sendJson(response, 502, payload);
   }
 }
@@ -3875,6 +4154,7 @@ async function handleClaimBrowserTask(request, response) {
       lease_expires_at: task.lease_expires_at,
     });
   }
+  await recordBrowserTaskProductEvent(task, "claimed");
   sendJson(response, 200, { task: summarizeBrowserTask(task, { includeActions: true }) });
 }
 
@@ -3898,6 +4178,7 @@ async function handleCreateBrowserTask(request, response) {
       action_count: task.cdp_actions.length,
     });
   }
+  await recordBrowserTaskProductEvent(task, "queued");
   sendJson(response, 202, { task: summarizeBrowserTask(task, { includeActions: true }) });
 }
 
@@ -3949,6 +4230,7 @@ async function handleBrowserTaskReceipt(request, response, id) {
       ].filter(Boolean).join("\n\n"),
     });
   }
+  await recordBrowserTaskProductEvent(task, "receipt", receipt);
   sendJson(response, 200, { task: summarizeBrowserTask(task), receipt });
 }
 
@@ -3977,6 +4259,7 @@ async function handleCreateToolRequest(request, response) {
     sendJson(response, 400, { error: cleanError(error) });
     return;
   }
+  await recordToolRequestProductEvent(toolRequest, "queued");
   sendJson(response, 202, { request: summarizeToolRequest(toolRequest, { includeInput: true }) });
 }
 
@@ -4007,6 +4290,7 @@ async function handleClaimToolRequest(request, response) {
     sendJson(response, 204, {});
     return;
   }
+  await recordToolRequestProductEvent(task, "claimed");
   sendJson(response, 200, { request: summarizeToolRequest(task, { includeInput: true }) });
 }
 
@@ -4049,7 +4333,66 @@ async function handleToolRequestReceipt(request, response, id) {
     receipts,
     error: receipt.error,
   });
+  await recordToolRequestProductEvent(next, "receipt", receipt);
   sendJson(response, 200, { request: summarizeToolRequest(next), receipt });
+}
+
+async function recordBrowserTaskProductEvent(task, stage, receipt = null) {
+  const eventType = stage === "receipt" ? "browser.task.receipt" : `browser.task.${stage}`;
+  const receiptKey = receipt?.id ? `:${receipt.id}` : "";
+  await recordProductEvent({
+    event_type: eventType,
+    stream_id: task.conversation_id ? productSessionStreamId(task.conversation_id) : `browser-task:${task.id}`,
+    idempotency_key: `browser-task:${task.id}:${stage}${receiptKey}`,
+    occurred_at: receipt?.ts || task.updated_at || task.created_at,
+    actor: {
+      kind: stage === "queued" ? "gateway" : "extension",
+      id: receipt?.client_id || task.claimed_by || task.source || "browser",
+    },
+    correlation_id: task.agent_run_id || task.id,
+    payload: {
+      task: summarizeBrowserTask(task, { includeActions: stage === "queued" }),
+      receipt: receipt ? {
+        id: receipt.id,
+        ts: receipt.ts,
+        ok: receipt.ok,
+        client_id: receipt.client_id,
+        summary: receipt.summary,
+        error: receipt.error,
+        action_results: receipt.action_results,
+        page_state: receipt.page_state,
+      } : null,
+    },
+  });
+}
+
+async function recordToolRequestProductEvent(requestRecord, stage, receipt = null) {
+  const eventType = stage === "receipt" ? "tool.request.receipt" : `tool.request.${stage}`;
+  const receiptKey = receipt?.id ? `:${receipt.id}` : "";
+  await recordProductEvent({
+    event_type: eventType,
+    stream_id: requestRecord.session_id ? productSessionStreamId(requestRecord.session_id) : `tool-request:${requestRecord.id}`,
+    idempotency_key: `tool-request:${requestRecord.id}:${stage}${receiptKey}`,
+    occurred_at: receipt?.ts || requestRecord.updated_at || requestRecord.created_at,
+    actor: {
+      kind: stage === "queued" ? "gateway" : "device",
+      id: receipt?.device_id || requestRecord.claimed_by || requestRecord.source_device_id || requestRecord.source || "device",
+    },
+    correlation_id: requestRecord.id,
+    payload: {
+      request: summarizeToolRequest(requestRecord, { includeInput: stage === "queued" }),
+      receipt: receipt ? {
+        id: receipt.id,
+        ts: receipt.ts,
+        ok: receipt.ok,
+        device_id: receipt.device_id,
+        summary: receipt.summary,
+        error: receipt.error,
+        result: receipt.result,
+        local_receipt: receipt.local_receipt,
+      } : null,
+    },
+  });
 }
 
 function summarizeVoiceResponse(response) {
@@ -4180,6 +4523,7 @@ async function recordStreamingVoiceTurn(turn) {
       status: turnStatus,
     },
   };
+  await recordVoiceTurnAcceptedProductEvent(baseRecord);
   if (!incomplete && liveClassification === "profile_control") {
     const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
     const payload = await handleVoiceProfileControl(baseRecord, transcript, profileOptions);
@@ -4193,7 +4537,7 @@ async function recordStreamingVoiceTurn(turn) {
         from_profile_version: profileVersion,
       },
     };
-    writeVoiceTurnRecord(canonicalRecord);
+    await writeCompletedVoiceTurnRecord(canonicalRecord);
     return canonicalRecord;
   }
 
@@ -4208,7 +4552,7 @@ async function recordStreamingVoiceTurn(turn) {
     response: payload,
     references: voiceSessionReferences,
   };
-  writeVoiceTurnRecord(canonicalRecord);
+  await writeCompletedVoiceTurnRecord(canonicalRecord);
   return canonicalRecord;
 }
 
@@ -5651,6 +5995,18 @@ function appendAgentEvent(runId, type, data) {
     ...(data || {}),
   };
   fs.appendFileSync(agentEventPath(runId), JSON.stringify(event) + "\n");
+  recordProductEventBestEffort({
+    event_type: `agent.run.${String(type || "event").replace(/_/g, ".")}`,
+    stream_id: productRunStreamId(runId),
+    idempotency_key: `agent-run:${runId}:${event.id}`,
+    occurred_at: event.ts,
+    actor: { kind: "agent", id: runId },
+    correlation_id: runId,
+    payload: {
+      run_id: runId,
+      ...event,
+    },
+  });
 }
 
 function readAgentEvents(id) {
