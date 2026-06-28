@@ -1,0 +1,66 @@
+digraph CrossSurfaceVoiceActions {
+    graph [goal="Chrome manual voice capture is reliable and cross-surface action lanes are recorded"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the run OpenSpec and ticket split. Confirm file ownership for browser voice, browser actions, Android actions, and workflow instructions."
+    ]
+
+    browser_voice [
+        label="Browser Voice",
+        prompt="Implement Chrome mascot manual push-to-talk capture from hold start, release commit, transcript preservation, and visible processing/response states."
+    ]
+
+    browser_actions [
+        label="Browser Actions",
+        prompt="Implement or complete extension-owned tab/page/Chrome-debugger local tools with allowlists and receipts."
+    ]
+
+    android_actions [
+        label="Android Actions",
+        prompt="Implement or complete Android app/accessibility local tools with policy checks and receipts."
+    ]
+
+    workflow_docs [
+        label="Workflow Instructions",
+        prompt="Add the reusable skill/instruction updates for Chief Moa cross-surface lane orchestration."
+    ]
+
+    verify_browser [
+        label="Verify Browser",
+        shape=parallelogram,
+        script="cd browser_extension && npm run verify && npm run smoke 2>&1",
+        goal_gate=true
+    ]
+
+    verify_android [
+        label="Verify Android",
+        shape=parallelogram,
+        script="cd android_app && ANDROID_HOME=\"$HOME/Library/Android/sdk\" ./gradlew assembleDebug 2>&1",
+        goal_gate=true
+    ]
+
+    deploy [
+        label="Deploy",
+        shape=parallelogram,
+        script="bash scripts/deploy.sh auto 2>&1",
+        goal_gate=true
+    ]
+
+    start -> plan
+    plan -> browser_voice
+    plan -> browser_actions
+    plan -> android_actions
+    plan -> workflow_docs
+    browser_voice -> verify_browser
+    browser_actions -> verify_browser
+    android_actions -> verify_android
+    workflow_docs -> verify_browser
+    verify_browser -> deploy
+    verify_android -> deploy
+    deploy -> exit
+}

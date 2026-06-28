@@ -152,6 +152,24 @@ if (/session\.ws\.send/.test(unsafeVoiceTransportBody)) {
 }
 
 if (
+  !/VOICE_PREROLL_MAX_MS/.test(backgroundSource) ||
+  !/MAX_PENDING_VOICE_AUDIO_BYTES/.test(backgroundSource) ||
+  !/function enqueuePendingVoiceSessionAudio/.test(backgroundSource) ||
+  !/function flushPendingVoiceSessionAudio/.test(backgroundSource) ||
+  !/pendingControlMessage/.test(backgroundSource)
+) {
+  throw new Error("background.js must buffer mic pre-roll audio and queued commit control before voice session_ready");
+}
+
+if (
+  !/voiceSessions\.set\(id, session\);[\s\S]{0,320}startOffscreenVoiceCapture\(id\)/.test(backgroundSource) ||
+  !/parsed\?\.type === "session_ready"[\s\S]{0,520}flushPendingVoiceSessionAudio\(session\)/.test(backgroundSource) ||
+  !/message\?\.type === "commit_turn"[\s\S]{0,220}pendingControlMessage/.test(backgroundSource)
+) {
+  throw new Error("extension-owned voice capture must start immediately, flush pre-roll on session_ready, and send commit after the flush");
+}
+
+if (
   !/const AGGIE_ROOT_ID\s*=\s*"agee-root"/.test(contentSource) ||
   !/window\.top !== window/.test(contentSource) ||
   !/function pruneDuplicateAggies|const pruneDuplicateAggies/.test(contentSource) ||
@@ -257,11 +275,17 @@ if (
   !/\/v1\/device-clients\/heartbeat/.test(backgroundSource) ||
   !/function browserLocalToolManifest/.test(backgroundSource) ||
   !/browser\.tab\.open/.test(backgroundSource) ||
+  !/browser\.tab\.list/.test(backgroundSource) ||
+  !/browser\.tab\.close/.test(backgroundSource) ||
+  !/browser\.tab\.activate/.test(backgroundSource) ||
+  !/browser\.tab\.reload/.test(backgroundSource) ||
+  !/browser\.cdp\.execute/.test(backgroundSource) ||
+  !/function executeCdpActionsOnTab/.test(backgroundSource) ||
   !/\/v1\/tool\/requests\/claim/.test(backgroundSource) ||
   !/function maybeRequestAndroidSpeak/.test(backgroundSource) ||
   !/tool:\s*"audio\.speak"/.test(backgroundSource)
 ) {
-  throw new Error("extension must heartbeat as a browser device client and queue/claim cross-device tool requests");
+  throw new Error("extension must heartbeat as a browser device client and expose browser tab/CDP tool requests");
 }
 
 if (/Listening\.\.\.|listening\.\.\.|stopping…|stopping\.\.\./.test(contentSource)) {
@@ -283,6 +307,10 @@ function sourceBetween(source, startPattern, endPattern, label) {
 
 if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(contentSource)) {
   throw new Error("browser voice partial transcripts must render as cue cards above the input");
+}
+
+if (!/function mergeLiveVoiceTranscript/.test(contentSource) || !/mergeLiveVoiceTranscript\(state\.transcript, incomingText\)/.test(contentSource)) {
+  throw new Error("browser voice transcript fragments must be accumulated instead of replacing early speech");
 }
 
 if (!/function isIdentityProfileControl/.test(contentSource) || !/your name/.test(contentSource) || !/call\|name/.test(contentSource)) {

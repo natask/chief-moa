@@ -22,6 +22,14 @@ The Android app SHALL define supported phone-local tools in a local capability m
 - **WHEN** an action references a tool not present in the local manifest
 - **THEN** the app refuses the action
 
+#### Scenario: Launcher app listing is available
+- **WHEN** the user runs `/apps` or `/list apps`, or a local request references `app.list`
+- **THEN** Android lists visible launcher apps from the device-local package manager and records a read-only receipt
+
+#### Scenario: Draft communication tools are available
+- **WHEN** a local request references `email.compose` or `sms.compose`
+- **THEN** Android opens a draft-only `ACTION_SENDTO` `mailto:` or `smsto:` intent without requesting send/read permissions
+
 ### Requirement: Approval Policy
 The Android app SHALL require approval based on action risk.
 
@@ -36,6 +44,10 @@ The Android app SHALL require approval based on action risk.
 #### Scenario: External side effect
 - **WHEN** an action would send, share, submit, call, write, or modify external state
 - **THEN** the app requires a local confirmation before execution
+
+#### Scenario: Draft-only communication handoff
+- **WHEN** Android opens an email or SMS draft for the user
+- **THEN** the target app remains responsible for the final send confirmation and Android records only the draft handoff receipt
 
 #### Scenario: Sensitive side effect
 - **WHEN** an action involves money, banking, passwords, security settings, medical, or legal operations

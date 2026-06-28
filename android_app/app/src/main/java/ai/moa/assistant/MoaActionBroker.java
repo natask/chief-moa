@@ -2,6 +2,7 @@ package ai.moa.assistant;
 
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 
@@ -18,7 +19,11 @@ import java.util.Map;
 final class MoaActionBroker {
     private static final String RISK_READ_ONLY = "read_only";
     private static final String RISK_NAVIGATION = "navigation";
+    private static final String RISK_EXTERNAL_SIDE_EFFECT = "external_side_effect";
     private static final String APPROVAL_IMPLICIT = "implicit_user_command";
+    private static final String APPROVAL_TARGET_APP_CONFIRMATION = "target_app_confirmation";
+    private static final int DEFAULT_APP_LIST_LIMIT = 40;
+    private static final int MAX_APP_LIST_LIMIT = 120;
     private static final Map<String, Capability> CAPABILITIES = createCapabilityManifest();
 
     private final Context context;
@@ -84,6 +89,10 @@ final class MoaActionBroker {
             boolean success = MoaAccessibilityService.performHome();
             recordReceipt(capability, "", success, success ? "Pressed home." : "Home action failed.");
             return LocalActionResult.handled(success ? "Pressed home." : "I could not press home from here.");
+        }
+
+        if (isAppListCommand(trimmed)) {
+            return listLauncherAppsForCommand();
         }
 
         String appTarget = openAppTarget(trimmed);
@@ -161,6 +170,18 @@ final class MoaActionBroker {
             return openLauncherAppForTool(target);
         }
 
+        if ("app.list".equals(name)) {
+            return listLauncherAppsForTool(args);
+        }
+
+        if ("email.compose".equals(name)) {
+            return composeEmailDraft(args);
+        }
+
+        if ("sms.compose".equals(name)) {
+            return composeSmsDraft(args);
+        }
+
         return ToolExecutionResult.done(false, "Unsupported local tool: " + name + ".", null);
     }
 
@@ -226,6 +247,18 @@ final class MoaActionBroker {
         return MoaActionReceiptStore.record(context, capability.tool, capability.risk, capability.approval, target, success, result);
     }
 
+    private LocalActionResult listLauncherAppsForCommand() {
+        return LocalActionResult.handled(listLauncherAppsForTool(new JSONObject()).reply);
+    }
+
+    private ToolExecutionResult listLauncherAppsForTool(JSONObject args) {
+        Capability capability = CAPABILITIES.get("app.list");
+        List<String> labels = launcherAppLabels(context.getPackageManager());
+        String reply = formatAppListReply(labels, args.optInt("limit", DEFAULT_APP_LIST_LIMIT));
+        JSONObject receipt = recordReceipt(capability, "launcher_apps", true, "Listed " + labels.size() + " launcher apps.");
+        return ToolExecutionResult.done(true, reply, receipt);
+    }
+
     private LocalActionResult openLauncherApp(String target) {
         return LocalActionResult.handled(openLauncherAppForTool(target).reply);
     }
@@ -268,28 +301,87 @@ final class MoaActionBroker {
         }
     }
 
+    private ToolExecutionResult composeEmailDraft(JSONObject args) {
+        Capability capability = CAPABILITIES.get("email.compose");
+        String recipient = emailDraftRecipient(args);
+        String subject = emailDraftSubject(args);
+        String body = emailDraftBody(args);
+        if (recipient.isEmpty() && subject.isEmpty() && body.isEmpty()) {
+            JSONObject receipt = recordReceipt(capability, "email_draft", false, "Email recipient, subject, or body is required.");
+            return ToolExecutionResult.done(false, "Email recipient, subject, or body is required.", receipt);
+        }
+
+        Intent intent = new Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"));
+        if (!recipient.isEmpty()) {
+            intent.putExtra(Intent.EXTRA_EMAIL, splitAddressList(recipient));
+        }
+        if (!subject.isEmpty()) {
+            intent.putExtra(Intent.EXTRA_SUBJECT, subject);
+        }
+        if (!body.isEmpty()) {
+            intent.putExtra(Intent.EXTRA_TEXT, body);
+        }
+        return openDraftIntent(
+                capability,
+                recipient.isEmpty() ? "email_draft" : "email:" + recipient,
+                intent,
+                "Opened an email draft. Review and send it in your email app.",
+                "I could not open an email draft app."
+        );
+    }
+
+    private ToolExecutionResult composeSmsDraft(JSONObject args) {
+        Capability capability = CAPABILITIES.get("sms.compose");
+        String recipient = smsDraftRecipient(args);
+        String body = smsDraftBody(args);
+        if (recipient.isEmpty() && body.isEmpty()) {
+            JSONObject receipt = recordReceipt(capability, "sms_draft", false, "SMS recipient or message is required.");
+            return ToolExecutionResult.done(false, "SMS recipient or message is required.", receipt);
+        }
+
+        Intent intent = new Intent(Intent.ACTION_SENDTO, smstoUri(recipient));
+        if (!body.isEmpty()) {
+            intent.putExtra("sms_body", body);
+        }
+        return openDraftIntent(
+                capability,
+                recipient.isEmpty() ? "sms_draft" : "sms:" + recipient,
+                intent,
+                "Opened an SMS draft. Review and send it in your messages app.",
+                "I could not open an SMS draft app."
+        );
+    }
+
+    private ToolExecutionResult openDraftIntent(Capability capability, String target, Intent intent, String successReply, String failureReply) {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            context.startActivity(intent);
+            JSONObject receipt = recordReceipt(capability, target, true, "Opened draft compose intent.");
+            return ToolExecutionResult.done(true, successReply, receipt);
+        } catch (RuntimeException error) {
+            JSONObject receipt = recordReceipt(capability, target, false, "No draft compose handler.");
+            return ToolExecutionResult.done(false, failureReply, receipt);
+        }
+    }
+
     private static List<AppCandidate> matchingLauncherApps(PackageManager packageManager, String target) {
         String normalizedTarget = normalizeAppLabel(target);
         if (normalizedTarget.isEmpty()) {
             return Collections.emptyList();
         }
 
-        Intent launcherIntent = new Intent(Intent.ACTION_MAIN);
-        launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-        List<ResolveInfo> activities = packageManager.queryIntentActivities(launcherIntent, 0);
+        List<ResolveInfo> activities = launcherActivities(packageManager);
         List<AppCandidate> exact = new ArrayList<>();
         List<AppCandidate> fuzzy = new ArrayList<>();
         for (ResolveInfo info : activities) {
-            if (info == null || info.activityInfo == null) {
+            AppCandidate candidate = appCandidate(packageManager, info);
+            if (candidate == null) {
                 continue;
             }
-            String packageName = safe(info.activityInfo.packageName);
-            String activityName = safe(info.activityInfo.name);
-            CharSequence loadedLabel = info.loadLabel(packageManager);
-            String label = safe(loadedLabel == null ? "" : loadedLabel.toString());
+            String label = candidate.label;
+            String packageName = candidate.packageName;
             String normalizedLabel = normalizeAppLabel(label);
             String normalizedPackage = normalizeAppLabel(packageName);
-            AppCandidate candidate = new AppCandidate(label.isEmpty() ? packageName : label, packageName, activityName);
             if (normalizedLabel.equals(normalizedTarget) || normalizedPackage.equals(normalizedTarget)) {
                 exact.add(candidate);
             } else if (normalizedLabel.contains(normalizedTarget) || normalizedPackage.contains(normalizedTarget)) {
@@ -297,6 +389,53 @@ final class MoaActionBroker {
             }
         }
         return exact.isEmpty() ? fuzzy : exact;
+    }
+
+    private static List<String> launcherAppLabels(PackageManager packageManager) {
+        Map<String, AppCandidate> byPackage = new HashMap<>();
+        for (ResolveInfo info : launcherActivities(packageManager)) {
+            AppCandidate candidate = appCandidate(packageManager, info);
+            if (candidate != null && !byPackage.containsKey(candidate.packageName)) {
+                byPackage.put(candidate.packageName, candidate);
+            }
+        }
+
+        List<AppCandidate> apps = new ArrayList<>(byPackage.values());
+        Collections.sort(apps, (left, right) -> {
+            String leftLabel = normalizeAppLabel(left.label);
+            String rightLabel = normalizeAppLabel(right.label);
+            int labelCompare = leftLabel.compareTo(rightLabel);
+            if (labelCompare != 0) {
+                return labelCompare;
+            }
+            return left.packageName.compareTo(right.packageName);
+        });
+
+        List<String> labels = new ArrayList<>();
+        for (AppCandidate app : apps) {
+            labels.add(app.label);
+        }
+        return labels;
+    }
+
+    private static List<ResolveInfo> launcherActivities(PackageManager packageManager) {
+        Intent launcherIntent = new Intent(Intent.ACTION_MAIN);
+        launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        return packageManager.queryIntentActivities(launcherIntent, 0);
+    }
+
+    private static AppCandidate appCandidate(PackageManager packageManager, ResolveInfo info) {
+        if (info == null || info.activityInfo == null) {
+            return null;
+        }
+        String packageName = safe(info.activityInfo.packageName);
+        String activityName = safe(info.activityInfo.name);
+        if (packageName.isEmpty()) {
+            return null;
+        }
+        CharSequence loadedLabel = info.loadLabel(packageManager);
+        String label = safe(loadedLabel == null ? "" : loadedLabel.toString());
+        return new AppCandidate(label.isEmpty() ? packageName : label, packageName, activityName);
     }
 
     static String openAppTarget(String text) {
@@ -317,11 +456,87 @@ final class MoaActionBroker {
         return "";
     }
 
+    static boolean isAppListCommand(String text) {
+        String lower = safe(text).toLowerCase(Locale.US);
+        return "/apps".equals(lower) || "/list apps".equals(lower);
+    }
+
     static String normalizeAppLabel(String value) {
         return safe(value)
                 .toLowerCase(Locale.US)
                 .replaceAll("[^a-z0-9]+", " ")
                 .trim();
+    }
+
+    static String formatAppListReply(List<String> labels, int requestedLimit) {
+        if (labels == null || labels.isEmpty()) {
+            return "No launcher apps were visible.";
+        }
+        int limit = boundedAppListLimit(requestedLimit);
+        int count = Math.min(labels.size(), limit);
+        StringBuilder builder = new StringBuilder();
+        if (count < labels.size()) {
+            builder.append("Installed apps (").append(count).append(" of ").append(labels.size()).append("): ");
+        } else {
+            builder.append("Installed apps: ");
+        }
+        for (int i = 0; i < count; i += 1) {
+            if (i > 0) {
+                builder.append(", ");
+            }
+            builder.append(labels.get(i));
+        }
+        builder.append(". Say /open app <name> to launch one.");
+        return builder.toString();
+    }
+
+    static int boundedAppListLimit(int requestedLimit) {
+        if (requestedLimit <= 0) {
+            return DEFAULT_APP_LIST_LIMIT;
+        }
+        return Math.min(requestedLimit, MAX_APP_LIST_LIMIT);
+    }
+
+    static String emailDraftRecipient(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("to", args.optString("recipient", args.optString("email", ""))));
+    }
+
+    static String emailDraftSubject(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("subject", args.optString("title", "")));
+    }
+
+    static String emailDraftBody(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("body", args.optString("message", args.optString("text", ""))));
+    }
+
+    static String smsDraftRecipient(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("to", args.optString("recipient", args.optString("phone", args.optString("number", "")))));
+    }
+
+    static String smsDraftBody(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("body", args.optString("message", args.optString("text", ""))));
+    }
+
+    private static String[] splitAddressList(String recipients) {
+        String[] raw = safe(recipients).split("[,;]");
+        List<String> addresses = new ArrayList<>();
+        for (String item : raw) {
+            String address = safe(item);
+            if (!address.isEmpty()) {
+                addresses.add(address);
+            }
+        }
+        return addresses.toArray(new String[0]);
+    }
+
+    private static Uri smstoUri(String recipient) {
+        String target = safe(recipient);
+        return target.isEmpty() ? Uri.parse("smsto:") : Uri.parse("smsto:" + Uri.encode(target));
     }
 
     private static Map<String, Capability> createCapabilityManifest() {
@@ -331,7 +546,10 @@ final class MoaActionBroker {
         capabilities.put("system.back", new Capability("system.back", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("system.home", new Capability("system.home", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("app.launch", new Capability("app.launch", RISK_NAVIGATION, APPROVAL_IMPLICIT));
-        capabilities.put("external.side_effect", new Capability("external.side_effect", "external_side_effect", "confirm"));
+        capabilities.put("app.list", new Capability("app.list", RISK_READ_ONLY, "none"));
+        capabilities.put("email.compose", new Capability("email.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
+        capabilities.put("sms.compose", new Capability("sms.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
+        capabilities.put("external.side_effect", new Capability("external.side_effect", RISK_EXTERNAL_SIDE_EFFECT, "confirm"));
         capabilities.put("sensitive.side_effect", new Capability("sensitive.side_effect", "sensitive_side_effect", "blocked"));
         return Collections.unmodifiableMap(capabilities);
     }
