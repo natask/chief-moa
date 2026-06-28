@@ -118,6 +118,33 @@
 #agee-launcher.agee-attention {
   animation: agee-attention 0.6s ease;
 }
+#agee-root.agee-avatar-runtime-active #agee-launcher.agee-avatar-motion-still .agee-bird {
+  animation: none;
+}
+#agee-root.agee-avatar-runtime-active #agee-launcher.agee-avatar-motion-pulse .agee-bird {
+  animation: agee-avatar-pulse 1.3s ease-in-out infinite;
+}
+#agee-root.agee-avatar-runtime-active #agee-launcher.agee-avatar-motion-hop .agee-bird {
+  animation: agee-avatar-hop 0.72s ease-in-out infinite;
+}
+#agee-root.agee-avatar-runtime-active #agee-launcher.agee-avatar-motion-orbit .agee-bird {
+  animation: agee-avatar-orbit 1.8s ease-in-out infinite;
+}
+#agee-root.agee-avatar-runtime-active #agee-launcher.agee-avatar-motion-float .agee-bird {
+  animation: agee-avatar-float 2.4s ease-in-out infinite;
+}
+#agee-root.agee-avatar-runtime-active #agee-launcher.agee-avatar-motion-shake .agee-bird {
+  animation: agee-avatar-shake 0.48s ease-in-out infinite;
+}
+#agee-root.agee-avatar-runtime-active #agee-launcher.agee-avatar-motion-glow .agee-bird {
+  animation: agee-avatar-glow 1.4s ease-in-out infinite;
+}
+#agee-root.agee-avatar-runtime-active[data-agee-avatar-intensity="subtle"] #agee-launcher .agee-bird {
+  animation-duration: 2.2s;
+}
+#agee-root.agee-avatar-runtime-active[data-agee-avatar-intensity="strong"] #agee-launcher .agee-bird {
+  animation-duration: 0.82s;
+}
 @keyframes agee-bob {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-3px); }
@@ -153,10 +180,43 @@
   50% { transform: scale(0.96); }
   75% { transform: scale(1.08); }
 }
+@keyframes agee-avatar-pulse {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
+  50% { transform: scale(1.1); filter: drop-shadow(0 0 9px rgba(245, 166, 35, 0.7)); }
+}
+@keyframes agee-avatar-hop {
+  0%, 100% { transform: translateY(0); }
+  35% { transform: translateY(-9px); }
+  62% { transform: translateY(0); }
+  78% { transform: translateY(-3px); }
+}
+@keyframes agee-avatar-orbit {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  25% { transform: translate(4px, -4px) rotate(5deg); }
+  50% { transform: translate(0, -7px) rotate(0deg); }
+  75% { transform: translate(-4px, -4px) rotate(-5deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+@keyframes agee-avatar-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes agee-avatar-shake {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  20% { transform: translateX(-3px) rotate(-4deg); }
+  40% { transform: translateX(3px) rotate(4deg); }
+  60% { transform: translateX(-2px) rotate(-3deg); }
+  80% { transform: translateX(2px) rotate(3deg); }
+}
+@keyframes agee-avatar-glow {
+  0%, 100% { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); transform: scale(1); }
+  50% { filter: drop-shadow(0 0 12px rgba(74, 155, 255, 0.85)); transform: scale(1.04); }
+}
 @media (prefers-reduced-motion: reduce) {
   #agee-launcher .agee-bird,
   #agee-launcher .agee-shadow,
-  #agee-launcher.agee-busy { animation: none; }
+  #agee-launcher.agee-busy,
+  #agee-root.agee-avatar-runtime-active #agee-launcher .agee-bird { animation: none; }
   #agee-launcher.agee-gliding { transition: none; }
 }
 #agee-panel {
