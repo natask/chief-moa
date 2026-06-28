@@ -12,6 +12,7 @@ const {
   isStopLike,
   wantsMultipleAgents,
   shouldRunAgentFromVoice,
+  isOperationalStatusQuestion,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
   classifyVoiceTurn,
@@ -44,8 +45,12 @@ assert.ok(shouldRunAgentFromVoice("make progress on the overlay"));
 assert.ok(shouldRunAgentFromVoice("push code to the home machine"));
 assert.ok(shouldRunAgentFromVoice("what are all the projects I have ongoing"));
 assert.ok(shouldRunAgentFromVoice("look at the Chrome extension Android app and mobile gateway"));
+assert.ok(!shouldRunAgentFromVoice("what is going on with the operational systems"));
 assert.ok(!shouldRunAgentFromVoice("what is the weather"));
 assert.ok(!shouldRunAgentFromVoice(""));
+assert.ok(isOperationalStatusQuestion("what is going on with the operational systems"));
+assert.ok(isOperationalStatusQuestion("what active runs are there"));
+assert.ok(!isOperationalStatusQuestion("fix the operational systems"));
 
 // explicitAgentPromptFrom: returns the prompt after a run prefix, else "".
 assert.strictEqual(explicitAgentPromptFrom("/agent build the panel"), "build the panel");
@@ -57,7 +62,7 @@ assert.strictEqual(classifyVoiceTurn({}, "stop"), "control");
 assert.strictEqual(classifyVoiceTurn({}, "run gemini and claude"), "multi_agent");
 assert.strictEqual(classifyVoiceTurn({}, "/agent ship it"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "agent_run");
-assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "agent_run");
+assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "profile_control");
