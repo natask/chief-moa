@@ -32,6 +32,7 @@ const {
   isStopLike,
   wantsMultipleAgents,
   shouldRunAgentFromVoice,
+  isOperationalStatusQuestion,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
   classifyVoiceTurn,
@@ -2515,7 +2516,7 @@ async function handleCancelAgentRun(response, id) {
   const active = activeRuns.get(safeId);
   if (active?.child) {
     active.cancelRequested = true;
-    active.child.kill("SIGTERM");
+    signalAgentChild(active.child, "SIGTERM");
     sendJson(response, 202, agentRunPayload(readAgentRun(safeId)));
     return;
   }
@@ -3461,6 +3462,9 @@ function localUtilityReply(prompt) {
   if (isCurrentTimeQuestion(prompt)) {
     return currentTimeReply();
   }
+  if (isOperationalStatusQuestion(prompt)) {
+    return operationalStatusSummary();
+  }
   return "";
 }
 
@@ -3692,6 +3696,7 @@ async function executeAgentRun(runId, active) {
       child = spawn(command, args, {
         cwd: run.working_dir,
         env: process.env,
+        detached: process.platform !== "win32",
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -3709,9 +3714,9 @@ async function executeAgentRun(runId, active) {
     const timer = setTimeout(() => {
       timedOut = true;
       appendAgentEvent(run.id, "timeout", { timeout_ms: run.timeout_ms });
-      child.kill("SIGTERM");
+      signalAgentChild(child, "SIGTERM");
       setTimeout(() => {
-        if (!settled) child.kill("SIGKILL");
+        if (!settled) signalAgentChild(child, "SIGKILL");
       }, 2500).unref();
     }, run.timeout_ms);
     timer.unref();
@@ -3748,6 +3753,25 @@ async function executeAgentRun(runId, active) {
       });
     });
   });
+}
+
+function signalAgentChild(child, signal) {
+  if (!child) {
+    return false;
+  }
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch {
+      // Fall back to signaling the direct child. ESRCH just means it already exited.
+    }
+  }
+  try {
+    return child.kill(signal);
+  } catch {
+    return false;
+  }
 }
 
 // Emit a concise, recallable "what was done" memory for a terminal agent run.
@@ -4043,7 +4067,7 @@ function operationalStatusSummary() {
   const latestRun = recentRuns[0];
   const lines = [
     "Operational snapshot:",
-    "- Chrome/gateway path: this turn reached /v1/voice/turns and was classified as agent_run.",
+    "- Voice path: this turn reached /v1/voice/turns and gateway state is available.",
     `- Gateway: provider=${MODEL_PROVIDER}, model=${MODEL_ID}, model_configured=${providerConfigured() ? "yes" : "no"}.`,
     `- Android OTA: ${ota.configured ? `${ota.version_name || ota.version_code || "version unknown"} (${ota.git_sha || "git sha unknown"})` : "not configured"}.`,
     `- Harnesses: default=${DEFAULT_HARNESS}; available=${availableHarnesses.join(", ") || "none"}${unavailableHarnesses.length ? `; unavailable=${unavailableHarnesses.join(", ")}` : ""}.`,
