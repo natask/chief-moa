@@ -17,6 +17,7 @@ const {
   voiceOptionsPayload,
 } = require("./lib/profile-options");
 const { createUiSpecStore } = require("./lib/ui-spec");
+const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createBrain } = require("./lib/brain");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
@@ -151,6 +152,7 @@ const agentProfile = createAgentProfileStore({
 // surfaces from this; a "deployment" is a spec change here, not new extension
 // code. The client live-refreshes on change (storage.onChanged pattern).
 const uiSpec = createUiSpecStore({ dataDir: DATA_DIR });
+const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_DIR });
 
 // The Brain: a fail-soft memory layer over the installed gbrain CLI. The
 // Steward recalls the user's facts/persona from here before every model turn so
@@ -383,6 +385,55 @@ const server = http.createServer(async (request, response) => {
       }
       uiSpec.reset();
       sendJson(response, 200, uiSpecPayload());
+      return;
+    }
+
+    if (url.pathname === "/v1/self-extension/artifacts" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, {
+        artifacts: selfExtensionArtifacts.list({
+          type: url.searchParams.get("type") || "",
+          status: url.searchParams.get("status") || "",
+          limit: Number(url.searchParams.get("limit") || 100),
+        }),
+        active: selfExtensionArtifacts.runtime().active,
+        known: selfExtensionArtifacts.known(),
+      });
+      return;
+    }
+
+    if (url.pathname === "/v1/self-extension/artifacts" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCreateSelfExtensionArtifact(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/self-extension/runtime" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, { runtime: selfExtensionArtifacts.runtime() });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/self-extension/artifacts/") &&
+      url.pathname.endsWith("/apply")
+    ) {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      const id = url.pathname.slice("/v1/self-extension/artifacts/".length, -"/apply".length);
+      await handleApplySelfExtensionArtifact(response, id);
       return;
     }
 
@@ -1867,6 +1918,70 @@ async function handleUiSpecPut(request, response) {
   try {
     uiSpec.replace(incoming);
     sendJson(response, 200, uiSpecPayload());
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handleCreateSelfExtensionArtifact(request, response) {
+  const body = await readJsonBody(request);
+  const incoming = body && typeof body === "object" ? (body.artifact || body) : {};
+  try {
+    const artifact = selfExtensionArtifacts.createCandidate(incoming);
+    recordProductEventBestEffort({
+      event_type: "self_extension.artifact.created",
+      stream_id: `self-extension:${artifact.type}`,
+      idempotency_key: `self-extension-artifact-created:${artifact.id}`,
+      occurred_at: artifact.created_at,
+      actor: { kind: "agent", id: "self-extension" },
+      correlation_id: artifact.variant_group_id,
+      payload: {
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        status: artifact.status,
+        variant_group_id: artifact.variant_group_id,
+        parent_id: artifact.parent_id,
+        prompt: artifact.prompt,
+        spec: artifact.spec,
+        preview: artifact.preview,
+        validation: artifact.validation,
+        created_at: artifact.created_at,
+      },
+    });
+    sendJson(response, 201, { artifact });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handleApplySelfExtensionArtifact(response, id) {
+  try {
+    const artifact = selfExtensionArtifacts.apply(id);
+    if (!artifact) {
+      sendJson(response, 404, { error: "self-extension artifact not found" });
+      return;
+    }
+    const runtime = selfExtensionArtifacts.runtime();
+    recordProductEventBestEffort({
+      event_type: "self_extension.artifact.applied",
+      stream_id: `self-extension:${artifact.type}`,
+      idempotency_key: `self-extension-artifact-applied:${artifact.id}:${artifact.applied_at}`,
+      occurred_at: artifact.applied_at,
+      actor: { kind: "agent", id: "self-extension" },
+      correlation_id: artifact.variant_group_id,
+      payload: {
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        variant_group_id: artifact.variant_group_id,
+        spec: artifact.spec,
+        preview: artifact.preview,
+        applied_at: artifact.applied_at,
+        runtime: runtime.active[artifact.type],
+      },
+    });
+    sendJson(response, 200, { artifact, runtime });
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
   }
