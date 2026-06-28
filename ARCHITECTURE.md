@@ -184,6 +184,34 @@ UI, and `userScripts` only for explicit opt-in page-acting code. The same
 extension package should work against a self-hosted or hosted engine by changing
 only the engine URL/session token.
 
+### Self-Extension Artifacts
+
+```text
+spoken or typed customization request
+  -> gateway stores the user intent as normal message/session evidence
+  -> gateway creates one or more self_extension_artifact candidates
+  -> gateway validates each candidate against a known artifact schema
+  -> gateway can expose previews and variants without applying them
+  -> user or agent applies one candidate by moving an active pointer
+  -> clients fetch a bounded runtime document
+  -> each client renders only the artifact types it explicitly supports
+  -> clients record visible/local receipts when they apply a runtime change
+```
+
+Self-extension is the mechanism for conversational customization and capability
+creation. The model does not directly mutate Moa. It proposes structured
+artifacts such as avatar behavior, theme, view, workflow, tool binding, or code
+patch specs. The gateway owns storage, validation, variant history, active
+pointers, runtime projection, and provider/tool routing. Android and browser
+clients own rendering and local execution for the artifact types they support.
+
+The first browser slice is `avatar_behavior`: the gateway serves an active
+declarative spec such as "thinking -> orbit -> subtle", and the extension maps
+that spec to known CSS classes on the Aggie/Lion mark. No generated JavaScript is
+executed in privileged extension code. Richer generated UI remains declarative
+or sandboxed, and page-acting code remains opt-in through the existing
+`userScripts` boundary.
+
 ### Agent Work
 
 ```text
@@ -341,6 +369,14 @@ claim, validate, execute, and receipt it.
 - `action_proposal`: structured server output asking the phone to perform work.
 - `approval`: a local user decision for non-trivial actions.
 - `receipt`: local audit record for executed phone actions.
+- `self_extension_artifact`: a persistent, inspectable customization or
+  capability artifact proposed from user intent. Examples include
+  `avatar_behavior`, `theme_spec`, `view_spec`, `workflow_spec`,
+  `tool_binding_spec`, and `code_patch_spec`.
+- `self_extension_variant`: a candidate artifact in a variant group so the user
+  can try parallel looks or behaviors without losing older versions.
+- `self_extension_runtime`: the bounded gateway projection of currently active
+  artifacts that clients fetch and interpret. It is data, not privileged code.
 
 Every new feature should attach to at least one primitive above. If it does not,
 the architecture is still fuzzy.
@@ -378,6 +414,9 @@ queues.
   surface for health, runtime profile, prompt history, sessions, and runs.
 - `gateway/lib/event-substrate.js`: product event substrate adapter for
   Postgres `product_events` or local `product-events.jsonl`.
+- `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
+  validators, active pointers, and runtime projection for conversational
+  customization.
 - `gateway/schema.sql`: Postgres schema for work graph records, product events,
   projection checkpoints, event blobs, and sync import checkpoints.
 - `gateway/lib/voice-intent.js`: pure voice-turn classifier
@@ -442,6 +481,10 @@ been enabled from `extension/dev.html`.
   generated code, never repackaged privileged extension code.
 - Browser extensions hold only engine connection state, not raw provider keys or
   subscriptions.
+- Self-extension artifacts are proposed data until the gateway validates them and
+  a supported client renders or executes them inside its own authority boundary.
+- Privileged Android and browser code must not execute arbitrary generated code
+  from self-extension artifacts.
 - The overlay remains fast and small; the full app owns inspection and control.
 - Docs and specs change with architecture-significant code changes.
 

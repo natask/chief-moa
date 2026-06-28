@@ -62,6 +62,7 @@
   let uiChimesEnabled = false;
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
   const DEV_RELOAD_POLL_MS = 900;
+  const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
   let devReloadTimer = null;
   let devReloadInFlight = false;
   let devReloadVersion = null;
@@ -119,7 +120,7 @@
   ];
   const PROFILE_VOICE_NAMES = ["puck", "charon", "kore", "fenrir", "aoede", "leda", "orus", "zephyr"];
   const AVATAR_BEHAVIOR_MOTIONS = new Set(["still", "pulse", "hop", "orbit", "float", "shake", "glow"]);
-  const AVATAR_BEHAVIOR_TRIGGERS = new Set(["always", "idle", "busy", "listening", "thinking", "speaking"]);
+  const AVATAR_BEHAVIOR_TRIGGERS = new Set(["idle", "editing", "listening", "thinking", "speaking", "done", "error", "attention", "busy"]);
   const AVATAR_BEHAVIOR_INTENSITIES = new Set(["subtle", "normal", "strong"]);
   const AVATAR_BEHAVIOR_DURATIONS = new Set(["while_active"]);
   const AVATAR_MOTION_CLASSES = [
@@ -132,12 +133,15 @@
     "agee-avatar-motion-glow",
   ];
   const AVATAR_TRIGGER_CLASSES = [
-    "agee-avatar-trigger-always",
     "agee-avatar-trigger-idle",
-    "agee-avatar-trigger-busy",
+    "agee-avatar-trigger-editing",
     "agee-avatar-trigger-listening",
     "agee-avatar-trigger-thinking",
     "agee-avatar-trigger-speaking",
+    "agee-avatar-trigger-done",
+    "agee-avatar-trigger-error",
+    "agee-avatar-trigger-attention",
+    "agee-avatar-trigger-busy",
   ];
   let avatarBehaviorRuntime = null;
   let extensionContextInvalidated = false;
@@ -538,6 +542,7 @@
     // The composer stays editable through every phase. Answers live in the cue
     // cards above, never in the input, so a running turn never locks typing.
     if (input) input.readOnly = false;
+    syncAvatarBehaviorTrigger();
   }
 
   // Show the result stack whenever it holds anything (running, done, error, or
@@ -588,6 +593,7 @@
     reactLauncher("attention"); // a question needs the user: ring for attention
     openTextSurface({ fresh: false });
     root?.classList.add("agee-confirming");
+    syncAvatarBehaviorTrigger();
     return new Promise((resolve) => {
       pendingConfirm = resolve;
       const row = document.createElement("div");
@@ -606,6 +612,7 @@
         pendingConfirm = null;
         row.remove();
         root?.classList.remove("agee-confirming");
+        syncAvatarBehaviorTrigger();
         resolve(ok);
       });
       log.appendChild(row);
@@ -632,6 +639,12 @@
   }
 
   function loadAvatarBehaviorRuntime() {
+    safeStorageLocalGet({ [SELF_EXTENSION_RUNTIME_CACHE_KEY]: null })
+      .then((stored) => {
+        const cached = stored?.[SELF_EXTENSION_RUNTIME_CACHE_KEY];
+        if (cached) applyAvatarBehaviorRuntime(cached.runtime || cached);
+      })
+      .catch(() => {});
     safeRuntimeSendMessage({ cmd: "selfExtensionRuntime" })
       .then((response) => applyAvatarBehaviorRuntime(response?.runtime || response))
       .catch(() => applyAvatarBehaviorRuntime(null));
@@ -660,7 +673,7 @@
       ? String(spec.duration)
       : "while_active";
     return {
-      id: typeof behavior.id === "string" ? behavior.id.slice(0, 80) : "",
+      id: typeof behavior.artifact_id === "string" ? behavior.artifact_id.slice(0, 80) : "",
       motion,
       trigger,
       intensity,
@@ -696,12 +709,15 @@
     if (!root || !avatarBehaviorRuntime) return;
     const trigger = avatarBehaviorRuntime.trigger;
     const active =
-      trigger === "always" ||
       (trigger === "idle" && agentState === "idle" && !anyActive()) ||
+      (trigger === "editing" && surfacePhase === "editing") ||
       (trigger === "busy" && (anyActive() || agentState === "thinking")) ||
       (trigger === "listening" && agentState === "listening") ||
       (trigger === "thinking" && agentState === "thinking") ||
-      (trigger === "speaking" && agentState === "speaking");
+      (trigger === "speaking" && agentState === "speaking") ||
+      (trigger === "done" && lastTerminal === "done" && !anyActive()) ||
+      (trigger === "error" && lastTerminal === "error" && !anyActive()) ||
+      (trigger === "attention" && root.classList.contains("agee-confirming"));
     root.dataset.ageeAvatarActive = active ? "true" : "false";
     root.classList.toggle("agee-avatar-runtime-active", active);
   }
@@ -1005,6 +1021,7 @@
       ring.classList.add("agee-ring-go");
     }
     chime(kind);
+    syncAvatarBehaviorTrigger();
   }
 
   // Fire a cue. Never blocks on a prior cue — that is the whole point: the user
@@ -1700,6 +1717,10 @@
       try {
         chrome.storage.onChanged.addListener((changes, area) => {
           if (area !== "local") return;
+          if (changes[SELF_EXTENSION_RUNTIME_CACHE_KEY]) {
+            const cached = changes[SELF_EXTENSION_RUNTIME_CACHE_KEY].newValue;
+            applyAvatarBehaviorRuntime(cached?.runtime || cached);
+          }
           if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
             configure().catch(() => {});
           }

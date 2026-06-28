@@ -34,6 +34,8 @@ const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
 const VOICE_AUTO_COMMIT_MAX_RECORDING_MS = 18000;
 const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
 const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
+const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
+const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
 
@@ -84,10 +86,11 @@ const SELF_EXTENSION_RUNTIME_FALLBACK = Object.freeze({
 });
 
 function safeSelfExtensionRuntimePayload(payload) {
-  if (!payload || typeof payload !== "object" || payload.version !== 1) {
+  const runtime = payload?.runtime && typeof payload.runtime === "object" ? payload.runtime : payload;
+  if (!runtime || typeof runtime !== "object" || runtime.version !== 1) {
     return SELF_EXTENSION_RUNTIME_FALLBACK;
   }
-  return payload;
+  return runtime;
 }
 
 async function loadSelfExtensionRuntime() {
@@ -97,6 +100,28 @@ async function loadSelfExtensionRuntime() {
     return safeSelfExtensionRuntimePayload(await callGateway(cfg, "/v1/self-extension/runtime", { method: "GET" }));
   } catch {
     return SELF_EXTENSION_RUNTIME_FALLBACK;
+  }
+}
+
+async function refreshSelfExtensionRuntime(reason = "refresh") {
+  const runtime = await loadSelfExtensionRuntime();
+  if (chrome?.storage?.local) {
+    await chrome.storage.local.set({
+      [SELF_EXTENSION_RUNTIME_CACHE_KEY]: {
+        runtime,
+        reason,
+        updated_at: new Date().toISOString(),
+      },
+    });
+  }
+  return runtime;
+}
+
+async function startSelfExtensionRuntimeRefresh() {
+  if (!chrome?.storage?.local) return;
+  await refreshSelfExtensionRuntime("startup");
+  if (chrome?.alarms) {
+    chrome.alarms.create(SELF_EXTENSION_RUNTIME_ALARM, { periodInMinutes: 0.5 });
   }
 }
 
@@ -391,12 +416,15 @@ if (chrome?.alarms?.onAlarm) {
       pollBrowserToolRequests().catch(() => {});
     } else if (alarm.name === DEV_RELOAD_ALARM) {
       pollDevReloadVersion("alarm").catch(() => {});
+    } else if (alarm.name === SELF_EXTENSION_RUNTIME_ALARM) {
+      refreshSelfExtensionRuntime("alarm").catch(() => {});
     }
   });
 }
 startBrowserTaskPolling();
 startDevReloadPolling().catch(() => {});
 startDeviceClientHeartbeat().catch(() => {});
+startSelfExtensionRuntimeRefresh().catch(() => {});
 reloadDevTabsAfterExtensionRestart().catch(() => {});
 
 // ---- Gateway device-client heartbeat --------------------------------------
@@ -973,6 +1001,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
   const runs = Array.isArray(data.agent_runs) ? data.agent_runs : [];
   const summary = reply || (runs.length ? `Started ${runs.length} agent run(s).` : "Done.");
   send(tabId, { cmd: "done", cueId, summary, speak });
+  refreshSelfExtensionRuntime("turn_complete").catch(() => {});
   await saveTaskState(cueId, {
     status: "done",
     instruction,
@@ -2214,7 +2243,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.cmd === "selfExtensionRuntime") {
-    loadSelfExtensionRuntime()
+    refreshSelfExtensionRuntime("content_request")
       .then((runtime) => sendResponse({ ok: true, runtime }))
       .catch(() => sendResponse({ ok: true, runtime: SELF_EXTENSION_RUNTIME_FALLBACK }));
     return true;

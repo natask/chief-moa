@@ -7,7 +7,8 @@ const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 
 const knownMotions = ["still", "pulse", "hop", "orbit", "float", "shake", "glow"];
-const knownTriggers = ["always", "idle", "busy", "listening", "thinking", "speaking"];
+const knownTriggers = ["idle", "editing", "listening", "thinking", "speaking", "done", "error", "attention", "busy"];
+const knownDurations = ["while_active"];
 
 function sourceBetween(source, startPattern, endPattern, label) {
   const start = source.search(startPattern);
@@ -32,6 +33,21 @@ if (!/callGateway\(cfg,\s*"\/v1\/self-extension\/runtime"/.test(backgroundSource
 }
 if (!/msg\.cmd === "selfExtensionRuntime"/.test(backgroundSource)) {
   throw new Error("background.js must expose the selfExtensionRuntime message command");
+}
+if (!/payload\?\.runtime/.test(backgroundSource)) {
+  throw new Error("background.js must unwrap the gateway { runtime } response envelope");
+}
+if (!/SELF_EXTENSION_RUNTIME_CACHE_KEY/.test(backgroundSource) || !/ageeSelfExtensionRuntime/.test(backgroundSource)) {
+  throw new Error("background.js must cache self-extension runtime in chrome.storage.local");
+}
+if (!/function refreshSelfExtensionRuntime/.test(backgroundSource) || !/chrome\.storage\.local\.set/.test(backgroundSource)) {
+  throw new Error("background.js must expose a self-extension runtime refresh path");
+}
+if (!/SELF_EXTENSION_RUNTIME_ALARM/.test(backgroundSource) || !/refreshSelfExtensionRuntime\("alarm"\)/.test(backgroundSource)) {
+  throw new Error("background.js must periodically refresh self-extension runtime for already-loaded pages");
+}
+if (!/refreshSelfExtensionRuntime\("turn_complete"\)/.test(backgroundSource)) {
+  throw new Error("background.js must refresh self-extension runtime after gateway turns complete");
 }
 
 const runtimeLoaderBody = sourceBetween(
@@ -67,10 +83,16 @@ for (const trigger of knownTriggers) {
     throw new Error(`content.js missing avatar behavior trigger class mapping: ${trigger}`);
   }
 }
+for (const duration of knownDurations) {
+  if (!contentSource.includes(`"${duration}"`)) {
+    throw new Error(`content.js missing known avatar behavior duration: ${duration}`);
+  }
+}
 
 if (
   !/function sanitizeAvatarBehaviorRuntime/.test(contentSource) ||
   !/behavior\?\.type !== "avatar_behavior"/.test(contentSource) ||
+  !/behavior\.artifact_id/.test(contentSource) ||
   !/AVATAR_BEHAVIOR_MOTIONS\.has\(motion\)/.test(contentSource) ||
   !/AVATAR_BEHAVIOR_TRIGGERS\.has\(trigger\)/.test(contentSource)
 ) {
@@ -81,9 +103,11 @@ if (
   !/root\.dataset\.ageeAvatarMotion = motion/.test(contentSource) ||
   !/root\.dataset\.ageeAvatarTrigger = trigger/.test(contentSource) ||
   !/root\.classList\.toggle\("agee-avatar-runtime-active", active\)/.test(contentSource) ||
-  !/function syncAvatarBehaviorTrigger/.test(contentSource)
+  !/function syncAvatarBehaviorTrigger/.test(contentSource) ||
+  !/SELF_EXTENSION_RUNTIME_CACHE_KEY/.test(contentSource) ||
+  !/changes\[SELF_EXTENSION_RUNTIME_CACHE_KEY\]/.test(contentSource)
 ) {
-  throw new Error("content.js must map sanitized avatar behavior to root data attributes and active classes");
+  throw new Error("content.js must map sanitized avatar behavior to root data attributes, active classes, and live storage updates");
 }
 
 const avatarRuntimeBody = sourceBetween(

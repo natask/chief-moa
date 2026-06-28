@@ -21,7 +21,7 @@ const AVATAR_TRIGGERS = [
 ];
 const AVATAR_MOTIONS = ["still", "pulse", "hop", "orbit", "float", "shake", "glow"];
 const AVATAR_INTENSITIES = ["subtle", "normal", "strong"];
-const AVATAR_DURATIONS = ["instant", "short", "medium", "long", "while_active"];
+const AVATAR_DURATIONS = ["while_active"];
 
 function createSelfExtensionArtifactStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || "./data");
@@ -228,21 +228,26 @@ function loadState(storePath) {
     return emptyState();
   }
   try {
-    return normalizeState(JSON.parse(fs.readFileSync(storePath, "utf8")));
+    return normalizeState(JSON.parse(fs.readFileSync(storePath, "utf8")), storePath);
   } catch {
+    archiveCorruptStore(storePath);
     return emptyState();
   }
 }
 
-function normalizeState(raw) {
+function normalizeState(raw, storePath = "") {
   if (!raw || typeof raw !== "object" || !raw.artifacts || typeof raw.artifacts !== "object") {
+    archiveCorruptStore(storePath);
     return emptyState();
   }
   const next = emptyState();
+  let droppedPersistedData = false;
   for (const artifact of Object.values(raw.artifacts)) {
     const normalized = normalizePersistedArtifact(artifact);
     if (normalized) {
       next.artifacts[normalized.id] = normalized;
+    } else {
+      droppedPersistedData = true;
     }
   }
   const active = plainObject(raw.active);
@@ -250,7 +255,12 @@ function normalizeState(raw) {
     const id = cleanToken(active[type], 80);
     if (id && next.artifacts[id]?.type === type) {
       next.active[type] = id;
+    } else if (id) {
+      droppedPersistedData = true;
     }
+  }
+  if (droppedPersistedData) {
+    archiveCorruptStore(storePath);
   }
   return next;
 }
@@ -300,6 +310,20 @@ function flush(storePath, state) {
   const tmpPath = `${storePath}.${process.pid}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
   fs.renameSync(tmpPath, storePath);
+}
+
+function archiveCorruptStore(storePath) {
+  if (!storePath || !fs.existsSync(storePath)) {
+    return "";
+  }
+  const stamp = new Date().toISOString().replace(/[^0-9TZ]/g, "");
+  const archivePath = `${storePath}.corrupt-${stamp}`;
+  try {
+    fs.copyFileSync(storePath, archivePath);
+    return archivePath;
+  } catch {
+    return "";
+  }
 }
 
 function plainObject(value) {

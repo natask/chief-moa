@@ -107,6 +107,23 @@ function assertStore(dir) {
   const fallback = createSelfExtensionArtifactStore({ dataDir: dir });
   assert.deepEqual(fallback.list(), [], "corrupt persistence must fall back to an empty safe store");
   assert.equal(fallback.runtime().active.avatar_behavior, null, "corrupt persistence must not expose stale active behavior");
+  const corruptArchive = fs.readdirSync(dir).find((name) => name.startsWith("self-extension-artifacts.json.corrupt-"));
+  assert.ok(corruptArchive, "corrupt persistence must be archived before fallback writes can overwrite it");
+  fallback.createCandidate({
+    type: "avatar_behavior",
+    title: "Recovered behavior",
+    spec: {
+      trigger: "thinking",
+      motion: "pulse",
+      intensity: "normal",
+      duration: "while_active",
+    },
+  });
+  assert.equal(
+    fs.readFileSync(path.join(dir, corruptArchive), "utf8"),
+    "{not json",
+    "the corrupt archive must remain intact after later writes",
+  );
 }
 
 async function assertAuthRequired(baseUrl) {
@@ -165,6 +182,7 @@ async function assertCreateVariants(baseUrl) {
   const list = await getJson(`${baseUrl}/v1/self-extension/artifacts?type=avatar_behavior`);
   assert.equal(list.artifacts.length, 2, "artifact list must include both variants");
   assert.ok(list.known.avatar_behavior.motions.includes("orbit"), "known vocabulary must include avatar motions");
+  assert.deepEqual(list.known.avatar_behavior.durations, ["while_active"], "known durations must match implemented client behavior");
   return { first: first.json, second: second.json };
 }
 
