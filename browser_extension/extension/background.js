@@ -78,6 +78,28 @@ async function gatewayHealth(cfg, signal) {
   return callGateway(cfg, "/health", { method: "GET", signal });
 }
 
+const SELF_EXTENSION_RUNTIME_FALLBACK = Object.freeze({
+  version: 1,
+  active: {},
+});
+
+function safeSelfExtensionRuntimePayload(payload) {
+  if (!payload || typeof payload !== "object" || payload.version !== 1) {
+    return SELF_EXTENSION_RUNTIME_FALLBACK;
+  }
+  return payload;
+}
+
+async function loadSelfExtensionRuntime() {
+  const cfg = await getConfig();
+  if (!cfg.gatewayUrl) return SELF_EXTENSION_RUNTIME_FALLBACK;
+  try {
+    return safeSelfExtensionRuntimePayload(await callGateway(cfg, "/v1/self-extension/runtime", { method: "GET" }));
+  } catch {
+    return SELF_EXTENSION_RUNTIME_FALLBACK;
+  }
+}
+
 // ---- Gateway-queued browser tasks -----------------------------------------
 // Gemini Live can queue browser work on the gateway. The extension is the only
 // component allowed to execute page-local CDP actions, so it claims tasks here,
@@ -2189,6 +2211,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then((cfg) => createVoiceSessionTicket(cfg))
       .then((ticket) => sendResponse({ ok: true, ...ticket }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "selfExtensionRuntime") {
+    loadSelfExtensionRuntime()
+      .then((runtime) => sendResponse({ ok: true, runtime }))
+      .catch(() => sendResponse({ ok: true, runtime: SELF_EXTENSION_RUNTIME_FALLBACK }));
     return true;
   }
   if (msg.cmd === "run" && sender.tab) {
