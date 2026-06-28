@@ -12,6 +12,25 @@ agent runs.
   timestamp
 - **AND** downstream route decisions refer back to that broker event
 
+### Requirement: Intent History Read Model
+The gateway SHALL expose a token-protected history/search read model that lets
+clients and agents inspect user-authored intents and sent messages across voice,
+chat, and broker surfaces.
+
+#### Scenario: User asks what they sent
+- **WHEN** a client queries history with a session id, search term, or both
+- **THEN** the gateway returns matching voice turns, chat turns, and broker
+  events with source, session, branch, text, route-decision references, agent-run
+  references, timestamps, and available audio playback references
+- **AND** the search result is derived from gateway-owned records, not provider
+  session memory
+
+#### Scenario: Brokered intent is routed
+- **WHEN** a broker event produces route decisions and context packs
+- **THEN** the history read model includes that broker event as an intent item
+- **AND** the item includes an inspectable summary of the route decisions and
+  linked context-pack identifiers
+
 ### Requirement: Existing Work Candidate Routing
 The broker SHALL evaluate each message against active sessions, projects,
 subprojects, and agent runs.

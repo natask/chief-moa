@@ -215,6 +215,22 @@ arrived. Workflow selection is an explicit route decision: research-heavy
 messages can target a research workflow, implementation requests can target
 coding, and simple messages can stay on the direct-answer path.
 
+The broker is also the intent-management entry point. A user intent is the
+durable user-authored message plus its source surface, session/browser/page
+context, evidence references, route decisions, context packs, linked agent runs,
+and eventual completion or input-needed pings. The user should not have to
+manage child agents directly. Agents update the gateway-owned intent/run/event
+stores as they work, and user-facing clients read those stores to show what is
+active, finished, blocked, or waiting for input.
+
+No spoken intent may be treated as ephemeral. Streaming voice stores the raw
+user PCM under the gateway voice-session archive while the provider processes
+it, stores the canonical turn transcript and assistant output, and exposes
+token-protected history/search and playback references so the user can inspect
+or replay what they sent. Local clients may keep their own capture spool while
+uploading, but the trusted gateway archive is the cross-device source of truth
+once the turn reaches the server.
+
 Broker route decisions also materialize launch context packs. The editable
 profile file is `gateway/agent-launcher-profiles.json`: each profile names the
 workflow directory, instruction file, required files, expected output, and

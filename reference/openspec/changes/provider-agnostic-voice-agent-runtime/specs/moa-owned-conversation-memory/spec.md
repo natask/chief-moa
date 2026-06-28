@@ -37,6 +37,21 @@ voice turn when retention is enabled.
 - **THEN** the gateway stores or references the assistant audio artifact with
   session and turn identifiers according to retention policy
 
+#### Scenario: User replays what they said
+- **WHEN** a retained streaming voice turn has archived PCM audio
+- **THEN** the gateway exposes token-protected playback/download references for
+  the user audio and assistant audio from the session history and history search
+  read models
+- **AND** fetching a playback reference returns the exact archived audio bytes
+  for that session and turn
+
+#### Scenario: Voice turn is searchable
+- **WHEN** the user searches sent-message history by session id or text
+- **THEN** retained voice turns appear with transcript, assistant output,
+  profile version, classification, timestamps, and available audio references
+- **AND** a provider's live-session memory is not required to show or replay the
+  sent turn
+
 ### Requirement: Queryable Context For Agents
 Agent harnesses SHALL be able to query current Moa session, branch, turn,
 profile, run, approval, receipt, and memory summary records from the gateway

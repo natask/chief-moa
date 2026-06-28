@@ -48,6 +48,8 @@ async function main() {
       assertRuntimeActiveRunFollowUp(baseUrl, dataDir, sessionId));
     await step("broker event persisted", () =>
       assertBrokerLedger(dataDir, continuation.event.id));
+    await step("broker event appears in history search", () =>
+      assertBrokerHistorySearch(baseUrl, continuation.event.id, sessionId));
 
     console.log(JSON.stringify({
       ok: true,
@@ -65,6 +67,7 @@ async function main() {
         "a second user turn while an agent run is active leaves the run active",
         "new work message can recommend create_new_fork without cancellation",
         "broker ledger persists route reasons",
+        "brokered intents appear in /v1/history/messages search",
       ],
     }, null, 2));
   } finally {
@@ -301,6 +304,18 @@ function assertBrokerLedger(dataDir, eventId) {
   const ledgerPath = path.join(dataDir, "broker-events.jsonl");
   const lines = fs.readFileSync(ledgerPath, "utf8").split("\n").filter(Boolean);
   assert.ok(lines.some((line) => JSON.parse(line).id === eventId), "broker ledger missing event id");
+}
+
+async function assertBrokerHistorySearch(baseUrl, eventId, sessionId) {
+  const history = await getJson(`${baseUrl}/v1/history/messages?session_id=${encodeURIComponent(sessionId)}&q=continue`);
+  const item = history.messages.find((message) => message.id === `broker:${eventId}`);
+  assert.ok(item, `history search must include broker event ${eventId}`);
+  assert.equal(item.type, "broker_event");
+  assert.equal(item.classification, "intent");
+  assert.ok(
+    item.refs.decisions.some((decision) => decision.action === "continue_session"),
+    "broker history item must include route decision summary",
+  );
 }
 
 function readContextPack(dataDir, id) {

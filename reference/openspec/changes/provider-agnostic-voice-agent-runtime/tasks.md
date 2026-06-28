@@ -29,6 +29,8 @@
 - [ ] 4.3 Store or reference user and assistant audio artifacts per turn according to the existing local retention behavior.
 - [x] 4.4 Add a gateway query path for current session, branch, turn, profile, provider events, runs, approvals, receipts, and memory summaries. Current JSON-file path includes voice turns, chat turns, profile, provider events, runs, browser tasks, approvals/receipts placeholders, and memory summary placeholder.
 - [x] 4.5 Add smoke coverage proving a restarted provider session reconstructs context from Moa-owned history instead of provider-only memory. Verified by `gateway/scripts/smoke-live-interrupt-handoff.js`.
+- [x] 4.6 Expose token-protected sent-message history/search and archived PCM playback refs for retained streaming voice turns.
+      Verified 2026-06-28 with `cd gateway && node scripts/smoke-regression.js` and `cd gateway && npm run check`.
 
 ## 5. Continuous Overlay Voice Runtime
 

@@ -564,7 +564,20 @@ async function assertStreamingVoiceSessionPersistence(baseUrl, dataDir) {
 
   const history = await getJson(`${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/turns`);
   assert.ok(Array.isArray(history.turns), "streaming session history must be an array");
-  assert.ok(history.turns.some((turn) => turn.turn_id === turnId), "streaming turn must be queryable by session history");
+  const historyTurn = history.turns.find((turn) => turn.turn_id === turnId);
+  assert.ok(historyTurn, "streaming turn must be queryable by session history");
+  assert.ok(historyTurn.audio?.user?.href, "streaming history turn must expose user audio playback ref");
+  assert.ok(historyTurn.audio?.assistant?.href, "streaming history turn must expose assistant audio playback ref");
+
+  const archive = await getJson(`${baseUrl}/v1/history/messages?session_id=${encodeURIComponent(sessionId)}&q=streaming`);
+  const archivedTurn = archive.messages.find((message) => message.type === "voice_turn" && message.turn_id === turnId);
+  assert.ok(archivedTurn, "history search must return the sent streaming voice message");
+  assert.ok(archivedTurn.audio?.user?.href, "history search result must include user audio ref");
+
+  const userAudio = await requestBinary(`${baseUrl}${historyTurn.audio.user.href}`);
+  assert.equal(userAudio.status, 200, "user audio endpoint must succeed");
+  assert.equal(userAudio.contentType, "audio/L16; rate=16000; channels=1");
+  assert.equal(userAudio.buffer.length, fs.statSync(userAudioPath).size, "user audio endpoint must return archived PCM bytes");
 }
 
 function smokeStreamingVoiceSession(target, sessionId, branchId, turnId) {
@@ -1137,6 +1150,16 @@ async function requestJson(url, options = {}) {
   const response = await fetch(url, { headers: options.auth === false ? {} : authHeaders() });
   const json = await response.json();
   return { status: response.status, json };
+}
+
+async function requestBinary(url, options = {}) {
+  const response = await fetch(url, { headers: options.auth === false ? {} : authHeaders() });
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return {
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    buffer,
+  };
 }
 
 async function postJson(url, body, options = {}) {
