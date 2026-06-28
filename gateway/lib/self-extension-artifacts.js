@@ -70,6 +70,7 @@ function createSelfExtensionArtifactStore(options = {}) {
         errors: [],
         warnings: validation.warnings,
       },
+      apply_context: {},
       created_at: now,
       updated_at: now,
       applied_at: "",
@@ -79,7 +80,7 @@ function createSelfExtensionArtifactStore(options = {}) {
     return clone(artifact);
   }
 
-  function apply(id) {
+  function apply(id, applyContext = {}) {
     const safeId = cleanToken(id, 80);
     const artifact = safeId ? state.artifacts[safeId] : null;
     if (!artifact) {
@@ -98,6 +99,7 @@ function createSelfExtensionArtifactStore(options = {}) {
     artifact.status = "applied";
     artifact.updated_at = now;
     artifact.applied_at = now;
+    artifact.apply_context = clonePlainObject(applyContext);
     state.active[artifact.type] = artifact.id;
     flush(storePath, state);
     return clone(artifact);
@@ -296,6 +298,7 @@ function normalizePersistedArtifact(input) {
       errors: [],
       warnings: Array.isArray(input.validation?.warnings) ? input.validation.warnings.filter((item) => typeof item === "string") : [],
     },
+    apply_context: plainObject(input.apply_context),
     created_at: createdAt,
     updated_at: cleanDate(input.updated_at) || createdAt,
     applied_at: cleanDate(input.applied_at),
@@ -358,6 +361,10 @@ function clampLimit(value, fallback) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function clonePlainObject(value) {
+  return clone(plainObject(value));
 }
 
 module.exports = {

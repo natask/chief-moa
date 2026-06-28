@@ -25,6 +25,12 @@ if (!/SELF_EXTENSION_RUNTIME_FALLBACK/.test(backgroundSource)) {
 if (!/function loadSelfExtensionRuntime/.test(backgroundSource)) {
   throw new Error("background.js must expose a self-extension runtime loader");
 }
+if (!/async function fetchSelfExtensionRuntime/.test(backgroundSource)) {
+  throw new Error("background.js must separate self-extension runtime fetch from cache fallback");
+}
+if (!/async function cachedSelfExtensionRuntimeRecord/.test(backgroundSource)) {
+  throw new Error("background.js must be able to read the last-good self-extension runtime cache");
+}
 if (!/\/v1\/self-extension\/runtime/.test(backgroundSource) || !/method:\s*"GET"/.test(backgroundSource)) {
   throw new Error("background.js must fetch GET /v1/self-extension/runtime");
 }
@@ -49,6 +55,9 @@ if (!/SELF_EXTENSION_RUNTIME_ALARM/.test(backgroundSource) || !/refreshSelfExten
 if (!/refreshSelfExtensionRuntime\("turn_complete"\)/.test(backgroundSource)) {
   throw new Error("background.js must refresh self-extension runtime after gateway turns complete");
 }
+if (!/stale:\s*true/.test(backgroundSource) || !/stale_reason/.test(backgroundSource) || !/return cached\.runtime/.test(backgroundSource)) {
+  throw new Error("background.js must preserve last-good runtime and mark it stale on refresh failure");
+}
 
 const runtimeLoaderBody = sourceBetween(
   backgroundSource,
@@ -56,11 +65,11 @@ const runtimeLoaderBody = sourceBetween(
   /\/\/ ---- Gateway-queued browser tasks/,
   "self-extension runtime loader",
 );
-if (!/if \(!cfg\.gatewayUrl\) return SELF_EXTENSION_RUNTIME_FALLBACK/.test(runtimeLoaderBody)) {
-  throw new Error("self-extension runtime loader must fall back when no gateway is configured");
+if (!/const cached = await cachedSelfExtensionRuntimeRecord\(\)/.test(runtimeLoaderBody)) {
+  throw new Error("self-extension runtime loader must read the last-good cache on fetch failure");
 }
-if (!/catch\s*\{[\s\S]{0,120}return SELF_EXTENSION_RUNTIME_FALLBACK/.test(runtimeLoaderBody)) {
-  throw new Error("self-extension runtime loader must fall back when the endpoint is unavailable");
+if (!/return cached\?\.runtime \|\| SELF_EXTENSION_RUNTIME_FALLBACK/.test(runtimeLoaderBody)) {
+  throw new Error("self-extension runtime loader must only use fallback when no last-good runtime exists");
 }
 
 for (const motion of knownMotions) {

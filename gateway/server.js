@@ -433,7 +433,7 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const id = url.pathname.slice("/v1/self-extension/artifacts/".length, -"/apply".length);
-      await handleApplySelfExtensionArtifact(response, id);
+      await handleApplySelfExtensionArtifact(request, response, id);
       return;
     }
 
@@ -1955,9 +1955,15 @@ async function handleCreateSelfExtensionArtifact(request, response) {
   }
 }
 
-async function handleApplySelfExtensionArtifact(response, id) {
+async function handleApplySelfExtensionArtifact(request, response, id) {
+  const body = await readJsonBody(request);
+  const applyContext = selfExtensionApplyContextFromBody(body);
+  if (!applyContext.ok) {
+    sendJson(response, 400, { error: `invalid self-extension apply metadata: ${applyContext.errors.join("; ")}` });
+    return;
+  }
   try {
-    const artifact = selfExtensionArtifacts.apply(id);
+    const artifact = selfExtensionArtifacts.apply(id, applyContext.context);
     if (!artifact) {
       sendJson(response, 404, { error: "self-extension artifact not found" });
       return;
@@ -1968,7 +1974,7 @@ async function handleApplySelfExtensionArtifact(response, id) {
       stream_id: `self-extension:${artifact.type}`,
       idempotency_key: `self-extension-artifact-applied:${artifact.id}:${artifact.applied_at}`,
       occurred_at: artifact.applied_at,
-      actor: { kind: "agent", id: "self-extension" },
+      actor: selfExtensionApplyActor(artifact.apply_context),
       correlation_id: artifact.variant_group_id,
       payload: {
         id: artifact.id,
@@ -1978,6 +1984,7 @@ async function handleApplySelfExtensionArtifact(response, id) {
         spec: artifact.spec,
         preview: artifact.preview,
         applied_at: artifact.applied_at,
+        apply_context: artifact.apply_context,
         runtime: runtime.active[artifact.type],
       },
     });
@@ -1985,6 +1992,84 @@ async function handleApplySelfExtensionArtifact(response, id) {
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
   }
+}
+
+function selfExtensionApplyActor(applyContext) {
+  const mode = cleanSelfExtensionToken(applyContext?.approval?.mode, 40);
+  const approvedBy = cleanSelfExtensionText(applyContext?.approval?.approved_by, 120);
+  if (mode === "explicit_user") {
+    return { kind: "user", id: approvedBy || "unknown" };
+  }
+  return { kind: "agent", id: approvedBy || "self-extension", mode: mode || "unknown" };
+}
+
+function selfExtensionApplyContextFromBody(body) {
+  const input = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  const source = input.source && typeof input.source === "object" && !Array.isArray(input.source)
+    ? input.source
+    : input.provenance && typeof input.provenance === "object" && !Array.isArray(input.provenance)
+      ? input.provenance
+      : {};
+  const approval = input.approval && typeof input.approval === "object" && !Array.isArray(input.approval)
+    ? input.approval
+    : {};
+  const sourceKind = cleanSelfExtensionToken(source.kind || input.source_kind, 40);
+  const approvalMode = cleanSelfExtensionToken(approval.mode || input.approval_mode, 40);
+  const errors = [];
+  const sourceKinds = ["user_turn", "agent_run", "manual_api", "smoke"];
+  const approvalModes = ["explicit_user", "developer", "test"];
+  if (!sourceKind) {
+    errors.push("source.kind is required");
+  } else if (!sourceKinds.includes(sourceKind)) {
+    errors.push(`source.kind must be one of: ${sourceKinds.join(", ")}`);
+  }
+  if (!approvalMode) {
+    errors.push("approval.mode is required");
+  } else if (!approvalModes.includes(approvalMode)) {
+    errors.push(`approval.mode must be one of: ${approvalModes.join(", ")}`);
+  }
+  const approvedBy = cleanSelfExtensionText(approval.approved_by || approval.approvedBy || input.approved_by, 120);
+  if (!approvedBy) {
+    errors.push("approval.approved_by is required");
+  }
+  if (errors.length > 0) {
+    return { ok: false, errors, context: {} };
+  }
+  return {
+    ok: true,
+    errors: [],
+    context: {
+      source: {
+        kind: sourceKind,
+        turn_id: cleanSelfExtensionToken(source.turn_id || source.turnId, 120),
+        broker_event_id: cleanSelfExtensionToken(source.broker_event_id || source.brokerEventId, 120),
+        agent_run_id: cleanSelfExtensionToken(source.agent_run_id || source.agentRunId, 120),
+        session_id: cleanSelfExtensionToken(source.session_id || source.sessionId, 120),
+        branch_id: cleanSelfExtensionToken(source.branch_id || source.branchId, 120),
+        device_id: cleanSelfExtensionToken(source.device_id || source.deviceId, 120),
+        surface: cleanSelfExtensionToken(source.surface, 80),
+      },
+      approval: {
+        mode: approvalMode,
+        approved_by: approvedBy,
+        approval_id: cleanSelfExtensionToken(approval.approval_id || approval.approvalId, 120),
+        policy: "self_extension_apply_requires_source_and_approval",
+      },
+      reason: cleanSelfExtensionText(input.reason || approval.reason || source.reason, 240),
+      requested_by: cleanSelfExtensionText(input.requested_by || input.requestedBy || "", 120),
+      recorded_at: new Date().toISOString(),
+    },
+  };
+}
+
+function cleanSelfExtensionToken(value, max) {
+  return typeof value === "string"
+    ? value.trim().replace(/[^a-zA-Z0-9_:-]/g, "").slice(0, max)
+    : "";
+}
+
+function cleanSelfExtensionText(value, max) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 async function handleAgentProfilePut(request, response) {

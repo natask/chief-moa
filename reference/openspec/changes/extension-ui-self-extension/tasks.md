@@ -6,6 +6,7 @@
       metadata, active pointers, and a runtime projection.
 - [x] Support `avatar_behavior` as the first artifact type.
 - [x] Expose token-guarded artifact list/create/apply/runtime endpoints.
+- [x] Require source provenance and approval metadata when applying an artifact.
 - [x] Add a gateway smoke that creates variants, rejects invalid specs, applies
       one artifact, and verifies runtime persistence after store reload.
 
@@ -17,6 +18,7 @@
       through known classes/data attributes only.
 - [x] Add CSS mappings for supported avatar motions without executing generated
       JavaScript.
+- [x] Preserve the last-good runtime when gateway refresh fails, marked stale.
 - [x] Add an extension smoke/static check for the self-extension runtime path.
 
 ### 3. Follow-Up Generated UI

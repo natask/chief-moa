@@ -202,15 +202,19 @@ Self-extension is the mechanism for conversational customization and capability
 creation. The model does not directly mutate Moa. It proposes structured
 artifacts such as avatar behavior, theme, view, workflow, tool binding, or code
 patch specs. The gateway owns storage, validation, variant history, active
-pointers, runtime projection, and provider/tool routing. Android and browser
-clients own rendering and local execution for the artifact types they support.
+pointers, runtime projection, and provider/tool routing. Moving an active
+pointer requires source provenance and approval metadata, even for API-driven
+development use. Android and browser clients own rendering and local execution
+for the artifact types they support.
 
 The first browser slice is `avatar_behavior`: the gateway serves an active
 declarative spec such as "thinking -> orbit -> subtle", and the extension maps
 that spec to known CSS classes on the Aggie/Lion mark. No generated JavaScript is
 executed in privileged extension code. Richer generated UI remains declarative
 or sandboxed, and page-acting code remains opt-in through the existing
-`userScripts` boundary.
+`userScripts` boundary. Browser clients preserve the last-good runtime when the
+gateway is temporarily unavailable and mark the cached runtime stale instead of
+visually clearing an applied customization.
 
 ### Agent Work
 

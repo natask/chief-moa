@@ -96,8 +96,9 @@ function assertStore(dir) {
     },
   });
   assert.equal(store.list({ type: "avatar_behavior" }).length, 2, "store must list both variants");
-  const applied = store.apply(second.id);
+  const applied = store.apply(second.id, smokeApplyContext());
   assert.equal(applied.status, "applied", "apply must mark the artifact applied");
+  assert.equal(applied.apply_context.approval.mode, "test", "store apply must preserve approval context");
   assert.equal(store.runtime().active.avatar_behavior.artifact_id, second.id, "runtime must expose the active artifact");
 
   const reopened = createSelfExtensionArtifactStore({ dataDir: dir });
@@ -187,10 +188,16 @@ async function assertCreateVariants(baseUrl) {
 }
 
 async function assertApplyAndRuntime(baseUrl, artifactId) {
-  const applied = await postJson(`${baseUrl}/v1/self-extension/artifacts/${encodeURIComponent(artifactId)}/apply`, {});
+  const missingMetadata = await postJson(`${baseUrl}/v1/self-extension/artifacts/${encodeURIComponent(artifactId)}/apply`, {});
+  assert.equal(missingMetadata.status, 400, "apply without source/approval metadata must return 400");
+  assert.match(missingMetadata.json.error || "", /source\.kind.*approval\.mode.*approval\.approved_by/s, "apply rejection must name missing metadata");
+
+  const applied = await postJson(`${baseUrl}/v1/self-extension/artifacts/${encodeURIComponent(artifactId)}/apply`, smokeApplyBody());
   assert.equal(applied.status, 200, `apply must return 200: ${JSON.stringify(applied.json)}`);
   assert.equal(applied.json.artifact.id, artifactId, "apply response must return the applied artifact");
   assert.equal(applied.json.artifact.status, "applied", "artifact must be marked applied");
+  assert.equal(applied.json.artifact.apply_context.source.kind, "smoke", "apply response must include source provenance");
+  assert.equal(applied.json.artifact.apply_context.approval.mode, "test", "apply response must include approval mode");
   assert.equal(applied.json.runtime.active.avatar_behavior.artifact_id, artifactId, "apply response runtime must include active avatar behavior");
 
   const runtime = await getJson(`${baseUrl}/v1/self-extension/runtime`);
@@ -209,9 +216,46 @@ async function assertMirroredEvents(baseUrl, appliedArtifactId) {
 
   const applied = await waitForEvents(baseUrl, "self_extension.artifact.applied", 1);
   assert.ok(
-    applied.events.some((event) => event.payload?.id === appliedArtifactId),
-    "apply action must be mirrored with the applied artifact id",
+    applied.events.some((event) => event.payload?.id === appliedArtifactId && event.payload?.apply_context?.approval?.mode === "test" && event.actor?.id === "smoke-self-extension-artifacts"),
+    "apply action must be mirrored with the applied artifact id and approval actor",
   );
+}
+
+function smokeApplyBody() {
+  return {
+    source: {
+      kind: "smoke",
+      session_id: "self_extension_smoke_session",
+      turn_id: "self_extension_smoke_turn",
+      surface: "gateway_smoke",
+    },
+    approval: {
+      mode: "test",
+      approved_by: "smoke-self-extension-artifacts",
+      approval_id: "self_extension_smoke_approval",
+    },
+    reason: "smoke apply",
+  };
+}
+
+function smokeApplyContext() {
+  return {
+    source: {
+      kind: "smoke",
+      session_id: "store_smoke_session",
+      turn_id: "store_smoke_turn",
+      surface: "store_smoke",
+    },
+    approval: {
+      mode: "test",
+      approved_by: "store-smoke",
+      approval_id: "store_smoke_approval",
+      policy: "self_extension_apply_requires_source_and_approval",
+    },
+    reason: "store smoke apply",
+    requested_by: "smoke",
+    recorded_at: new Date().toISOString(),
+  };
 }
 
 async function waitForEvents(baseUrl, eventType, minCount) {

@@ -86,35 +86,80 @@ const SELF_EXTENSION_RUNTIME_FALLBACK = Object.freeze({
 });
 
 function safeSelfExtensionRuntimePayload(payload) {
+  return normalizeSelfExtensionRuntimePayload(payload) || SELF_EXTENSION_RUNTIME_FALLBACK;
+}
+
+function normalizeSelfExtensionRuntimePayload(payload) {
   const runtime = payload?.runtime && typeof payload.runtime === "object" ? payload.runtime : payload;
   if (!runtime || typeof runtime !== "object" || runtime.version !== 1) {
-    return SELF_EXTENSION_RUNTIME_FALLBACK;
+    return null;
   }
   return runtime;
 }
 
-async function loadSelfExtensionRuntime() {
+async function fetchSelfExtensionRuntime() {
   const cfg = await getConfig();
-  if (!cfg.gatewayUrl) return SELF_EXTENSION_RUNTIME_FALLBACK;
+  if (!cfg.gatewayUrl) throw new Error("No gateway URL set.");
+  const runtime = normalizeSelfExtensionRuntimePayload(await callGateway(cfg, "/v1/self-extension/runtime", { method: "GET" }));
+  if (!runtime) throw new Error("Gateway returned an invalid self-extension runtime.");
+  return runtime;
+}
+
+async function cachedSelfExtensionRuntimeRecord() {
+  if (!chrome?.storage?.local) return null;
+  const stored = await chrome.storage.local.get({ [SELF_EXTENSION_RUNTIME_CACHE_KEY]: null });
+  const record = stored[SELF_EXTENSION_RUNTIME_CACHE_KEY];
+  const runtime = normalizeSelfExtensionRuntimePayload(record?.runtime || record);
+  if (!runtime) return null;
+  return {
+    runtime,
+    reason: typeof record?.reason === "string" ? record.reason : "cache",
+    updated_at: typeof record?.updated_at === "string" ? record.updated_at : "",
+    stale: record?.stale === true,
+    stale_reason: typeof record?.stale_reason === "string" ? record.stale_reason : "",
+    stale_at: typeof record?.stale_at === "string" ? record.stale_at : "",
+  };
+}
+
+async function loadSelfExtensionRuntime() {
   try {
-    return safeSelfExtensionRuntimePayload(await callGateway(cfg, "/v1/self-extension/runtime", { method: "GET" }));
+    return await fetchSelfExtensionRuntime();
   } catch {
-    return SELF_EXTENSION_RUNTIME_FALLBACK;
+    const cached = await cachedSelfExtensionRuntimeRecord();
+    return cached?.runtime || SELF_EXTENSION_RUNTIME_FALLBACK;
   }
 }
 
 async function refreshSelfExtensionRuntime(reason = "refresh") {
-  const runtime = await loadSelfExtensionRuntime();
-  if (chrome?.storage?.local) {
-    await chrome.storage.local.set({
-      [SELF_EXTENSION_RUNTIME_CACHE_KEY]: {
-        runtime,
-        reason,
-        updated_at: new Date().toISOString(),
-      },
-    });
+  try {
+    const runtime = await fetchSelfExtensionRuntime();
+    if (chrome?.storage?.local) {
+      await chrome.storage.local.set({
+        [SELF_EXTENSION_RUNTIME_CACHE_KEY]: {
+          runtime,
+          reason,
+          stale: false,
+          updated_at: new Date().toISOString(),
+        },
+      });
+    }
+    return runtime;
+  } catch (error) {
+    const cached = await cachedSelfExtensionRuntimeRecord();
+    if (cached && chrome?.storage?.local) {
+      await chrome.storage.local.set({
+        [SELF_EXTENSION_RUNTIME_CACHE_KEY]: {
+          ...cached,
+          reason,
+          stale: true,
+          stale_reason: String(error?.message || error).slice(0, 200),
+          stale_at: new Date().toISOString(),
+        },
+      });
+      return cached.runtime;
+    }
+    return SELF_EXTENSION_RUNTIME_FALLBACK;
   }
-  return runtime;
 }
 
 async function startSelfExtensionRuntimeRefresh() {
