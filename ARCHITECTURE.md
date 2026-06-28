@@ -231,6 +231,13 @@ or replay what they sent. Local clients may keep their own capture spool while
 uploading, but the trusted gateway archive is the cross-device source of truth
 once the turn reaches the server.
 
+gbrain is the semantic recall layer for this intent store, not the store itself.
+After a broker event is durably written, the gateway may index a concise intent
+summary into gbrain under the Moa namespace so later searches can recall related
+intent threads semantically. If gbrain is unavailable, stale, or incomplete, the
+gateway still relies on broker events, voice turns, agent runs, receipts, and
+event records as the authoritative product history.
+
 Broker route decisions also materialize launch context packs. The editable
 profile file is `gateway/agent-launcher-profiles.json`: each profile names the
 workflow directory, instruction file, required files, expected output, and

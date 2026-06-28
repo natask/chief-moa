@@ -31,6 +31,25 @@ chat, and broker surfaces.
 - **AND** the item includes an inspectable summary of the route decisions and
   linked context-pack identifiers
 
+### Requirement: Semantic Intent Recall
+The gateway SHALL use gbrain as a best-effort semantic recall index for intent
+summaries while keeping broker events and product events as the source of truth.
+
+#### Scenario: Broker event is stored
+- **WHEN** the gateway persists a broker event and route decisions
+- **THEN** it may write a concise intent summary to gbrain under the Moa memory
+  namespace with the broker event id, user message summary, route decisions, and
+  context-pack references
+- **AND** failure to write that gbrain memory SHALL NOT prevent the broker event
+  from being stored or routed
+
+#### Scenario: History search has a semantic match
+- **WHEN** a client queries sent-message history with search text
+- **THEN** the gateway may include matching gbrain intent memories as semantic
+  recall hints
+- **AND** those hints SHALL NOT replace the canonical history items returned
+  from gateway-owned voice, chat, and broker records
+
 ### Requirement: Existing Work Candidate Routing
 The broker SHALL evaluate each message against active sessions, projects,
 subprojects, and agent runs.

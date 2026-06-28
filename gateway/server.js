@@ -1217,6 +1217,7 @@ async function handleBrokerMessage(request, response) {
     updated_at: new Date().toISOString(),
   };
   writeBrokerEvent(stored);
+  indexBrokerEventInBrain(stored);
   attachBrokerEvidenceToRuns(stored);
   await recordBrokerProductEvent(stored);
   sendJson(response, 202, {
@@ -1758,6 +1759,53 @@ function writeBrokerEvent(event) {
     })),
     context_pack_refs: event.context_pack_refs || [],
   }) + "\n");
+}
+
+function indexBrokerEventInBrain(event) {
+  const summary = brokerEventBrainSummary(event);
+  if (!summary) {
+    return false;
+  }
+  const routeTags = (event.decisions || [])
+    .map((decision) => decision.target_id || decision.target_type || "")
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").slice(0, 60))
+    .filter(Boolean);
+  return brain.remember(summary, {
+    kind: "intent",
+    slug: `${brain.slugPrefix}/intent/${event.id}`,
+    title: `Intent: ${truncate(event.text || event.id, 72)}`,
+    tags: ["memory", "intent", "broker-event"].concat(routeTags),
+  });
+}
+
+function brokerEventBrainSummary(event) {
+  if (!event || !event.id || !event.text) {
+    return "";
+  }
+  const decisions = (event.decisions || [])
+    .slice(0, 8)
+    .map((decision) => [
+      `${decision.action || "route"} -> ${decision.target_type || "target"}:${decision.target_id || ""}`,
+      decision.confidence != null ? `confidence=${decision.confidence}` : "",
+      decision.reason ? `reason=${decision.reason}` : "",
+      decision.context_pack_id ? `context_pack=${decision.context_pack_id}` : "",
+    ].filter(Boolean).join(" | "));
+  const contextPackIds = (event.context_pack_refs || [])
+    .map((ref) => ref.id)
+    .filter(Boolean)
+    .slice(0, 8);
+  return [
+    `Intent ${event.id}.`,
+    `Source: ${event.source || "unknown"}.`,
+    event.session_id ? `Session: ${event.session_id}.` : "",
+    event.branch_id ? `Branch: ${event.branch_id}.` : "",
+    event.project_id ? `Project: ${event.project_id}.` : "",
+    `User message: ${truncate(event.text || "", 1200)}`,
+    decisions.length ? "Route decisions:" : "",
+    ...decisions.map((decision) => `- ${decision}`),
+    contextPackIds.length ? `Context packs: ${contextPackIds.join(", ")}.` : "",
+  ].filter(Boolean).join("\n");
 }
 
 function profileOptionsFromUrl(url) {
@@ -6019,7 +6067,31 @@ function historyMessagesPayload({ sessionId = "", q = "", limit = 50 } = {}) {
     session_id: safeSessionId,
     query: q ? String(q).slice(0, 240) : "",
     messages: items,
+    semantic_memories: query ? historySemanticMemoryHits(q, Math.min(safeLimit, 20)) : [],
   };
+}
+
+function historySemanticMemoryHits(query, limit) {
+  const hits = brain.recall(String(query || "").trim(), Math.max(1, Math.min(Number(limit) || 10, 20)));
+  const intentPrefix = `${brain.slugPrefix}/intent/`;
+  const seen = new Set();
+  const memories = [];
+  for (const hit of hits || []) {
+    const slug = String(hit.slug || "");
+    const snippet = String(hit.snippet || "").trim();
+    if (!slug.startsWith(intentPrefix) || !snippet || seen.has(slug)) {
+      continue;
+    }
+    seen.add(slug);
+    memories.push({
+      type: "semantic_intent_memory",
+      slug,
+      score: hit.score,
+      snippet: truncate(snippet, 1000),
+      source: "gbrain",
+    });
+  }
+  return memories;
 }
 
 function historyVoiceTurnItem(record) {

@@ -5,6 +5,8 @@
 - [x] 1.3 Add a gateway endpoint to accept a message and return stored route decisions. Implemented as `POST /v1/broker/messages`.
 - [x] 1.4 Add a gateway history/search read model that returns brokered intents alongside voice and chat turns.
       Verified 2026-06-28 with `cd gateway && npm run smoke:message-broker` and `cd gateway && npm run check`.
+- [x] 1.5 Index brokered intent summaries into gbrain as best-effort semantic recall hints while keeping broker events as source of truth.
+      Verified 2026-06-28 with `cd gateway && npm run smoke:message-broker`.
 
 ## 2. Session / Project Candidate Lookup
 
