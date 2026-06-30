@@ -14,6 +14,7 @@ const CLIENT_AUDIO_FORMAT = {
 };
 const DEFAULT_GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 const DEFAULT_VERTEX_LIVE_MODEL = "gemini-live-2.5-flash-native-audio";
+const DEFAULT_VERTEX_LIVE_LOCATION = "us-central1";
 const DEFAULT_CHIRP_MODEL = "chirp_3";
 const GEMINI_LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const VERTEX_LIVE_EXPRESS_ENDPOINT = "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent";
@@ -614,7 +615,7 @@ class GeminiLiveVoiceProvider {
       ? env.VERTEX_EXPRESS_API_KEY || env.VERTEX_API_KEY || env.GOOGLE_API_KEY || env.GEMINI_API_KEY || ""
       : env.GEMINI_API_KEY || env.GOOGLE_API_KEY || "";
     this.vertexProject = env.VERTEX_PROJECT || env.GOOGLE_CLOUD_PROJECT || "";
-    this.vertexLocation = env.VERTEX_LOCATION || env.GOOGLE_CLOUD_LOCATION || "global";
+    this.vertexLocation = vertexLiveLocation(env);
     this.gcloudBin = env.GCLOUD_BIN || "gcloud";
     this.endpoint = this.authMode === "vertex"
       ? env.VERTEX_LIVE_ENDPOINT || this.defaultVertexEndpoint(providerOptions?.defaultEndpoint || VERTEX_LIVE_EXPRESS_ENDPOINT)
@@ -716,6 +717,7 @@ class GeminiLiveVoiceProvider {
       model: this.model,
       endpoint: redactEndpoint(this.endpoint),
       auth: this.authStatus(),
+      location: this.authMode === "vertex" ? this.vertexLocation : null,
       voice: this.effectiveVoice(),
       voice_default: this.envVoiceName,
       assistant_name: this.agentProfile && typeof this.agentProfile.effective === "function"
@@ -762,7 +764,7 @@ class GeminiLiveVoiceProvider {
 
   async processTurn(turn, hooks) {
     if (!this.configured()) {
-      throw new Error(`${this.provider} voice provider requires VERTEX_EXPRESS_API_KEY, VERTEX_API_KEY, GOOGLE_API_KEY, or Vertex ADC with VERTEX_PROJECT and VERTEX_LOCATION on the gateway machine`);
+      throw new Error(`${this.provider} voice provider requires VERTEX_EXPRESS_API_KEY, VERTEX_API_KEY, GOOGLE_API_KEY, or Vertex ADC with VERTEX_PROJECT and VERTEX_LIVE_LOCATION or VERTEX_LOCATION on the gateway machine`);
     }
     if (!turn.audioBytes || turn.audioBytes <= 0) {
       throw new Error("cannot send an empty audio turn to gemini-live");
@@ -805,7 +807,7 @@ class GeminiLiveVoiceProvider {
 
   createLiveTurnSession(turn, hooks) {
     if (!this.configured()) {
-      throw new Error(`${this.provider} voice provider requires VERTEX_EXPRESS_API_KEY, VERTEX_API_KEY, GOOGLE_API_KEY, or Vertex ADC with VERTEX_PROJECT and VERTEX_LOCATION on the gateway machine`);
+      throw new Error(`${this.provider} voice provider requires VERTEX_EXPRESS_API_KEY, VERTEX_API_KEY, GOOGLE_API_KEY, or Vertex ADC with VERTEX_PROJECT and VERTEX_LIVE_LOCATION or VERTEX_LOCATION on the gateway machine`);
     }
 
     const state = {
@@ -1601,6 +1603,13 @@ function chirpEndpoint(projectId, location) {
   const safeLocation = String(location || "us").trim() || "us";
   const host = safeLocation === "global" ? "speech.googleapis.com" : `${safeLocation}-speech.googleapis.com`;
   return `https://${host}/v2/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(safeLocation)}/recognizers/_:recognize`;
+}
+
+function vertexLiveLocation(env) {
+  const explicitLiveLocation = String(env.VERTEX_LIVE_LOCATION || env.GEMINI_LIVE_LOCATION || "").trim();
+  const sharedVertexLocation = String(env.VERTEX_LOCATION || env.GOOGLE_CLOUD_LOCATION || "").trim();
+  const candidate = explicitLiveLocation || sharedVertexLocation || DEFAULT_VERTEX_LIVE_LOCATION;
+  return candidate.toLowerCase() === "global" ? DEFAULT_VERTEX_LIVE_LOCATION : candidate;
 }
 
 function languageCodes(value) {
