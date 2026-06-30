@@ -376,7 +376,15 @@
       finishLauncherPushToTalk();
       return;
     }
-    if (wasPendingDoubleClickHold) return;
+    if (wasPendingDoubleClickHold) {
+      // Released before the push-to-talk hold threshold = a quick double-click.
+      // Toggle voice: first quick double-click starts listening, the next one
+      // commits and sends. (Double-click and hold stays push-to-talk above.)
+      openTextSurface({ fresh: false });
+      primeAudio();
+      toggleVoice();
+      return;
+    }
     if (moved) {
       const rect = launcher.getBoundingClientRect();
       placeLauncher(rect.left, rect.top, true);
