@@ -253,7 +253,10 @@ const server = http.createServer(async (request, response) => {
           pending_tool_requests: listToolRequests({ status: "pending", limit: 100 }).length,
         },
         brain: {
-          available: brain.available(),
+          available: brain.available() || brain.mode() === "file",
+          mode: brain.mode(),
+          gbrain_available: brain.available(),
+          facts_file: brain.factsFile,
           recall_limit: BRAIN_RECALL_LIMIT,
           slug_prefix: brain.slugPrefix,
           gbrain_home: brain.gbrainHome || "default (~/.gbrain)",
