@@ -41,13 +41,28 @@ async function getBakedConfig() {
 
 async function seedGatewayConfig() {
   const baked = await getBakedConfig();
-  const cur = await chrome.storage.local.get(["ageeGatewayUrl", "ageeGatewayToken"]);
+  const cur = await chrome.storage.local.get([
+    "ageeGatewayUrl",
+    "ageeGatewayToken",
+    "ageeGatewayUserSet",
+  ]);
   const curUrl = normalizeGatewayUrl(cur.ageeGatewayUrl);
   const patch = {};
-  if (!curUrl || LEGACY_DEFAULT_GATEWAY_URLS.has(curUrl)) {
+  // Adopt the baked gateway config unless the user picked the URL by hand.
+  // The stored value is otherwise just a previously-seeded default, so a new
+  // baked URL (from `npm run configure`, e.g. pointing at a local gateway)
+  // must win instead of the extension clinging to the old seeded URL.
+  const userOwnsUrl = cur.ageeGatewayUserSet === true;
+  const shouldAdoptBaked =
+    !curUrl ||
+    LEGACY_DEFAULT_GATEWAY_URLS.has(curUrl) ||
+    (!userOwnsUrl && curUrl !== baked.gatewayUrl);
+  if (shouldAdoptBaked) {
     patch.ageeGatewayUrl = baked.gatewayUrl;
-  }
-  if (!cur.ageeGatewayToken && baked.gatewayToken) {
+    // Carry the matching token so auth tracks the gateway we just adopted;
+    // a stale token from the old gateway would 401 against the new one.
+    if (baked.gatewayToken) patch.ageeGatewayToken = baked.gatewayToken;
+  } else if (!cur.ageeGatewayToken && baked.gatewayToken) {
     patch.ageeGatewayToken = baked.gatewayToken;
   }
   if (Object.keys(patch).length) await chrome.storage.local.set(patch);

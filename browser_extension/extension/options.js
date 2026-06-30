@@ -87,6 +87,9 @@ document.getElementById("save").addEventListener("click", async () => {
   await chrome.storage.local.set({
     ageeGatewayUrl: normalizeGatewayUrl(gatewayUrlEl.value),
     ageeGatewayToken: gatewayTokenEl.value.trim(),
+    // Mark the URL as user-owned so seeding stops overwriting it with the
+    // baked default on the next startup.
+    ageeGatewayUserSet: true,
   });
   flash("Saved ✓");
   setTimeout(() => (statusEl.textContent = ""), 1500);
