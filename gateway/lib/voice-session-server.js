@@ -512,6 +512,7 @@ class VoiceSessionConnection {
         branch_id: turn.branchId || "default",
         all_branches_context: turn.allBranchesContext === true,
         turn_id: turn.turnId,
+        transcript: providerEvents.transcript || turn.syntheticText || "",
         profile_version: turn.profileVersion || "",
         device_id: turn.deviceId || "",
         source: turn.source,

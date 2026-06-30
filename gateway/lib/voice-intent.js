@@ -78,19 +78,20 @@ function shouldRunAgentFromVoice(text) {
   if (actionStarts.some((start) => lower.startsWith(start))) {
     return true;
   }
+  const asksOperationalStatus = (
+    lower.includes("operational systems")
+    || lower.includes("things operating")
+    || lower.includes("projects i have ongoing")
+    || lower.includes("all the projects")
+    || lower.includes("what am i working on")
+  );
   return lower.includes("push code")
     || lower.includes("make it work")
     || lower.includes("run the tests")
     || lower.includes("home machine")
     || lower.includes("in the repo")
     || lower.includes("in the app")
-    || lower.includes("operational systems")
-    || lower.includes("what s going on")
-    || lower.includes("what is going on")
-    || lower.includes("things operating")
-    || lower.includes("projects i have ongoing")
-    || lower.includes("all the projects")
-    || lower.includes("what am i working on")
+    || asksOperationalStatus
     || lower.includes("forward progress")
     || lower.includes("chrome extension")
     || lower.includes("android app")
