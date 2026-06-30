@@ -1,0 +1,1 @@
+- Fixed Vertex Live voice to use regional endpoints instead of `global` — agent: Codex/GPT-5 — c6eb268
