@@ -631,6 +631,12 @@ class GeminiLiveVoiceProvider {
     this.temperature = numberFrom(env.GEMINI_LIVE_TEMPERATURE || env.MODEL_TEMPERATURE, 0.4);
     this.timeoutMs = Math.max(5000, numberFrom(env.VOICE_PROVIDER_TIMEOUT_MS, 60000));
     this.audioIdleCompleteMs = Math.max(500, numberFrom(env.GEMINI_LIVE_AUDIO_IDLE_COMPLETE_MS, 2500));
+    // Push-to-talk option: manual activity detection. The client marks turn
+    // start and end explicitly, so the model never interrupts its own reply on
+    // stray or echoed audio (server VAD caused "generation was interrupted" /
+    // no audio output). Opt-in via GEMINI_LIVE_MANUAL_VAD=1; default keeps
+    // server VAD so barge-in / interrupt-handoff behavior is unchanged.
+    this.manualActivityDetection = env.GEMINI_LIVE_MANUAL_VAD === "1";
     this.sendChunkBytes = Math.max(3200, numberFrom(env.GEMINI_LIVE_SEND_CHUNK_BYTES, 32000));
     this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are Aggie. Your name is Aggie; if asked who you are, say Aggie — never say you are Gemini or Google. Speak tersely. Use the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
   }
@@ -943,6 +949,11 @@ class GeminiLiveVoiceProvider {
 
       if (message.setupComplete) {
         ready = true;
+        if (this.manualActivityDetection) {
+          // Manual VAD: open the user's activity window before any audio so the
+          // model treats the whole push-to-talk capture as one turn.
+          sendGeminiJson(websocket, { realtimeInput: { activityStart: {} } }).catch(rejectOnce);
+        }
         resolveReady();
         return;
       }
@@ -1008,11 +1019,12 @@ class GeminiLiveVoiceProvider {
           if (!ready) {
             await readyPromise;
           }
-          await sendGeminiJson(websocket, {
-            realtimeInput: {
-              audioStreamEnd: true,
-            },
-          });
+          // Manual VAD closes the turn with activityEnd; server VAD uses
+          // audioStreamEnd. activityEnd lets the model reply without
+          // interrupting itself on trailing/echoed audio.
+          await sendGeminiJson(websocket, this.manualActivityDetection
+            ? { realtimeInput: { activityEnd: {} } }
+            : { realtimeInput: { audioStreamEnd: true } });
         });
       },
       sendToolResponse: (functionResponses) => {
@@ -1309,7 +1321,7 @@ class GeminiLiveVoiceProvider {
       outputAudioTranscription: {},
       realtimeInputConfig: {
         automaticActivityDetection: {
-          disabled: false,
+          disabled: this.manualActivityDetection,
         },
       },
     };
