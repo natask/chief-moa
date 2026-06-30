@@ -66,6 +66,8 @@ assert.strictEqual(classifyVoiceTurn({}, "change your language to Amharic"), "pr
 assert.strictEqual(classifyVoiceTurn({}, "your name is Moa"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "you are Aggie"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "call yourself The Steward"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "I want you to be a research scout"), "profile_control");
+assert.strictEqual(classifyVoiceTurn({}, "act as my calm writing coach"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what voice are you using"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what language settings are active"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "what languages can you speak"), "profile_control");
@@ -178,6 +180,11 @@ const deviceScopedVoice = parseProfileControlIntent("use the Kore voice on this 
 assert.equal(deviceScopedVoice.scope, "device");
 assert.deepStrictEqual(deviceScopedVoice.patch, { voice: "Kore" });
 assert.deepStrictEqual(parseProfileControlIntent("use a feminine voice").patch, { voice: "Aoede" });
+
+const companionIntent = parseProfileControlIntent("I want you to be a research scout");
+assert.equal(companionIntent.action, "companion_create_apply");
+assert.equal(companionIntent.subject, "companion");
+assert.equal(companionIntent.companion_role, "research scout");
 assert.deepStrictEqual(parseProfileControlIntent("use a masculine voice").patch, { voice: "Charon" });
 assert.deepStrictEqual(parseProfileControlIntent("change your voice"), {
   action: "clarify",

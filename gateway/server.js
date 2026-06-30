@@ -16,6 +16,7 @@ const {
   languageOptionsPayload,
   voiceOptionsPayload,
 } = require("./lib/profile-options");
+const { createCompanionCatalogStore } = require("./lib/companion-catalog");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createBrain } = require("./lib/brain");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
@@ -146,6 +147,7 @@ const agentProfile = createAgentProfileStore({
     recovery_mode: "normal",
   },
 });
+const companionCatalog = createCompanionCatalogStore({ dataDir: DATA_DIR });
 
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
 // surfaces from this; a "deployment" is a spec change here, not new extension
@@ -289,6 +291,42 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, profileOptionsPayload());
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/companions" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, companionCatalogPayload(url));
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/companions" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCreateCompanion(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/companions/preview" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCompanionPreview(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/companions/apply" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCompanionApply(request, response);
       return;
     }
 
@@ -1841,6 +1879,12 @@ function agentProfileRuntimeStatus(options = {}) {
     autonomy_level: profile.autonomy_level,
     memory_policy: profile.memory_policy,
     recovery_mode: profile.recovery_mode,
+    active_companion: profile.active_companion_id ? {
+      id: profile.active_companion_id,
+      name: profile.active_companion_name,
+      source: profile.active_companion_source,
+      version: profile.active_companion_version,
+    } : null,
   };
 }
 
@@ -1860,6 +1904,120 @@ function uiSpecPayload() {
     spec: uiSpec.effective(),
     defaults: uiSpec.defaults(),
     is_customized: uiSpec.isCustomized(),
+  };
+}
+
+function companionCatalogPayload(url) {
+  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
+  const limit = Number(url?.searchParams?.get("limit") || 100);
+  const profile = agentProfile.effective();
+  return {
+    version: companionCatalog.version,
+    generated_at: new Date().toISOString(),
+    query,
+    active_companion_id: profile.active_companion_id || "",
+    companions: companionCatalog.list({ query, limit }),
+    endpoints: {
+      list: "/v1/agent/companions",
+      create: "/v1/agent/companions",
+      preview: "/v1/agent/companions/preview",
+      apply: "/v1/agent/companions/apply",
+    },
+  };
+}
+
+async function handleCreateCompanion(request, response) {
+  const body = await readJsonBody(request);
+  try {
+    const companion = companionCatalog.createDraft({
+      text: body?.text || body?.request || body?.prompt || body?.description,
+      name: body?.name,
+      voice: body?.voice,
+    });
+    const preview = companionCatalog.preview({ companion_id: companion.id });
+    sendJson(response, 201, {
+      companion,
+      preview,
+      active_profile_mutated: false,
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handleCompanionPreview(request, response) {
+  const body = await readJsonBody(request);
+  try {
+    const preview = companionCatalog.preview(body || {});
+    const profileOptions = profileOptionsFromBody(body, "global");
+    const base = agentProfile.effective(profileOptions);
+    const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
+    sendJson(response, 200, {
+      ...preview,
+      profile_version: agentProfile.currentVersion(profileOptions),
+      profile_before: agentProfileRuntimeStatus(profileOptions),
+      profile_preview: summarizePreviewProfile(base, merged),
+    });
+  } catch (error) {
+    sendJson(response, 404, { error: cleanError(error) });
+  }
+}
+
+async function handleCompanionApply(request, response) {
+  const body = await readJsonBody(request);
+  const profileOptions = profileOptionsFromBody(body, "global");
+  if (!requireDeviceScope(response, profileOptions)) {
+    return;
+  }
+  try {
+    const result = applyCompanionToProfile(body || {}, profileOptions, body?.source || "api");
+    sendJson(response, 200, result);
+  } catch (error) {
+    sendJson(response, 404, { error: cleanError(error) });
+  }
+}
+
+function applyCompanionToProfile(input, profileOptions, source = "api") {
+  const preview = companionCatalog.preview(input || {});
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
+  agentProfile.patch(preview.profile_overrides, {
+    source,
+    reason: `companion:${preview.companion.id}`,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const after = agentProfile.effective(profileOptions);
+  const afterVersion = agentProfile.currentVersion(profileOptions);
+  recordProfileHistory(before, after, source, {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  return agentProfilePayload({
+    application: profileApplicationSemantics(),
+    companion: preview.companion,
+    companion_applied: beforeVersion !== afterVersion,
+    from_profile_version: beforeVersion,
+  }, profileOptions);
+}
+
+function summarizePreviewProfile(before, after) {
+  const fields = ["assistant_name", "voice", "voice_max_chars", "response_modality", "tool_policy", "autonomy_level", "memory_policy", "active_companion_id", "active_companion_name"];
+  const changed = {};
+  for (const field of fields) {
+    if (before?.[field] !== after?.[field]) {
+      changed[field] = { before: before?.[field] || "", after: after?.[field] || "" };
+    }
+  }
+  return {
+    assistant_name: after.assistant_name,
+    voice: after.voice,
+    voice_max_chars: after.voice_max_chars,
+    active_companion_id: after.active_companion_id,
+    active_companion_name: after.active_companion_name,
+    changed,
   };
 }
 
@@ -2940,6 +3098,38 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
+    };
+  }
+
+  if (intent.action === "companion_create_apply") {
+    const draft = companionCatalog.createDraft({
+      text: intent.companion_request || transcript,
+      name: "",
+    });
+    const result = applyCompanionToProfile({ companion_id: draft.id }, profileOptions, "voice");
+    const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
+    const display = `Created and switched to ${draft.name} ${scopeText}. Profile version is ${result.profile_version}; applies ${result.application.applies.replace(/_/g, " ")}.`;
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak: display,
+        display,
+        actions: [{
+          type: "companion_applied",
+          companion: result.companion,
+          profile_version: result.profile_version,
+          from_profile_version: result.from_profile_version,
+          scope: profileOptions.scope,
+          device_id: profileOptions.deviceId,
+          application: result.application,
+        }],
+        follow_up_expected: false,
+      }),
+      profile_version: result.profile_version,
+      from_profile_version: result.from_profile_version,
+      application: result.application,
+      profile: agentProfileRuntimeStatus(profileOptions),
+      companion: result.companion,
     };
   }
 

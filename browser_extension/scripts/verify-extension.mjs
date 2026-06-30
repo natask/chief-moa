@@ -167,6 +167,16 @@ if (!/Grant microphone/.test(optionsHtmlSource) || !/navigator\.mediaDevices\.ge
 }
 
 if (
+  !/id="companionList"/.test(optionsHtmlSource) ||
+  !/id="companionPrompt"/.test(optionsHtmlSource) ||
+  !/\/v1\/agent\/companions/.test(optionsSource) ||
+  !/\/v1\/agent\/companions\/preview/.test(optionsSource) ||
+  !/\/v1\/agent\/companions\/apply/.test(optionsSource)
+) {
+  throw new Error("options page must expose companion catalog create/preview/apply controls backed by gateway endpoints");
+}
+
+if (
   !/microphone_capture_failed/.test(backgroundSource) ||
   !/recoverable:\s*false/.test(backgroundSource) ||
   !/chrome:\/\/extensions\/\?id=\$\{chrome\.runtime\.id\}/.test(backgroundSource) ||

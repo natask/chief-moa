@@ -367,7 +367,7 @@ function looksLikeGatewayProfileControlIntent(text) {
   if (looksLikeInstructionalExample(raw)) return false;
   const lower = normalizeSpeech(raw);
   if (!lower) return false;
-  return isGatewayPromptControl(lower) || isGatewayIdentityControl(lower) || isGatewayLanguageControl(lower) || isGatewayVoiceControl(lower);
+  return isGatewayPromptControl(lower) || isGatewayCompanionControl(lower) || isGatewayIdentityControl(lower) || isGatewayLanguageControl(lower) || isGatewayVoiceControl(lower);
 }
 
 function isGatewayPromptControl(lower) {
@@ -384,6 +384,12 @@ function isGatewayIdentityControl(lower) {
     /\byour name\b\s*(is|should be|will be)\b/.test(lower) ||
     /\b(call|name) yourself\b/.test(lower) ||
     /\b(you are|youre)\b\s+(now\s+)?(called\s+|named\s+)?/.test(lower);
+}
+
+function isGatewayCompanionControl(lower) {
+  return /\b(?:i want|i d like|i would like)\s+you\s+to\s+(?:be|become|act as)\b/.test(lower) ||
+    /\b(?:be|become|act as|serve as)\s+(?:my\s+|a\s+|an\s+)?(?:research|writing|coding|browser|screen|calm|playful|coach|scout|builder|scribe|helper)\b/.test(lower) ||
+    /\b(?:make|turn)\s+(?:yourself|you)\s+(?:into\s+)?(?:my\s+|a\s+|an\s+)?(?:research|writing|coding|browser|screen|calm|playful|coach|scout|builder|scribe|helper)\b/.test(lower);
 }
 
 function isGatewayLanguageControl(lower) {
