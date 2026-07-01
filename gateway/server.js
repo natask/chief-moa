@@ -2236,16 +2236,35 @@ function sendRouterActivation(response, id) {
 }
 
 async function handleCancelAgentRun(response, id) {
-  const safeId = sanitizeId(id);
-  if (!fs.existsSync(agentRunPath(safeId))) {
+  const result = cancelAgentRunById(id);
+  if (!result.ok && result.status === "not_found") {
     sendJson(response, 404, { error: "agent run not found" });
     return;
   }
-  const run = readAgentRun(safeId);
 
-  if (isTerminalRunStatus(run.status)) {
-    sendJson(response, 200, agentRunPayload(run));
+  if (result.status === "cancel_requested") {
+    sendJson(response, 202, agentRunPayload(result.run));
     return;
+  }
+
+  sendJson(response, 200, agentRunPayload(result.run));
+}
+
+function cancelAgentRunById(id) {
+  let safeId;
+  try {
+    safeId = sanitizeId(id);
+  } catch {
+    return { ok: false, status: "not_found", run: null, error: "agent run not found" };
+  }
+
+  if (!fs.existsSync(agentRunPath(safeId))) {
+    return { ok: false, status: "not_found", run: null, error: "agent run not found" };
+  }
+
+  const run = readAgentRun(safeId);
+  if (isTerminalRunStatus(run.status)) {
+    return { ok: true, status: "already_terminal", run };
   }
 
   appendAgentEvent(safeId, "cancel_requested", {});
@@ -2253,8 +2272,7 @@ async function handleCancelAgentRun(response, id) {
   if (active?.child) {
     active.cancelRequested = true;
     active.child.kill("SIGTERM");
-    sendJson(response, 202, agentRunPayload(readAgentRun(safeId)));
-    return;
+    return { ok: true, status: "cancel_requested", run: readAgentRun(safeId) };
   }
 
   const canceledAt = new Date().toISOString();
@@ -2266,7 +2284,7 @@ async function handleCancelAgentRun(response, id) {
   });
   appendAgentEvent(safeId, "canceled", { error: next.error });
   activeRuns.delete(safeId);
-  sendJson(response, 200, agentRunPayload(next));
+  return { ok: true, status: "canceled_before_active", run: next };
 }
 
 async function handleAgentRunFollowup(request, response, id) {
@@ -3916,6 +3934,12 @@ async function handleLiveVoiceToolCall(call) {
   if (name === "launch_agent_run") {
     return liveToolLaunchAgentRun(call, args);
   }
+  if (name === "cancel_agent_run") {
+    return liveToolCancelAgentRun(call, args);
+  }
+  if (name === "list_agent_runs") {
+    return liveToolListAgentRuns(call, args);
+  }
   if (name === "launch_browser_agent") {
     return liveToolLaunchBrowserAgent(call, args);
   }
@@ -3970,6 +3994,141 @@ function liveToolLaunchAgentRun(call, args) {
     run: summarizeAgentRun(run),
     message: `Started ${run.harness} run ${run.id}.`,
   };
+}
+
+function liveToolCancelAgentRun(call, args) {
+  const runId = String(args.run_id || args.runId || "").trim();
+  if (runId) {
+    const result = cancelAgentRunById(runId);
+    if (!result.ok) {
+      return {
+        ok: false,
+        type: "agent_runs_canceled",
+        error: result.error || "agent run not found",
+        canceled: [],
+        count: 0,
+      };
+    }
+    const summary = summarizeAgentRun(result.run);
+    return {
+      ok: true,
+      type: "agent_runs_canceled",
+      cancel_status: result.status,
+      canceled: [summary],
+      count: 1,
+      message: agentRunCancelToolMessage(result.status, summary),
+    };
+  }
+
+  const target = String(args.target || "current").trim().toLowerCase() || "current";
+  if (target !== "current" && target !== "all") {
+    return { ok: false, error: "target must be current or all" };
+  }
+
+  const conversationId = liveToolConversationId(call);
+  if (!conversationId) {
+    return { ok: false, error: "conversation_id is required to cancel by target" };
+  }
+
+  const candidates = liveConversationAgentRuns(conversationId)
+    .filter((run) => !isTerminalRunStatus(run.status))
+    .sort(compareAgentRunsUpdatedDesc);
+  const selected = target === "all" ? candidates : candidates.slice(0, 1);
+  if (selected.length === 0) {
+    return {
+      ok: false,
+      type: "agent_runs_canceled",
+      error: `no active agent runs found for conversation ${conversationId}`,
+      canceled: [],
+      count: 0,
+    };
+  }
+
+  const canceled = [];
+  const errors = [];
+  for (const run of selected) {
+    const result = cancelAgentRunById(run.id);
+    if (result.ok && result.run) {
+      canceled.push(summarizeAgentRun(result.run));
+    } else {
+      errors.push({ run_id: run.id, error: result.error || "cancel failed" });
+    }
+  }
+
+  if (canceled.length === 0) {
+    return {
+      ok: false,
+      type: "agent_runs_canceled",
+      error: errors[0]?.error || "no agent runs were canceled",
+      canceled,
+      count: 0,
+      errors,
+    };
+  }
+
+  return {
+    ok: true,
+    type: "agent_runs_canceled",
+    target,
+    conversation_id: conversationId,
+    canceled,
+    count: canceled.length,
+    ...(errors.length ? { errors } : {}),
+  };
+}
+
+function liveToolListAgentRuns(call, args) {
+  const conversationId = liveToolConversationId(call);
+  if (!conversationId) {
+    return { ok: false, error: "conversation_id is required to list agent runs" };
+  }
+  const limit = Math.max(1, Math.min(Number(args.limit) || 10, 50));
+  const runs = liveConversationAgentRuns(conversationId)
+    .sort(compareAgentRunsUpdatedDesc)
+    .slice(0, limit);
+  return {
+    ok: true,
+    type: "agent_runs",
+    conversation_id: conversationId,
+    runs,
+    count: runs.length,
+  };
+}
+
+function liveToolConversationId(call) {
+  return String(call?.conversation_id || call?.session_id || "").trim();
+}
+
+function liveConversationAgentRuns(conversationId) {
+  return listAllAgentRuns()
+    .map((run) => completeAgentRunSummary(run))
+    .filter((run) => run && run.conversation_id === conversationId);
+}
+
+function completeAgentRunSummary(run) {
+  if (!run || !run.id) return null;
+  if (run.conversation_id !== undefined && run.status !== undefined) {
+    return run;
+  }
+  try {
+    return summarizeAgentRun(readAgentRun(run.id));
+  } catch {
+    return run;
+  }
+}
+
+function compareAgentRunsUpdatedDesc(a, b) {
+  return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || ""));
+}
+
+function agentRunCancelToolMessage(status, run) {
+  if (status === "already_terminal") {
+    return `Run ${run.id} was already ${run.status}.`;
+  }
+  if (status === "cancel_requested") {
+    return `Requested cancellation for run ${run.id}.`;
+  }
+  return `Canceled run ${run.id}.`;
 }
 
 function liveToolLaunchBrowserAgent(call, args) {

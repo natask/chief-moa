@@ -278,8 +278,12 @@ async function assertProviderSessionConfig(dataDir) {
     "Gemini Live setup must expose remember_user_fact",
   );
   assert.ok(
-    defaultSetup.tools?.[0]?.functionDeclarations?.some((tool) => tool.name === "query_memory"),
-    "Gemini Live setup must expose query_memory",
+    defaultSetup.tools?.[0]?.functionDeclarations?.some((tool) => tool.name === "cancel_agent_run"),
+    "Gemini Live setup must expose cancel_agent_run",
+  );
+  assert.ok(
+    defaultSetup.tools?.[0]?.functionDeclarations?.some((tool) => tool.name === "list_agent_runs"),
+    "Gemini Live setup must expose list_agent_runs",
   );
   const contextSetup = provider.setupMessage({ contextPrompt: "durable context marker" });
   assert.ok(
