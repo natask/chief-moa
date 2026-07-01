@@ -698,8 +698,13 @@ class GeminiLiveVoiceProvider {
       answerPolicyInstruction(),
       missionAccessInstruction(),
       profileControlInstruction(effectiveProfile),
+      agentRunControlInstruction(),
       profileLanguageInstruction(effectiveProfile),
       "If the user tells you to stop, shut up, be quiet, hush, or not to speak, stop talking immediately and say nothing — do not acknowledge it, just go silent.",
+      // Native-audio Live goes silent after any function call, so tool use must
+      // be rare and deliberate. Everything the agent knows about the user is
+      // already in the durable context above; answering questions needs no tool.
+      "Tool discipline: answer every question and request by speaking out loud, using the durable context already provided. Never call a tool just to answer or recall something. Call remember_user_fact ONLY when the user explicitly tells you to remember, save, or note something; call update_agent_profile ONLY when the user explicitly asks to change a setting, voice, or language. When in doubt, speak instead of calling a tool.",
       modality === "text"
         ? "Reply in text only. Do not speak your replies out loud."
         : "",
@@ -1298,19 +1303,38 @@ class GeminiLiveVoiceProvider {
               required: ["fact"],
             },
           },
+          // No query_memory / recall tool on the live path on purpose: the
+          // gateway already injects standing facts + relevant memories into the
+          // turn context (see voiceLiveContextPrompt). The native-audio model
+          // goes SILENT after any tool call, so a recall tool would turn every
+          // "what do you know about X" into a mute turn. Answering from the
+          // injected context lets the model speak the answer instead.
           {
-            name: "query_memory",
-            description: "Recall standing and relevant memories from Moa's durable memory store.",
+            name: "cancel_agent_run",
+            description: "Stop the ACTUAL work of a launched agent run. Only call this when the user explicitly asks to cancel or stop the run, agent, task, or everything; do not call this for 'be quiet' or ordinary speech interruption.",
             parameters: {
               type: "OBJECT",
               properties: {
-                query: {
+                run_id: {
                   type: "STRING",
-                  description: "The memory query.",
+                  description: "Optional specific agent run id to cancel.",
                 },
+                target: {
+                  type: "STRING",
+                  description: "Optional target when run_id is omitted: current cancels the most recently updated active run in this conversation; all cancels every active run in this conversation.",
+                },
+              },
+            },
+          },
+          {
+            name: "list_agent_runs",
+            description: "List the user's launched agent runs and their status.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
                 limit: {
                   type: "NUMBER",
-                  description: "Maximum memories to return.",
+                  description: "Maximum runs to return.",
                 },
               },
             },
@@ -1673,6 +1697,15 @@ function profileControlInstruction(profile) {
     `- Supported voice ids: ${voices}.`,
     currentVoice ? `- Current configured voice: ${currentVoice}.` : "",
   ].filter(Boolean).join("\n");
+}
+
+function agentRunControlInstruction() {
+  return [
+    "Moa agent-run-control tools:",
+    "- You can run several agents at once. If the user interrupts you to ask for another thing, launch ANOTHER agent run with launch_agent_run; do not cancel the running one.",
+    "- 'stop', 'be quiet', and 'shut up' only silence your current spoken reply. They do NOT stop launched agent runs. Only call cancel_agent_run when the user explicitly says to cancel/stop the run, the agent, the task, or everything.",
+    "- Use list_agent_runs to tell the user what is running.",
+  ].join("\n");
 }
 
 function profileLanguageInstruction(profile) {
