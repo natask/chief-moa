@@ -35,6 +35,10 @@ const {
   parseProfileControlIntent,
   classifyVoiceTurn,
 } = require("./lib/voice-intent");
+const {
+  routeVoiceTurn,
+  classificationFromActions,
+} = require("./lib/voice-router");
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8787);
@@ -2640,9 +2644,26 @@ async function handleVoiceTurn(request, response) {
 
   const source = String(body.source || body.client?.source || "android-overlay").slice(0, 80);
   const screen = summarizeScreen(body.screen || body.context?.screen);
-  const classification = classifyVoiceTurn(body, transcript);
   const profileVersion = agentProfile.currentVersion(profileOptions);
   const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
+  // Routing. Default path is the deterministic keyword classifier. When
+  // VOICE_ROUTER_LLM=1 the LLM router produces an ordered action list instead;
+  // its list collapses to the same legacy label for the branches below, and its
+  // dispatch_agent entries (which carry per-run prompt/harness) drive agent
+  // fan-out so one turn can stack several agents. Router failures fall back to
+  // the heuristic inside routeVoiceTurn, so the flag can never harden a turn.
+  let routedActions = null;
+  let classification;
+  if (process.env.VOICE_ROUTER_LLM === "1") {
+    const routed = await routeVoiceTurn(body, transcript, {
+      useLlm: true,
+      callModel: (messages) => callModelOrFallback(messages, profile),
+    });
+    routedActions = routed.actions;
+    classification = classificationFromActions(routedActions);
+  } else {
+    classification = classifyVoiceTurn(body, transcript);
+  }
   // Capture memory-worthy statements ("call me Bob", "talk to me like a baller")
   // to the Brain deterministically, before we branch on classification, so a
   // fact lands even when the turn is a control/agent turn that never hits the
@@ -2727,21 +2748,31 @@ async function handleVoiceTurn(request, response) {
       return;
     }
 
-    const prompt = voiceAgentPrompt(transcript, body.screen || body.context?.screen, {
+    const wrapPrompt = (text) => voiceAgentPrompt(text, body.screen || body.context?.screen, {
       sessionId,
       branchId,
       excludeTurnId: turnId,
       allBranches: body.all_branches_context === true,
     });
-    const harnesses = classification === "multi_agent"
-      ? voiceMultiAgentHarnesses(body, transcript)
-      : [sanitizeHarness(body.harness || body.client?.harness || DEFAULT_HARNESS)];
-    const runs = harnesses.map((harness) => startAgentRun({
+    // When the LLM router ran, its dispatch_agent actions carry a per-run prompt
+    // and harness, so one turn can stack several distinct agents. Otherwise use
+    // the legacy single/multi harness resolution against the whole transcript.
+    const dispatchActions = (routedActions || []).filter((action) => action?.type === "dispatch_agent");
+    const dispatches = dispatchActions.length > 0
+      ? dispatchActions.map((action) => ({
+          harness: sanitizeHarness(action.harness || body.harness || body.client?.harness || DEFAULT_HARNESS),
+          prompt: wrapPrompt(action.prompt || transcript),
+        }))
+      : (classification === "multi_agent"
+          ? voiceMultiAgentHarnesses(body, transcript)
+          : [sanitizeHarness(body.harness || body.client?.harness || DEFAULT_HARNESS)]
+        ).map((harness) => ({ harness, prompt: wrapPrompt(transcript) }));
+    const runs = dispatches.map((dispatch) => startAgentRun({
       conversation_id: conversationId,
       profile_version: profileVersion,
       source: "android-voice-router",
-      harness,
-      prompt,
+      harness: dispatch.harness,
+      prompt: dispatch.prompt,
       screen: body.screen || body.context?.screen,
     }));
 
