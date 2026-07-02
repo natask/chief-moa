@@ -30,7 +30,7 @@ const runDir = join(root, ".gstack", "background-qa", `gateway-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
 
 // The live gateway. /health needs no token; all /v1/* require a bearer token.
-const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || "http://10.147.17.6:8787").replace(/\/+$/, "");
+const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || "http://10.147.17.10:8787").replace(/\/+$/, "");
 // Read the token ONLY from the environment. Never from .env, never printed.
 const GATEWAY_TOKEN = process.env.AGEE_GATEWAY_TOKEN || "";
 const HAS_TOKEN = GATEWAY_TOKEN.length > 0;

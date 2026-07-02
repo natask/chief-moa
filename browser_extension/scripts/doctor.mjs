@@ -11,7 +11,9 @@ import { join, resolve } from "node:path";
 const root = resolve(new URL("..", import.meta.url).pathname);
 const extensionDir = join(root, "extension");
 const configPath = join(extensionDir, "agee.config.json");
-const defaultGatewayUrl = "http://10.147.17.6:8787";
+const defaultGatewayUrl = "http://10.147.17.10:8787";
+const localGatewayUrl = "http://10.147.17.6:8787";
+const staleGatewayUrls = new Set(["http://10.147.17.10:8788"]);
 const staleError = "No gateway URL and no API key set";
 const manifest = readJson(join(extensionDir, "manifest.json"));
 const extensionLabel = manifest.name || "agee";
@@ -70,9 +72,9 @@ function checkSource() {
     pass("current background.js does not contain the stale Anthropic-key fallback error");
   }
   if (config.includes(defaultGatewayUrl)) {
-    pass(`current config.js has the local ZeroTier gateway default ${defaultGatewayUrl}`);
+    pass(`current config.js has the main-machine gateway default ${defaultGatewayUrl}`);
   } else {
-    fail(`current config.js is missing the local ZeroTier gateway default ${defaultGatewayUrl}`);
+    fail(`current config.js is missing the main-machine gateway default ${defaultGatewayUrl}`);
   }
 }
 
@@ -93,8 +95,10 @@ function checkBakedConfig() {
   const gatewayToken = String(config.gatewayToken || "");
   if (!gatewayUrl) {
     fail("baked config has no gatewayUrl");
-  } else if (gatewayUrl === "http://10.147.17.10:8787" || gatewayUrl === "http://10.147.17.10:8788") {
-    fail(`baked config still points at offline legacy gateway ${gatewayUrl}; run \`npm run configure\``);
+  } else if (staleGatewayUrls.has(gatewayUrl)) {
+    fail(`baked config still points at stale gateway ${gatewayUrl}; run \`npm run configure\``);
+  } else if (gatewayUrl === localGatewayUrl) {
+    pass(`baked config gateway URL is local dev gateway ${gatewayUrl}`);
   } else {
     pass(`baked config gateway URL is ${gatewayUrl}`);
   }

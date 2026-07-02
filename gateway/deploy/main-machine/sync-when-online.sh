@@ -41,6 +41,6 @@ ssh "$REMOTE" "cd '$REMOTE_DIR' && npm ci && npm run check"
 
 # The gateway runs as a user systemd unit (moa-gateway.service). Restart it and
 # confirm health so this is a one-shot deploy, not just a file sync.
-ssh "$REMOTE" "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user restart moa-gateway.service && sleep 1 && curl -fsS http://127.0.0.1:8788/health >/dev/null && echo 'gateway restarted and healthy'"
+ssh "$REMOTE" "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user restart moa-gateway.service && sleep 1 && curl -fsS http://127.0.0.1:8787/health >/dev/null && echo 'gateway restarted and healthy'"
 
 echo "Synced + restarted gateway at $REMOTE:$REMOTE_DIR"

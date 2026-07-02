@@ -1,11 +1,12 @@
 # Main-Machine Gateway Setup
 
 This is the remote payload for `reclaim@10.147.17.10`. It makes the gateway run
-as a normal Node service on port `8788` so the Android overlay can connect to:
+as a normal Node service on port `8787` so Android and browser clients can
+connect to:
 
 ```text
-http://10.147.17.10:8788
-ws://10.147.17.10:8788/v1/voice/sessions
+http://10.147.17.10:8787
+ws://10.147.17.10:8787/v1/voice/sessions
 ```
 
 ## What Goes On The Server
@@ -91,22 +92,22 @@ command -v node
 From the main machine:
 
 ```sh
-curl -fsS http://127.0.0.1:8788/health
-node deploy/main-machine/smoke-voice-session.js ws://127.0.0.1:8788/v1/voice/sessions "$MOA_GATEWAY_TOKEN"
+curl -fsS http://127.0.0.1:8787/health
+node deploy/main-machine/smoke-voice-session.js ws://127.0.0.1:8787/v1/voice/sessions "$MOA_GATEWAY_TOKEN"
 ```
 
 From this Mac after ZeroTier works:
 
 ```sh
-curl -fsS http://10.147.17.10:8788/health
-node software/moa_gateway/deploy/main-machine/smoke-voice-session.js ws://10.147.17.10:8788/v1/voice/sessions "$MOA_GATEWAY_TOKEN"
+curl -fsS http://10.147.17.10:8787/health
+node software/moa_gateway/deploy/main-machine/smoke-voice-session.js ws://10.147.17.10:8787/v1/voice/sessions "$MOA_GATEWAY_TOKEN"
 ```
 
 Protected OTA + Gemini Live smoke from this repo:
 
 ```sh
 cd software/moa_gateway
-MOA_GATEWAY_TOKEN=<token> npm run smoke:main-machine -- http://10.147.17.10:8788
+MOA_GATEWAY_TOKEN=<token> npm run smoke:main-machine -- http://10.147.17.10:8787
 ```
 
 Success means the WebSocket emits `session_ready`, `transcript_final`,

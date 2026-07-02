@@ -20,7 +20,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 2. Grant `Draw over other apps`. The setup screen opens Aggie's overlay permission page; Android requires you to allow it there.
 3. Grant microphone access when Android prompts, or tap `Enable microphone`.
 4. Grant `Screen access` in Android accessibility settings for current-screen context and controlled actions. If Android blocks the toggle with restricted settings, open App info for Aggie, tap the three-dot menu, choose `Allow restricted settings`, return, then enable Screen access.
-5. Set the Moa Gateway URL. The development default is `http://10.147.17.6:8787` for this Mac over ZeroTier. Use `http://10.147.17.10:8788` when the main-machine gateway is online.
+5. Set the Moa Gateway URL. The default is the main-machine gateway
+   `http://10.147.17.10:8787`. Use `http://10.147.17.6:8787` only when you are
+   intentionally pointing the app at this Mac's local gateway over ZeroTier.
 6. Tap `Start assistant circle`.
 7. Leave the app. The Moa circle stays over the screen.
 

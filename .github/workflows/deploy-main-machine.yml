@@ -1,0 +1,130 @@
+name: Deploy main-machine
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/deploy-main-machine.yml"
+      - "gateway/**"
+      - "android_app/**"
+      - "scripts/deploy.sh"
+      - "scripts/deploy-version-status.mjs"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deploy target"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - gateway
+          - android
+          - all
+
+concurrency:
+  group: chief-moa-main-machine-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Verify and deploy
+    runs-on: self-hosted
+    env:
+      REMOTE: ${{ vars.CHIEF_MOA_DEPLOY_REMOTE || 'reclaim@10.147.17.10' }}
+      REMOTE_GW_DIR: ${{ vars.CHIEF_MOA_REMOTE_GW_DIR || '/home/reclaim-ethiopia/moa-assistant/software/moa_gateway' }}
+      REMOTE_DIR: ${{ vars.CHIEF_MOA_REMOTE_GW_DIR || '/home/reclaim-ethiopia/moa-assistant/software/moa_gateway' }}
+      REMOTE_OTA_DIR: ${{ vars.CHIEF_MOA_REMOTE_OTA_DIR || '/home/reclaim-ethiopia/moa-assistant-data/moa_gateway/android-ota' }}
+      GATEWAY_URL: ${{ vars.CHIEF_MOA_GATEWAY_URL || 'http://10.147.17.10:8787' }}
+      ANDROID_HOME: ${{ vars.ANDROID_HOME || '/Users/natnaelkahssay/Library/Android/sdk' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Select deploy target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested="${{ github.event.inputs.target || 'auto' }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$requested" != "auto" ]; then
+            printf 'target=%s\n' "$requested" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          before="${{ github.event.before }}"
+          if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+            before="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          if [ -n "$before" ]; then
+            changed="$(git diff --name-only "$before" HEAD)"
+          else
+            changed="$(git ls-files)"
+          fi
+
+          gateway=0
+          android=0
+          while IFS= read -r path; do
+            case "$path" in
+              gateway/*|scripts/deploy.sh|scripts/deploy-version-status.mjs|.github/workflows/deploy-main-machine.yml)
+                gateway=1
+                ;;
+              android_app/*)
+                android=1
+                ;;
+            esac
+          done <<< "$changed"
+
+          if [ "$gateway" -eq 1 ] && [ "$android" -eq 1 ]; then
+            target=all
+          elif [ "$gateway" -eq 1 ]; then
+            target=gateway
+          elif [ "$android" -eq 1 ]; then
+            target=android
+          else
+            target=none
+          fi
+          printf 'target=%s\n' "$target" >> "$GITHUB_OUTPUT"
+
+      - name: Verify gateway
+        if: steps.target.outputs.target == 'gateway' || steps.target.outputs.target == 'all'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd gateway
+          npm ci
+          npm run check
+
+      - name: Verify Android
+        if: steps.target.outputs.target == 'android' || steps.target.outputs.target == 'all'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd android_app
+          ./gradlew assembleDebug
+
+      - name: Deploy selected target
+        if: steps.target.outputs.target != 'none'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ steps.target.outputs.target }}" in
+            gateway) bash scripts/deploy.sh gateway ;;
+            android) bash scripts/deploy.sh android ;;
+            all)
+              bash scripts/deploy.sh gateway
+              bash scripts/deploy.sh android
+              ;;
+            *) echo "Nothing to deploy" ;;
+          esac
+
+      - name: Smoke deployed gateway
+        if: steps.target.outputs.target == 'gateway' || steps.target.outputs.target == 'all'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$GATEWAY_URL/health" >/dev/null

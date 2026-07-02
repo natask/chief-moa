@@ -59,9 +59,9 @@ MODEL_API_KEY=<provider-key>
 MODEL_ID=gpt-4o-mini
 ```
 
-The Android app default gateway URL is `http://10.147.17.6:8787`, which is
-this Mac's current ZeroTier address. Use `http://10.147.17.10:8788` when the
-main-machine gateway is online.
+The Android app default gateway URL is the main-machine gateway,
+`http://10.147.17.10:8787`. Use `http://10.147.17.6:8787` only when intentionally
+pointing the app at this Mac's local gateway over ZeroTier.
 
 ## Repo Deploy
 

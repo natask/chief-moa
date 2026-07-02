@@ -9,7 +9,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 final class MoaPrefs {
-    static final String DEFAULT_GATEWAY_URL = "http://10.147.17.6:8787";
+    static final String DEFAULT_GATEWAY_URL = "http://10.147.17.10:8787";
 
     private static final String PREFS = "moa_prefs";
     private static final String KEY_GATEWAY_URL = "gateway_url";

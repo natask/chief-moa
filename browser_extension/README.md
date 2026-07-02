@@ -186,8 +186,9 @@ It loads the real extension, writes the gateway URL + token into
 `chrome.storage.local` (exactly as the Options page does), opens the overlay, and
 drives real `run` / `describe` submits while a `fetch` recorder in the service
 worker observes which gateway path produced each rendered reply. The default
-gateway is the local ZeroTier one (`http://10.147.17.6:8787`); override with
-`AGEE_GATEWAY_URL`.
+gateway is the main-machine one (`http://10.147.17.10:8787`); use
+`AGEE_GATEWAY_URL=http://10.147.17.6:8787` or `npm run configure:local` when
+intentionally testing against this Mac's local gateway.
 
 **Confirmed round-trip sequence (what the smoke asserts):**
 

@@ -1,8 +1,6 @@
-const DEFAULT_GATEWAY_URL = "http://10.147.17.6:8787";
-const LEGACY_DEFAULT_GATEWAY_URLS = new Set([
-  "http://10.147.17.10:8787",
-  "http://10.147.17.10:8788",
-]);
+const DEFAULT_GATEWAY_URL = "http://10.147.17.10:8787";
+const LOCAL_GATEWAY_URL = "http://10.147.17.6:8787";
+const STALE_DEFAULT_GATEWAY_URLS = new Set(["http://10.147.17.10:8788"]);
 
 let bakedCache = null;
 
@@ -12,13 +10,13 @@ function normalizeGatewayUrl(value) {
 
 function normalizeDefaultGatewayUrl(value) {
   const url = normalizeGatewayUrl(value);
-  if (!url || LEGACY_DEFAULT_GATEWAY_URLS.has(url)) return DEFAULT_GATEWAY_URL;
+  if (!url || STALE_DEFAULT_GATEWAY_URLS.has(url)) return DEFAULT_GATEWAY_URL;
   return url;
 }
 
 function effectiveGatewayUrl(storedValue, bakedValue) {
   const stored = normalizeGatewayUrl(storedValue);
-  if (!stored || LEGACY_DEFAULT_GATEWAY_URLS.has(stored)) return bakedValue;
+  if (!stored || STALE_DEFAULT_GATEWAY_URLS.has(stored)) return bakedValue;
   return stored;
 }
 
@@ -58,7 +56,7 @@ async function seedGatewayConfig() {
   const userOwnsUrl = cur.ageeGatewayUserSet === true;
   const shouldAdoptBaked =
     !curUrl ||
-    LEGACY_DEFAULT_GATEWAY_URLS.has(curUrl) ||
+    STALE_DEFAULT_GATEWAY_URLS.has(curUrl) ||
     (!userOwnsUrl && curUrl !== baked.gatewayUrl);
   if (shouldAdoptBaked) {
     patch.ageeGatewayUrl = baked.gatewayUrl;
@@ -84,6 +82,7 @@ async function getEffectiveGatewayConfig() {
 
 export {
   DEFAULT_GATEWAY_URL,
+  LOCAL_GATEWAY_URL,
   getEffectiveGatewayConfig,
   normalizeGatewayUrl,
   seedGatewayConfig,
