@@ -21,7 +21,7 @@ const extensionPath = join(root, "extension");
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `live-voice-main-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
-const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || "http://10.147.17.10:8788").replace(/\/+$/, "");
+const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || "http://10.147.17.6:8787").replace(/\/+$/, "");
 const GATEWAY_TOKEN = process.env.AGEE_GATEWAY_TOKEN || "";
 
 let latestChromeStderr = "";

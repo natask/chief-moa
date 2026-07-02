@@ -13,12 +13,19 @@ const talkResultEl = document.getElementById("talkResult");
 const profileScopeEl = document.getElementById("profileScope");
 const systemPromptEl = document.getElementById("systemPrompt");
 const profileModelEl = document.getElementById("profileModel");
+const modelOptionsEl = document.getElementById("modelOptions");
 const temperatureEl = document.getElementById("temperature");
 const voiceMaxCharsEl = document.getElementById("voiceMaxChars");
 const voiceNameEl = document.getElementById("voiceName");
 const languageEl = document.getElementById("language");
 const inputLanguagesEl = document.getElementById("inputLanguages");
 const languageOptionsEl = document.getElementById("languageOptions");
+const replyLanguageSelectedEl = document.getElementById("replyLanguageSelected");
+const replyLanguageSearchEl = document.getElementById("replyLanguageSearch");
+const replyLanguageOptionsEl = document.getElementById("replyLanguageOptions");
+const heardLanguageSelectedEl = document.getElementById("heardLanguageSelected");
+const heardLanguageSearchEl = document.getElementById("heardLanguageSearch");
+const heardLanguageOptionsEl = document.getElementById("heardLanguageOptions");
 const profileCatalogStateEl = document.getElementById("profileCatalogState");
 const profileStatusEl = document.getElementById("profileStatus");
 
@@ -190,12 +197,146 @@ document.getElementById("checkMic").addEventListener("click", async () => {
 
 let currentProfile = null; // last effective profile we rendered
 let currentProfileOptions = null;
+let languageCatalog = [];
+
+function splitLanguageCodes(value) {
+  const seen = new Set();
+  const codes = [];
+  for (const raw of String(value || "").split(",")) {
+    const code = raw.trim();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    codes.push(code);
+  }
+  return codes;
+}
+
+function languageLabel(code) {
+  const match = languageCatalog.find((language) => language.code === code);
+  return match ? `${match.label} (${match.code})` : code;
+}
+
+function setLanguageCodes(input, codes) {
+  input.value = codes.join(",");
+}
+
+function languagePickerConfigs() {
+  return [
+    {
+      input: languageEl,
+      selected: replyLanguageSelectedEl,
+      search: replyLanguageSearchEl,
+      options: replyLanguageOptionsEl,
+      empty: "No reply languages selected.",
+    },
+    {
+      input: inputLanguagesEl,
+      selected: heardLanguageSelectedEl,
+      search: heardLanguageSearchEl,
+      options: heardLanguageOptionsEl,
+      empty: "No heard languages selected.",
+    },
+  ].filter((config) => config.input && config.selected && config.search && config.options);
+}
+
+function renderLanguagePickers() {
+  for (const config of languagePickerConfigs()) {
+    renderLanguagePicker(config);
+  }
+}
+
+function renderLanguagePicker(config) {
+  const selectedCodes = splitLanguageCodes(config.input.value);
+  config.selected.textContent = "";
+  if (selectedCodes.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "catalog-empty";
+    empty.textContent = config.empty;
+    config.selected.append(empty);
+  } else {
+    for (const code of selectedCodes) {
+      const pill = document.createElement("span");
+      pill.className = "catalog-pill";
+      pill.textContent = languageLabel(code);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "x";
+      remove.setAttribute("aria-label", `Remove ${languageLabel(code)}`);
+      remove.addEventListener("click", () => {
+        setLanguageCodes(config.input, selectedCodes.filter((item) => item !== code));
+        renderLanguagePicker(config);
+      });
+      pill.append(remove);
+      config.selected.append(pill);
+    }
+  }
+
+  const query = config.search.value.trim().toLowerCase();
+  const matches = languageCatalog
+    .filter((language) => {
+      if (!query) return true;
+      const aliases = Array.isArray(language.aliases) ? language.aliases.join(" ") : "";
+      return `${language.label} ${language.code} ${aliases}`.toLowerCase().includes(query);
+    })
+    .slice(0, 80);
+
+  config.options.textContent = "";
+  if (matches.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "catalog-empty";
+    empty.textContent = languageCatalog.length ? "No matching languages." : "Gateway language catalog unavailable.";
+    config.options.append(empty);
+    return;
+  }
+
+  for (const language of matches) {
+    const code = String(language.code || "").trim();
+    if (!code) continue;
+    const row = document.createElement("label");
+    row.className = "catalog-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedCodes.includes(code);
+    checkbox.addEventListener("change", () => {
+      const next = checkbox.checked
+        ? [...selectedCodes, code]
+        : selectedCodes.filter((item) => item !== code);
+      setLanguageCodes(config.input, next);
+      renderLanguagePicker(config);
+    });
+    const text = document.createElement("span");
+    text.textContent = String(language.label || code);
+    const small = document.createElement("small");
+    small.textContent = code;
+    row.append(checkbox, text, small);
+    config.options.append(row);
+  }
+}
 
 function renderProfileOptions(payload) {
   if (!payload || typeof payload !== "object") return;
   currentProfileOptions = payload;
   const voices = Array.isArray(payload.voices) ? payload.voices : [];
   const languages = Array.isArray(payload.languages) ? payload.languages : [];
+  const models = Array.isArray(payload.models) ? payload.models : [];
+  languageCatalog = languages
+    .map((language) => ({
+      label: String(language.label || language.code || "").trim(),
+      code: String(language.code || "").trim(),
+      aliases: Array.isArray(language.aliases) ? language.aliases.map((alias) => String(alias || "")) : [],
+    }))
+    .filter((language) => language.code);
+  if (modelOptionsEl) {
+    modelOptionsEl.textContent = "";
+    for (const model of models) {
+      const id = String(model.id || "").trim();
+      if (!id) continue;
+      const option = document.createElement("option");
+      option.value = id;
+      option.label = model.provider ? `${id} - ${model.provider}` : id;
+      modelOptionsEl.append(option);
+    }
+  }
   if (voiceNameEl) {
     const selected = voiceNameEl.value || currentProfile?.voice || "";
     voiceNameEl.textContent = "";
@@ -218,17 +359,16 @@ function renderProfileOptions(payload) {
   }
   if (languageOptionsEl) {
     languageOptionsEl.textContent = "";
-    for (const language of languages) {
-      const code = String(language.code || "").trim();
-      if (!code) continue;
+    for (const language of languageCatalog) {
       const option = document.createElement("option");
-      option.value = code;
-      option.label = String(language.label || code);
+      option.value = language.code;
+      option.label = language.label || language.code;
       languageOptionsEl.append(option);
     }
   }
+  renderLanguagePickers();
   if (profileCatalogStateEl) {
-    profileCatalogStateEl.textContent = `Loaded ${voices.length} voices and ${languages.length} languages from the gateway catalog.`;
+    profileCatalogStateEl.textContent = `Loaded ${voices.length} voices, ${languageCatalog.length} languages, and ${models.length} model options from the gateway catalog.`;
   }
 }
 
@@ -240,8 +380,9 @@ function renderProfile(payload) {
   temperatureEl.value = profile.temperature ?? "";
   voiceMaxCharsEl.value = profile.voice_max_chars ?? "";
   if (voiceNameEl) voiceNameEl.value = profile.voice || "";
-  languageEl.value = profile.language || "";
-  if (inputLanguagesEl) inputLanguagesEl.value = profile.input_languages || "";
+  languageEl.value = profile.language || profile.language_primary || "";
+  if (inputLanguagesEl) inputLanguagesEl.value = profile.input_languages || profile.input_language_primary || "";
+  renderLanguagePickers();
   const overridden = Boolean(payload?.is_overridden);
   profileStateEl.innerHTML =
     `In effect ${payload?.scope === "device" ? "on this device" : "on the gateway"}: <span class="badge ${overridden ? "overridden" : ""}">` +
@@ -361,6 +502,9 @@ document.getElementById("saveProfile").addEventListener("click", async () => {
 
 document.getElementById("refreshProfile").addEventListener("click", loadProfile);
 profileScopeEl?.addEventListener("change", loadProfile);
+for (const config of languagePickerConfigs()) {
+  config.search.addEventListener("input", () => renderLanguagePicker(config));
+}
 
 document.getElementById("resetProfile").addEventListener("click", async () => {
   const { url, token } = gatewayConfig();

@@ -1,5 +1,8 @@
-const DEFAULT_GATEWAY_URL = "http://10.147.17.10:8788";
-const LEGACY_DEFAULT_GATEWAY_URLS = new Set(["http://10.147.17.10:8787"]);
+const DEFAULT_GATEWAY_URL = "http://10.147.17.6:8787";
+const LEGACY_DEFAULT_GATEWAY_URLS = new Set([
+  "http://10.147.17.10:8787",
+  "http://10.147.17.10:8788",
+]);
 
 let bakedCache = null;
 

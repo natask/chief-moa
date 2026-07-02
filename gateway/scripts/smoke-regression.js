@@ -234,6 +234,8 @@ async function assertAgentProfileOptionsCatalog(baseUrl) {
   assert.equal(catalog.version, "profile-options/v1");
   assert.ok(catalog.endpoints?.profile === "/v1/agent/profile", "catalog must name the profile endpoint");
   assert.ok(catalog.endpoints?.options === "/v1/agent/profile/options", "catalog must name the options endpoint");
+  assert.ok(Array.isArray(catalog.models) && catalog.models.some((model) => model.id === "smoke-model" && model.current === true), "catalog must list the current gateway model");
+  assert.ok(catalog.fields?.model?.values?.includes("smoke-model"), "catalog model field must include the current gateway model");
   assert.ok(Array.isArray(catalog.voices) && catalog.voices.length >= 8, "catalog must list supported voices");
   assert.ok(Array.isArray(catalog.languages) && catalog.languages.length >= 40, "catalog must list supported languages");
 

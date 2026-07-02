@@ -186,7 +186,7 @@ It loads the real extension, writes the gateway URL + token into
 `chrome.storage.local` (exactly as the Options page does), opens the overlay, and
 drives real `run` / `describe` submits while a `fetch` recorder in the service
 worker observes which gateway path produced each rendered reply. The default
-gateway is the live one (`http://10.147.17.10:8788`); override with
+gateway is the local ZeroTier one (`http://10.147.17.6:8787`); override with
 `AGEE_GATEWAY_URL`.
 
 **Confirmed round-trip sequence (what the smoke asserts):**

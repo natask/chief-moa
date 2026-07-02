@@ -7,7 +7,7 @@ Prove the basic phone-to-server voice loop before expanding the assistant platfo
 ```text
 tap overlay
   -> Android records microphone audio
-  -> Android streams audio frames to Moa Gateway at 10.147.17.10
+  -> Android streams audio frames to Moa Gateway at 10.147.17.6
   -> user taps send
   -> Android commits the turn
   -> gateway transcribes/responds/synthesizes
@@ -22,7 +22,7 @@ This replaces passive wake-word behavior. Voice starts only from an explicit UI 
 The first software draft should prove transport and playback, not model quality.
 
 1. Android captures PCM16 mono audio with `AudioRecord`.
-2. Android opens `ws://10.147.17.10:8787/v1/voice/sessions`.
+2. Android opens `ws://10.147.17.6:8787/v1/voice/sessions`.
 3. Android sends JSON control events and binary audio chunks.
 4. Gateway writes received audio chunks to a turn file.
 5. User taps send; Android sends `commit_turn`.
@@ -290,7 +290,7 @@ TTS:
 
 For the MVP, failures should be visible and boring:
 
-- WebSocket connection fails: show "Cannot reach gateway at 10.147.17.10".
+- WebSocket connection fails: show "Cannot reach gateway at 10.147.17.6".
 - Audio permission missing: open the setup screen or show the existing permission message.
 - Commit fails: stop recording, keep local error visible, allow retry from idle.
 - Playback fails: show text response and mark audio failed.
@@ -309,6 +309,6 @@ The third risk is allowing server actions to bypass Android policy. Server respo
 
 ## Open Questions
 
-- Should the MVP use cleartext `ws://` over ZeroTier or `wss://` with local certs? First draft can use `ws://10.147.17.10:8787`.
+- Should the MVP use cleartext `ws://` over ZeroTier or `wss://` with local certs? First draft can use `ws://10.147.17.6:8787`.
 - Should assistant audio be raw PCM16 or WAV-framed chunks? First draft should use PCM16 after an `assistant_audio_start` format event.
 - Should the Android UI have one active voice session or multiple cards immediately? First draft should use one active session and preserve the protocol shape for multiple sessions.

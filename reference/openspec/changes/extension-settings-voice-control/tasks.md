@@ -2,6 +2,7 @@
 
 - [x] 1.1 Present the extension's settings (gateway URL/token, runtime profile fields incl. system prompt, model) in one settings surface.
 - [x] 1.2 Read current values from the gateway (`GET /v1/agent/profile`) and local config; show what is in effect.
+- [x] 1.3 Load model, voice, and language choices from the gateway profile-options catalog; render languages as searchable multi-select controls while persisting the existing gateway profile fields.
 
 ## 2. Change Settings By Talking To The Agent
 

@@ -386,10 +386,13 @@ if (
 if (
   !/\/v1\/agent\/profile\/options/.test(optionsSource) ||
   !/function renderProfileOptions/.test(optionsSource) ||
+  !/function renderLanguagePicker/.test(optionsSource) ||
   !/<select id="voiceName">/.test(optionsHtmlSource) ||
+  !/<datalist id="modelOptions">/.test(optionsHtmlSource) ||
+  !/<div class="catalog-picker" id="replyLanguagePicker">/.test(optionsHtmlSource) ||
   !/<datalist id="languageOptions">/.test(optionsHtmlSource)
 ) {
-  throw new Error("options page must load voice/language choices from the gateway profile-options catalog");
+  throw new Error("options page must load model/voice/language choices from the gateway profile-options catalog");
 }
 
 if (/patch\.language_primary/.test(optionsSource) || /patch\.input_language_primary/.test(optionsSource)) {

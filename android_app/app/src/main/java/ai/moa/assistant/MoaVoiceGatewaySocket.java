@@ -20,7 +20,7 @@ import okio.ByteString;
 
 final class MoaVoiceGatewaySocket {
     private static final String TAG = "MoaVoiceSocket";
-    static final String DEFAULT_URL = "ws://10.147.17.10:8788/v1/voice/sessions";
+    static final String DEFAULT_URL = "ws://10.147.17.6:8787/v1/voice/sessions";
     private static final int CONNECT_TIMEOUT_MS = 3500;
     private static final int WRITE_TIMEOUT_MS = 10000;
 

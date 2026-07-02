@@ -292,7 +292,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, agentAuthError());
         return;
       }
-      sendJson(response, 200, profileOptionsPayload());
+      sendJson(response, 200, gatewayProfileOptionsPayload());
       return;
     }
 
@@ -1753,6 +1753,31 @@ function profileOptionsFromUrl(url) {
     requested_scope: requestedScope === "device" ? "device" : "global",
     deviceId,
   };
+}
+
+function gatewayProfileOptionsPayload() {
+  return profileOptionsPayload({ models: gatewayModelOptions() });
+}
+
+function gatewayModelOptions() {
+  const models = [];
+  const seen = new Set();
+  function add(id, patch = {}) {
+    const modelId = String(id || "").trim();
+    if (!modelId || seen.has(modelId)) return;
+    seen.add(modelId);
+    models.push({
+      id: modelId,
+      label: patch.label || modelId,
+      provider: patch.provider || MODEL_PROVIDER,
+      current: patch.current === true,
+    });
+  }
+  add(MODEL_ID, { current: true });
+  for (const raw of String(process.env.MODEL_OPTIONS || process.env.MODEL_IDS || "").split(/[,;\n]+/)) {
+    add(raw);
+  }
+  return models;
 }
 
 function profileDeviceIdFromBody(body) {
@@ -3950,7 +3975,7 @@ async function handleLiveVoiceToolCall(call) {
     return {
       ok: true,
       type: "profile_options",
-      ...profileOptionsPayload(),
+      ...gatewayProfileOptionsPayload(),
     };
   }
   if (name === "start_voice_sampler") {

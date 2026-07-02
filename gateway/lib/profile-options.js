@@ -247,7 +247,40 @@ function voiceOptionsPayload() {
   }));
 }
 
-function profileOptionsPayload() {
+function normalizeModelOption(option) {
+  if (typeof option === "string") {
+    const id = option.trim();
+    return id ? { id, label: id } : null;
+  }
+  if (!option || typeof option !== "object") {
+    return null;
+  }
+  const id = String(option.id || option.model || "").trim();
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    label: String(option.label || id),
+    provider: String(option.provider || ""),
+    current: option.current === true,
+  };
+}
+
+function modelOptionsPayload(options = {}) {
+  const seen = new Set();
+  const models = [];
+  for (const raw of Array.isArray(options.models) ? options.models : []) {
+    const model = normalizeModelOption(raw);
+    if (!model || seen.has(model.id)) continue;
+    seen.add(model.id);
+    models.push(model);
+  }
+  return models;
+}
+
+function profileOptionsPayload(options = {}) {
+  const models = modelOptionsPayload(options);
   return {
     version: "profile-options/v1",
     endpoints: {
@@ -256,7 +289,12 @@ function profileOptionsPayload() {
     },
     voices: voiceOptionsPayload(),
     languages: languageOptionsPayload(),
+    models,
     fields: {
+      model: {
+        type: models.length > 0 ? "enum_or_text" : "text",
+        values: models.map((model) => model.id),
+      },
       voice: {
         type: "enum",
         values: CORE_VOICES.slice(),
@@ -306,6 +344,7 @@ module.exports = {
   normalizeLanguageList,
   normalizeLanguageListValue,
   languageOptionsPayload,
+  modelOptionsPayload,
   voiceOptionsPayload,
   profileOptionsPayload,
   normalizeSpeechKey,
