@@ -62,10 +62,11 @@ gateway_drifted() {
 deploy_gateway() {
   local force="${1:-}"
   # Hook-safe: when the main machine is unreachable (offline / ZeroTier down),
-  # skip quietly instead of erroring. BatchMode avoids any password hang.
+  # return a distinct status without marking the target deployed. BatchMode
+  # avoids any password hang.
   if ! ssh -o ConnectTimeout=6 -o BatchMode=yes "$REMOTE" true 2>/dev/null; then
     log "gateway: remote $REMOTE unreachable — skipping"
-    return 0
+    return 75
   fi
   if [ "$force" != "--force" ] && ! gateway_drifted; then
     log "gateway: in sync, nothing to deploy"
@@ -349,9 +350,17 @@ deploy_auto() {
   fi
 
   for target in $changed_targets; do
-    deploy_target "$target"
-    mark_deployed "$target"
-    did_deploy=1
+    if deploy_target "$target"; then
+      mark_deployed "$target"
+      did_deploy=1
+    else
+      status=$?
+      if [ "$status" -eq 75 ]; then
+        log "auto: $target deploy skipped; not marking deployed"
+      else
+        return "$status"
+      fi
+    fi
   done
 
   if [ "$did_deploy" -eq 0 ]; then
