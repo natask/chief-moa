@@ -23,6 +23,11 @@ Those IPs are useful only when intentionally testing on a local/ZeroTier
 gateway. The VPS URL replaces the "which 10.147 address is live?" failure mode
 with one HTTPS endpoint reachable by both phone and browser.
 
+In Android source, `MoaPrefs.ONBOARDING_GATEWAY_URL` is the visible hosted
+onboarding origin and `MoaPrefs.DEFAULT_GATEWAY_URL` currently points to it.
+Local/ZeroTier gateway URLs remain explicit developer choices, not implicit
+defaults.
+
 ## What The App Stores
 
 The Android app stores only:
@@ -34,6 +39,11 @@ The Android app stores only:
 
 It must not store provider keys, account passwords, worker tokens, or harness
 credentials.
+
+When the app finds an old tokenless seeded main-machine default such as
+`http://10.147.17.10:8787`, it migrates that saved URL to the hosted onboarding
+origin. If a token is already saved, the URL is left alone because it may belong
+to an intentional local gateway.
 
 ## First Run Flow
 
@@ -132,11 +142,9 @@ is set by length only. They must not print the token value.
 
 ## Source Follow-Ups
 
-- `MoaPrefs.java`: replace hosted default URL or make it build-time generated.
-- `MoaVoiceGatewaySocket.java`: derive hosted voice as `wss://...` and add stale
-  IP, token, route, and WebSocket proxy diagnostics.
+- `MoaPrefs.java`: add build-time generation if hosted/self-hosted release
+  variants need different defaults.
+- `MoaVoiceGatewaySocket.java`: consider moving Android to the same one-use
+  `/v1/voice/session-ticket` flow as browser voice before hosted mode.
 - `MainActivity.java`: add URL classification, auth probe after health, and a
   registration path using the existing Android device id.
-- `MoaStreamingVoiceSessionController.java`: decide whether Android keeps direct
-  bearer WebSocket auth or moves to the same one-use voice ticket flow as the
-  browser before hosted mode.

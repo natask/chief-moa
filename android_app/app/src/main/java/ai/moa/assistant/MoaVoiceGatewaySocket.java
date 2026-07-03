@@ -20,7 +20,7 @@ import okio.ByteString;
 
 final class MoaVoiceGatewaySocket {
     private static final String TAG = "MoaVoiceSocket";
-    static final String DEFAULT_URL = "ws://10.147.17.10:8787/v1/voice/sessions";
+    static final String DEFAULT_URL = voiceSocketUrl(MoaPrefs.DEFAULT_GATEWAY_URL);
     private static final int CONNECT_TIMEOUT_MS = 3500;
     private static final int WRITE_TIMEOUT_MS = 10000;
     // Keep readTimeout at 0 (infinite) so a long idle stretch mid-assistant-audio
@@ -57,6 +57,7 @@ final class MoaVoiceGatewaySocket {
     }
 
     private final String url;
+    private final String configuredUrl;
     private final String token;
     private final Callback callback;
     private final OkHttpClient client;
@@ -67,10 +68,11 @@ final class MoaVoiceGatewaySocket {
     private boolean destroyed;
 
     MoaVoiceGatewaySocket(Callback callback) {
-        this(DEFAULT_URL, "", callback);
+        this(MoaPrefs.DEFAULT_GATEWAY_URL, "", callback);
     }
 
     MoaVoiceGatewaySocket(String url, String token, Callback callback) {
+        this.configuredUrl = safe(url);
         this.url = voiceSocketUrl(url);
         this.token = safe(token);
         this.callback = callback;
@@ -87,12 +89,18 @@ final class MoaVoiceGatewaySocket {
             if (webSocket != null || destroyed) {
                 return;
             }
-            Request.Builder builder = new Request.Builder().url(url);
-            if (!token.isEmpty()) {
-                builder.header("Authorization", "Bearer " + token);
-            }
             Log.i(TAG, "connect -> " + redactedUrl(url) + " token=" + (token.isEmpty() ? "MISSING" : "set(" + token.length() + ")"));
-            webSocket = client.newWebSocket(builder.build(), new Listener());
+            try {
+                Request.Builder builder = new Request.Builder().url(url);
+                if (!token.isEmpty()) {
+                    builder.header("Authorization", "Bearer " + token);
+                }
+                webSocket = client.newWebSocket(builder.build(), new Listener());
+            } catch (IllegalArgumentException error) {
+                String message = socketFailureMessage(configuredUrl, url, error, null);
+                Log.e(TAG, "invalid voice gateway URL: " + message, error);
+                reportFailure(message, error);
+            }
         }
     }
 
@@ -306,7 +314,7 @@ final class MoaVoiceGatewaySocket {
         return value == null ? "" : value.trim();
     }
 
-    private static String voiceSocketUrl(String value) {
+    static String voiceSocketUrl(String value) {
         String url = safe(value);
         if (url.isEmpty()) {
             return DEFAULT_URL;
@@ -339,28 +347,55 @@ final class MoaVoiceGatewaySocket {
         return message.replace('\n', ' ').replace('\r', ' ').trim();
     }
 
-    private static String socketFailureMessage(String url, Throwable error, Response response) {
-        String target = redactedUrl(url);
+    static String socketFailureMessage(String configuredUrl, String socketUrl, Throwable error, Response response) {
+        String target = redactedUrl(safe(socketUrl).isEmpty() ? configuredUrl : socketUrl);
+        String urlDiagnostic = MoaPrefs.gatewayUrlDiagnosticMessage(configuredUrl);
         if (response != null) {
             int status = response.code();
             if (status == 401 || status == 403) {
-                return "Voice gateway rejected the socket request (HTTP " + status + "). Save the gateway token in Voice agent setup.";
+                return "Gateway reachable at " + target + ", but the voice socket token was rejected (HTTP "
+                        + status + "). " + tokenGuidance(configuredUrl);
             }
             if (status == 404) {
-                return "Voice gateway did not expose /v1/voice/sessions at " + target + ". Check the gateway URL.";
+                if (!urlDiagnostic.isEmpty()) {
+                    return "Voice gateway URL issue at " + target + ". " + urlDiagnostic;
+                }
+                return "Gateway is reachable, but voice routes are not deployed at "
+                        + target + " (HTTP 404). Check that this URL points at the stable VPS gateway or a local gateway with voice deployed.";
             }
             return "Voice gateway socket failed at " + target + " (HTTP " + status + ").";
         }
+        if (!urlDiagnostic.isEmpty()) {
+            return "Voice gateway URL issue at " + target + ". " + urlDiagnostic;
+        }
         if (isTimeout(error)) {
-            return "Could not reach voice gateway at " + target + " within " + CONNECT_TIMEOUT_MS + "ms. Check that the phone is on ZeroTier/VPN or the same network and that the gateway is running.";
+            return "Could not reach voice gateway at " + target + " within " + CONNECT_TIMEOUT_MS + "ms. "
+                    + stableOrLocalGatewayGuidance();
         }
         if (error instanceof UnknownHostException) {
-            return "Could not resolve voice gateway host for " + target + ". Check the gateway URL.";
+            return "Could not resolve voice gateway host for " + target + ". Enter the stable VPS URL "
+                    + MoaPrefs.ONBOARDING_GATEWAY_URL + " or verify DNS/TLS for your self-hosted gateway.";
         }
         if (error instanceof ConnectException) {
-            return "Could not connect to voice gateway at " + target + ". Check that the gateway is running and reachable from this phone.";
+            return "Could not connect to voice gateway at " + target + ". "
+                    + stableOrLocalGatewayGuidance();
         }
-        return "Voice gateway socket failed at " + target + ": " + cleanError(error) + ".";
+        return "Voice socket could not connect at " + target + ": " + cleanError(error)
+                + ". Check Cloudflare WebSocket proxying, TLS, the gateway voice route, and the saved gateway URL.";
+    }
+
+    private static String stableOrLocalGatewayGuidance() {
+        return "Use the stable VPS URL " + MoaPrefs.ONBOARDING_GATEWAY_URL
+                + " or confirm this phone is on the same network/VPN as the local gateway.";
+    }
+
+    private static String tokenGuidance(String configuredUrl) {
+        MoaPrefs.GatewayUrlIssue issue = MoaPrefs.classifyGatewayUrl(configuredUrl);
+        if (issue == MoaPrefs.GatewayUrlIssue.STALE_MAIN_MACHINE || issue == MoaPrefs.GatewayUrlIssue.LOCAL_DEV) {
+            return "The token may belong to a different gateway. Confirm the stable VPS URL "
+                    + MoaPrefs.ONBOARDING_GATEWAY_URL + ", then re-register this phone or paste a fresh token.";
+        }
+        return "Re-register this phone or paste a fresh device token.";
     }
 
     private static boolean isTimeout(Throwable error) {
@@ -442,8 +477,8 @@ final class MoaVoiceGatewaySocket {
             }
             Log.e(TAG, "onFailure HTTP " + (response != null ? response.code() : -1)
                     + " err=" + (error != null ? error.getClass().getSimpleName() + ":" + cleanError(error) : "none")
-                    + " msg=" + socketFailureMessage(url, error, response), error);
-            reportFailure(socketFailureMessage(url, error, response), error);
+                    + " msg=" + socketFailureMessage(configuredUrl, url, error, response), error);
+            reportFailure(socketFailureMessage(configuredUrl, url, error, response), error);
         }
     }
 

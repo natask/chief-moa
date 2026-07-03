@@ -5,11 +5,23 @@ import android.content.SharedPreferences;
 
 import org.json.JSONObject;
 
+import java.net.URI;
 import java.util.Locale;
 import java.util.UUID;
 
 final class MoaPrefs {
-    static final String DEFAULT_GATEWAY_URL = "http://10.147.17.10:8787";
+    static final String HOSTED_GATEWAY_URL = "https://api.agee.app";
+    static final String ONBOARDING_GATEWAY_URL = HOSTED_GATEWAY_URL;
+    static final String DEFAULT_GATEWAY_URL = ONBOARDING_GATEWAY_URL;
+    static final String LOCAL_DEV_GATEWAY_URL = "http://10.147.17.6:8787";
+    static final String LEGACY_MAIN_GATEWAY_URL = "http://10.147.17.10:8787";
+
+    private static final String[] STALE_DEFAULT_GATEWAY_URLS = new String[] {
+            LEGACY_MAIN_GATEWAY_URL,
+            "http://10.147.17.10:8788",
+            "ws://10.147.17.10:8787/v1/voice/sessions",
+            "ws://10.147.17.10:8788/v1/voice/sessions"
+    };
 
     private static final String PREFS = "moa_prefs";
     private static final String KEY_GATEWAY_URL = "gateway_url";
@@ -24,7 +36,16 @@ final class MoaPrefs {
     }
 
     static String gatewayUrl(Context context) {
-        return prefs(context).getString(KEY_GATEWAY_URL, DEFAULT_GATEWAY_URL);
+        SharedPreferences preferences = prefs(context);
+        String stored = preferences.getString(KEY_GATEWAY_URL, null);
+        if (stored == null) {
+            return DEFAULT_GATEWAY_URL;
+        }
+        String migrated = gatewayUrlAfterStaleDefaultMigration(stored, preferences.getString(KEY_GATEWAY_TOKEN, ""));
+        if (!safe(stored).equals(migrated)) {
+            preferences.edit().putString(KEY_GATEWAY_URL, migrated).apply();
+        }
+        return migrated;
     }
 
     static String gatewayToken(Context context) {
@@ -123,8 +144,101 @@ final class MoaPrefs {
         return "Hear " + input + " / Reply " + reply;
     }
 
+    static String gatewayUrlAfterStaleDefaultMigration(String storedGatewayUrl, String gatewayToken) {
+        String stored = safe(storedGatewayUrl);
+        if (stored.isEmpty() || !safe(gatewayToken).isEmpty()) {
+            return stored;
+        }
+        return isStaleDefaultGatewayUrl(stored) ? DEFAULT_GATEWAY_URL : stored;
+    }
+
+    static GatewayUrlIssue classifyGatewayUrl(String value) {
+        String raw = safe(value);
+        if (raw.isEmpty()) {
+            return GatewayUrlIssue.NONE;
+        }
+        String lower = raw.toLowerCase(Locale.US);
+        if (!lower.startsWith("http://")
+                && !lower.startsWith("https://")
+                && !lower.startsWith("ws://")
+                && !lower.startsWith("wss://")) {
+            return GatewayUrlIssue.MISSING_SCHEME;
+        }
+        try {
+            URI uri = new URI(raw);
+            boolean httpOrigin = lower.startsWith("http://") || lower.startsWith("https://");
+            String host = safe(uri.getHost()).toLowerCase(Locale.US);
+            if ("10.147.17.10".equals(host)) {
+                return GatewayUrlIssue.STALE_MAIN_MACHINE;
+            }
+            if ("10.147.17.6".equals(host)) {
+                return GatewayUrlIssue.LOCAL_DEV;
+            }
+            if (httpOrigin && isEndpointPath(uri.getPath())) {
+                return GatewayUrlIssue.ENDPOINT_PATH;
+            }
+        } catch (Exception ignored) {
+            return GatewayUrlIssue.MISSING_SCHEME;
+        }
+        return GatewayUrlIssue.NONE;
+    }
+
+    static String gatewayUrlDiagnosticMessage(String value) {
+        GatewayUrlIssue issue = classifyGatewayUrl(value);
+        switch (issue) {
+            case STALE_MAIN_MACHINE:
+                return "This points at the old main-machine ZeroTier gateway. Use the stable VPS URL "
+                        + ONBOARDING_GATEWAY_URL + " unless you are intentionally testing local dev.";
+            case LOCAL_DEV:
+                return "This points at the local Mac gateway. Use the stable VPS URL "
+                        + ONBOARDING_GATEWAY_URL
+                        + " for mobile onboarding, or keep the phone on the same network/VPN for local dev.";
+            case MISSING_SCHEME:
+                return "Enter the full gateway URL, for example " + ONBOARDING_GATEWAY_URL + ".";
+            case ENDPOINT_PATH:
+                return "Save only the gateway origin, not an endpoint path.";
+            case NONE:
+            default:
+                return "";
+        }
+    }
+
+    enum GatewayUrlIssue {
+        NONE,
+        MISSING_SCHEME,
+        ENDPOINT_PATH,
+        STALE_MAIN_MACHINE,
+        LOCAL_DEV
+    }
+
     private static SharedPreferences prefs(Context context) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static boolean isStaleDefaultGatewayUrl(String value) {
+        String normalized = trimTrailingSlashes(safe(value)).toLowerCase(Locale.US);
+        for (String staleUrl : STALE_DEFAULT_GATEWAY_URLS) {
+            if (normalized.equals(trimTrailingSlashes(staleUrl).toLowerCase(Locale.US))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isEndpointPath(String value) {
+        String path = trimTrailingSlashes(safe(value));
+        return "/health".equals(path)
+                || "/v1/chat".equals(path)
+                || "/v1/voice/turns".equals(path)
+                || "/v1/voice/sessions".equals(path);
+    }
+
+    private static String trimTrailingSlashes(String value) {
+        String result = safe(value);
+        while (result.length() > 1 && result.endsWith("/")) {
+            result = result.substring(0, result.length() - 1);
+        }
+        return result;
     }
 
     private static JSONObject agentProfile(Context context) {
@@ -165,6 +279,10 @@ final class MoaPrefs {
             }
         }
         return "";
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value.trim();
     }
 
 }
