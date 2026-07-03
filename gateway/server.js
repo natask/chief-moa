@@ -41,6 +41,7 @@ const {
   routeVoiceTurn,
   classificationFromActions,
 } = require("./lib/voice-router");
+const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8787);
@@ -3073,6 +3074,10 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     };
   }
 
+  if (intent.action === "revert") {
+    return handleVoiceProfileRevert(record, intent, profileOptions);
+  }
+
   if (intent.action === "clarify") {
     const message = profileClarificationText(intent.subject, profileOptions);
     return {
@@ -3134,6 +3139,136 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     device_id: profileOptions.deviceId || "",
     application,
     persona: intent.persona || "",
+    profile: agentProfileRuntimeStatus(profileOptions),
+  };
+}
+
+// HTTP-path counterpart of the revert_agent_profile live tool. mode "reset"
+// restores gateway defaults; mode "previous" undoes the last change. Both append
+// a new version so the profile can never land broken, and both report the
+// spoken confirmation plus a structured action for the client.
+function handleVoiceProfileRevert(record, intent, profileOptions) {
+  const mode = intent.mode === "reset" ? "reset" : "previous";
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
+  const application = profileApplicationSemantics();
+  const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
+
+  if (mode === "reset") {
+    agentProfile.reset({
+      source: "voice",
+      reason: "voice_profile_reset",
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+    const after = agentProfile.effective(profileOptions);
+    const afterVersion = agentProfile.currentVersion(profileOptions);
+    const changed = agentProfile.fields().filter((field) => before?.[field] !== after?.[field]);
+    recordProfileHistory(before, after, "voice", {
+      beforeVersion,
+      afterVersion,
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+    const message = changed.length > 0
+      ? `Reset ${scopeText} to the default settings. Applies ${application.applies.replace(/_/g, " ")}.`
+      : `Your settings were already the defaults ${scopeText}, so nothing changed.`;
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak: message,
+        display: message,
+        actions: [{
+          type: "profile_reverted",
+          mode: "reset",
+          reverted: changed.length > 0,
+          changed,
+          profile_version: afterVersion,
+          from_profile_version: beforeVersion,
+          scope: profileOptions.scope,
+          device_id: profileOptions.deviceId || "",
+          application,
+        }],
+        follow_up_expected: false,
+      }),
+      profile_version: afterVersion,
+      from_profile_version: beforeVersion,
+      scope: profileOptions.scope,
+      device_id: profileOptions.deviceId || "",
+      application,
+      profile: agentProfileRuntimeStatus(profileOptions),
+    };
+  }
+
+  const result = agentProfile.revertLast({
+    source: "voice",
+    reason: "voice_profile_revert",
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const afterVersion = agentProfile.currentVersion(profileOptions);
+  if (!result.ok) {
+    const message = result.reason === "already_at_previous"
+      ? `There is nothing newer to undo ${scopeText}; your settings are already at the previous state.`
+      : `There is no earlier change to undo ${scopeText}.`;
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak: message,
+        display: message,
+        actions: [{
+          type: "profile_reverted",
+          mode: "previous",
+          reverted: false,
+          reason: result.reason || "",
+          profile_version: afterVersion,
+          from_profile_version: beforeVersion,
+          scope: profileOptions.scope,
+          device_id: profileOptions.deviceId || "",
+          application,
+        }],
+        follow_up_expected: false,
+      }),
+      profile_version: afterVersion,
+      from_profile_version: beforeVersion,
+      scope: profileOptions.scope,
+      device_id: profileOptions.deviceId || "",
+      application,
+      profile: agentProfileRuntimeStatus(profileOptions),
+    };
+  }
+  const after = agentProfile.effective(profileOptions);
+  recordProfileHistory(before, after, "voice", {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const message = `Undid the last change ${scopeText}. Applies ${application.applies.replace(/_/g, " ")}.`;
+  return {
+    ...voiceTurnPayload(record, {
+      classification: "profile_control",
+      speak: message,
+      display: message,
+      actions: [{
+        type: "profile_reverted",
+        mode: "previous",
+        reverted: true,
+        changed: result.changed || [],
+        reverted_to_version: result.reverted_to_version || "",
+        profile_version: afterVersion,
+        from_profile_version: beforeVersion,
+        scope: profileOptions.scope,
+        device_id: profileOptions.deviceId || "",
+        application,
+      }],
+      follow_up_expected: false,
+    }),
+    profile_version: afterVersion,
+    from_profile_version: beforeVersion,
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId || "",
+    application,
     profile: agentProfileRuntimeStatus(profileOptions),
   };
 }
@@ -4069,6 +4204,12 @@ async function handleLiveVoiceToolCall(call) {
   if (name === "update_agent_profile") {
     return liveToolUpdateAgentProfile(call, args);
   }
+  if (name === "revert_agent_profile") {
+    return liveToolRevertAgentProfile(call, args);
+  }
+  if (name === "propose_page_tweak") {
+    return liveToolProposePageTweak(call, args);
+  }
   if (name === "get_profile_options") {
     return {
       ok: true,
@@ -4384,6 +4525,157 @@ function liveToolUpdateAgentProfile(call, args) {
     };
   }
   return result;
+}
+
+// Reversibility by voice: "undo that" / "reset your settings". mode "previous"
+// (default) restores the version before the last change; mode "reset" restores
+// the gateway defaults. Both append a new version so the app never lands in a
+// broken state, and both honor global/device scope like other profile changes.
+function liveToolRevertAgentProfile(call, args) {
+  const mode = String(args.mode || args.target || "previous").trim().toLowerCase() === "reset"
+    ? "reset"
+    : "previous";
+  const requestedScope = String(args.scope || args.profile_scope || "global").toLowerCase() === "device" ? "device" : "global";
+  const deviceId = normalizeDeviceId(args.device_id || call.device_id || "");
+  if (requestedScope === "device" && !deviceId) {
+    return {
+      ok: false,
+      error: "Hey, I would like to do that, but I need you to give me access to this device's Moa device id.",
+    };
+  }
+  const profileOptions = { scope: requestedScope === "device" ? "device" : "global", deviceId };
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
+
+  if (mode === "reset") {
+    agentProfile.reset({
+      source: "gemini-live-tool",
+      reason: String(args.reason || "live_profile_reset").slice(0, 80),
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+    const after = agentProfile.effective(profileOptions);
+    const afterVersion = agentProfile.currentVersion(profileOptions);
+    const changed = agentProfile.fields().filter((field) => before?.[field] !== after?.[field]);
+    recordProfileHistory(before, after, "gemini-live-tool", {
+      beforeVersion,
+      afterVersion,
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+    const application = profileApplicationSemantics();
+    const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
+    const message = changed.length > 0
+      ? `Reset ${scopeText} to the default settings. It applies ${application.applies.replace(/_/g, " ")}.`
+      : `Your settings were already the defaults ${scopeText}, so nothing changed.`;
+    return {
+      ok: true,
+      type: "agent_profile_reverted",
+      mode: "reset",
+      reverted: changed.length > 0,
+      changed,
+      from_profile_version: beforeVersion,
+      profile_version: afterVersion,
+      scope: profileOptions.scope,
+      device_id: profileOptions.deviceId,
+      message,
+      profile: agentProfileRuntimeStatus(profileOptions),
+      application,
+    };
+  }
+
+  const result = agentProfile.revertLast({
+    source: "gemini-live-tool",
+    reason: String(args.reason || "live_profile_revert").slice(0, 80),
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const afterVersion = agentProfile.currentVersion(profileOptions);
+  const application = profileApplicationSemantics();
+  const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
+  if (!result.ok) {
+    const message = result.reason === "already_at_previous"
+      ? `There is nothing newer to undo ${scopeText}; your settings are already at the previous state.`
+      : `There is no earlier change to undo ${scopeText}.`;
+    return {
+      ok: true,
+      type: "agent_profile_reverted",
+      mode: "previous",
+      reverted: false,
+      reason: result.reason,
+      from_profile_version: beforeVersion,
+      profile_version: afterVersion,
+      scope: profileOptions.scope,
+      device_id: profileOptions.deviceId,
+      message,
+      profile: agentProfileRuntimeStatus(profileOptions),
+      application,
+    };
+  }
+  const after = agentProfile.effective(profileOptions);
+  recordProfileHistory(before, after, "gemini-live-tool", {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const message = `Undid the last change ${scopeText}. It applies ${application.applies.replace(/_/g, " ")}.`;
+  return {
+    ok: true,
+    type: "agent_profile_reverted",
+    mode: "previous",
+    reverted: true,
+    changed: result.changed || [],
+    reverted_to_version: result.reverted_to_version || "",
+    from_profile_version: beforeVersion,
+    profile_version: afterVersion,
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId,
+    message,
+    profile: agentProfileRuntimeStatus(profileOptions),
+    application,
+  };
+}
+
+// Browser-sourced turns come from the agee extension. Only those may propose a
+// page tweak, since the tweak targets the browser page the user is looking at.
+function isBrowserSourcedCall(call) {
+  const source = String(call?.source || "").toLowerCase();
+  return source.includes("agee-extension") || source.includes("browser");
+}
+
+// The contract with the browser extension lane: the model proposes a page tweak
+// as a bounded { kind, params, name? } record; the gateway validates the kind
+// against the extension's allowlist and the params shape, then returns it as a
+// structured action { type: "page_tweak", record } in the turn result. The
+// gateway never executes the tweak and never emits CSS — the extension compiles
+// the CSS locally from kind+params, keeping the no-eval boundary. An invalid or
+// unknown kind is reported back to the model, not turned into a failed turn.
+function liveToolProposePageTweak(call, args) {
+  if (!isBrowserSourcedCall(call)) {
+    return {
+      ok: false,
+      error: "page tweaks are only available on browser turns from the agee extension",
+    };
+  }
+  const proposal = args && typeof args.tweak === "object" && !Array.isArray(args.tweak) ? args.tweak : args;
+  const validated = validatePageTweak(proposal);
+  if (!validated.ok) {
+    return {
+      ok: false,
+      type: "page_tweak_rejected",
+      error: validated.error,
+      supported_kinds: validated.supported_kinds || TWEAK_KINDS.slice(),
+    };
+  }
+  const record = validated.record;
+  return {
+    ok: true,
+    type: "page_tweak",
+    action: { type: "page_tweak", record },
+    record,
+    message: `Proposed a ${record.kind} change to this page; the browser will apply it and you can undo it there.`,
+  };
 }
 
 function liveToolStartVoiceSampler(args) {

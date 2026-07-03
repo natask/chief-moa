@@ -14,6 +14,7 @@ const {
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
+  parseProfileRevertIntent,
   parsePersonaIntent,
   classifyVoiceTurn,
 } = require("../lib/voice-intent");
@@ -276,6 +277,37 @@ assert.notEqual(parseProfileControlIntent("what time is it")?.action, "echo_tran
 // parsePersonaIntent knownOnly gate: a free-form subject is skipped when knownOnly.
 assert.equal(parsePersonaIntent("become a wizard", { knownOnly: true }), null, "knownOnly must skip unknown personas");
 assert.ok(parsePersonaIntent("become a wizard"), "free-form persona must resolve without knownOnly");
+
+// Reversibility by voice. "undo" / "revert" -> previous; "reset your settings"
+// / "start over" -> reset. Checked before persona/name matching so a reset
+// utterance is an undo, not a persona rename.
+for (const phrase of [
+  "undo that",
+  "undo the last change",
+  "revert that",
+  "take that back",
+  "change it back",
+]) {
+  const revert = parseProfileControlIntent(phrase);
+  assert.equal(revert?.action, "revert", `'${phrase}' must be a revert intent`);
+  assert.equal(revert?.mode, "previous", `'${phrase}' must revert to previous`);
+  assert.equal(classifyVoiceTurn({}, phrase), "profile_control", `'${phrase}' must route as profile_control`);
+}
+for (const phrase of [
+  "reset your settings",
+  "reset your profile",
+  "start over with the defaults",
+  "restore the default settings",
+]) {
+  const reset = parseProfileControlIntent(phrase);
+  assert.equal(reset?.action, "revert", `'${phrase}' must be a revert intent`);
+  assert.equal(reset?.mode, "reset", `'${phrase}' must reset to defaults`);
+}
+// A reset utterance must NOT be captured as a persona/name change.
+assert.equal(parseProfileControlIntent("reset your settings").patch, undefined, "reset must carry no profile patch");
+// Ordinary navigation must not be swept into a profile revert.
+assert.equal(parseProfileRevertIntent("go back to the previous page"), null, "page navigation is not a profile revert");
+assert.equal(parseProfileRevertIntent("what time is it"), null);
 
 // forced/hint fields override the heuristics.
 assert.strictEqual(classifyVoiceTurn({ forced_action: "control" }, "anything"), "control");

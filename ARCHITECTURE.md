@@ -111,6 +111,35 @@ Android owns playback: it consumes that action by opening one text-only Live
 session per sample with a session-only voice override, so samples do not mutate
 the saved profile voice.
 
+The model performs customization through gateway tool calls, not client-side
+keyword detection. On the Live path the model calls `update_agent_profile` to
+change any vetted setting (reply language, heard language, voice including
+masculine/feminine aliases, `response_modality`, `voice_max_chars`, assistant
+name, persona, providers), `revert_agent_profile` to undo its last change
+(`mode=previous`) or restore the gateway defaults (`mode=reset`), and
+`propose_page_tweak` on browser turns. Every write passes through the same
+sanitizer as the HTTP path (persona-prompt override stripping, the language
+allowlist, per-field coercion), so no tool value can blank a field or break the
+app; a rejected value keeps the previous setting and returns a structured
+`language_rejection`-style result rather than failing the turn. The HTTP turn
+path exposes the same capabilities through the deterministic profile-control
+intent parser: "undo that" reverts the last change and "reset your settings"
+restores defaults, both scoped global or per-device and both appending a new
+profile version so history stays append-only and every voice change is itself
+reversible by voice.
+
+Browser page tweaks follow the proposal boundary: `propose_page_tweak` is
+available only on browser-sourced turns, and the gateway validates the proposed
+`{ kind, params, name? }` record against the extension's own tweak allowlist
+(`hide`, `css-selector-hide`, `font-scale`, `font-size`, `dark`, `black`,
+`width`) and the params shape, then returns it as a structured
+`{ type: "page_tweak", record }` action in the turn result. The gateway never
+compiles CSS, emits code, or executes the tweak; it only passes a bounded
+declarative record, and the browser extension compiles the CSS locally and
+applies it. This keeps the no-eval boundary: the model cannot send CSS or JS
+strings, only a kind and bounded params, and an unknown kind or malformed params
+returns a `page_tweak_rejected` result instead of failing the turn.
+
 Spoken input must never be lost. Each stored voice turn keeps the exact final
 transcript with a transcript source label (real STT, typed text, or synthetic
 placeholder), streaming partials merge into the final record when the provider
