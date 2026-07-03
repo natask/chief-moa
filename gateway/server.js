@@ -835,6 +835,16 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname.startsWith("/v1/voice/turns/")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const turnId = decodeURIComponent(url.pathname.replace("/v1/voice/turns/", "")).trim();
+      handleVoiceTurnGet(response, turnId, url.searchParams.get("session_id") || "");
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/voice/session-ticket") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -2725,6 +2735,7 @@ async function handleVoiceTurn(request, response) {
     source,
     device_id: deviceId,
     transcript: truncate(transcript, 16000),
+    transcript_source: normalizeTranscriptSource(body.transcript_source, transcript, "client_stt"),
     classification,
     screen,
     created_at: startedAt,
@@ -2970,6 +2981,32 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     };
   }
 
+  if (intent.action === "echo_transcript") {
+    const previous = previousUserTranscript(record.session_id, record.branch_id, record.id);
+    const speak = previous.transcript
+      ? `You said: ${previous.transcript}`
+      : "I don't have a previous turn to repeat yet.";
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak,
+        display: speak,
+        actions: [{
+          type: "transcript_echo",
+          turn_id: previous.turn_id || "",
+          transcript: previous.transcript || "",
+          transcript_source: previous.transcript_source || "",
+        }],
+        follow_up_expected: false,
+      }),
+      echoed_turn_id: previous.turn_id || "",
+      echoed_transcript: previous.transcript || "",
+      echoed_transcript_source: previous.transcript_source || "",
+      profile_version: agentProfile.currentVersion(profileOptions),
+      profile: agentProfileRuntimeStatus(profileOptions),
+    };
+  }
+
   if (intent.action === "summary") {
     const summary = profileSummaryText(intent.subject, profileOptions);
     return {
@@ -3052,13 +3089,17 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         from_profile_version: beforeVersion,
         scope: profileOptions.scope,
         device_id: profileOptions.deviceId,
+        persona: intent.persona || "",
         application,
       }],
       follow_up_expected: false,
     }),
     profile_version: afterVersion,
     from_profile_version: beforeVersion,
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId || "",
     application,
+    persona: intent.persona || "",
     profile: agentProfileRuntimeStatus(profileOptions),
   };
 }
@@ -3785,6 +3826,23 @@ function voiceTranscript(body) {
   return String(body.transcript || body.text || body.input || "").trim();
 }
 
+// Label where a stored transcript came from so a client can tell a real echo
+// from a placeholder: "stt"/"client_stt"/"text" are real; "synthetic" is the
+// "Voice captured." fallback. An explicit source wins; otherwise a synthetic
+// placeholder transcript is labeled "synthetic" and anything else defaults.
+const KNOWN_TRANSCRIPT_SOURCES = new Set(["stt", "client_stt", "text", "synthetic"]);
+function normalizeTranscriptSource(explicit, transcript, fallback = "stt") {
+  const value = String(explicit || "").trim().toLowerCase();
+  if (KNOWN_TRANSCRIPT_SOURCES.has(value)) {
+    return value;
+  }
+  const text = String(transcript || "").trim();
+  if (!text || text === "Voice captured.") {
+    return "synthetic";
+  }
+  return fallback;
+}
+
 function voiceMessages(body, transcript) {
   const messages = Array.isArray(body.messages) ? normalizeMessages(body.messages) : [];
   const last = messages[messages.length - 1];
@@ -3885,6 +3943,7 @@ function voiceTurnPayload(record, patch) {
   const classification = patch.classification || record.classification;
   const display = String(patch.display ?? patch.speak ?? "");
   const speak = String(patch.speak ?? "");
+  const transcript = String(patch.transcript ?? record.transcript ?? "");
   return {
     turn_id: record.id,
     session_id: record.session_id,
@@ -3893,6 +3952,11 @@ function voiceTurnPayload(record, patch) {
     profile_version: record.profile_version || "",
     classification,
     action: classification,
+    // The exact final transcript captured for this turn, plus where it came
+    // from, so a client can show "You said: …" instantly and tell a real echo
+    // from the "Voice captured." synthetic placeholder.
+    transcript,
+    transcript_source: String(patch.transcript_source ?? record.transcript_source ?? ""),
     speak,
     display,
     text: display || speak,
@@ -4659,6 +4723,60 @@ function readVoiceTurnRecord(sessionId, turnId) {
   }
 }
 
+// Find a stored voice turn by id. Fast path uses the session dir when the
+// session is known; otherwise scans session dirs so a turn is queryable by id
+// alone. Returns the record or null.
+function findVoiceTurnRecordById(turnId, sessionId = "") {
+  const safeTurnId = sanitizeOptionalId(turnId, "");
+  if (!safeTurnId) {
+    return null;
+  }
+  if (sessionId) {
+    const record = readVoiceTurnRecord(sessionId, safeTurnId);
+    if (record) return record;
+  }
+  if (!fs.existsSync(VOICE_TURNS_DIR)) {
+    return null;
+  }
+  for (const sessionDir of fs.readdirSync(VOICE_TURNS_DIR)) {
+    const filePath = path.join(VOICE_TURNS_DIR, sessionDir, `${safeTurnId}.json`);
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// GET /v1/voice/turns/:turnId — return the stored turn so spoken input is never
+// lost: the verbatim transcript, its source, the assistant text, and timestamps.
+function handleVoiceTurnGet(response, turnId, sessionId) {
+  const record = findVoiceTurnRecordById(turnId, sessionId);
+  if (!record) {
+    sendJson(response, 404, { error: "voice turn not found" });
+    return;
+  }
+  sendJson(response, 200, {
+    turn_id: String(record.id || ""),
+    session_id: String(record.session_id || ""),
+    conversation_id: String(record.conversation_id || ""),
+    branch_id: String(record.branch_id || ""),
+    profile_version: String(record.profile_version || ""),
+    classification: String(record.classification || ""),
+    source: String(record.source || ""),
+    device_id: String(record.device_id || ""),
+    transcript: String(record.transcript || ""),
+    transcript_source: String(record.transcript_source || ""),
+    assistant_text: String(record.response?.display || record.response?.speak || ""),
+    speak: String(record.response?.speak || ""),
+    created_at: String(record.created_at || ""),
+    updated_at: String(record.updated_at || ""),
+    references: record.references || {},
+  });
+}
+
 function writeVoiceTurnRecord(record) {
   const dir = path.join(VOICE_TURNS_DIR, sanitizeOptionalId(record.session_id, "default"));
   fs.mkdirSync(dir, { recursive: true });
@@ -4693,6 +4811,7 @@ async function recordStreamingVoiceTurn(turn) {
   }
 
   const transcript = truncate(String(turn.transcript || ""), 16000);
+  const transcriptSource = normalizeTranscriptSource(turn.transcript_source, transcript);
   const assistantText = String(turn.assistant_text || "").trim();
   const deviceId = normalizeDeviceId(turn.device_id || turn.deviceId || "");
   // Capture memory-worthy statements ("my name is X", "remember that …") from
@@ -4719,6 +4838,7 @@ async function recordStreamingVoiceTurn(turn) {
     device_id: deviceId,
     source: String(turn.source || "android-overlay").slice(0, 80),
     transcript,
+    transcript_source: transcriptSource,
     classification: liveClassification === "profile_control"
       ? "profile_control"
       : (incomplete ? "interrupted" : "chat"),
@@ -4931,6 +5051,29 @@ function listVoiceTurnRecordsForSession(sessionId, branchId) {
   }
   records.sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
   return records;
+}
+
+// The exact final transcript of the user's previous turn, for "what did you
+// hear" echo-back. Verbatim — the raw stored transcript, never paraphrased.
+// Skips the current turn and any synthetic "Voice captured." placeholder so the
+// echo reflects what was actually heard.
+function previousUserTranscript(sessionId, branchId, currentTurnId) {
+  const records = listVoiceTurnRecordsForSession(sessionId, "");
+  const currentId = String(currentTurnId || "");
+  for (let i = records.length - 1; i >= 0; i -= 1) {
+    const record = records[i];
+    if (String(record.id || "") === currentId) continue;
+    const transcript = String(record.transcript || "").trim();
+    if (!transcript) continue;
+    const source = String(record.transcript_source || "");
+    if (transcript === "Voice captured." || source === "synthetic") continue;
+    return {
+      turn_id: String(record.id || ""),
+      transcript,
+      transcript_source: source || "stt",
+    };
+  }
+  return { turn_id: "", transcript: "", transcript_source: "" };
 }
 
 function sessionContextPayload({ sessionId, branchId = "default", allBranches = false }) {

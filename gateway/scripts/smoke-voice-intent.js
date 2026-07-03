@@ -14,6 +14,7 @@ const {
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
+  parsePersonaIntent,
   classifyVoiceTurn,
 } = require("../lib/voice-intent");
 const {
@@ -220,6 +221,58 @@ assert.deepStrictEqual(parseProfileControlIntent("what is your name"), {
   subject: "assistant_name",
   scope: "global",
 });
+
+// Persona control: "become X" / "act as X" / "you are now <known persona>".
+// A known catalog persona carries a vetted prompt (+ optional voice); a
+// free-form persona is stored as a "You are X." prompt. Both route as
+// profile_control and set system_prompt.
+const pirate = parseProfileControlIntent("become a pirate");
+assert.equal(pirate.action, "update", "become a pirate must be an update intent");
+assert.equal(pirate.persona, "pirate", "become a pirate must resolve the pirate persona");
+assert.equal(pirate.patch.voice, "Fenrir", "pirate persona must carry its voice");
+assert.ok(/pirate/i.test(pirate.patch.system_prompt), "pirate persona must set a pirate system prompt");
+assert.equal(pirate.confirmation, "Done. I am now your pirate.", "pirate persona must confirm tersely");
+
+const therapist = parseProfileControlIntent("act like a therapist");
+assert.equal(therapist.persona, "therapist", "act like a therapist must resolve the therapist persona");
+
+// A KNOWN persona via "you are now X" wins over the name matcher.
+const butler = parseProfileControlIntent("you are now a butler");
+assert.equal(butler.persona, "butler", "'you are now a butler' must switch persona, not rename");
+assert.equal(butler.patch.assistant_name, undefined, "known persona must not be treated as a name");
+
+// A free-form persona is stored as a custom prompt.
+const chef = parseProfileControlIntent("pretend to be a grumpy chef who hates onions");
+assert.equal(chef.persona, "custom", "free-form persona must be marked custom");
+assert.ok(/grumpy chef who hates onions/i.test(chef.patch.system_prompt), "custom persona prompt must carry the description");
+
+// "you are now Moa" still renames (free-form persona must not swallow names).
+const rename = parseProfileControlIntent("you are now Moa");
+assert.equal(rename.patch.assistant_name, "Moa", "'you are now Moa' must set the assistant name");
+assert.ok(!rename.persona, "'you are now Moa' must not be a persona");
+
+// A voice-only utterance must not be captured as a persona.
+assert.deepStrictEqual(parseProfileControlIntent("use the Charon voice").patch, { voice: "Charon" });
+
+// Exact-transcript echo-back: "what did you hear" / "what did I say" / "repeat
+// what I said" route as an echo_transcript control action.
+for (const phrase of [
+  "what did you hear",
+  "what did I say",
+  "repeat what I said exactly",
+  "read that back",
+  "what were my exact words",
+]) {
+  const echo = parseProfileControlIntent(phrase);
+  assert.equal(echo?.action, "echo_transcript", `'${phrase}' must be an echo_transcript intent`);
+  assert.equal(classifyVoiceTurn({}, phrase), "profile_control", `'${phrase}' must route as profile_control`);
+}
+// A plain question must not be an echo.
+assert.notEqual(parseProfileControlIntent("what time is it")?.action, "echo_transcript");
+
+// parsePersonaIntent knownOnly gate: a free-form subject is skipped when knownOnly.
+assert.equal(parsePersonaIntent("become a wizard", { knownOnly: true }), null, "knownOnly must skip unknown personas");
+assert.ok(parsePersonaIntent("become a wizard"), "free-form persona must resolve without knownOnly");
 
 // forced/hint fields override the heuristics.
 assert.strictEqual(classifyVoiceTurn({ forced_action: "control" }, "anything"), "control");

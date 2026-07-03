@@ -793,7 +793,8 @@ class GeminiLiveVoiceProvider {
 
     await this.runWebSocketTurn(turn, hooks, state);
 
-    if (!state.inputTranscript.trim()) {
+    const hadRealTranscript = Boolean(state.inputTranscript.trim());
+    if (!hadRealTranscript) {
       state.inputTranscript = "Voice captured.";
     }
     if (!state.assistantTextSent && state.outputTranscript.trim()) {
@@ -809,6 +810,10 @@ class GeminiLiveVoiceProvider {
       provider: this.provider,
       model: this.model,
       transcript: state.inputTranscript.trim(),
+      // "stt" when the provider returned a real input transcript; "synthetic"
+      // when we fell back to a placeholder because STT produced nothing. Lets
+      // the client tell a real echo-back from "Voice captured."
+      transcript_source: hadRealTranscript ? "stt" : "synthetic",
       assistant_text: state.outputTranscript.trim(),
       audio_format: CLIENT_AUDIO_FORMAT,
     };
@@ -864,13 +869,22 @@ class GeminiLiveVoiceProvider {
       idleTimer.unref();
     };
 
-    const result = () => ({
-      provider: this.provider,
-      model: this.model,
-      transcript: state.inputTranscript.trim() || String(turn.syntheticText || "").trim() || "Voice captured.",
-      assistant_text: state.outputTranscript.trim(),
-      audio_format: CLIENT_AUDIO_FORMAT,
-    });
+    const result = () => {
+      const sttTranscript = state.inputTranscript.trim();
+      const textTurnText = String(turn.syntheticText || "").trim();
+      // Real STT wins; a text_turn's typed text is "text"; otherwise the
+      // placeholder is "synthetic". Lets the client and echo-back tell what was
+      // actually heard from a fallback.
+      const transcriptSource = sttTranscript ? "stt" : (textTurnText ? "text" : "synthetic");
+      return {
+        provider: this.provider,
+        model: this.model,
+        transcript: sttTranscript || textTurnText || "Voice captured.",
+        transcript_source: transcriptSource,
+        assistant_text: state.outputTranscript.trim(),
+        audio_format: CLIENT_AUDIO_FORMAT,
+      };
+    };
 
     let resolveDone;
     let rejectDone;

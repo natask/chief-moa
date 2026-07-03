@@ -578,7 +578,16 @@ class VoiceSessionConnection {
   }
 
   async completeTurnWithProviderResult(turn, providerEvents, providerResult) {
-    const transcript = String(providerResult?.transcript || providerEvents.transcript || "").trim();
+    // Merge streaming partials into the final transcript: if the provider result
+    // is missing or the "Voice captured." synthetic placeholder but a real
+    // transcript_partial/transcript_final arrived over the stream, prefer that so
+    // the stored turn holds what was actually heard, not the fallback.
+    const resultTranscript = String(providerResult?.transcript || "").trim();
+    const streamedTranscript = String(providerEvents.transcript || "").trim();
+    const resultIsSynthetic = !resultTranscript || resultTranscript === "Voice captured.";
+    const transcript = (resultIsSynthetic && streamedTranscript)
+      ? streamedTranscript
+      : (resultTranscript || streamedTranscript);
     const assistantText = String(providerResult?.assistant_text || providerEvents.assistantText || "").trim();
     const assistantAudioFormat = providerResult?.audio_format || ASSISTANT_AUDIO_FORMAT;
     writeTurnMetadata(turn, {
@@ -601,8 +610,13 @@ class VoiceSessionConnection {
       await providerHooks.onTranscriptFinal(transcript);
     }
 
+    let transcriptSource = String(providerResult?.transcript_source || "").trim();
+    if (!transcriptSource || (transcriptSource === "synthetic" && streamedTranscript)) {
+      transcriptSource = (transcript && transcript !== "Voice captured.") ? "stt" : "synthetic";
+    }
     const canonicalRecord = await this.recordCompletedTurn(turn, providerResult, {
       transcript,
+      transcriptSource,
       assistantText,
       assistantAudioFormat,
     });
@@ -673,6 +687,7 @@ class VoiceSessionConnection {
         started_at: turn.startedAt,
         completed_at: nowIso(),
         transcript,
+        transcript_source: transcript ? "stt" : "",
         assistant_text: assistantText,
         provider: turn.providerStatus?.provider || this.voiceProvider.status().provider,
         model: turn.providerStatus?.model || this.voiceProvider.status().model,
@@ -718,6 +733,7 @@ class VoiceSessionConnection {
         started_at: turn.startedAt,
         completed_at: nowIso(),
         transcript: completed.transcript,
+        transcript_source: completed.transcriptSource || providerResult?.transcript_source || "",
         assistant_text: completed.assistantText,
         provider: providerResult?.provider || this.voiceProvider.status().provider,
         model: providerResult?.model || this.voiceProvider.status().model,

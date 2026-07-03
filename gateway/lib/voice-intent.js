@@ -11,6 +11,7 @@
 const {
   LANGUAGE_OPTIONS: LANGUAGE_DEFINITIONS,
   canonicalVoice,
+  canonicalPersona,
 } = require("./profile-options");
 
 // Lowercase, strip punctuation, collapse whitespace. The matchers below assume
@@ -118,6 +119,9 @@ function parseProfileControlIntent(text) {
     return null;
   }
   const scope = profileScopeFromText(lower);
+  if (wantsTranscriptEcho(lower)) {
+    return { action: "echo_transcript", subject: "transcript", scope };
+  }
   const voiceSampleText = voiceSampleTextFrom(raw);
   if (wantsVoiceSampling(lower)) {
     return {
@@ -171,6 +175,15 @@ function parseProfileControlIntent(text) {
     };
   }
 
+  // A KNOWN catalog persona ("become a pirate", "you are now a butler") wins
+  // over the name matcher so "you are now a butler" switches persona rather than
+  // renaming the assistant to "butler". Free-form personas are handled later, so
+  // "you are now Moa" still sets the name.
+  const knownPersona = parsePersonaIntent(raw, { knownOnly: true });
+  if (knownPersona) {
+    return knownPersona;
+  }
+
   const assistantName = assistantNameUpdateFrom(raw);
   if (assistantName) {
     return {
@@ -207,6 +220,11 @@ function parseProfileControlIntent(text) {
     };
   }
 
+  const persona = parsePersonaIntent(raw);
+  if (persona) {
+    return persona;
+  }
+
   if (needsVoiceChoice(lower)) {
     return {
       action: "clarify",
@@ -217,6 +235,120 @@ function parseProfileControlIntent(text) {
   }
 
   return null;
+}
+
+// "what did you hear / what did I say / repeat what I said exactly" — the user
+// wants the exact final transcript of their PREVIOUS turn echoed back verbatim,
+// not a paraphrase. Detected here so it routes as an instant control action
+// against stored turns rather than through a model call.
+function wantsTranscriptEcho(lower) {
+  if (/\b(?:what|which)\s+(?:did|do)\s+(?:you|u)\s+(?:hear|catch|get|understand)\b/.test(lower)) {
+    return true;
+  }
+  if (/\bwhat\s+did\s+i\s+(?:say|just say)\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:repeat|say|read|show|tell me)\b[^.]*\b(?:what|exactly what)\s+i\s+(?:said|just said)\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:repeat|read)\s+(?:that|it)\s+back\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:exact|exactly)\s+(?:transcript|words|what)\b/.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+// "become X" / "act as X" / "act like X" / "you are now X" / "pretend to be X" /
+// "roleplay as X" -> switch persona. A known persona from the catalog carries a
+// vetted prompt (and optional voice); an unknown free-form X is stored as a
+// persona prompt ("You are X."), sanitized/capped downstream. Returns an update
+// intent or null.
+const PERSONA_PATTERNS = [
+  /\bbecome\s+(.+)$/i,
+  /\bact\s+(?:as|like)\s+(?:if you(?:'re| are)\s+)?(.+)$/i,
+  /\bpretend\s+(?:to\s+be|you(?:'re| are))\s+(.+)$/i,
+  /\brole\s*play\s+(?:as\s+)?(.+)$/i,
+  /\byou\s+are\s+now\s+(.+)$/i,
+  /\bbe\s+(?:a|an)\s+(.+)$/i,
+];
+
+function parsePersonaIntent(text, options = {}) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const knownOnly = options.knownOnly === true;
+  const scope = profileScopeFromText(normalizeSpeech(raw));
+  for (const pattern of PERSONA_PATTERNS) {
+    const match = raw.match(pattern);
+    const subject = personaSubjectFrom(match?.[1] || "");
+    if (!subject) {
+      continue;
+    }
+    const known = canonicalPersona(subject);
+    if (knownOnly && !known) {
+      continue;
+    }
+    if (known) {
+      const patch = { system_prompt: known.prompt };
+      if (known.voice) {
+        patch.voice = known.voice;
+      }
+      if (known.language) {
+        patch.language = known.language;
+        patch.language_primary = known.language.split(",")[0].trim();
+        patch.language_mode = "explicit";
+        patch.language_output = "primary_only";
+        patch.language_auto_switch = false;
+      }
+      return {
+        action: "update",
+        patch,
+        summary: `persona ${known.label}`,
+        persona: known.id,
+        confirmation: `Done. I am now your ${known.label.toLowerCase()}.`,
+        scope,
+      };
+    }
+    // Free-form persona: store as a persona prompt. Sanitized/capped in
+    // agent-profile.js, which strips any rule-override attempt.
+    const label = subject.replace(/^(?:a|an)\s+/i, "").trim();
+    return {
+      action: "update",
+      patch: { system_prompt: `You are ${label}. Stay in character. Keep replies terse.` },
+      summary: `persona ${label}`,
+      persona: "custom",
+      confirmation: `Done. I am now ${label}.`,
+      scope,
+    };
+  }
+  return null;
+}
+
+function personaSubjectFrom(value) {
+  const candidate = String(value || "")
+    .trim()
+    .replace(/\s+(?:from\s+now\s+on|going\s+forward|please|now|okay|ok)$/i, "")
+    .replace(/^["'`]+|["'`.!,?;:]+$/g, "")
+    .replace(/\s+(?:on|for)\s+(?:this|my|all|every)\s+(?:device|devices|phone|browser|surface)s?\b.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!candidate) {
+    return "";
+  }
+  // Reject pure language/voice/name changes so those keep their own routes.
+  if (/\bvoice\b/i.test(candidate)) {
+    return "";
+  }
+  if (candidate.length > 120 || candidate.split(/\s+/).length > 16) {
+    return "";
+  }
+  if (!/[A-Za-z]/.test(candidate)) {
+    return "";
+  }
+  return candidate;
 }
 
 function profileScopeFromText(lower) {
@@ -518,5 +650,6 @@ module.exports = {
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
+  parsePersonaIntent,
   classifyVoiceTurn,
 };
