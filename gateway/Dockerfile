@@ -1,4 +1,9 @@
 # syntax=docker/dockerfile:1
+#
+# One deployable gateway image. Deployment mode is env config (MOA_MODE), not a
+# build variant: the same image runs local dev, self-host BYOK, and hosted.
+# Never bake provider keys, tokens, or harness credentials into this image; the
+# gateway does not run agent harnesses in remote modes (worker-pull owns that).
 
 FROM node:22-bookworm-slim AS runtime
 

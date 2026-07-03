@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Scratch-only restore verification for Chief Moa VPS promotion gates.
 #
+# Canonical live Compose/VPS operations use scripts/vps/restore-check.sh. This
+# root entrypoint remains the standalone explicit-input restore verifier from
+# the agent-control-plane lane.
+#
 # This script restores backup artifacts into caller-provided scratch targets and
 # starts a local scratch gateway for /health. It does not read .env files or
 # touch the active deployment.

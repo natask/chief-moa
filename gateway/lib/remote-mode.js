@@ -61,8 +61,8 @@ function resolveRemoteMode(env = process.env) {
 }
 
 function normalizeMode(value) {
-  const mode = String(value || "local").trim().toLowerCase().replace(/_/g, "-");
-  if (mode === "selfhost") return "self-host";
+  const mode = String(value || "local").trim().toLowerCase().replace(/[_\s]/g, "-");
+  if (mode === "selfhost" || mode === "self-hosted") return "self-host";
   return mode || "local";
 }
 

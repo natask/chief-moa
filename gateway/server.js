@@ -45,14 +45,31 @@ const {
   classificationFromActions,
 } = require("./lib/voice-router");
 
+// Deployment mode. One image, env-driven modes (see
+// reference/openspec/changes/remote-hosted-gateway):
+//   local      dev default: no auth required, file fallback allowed, loopback bind
+//   self-host  remote: token + DATABASE_URL required, binds 0.0.0.0, trusts proxy
+//   hosted     self-host plus per-user accounts and backup expectations
+// Mode sets defaults only; each default stays overridable by its own env var.
 const runtimeMode = resolveRemoteMode(process.env);
 if (!runtimeMode.valid) {
   console.error(`Gateway configuration error: ${runtimeMode.issues.join("; ")}`);
+  if (runtimeMode.remote) {
+    console.error(
+      "Set the required remote-mode environment (see gateway/deploy/vps/gateway.env.example), " +
+        "or run MOA_MODE=local for a no-database dev gateway."
+    );
+  }
   process.exit(1);
 }
 
+const MOA_MODE = runtimeMode.mode;
+const REMOTE_MODE = runtimeMode.remote;
 const HOST = process.env.HOST || runtimeMode.defaultHost;
 const PORT = Number(process.env.PORT || 8787);
+// Behind Cloudflare/Caddy the gateway reads the forwarded protocol from proxy
+// headers. On by default in remote modes; MOA_TRUST_PROXY=0/1 overrides.
+const TRUST_PROXY = runtimeMode.trustProxy;
 const GATEWAY_DIR = __dirname;
 const REPO_ROOT = path.resolve(GATEWAY_DIR, "../..");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "./data");
@@ -240,6 +257,7 @@ const server = http.createServer(async (request, response) => {
         ok: true,
         mode: runtimeMode.mode,
         gateway_mode: runtimeMode.health(),
+        trust_proxy: TRUST_PROXY,
         provider: MODEL_PROVIDER,
         model: MODEL_ID,
         model_base_url: MODEL_BASE_URL,
@@ -1105,7 +1123,9 @@ server.on("upgrade", (request, socket, head) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`A.G. gateway listening on http://${HOST}:${PORT}`);
-  console.log(`Mode: ${runtimeMode.mode}${WORKER_PULL_AGENT_RUNS ? " worker-pull=on" : ""}`);
+  console.log(
+    `Mode: ${MOA_MODE} trust_proxy=${TRUST_PROXY} database=${process.env.DATABASE_URL ? "postgres" : "file-fallback"}${WORKER_PULL_AGENT_RUNS ? " worker-pull=on" : ""}`
+  );
   console.log(`Provider: ${MODEL_PROVIDER} model=${MODEL_ID}`);
   if (MODEL_PROVIDER === "vertex") {
     console.log(`Vertex: project=${VERTEX_PROJECT || "unset"} location=${VERTEX_LOCATION} auth=${vertexCredentialHint() || "missing"}`);
@@ -6145,7 +6165,7 @@ function sendAndroidOtaManifest(request, response) {
   }
 
   const host = request.headers.host || `${HOST}:${PORT}`;
-  const protocol = request.headers["x-forwarded-proto"] || "http";
+  const protocol = (TRUST_PROXY && firstForwardedValue(request.headers["x-forwarded-proto"])) || "http";
   sendJson(response, 200, {
     ...manifest,
     download_url: `${protocol}://${host}/v1/android/updates/latest.apk`,
@@ -7055,6 +7075,12 @@ function isPathInside(parent, child) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+// Chained proxies (Cloudflare -> Caddy) can send a comma-joined header list;
+// the first value is the client-facing protocol.
+function firstForwardedValue(header) {
+  return String(header || "").split(",")[0].trim();
+}
+
 function authorized(request) {
   if (!MOA_GATEWAY_TOKEN) {
     return runtimeMode.protectedRoutesOpenWithoutToken;
@@ -7094,12 +7120,11 @@ function cleanupVoiceSessionTickets() {
 }
 
 function voiceSessionUrlForRequest(request, ticket) {
-  const forwardedProto = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedProto = TRUST_PROXY ? firstForwardedValue(request.headers["x-forwarded-proto"]) : "";
   const proto = forwardedProto || (request.socket?.encrypted ? "https" : "http");
   const wsProto = proto === "https" ? "wss" : "ws";
-  const host = String(request.headers["x-forwarded-host"] || request.headers.host || `${HOST}:${PORT}`)
-    .split(",")[0]
-    .trim();
+  const forwardedHost = TRUST_PROXY ? firstForwardedValue(request.headers["x-forwarded-host"]) : "";
+  const host = forwardedHost || String(request.headers.host || `${HOST}:${PORT}`);
   const url = new URL(`${wsProto}://${host}${voiceSessionServer.endpoint}`);
   url.searchParams.set("ticket", ticket);
   return url.toString();

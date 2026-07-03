@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Safe-by-default pre-promotion backup lane for Chief Moa VPS deployments.
 #
+# Canonical live Compose/VPS operations use scripts/vps/backup.sh. This root
+# entrypoint remains the standalone explicit-input backup tool from the
+# agent-control-plane lane.
+#
 # This script intentionally does not source .env files. Provide the source
 # database URL, source DATA_DIR, and destination backup directory explicitly.
 set -euo pipefail
