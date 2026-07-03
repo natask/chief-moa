@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Aggie",
+  "name": "A.G.",
   "version": "0.1.9",
   "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
@@ -46,18 +46,18 @@
         "mac": "Command+Comma",
         "default": "Ctrl+Comma"
       },
-      "description": "Open Aggie command mode"
+      "description": "Open A.G. command mode"
     },
     "toggle-agee-voice": {
       "suggested_key": {
         "mac": "Command+Period",
         "default": "Ctrl+Period"
       },
-      "description": "Start or send Aggie voice"
+      "description": "Start or send A.G. voice"
     }
   },
   "action": {
-    "default_title": "Aggie — open settings",
+    "default_title": "A.G. — open settings",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

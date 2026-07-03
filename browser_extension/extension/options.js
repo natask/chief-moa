@@ -170,7 +170,7 @@ document.getElementById("grantMic").addEventListener("click", async () => {
         autoGainControl: true,
       },
     });
-    flashMic("Microphone granted to Aggie ✓");
+    flashMic("Microphone granted to A.G. ✓");
   } catch (err) {
     flashMic(`Microphone blocked: ${String(err.message || err)}`, false);
   } finally {

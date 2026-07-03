@@ -73,13 +73,13 @@ text streams into the result stack above the input. The extension does not
 render visible chat history; session history stays on the gateway and can be
 queried by asking Moa.
 Voice uses an extension offscreen document for microphone capture, so websites
-do not need per-site microphone approval for Aggie turns. Spoken turns
+do not need per-site microphone approval for A.G. turns. Spoken turns
 auto-commit after speech silence and re-arm while conversation mode is active.
 The Moa mark mirrors Android: single click opens the chat menu, click and hold
 while moving drags the mark, and double-click-and-hold starts manual voice mode;
 release commits that manual voice turn immediately.
 If Chrome blocks offscreen microphone capture, the overlay shows a visible
-permission error and opens the Aggie Options page; grant the microphone there or
+permission error and opens the A.G. Options page; grant the microphone there or
 set Microphone to Allow for the extension from `chrome://extensions`.
 Explicit open-tab commands such as `open https://example.com in a new tab`
 create a browser tab locally; open-and-report requests still run through the
