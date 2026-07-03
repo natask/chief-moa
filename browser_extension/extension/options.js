@@ -544,7 +544,7 @@ async function applyTalk(text) {
     talkResultEl.classList.add("err");
     talkResultEl.textContent =
       `Could not turn that into a settings change. Try: "be terser", "set the system prompt to …", ` +
-      `"use model gpt-4o-mini", "set temperature to 0.2", "reply in Spanish".`;
+      `"use model gpt-4o-mini", "set temperature to 0.2", "reply in Amharic".`;
     return;
   }
   talkResultEl.textContent = "Applying…";

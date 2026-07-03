@@ -335,7 +335,9 @@ claim, validate, execute, and receipt it.
   persona (vetted catalog or sanitized free-form system prompt), model behavior,
   and mission-agent access policy. The global profile applies to all devices;
   device overrides persist only for a named device client. Profile-change
-  responses report the scope and device id they applied to.
+  responses report the scope and device id they applied to. The current
+  language catalog is intentionally limited to English (`en-US`) and Amharic
+  (`am-ET`) until the product scope explicitly expands.
 - `browser_agent_owner`: the single active browser tab/page/run that may listen,
   speak, and show browser-local task cues for a browser session; non-owner tabs
   can show passive status but must not capture voice or claim local cues.

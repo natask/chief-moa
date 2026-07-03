@@ -268,7 +268,7 @@ async function assertProfileScopeReported(baseUrl) {
   const turn = await postJson(`${baseUrl}/v1/voice/turns`, {
     session_id: "voice-profile-smoke",
     turn_id: "scope-report",
-    transcript: "respond in Spanish",
+    transcript: "respond in Amharic",
     source: "voice-profile-smoke",
   });
   assert.equal(turn.status, 200, `scope-report turn must succeed: ${JSON.stringify(turn.json)}`);

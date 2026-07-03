@@ -407,7 +407,7 @@ function normalizeAssistantNameCandidate(value) {
 // How the agent should deliver replies: "text" (write, don't speak) or "speech"
 // (speak out loud). Returns null when the utterance is not about output modality.
 // Operates on normalized text ("don't" -> "don t"). Runs after the language
-// parser, so "respond in French" is language and "respond in text" is modality.
+// parser, so "respond in Amharic" is language and "respond in text" is modality.
 function modalityUpdateFrom(lower) {
   if (/\b(?:respond|reply|answer|write|type|put it|send it)\b[^.]*\b(?:in|with|as|via|using)?\s*(?:text|writing|chat)\b/.test(lower)
     || /\btext\s*(?:only|mode)\b/.test(lower)
