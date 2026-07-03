@@ -15,6 +15,11 @@ const CLIENT_AUDIO_FORMAT = {
 const DEFAULT_GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 const DEFAULT_VERTEX_LIVE_MODEL = "gemini-live-2.5-flash-native-audio";
 const DEFAULT_CHIRP_MODEL = "chirp_3";
+// Chirp 3 language-restricted recognition holds a primary language plus at most
+// ONE alternative. Passing more codes (or the "auto" sentinel) drops the request
+// back to auto language detection, where the codes become hints only. Capping at
+// two keeps CHIRP_LANGUAGE_CODES a true allowlist (for example en-US,am-ET).
+const CHIRP_MAX_LANGUAGE_CODES = 2;
 const GEMINI_LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const VERTEX_LIVE_EXPRESS_ENDPOINT = "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent";
 const PROVIDER_TYPES = ["native_live", "stt", "reasoning", "tts"];
@@ -456,7 +461,13 @@ class ChirpSttVoiceProvider {
     this.projectId = chirpProjectId(env);
     this.location = String(env.CHIRP_LOCATION || env.GCP_LOCATION || env.GOOGLE_CLOUD_LOCATION || "us").trim() || "us";
     this.model = String(env.CHIRP_MODEL || env.VOICE_STT_MODEL || DEFAULT_CHIRP_MODEL).trim() || DEFAULT_CHIRP_MODEL;
-    this.languageCodes = languageCodes(env.CHIRP_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODE || env.GEMINI_LIVE_LANGUAGE_CODE || env.MODEL_LANGUAGE || "en-US");
+    // Restricted recognition: en-US,am-ET stays an allowlist, never a hint set.
+    // am-ET is only available on chirp_3, so force chirp_3 whenever any Amharic
+    // (am*) code is requested, even if the env asks for an older Chirp model.
+    this.languageCodes = restrictedChirpLanguageCodes(env.CHIRP_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODE || env.GEMINI_LIVE_LANGUAGE_CODE || env.MODEL_LANGUAGE || "en-US");
+    if (this.languageCodes.some((code) => /^am(-|$)/i.test(code)) && this.model !== DEFAULT_CHIRP_MODEL) {
+      this.model = DEFAULT_CHIRP_MODEL;
+    }
     this.timeoutMs = Math.max(5000, numberFrom(env.CHIRP_TIMEOUT_MS || env.VOICE_PROVIDER_TIMEOUT_MS, 30000));
     this.gcloudBin = env.GCLOUD_BIN || "gcloud";
     this.staticAccessToken = env.CHIRP_ACCESS_TOKEN || env.GCP_ACCESS_TOKEN || "";
@@ -539,6 +550,12 @@ class ChirpSttVoiceProvider {
       },
       body: JSON.stringify({
         config: {
+          // Explicit decoding (not autoDecodingConfig) plus a restricted
+          // languageCodes list is what actually pins recognition to the
+          // allowlist. Combining auto decoding / an "auto" language code with
+          // languageCodes drops Chirp 3 back to auto language detection, so
+          // this.languageCodes is already stripped of "auto" and capped at
+          // primary + one alternative by restrictedChirpLanguageCodes.
           explicitDecodingConfig: {
             encoding: "LINEAR16",
             sampleRateHertz: sampleRate,
@@ -1716,6 +1733,25 @@ function languageCodes(value) {
     .map((entry) => entry.trim())
     .filter(Boolean);
   return codes.length ? Array.from(new Set(codes)).slice(0, 10) : ["en-US"];
+}
+
+// Chirp 3 language-restricted recognition. On Chirp 3, languageCodes=["auto"]
+// (or an "auto" value mixed into the list) turns restriction OFF: the model
+// detects the spoken language on its own and any listed codes become hints only.
+// To truly restrict recognition you must send explicit BCP-47 codes with NO
+// "auto" sentinel, and Chirp 3's restricted mode holds a primary plus at most
+// ONE alternative. This strips any "auto" sentinel, dedupes, and caps at primary
+// + one alternative so a request that lists e.g. "en-US,am-ET" restricts
+// recognition to exactly those two languages instead of falling back to
+// auto-detection. am-ET requires the chirp_3 model.
+function restrictedChirpLanguageCodes(value) {
+  const codes = String(value || "")
+    .split(/[,\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => entry.toLowerCase() !== "auto");
+  const deduped = Array.from(new Set(codes));
+  return deduped.length ? deduped.slice(0, CHIRP_MAX_LANGUAGE_CODES) : ["en-US"];
 }
 
 function profileIdentityInstruction(profile) {
