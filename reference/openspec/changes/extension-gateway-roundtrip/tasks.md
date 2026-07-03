@@ -27,3 +27,8 @@
 - [x] 1.15 Keep exactly one Aggie root on each top-level page after extension
       reload/reinjection, while blocking iframe duplicates. Verified by
       `npm run verify` and `npm run smoke`.
+- [x] 1.16 Align browser mark and keyboard parity: Cmd/Ctrl+, opens the same
+      typed command surface as a single mark click, duplicate keydown/command
+      deliveries are idempotent, quick double-click release is text-only, and
+      only double-click-and-hold starts mark push-to-talk. Verified by
+      `npm run verify`.

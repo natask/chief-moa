@@ -198,6 +198,32 @@ if (!/e\.code === "Comma"/.test(contentSource) || /toLowerCase\(\) === "k"/.test
   throw new Error("text command hotkey must be Cmd/Ctrl+Comma, not Cmd/Ctrl+K");
 }
 
+const openTypedCommandSurfaceBody = sourceBetween(
+  contentSource,
+  /function openTypedCommandSurface\(/,
+  /function closeTextSurface\(/,
+  "typed command open helper"
+);
+if (
+  !/openTextSurface\(\{\s*fresh:\s*false\s*\}\)/.test(openTypedCommandSurfaceBody) ||
+  /commitLiveVoiceTurn\(\)|toggleVoice\(\)|startLiveVoiceTurn\(|submitInstruction\(/.test(openTypedCommandSurfaceBody)
+) {
+  throw new Error("typed command open helper must be idempotent open-only, with no voice or submit side effects");
+}
+
+const textHotkeyBody = sourceBetween(
+  contentSource,
+  /\/\/ ⌘, → text command field\./,
+  /\n\s*\}\s*,\n\s*true/,
+  "Cmd/Ctrl+Comma hotkey handler"
+);
+if (
+  !/openTypedCommandSurface\(\)/.test(textHotkeyBody) ||
+  /commitLiveVoiceTurn\(\)|toggleVoice\(\)|startLiveVoiceTurn\(|submitInstruction\(/.test(textHotkeyBody)
+) {
+  throw new Error("Cmd/Ctrl+Comma must match a mark single-click: open typed surface only");
+}
+
 if (/case "done":[\s\S]{0,180}setInputText\(msg\.summary/.test(contentSource)) {
   throw new Error("done replies must render in the result surface, not inside the command input");
 }
@@ -357,6 +383,19 @@ if (!/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) || !/startLauncher
   throw new Error("double-click-and-hold must start launcher push-to-talk after the hold threshold");
 }
 
+const launcherQuickDoubleClickBody = sourceBetween(
+  contentSource,
+  /if \(wasPendingDoubleClickHold\) \{/,
+  /\n\s*\}\n\s*if \(moved\)/,
+  "launcher quick double-click release handler"
+);
+if (
+  !/openTypedCommandSurface\(\)/.test(launcherQuickDoubleClickBody) ||
+  /commitLiveVoiceTurn\(\)|toggleVoice\(\)|startLiveVoiceTurn\(|submitInstruction\(/.test(launcherQuickDoubleClickBody)
+) {
+  throw new Error("releasing a launcher double-click before the hold threshold must open text only");
+}
+
 if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {
   throw new Error("browser voice must not show a separate top voice-state strip");
 }
@@ -369,6 +408,14 @@ const doneMessageCase = sourceBetween(contentSource, /case "done":/, /case "erro
 const errorMessageCase = sourceBetween(contentSource, /case "error":/, /case "agentRevoked":/, "error message case");
 if (/setInputText\(\s*""/.test(doneMessageCase) || /setInputText\(\s*""/.test(errorMessageCase)) {
   throw new Error("browser replies and errors must render above the composer without clearing typed drafts");
+}
+
+const openMessageCase = sourceBetween(contentSource, /case "open":/, /case "toggleVoice":/, "open message case");
+if (
+  !/openTypedCommandSurface\(\)/.test(openMessageCase) ||
+  /commitLiveVoiceTurn\(\)|toggleVoice\(\)|startLiveVoiceTurn\(|submitInstruction\(/.test(openMessageCase)
+) {
+  throw new Error("chrome.commands Cmd/Ctrl+Comma open message must be open-only and idempotent");
 }
 
 if (!/function safeRuntimeSendMessage/.test(contentSource) || !/function safeStorageLocalGet/.test(contentSource) || !/function safeStorageLocalSet/.test(contentSource)) {

@@ -134,6 +134,220 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
   throw new Error(`Timed out waiting for expression: ${expression}; last=${JSON.stringify(lastValue)}`);
 }
 
+function installRuntimeMessageProbeInPage() {
+  window.__ageeSmokeRuntimeMessages = [];
+  if (window.__ageeSmokeRuntimeProbeInstalled) return { ok: true, reused: true };
+  try {
+    const original = chrome?.runtime?.sendMessage;
+    if (typeof original !== "function") return { ok: false, error: "chrome.runtime.sendMessage missing" };
+    window.__ageeSmokeRuntimeSendMessageOriginal = original.bind(chrome.runtime);
+    const wrapped = (...args) => {
+      try {
+        const message = args[0];
+        window.__ageeSmokeRuntimeMessages.push(
+          message && typeof message === "object" ? JSON.parse(JSON.stringify(message)) : message,
+        );
+      } catch {
+        window.__ageeSmokeRuntimeMessages.push("[unserializable message]");
+      }
+      return window.__ageeSmokeRuntimeSendMessageOriginal(...args);
+    };
+    wrapped.__ageeSmokeProbe = true;
+    chrome.runtime.sendMessage = wrapped;
+    if (chrome.runtime.sendMessage !== wrapped) {
+      return { ok: false, error: "chrome.runtime.sendMessage was not replaceable" };
+    }
+    window.__ageeSmokeRuntimeProbeInstalled = true;
+    return { ok: true, reused: false };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error) };
+  }
+}
+
+function readTextSurfaceStateInPage() {
+  const root = document.querySelector("#agee-root");
+  const launcher = document.querySelector("#agee-launcher");
+  const panel = document.querySelector("#agee-panel");
+  const input = document.querySelector("#agee-input");
+  const voice = document.querySelector("#agee-voice");
+  const transcript = document.querySelector("#agee-transcript");
+  const messages = Array.isArray(window.__ageeSmokeRuntimeMessages)
+    ? window.__ageeSmokeRuntimeMessages
+    : [];
+  const runtimeVoiceMessages = messages.filter((message) => {
+    if (!message || typeof message !== "object") return false;
+    const cmd = String(message.cmd || "");
+    return /voice/i.test(cmd) || message.capture === "extension-offscreen";
+  });
+  return {
+    rootPresent: !!root,
+    launcherPresent: !!launcher,
+    panelPresent: !!panel,
+    inputPresent: !!input,
+    inputTag: input?.tagName?.toLowerCase() || "",
+    inputPlaceholder: input?.getAttribute("placeholder") || "",
+    inputValue: input?.value || "",
+    panelRole: panel?.getAttribute("role") || "",
+    open: !!root?.classList.contains("agee-open"),
+    activeInput: document.activeElement === input,
+    voicing: !!root?.classList.contains("agee-voicing"),
+    stateListening: !!root?.classList.contains("agee-state-listening"),
+    stateThinking: !!root?.classList.contains("agee-state-thinking"),
+    stateSpeaking: !!root?.classList.contains("agee-state-speaking"),
+    voiceButtonListening: !!voice?.classList.contains("listening"),
+    voiceAria: voice?.getAttribute("aria-label") || "",
+    voiceTitle: voice?.getAttribute("title") || "",
+    transcriptText: transcript?.textContent || "",
+    runtimeProbeInstalled: window.__ageeSmokeRuntimeProbeInstalled === true,
+    runtimeMessages: messages,
+    runtimeVoiceMessages,
+  };
+}
+
+async function executeInTab(workerCdp, tabId, func, args = []) {
+  return evaluate(workerCdp, `
+    (async () => {
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId: ${JSON.stringify(tabId)} },
+        func: ${func.toString()},
+        args: ${JSON.stringify(args)},
+      });
+      return result?.result;
+    })()
+  `);
+}
+
+async function sendTabMessage(workerCdp, tabId, message) {
+  return evaluate(workerCdp, `
+    chrome.tabs.sendMessage(${JSON.stringify(tabId)}, ${JSON.stringify(message)})
+  `);
+}
+
+async function resetRuntimeProbe(workerCdp, tabId) {
+  return executeInTab(workerCdp, tabId, installRuntimeMessageProbeInPage);
+}
+
+async function readTextSurfaceState(workerCdp, tabId) {
+  return executeInTab(workerCdp, tabId, readTextSurfaceStateInPage);
+}
+
+async function waitForTextSurface(workerCdp, tabId, label, timeoutMs = 3000) {
+  const started = Date.now();
+  let lastState;
+  while (Date.now() - started < timeoutMs) {
+    lastState = await readTextSurfaceState(workerCdp, tabId).catch((error) => ({
+      error: String(error?.message || error),
+    }));
+    if (lastState?.open && lastState?.activeInput) return lastState;
+    await delay(80);
+  }
+  throw new Error(`${label} did not open the typed surface: ${JSON.stringify(lastState)}`);
+}
+
+async function closeTextSurfaceIfOpen(workerCdp, tabId) {
+  const state = await readTextSurfaceState(workerCdp, tabId);
+  if (state?.open) {
+    await sendTabMessage(workerCdp, tabId, { cmd: "toggle" });
+    await delay(100);
+  }
+  const closed = await readTextSurfaceState(workerCdp, tabId);
+  if (closed?.open) throw new Error(`typed surface did not close during smoke reset: ${JSON.stringify(closed)}`);
+  await resetRuntimeProbe(workerCdp, tabId);
+}
+
+async function clickLauncher(pageCdp) {
+  const point = await waitForEval(pageCdp, `
+    (() => {
+      const launcher = document.querySelector("#agee-launcher");
+      if (!launcher) return null;
+      const rect = launcher.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    })()
+  `);
+  await pageCdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await pageCdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    clickCount: 1,
+  });
+}
+
+async function pressTextHotkey(pageCdp) {
+  const event = {
+    key: ",",
+    code: "Comma",
+    windowsVirtualKeyCode: 188,
+    nativeVirtualKeyCode: 188,
+    modifiers: 2,
+  };
+  await pageCdp.send("Input.dispatchKeyEvent", { ...event, type: "rawKeyDown" });
+  await pageCdp.send("Input.dispatchKeyEvent", { ...event, type: "keyUp" });
+}
+
+function comparableTextSurfaceState(state) {
+  return {
+    rootPresent: state?.rootPresent === true,
+    launcherPresent: state?.launcherPresent === true,
+    panelPresent: state?.panelPresent === true,
+    panelRole: state?.panelRole || "",
+    inputPresent: state?.inputPresent === true,
+    inputTag: state?.inputTag || "",
+    inputPlaceholder: state?.inputPlaceholder || "",
+    inputValue: state?.inputValue || "",
+    open: state?.open === true,
+    activeInput: state?.activeInput === true,
+    voicing: state?.voicing === true,
+    stateListening: state?.stateListening === true,
+    stateThinking: state?.stateThinking === true,
+    stateSpeaking: state?.stateSpeaking === true,
+    voiceButtonListening: state?.voiceButtonListening === true,
+    voiceAria: state?.voiceAria || "",
+    voiceTitle: state?.voiceTitle || "",
+    transcriptText: state?.transcriptText || "",
+  };
+}
+
+function assertTextSurfaceOpenWithoutVoice(label, state) {
+  const missing = ["rootPresent", "launcherPresent", "panelPresent", "inputPresent"]
+    .filter((key) => state?.[key] !== true);
+  if (missing.length) throw new Error(`${label} missing typed surface nodes: ${JSON.stringify(state)}`);
+  if (state.inputTag !== "textarea" || state.inputPlaceholder !== "Ask Aggie" || state.panelRole !== "dialog") {
+    throw new Error(`${label} did not expose the expected typed command surface: ${JSON.stringify(state)}`);
+  }
+  if (!state.open || !state.activeInput) {
+    throw new Error(`${label} did not open and focus #agee-input: ${JSON.stringify(state)}`);
+  }
+  if (state.voicing || state.stateListening || state.stateThinking || state.stateSpeaking || state.voiceButtonListening) {
+    throw new Error(`${label} started voice state instead of text-only open: ${JSON.stringify(state)}`);
+  }
+  if (state.voiceAria !== "Start voice" || state.voiceTitle !== "Start voice" || state.transcriptText) {
+    throw new Error(`${label} left voice controls in a non-idle state: ${JSON.stringify(state)}`);
+  }
+  if (state.runtimeProbeInstalled && state.runtimeVoiceMessages?.length) {
+    throw new Error(`${label} sent voice runtime messages: ${JSON.stringify(state.runtimeVoiceMessages)}`);
+  }
+}
+
+function assertSameTextSurfaceState(label, expected, actual) {
+  const expectedComparable = comparableTextSurfaceState(expected);
+  const actualComparable = comparableTextSurfaceState(actual);
+  if (JSON.stringify(actualComparable) !== JSON.stringify(expectedComparable)) {
+    throw new Error(`${label} did not match single-click text-open state: ${JSON.stringify({
+      expected: expectedComparable,
+      actual: actualComparable,
+    })}`);
+  }
+}
+
 function assertVoicePlaybackStopContract() {
   const source = readFileSync(join(extensionPath, "content.js"), "utf8");
   const background = readFileSync(join(extensionPath, "background.js"), "utf8");
@@ -303,6 +517,31 @@ async function main() {
     if (singleRootResult?.rootCount !== 1 || singleRootResult?.staleCount !== 0) {
       throw new Error(`content reinjection did not collapse duplicate Aggie roots: ${JSON.stringify(singleRootResult)}`);
     }
+
+    await browserCdp.send("Target.activateTarget", { targetId });
+    await closeTextSurfaceIfOpen(workerCdp, ping.tabId);
+
+    await clickLauncher(pageCdp);
+    const launcherOpenState = await waitForTextSurface(workerCdp, ping.tabId, "launcher single click/tap");
+    assertTextSurfaceOpenWithoutVoice("launcher single click/tap", launcherOpenState);
+
+    await closeTextSurfaceIfOpen(workerCdp, ping.tabId);
+    await pressTextHotkey(pageCdp);
+    const textHotkeyOpenState = await waitForTextSurface(workerCdp, ping.tabId, "Cmd/Ctrl+, page hotkey");
+    assertTextSurfaceOpenWithoutVoice("Cmd/Ctrl+, page hotkey", textHotkeyOpenState);
+    assertSameTextSurfaceState("Cmd/Ctrl+, page hotkey", launcherOpenState, textHotkeyOpenState);
+
+    await resetRuntimeProbe(workerCdp, ping.tabId);
+    await pressTextHotkey(pageCdp);
+    const repeatedTextHotkeyState = await waitForTextSurface(workerCdp, ping.tabId, "repeated Cmd/Ctrl+, page hotkey");
+    assertTextSurfaceOpenWithoutVoice("repeated Cmd/Ctrl+, page hotkey", repeatedTextHotkeyState);
+    assertSameTextSurfaceState("repeated Cmd/Ctrl+, page hotkey", launcherOpenState, repeatedTextHotkeyState);
+
+    await closeTextSurfaceIfOpen(workerCdp, ping.tabId);
+    await sendTabMessage(workerCdp, ping.tabId, { cmd: "open" });
+    const serviceWorkerOpenState = await waitForTextSurface(workerCdp, ping.tabId, "service-worker open command");
+    assertTextSurfaceOpenWithoutVoice("service-worker open command", serviceWorkerOpenState);
+    assertSameTextSurfaceState("service-worker open command", launcherOpenState, serviceWorkerOpenState);
 
     const overlayMetrics = await evaluate(workerCdp, `
       (async () => {
@@ -567,6 +806,7 @@ async function main() {
     console.log(
       `extension smoke passed (REAL extension, headless Chrome for Testing): ` +
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
+        `basic open paths checked (launcher click/tap, Cmd/Ctrl+, service-worker open), ` +
         `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
         `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +

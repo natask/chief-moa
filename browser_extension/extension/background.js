@@ -2293,6 +2293,9 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if ((command !== "toggle-agee" && command !== "toggle-agee-voice") || !tab?.id) return;
   try {
     await ensureContent(tab.id);
+    // The legacy "toggle-agee" command name is Cmd/Ctrl+Comma. Its behavior is
+    // an idempotent open, matching a single click on the browser mark. The page
+    // keydown listener may also handle the same shortcut before this arrives.
     await chrome.tabs.sendMessage(tab.id, { cmd: command === "toggle-agee-voice" ? "toggleVoice" : "open" });
   } catch {
     // Restricted browser pages cannot receive content scripts.

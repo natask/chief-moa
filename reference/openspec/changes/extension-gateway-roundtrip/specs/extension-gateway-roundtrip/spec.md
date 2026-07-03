@@ -91,10 +91,25 @@ text-to-speech as the production voice path.
 - **THEN** the extension opens the chat menu for typed input
 - **AND** it does not start, stop, or submit a voice turn
 
+#### Scenario: Cmd/Ctrl+Comma matches browser mark single click
+- **WHEN** the user presses Cmd+, or Ctrl+, while the browser content keydown
+  listener and the Chrome `commands` listener may both receive the shortcut
+- **THEN** the extension opens the same typed command/chat surface as a single
+  click on the browser Moa mark
+- **AND** the duplicate deliveries are idempotent and leave one typed surface
+  open
+- **AND** the shortcut does not start, stop, commit, or submit a voice turn
+
 #### Scenario: Browser mark click-and-hold drags
 - **WHEN** the user presses the browser Moa mark, holds, and moves it
 - **THEN** the extension repositions the mark
 - **AND** it does not start voice capture or toggle the chat menu
+
+#### Scenario: Browser mark quick double-click opens chat menu
+- **WHEN** the user double-clicks the browser Moa mark but releases before the
+  push-to-talk hold threshold
+- **THEN** the extension opens the chat menu for typed input
+- **AND** it does not start, stop, or submit a voice turn
 
 #### Scenario: Browser mark double-click-and-hold push-to-talk commits on release
 - **WHEN** the user double-clicks and holds the browser Moa mark

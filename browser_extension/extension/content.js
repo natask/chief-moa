@@ -330,12 +330,10 @@
       return;
     }
     if (wasPendingDoubleClickHold) {
-      // Released before the push-to-talk hold threshold = a quick double-click.
-      // Toggle voice: first quick double-click starts listening, the next one
-      // commits and sends. (Double-click and hold stays push-to-talk above.)
-      openTextSurface({ fresh: false });
-      primeAudio();
-      toggleVoice();
+      // Released before the push-to-talk hold threshold = a quick double-click:
+      // keep this equivalent to a normal mark click. Voice belongs only to the
+      // explicit voice button, Cmd/Ctrl+Period, or double-click-and-hold.
+      openTypedCommandSurface();
       return;
     }
     if (moved) {
@@ -363,7 +361,7 @@
       clickTimer = null;
       const tap = lastLauncherTap;
       lastLauncherTap = null;
-      if (tap) openTextSurface({ fresh: false });
+      if (tap) openTypedCommandSurface();
     }, LAUNCHER_DOUBLE_CLICK_MS);
   }
 
@@ -460,6 +458,13 @@
       setSurfacePhase("editing");
     }
     setTimeout(() => input.focus(), 0);
+  }
+
+  function openTypedCommandSurface() {
+    // Shared by mark single-click, Cmd/Ctrl+Comma, and chrome.commands. This is
+    // intentionally idempotent because Chrome may deliver both the page keydown
+    // and the extension command for the same keyboard action.
+    openTextSurface({ fresh: false });
   }
 
   function closeTextSurface() {
@@ -1639,7 +1644,7 @@
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
-        openTextSurface({ fresh: false });
+        openTypedCommandSurface();
         return;
       }
     },
@@ -1823,7 +1828,7 @@
         reply({ ok: true });
         return true;
       case "open":
-        openTextSurface({ fresh: false });
+        openTypedCommandSurface();
         reply({ ok: true });
         return true;
       case "toggleVoice":
