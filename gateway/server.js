@@ -10,6 +10,7 @@ const { createUiSpecStore } = require("./lib/ui-spec");
 const { createBrain } = require("./lib/brain");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
+const { createAccountConnectionStore } = require("./lib/account-connections");
 const {
   buildEvaluatorMessages,
   parseFinal: parsePresentationFinal,
@@ -139,6 +140,32 @@ const workGraph = createWorkGraphStore({
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
 });
 
+// Account connections: user-connected provider accounts + credential health.
+// Raw provider credentials stay inside this store's encrypted boundary; the
+// API surface exposes only connection summaries, `credential_ref_kind`, and
+// short-lived user-action URLs. Contract: reference/openspec/changes/
+// remote-hosted-gateway/account-connection-policy.md.
+const PUBLIC_BASE_URL = stripTrailingSlash(
+  process.env.PUBLIC_BASE_URL || `http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`
+);
+const accountConnections = createAccountConnectionStore({
+  dataDir: DATA_DIR,
+  publicBaseUrl: PUBLIC_BASE_URL,
+});
+// Periodic credential-health pass: refresh ahead of expiry where the provider
+// supports it, otherwise flag the user and queue a device notification. Set
+// ACCOUNT_HEALTH_INTERVAL_MS=0 to disable (tests drive it via
+// POST /v1/account-connections/health/run instead).
+const ACCOUNT_HEALTH_INTERVAL_MS = Number(process.env.ACCOUNT_HEALTH_INTERVAL_MS ?? 5 * 60 * 1000);
+if (ACCOUNT_HEALTH_INTERVAL_MS > 0) {
+  const accountHealthTimer = setInterval(() => {
+    accountConnections.runHealthChecks().catch((error) => {
+      console.error(`account credential health check failed: ${cleanError(error)}`);
+    });
+  }, ACCOUNT_HEALTH_INTERVAL_MS);
+  accountHealthTimer.unref();
+}
+
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
   systemPrompt: SYSTEM_PROMPT,
@@ -214,6 +241,11 @@ const server = http.createServer(async (request, response) => {
           token_required: !ALLOW_AGENT_WITHOUT_TOKEN,
         },
         android_ota: androidOtaHealth(),
+        account_connections: {
+          ...accountConnections.status(),
+          health_interval_ms: ACCOUNT_HEALTH_INTERVAL_MS,
+          endpoint: "/v1/account-connections",
+        },
         brain: {
           available: brain.available(),
           recall_limit: BRAIN_RECALL_LIMIT,
@@ -687,6 +719,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/v1/account-providers" || url.pathname.startsWith("/v1/account-connections")) {
+      await handleAccountConnectionRoutes(request, response, url);
+      return;
+    }
+
     sendJson(response, 404, { error: "not found" });
   } catch (error) {
     sendJson(response, 500, { error: cleanError(error) });
@@ -761,6 +798,229 @@ async function handlePresentationEvaluate(request, response) {
     turns_seen: turns.length,
     ...result,
   });
+}
+
+// All /v1/account-providers and /v1/account-connections* routes. Two auth
+// classes: browser-facing flows (OAuth start/callback, gateway secret form)
+// authenticate with a short-lived single-purpose token carried in the URL,
+// because the user's browser has no gateway bearer token; every other route
+// requires the gateway token like the agent endpoints. Raw provider secrets
+// enter only through the OAuth callback and the gateway-served secret form,
+// and no route ever returns one.
+async function handleAccountConnectionRoutes(request, response, url) {
+  const { method } = request;
+  const pathname = url.pathname;
+  try {
+    if (method === "GET" && pathname === "/v1/account-connections/oauth/start") {
+      const redirect = accountConnections.oauthStartRedirect(url.searchParams.get("state") || "");
+      response.writeHead(302, { location: redirect, "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+
+    if (method === "GET" && pathname === "/v1/account-connections/oauth/callback") {
+      const result = await accountConnections.completeOauthCallback({
+        state: url.searchParams.get("state") || "",
+        code: url.searchParams.get("code") || "",
+        error: url.searchParams.get("error") || "",
+      });
+      sendAccountHtml(response, 200, "Account connected", `${escapeHtml(result.connection.provider_label)} ("${escapeHtml(result.connection.label)}") is connected. You can close this window.`);
+      return;
+    }
+
+    if (method === "GET" && pathname === "/v1/account-connections/secret-form") {
+      const info = accountConnections.secretFormInfo(url.searchParams.get("token") || "");
+      sendAccountSecretForm(response, info);
+      return;
+    }
+
+    if (method === "POST" && pathname === "/v1/account-connections/secret-form") {
+      const { body, isForm } = await readFormOrJsonBody(request);
+      const result = accountConnections.submitSecretForm(String(body.token || ""), body);
+      if (isForm) {
+        sendAccountHtml(response, 200, "Credential stored", `${escapeHtml(result.connection.provider_label)} ("${escapeHtml(result.connection.label)}") is connected. The secret is stored encrypted on the gateway. You can close this window.`);
+      } else {
+        sendJson(response, 200, result);
+      }
+      return;
+    }
+
+    if (!authorizedAgent(request)) {
+      sendJson(response, 401, agentAuthError());
+      return;
+    }
+    const userId = accountUserId();
+
+    if (method === "GET" && pathname === "/v1/account-providers") {
+      sendJson(response, 200, { providers: accountConnections.catalog() });
+      return;
+    }
+
+    if (method === "GET" && pathname === "/v1/account-connections") {
+      sendJson(response, 200, { connections: accountConnections.list(userId) });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/v1/account-connections") {
+      const body = await readJsonBody(request);
+      const result = accountConnections.create(userId, body);
+      sendJson(response, result.statusCode, { connection: result.connection, reauth_action: result.reauth_action });
+      return;
+    }
+
+    if (method === "GET" && pathname === "/v1/account-connections/notifications") {
+      sendJson(response, 200, {
+        notifications: accountConnections.listNotifications({
+          userId,
+          deviceId: url.searchParams.get("device_id") || "",
+          status: url.searchParams.get("status") || "",
+        }),
+      });
+      return;
+    }
+
+    if (method === "POST" && pathname.startsWith("/v1/account-connections/notifications/") && pathname.endsWith("/receipt")) {
+      const id = pathname.slice("/v1/account-connections/notifications/".length, -"/receipt".length);
+      const body = await readJsonBody(request);
+      sendJson(response, 200, { notification: accountConnections.recordNotificationReceipt(userId, id, body) });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/v1/account-connections/health/run") {
+      sendJson(response, 200, { summary: await accountConnections.runHealthChecks() });
+      return;
+    }
+
+    const remainder = pathname.startsWith("/v1/account-connections/")
+      ? pathname.slice("/v1/account-connections/".length)
+      : "";
+    const [connectionId, action, extra] = remainder.split("/");
+    if (!connectionId || extra) {
+      sendJson(response, 404, { error: "not found" });
+      return;
+    }
+
+    if (method === "GET" && !action) {
+      sendJson(response, 200, { connection: accountConnections.get(userId, connectionId) });
+      return;
+    }
+
+    if (method === "PATCH" && !action) {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, { connection: accountConnections.patch(userId, connectionId, body) });
+      return;
+    }
+
+    if (method === "POST" && action === "refresh") {
+      const result = await accountConnections.requestRefresh(userId, connectionId);
+      sendJson(response, result.statusCode, { connection: result.connection });
+      return;
+    }
+
+    if (method === "POST" && action === "reauth") {
+      sendJson(response, 200, accountConnections.requestReauth(userId, connectionId));
+      return;
+    }
+
+    if (method === "POST" && action === "disable") {
+      sendJson(response, 200, { connection: accountConnections.disable(userId, connectionId) });
+      return;
+    }
+
+    if (method === "POST" && action === "disconnect") {
+      sendJson(response, 200, { connection: await accountConnections.disconnect(userId, connectionId) });
+      return;
+    }
+
+    sendJson(response, 404, { error: "not found" });
+  } catch (error) {
+    const status = Number(error?.statusCode) || 500;
+    sendJson(response, status, { error: cleanError(error), ...(error?.payload || {}) });
+  }
+}
+
+// Connections are scoped to an authenticated user. Until the better-auth user
+// base lands, the gateway runs single-user: the identity is derived from the
+// gateway token so a token rotation starts a fresh scope, and hosted multi-user
+// mode only has to replace this resolver, not the store or the routes.
+function accountUserId() {
+  if (!MOA_GATEWAY_TOKEN) {
+    return "usr_local";
+  }
+  return `usr_${crypto.createHash("sha256").update(MOA_GATEWAY_TOKEN).digest("hex").slice(0, 16)}`;
+}
+
+// Body reader for the gateway secret form: browsers post
+// application/x-www-form-urlencoded, API smoke posts JSON.
+function readFormOrJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error("request body too large"));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      const contentType = String(request.headers["content-type"] || "");
+      try {
+        if (contentType.includes("application/x-www-form-urlencoded")) {
+          resolve({ body: Object.fromEntries(new URLSearchParams(raw)), isForm: true });
+          return;
+        }
+        resolve({ body: JSON.parse(raw || "{}"), isForm: false });
+      } catch {
+        reject(new Error("request body must be JSON or form-encoded"));
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function sendAccountHtml(response, status, title, message) {
+  response.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
+  });
+  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:26rem;margin:4rem auto;padding:0 1rem;color:#222}</style></head><body><h1>${escapeHtml(title)}</h1><p>${message}</p></body></html>`);
+}
+
+// The gateway-served secret entry form. The secret posts directly back to the
+// gateway over this same origin and is encrypted at rest; it never transits an
+// API response, Android, or the browser extension.
+function sendAccountSecretForm(response, info) {
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+  });
+  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect ${escapeHtml(info.provider_label)}</title><style>body{font-family:system-ui,sans-serif;max-width:26rem;margin:4rem auto;padding:0 1rem;color:#222}label{display:block;margin:1rem 0 .25rem}input{width:100%;padding:.5rem;font-size:1rem}button{margin-top:1.25rem;padding:.6rem 1.2rem;font-size:1rem}</style></head><body>
+<h1>Connect ${escapeHtml(info.provider_label)}</h1>
+<p>Enter a ${escapeHtml(info.credential_kind_label)} for "${escapeHtml(info.connection_label)}". It is stored encrypted on your gateway and never sent to your phone or browser extension. This form expires at ${escapeHtml(info.expires_at)}.</p>
+<form method="post" action="/v1/account-connections/secret-form">
+<input type="hidden" name="token" value="${escapeHtml(info.token)}">
+<label for="secret">${escapeHtml(info.credential_kind_label)}</label>
+<input type="password" id="secret" name="secret" autocomplete="off" required>
+<label for="account_display">Account label shown in Moa (optional)</label>
+<input type="text" id="account_display" name="account_display" autocomplete="off">
+<button type="submit">Store credential</button>
+</form>
+</body></html>`);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function handleChat(request, response) {
@@ -3896,7 +4156,7 @@ function sendStaticHtml(response, filePath) {
 
 function setCors(response) {
   response.setHeader("access-control-allow-origin", "*");
-  response.setHeader("access-control-allow-methods", "GET,POST,PUT,OPTIONS");
+  response.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,OPTIONS");
   response.setHeader("access-control-allow-headers", "content-type,authorization");
 }
 
