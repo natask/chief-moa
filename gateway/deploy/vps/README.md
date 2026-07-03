@@ -111,6 +111,28 @@ and untouched; schema changes apply on gateway boot (`schema.sql` is
 idempotent). If the backup or restore check fails, the update stops before
 touching the active service.
 
+## Promote a new version from your workstation
+
+After the target branch is committed locally and ready to become the active VPS
+gateway, run the local promotion wrapper from the repo checkout:
+
+```sh
+scripts/vps/push.sh --host root@203.0.113.7 --ref master
+# or:
+MOA_VPS_SSH=root@vps scripts/vps/push.sh --ref master
+```
+
+The script never guesses the host. It refuses uncommitted VPS deploy-path
+changes, pushes the named local branch to `origin` only when origin is missing
+that branch or is behind it, then SSHes to the VPS and runs
+`/opt/chief-moa/app/scripts/vps/update.sh --ref <branch>`. For a non-default
+checkout path, set `MOA_VPS_APP_DIR=/path/to/app`.
+
+This is a promotion of the active gateway. Run it only when an operator has
+explicitly approved deploy/promote for the current turn. The backup and restore
+gate remains on the VPS inside `update.sh`, so the active service is not rebuilt
+or restarted until the fresh backup and scratch restore check pass.
+
 ## Backup and restore check
 
 ```sh
