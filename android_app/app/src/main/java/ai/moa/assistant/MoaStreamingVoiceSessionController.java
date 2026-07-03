@@ -17,6 +17,9 @@ final class MoaStreamingVoiceSessionController {
     private static final long AUTO_COMMIT_SILENCE_MS = 700;
     private static final long AUTO_COMMIT_MAX_RECORDING_MS = 12000;
     private static final long AUTO_COMMIT_CHECK_MS = 100;
+    // How long a commit will wait for session_ready before failing the turn.
+    // Without this bound a deferred commit could wait forever on a hung socket.
+    private static final long PENDING_COMMIT_TIMEOUT_MS = 1800;
     private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 450;
     private static final int MAX_PENDING_AUDIO_BYTES = MoaAudioCaptureController.SAMPLE_RATE_HZ * 2 * 5;
 
@@ -55,6 +58,7 @@ final class MoaStreamingVoiceSessionController {
     private final Callback callback;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoCommitCheck = this::maybeAutoCommitTurn;
+    private final Runnable pendingCommitTimeout = this::failPendingCommitTurn;
     private final Object lock = new Object();
 
     private MoaAudioCaptureController captureController;
@@ -168,6 +172,12 @@ final class MoaStreamingVoiceSessionController {
         }
         if (shouldFinishNow) {
             finishCommittedTurn(socket, currentTurnId, hasAudio);
+        } else {
+            // session_ready has not arrived yet; the commit is deferred to
+            // onSessionReady. Bound that wait so a hung socket fails the turn
+            // with a visible error instead of hanging silently forever.
+            mainHandler.removeCallbacks(pendingCommitTimeout);
+            mainHandler.postDelayed(pendingCommitTimeout, PENDING_COMMIT_TIMEOUT_MS);
         }
     }
 
@@ -193,6 +203,7 @@ final class MoaStreamingVoiceSessionController {
             lastVoiceActivityAtMs = 0;
         }
         mainHandler.removeCallbacks(autoCommitCheck);
+        mainHandler.removeCallbacks(pendingCommitTimeout);
 
         if (capture != null) {
             capture.stop();
@@ -234,6 +245,7 @@ final class MoaStreamingVoiceSessionController {
             lastVoiceActivityAtMs = 0;
         }
         mainHandler.removeCallbacks(autoCommitCheck);
+        mainHandler.removeCallbacks(pendingCommitTimeout);
 
         if (capture != null) {
             capture.stop();
@@ -321,7 +333,51 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
+    private void failPendingCommitTurn() {
+        MoaAudioCaptureController capture;
+        MoaAudioPlaybackController playback;
+        MoaVoiceGatewaySocket socket;
+        String currentTurnId;
+        synchronized (lock) {
+            // Only fail if the turn is still waiting for session_ready. If the
+            // commit already finished (or the turn was torn down), do nothing.
+            if (!active || !committed || !pendingCommitAfterSessionReady) {
+                return;
+            }
+            capture = captureController;
+            playback = playbackController;
+            socket = gatewaySocket;
+            currentTurnId = turnId;
+            active = false;
+            committed = false;
+            assistantAudioStarted = false;
+            loggedVoiceActivity = false;
+            sessionReady = false;
+            pendingCommitAfterSessionReady = false;
+            clearPendingAudioLocked();
+            capturedAudioBytes = 0;
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
+        }
+        mainHandler.removeCallbacks(autoCommitCheck);
+        Log.w(TAG, "pending commit timed out before session_ready");
+        if (capture != null) {
+            capture.stop();
+        }
+        if (playback != null) {
+            playback.stop();
+        }
+        if (socket != null) {
+            if (!currentTurnId.isEmpty()) {
+                socket.sendCancelTurn(currentTurnId);
+            }
+            socket.close();
+        }
+        reportError("Voice gateway did not become ready in time. Tap to try again.", null);
+    }
+
     private void handleTurnDone(String completedTurnId, String status, boolean transcriptionOnly) {
+        mainHandler.removeCallbacks(pendingCommitTimeout);
         MoaAudioCaptureController capture;
         MoaAudioPlaybackController playback;
         boolean shouldStopPlayback;
@@ -544,6 +600,7 @@ final class MoaStreamingVoiceSessionController {
                 lastVoiceActivityAtMs = 0;
             }
             mainHandler.removeCallbacks(autoCommitCheck);
+            mainHandler.removeCallbacks(pendingCommitTimeout);
             if (wasActive) {
                 post(() -> callback.onSessionClosed());
             }
@@ -568,6 +625,7 @@ final class MoaStreamingVoiceSessionController {
                 lastVoiceActivityAtMs = 0;
             }
             mainHandler.removeCallbacks(autoCommitCheck);
+            mainHandler.removeCallbacks(pendingCommitTimeout);
             if (capture != null) {
                 capture.stop();
             }
@@ -595,6 +653,7 @@ final class MoaStreamingVoiceSessionController {
                 hasAudio = capturedAudioBytes > 0;
             }
             Log.i(TAG, "sessionReady");
+            mainHandler.removeCallbacks(pendingCommitTimeout);
             if (shouldFinishCommit) {
                 finishCommittedTurn(socket, currentTurnId, hasAudio);
             } else {

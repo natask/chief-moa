@@ -52,6 +52,10 @@ public final class OverlayService extends Service {
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
     private static final long VOICE_USER_EXIT_MS = 150;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
+    // After a streaming commit, if no transcript/assistant/turn_done event
+    // arrives within this window the turn is torn down so the user can retry
+    // instead of waiting on a silently stalled turn.
+    private static final long STREAMING_TURN_WATCHDOG_MS = 12000;
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
     private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
@@ -89,6 +93,7 @@ public final class OverlayService extends Service {
     private boolean currentStreamingAssistantRecorded;
     private Runnable pendingAutoDismiss;
     private Runnable pendingContinuousVoiceRestart;
+    private Runnable pendingStreamingTurnWatchdog;
     private MoaVoiceController voiceController;
     private MoaStreamingVoiceSessionController streamingVoiceController;
     private MoaVoiceSamplePlayer voiceSamplePlayer;
@@ -118,6 +123,7 @@ public final class OverlayService extends Service {
     private enum VoiceRuntimeState {
         READY,
         LISTENING,
+        SENDING,
         THINKING,
         SPEAKING,
         INTERRUPTED,
@@ -220,6 +226,7 @@ public final class OverlayService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        cancelStreamingTurnWatchdog();
         removeTranscriptOverlay();
         removePanel();
         removeOrb();
@@ -794,6 +801,9 @@ public final class OverlayService extends Service {
             case LISTENING:
                 state = "Listening";
                 break;
+            case SENDING:
+                state = "Sending";
+                break;
             case THINKING:
                 state = "Thinking";
                 break;
@@ -823,6 +833,7 @@ public final class OverlayService extends Service {
             case INTERRUPTED:
             case RECOVERING:
                 return MoaColors.GOLD;
+            case SENDING:
             case THINKING:
             case SPEAKING:
                 return MoaColors.GOLD;
@@ -1960,12 +1971,55 @@ public final class OverlayService extends Service {
         } else {
             showTranscriptOverlay("");
         }
-        setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+        // Show a distinct "sending" state on release. It becomes THINKING once
+        // the gateway acks the commit or the first turn event arrives.
+        setVoiceRuntimeState(VoiceRuntimeState.SENDING);
         updateMicState();
         if (routeCommittedStreamingTranscriptIfNeeded(transcript)) {
             return;
         }
+        armStreamingTurnWatchdog(streamingVoiceGeneration);
         controller.commitTurn();
+    }
+
+    // If a committed streaming turn produces no transcript/assistant/turn_done
+    // event within the watchdog window, tear it down, show a short error, and
+    // reset the orb so the user can retry immediately.
+    private void armStreamingTurnWatchdog(int generation) {
+        cancelStreamingTurnWatchdog();
+        pendingStreamingTurnWatchdog = () -> {
+            pendingStreamingTurnWatchdog = null;
+            if (!isCurrentStreamingGeneration(generation)) {
+                return;
+            }
+            Log.w(TAG, "streaming turn watchdog fired; tearing down stalled turn");
+            if (streamingVoiceActive()) {
+                cancelStreamingVoice();
+            }
+            String failure = "No response from voice gateway. Tap to try again.";
+            updateVoiceAssistantTranscript(failure);
+            setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+            continuousVoiceLoop = false;
+            updateMicState();
+            scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
+        };
+        mainHandler.postDelayed(pendingStreamingTurnWatchdog, STREAMING_TURN_WATCHDOG_MS);
+    }
+
+    private void cancelStreamingTurnWatchdog() {
+        if (pendingStreamingTurnWatchdog != null) {
+            mainHandler.removeCallbacks(pendingStreamingTurnWatchdog);
+            pendingStreamingTurnWatchdog = null;
+        }
+    }
+
+    // The turn is making progress (commit acked or first event in). Stop the
+    // watchdog and move the visible state from "sending" to "thinking".
+    private void markStreamingTurnProgressing() {
+        cancelStreamingTurnWatchdog();
+        if (voiceRuntimeState == VoiceRuntimeState.SENDING) {
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+        }
     }
 
     private boolean routeCommittedStreamingTranscriptIfNeeded(String transcript) {
@@ -2062,6 +2116,7 @@ public final class OverlayService extends Service {
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
+        cancelStreamingTurnWatchdog();
         if (streamingVoiceActive()) {
             streamingVoiceController.cancel();
             streamingVoiceController = null;
@@ -2107,6 +2162,7 @@ public final class OverlayService extends Service {
                 + " gatewayConfigured=" + !safe(gatewayUrl).isEmpty()
                 + " token=" + (safe(gatewayToken).isEmpty() ? "missing" : "set"));
         cancelContinuousVoiceRestart();
+        cancelStreamingTurnWatchdog();
         if (streamingVoiceController != null) {
             streamingVoiceController.destroy();
         }
@@ -2138,7 +2194,14 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+                // If the user already released (commit deferred until now), the
+                // turn is in flight: promote to THINKING and drop the watchdog's
+                // "sending" state instead of falling back to LISTENING.
+                if (voiceRuntimeState == VoiceRuntimeState.SENDING || currentStreamingTurnCommitRequested) {
+                    markStreamingTurnProgressing();
+                } else {
+                    setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+                }
                 updateMicState();
             }
 
@@ -2170,6 +2233,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                markStreamingTurnProgressing();
                 String transcript = streamingTranscriptAccumulator.update(text);
                 currentStreamingTranscript = safe(transcript);
                 updateVoiceUserTranscript(currentStreamingTranscript, currentStreamingTurnCommitRequested);
@@ -2184,6 +2248,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                markStreamingTurnProgressing();
                 String transcript = safe(streamingTranscriptAccumulator.update(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
@@ -2207,6 +2272,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                markStreamingTurnProgressing();
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -2220,6 +2286,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                cancelStreamingTurnWatchdog();
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -2249,6 +2316,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                cancelStreamingTurnWatchdog();
                 if (transcriptionOnly && !currentStreamingTurnRouted && !currentStreamingTranscript.isEmpty()) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript, !voiceUserTranscriptFinal);
                     return;
@@ -2278,6 +2346,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                cancelStreamingTurnWatchdog();
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -2296,6 +2365,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                cancelStreamingTurnWatchdog();
                 nextStreamingTurnFollowsActiveRun = false;
                 if (isRecoverableStreamingVoiceError(message)) {
                     recoverStreamingVoiceTurn(generation);

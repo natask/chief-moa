@@ -23,6 +23,10 @@ final class MoaVoiceGatewaySocket {
     static final String DEFAULT_URL = "ws://10.147.17.10:8787/v1/voice/sessions";
     private static final int CONNECT_TIMEOUT_MS = 3500;
     private static final int WRITE_TIMEOUT_MS = 10000;
+    // Keep readTimeout at 0 (infinite) so a long idle stretch mid-assistant-audio
+    // is not killed. Instead ping the socket so a dead/hung connection is
+    // detected and surfaced through onFailure, rather than hanging forever.
+    private static final int PING_INTERVAL_MS = 10000;
 
     interface Callback {
         void onSocketOpen();
@@ -74,6 +78,7 @@ final class MoaVoiceGatewaySocket {
                 .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .writeTimeout(WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS)
+                .pingInterval(PING_INTERVAL_MS, TimeUnit.MILLISECONDS)
                 .build();
     }
 
