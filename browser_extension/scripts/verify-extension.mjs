@@ -48,7 +48,7 @@ const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.j
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen"];
-const requiredHostPermissions = ["http://*/*", "https://*/*"];
+const requiredHostPermissions = ["http://*/*", "https://*/*", "wss://api.agee.app/*"];
 
 if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");

@@ -125,8 +125,10 @@ ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug
 Manual phone checks:
 
 - Save `https://api.agee.app` and the device token.
-- Confirm setup reports gateway reachable.
-- Confirm the authenticated check reports token valid once implemented.
+- Confirm the Model gateway status reports `Reachable / token OK`. A saved bad
+  token shows `Token rejected`; an empty token against a token-requiring
+  gateway shows `Token required`; a ZeroTier URL shows an
+  `old ZeroTier URL` / `local dev URL` suffix.
 - Tap the orb, send a typed `test` turn, and confirm a gateway reply.
 - Double-click-and-hold, speak, release, and confirm final transcript plus
   `turn_done` or a clear voice diagnostic.
@@ -146,5 +148,7 @@ is set by length only. They must not print the token value.
   variants need different defaults.
 - `MoaVoiceGatewaySocket.java`: consider moving Android to the same one-use
   `/v1/voice/session-ticket` flow as browser voice before hosted mode.
-- `MainActivity.java`: add URL classification, auth probe after health, and a
-  registration path using the existing Android device id.
+- `MainActivity.java`: URL classification before health and a protected
+  `GET /v1/sessions` auth probe after health are implemented in the setup
+  status line. Remaining: a device registration path using the existing
+  Android device id once the gateway registration endpoint exists.
