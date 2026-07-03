@@ -8,9 +8,10 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { WebSocket } = require("ws");
 
-const baseUrl = stripTrailingSlash(process.argv[2] || process.env.MOA_MAIN_MACHINE_URL || "http://10.147.17.10:8788");
+const baseUrl = stripTrailingSlash(process.argv[2] || process.env.MOA_GATEWAY_URL || process.env.MOA_MAIN_MACHINE_URL || "http://10.147.17.10:8787");
 const token = process.argv[3] || process.env.MOA_GATEWAY_TOKEN || "";
-const voiceUrl = process.env.MOA_MAIN_MACHINE_WS_URL || baseUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:") + "/v1/voice/sessions";
+const voiceUrl = process.env.MOA_GATEWAY_WS_URL || process.env.MOA_MAIN_MACHINE_WS_URL || baseUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:") + "/v1/voice/sessions";
+const expectedVoiceModel = process.env.MOA_EXPECT_VOICE_MODEL || process.env.MOA_MAIN_MACHINE_EXPECT_VOICE_MODEL || "";
 
 main().catch((error) => {
   console.error(JSON.stringify({
@@ -23,20 +24,25 @@ main().catch((error) => {
 
 async function main() {
   if (!token) {
-    throw new Error("MOA_GATEWAY_TOKEN is required for protected main-machine smoke checks");
+    throw new Error("MOA_GATEWAY_TOKEN is required for protected gateway smoke checks");
   }
 
   const health = await getJson(`${baseUrl}/health`, false);
   assert(health.ok === true, "health did not return ok=true");
   assert(health.android_ota?.configured === true, "health did not report configured Android OTA");
   assert(health.voice_stream?.provider?.configured === true, "health did not report configured streaming voice provider");
-  assert(health.voice_stream?.provider?.model === "gemini-3.1-flash-live-preview", "main-machine voice model is not gemini-3.1-flash-live-preview");
+  if (expectedVoiceModel) {
+    assert(health.voice_stream?.provider?.model === expectedVoiceModel, `gateway voice model is not ${expectedVoiceModel}`);
+  }
 
   const manifest = await getJson(`${baseUrl}/v1/android/updates/latest`, true);
   assert(manifest.app_id === "ai.moa.assistant", "OTA manifest app_id mismatch");
   assert(Number(manifest.version_code) > 0, "OTA manifest version_code missing");
   assert(manifest.sha256, "OTA manifest sha256 missing");
   assert(Number(manifest.size_bytes) > 0, "OTA manifest size_bytes missing");
+  if (baseUrl.startsWith("https://")) {
+    assert(String(manifest.download_url || "").startsWith(`${baseUrl}/`), "OTA manifest download_url is not using the HTTPS gateway origin");
+  }
 
   const apk = Buffer.from(await getArrayBuffer(`${baseUrl}/v1/android/updates/latest.apk`));
   assert(apk.length === Number(manifest.size_bytes), `APK size mismatch: got ${apk.length}, expected ${manifest.size_bytes}`);
@@ -118,7 +124,7 @@ async function smokeOperationalVoiceTurn() {
     session_id: sessionId,
     branch_id: "default",
     turn_id: turnId,
-    source: "main-machine-operational-smoke",
+    source: "gateway-operational-smoke",
     harness: "echo",
     transcript,
   });
@@ -186,7 +192,7 @@ function smokeVoiceSession(target, gatewayToken) {
         type: "session_start",
         session_id: sessionId,
         turn_id: turnId,
-        source: "main-machine-smoke",
+        source: "gateway-smoke",
         format: {
           encoding: "pcm16",
           sample_rate: 16000,
@@ -255,8 +261,8 @@ function smokeVoiceSession(target, gatewayToken) {
 }
 
 async function sendChunkedAudio(ws, audio, turnId) {
-  const chunkBytes = Math.max(640, Number(process.env.MOA_MAIN_MACHINE_VOICE_CHUNK_BYTES || 3200));
-  const delayMs = Math.max(0, Number(process.env.MOA_MAIN_MACHINE_VOICE_CHUNK_DELAY_MS || 20));
+  const chunkBytes = Math.max(640, Number(process.env.MOA_GATEWAY_VOICE_CHUNK_BYTES || process.env.MOA_MAIN_MACHINE_VOICE_CHUNK_BYTES || 3200));
+  const delayMs = Math.max(0, Number(process.env.MOA_GATEWAY_VOICE_CHUNK_DELAY_MS || process.env.MOA_MAIN_MACHINE_VOICE_CHUNK_DELAY_MS || 20));
   for (let offset = 0; offset < audio.length; offset += chunkBytes) {
     if (ws.readyState !== WebSocket.OPEN) {
       throw new Error("websocket closed while streaming voice smoke audio");
@@ -281,7 +287,7 @@ function authHeaders() {
 }
 
 function generateVoiceSmokePcm16() {
-  const fixturePath = process.env.MOA_MAIN_MACHINE_VOICE_PCM || "";
+  const fixturePath = process.env.MOA_GATEWAY_VOICE_PCM || process.env.MOA_MAIN_MACHINE_VOICE_PCM || "";
   if (fixturePath) {
     return {
       source: fixturePath,
@@ -289,12 +295,12 @@ function generateVoiceSmokePcm16() {
     };
   }
 
-  const phrase = process.env.MOA_MAIN_MACHINE_VOICE_PHRASE || "Can you hear me clearly? This is an A.G. gateway smoke test.";
+  const phrase = process.env.MOA_GATEWAY_VOICE_PHRASE || process.env.MOA_MAIN_MACHINE_VOICE_PHRASE || "Can you hear me clearly? This is an A.G. gateway smoke test.";
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-voice-smoke-"));
   const aiffPath = path.join(tempDir, "speech.aiff");
   const pcmPath = path.join(tempDir, "speech.pcm");
   try {
-    execFileSync("say", ["-v", process.env.MOA_MAIN_MACHINE_SAY_VOICE || "Samantha", "-r", process.env.MOA_MAIN_MACHINE_SAY_RATE || "135", "-o", aiffPath, phrase], {
+    execFileSync("say", ["-v", process.env.MOA_GATEWAY_SAY_VOICE || process.env.MOA_MAIN_MACHINE_SAY_VOICE || "Samantha", "-r", process.env.MOA_GATEWAY_SAY_RATE || process.env.MOA_MAIN_MACHINE_SAY_RATE || "135", "-o", aiffPath, phrase], {
       stdio: ["ignore", "ignore", "pipe"],
       timeout: 10000,
     });

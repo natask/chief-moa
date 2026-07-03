@@ -42,8 +42,14 @@ const {
   classificationFromActions,
 } = require("./lib/voice-router");
 
-const HOST = process.env.HOST || "0.0.0.0";
+const MOA_MODE = normalizeMoaMode(process.env.MOA_MODE || "local");
+const REMOTE_MOA_MODE = MOA_MODE === "self-host" || MOA_MODE === "hosted";
+const TRUST_PROXY = envFlag("TRUST_PROXY", REMOTE_MOA_MODE);
+validateRuntimeMode();
+
+const HOST = process.env.HOST || (REMOTE_MOA_MODE ? "0.0.0.0" : "127.0.0.1");
 const PORT = Number(process.env.PORT || 8787);
+const PUBLIC_GATEWAY_URL = stripTrailingSlash(process.env.PUBLIC_GATEWAY_URL || process.env.MOA_PUBLIC_ORIGIN || "");
 const GATEWAY_DIR = __dirname;
 const REPO_ROOT = path.resolve(GATEWAY_DIR, "../..");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "./data");
@@ -210,6 +216,14 @@ const server = http.createServer(async (request, response) => {
       const voiceProvider = voiceSessionServer.status();
       sendJson(response, 200, {
         ok: true,
+        mode: MOA_MODE,
+        remote_mode: REMOTE_MOA_MODE,
+        trust_proxy: TRUST_PROXY,
+        bind: {
+          host: HOST,
+          port: PORT,
+        },
+        public_gateway_url: PUBLIC_GATEWAY_URL || undefined,
         provider: MODEL_PROVIDER,
         model: MODEL_ID,
         model_base_url: MODEL_BASE_URL,
@@ -906,6 +920,7 @@ server.on("upgrade", (request, socket, head) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`A.G. gateway listening on http://${HOST}:${PORT}`);
+  console.log(`Mode: ${MOA_MODE} trust_proxy=${TRUST_PROXY ? "enabled" : "disabled"}`);
   console.log(`Provider: ${MODEL_PROVIDER} model=${MODEL_ID}`);
   if (MODEL_PROVIDER === "vertex") {
     console.log(`Vertex: project=${VERTEX_PROJECT || "unset"} location=${VERTEX_LOCATION} auth=${vertexCredentialHint() || "missing"}`);
@@ -5938,11 +5953,10 @@ function sendAndroidOtaManifest(request, response) {
     return;
   }
 
-  const host = request.headers.host || `${HOST}:${PORT}`;
-  const protocol = request.headers["x-forwarded-proto"] || "http";
+  const origin = externalOriginForRequest(request);
   sendJson(response, 200, {
     ...manifest,
-    download_url: `${protocol}://${host}/v1/android/updates/latest.apk`,
+    download_url: `${origin}/v1/android/updates/latest.apk`,
   });
 }
 
@@ -6831,15 +6845,30 @@ function cleanupVoiceSessionTickets() {
 }
 
 function voiceSessionUrlForRequest(request, ticket) {
-  const forwardedProto = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
-  const proto = forwardedProto || (request.socket?.encrypted ? "https" : "http");
-  const wsProto = proto === "https" ? "wss" : "ws";
-  const host = String(request.headers["x-forwarded-host"] || request.headers.host || `${HOST}:${PORT}`)
-    .split(",")[0]
-    .trim();
-  const url = new URL(`${wsProto}://${host}${voiceSessionServer.endpoint}`);
+  const origin = new URL(externalOriginForRequest(request));
+  origin.protocol = origin.protocol === "https:" ? "wss:" : "ws:";
+  origin.pathname = voiceSessionServer.endpoint;
+  origin.search = "";
+  origin.hash = "";
+  const url = origin;
   url.searchParams.set("ticket", ticket);
   return url.toString();
+}
+
+function externalOriginForRequest(request) {
+  if (PUBLIC_GATEWAY_URL) {
+    return PUBLIC_GATEWAY_URL;
+  }
+  const forwardedProto = TRUST_PROXY ? firstHeader(request.headers["x-forwarded-proto"]) : "";
+  const proto = forwardedProto || (request.socket?.encrypted ? "https" : "http");
+  const forwardedHost = TRUST_PROXY ? firstHeader(request.headers["x-forwarded-host"]) : "";
+  const host = forwardedHost || firstHeader(request.headers.host) || `${HOST}:${PORT}`;
+  return `${proto}://${host}`;
+}
+
+function firstHeader(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return String(raw || "").split(",")[0].trim();
 }
 
 function authorizedAgent(request) {
@@ -7026,4 +7055,37 @@ function truncateToBytes(value, maxBytes) {
 
 function stripTrailingSlash(value) {
   return value.replace(/\/+$/, "");
+}
+
+function normalizeMoaMode(value) {
+  const mode = String(value || "local").trim().toLowerCase();
+  if (["local", "self-host", "hosted"].includes(mode)) {
+    return mode;
+  }
+  console.error(`Invalid MOA_MODE=${JSON.stringify(value)}. Expected local, self-host, or hosted.`);
+  process.exit(1);
+}
+
+function envFlag(name, defaultValue = false) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === "") {
+    return Boolean(defaultValue);
+  }
+  return ["1", "true", "yes", "on"].includes(String(raw).trim().toLowerCase());
+}
+
+function validateRuntimeMode() {
+  if (!REMOTE_MOA_MODE) {
+    return;
+  }
+  const databaseUrl = String(process.env.DATABASE_URL || "").trim();
+  if (!databaseUrl) {
+    console.error(`MOA_MODE=${MOA_MODE} requires DATABASE_URL; refusing to start with local file fallback in remote mode.`);
+    process.exit(1);
+  }
+  const gatewayToken = String(process.env.MOA_GATEWAY_TOKEN || "").trim();
+  if (!gatewayToken) {
+    console.error(`MOA_MODE=${MOA_MODE} requires MOA_GATEWAY_TOKEN until better-auth is enabled.`);
+    process.exit(1);
+  }
 }

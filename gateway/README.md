@@ -2,9 +2,15 @@
 
 Self-hosted model and agent gateway for the Android voice assistant. The phone sends chat turns and explicit agent actions here; the gateway stores conversations and agent run history locally, then forwards model calls or launches configured harnesses on the home machine.
 
+For mobile use outside the private network, deploy the gateway to a VPS and put
+Cloudflare in front of it. The runbook is
+[deploy/vps/README.md](deploy/vps/README.md). Clients should use
+`https://api.<domain>` for HTTP and the gateway will derive
+`wss://api.<domain>/v1/voice/sessions` for voice.
+
 The development Android URL is `http://10.147.17.6:8787` for this Mac over
-ZeroTier. Use `http://10.147.17.10:8788` when the main-machine gateway is
-online. The intended shape is:
+ZeroTier. Use `http://10.147.17.10:8787` when the private main-machine gateway
+is online. The intended private-network shape is:
 
 ```text
 Android overlay -> Moa Gateway on home machine -> voice router -> model provider / streaming voice provider / Gemini CLI / Codex CLI / Claude CLI
@@ -18,7 +24,9 @@ cp .env.example .env
 npm start
 ```
 
-Then set the Android app gateway URL to `http://<server-ip>:8788` for the main machine, or the port configured in `.env`, and the token to `MOA_GATEWAY_TOKEN` when token auth is enabled.
+Then set the Android app gateway URL to `http://<server-ip>:8787` for a private
+machine, or `https://api.<domain>` for a VPS deployment, and the token to
+`MOA_GATEWAY_TOKEN` when token auth is enabled.
 If `.env` is missing, `npm start` still boots the gateway with defaults. In that
 mode, Moa stores voice turns and can route explicit agent runs, but normal chat
 uses a short local fallback until you configure a model provider.

@@ -20,7 +20,7 @@ import okio.ByteString;
 
 final class MoaVoiceGatewaySocket {
     private static final String TAG = "MoaVoiceSocket";
-    static final String DEFAULT_URL = "ws://10.147.17.10:8787/v1/voice/sessions";
+    static final String DEFAULT_URL = gatewayUrlToVoiceSocketUrl(MoaPrefs.DEFAULT_GATEWAY_URL);
     private static final int CONNECT_TIMEOUT_MS = 3500;
     private static final int WRITE_TIMEOUT_MS = 10000;
     // Keep readTimeout at 0 (infinite) so a long idle stretch mid-assistant-audio
@@ -311,6 +311,11 @@ final class MoaVoiceGatewaySocket {
         if (url.isEmpty()) {
             return DEFAULT_URL;
         }
+        return gatewayUrlToVoiceSocketUrl(url);
+    }
+
+    private static String gatewayUrlToVoiceSocketUrl(String value) {
+        String url = safe(value);
         if (url.startsWith("http://")) {
             url = "ws://" + url.substring("http://".length());
         } else if (url.startsWith("https://")) {

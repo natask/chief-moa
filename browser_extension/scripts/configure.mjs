@@ -5,14 +5,15 @@
 // safe and is shown for confirmation.
 //
 // Token source, in order:
-//   1. MOA_GATEWAY_TOKEN in the environment (CI / explicit override)
-//   2. the main machine over SSH (reclaim@10.147.17.10), read from its .env
+//   1. AGEE_GATEWAY_TOKEN or MOA_GATEWAY_TOKEN in the environment.
+//   2. legacy private gateway only: the main machine over SSH, when enabled.
 //
-// URL override: AGEE_GATEWAY_URL (defaults to the main-machine gateway).
+// URL override: AGEE_GATEWAY_URL or MOA_GATEWAY_URL (defaults to the legacy
+// private gateway for local installs).
 //
 // Run:  npm run configure
 //       npm run configure:local
-//       AGEE_GATEWAY_URL=http://host:port npm run configure
+//       AGEE_GATEWAY_URL=https://api.example.com AGEE_GATEWAY_TOKEN=... npm run configure
 
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -21,14 +22,15 @@ import { join, resolve } from "node:path";
 const root = resolve(new URL("..", import.meta.url).pathname);
 const outFile = join(root, "extension", "agee.config.json");
 
-const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || "http://10.147.17.10:8787").replace(/\/+$/, "");
+const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || process.env.MOA_GATEWAY_URL || "http://10.147.17.10:8787").replace(/\/+$/, "");
 const MODEL = process.env.AGEE_MODEL || "claude-opus-4-8";
 const SSH_TARGET = process.env.AGEE_SSH_TARGET || "reclaim@10.147.17.10";
 const SERVICE = process.env.AGEE_SERVICE || "moa-gateway.service";
 const REMOTE_ENV = process.env.AGEE_REMOTE_ENV || "/home/reclaim-ethiopia/moa-assistant/software/moa_gateway/.env";
+const USE_MAIN_MACHINE_TOKEN = envFlag("AGEE_USE_MAIN_MACHINE_TOKEN", !GATEWAY_URL.startsWith("https://"));
 
 function tokenFromEnv() {
-  const t = (process.env.MOA_GATEWAY_TOKEN || "").trim();
+  const t = (process.env.AGEE_GATEWAY_TOKEN || process.env.MOA_GATEWAY_TOKEN || "").trim();
   return t || null;
 }
 
@@ -72,12 +74,16 @@ function write(token) {
   writeFileSync(outFile, `${body}\n`, { mode: 0o600 });
 }
 
-const token = tokenFromEnv() || tokenFromSsh();
+const token = tokenFromEnv() || (USE_MAIN_MACHINE_TOKEN ? tokenFromSsh() : null);
 
 if (!token) {
   console.error("agee configure: could not find a gateway token.");
-  console.error(`  Tried MOA_GATEWAY_TOKEN env and ${SSH_TARGET}:${REMOTE_ENV} over SSH.`);
-  console.error("  Set MOA_GATEWAY_TOKEN and re-run, or fix SSH access to the main machine.");
+  if (USE_MAIN_MACHINE_TOKEN) {
+    console.error(`  Tried AGEE_GATEWAY_TOKEN/MOA_GATEWAY_TOKEN env and ${SSH_TARGET}:${REMOTE_ENV} over SSH.`);
+    console.error("  Set AGEE_GATEWAY_TOKEN or MOA_GATEWAY_TOKEN and re-run, or fix SSH access to the main machine.");
+  } else {
+    console.error("  Hosted/VPS gateway packages require AGEE_GATEWAY_TOKEN or MOA_GATEWAY_TOKEN in the environment.");
+  }
   process.exit(1);
 }
 
@@ -91,3 +97,9 @@ console.log("");
 console.log("Next: load the extension once at chrome://extensions -> Load unpacked ->");
 console.log(`      ${join(root, "extension")}`);
 console.log("It is configured. No Options visit needed.");
+
+function envFlag(name, defaultValue = false) {
+  const value = process.env[name];
+  if (value == null || value === "") return defaultValue;
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}

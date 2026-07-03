@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-moa_gateway}
+      POSTGRES_USER: ${POSTGRES_USER:-moa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-moa-dev-password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-moa} -d ${POSTGRES_DB:-moa_gateway}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  gateway:
+    build:
+      context: ./gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MOA_MODE: ${MOA_MODE:-self-host}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      PUBLIC_GATEWAY_URL: ${PUBLIC_GATEWAY_URL:-}
+      HOST: 0.0.0.0
+      PORT: ${GATEWAY_PORT:-8787}
+      DATA_DIR: /data
+      ANDROID_OTA_DIR: /data/android-ota
+      DATABASE_URL: postgres://${POSTGRES_USER:-moa}:${POSTGRES_PASSWORD:-moa-dev-password}@postgres:5432/${POSTGRES_DB:-moa_gateway}
+      MOA_GATEWAY_TOKEN: ${MOA_GATEWAY_TOKEN:-dev-compose-token}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai-compatible}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}
+      MODEL_ID: ${MODEL_ID:-gpt-4o-mini}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-loopback}
+      VOICE_STT_PROVIDER: ${VOICE_STT_PROVIDER:-loopback}
+      VOICE_LLM_PROVIDER: ${VOICE_LLM_PROVIDER:-loopback}
+      VOICE_TTS_PROVIDER: ${VOICE_TTS_PROVIDER:-loopback}
+      DEFAULT_AGENT_HARNESS: ${DEFAULT_AGENT_HARNESS:-echo}
+      ALLOW_AGENT_WITHOUT_TOKEN: "0"
+    volumes:
+      - gateway-data:/data
+    ports:
+      - "${GATEWAY_HOST_PORT:-8787}:${GATEWAY_PORT:-8787}"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 8787) + '/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  postgres-data:
+  gateway-data:

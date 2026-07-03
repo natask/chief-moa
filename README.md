@@ -51,6 +51,18 @@ cp .env.example .env
 npm start
 ```
 
+VPS gateway deploy path:
+
+```sh
+VPS_REMOTE=root@203.0.113.10 \
+VPS_GATEWAY_URL=https://api.<domain> \
+bash scripts/deploy.sh vps
+```
+
+See [gateway/deploy/vps/README.md](gateway/deploy/vps/README.md) before using
+this against active clients; fill the VPS `.env` on the host and verify backups
+for any existing data first.
+
 Browser extension check:
 
 ```sh

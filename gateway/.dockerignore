@@ -1,0 +1,9 @@
+.env
+.env.*
+data
+node_modules
+npm-debug.log*
+*.pcm
+*.log
+coverage
+dist

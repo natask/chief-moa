@@ -12,6 +12,7 @@
 #   scripts/deploy.sh --force    # gateway, deploy even with no detected drift
 #   scripts/deploy.sh android    # rebuild + sync the Android OTA artifact
 #   scripts/deploy.sh extension  # verify + package + poke loaded browser reload
+#   scripts/deploy.sh vps        # deploy gateway Docker Compose stack to VPS_REMOTE
 #   scripts/deploy.sh all        # gateway + android OTA + extension deployment
 set -euo pipefail
 
@@ -74,6 +75,11 @@ deploy_gateway() {
   fi
   log "gateway: changes detected -> syncing + restarting"
   bash "$ROOT_DIR/gateway/deploy/main-machine/sync-when-online.sh"
+}
+
+deploy_vps_gateway() {
+  log "vps-gateway: syncing Docker Compose stack"
+  bash "$ROOT_DIR/gateway/deploy/vps/sync-compose.sh"
 }
 
 deploy_android() {
@@ -221,6 +227,9 @@ target_patterns() {
       ;;
     gateway)
       printf '%s\n' \
+        "docker-compose.yml" \
+        "gateway/Dockerfile" \
+        "gateway/.dockerignore" \
         "gateway/server.js" \
         "gateway/agent-launcher-profiles.json" \
         "gateway/agent-workflows/" \
@@ -228,6 +237,22 @@ target_patterns() {
         "gateway/public/" \
         "gateway/scripts/" \
         "gateway/deploy/main-machine/" \
+        "gateway/schema.sql" \
+        "gateway/package.json" \
+        "gateway/package-lock.json"
+      ;;
+    vps-gateway)
+      printf '%s\n' \
+        "docker-compose.yml" \
+        "gateway/Dockerfile" \
+        "gateway/.dockerignore" \
+        "gateway/server.js" \
+        "gateway/agent-launcher-profiles.json" \
+        "gateway/agent-workflows/" \
+        "gateway/lib/" \
+        "gateway/public/" \
+        "gateway/scripts/" \
+        "gateway/deploy/vps/" \
         "gateway/schema.sql" \
         "gateway/package.json" \
         "gateway/package-lock.json"
@@ -320,6 +345,7 @@ deploy_target() {
   done
   case "$1" in
     gateway) deploy_gateway ;;
+    vps-gateway) deploy_vps_gateway ;;
     android) deploy_android ;;
     extension) deploy_extension ;;
   esac
@@ -371,9 +397,10 @@ deploy_auto() {
 case "${1:-gateway}" in
   auto)              deploy_auto ;;
   gateway|"")        deploy_target gateway; mark_deployed gateway ;;
+  vps)               node "$VERSION_STATUS_SCRIPT" current vps-gateway | while IFS= read -r line; do log "$line"; done; deploy_vps_gateway; mark_deployed vps-gateway ;;
   --force)           node "$VERSION_STATUS_SCRIPT" current gateway | while IFS= read -r line; do log "$line"; done; deploy_gateway --force; mark_deployed gateway ;;
   android)           deploy_target android; mark_deployed android ;;
   extension)         deploy_target extension; mark_deployed extension ;;
   all)               deploy_target gateway; mark_deployed gateway; deploy_target android; mark_deployed android; deploy_target extension; mark_deployed extension ;;
-  *) echo "usage: deploy.sh [auto|gateway|--force|android|extension|all]" >&2; exit 2 ;;
+  *) echo "usage: deploy.sh [auto|gateway|vps|--force|android|extension|all]" >&2; exit 2 ;;
 esac

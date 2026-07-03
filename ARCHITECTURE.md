@@ -38,6 +38,13 @@ Moa Gateway
   launch, run status, the gateway-served browser control surface,
   engine-served browser customizations, and signed Android APK update artifacts.
 
+  The same gateway binary runs in `local`, `self-host`, or `hosted` mode.
+  Remote modes bind to `0.0.0.0`, require `MOA_GATEWAY_TOKEN` and
+  `DATABASE_URL`, trust proxy headers only when configured, and should publish a
+  canonical `PUBLIC_GATEWAY_URL` such as `https://api.<domain>`. Android and the
+  browser still store only that gateway URL plus a token; voice uses the matching
+  `wss://.../v1/voice/sessions` URL.
+
 Execution machine
   Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
   build/test commands, desktop/browser/server automation.

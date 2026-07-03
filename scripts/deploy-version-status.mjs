@@ -24,6 +24,14 @@ function currentVersion(target) {
       label: `package=${pkg.version || "unknown"}`,
     };
   }
+  if (target === "vps-gateway") {
+    const pkg = readJson(join(ROOT_DIR, "gateway", "package.json")) || {};
+    return {
+      version: String(pkg.version || ""),
+      source: "gateway/package.json",
+      label: `package=${pkg.version || "unknown"} deploy=vps`,
+    };
+  }
   if (target === "extension") {
     const manifest = readJson(join(ROOT_DIR, "browser_extension", "extension", "manifest.json")) || {};
     return {
@@ -98,7 +106,7 @@ function assertExtensionBumped(stateDir) {
 }
 
 function show(stateDir) {
-  for (const target of ["gateway", "android", "extension"]) {
+  for (const target of ["gateway", "vps-gateway", "android", "extension"]) {
     const current = currentVersion(target);
     const previous = existsSync(statePath(stateDir, target)) ? readJson(statePath(stateDir, target)) : null;
     const deployed = previous

@@ -33,8 +33,8 @@ async function getBakedConfig() {
       return bakedCache;
     }
   } catch {
-    // Missing local config is normal on a fresh checkout. The gateway URL still
-    // defaults to the main-machine endpoint; the token can be added later.
+    // Missing local config is normal on a fresh checkout. The gateway URL falls
+    // back to the legacy private endpoint; hosted/VPS packages should bake one.
   }
   bakedCache = { gatewayUrl: DEFAULT_GATEWAY_URL, gatewayToken: "" };
   return bakedCache;
