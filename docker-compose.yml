@@ -1,0 +1,78 @@
+services:
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    image: chief-moa-gateway:local
+    init: true
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-8787}:8787"
+    environment:
+      MOA_MODE: ${MOA_MODE:-self-host}
+      HOST: 0.0.0.0
+      PORT: 8787
+      DATA_DIR: /data
+      ANDROID_OTA_DIR: /data/android-ota
+      DATABASE_URL: ${DATABASE_URL:-postgres://moa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_gateway}
+      MOA_GATEWAY_TOKEN: ${MOA_GATEWAY_TOKEN:?set MOA_GATEWAY_TOKEN in the compose env file}
+      ALLOW_AGENT_WITHOUT_TOKEN: "0"
+      DEFAULT_AGENT_HARNESS: ${DEFAULT_AGENT_HARNESS:-echo}
+      VOICE_MULTI_AGENT_HARNESSES: ${VOICE_MULTI_AGENT_HARNESSES:-echo}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai-compatible}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}
+      MODEL_ID: ${MODEL_ID:-gpt-4o-mini}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-loopback}
+      VOICE_STT_PROVIDER: ${VOICE_STT_PROVIDER:-loopback}
+      VOICE_LLM_PROVIDER: ${VOICE_LLM_PROVIDER:-loopback}
+      VOICE_TTS_PROVIDER: ${VOICE_TTS_PROVIDER:-loopback}
+      VERTEX_PROJECT: ${VERTEX_PROJECT:-}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-global}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      VERTEX_EXPRESS_API_KEY: ${VERTEX_EXPRESS_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+      GCP_LOCATION: ${GCP_LOCATION:-us}
+      CHIRP_MODEL: ${CHIRP_MODEL:-chirp_3}
+      CHIRP_LANGUAGE_CODES: ${CHIRP_LANGUAGE_CODES:-en-US}
+    volumes:
+      - moa-gateway-data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "const port = process.env.PORT || '8787'; fetch('http://127.0.0.1:' + port + '/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1));"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 30s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: moa_gateway
+      POSTGRES_USER: moa
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}
+    volumes:
+      - moa-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 30s
+
+volumes:
+  moa-gateway-data:
+  moa-postgres-data:
