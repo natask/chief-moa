@@ -81,6 +81,10 @@ const ROUTER_DEFAULT_HARNESS = process.env.ROUTER_DEFAULT_HARNESS || "echo";
 const BRAIN_RECALL_LIMIT = Number(process.env.BRAIN_RECALL_LIMIT || 5);
 const BRAIN_CONTEXT_MAX_CHARS = Number(process.env.BRAIN_CONTEXT_MAX_CHARS || 1200);
 const ALLOW_HARNESS_WORKDIR_OUTSIDE_ROOT = process.env.ALLOW_HARNESS_WORKDIR_OUTSIDE_ROOT === "1";
+// How many prior turns to pack into the context window when building model
+// messages. The env var caps the global default; individual requests can pass
+// a smaller (never larger) limit via the `context_turn_limit` body/query param.
+const SESSION_CONTEXT_TURN_LIMIT = Math.max(1, Number(process.env.SESSION_CONTEXT_TURN_LIMIT || 40));
 const activeRuns = new Map();
 // Script body for the deterministic `echo` harness. Runs under `node -e`, takes
 // the intent as the trailing arg, and prints a short, structured "what I did"
@@ -609,6 +613,7 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, sessionContextPayload({
         sessionId,
         branchId: url.searchParams.get("branch_id") || "default",
+        turnLimit: url.searchParams.get("turn_limit"),
       }));
       return;
     }
@@ -766,7 +771,7 @@ async function handlePresentationEvaluate(request, response) {
 async function handleChat(request, response) {
   const body = await readJsonBody(request);
   const conversationId = sanitizeId(body.conversation_id || crypto.randomUUID());
-  const messages = normalizeMessages(body.messages);
+  const messages = normalizeMessages(body.messages, body.context_turn_limit);
   if (messages.length === 0) {
     sendJson(response, 400, { error: "messages must contain at least one user message" });
     return;
@@ -1625,7 +1630,7 @@ async function handleVoiceTurn(request, response) {
   }
 
   try {
-    const messages = voiceMessages(body, transcript);
+    const messages = voiceMessages(body, transcript, body.context_turn_limit);
     const screenContext = formatScreenContext(body.screen || body.context?.screen);
     // Recall the user's facts/persona from the Brain (keyed off this turn's
     // transcript) and inject it as a bounded system block so the spoken answer
@@ -2310,12 +2315,12 @@ function harnessDefinition(name) {
   return definition;
 }
 
-function normalizeMessages(messages) {
+function normalizeMessages(messages, limit) {
   if (!Array.isArray(messages)) {
     throw new Error("messages must be an array");
   }
-
-  return messages.slice(-40).map((message) => {
+  const safeLimit = resolveContextTurnLimit(limit);
+  return messages.slice(-safeLimit).map((message) => {
     const role = message.role === "assistant" || message.role === "system" ? message.role : "user";
     const content = String(message.content || "").trim();
     return { role, content };
@@ -2326,13 +2331,28 @@ function voiceTranscript(body) {
   return String(body.transcript || body.text || body.input || "").trim();
 }
 
-function voiceMessages(body, transcript) {
-  const messages = Array.isArray(body.messages) ? normalizeMessages(body.messages) : [];
+function voiceMessages(body, transcript, limit) {
+  const safeLimit = resolveContextTurnLimit(limit);
+  const messages = Array.isArray(body.messages) ? normalizeMessages(body.messages, safeLimit) : [];
   const last = messages[messages.length - 1];
   if (!last || last.role !== "user" || last.content !== transcript) {
     messages.push({ role: "user", content: transcript });
   }
-  return messages.slice(-40);
+  return messages.slice(-safeLimit);
+}
+
+// Resolve the per-request context turn limit. Accepts an optional requested
+// value (from body or query param) and clamps it to [1, SESSION_CONTEXT_TURN_LIMIT].
+// When no override is given, the global default applies.
+function resolveContextTurnLimit(requested) {
+  if (requested == null || requested === "") {
+    return SESSION_CONTEXT_TURN_LIMIT;
+  }
+  const n = Number(requested);
+  if (!Number.isFinite(n) || n < 1) {
+    return SESSION_CONTEXT_TURN_LIMIT;
+  }
+  return Math.min(Math.floor(n), SESSION_CONTEXT_TURN_LIMIT);
 }
 
 function voiceAgentPrompt(transcript, screen) {
@@ -2597,7 +2617,7 @@ function liveToolGetSessionContext(call, args) {
   const sessionId = sanitizeOptionalId(args.session_id || call.conversation_id || call.session_id, "default");
   const branchId = sanitizeOptionalId(args.branch_id || call.branch_id, "default");
   const limit = Math.max(1, Math.min(Number(args.limit) || 10, 50));
-  const payload = sessionContextPayload({ sessionId, branchId });
+  const payload = sessionContextPayload({ sessionId, branchId, turnLimit: limit });
   return {
     ok: true,
     type: "session_context",
@@ -3016,20 +3036,23 @@ function listVoiceTurnRecordsForSession(sessionId, branchId) {
   return records;
 }
 
-function sessionContextPayload({ sessionId, branchId = "default" }) {
+function sessionContextPayload({ sessionId, branchId = "default", turnLimit }) {
   const safeSessionId = sanitizeOptionalId(sessionId, "default");
   const safeBranchId = sanitizeOptionalId(branchId, "default");
-  const turns = listVoiceTurnRecordsForSession(safeSessionId, safeBranchId);
+  const allTurns = listVoiceTurnRecordsForSession(safeSessionId, safeBranchId);
+  const safeLimit = resolveContextTurnLimit(turnLimit);
+  const turns = allTurns.slice(-safeLimit);
   const turnIds = new Set(turns.map((turn) => String(turn.id || "")));
   const providerEvents = readProviderEventLedger({ sessionId: safeSessionId, branchId: safeBranchId, limit: 500 });
-  const runs = runsForSession(safeSessionId, turns);
+  const runs = runsForSession(safeSessionId, allTurns);
   return {
     generated_at: new Date().toISOString(),
     session: {
       session_id: safeSessionId,
       branch_id: safeBranchId,
-      latest_turn_id: turns.length ? String(turns[turns.length - 1].id || "") : "",
-      turn_count: turns.length,
+      latest_turn_id: allTurns.length ? String(allTurns[allTurns.length - 1].id || "") : "",
+      turn_count: allTurns.length,
+      context_turn_limit: safeLimit,
     },
     profile: agentProfileRuntimeStatus(),
     turns: turns.map((turn) => ({
