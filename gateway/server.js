@@ -35,6 +35,10 @@ const AGENT_RUNS_DIR = path.join(DATA_DIR, "agent-runs");
 const BROWSER_TASKS_DIR = path.join(DATA_DIR, "browser-tasks");
 const VOICE_TURNS_DIR = path.join(DATA_DIR, "voice-turns");
 const VOICE_PROVIDER_EVENTS_FILE = path.join(DATA_DIR, "voice-provider-events.jsonl");
+// Per-session typed-chat turn records (mirrors the voice-turns/<session_id>/
+// pattern). Each chat turn is a small JSON file under chat-turns/<session_id>/.
+// The global turns.jsonl ledger is still appended for backwards compatibility.
+const CHAT_TURNS_DIR = path.join(DATA_DIR, "chat-turns");
 // Ambient screen frames for the continuous (rung-3) interaction mode: the client
 // samples the screen on an interval and posts each frame here. Intake only — it
 // stores frames per session so a later merge/feedback step can read the stream.
@@ -103,6 +107,7 @@ fs.mkdirSync(BROWSER_TASKS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_TURNS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
+fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 
 // Runtime-editable agent profile layered over the env defaults. On boot it loads
 // the persisted profile if present; otherwise the env default is used with no
@@ -640,6 +645,44 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    // Typed chat history for a session — the read path for the console / coded
+    // chat surface. Parallel in shape to the voice /turns endpoint above but
+    // reads from the per-session chat-turns store (falling back to the global
+    // turns.jsonl ledger for sessions that pre-date the per-session store).
+    if (
+      request.method === "GET" &&
+      url.pathname.startsWith("/v1/sessions/") &&
+      url.pathname.endsWith("/chat-turns")
+    ) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const sessionId = decodeURIComponent(
+        url.pathname.slice("/v1/sessions/".length, -"/chat-turns".length)
+      );
+      const safeId = sanitizeOptionalId(sessionId, "default");
+      const limit = resolveContextTurnLimit(url.searchParams.get("limit"));
+      const all = listChatTurnRecordsForSession(safeId);
+      const page = all.slice(-limit);
+      sendJson(response, 200, {
+        session_id: safeId,
+        total: all.length,
+        limit,
+        turns: page.map((record) => ({
+          turn_id: String(record.turn_id || ""),
+          conversation_id: String(record.conversation_id || safeId),
+          session_id: String(record.session_id || safeId),
+          source: String(record.source || ""),
+          model: String(record.model || ""),
+          profile_version: String(record.profile_version || ""),
+          created_at: String(record.created_at || record.ts || ""),
+          response_text: String(record.response_text || ""),
+        })),
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/v1/context/latest") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -689,6 +732,27 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       await handlePresentationEvaluate(request, response);
+      return;
+    }
+
+    // Serve stored raw PCM audio for a voice turn. The turn_id is extracted
+    // from the URL; the actual file path is resolved strictly from the canonical
+    // turn record (no client-supplied path), so the client can only reach files
+    // that were written by the gateway itself. 404 when the record or file is
+    // missing. The ?role= param selects user (default) or assistant audio.
+    //
+    // This endpoint is the prerequisite for future audio-analysis agents: an
+    // agent can read the turn record, get a turn_id, and fetch the raw PCM for
+    // STT re-processing, quality scoring, or pitch analysis.
+    if (
+      request.method === "GET" &&
+      url.pathname.startsWith("/v1/voice/audio/")
+    ) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleVoiceAudio(request, response, url);
       return;
     }
 
@@ -802,17 +866,37 @@ async function handleChat(request, response) {
     messages: savedMessages,
   };
 
+  const sessionId = sanitizeOptionalId(body.session_id || conversationId, conversationId);
+  const chatTurnId = sanitizeOptionalId(body.turn_id, randomId("cturn"));
   fs.writeFileSync(conversationPath(conversationId), JSON.stringify(saved, null, 2));
-  fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify({
+  const ledgerEntry = {
     ts: saved.updated_at,
+    turn_id: chatTurnId,
     conversation_id: conversationId,
+    session_id: sessionId,
     source: saved.source,
     model: profile.model,
     profile_version: profileVersion,
     request_messages: modelMessages,
     screen: saved.screen,
     response_text: text,
-  }) + "\n");
+  };
+  fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify(ledgerEntry) + "\n");
+  // Per-session record for fast, O(1) session-scoped reads. Parallel to how
+  // voice turns are stored under voice-turns/<session_id>/<turn_id>.json.
+  writeChatTurnRecord({
+    turn_id: chatTurnId,
+    conversation_id: conversationId,
+    session_id: sessionId,
+    source: saved.source,
+    model: profile.model,
+    profile_version: profileVersion,
+    created_at: saved.updated_at,
+    updated_at: saved.updated_at,
+    screen: saved.screen,
+    request_messages: modelMessages,
+    response_text: text,
+  });
 
   sendJson(response, 200, {
     conversation_id: conversationId,
@@ -1756,6 +1840,115 @@ async function handleVoiceProfileControl(record, transcript) {
     application,
     profile: agentProfileRuntimeStatus(),
   };
+}
+
+// Serve stored PCM audio for a voice turn. Resolves the physical file path
+// exclusively from the canonical turn record (never from client input), so the
+// client can only reach files written by the gateway itself.
+// URL:  GET /v1/voice/audio/<turn_id>?role=user|assistant&session_id=<id>
+// - turn_id: required (in the URL segment after /v1/voice/audio/)
+// - session_id: recommended; without it the gateway searches every session dir
+// - role: "user" (default) for the user PCM, "assistant" for the assistant PCM
+async function handleVoiceAudio(request, response, url) {
+  // Extract the turn_id from the URL. Everything after the prefix is the id.
+  const rawTurnId = decodeURIComponent(url.pathname.slice("/v1/voice/audio/".length));
+  const turnId = sanitizeOptionalId(rawTurnId, "");
+  if (!turnId) {
+    sendJson(response, 400, { error: "turn_id is required in the URL path" });
+    return;
+  }
+
+  const role = String(url.searchParams.get("role") || "user").toLowerCase().trim();
+  if (role !== "user" && role !== "assistant") {
+    sendJson(response, 400, { error: "role must be 'user' or 'assistant'" });
+    return;
+  }
+
+  // Resolve the turn record. If session_id is supplied, do a direct lookup;
+  // otherwise search all per-session dirs for the turn. The turn record carries
+  // the canonical audio paths — the client cannot influence which file is opened.
+  const requestedSessionId = url.searchParams.get("session_id");
+  let record = null;
+  if (requestedSessionId) {
+    const safeSessionId = sanitizeOptionalId(requestedSessionId, "default");
+    record = readVoiceTurnRecord(safeSessionId, turnId);
+  } else {
+    // Search all session dirs. This is a best-effort fallback for callers that
+    // only know the turn_id. It reads one file per session at most.
+    if (fs.existsSync(VOICE_TURNS_DIR)) {
+      for (const entry of fs.readdirSync(VOICE_TURNS_DIR)) {
+        const candidate = readVoiceTurnRecord(entry, turnId);
+        if (candidate) {
+          record = candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!record) {
+    sendJson(response, 404, { error: `turn record not found for turn_id: ${turnId}` });
+    return;
+  }
+
+  // The canonical audio reference is stored in the voice-session-server's turn
+  // metadata (voice-sessions/<session_id>/<turn_id>.pcm or .assistant.pcm).
+  // The turn record from handleVoiceTurn does not embed pcm_file; only the
+  // voice-session-server metadata does. Look up the metadata file.
+  const sessionIdForAudio = sanitizeOptionalId(record.session_id || requestedSessionId, "default");
+  const voiceSessionsDir = path.join(DATA_DIR, "voice-sessions");
+  const metadataPath = path.join(voiceSessionsDir, sessionIdForAudio, `${turnId}.json`);
+
+  let audioPath;
+  if (fs.existsSync(metadataPath)) {
+    // Happy path: metadata written by the voice-session-server. Use its paths.
+    let meta;
+    try {
+      meta = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    } catch {
+      sendJson(response, 500, { error: "could not read turn audio metadata" });
+      return;
+    }
+    const pcmFile = role === "assistant"
+      ? (meta?.assistant_audio?.pcm_file || `${turnId}.assistant.pcm`)
+      : (meta?.audio?.pcm_file || `${turnId}.pcm`);
+    audioPath = path.join(voiceSessionsDir, sessionIdForAudio, pcmFile);
+    // Safety check: the resolved path must stay inside voice-sessions dir.
+    if (!isPathInside(voiceSessionsDir, audioPath)) {
+      sendJson(response, 400, { error: "audio path out of bounds" });
+      return;
+    }
+  } else {
+    // Fallback: derive the path from the turn_id and session_id directly.
+    // This covers turns recorded before metadata was written or on older clients.
+    const filename = role === "assistant" ? `${turnId}.assistant.pcm` : `${turnId}.pcm`;
+    audioPath = path.join(voiceSessionsDir, sessionIdForAudio, filename);
+    if (!isPathInside(voiceSessionsDir, audioPath)) {
+      sendJson(response, 400, { error: "audio path out of bounds" });
+      return;
+    }
+  }
+
+  if (!fs.existsSync(audioPath)) {
+    sendJson(response, 404, {
+      error: "audio file not found",
+      turn_id: turnId,
+      role,
+      path_hint: path.basename(audioPath),
+    });
+    return;
+  }
+
+  const stat = fs.statSync(audioPath);
+  response.writeHead(200, {
+    "content-type": "audio/pcm;rate=16000",
+    "content-length": String(stat.size),
+    "x-turn-id": turnId,
+    "x-role": role,
+    "x-session-id": sessionIdForAudio,
+    "cache-control": "no-store",
+  });
+  fs.createReadStream(audioPath).pipe(response);
 }
 
 function profileSummaryText(subject) {
@@ -2802,6 +2995,66 @@ function voiceMultiAgentHarnesses(body, transcript) {
 
 function voiceTurnPath(sessionId, turnId) {
   return path.join(VOICE_TURNS_DIR, sanitizeOptionalId(sessionId, "default"), `${sanitizeOptionalId(turnId, randomId("turn"))}.json`);
+}
+
+// Per-session typed-chat turn record helpers. Mirrors the voice-turns pattern:
+// one JSON file per turn under chat-turns/<session_id>/<turn_id>.json for fast
+// session-scoped reads. The global turns.jsonl ledger is still appended for
+// backwards compatibility and cross-session queries.
+function chatTurnPath(sessionId, turnId) {
+  return path.join(CHAT_TURNS_DIR, sanitizeOptionalId(sessionId, "default"), `${sanitizeOptionalId(turnId, randomId("cturn"))}.json`);
+}
+
+function writeChatTurnRecord(record) {
+  const dir = path.join(CHAT_TURNS_DIR, sanitizeOptionalId(record.session_id || record.conversation_id, "default"));
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${sanitizeOptionalId(record.turn_id, randomId("cturn"))}.json`);
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(record, null, 2));
+  fs.renameSync(tmpPath, filePath);
+}
+
+// List all chat turn records for a session, newest-last (chronological).
+// Reads from the per-session directory first; if the directory is missing
+// (old sessions that pre-date this feature) falls back to scanning turns.jsonl.
+function listChatTurnRecordsForSession(sessionId) {
+  const safeId = sanitizeOptionalId(sessionId, "default");
+  const dir = path.join(CHAT_TURNS_DIR, safeId);
+  if (fs.existsSync(dir)) {
+    const records = [];
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        const record = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
+        if (record) records.push(record);
+      } catch {
+        // Skip unreadable/partial files; one bad file must not sink history.
+      }
+    }
+    records.sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+    return records;
+  }
+  // Fallback: scan the global ledger and filter by session/conversation id.
+  const ledgerPath = path.join(DATA_DIR, "turns.jsonl");
+  if (!fs.existsSync(ledgerPath)) {
+    return [];
+  }
+  const lines = fs.readFileSync(ledgerPath, "utf8").split("\n").filter(Boolean);
+  const records = [];
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (
+        entry &&
+        (String(entry.session_id || "") === safeId || String(entry.conversation_id || "") === safeId)
+      ) {
+        records.push(entry);
+      }
+    } catch {
+      // Skip corrupt lines.
+    }
+  }
+  return records;
 }
 
 function readVoiceTurnRecord(sessionId, turnId) {
