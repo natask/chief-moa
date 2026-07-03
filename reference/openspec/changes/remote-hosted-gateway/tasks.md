@@ -48,7 +48,7 @@ Verification:
 - [x] 1.3 Document the scaffold contract in `vps-deploy-mode-contract.md`,
   including required env, volume ownership, healthcheck, and active-promotion
   blocker.
-- [ ] 1.4 Run Compose config validation without secrets:
+- [x] 1.4 Run Compose config validation without secrets:
   `MOA_GATEWAY_TOKEN=change-me POSTGRES_PASSWORD=change-me docker compose --env-file /dev/null config --quiet`.
 - [ ] 1.5 Run an isolated Compose smoke in a preview path and prove `/health`
   passes, privileged routes still require auth, Postgres is connected, and
@@ -150,7 +150,7 @@ Verification:
   env, raw credentials, and arbitrary absolute paths.
 - [x] 5.6 Implement worker heartbeat, event append, terminal result, stale claim
   rejection, cancellation observation, lease expiry, and retry semantics.
-- [ ] 5.7 Build the local worker runtime pull loop for an allowlisted `echo`
+- [x] 5.7 Build the local worker runtime pull loop for an allowlisted `echo`
   harness before enabling Codex/Claude/Gemini harness profiles.
 
 Acceptance: a queued gateway run is claimed by an execution machine that only
