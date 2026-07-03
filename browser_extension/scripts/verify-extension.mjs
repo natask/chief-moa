@@ -190,6 +190,38 @@ if (
   throw new Error("Cmd/Ctrl+Period must be wired through command handling and startup/update content injection");
 }
 
+if (
+  !/function startVoicePress/.test(contentSource) ||
+  !/function activateVoicePressHold/.test(contentSource) ||
+  !/function finishVoicePress/.test(contentSource) ||
+  !/function isVoiceHotkeyRelease/.test(contentSource) ||
+  !/window\.addEventListener\(\s*"keyup"/.test(contentSource) ||
+  !/startVoicePress\(\{\s*source:\s*"hotkey"\s*\}\)/.test(contentSource) ||
+  !/configureLiveVoiceSession\(press\.state,[\s\S]{0,180}autoCommit:\s*false/.test(contentSource) ||
+  !/configureLiveVoiceSession\(press\.state,[\s\S]{0,180}autoCommit:\s*true/.test(contentSource)
+) {
+  throw new Error("Cmd/Ctrl+Period must use press/release tap-hold voice handling with explicit auto-commit mode changes");
+}
+
+const keydownHotkeyBody = sourceBetween(
+  contentSource,
+  /window\.addEventListener\(\s*"keydown"/,
+  /window\.addEventListener\(\s*"keyup"/,
+  "page hotkey keydown handler"
+);
+if (!/if \(isTextHotkey\(e\)\)[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);/.test(keydownHotkeyBody)) {
+  throw new Error("Cmd/Ctrl+Comma must open the text command surface without clearing the draft");
+}
+const textHotkeyBlock = sourceBetween(
+  keydownHotkeyBody,
+  /if \(isTextHotkey\(e\)\)/,
+  /return;\s*\}\s*\},/,
+  "text hotkey block"
+);
+if (/toggleVoice|startVoicePress|startLiveVoiceTurn|commitLiveVoiceTurn/.test(textHotkeyBlock)) {
+  throw new Error("Cmd/Ctrl+Comma must not start, toggle, or commit browser voice");
+}
+
 if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {
   throw new Error("content snapshot must include visible page text, not only actionable elements");
 }
@@ -234,7 +266,7 @@ if (!/assistantOverlap:\s*assistantSpeechOverlap === true/.test(contentSource)) 
   throw new Error("content.js must pass assistant overlap policy when opening a voice session");
 }
 
-if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.test(backgroundSource)) {
+if (!/playback_policy:\s*\{\s*assistant_overlap:\s*(?:assistantOverlap|session\.assistantOverlap) === true/.test(backgroundSource)) {
   throw new Error("background.js must forward assistant overlap policy into the gateway voice session_start event");
 }
 
@@ -353,8 +385,57 @@ const launcherDoubleClickHoldBody = sourceBetween(
   /function cancelLauncherDoubleClickHold\(/,
   "launcher double-click-hold handler"
 );
-if (!/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) || !/startLauncherPushToTalk\(\)/.test(launcherDoubleClickHoldBody)) {
-  throw new Error("double-click-and-hold must start launcher push-to-talk after the hold threshold");
+if (
+  !/startVoicePress\(\{\s*source:\s*"launcher"/.test(launcherDoubleClickHoldBody) ||
+  !/VOICE_PRESS_HOLD_MS/.test(launcherDoubleClickHoldBody) ||
+  !/activateVoicePressHold\(\{\s*source:\s*"launcher"/.test(launcherDoubleClickHoldBody)
+) {
+  throw new Error("launcher double-click-and-hold must start capture immediately, then switch to push-to-talk after the hold threshold");
+}
+
+if (!/finishVoicePress\(\{\s*source:\s*"launcher"/.test(contentSource)) {
+  throw new Error("launcher quick double-click release must finish the shared voice press path, not run a separate toggle path");
+}
+
+if (
+  !/MAX_PENDING_VOICE_AUDIO_CHUNKS/.test(backgroundSource) ||
+  !/MAX_PENDING_VOICE_AUDIO_BYTES/.test(backgroundSource) ||
+  !/function queuePendingVoiceAudio/.test(backgroundSource) ||
+  !/function flushPendingVoiceAudio/.test(backgroundSource) ||
+  !/pendingCommitMessage/.test(backgroundSource)
+) {
+  throw new Error("background.js must bound and flush early offscreen PCM while the gateway voice session becomes ready");
+}
+
+const startVoiceSessionProxyBody = sourceBetween(
+  backgroundSource,
+  /async function startVoiceSessionProxy\(/,
+  /async function connectVoiceSessionSocket\(/,
+  "voice session proxy startup"
+);
+if (
+  !/voiceSessions\.set\(id,\s*session\)/.test(startVoiceSessionProxyBody) ||
+  !/startOffscreenVoiceCapture\(id\)/.test(startVoiceSessionProxyBody) ||
+  !/connectVoiceSessionSocket\(session\)/.test(startVoiceSessionProxyBody)
+) {
+  throw new Error("voice session startup must register the session id and start offscreen capture before waiting on the gateway socket");
+}
+
+const sessionReadyBody = sourceBetween(
+  backgroundSource,
+  /async function forwardVoiceSessionEvent\(/,
+  /function sendVoiceSessionAudio\(/,
+  "voice session event forwarding"
+);
+if (/session_ready[\s\S]{0,220}startOffscreenVoiceCapture/.test(sessionReadyBody)) {
+  throw new Error("offscreen voice capture must not wait for gateway session_ready");
+}
+if (!/parsed\?\.type === "session_ready"[\s\S]{0,160}flushPendingVoiceAudio\(session\)/.test(sessionReadyBody)) {
+  throw new Error("gateway session_ready must flush queued early PCM in order");
+}
+
+if (!/cmd === "voiceSessionConfigure"/.test(backgroundSource) || !/cmd:\s*"voiceSessionConfigure"/.test(contentSource)) {
+  throw new Error("content/background must support voice session mode configuration for tap vs hold");
 }
 
 if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {

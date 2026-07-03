@@ -44,6 +44,7 @@
     holdToTalkActive = false,
     holdToTalkPointerId = null,
     doubleClickHoldPending = false,
+    voicePress = null,
     lastLauncherTap = null,
     // The Aggie mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
@@ -52,6 +53,7 @@
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
   const DOUBLE_CLICK_HOLD_MS = 120;
+  const VOICE_PRESS_HOLD_MS = DOUBLE_CLICK_HOLD_MS;
   const LAUNCHER_DOUBLE_CLICK_MS = 280;
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
@@ -308,6 +310,9 @@
     const dy = e.clientY - dragState.startY;
     if (Math.abs(dx) + Math.abs(dy) > LAUNCHER_DRAG_SLOP) {
       dragState.moved = true;
+      if (doubleClickHoldPending && e.pointerId === holdToTalkPointerId) {
+        cancelVoicePress("launcher drag");
+      }
       cancelLauncherDoubleClickHold();
     }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
@@ -333,9 +338,7 @@
       // Released before the push-to-talk hold threshold = a quick double-click.
       // Toggle voice: first quick double-click starts listening, the next one
       // commits and sends. (Double-click and hold stays push-to-talk above.)
-      openTextSurface({ fresh: false });
-      primeAudio();
-      toggleVoice();
+      finishVoicePress({ source: "launcher", pointerId: e.pointerId });
       return;
     }
     if (moved) {
@@ -379,13 +382,13 @@
     cancelLauncherDoubleClickHold();
     doubleClickHoldPending = true;
     holdToTalkPointerId = e.pointerId;
+    startVoicePress({ source: "launcher", pointerId: e.pointerId });
     holdToTalkTimer = setTimeout(() => {
       holdToTalkTimer = null;
       if (!doubleClickHoldPending || !dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
       doubleClickHoldPending = false;
-      holdToTalkActive = true;
-      startLauncherPushToTalk();
-    }, DOUBLE_CLICK_HOLD_MS);
+      holdToTalkActive = activateVoicePressHold({ source: "launcher", pointerId: e.pointerId });
+    }, VOICE_PRESS_HOLD_MS);
   }
 
   function cancelLauncherDoubleClickHold() {
@@ -400,22 +403,144 @@
   }
 
   function startLauncherPushToTalk() {
-    openTextSurface({ fresh: false });
-    primeAudio();
-    if (liveVoice) stopLiveVoiceTurn("cancel");
-    startLiveVoiceTurn({
-      preserveAssistantPlayback: assistantSpeechOverlap === true,
-      conversation: false,
-      autoCommit: false,
-    });
+    startVoicePress({ source: "launcher", pointerId: holdToTalkPointerId });
+    holdToTalkActive = activateVoicePressHold({ source: "launcher", pointerId: holdToTalkPointerId });
   }
 
   function finishLauncherPushToTalk() {
-    holdToTalkActive = false;
-    holdToTalkPointerId = null;
+    finishVoicePress({ source: "launcher", pointerId: holdToTalkPointerId });
+  }
+
+  function startVoicePress({ source, pointerId = null } = {}) {
+    cancelVoicePress("superseded");
+    openTextSurface({ fresh: false });
+    primeAudio();
+    const press = {
+      source,
+      pointerId,
+      action: "start",
+      state: null,
+      holdActive: false,
+      released: false,
+      timer: null,
+    };
+    voicePress = press;
+
     if (liveVoice && listening) {
+      press.action = "commit";
       commitLiveVoiceTurn();
+      return press;
     }
+
+    if (liveVoice) {
+      if (assistantSpeechOverlap === true && liveVoice.committed) {
+        startLiveVoiceTurn({
+          preserveAssistantPlayback: true,
+          autoCommit: false,
+        });
+      } else {
+        stopLiveVoiceTurn("cancel");
+        startLiveVoiceTurn({
+          preserveAssistantPlayback: assistantSpeechOverlap === true,
+          autoCommit: false,
+        });
+      }
+    } else {
+      startLiveVoiceTurn({
+        preserveAssistantPlayback: assistantSpeechOverlap === true,
+        autoCommit: false,
+      });
+    }
+
+    press.state = liveVoice;
+    press.timer = setTimeout(() => {
+      activateVoicePressHold({ source, pointerId });
+    }, VOICE_PRESS_HOLD_MS);
+    return press;
+  }
+
+  function matchingVoicePress({ source, pointerId = null } = {}) {
+    if (!voicePress) return null;
+    if (source && voicePress.source !== source) return null;
+    if (pointerId != null && voicePress.pointerId !== pointerId) return null;
+    return voicePress;
+  }
+
+  function clearVoicePressTimer(press) {
+    if (press?.timer) {
+      clearTimeout(press.timer);
+      press.timer = null;
+    }
+  }
+
+  function activateVoicePressHold({ source, pointerId = null } = {}) {
+    const press = matchingVoicePress({ source, pointerId });
+    if (!press || press.action !== "start" || press.released || press.holdActive) return false;
+    const state = press.state;
+    if (!state || !isLiveVoiceStateActive(state) || liveVoice !== state || !listening) return false;
+    press.holdActive = true;
+    state.pushToTalk = true;
+    conversationActive = false;
+    configureLiveVoiceSession(state, {
+      autoCommit: false,
+      conversation: false,
+      reason: `${source || "voice"} hold`,
+    });
+    return true;
+  }
+
+  function finishVoicePress({ source, pointerId = null } = {}) {
+    const press = matchingVoicePress({ source, pointerId });
+    if (!press) return;
+    press.released = true;
+    clearVoicePressTimer(press);
+    if (press.action === "start" && press.state && isLiveVoiceStateActive(press.state)) {
+      if (press.holdActive) {
+        conversationActive = false;
+        press.state.pushToTalk = true;
+        configureLiveVoiceSession(press.state, {
+          autoCommit: false,
+          conversation: false,
+          reason: `${source || "voice"} hold release`,
+        });
+        if (liveVoice === press.state && listening) commitLiveVoiceTurn();
+      } else {
+        press.state.pushToTalk = false;
+        conversationActive = true;
+        configureLiveVoiceSession(press.state, {
+          autoCommit: true,
+          conversation: true,
+          reason: `${source || "voice"} tap`,
+        });
+      }
+    }
+    if (source === "launcher") {
+      holdToTalkActive = false;
+      holdToTalkPointerId = null;
+      doubleClickHoldPending = false;
+    }
+    if (voicePress === press) voicePress = null;
+  }
+
+  function cancelVoicePress(reason = "cancel") {
+    const press = voicePress;
+    if (!press) return;
+    clearVoicePressTimer(press);
+    if (press.action === "start" && press.state && isLiveVoiceStateActive(press.state)) {
+      const wasCurrent = liveVoice === press.state;
+      stopLiveVoiceState(press.state, "cancel");
+      if (wasCurrent) {
+        setVoiceState(false);
+        if (agentState !== "idle") setAgentState("idle");
+      }
+    }
+    voicePress = null;
+    if (press.source === "launcher") {
+      holdToTalkActive = false;
+      holdToTalkPointerId = null;
+      doubleClickHoldPending = false;
+    }
+    void reason;
   }
 
   function toggle(force) {
@@ -802,7 +927,34 @@
       liveVoiceBySessionId.set(state.voiceSessionId, state);
       safeRuntimeSendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId })
         .catch(() => {});
+      flushLiveVoiceSessionConfig(state);
     }
+  }
+
+  function configureLiveVoiceSession(state, config = {}) {
+    if (!state) return;
+    const next = {
+      ...(state.pendingVoiceSessionConfig || {}),
+      ...config,
+    };
+    state.pendingVoiceSessionConfig = next;
+    state.autoCommit = next.autoCommit !== false;
+    state.conversation = next.conversation !== false;
+    flushLiveVoiceSessionConfig(state);
+  }
+
+  function flushLiveVoiceSessionConfig(state) {
+    if (!state?.voiceSessionId || !state.pendingVoiceSessionConfig) return;
+    const config = state.pendingVoiceSessionConfig;
+    state.pendingVoiceSessionConfig = null;
+    safeRuntimeSendMessage({
+      cmd: "voiceSessionConfigure",
+      voiceSessionId: state.voiceSessionId,
+      config: {
+        autoCommit: config.autoCommit !== false,
+        reason: config.reason || "voice mode changed",
+      },
+    }).catch(() => {});
   }
 
   function untrackLiveVoiceState(state) {
@@ -967,6 +1119,11 @@
       transcript: "",
       gatewayRouted: false,
       assistantSpeechOverlap: preserveAssistantPlayback,
+      autoCommit: options.autoCommit !== false,
+      conversation: conversationActive,
+      pendingVoiceSessionConfig: options.autoCommit === false
+        ? { autoCommit: false, reason: "voice start pending tap-or-hold" }
+        : null,
     };
     trackLiveVoiceState(state);
     liveVoice = state;
@@ -994,8 +1151,10 @@
       }
       attachLiveVoiceSession(state, session.voiceSessionId);
       if (state.commitWhenReady) commitLiveVoiceTurn();
+      return state;
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
+      return state;
     }
   }
 
@@ -1616,7 +1775,16 @@
   //   ⌘,  (or Ctrl+,)         → open the text command field
 
   function isVoiceHotkey(e) {
-    return (e.metaKey || e.ctrlKey) && e.key === ".";
+    return (e.metaKey || e.ctrlKey) && (e.key === "." || (!e.shiftKey && e.code === "Period"));
+  }
+
+  function isVoiceHotkeyRelease(e) {
+    return !!voicePress && voicePress.source === "hotkey" && (
+      e.key === "." ||
+      e.code === "Period" ||
+      e.key === "Meta" ||
+      e.key === "Control"
+    );
   }
 
   function isTextHotkey(e) {
@@ -1630,8 +1798,9 @@
       if (isVoiceHotkey(e)) {
         e.preventDefault();
         e.stopPropagation();
+        if (e.repeat && voicePress?.source === "hotkey") return;
         if (!root) build();
-        toggleVoiceSession();
+        startVoicePress({ source: "hotkey" });
         return;
       }
       // ⌘, → text command field.
@@ -1642,6 +1811,17 @@
         openTextSurface({ fresh: false });
         return;
       }
+    },
+    true
+  );
+
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (!isVoiceHotkeyRelease(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      finishVoicePress({ source: "hotkey" });
     },
     true
   );

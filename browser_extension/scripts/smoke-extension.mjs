@@ -186,8 +186,17 @@ function assertVoicePlaybackStopContract() {
   if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(source)) {
     throw new Error("live voice transcript must render in cue cards above the input");
   }
-  if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.test(background)) {
+  if (!/playback_policy:\s*\{\s*assistant_overlap:\s*(?:assistantOverlap|session\.assistantOverlap) === true/.test(background)) {
     throw new Error("background.js must send assistant_overlap playback policy to the gateway");
+  }
+  if (!/function startVoicePress/.test(source) || !/window\.addEventListener\(\s*"keyup"/.test(source)) {
+    throw new Error("content.js must handle Cmd/Ctrl+Period as a key press/release, not keydown-only toggle");
+  }
+  if (!/function queuePendingVoiceAudio/.test(background) || !/function flushPendingVoiceAudio/.test(background)) {
+    throw new Error("background.js must queue early voice PCM until the gateway session is ready");
+  }
+  if (/session_ready[\s\S]{0,220}startOffscreenVoiceCapture/.test(background)) {
+    throw new Error("offscreen microphone capture must start before gateway session_ready");
   }
 }
 
@@ -411,6 +420,191 @@ async function main() {
     }
     if (!resultPlacement?.cueAboveInput) {
       throw new Error(`result cue did not render above the command input: ${JSON.stringify(resultPlacement)}`);
+    }
+
+    const hotkeyVoiceResult = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: async () => {
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const clone = (value) => JSON.parse(JSON.stringify(value || {}));
+            const root = document.querySelector("#agee-root");
+            const input = document.querySelector("#agee-input");
+            if (!root || !input) return { ok: false, error: "overlay missing" };
+
+            const originalSend = chrome.runtime.sendMessage;
+            const messages = [];
+            let voiceSeq = 0;
+            const stub = (message) => {
+              messages.push(clone(message));
+              if (message?.cmd === "voiceSessionStart") {
+                voiceSeq += 1;
+                return Promise.resolve({ ok: true, voiceSessionId: \`smoke-voice-\${voiceSeq}\` });
+              }
+              if (
+                message?.cmd === "voiceSessionAttach" ||
+                message?.cmd === "voiceSessionConfigure" ||
+                message?.cmd === "voiceSessionControl" ||
+                message?.cmd === "voiceSessionClose"
+              ) {
+                return Promise.resolve({ ok: true });
+              }
+              return Promise.resolve({ ok: true });
+            };
+
+            try {
+              chrome.runtime.sendMessage = stub;
+              if (chrome.runtime.sendMessage !== stub) {
+                return { ok: false, error: "could not stub chrome.runtime.sendMessage" };
+              }
+
+              const dispatchPeriod = (type) => window.dispatchEvent(new KeyboardEvent(type, {
+                key: ".",
+                code: "Period",
+                metaKey: true,
+                bubbles: true,
+                cancelable: true,
+              }));
+              const dispatchComma = () => window.dispatchEvent(new KeyboardEvent("keydown", {
+                key: ",",
+                code: "Comma",
+                metaKey: true,
+                bubbles: true,
+                cancelable: true,
+              }));
+
+              input.value = "draft survives hotkeys";
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              dispatchComma();
+              await sleep(80);
+              const commaMessages = messages.splice(0);
+              const commaOk =
+                root.classList.contains("agee-open") &&
+                input.value === "draft survives hotkeys" &&
+                !commaMessages.some((message) => /voiceSession|Voice|run/.test(String(message.cmd || "")));
+
+              dispatchPeriod("keydown");
+              await sleep(40);
+              dispatchPeriod("keyup");
+              await sleep(180);
+              const tapMessages = messages.splice(0);
+              const tapStart = tapMessages.filter((message) => message.cmd === "voiceSessionStart");
+              const tapCommit = tapMessages.filter((message) => message.cmd === "voiceSessionControl" && message.message?.type === "commit_turn");
+              const tapAutoCommitEnabled = tapMessages.some((message) => message.cmd === "voiceSessionConfigure" && message.config?.autoCommit === true);
+              const tapOk =
+                tapStart.length === 1 &&
+                tapStart[0].autoCommit === false &&
+                tapCommit.length === 0 &&
+                tapAutoCommitEnabled &&
+                root.classList.contains("agee-state-listening");
+
+              dispatchPeriod("keydown");
+              await sleep(40);
+              dispatchPeriod("keyup");
+              await sleep(120);
+              const secondTapMessages = messages.splice(0);
+              const secondTapCommit = secondTapMessages.filter((message) => message.cmd === "voiceSessionControl" && message.message?.type === "commit_turn");
+              const secondTapOk = secondTapCommit.length === 1;
+
+              dispatchPeriod("keydown");
+              await sleep(180);
+              const holdDuringMessages = messages.slice();
+              const holdDisabledAutoCommit = holdDuringMessages.some((message) => message.cmd === "voiceSessionConfigure" && message.config?.autoCommit === false);
+              dispatchPeriod("keyup");
+              await sleep(160);
+              const holdMessages = messages.splice(0);
+              const holdStart = holdMessages.filter((message) => message.cmd === "voiceSessionStart");
+              const holdCommit = holdMessages.filter((message) => message.cmd === "voiceSessionControl" && message.message?.type === "commit_turn");
+              const holdOk =
+                holdStart.length >= 1 &&
+                holdStart.at(-1).autoCommit === false &&
+                holdDisabledAutoCommit &&
+                holdCommit.length >= 1;
+
+              return {
+                ok: commaOk && tapOk && secondTapOk && holdOk,
+                commaOk,
+                tapOk,
+                secondTapOk,
+                holdOk,
+                tapMessages,
+                secondTapMessages,
+                holdMessages,
+                inputValue: input.value,
+              };
+            } finally {
+              chrome.runtime.sendMessage = originalSend;
+            }
+          },
+        });
+        return result?.result;
+      })()
+    `);
+    if (!hotkeyVoiceResult?.ok) {
+      throw new Error(`Cmd/Ctrl+Period tap-hold smoke failed: ${JSON.stringify(hotkeyVoiceResult)}`);
+    }
+
+    const earlyAudioQueueResult = await evaluate(workerCdp, `
+      (async () => {
+        const hook = globalThis.__ageeVoiceQueueSmoke;
+        if (!hook) return { ok: false, error: "missing __ageeVoiceQueueSmoke hook" };
+
+        const queueId = \`smoke-queue-\${Date.now()}\`;
+        hook.create(queueId);
+        const first = hook.audio(queueId, [1, 0, 2, 0]);
+        const second = hook.audio(queueId, [3, 0, 4, 0]);
+        const beforeReady = hook.snapshot(queueId);
+        const afterReady = hook.ready(queueId);
+        hook.destroy(queueId);
+        const queueSent = afterReady?.sent || [];
+        const queueOk =
+          first?.ok === true &&
+          first?.queued === true &&
+          second?.ok === true &&
+          second?.queued === true &&
+          beforeReady?.pendingChunks === 2 &&
+          afterReady?.pendingChunks === 0 &&
+          queueSent.length === 2 &&
+          queueSent[0]?.kind === "audio" &&
+          queueSent[0]?.bytes?.join(",") === "1,0,2,0" &&
+          queueSent[1]?.kind === "audio" &&
+          queueSent[1]?.bytes?.join(",") === "3,0,4,0";
+
+        const commitId = \`smoke-commit-\${Date.now()}\`;
+        hook.create(commitId);
+        hook.audio(commitId, [9, 0, 10, 0]);
+        const commitQueued = await hook.commit(commitId);
+        const beforeCommitReady = hook.snapshot(commitId);
+        const afterCommitReady = hook.ready(commitId);
+        hook.destroy(commitId);
+        const commitSent = afterCommitReady?.sent || [];
+        const commitOk =
+          commitQueued?.ok === true &&
+          commitQueued?.queued === true &&
+          beforeCommitReady?.pendingChunks === 1 &&
+          beforeCommitReady?.committed === true &&
+          commitSent.length === 2 &&
+          commitSent[0]?.kind === "audio" &&
+          commitSent[0]?.bytes?.join(",") === "9,0,10,0" &&
+          commitSent[1]?.kind === "json" &&
+          JSON.parse(commitSent[1].text).type === "commit_turn";
+
+        return {
+          ok: queueOk && commitOk,
+          queueOk,
+          commitOk,
+          beforeReady,
+          afterReady,
+          beforeCommitReady,
+          afterCommitReady,
+          commitQueued,
+        };
+      })()
+    `);
+    if (!earlyAudioQueueResult?.ok) {
+      throw new Error(`early voice audio queue smoke failed: ${JSON.stringify(earlyAudioQueueResult)}`);
     }
 
     const workerResult = await evaluate(workerCdp, `

@@ -1,0 +1,1 @@
+- Implemented Cmd/Ctrl+Period tap/hold voice and capture-first early PCM buffering for browser voice — agent: Codex/GPT-5 — entire checkpoint: current Codex session
