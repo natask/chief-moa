@@ -54,6 +54,34 @@ For Android-first product work, the active change is usually
 - Runtime behavior: verify with gateway smoke checks or phone QA, whichever is
   closest to the changed behavior.
 
+## Self-Serve Maintenance Skills
+
+Recurring maintenance loops have agent-runnable skills. Prefer them over
+re-deriving the commands. Each is a thin wrapper over the repo's real
+`npm`/`bash` commands and respects the live-gateway freeze.
+
+- `moa-voice-qa` - verify a spoken turn flows phone/browser -> gateway ->
+  Gemini/Vertex Live -> reply, and audit why a voice turn failed. Runs
+  `gateway npm run check` + `npm run eval:voice` (deterministic by default;
+  `live` arg hits the real Live socket and costs money). Reads `/health` and
+  stored voice turns read-only. Use for "voice doesn't respond" reports.
+- `moa-extension-refresh` - verify + smoke + package + reload the unpacked
+  browser extension via `scripts/deploy.sh extension`. Auto-bumps the manifest
+  version before packaging (Chrome caches by version). Records a blocker with
+  the package path when the dev reload bridge is not enabled. For deep fuzzing
+  use `chrome-extension-qa-ralph` instead.
+- `moa-gateway-refresh` - audit-first gateway health, drift, and change review.
+  Audit mode is read-only and never restarts the live service. Promotion
+  (`scripts/deploy.sh gateway`) requires the user to explicitly say
+  promote/apply/deploy in the current turn, plus a read-only backup/restore
+  check first. Background/cron invocations stop at audit and must not
+  self-promote.
+
+The gateway on the main machine is a live app with user data. Diagnosis is
+read-only; restart/redeploy is a promotion gated on explicit user approval in
+the same turn. Fix work happens in an isolated branch or worktree, never against
+the running service. See the `main-machine` skill for connection facts.
+
 ## Finish Order
 
 For every completed implementation unit, finish in this order:
