@@ -10,6 +10,7 @@
 // content-script harness — the whole point is to exercise the real extension.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
@@ -43,6 +44,150 @@ function serve() {
       resolveServer({ server, port: address.port });
     });
   });
+}
+
+function sendWsFrame(socket, opcode, payload) {
+  const body = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
+  let header;
+  if (body.length < 126) {
+    header = Buffer.from([0x80 | opcode, body.length]);
+  } else if (body.length < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 126;
+    header.writeUInt16BE(body.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | opcode;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(body.length), 2);
+  }
+  socket.write(Buffer.concat([header, body]));
+}
+
+function sendWsText(socket, value) {
+  sendWsFrame(socket, 0x1, JSON.stringify(value));
+}
+
+function readWsFrames(buffer) {
+  const frames = [];
+  let offset = 0;
+  while (offset + 2 <= buffer.length) {
+    const first = buffer[offset];
+    const second = buffer[offset + 1];
+    const opcode = first & 0x0f;
+    const masked = Boolean(second & 0x80);
+    let length = second & 0x7f;
+    let headerLength = 2;
+    if (length === 126) {
+      if (offset + 4 > buffer.length) break;
+      length = buffer.readUInt16BE(offset + 2);
+      headerLength = 4;
+    } else if (length === 127) {
+      if (offset + 10 > buffer.length) break;
+      length = Number(buffer.readBigUInt64BE(offset + 2));
+      headerLength = 10;
+    }
+    const maskLength = masked ? 4 : 0;
+    const frameEnd = offset + headerLength + maskLength + length;
+    if (frameEnd > buffer.length) break;
+    let payload = buffer.subarray(offset + headerLength + maskLength, frameEnd);
+    if (masked) {
+      const mask = buffer.subarray(offset + headerLength, offset + headerLength + 4);
+      payload = Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]));
+    } else {
+      payload = Buffer.from(payload);
+    }
+    frames.push({ opcode, payload });
+    offset = frameEnd;
+  }
+  return { frames, rest: buffer.subarray(offset) };
+}
+
+async function serveVoiceQueueGateway() {
+  const state = {
+    frames: [],
+    binaryFrames: [],
+    textFrames: [],
+    readySentAt: 0,
+  };
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (url.pathname === "/v1/voice/session-ticket") {
+      const { port } = server.address();
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        ticket: "queue-smoke-ticket",
+        ws_url: `ws://localhost:${port}/v1/voice/sessions?ticket=queue-smoke-ticket`,
+      }));
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  server.on("upgrade", (req, socket) => {
+    const key = req.headers["sec-websocket-key"];
+    if (!key) {
+      socket.destroy();
+      return;
+    }
+    const accept = createHash("sha1")
+      .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+
+    let pending = Buffer.alloc(0);
+    socket.on("data", (chunk) => {
+      pending = Buffer.concat([pending, chunk]);
+      const parsed = readWsFrames(pending);
+      pending = parsed.rest;
+      for (const frame of parsed.frames) {
+        const entry = { opcode: frame.opcode, at: Date.now(), payload: frame.payload };
+        state.frames.push(entry);
+        if (frame.opcode === 0x1) {
+          const text = frame.payload.toString("utf8");
+          let json = null;
+          try {
+            json = JSON.parse(text);
+          } catch {}
+          entry.text = text;
+          entry.json = json;
+          state.textFrames.push(entry);
+          if (json?.type === "session_start" && !state.readySentAt) {
+            setTimeout(() => {
+              state.readySentAt = Date.now();
+              sendWsText(socket, { type: "session_ready" });
+            }, 250);
+          }
+        } else if (frame.opcode === 0x2) {
+          state.binaryFrames.push(entry);
+        } else if (frame.opcode === 0x8) {
+          socket.end();
+        }
+      }
+    });
+  });
+
+  await new Promise((resolveServer) => server.listen(0, "localhost", resolveServer));
+  const { port } = server.address();
+  return {
+    server,
+    state,
+    baseUrl: `http://localhost:${port}`,
+  };
 }
 
 function delay(ms) {
@@ -183,6 +328,26 @@ function assertVoicePlaybackStopContract() {
   if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(source)) {
     throw new Error("voice button click must open the input surface and prime audio before starting live voice");
   }
+  if (
+    !/function beginVoiceGesturePress/.test(source) ||
+    !/keyboardVoicePress = beginVoiceGesturePress\("keyboard"\)/.test(source) ||
+    !/launcherVoicePress = startLauncherPushToTalk\(\);[\s\S]{0,120}setTimeout/.test(source) ||
+    !/promoteVoiceGesturePressToHold/.test(source) ||
+    !/finishVoiceGesturePress/.test(source) ||
+    !/if \(!e\.repeat\) startKeyboardVoicePress\(\);/.test(source)
+  ) {
+    throw new Error("Cmd/Ctrl+Period and launcher double-click must share press/release voice gesture state");
+  }
+  if (
+    !/MAX_QUEUED_VOICE_AUDIO_BYTES/.test(background) ||
+    !/function queueVoiceSessionAudio/.test(background) ||
+    !/function flushQueuedVoiceAudio/.test(background) ||
+    !/function markVoiceSessionReady/.test(background) ||
+    !/startVoiceSessionCapture\(session\)/.test(background) ||
+    /parsed\?\.type === "session_ready"[\s\S]{0,160}startOffscreenVoiceCapture/.test(background)
+  ) {
+    throw new Error("background.js must start offscreen capture before session_ready and queue early PCM");
+  }
   if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(source)) {
     throw new Error("live voice transcript must render in cue cards above the input");
   }
@@ -191,10 +356,220 @@ function assertVoicePlaybackStopContract() {
   }
 }
 
+function voiceGestureRuntimeFunctionSource() {
+  return `
+    async (mode) => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const calls = [];
+      const originalSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = (message) => {
+        calls.push(JSON.parse(JSON.stringify(message || {})));
+        if (message?.cmd === "voiceSessionStart") {
+          return Promise.resolve({
+            ok: true,
+            voiceSessionId: "smoke-" + mode + "-voice-session",
+            session_id: "smoke-session",
+            conversation_id: "smoke-session",
+          });
+        }
+        if (message?.cmd === "voiceSessionAttach") return Promise.resolve({ ok: true });
+        if (message?.cmd === "voiceSessionControl") return Promise.resolve({ ok: true });
+        if (message?.cmd === "voiceSessionClose") return Promise.resolve({ ok: true });
+        return Promise.resolve({ ok: true });
+      };
+      const key = (type, keyValue, code, extra = {}) => window.dispatchEvent(new KeyboardEvent(type, {
+        key: keyValue,
+        code,
+        bubbles: true,
+        cancelable: true,
+        ...extra,
+      }));
+      try {
+        if (mode === "comma") {
+          const input = document.querySelector("#agee-input");
+          if (input) {
+            input.value = "draft survives comma";
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          key("keydown", ",", "Comma", { metaKey: true });
+          await sleep(80);
+          const root = document.querySelector("#agee-root");
+          return {
+            mode: "comma",
+            calls,
+            open: root?.classList.contains("agee-open") || false,
+            inputValue: document.querySelector("#agee-input")?.value || "",
+          };
+        }
+
+        key("keydown", ".", "Period", { metaKey: true });
+        await sleep(mode === "hold" ? 180 : 40);
+        key("keyup", ".", "Period", { metaKey: false });
+        await sleep(160);
+
+        if (mode === "tap") {
+          key("keydown", ".", "Period", { metaKey: true });
+          await sleep(30);
+          key("keyup", ".", "Period", { metaKey: false });
+          await sleep(120);
+        }
+
+        return {
+          mode,
+          calls,
+          open: document.querySelector("#agee-root")?.classList.contains("agee-open") || false,
+          listening: document.querySelector("#agee-voice")?.classList.contains("listening") || false,
+        };
+      } finally {
+        chrome.runtime.sendMessage = originalSendMessage;
+      }
+    }
+  `;
+}
+
+async function runVoiceGestureSmoke(workerCdp, tabId, mode) {
+  const result = await evaluate(workerCdp, `
+    (async () => {
+      const [injection] = await chrome.scripting.executeScript({
+        target: { tabId: ${tabId} },
+        func: ${voiceGestureRuntimeFunctionSource()},
+        args: [${JSON.stringify(mode)}],
+      });
+      return injection?.result;
+    })()
+  `);
+  const calls = Array.isArray(result?.calls) ? result.calls : [];
+  if (mode === "comma") {
+    if (!result?.open || result.inputValue !== "draft survives comma" || calls.length !== 0) {
+      throw new Error(`Cmd/Ctrl+Comma smoke failed: ${JSON.stringify(result)}`);
+    }
+    return result;
+  }
+  const starts = calls.filter((call) => call.cmd === "voiceSessionStart");
+  const controls = calls.filter((call) => call.cmd === "voiceSessionControl");
+  const commits = controls.filter((call) => call.message?.type === "commit_turn");
+  const setAutoCommit = controls.filter((call) => call.message?.type === "set_auto_commit");
+  if (!starts.length || starts[0].autoCommit !== false || starts[0].conversation !== false) {
+    throw new Error(`${mode} voice smoke did not start through the manual-candidate path: ${JSON.stringify(result)}`);
+  }
+  if (mode === "tap") {
+    if (!setAutoCommit.some((call) => call.message?.enabled === true) || commits.length !== 1) {
+      throw new Error(`Cmd/Ctrl+Period tap smoke did not promote to toggle then commit on next tap: ${JSON.stringify(result)}`);
+    }
+  } else if (mode === "hold") {
+    if (!setAutoCommit.some((call) => call.message?.enabled === false) || commits.length !== 1) {
+      throw new Error(`Cmd/Ctrl+Period hold smoke did not commit as push-to-talk: ${JSON.stringify(result)}`);
+    }
+  }
+  return result;
+}
+
+async function waitForQueueGateway(state, timeoutMs = 5000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const commitFrame = state.textFrames.find((frame) => frame.json?.type === "commit_turn");
+    if (state.readySentAt && state.binaryFrames.length >= 2 && commitFrame) {
+      return {
+        binaryFrames: state.binaryFrames,
+        commitFrame,
+        textFrames: state.textFrames,
+      };
+    }
+    await delay(50);
+  }
+  throw new Error(`early-audio queue smoke timed out: ${JSON.stringify({
+    readySentAt: state.readySentAt,
+    binaryFrames: state.binaryFrames.length,
+    textTypes: state.textFrames.map((frame) => frame.json?.type || "raw"),
+  })}`);
+}
+
+async function runEarlyAudioQueueSmoke(workerCdp, tabId, gateway) {
+  await evaluate(workerCdp, `
+    chrome.storage.local.set({
+      ageeGatewayUrl: ${JSON.stringify(gateway.baseUrl)},
+      ageeGatewayToken: "",
+      ageeApiKey: "",
+    })
+  `);
+  const started = await evaluate(workerCdp, `
+    (async () => {
+      const [injection] = await chrome.scripting.executeScript({
+        target: { tabId: ${tabId} },
+        func: async () => {
+          const toBase64 = (bytes) => btoa(String.fromCharCode(...bytes));
+          const session = await chrome.runtime.sendMessage({
+            cmd: "voiceSessionStart",
+            cueId: "queue-smoke-cue",
+            turnId: "queue-smoke-turn",
+            assistantOverlap: false,
+            capture: "content-script",
+            autoCommit: false,
+            conversation: false,
+          });
+          if (!session?.ok || !session.voiceSessionId) return { ok: false, stage: "start", session };
+          const attached = await chrome.runtime.sendMessage({
+            cmd: "voiceSessionAttach",
+            voiceSessionId: session.voiceSessionId,
+          });
+          const audioA = await chrome.runtime.sendMessage({
+            cmd: "voiceSessionAudio",
+            voiceSessionId: session.voiceSessionId,
+            audio: toBase64([1, 2, 3, 4]),
+          });
+          const audioB = await chrome.runtime.sendMessage({
+            cmd: "voiceSessionAudio",
+            voiceSessionId: session.voiceSessionId,
+            audio: toBase64([5, 6, 7, 8]),
+          });
+          const commit = await chrome.runtime.sendMessage({
+            cmd: "voiceSessionControl",
+            voiceSessionId: session.voiceSessionId,
+            message: { type: "commit_turn", turn_id: "queue-smoke-turn" },
+          });
+          return { ok: true, session, attached, audioA, audioB, commit };
+        },
+      });
+      return injection?.result;
+    })()
+  `);
+  if (!started?.ok || started.audioA?.queued !== true || started.audioB?.queued !== true || started.commit?.queued !== true) {
+    throw new Error(`early-audio queue smoke did not queue pre-ready audio/control: ${JSON.stringify(started)}`);
+  }
+
+  const observed = await waitForQueueGateway(gateway.state);
+  const binaryPayloads = observed.binaryFrames.map((frame) => Array.from(frame.payload));
+  const frameOrder = gateway.state.frames.map((frame) => {
+    if (frame.opcode === 0x2) return "audio";
+    return frame.json?.type || "text";
+  });
+  const firstCommitIndex = frameOrder.indexOf("commit_turn");
+  const firstAudioIndex = frameOrder.indexOf("audio");
+  if (
+    !gateway.state.readySentAt ||
+    observed.binaryFrames.some((frame) => frame.at < gateway.state.readySentAt) ||
+    JSON.stringify(binaryPayloads.slice(0, 2)) !== JSON.stringify([[1, 2, 3, 4], [5, 6, 7, 8]]) ||
+    firstAudioIndex < 0 ||
+    firstCommitIndex < 0 ||
+    firstCommitIndex < firstAudioIndex
+  ) {
+    throw new Error(`early-audio queue ordering failed: ${JSON.stringify({
+      readySentAt: gateway.state.readySentAt,
+      binaryPayloads,
+      frameOrder,
+    })}`);
+  }
+  return {
+    queuedAudio: binaryPayloads.length,
+    frameOrder,
+  };
+}
+
 async function main() {
   assertVoicePlaybackStopContract();
   const chromePath = resolveChromeForTesting();
   const { server, port: serverPort } = await serve();
+  const queueGateway = await serveVoiceQueueGateway();
   mkdirSync(profilePath, { recursive: true });
   mkdirSync(artifactsDir, { recursive: true });
 
@@ -564,12 +939,19 @@ async function main() {
       throw new Error(`unexpected demo result: ${resultText}`);
     }
 
+    const commaGesture = await runVoiceGestureSmoke(workerCdp, ping.tabId, "comma");
+    const tapGesture = await runVoiceGestureSmoke(workerCdp, ping.tabId, "tap");
+    const holdGesture = await runVoiceGestureSmoke(workerCdp, ownershipResult.tabB, "hold");
+    const queueGesture = await runEarlyAudioQueueSmoke(workerCdp, ownershipResult.tabB, queueGateway);
+
     console.log(
       `extension smoke passed (REAL extension, headless Chrome for Testing): ` +
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
         `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
         `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +
+        `shortcut gestures checked (comma calls=${commaGesture.calls.length}, tap calls=${tapGesture.calls.length}, hold calls=${holdGesture.calls.length}), ` +
+        `early voice queue flushed ${queueGesture.queuedAudio} chunks before commit, ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );
     console.log(`screenshot: ${screenshotPath}`);
@@ -579,6 +961,7 @@ async function main() {
     workerCdp?.close();
     browserCdp?.close();
     server.close();
+    queueGateway.server.close();
     chrome.kill("SIGTERM");
     await delay(300);
     rmSync(runDir, { recursive: true, force: true });

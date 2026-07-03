@@ -43,6 +43,8 @@
     holdToTalkTimer = null,
     holdToTalkActive = false,
     holdToTalkPointerId = null,
+    launcherVoicePress = null,
+    keyboardVoicePress = null,
     doubleClickHoldPending = false,
     lastLauncherTap = null,
     // The Aggie mark stays where the user drops it and reacts visually to state.
@@ -52,6 +54,7 @@
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
   const DOUBLE_CLICK_HOLD_MS = 120;
+  const VOICE_HOLD_MS = DOUBLE_CLICK_HOLD_MS;
   const LAUNCHER_DOUBLE_CLICK_MS = 280;
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
@@ -291,9 +294,7 @@
       scheduleLauncherDoubleClickHold(e);
     } else {
       cancelLauncherTap();
-      doubleClickHoldPending = false;
-      holdToTalkActive = false;
-      holdToTalkPointerId = null;
+      cancelLauncherDoubleClickHold({ cancelVoice: true });
     }
     launcher.setPointerCapture(e.pointerId);
     launcher.addEventListener("pointermove", moveLauncherDrag);
@@ -308,15 +309,14 @@
     const dy = e.clientY - dragState.startY;
     if (Math.abs(dx) + Math.abs(dy) > LAUNCHER_DRAG_SLOP) {
       dragState.moved = true;
-      cancelLauncherDoubleClickHold();
+      cancelLauncherDoubleClickHold({ cancelVoice: true });
     }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
   }
 
   function stopLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
-    const wasHoldToTalk = holdToTalkActive && e.pointerId === holdToTalkPointerId;
-    const wasPendingDoubleClickHold = doubleClickHoldPending && e.pointerId === holdToTalkPointerId;
+    const wasVoicePress = launcherVoicePress && e.pointerId === holdToTalkPointerId;
     const moved = dragState.moved;
     const downMs = e.timeStamp - dragState.startTime;
     dragState = null;
@@ -324,20 +324,12 @@
     launcher.removeEventListener("pointermove", moveLauncherDrag);
     launcher.removeEventListener("pointerup", stopLauncherDrag);
     launcher.removeEventListener("pointercancel", stopLauncherDrag);
+    if (wasVoicePress) {
+      if (e.type === "pointercancel" || moved) cancelLauncherDoubleClickHold({ cancelVoice: true });
+      else finishLauncherPushToTalk();
+      return;
+    }
     cancelLauncherDoubleClickHold();
-    if (wasHoldToTalk) {
-      finishLauncherPushToTalk();
-      return;
-    }
-    if (wasPendingDoubleClickHold) {
-      // Released before the push-to-talk hold threshold = a quick double-click.
-      // Toggle voice: first quick double-click starts listening, the next one
-      // commits and sends. (Double-click and hold stays push-to-talk above.)
-      openTextSurface({ fresh: false });
-      primeAudio();
-      toggleVoice();
-      return;
-    }
     if (moved) {
       const rect = launcher.getBoundingClientRect();
       placeLauncher(rect.left, rect.top, true);
@@ -376,46 +368,52 @@
   }
 
   function scheduleLauncherDoubleClickHold(e) {
-    cancelLauncherDoubleClickHold();
+    cancelLauncherDoubleClickHold({ cancelVoice: true });
     doubleClickHoldPending = true;
     holdToTalkPointerId = e.pointerId;
+    launcherVoicePress = startLauncherPushToTalk();
     holdToTalkTimer = setTimeout(() => {
       holdToTalkTimer = null;
-      if (!doubleClickHoldPending || !dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
+      if (!launcherVoicePress || !doubleClickHoldPending || !dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
       doubleClickHoldPending = false;
-      holdToTalkActive = true;
-      startLauncherPushToTalk();
-    }, DOUBLE_CLICK_HOLD_MS);
+      holdToTalkActive = promoteVoiceGesturePressToHold(launcherVoicePress);
+    }, VOICE_HOLD_MS);
   }
 
-  function cancelLauncherDoubleClickHold() {
+  function cancelLauncherDoubleClickHold({ cancelVoice = false } = {}) {
     if (holdToTalkTimer) {
       clearTimeout(holdToTalkTimer);
       holdToTalkTimer = null;
     }
-    if (!holdToTalkActive) {
+    if (cancelVoice && launcherVoicePress) {
+      cancelVoiceGesturePress(launcherVoicePress);
+      launcherVoicePress = null;
+    }
+    if (cancelVoice) {
+      holdToTalkActive = false;
+      holdToTalkPointerId = null;
+      doubleClickHoldPending = false;
+    } else if (!holdToTalkActive) {
       holdToTalkPointerId = null;
       doubleClickHoldPending = false;
     }
   }
 
   function startLauncherPushToTalk() {
-    openTextSurface({ fresh: false });
-    primeAudio();
-    if (liveVoice) stopLiveVoiceTurn("cancel");
-    startLiveVoiceTurn({
-      preserveAssistantPlayback: assistantSpeechOverlap === true,
-      conversation: false,
-      autoCommit: false,
-    });
+    return beginVoiceGesturePress("launcher");
   }
 
   function finishLauncherPushToTalk() {
+    const press = launcherVoicePress;
+    if (holdToTalkTimer) {
+      clearTimeout(holdToTalkTimer);
+      holdToTalkTimer = null;
+    }
+    launcherVoicePress = null;
     holdToTalkActive = false;
     holdToTalkPointerId = null;
-    if (liveVoice && listening) {
-      commitLiveVoiceTurn();
-    }
+    doubleClickHoldPending = false;
+    finishVoiceGesturePress(press);
   }
 
   function toggle(force) {
@@ -941,14 +939,103 @@
     if (root) root.classList.toggle("agee-ambient", ambientState === "on");
   }
 
+  function beginVoiceGesturePress(source) {
+    if (!root) build();
+    openTextSurface({ fresh: false });
+    primeAudio();
+    const press = {
+      source,
+      state: null,
+      held: false,
+      released: false,
+      toggledExisting: false,
+    };
+    if (liveVoice && listening) {
+      commitLiveVoiceTurn();
+      press.toggledExisting = true;
+      return press;
+    }
+    if (liveVoice) {
+      if (assistantSpeechOverlap === true && liveVoice.committed) {
+        startLiveVoiceTurn({
+          preserveAssistantPlayback: true,
+          conversation: false,
+          autoCommit: false,
+        });
+      } else {
+        stopLiveVoiceTurn("cancel");
+        startLiveVoiceTurn({
+          preserveAssistantPlayback: assistantSpeechOverlap === true,
+          conversation: false,
+          autoCommit: false,
+        });
+      }
+    } else {
+      startLiveVoiceTurn({
+        preserveAssistantPlayback: assistantSpeechOverlap === true,
+        conversation: false,
+        autoCommit: false,
+      });
+    }
+    press.state = liveVoice;
+    return press;
+  }
+
+  function promoteVoiceGesturePressToHold(press) {
+    if (!press || press.released || press.toggledExisting) return false;
+    press.held = true;
+    const state = press.state;
+    if (!state || !isLiveVoiceStateActive(state) || liveVoice !== state) return false;
+    conversationActive = false;
+    setLiveVoiceAutoCommit(state, false);
+    return true;
+  }
+
+  function finishVoiceGesturePress(press) {
+    if (!press || press.released) return;
+    press.released = true;
+    if (press.toggledExisting) return;
+    const state = press.state;
+    if (!state || !isLiveVoiceStateActive(state) || liveVoice !== state) return;
+    if (press.held) {
+      conversationActive = false;
+      setLiveVoiceAutoCommit(state, false);
+      commitLiveVoiceTurn();
+      return;
+    }
+    conversationActive = true;
+    setLiveVoiceAutoCommit(state, true);
+  }
+
+  function cancelVoiceGesturePress(press) {
+    if (!press || press.released) return;
+    press.released = true;
+    const state = press.state;
+    if (state && isLiveVoiceStateActive(state) && liveVoice === state && !press.toggledExisting) {
+      stopLiveVoiceTurn("cancel");
+    }
+  }
+
+  function setLiveVoiceAutoCommit(state, enabled) {
+    if (!state || !isLiveVoiceStateActive(state)) return;
+    state.autoCommit = enabled === true;
+    if (!state.voiceSessionId) {
+      state.autoCommitWhenReady = state.autoCommit;
+      return;
+    }
+    sendLiveVoiceControl(state, {
+      type: "set_auto_commit",
+      enabled: state.autoCommit,
+    });
+  }
+
   async function startLiveVoiceTurn(options = {}) {
     const preserveAssistantPlayback = options.preserveAssistantPlayback === true || assistantSpeechOverlap === true;
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
     openTextSurface({ fresh: false });
-    conversationActive = true;
-    if (options.conversation === false) conversationActive = false;
+    conversationActive = options.conversation !== false;
     const cueId = newCueId();
     createCue(cueId, "", { presentation: "icon" });
     setVoiceState(true);
@@ -967,6 +1054,9 @@
       transcript: "",
       gatewayRouted: false,
       assistantSpeechOverlap: preserveAssistantPlayback,
+      autoCommit: options.autoCommit !== false,
+      conversation: options.conversation !== false,
+      autoCommitWhenReady: null,
     };
     trackLiveVoiceState(state);
     liveVoice = state;
@@ -982,6 +1072,7 @@
         assistantOverlap: assistantSpeechOverlap === true,
         capture: "extension-offscreen",
         autoCommit: options.autoCommit !== false,
+        conversation: options.conversation !== false,
       });
       if (extensionContextInvalidated) {
         stopLiveVoiceState(state, "context invalidated");
@@ -993,6 +1084,11 @@
         throw new Error(session?.error || "gateway did not open a voice session");
       }
       attachLiveVoiceSession(state, session.voiceSessionId);
+      if (state.autoCommitWhenReady != null) {
+        const enabled = state.autoCommitWhenReady === true;
+        state.autoCommitWhenReady = null;
+        setLiveVoiceAutoCommit(state, enabled);
+      }
       if (state.commitWhenReady) commitLiveVoiceTurn();
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
@@ -1616,11 +1712,37 @@
   //   ⌘,  (or Ctrl+,)         → open the text command field
 
   function isVoiceHotkey(e) {
-    return (e.metaKey || e.ctrlKey) && e.key === ".";
+    return (e.metaKey || e.ctrlKey) && (e.key === "." || e.code === "Period");
+  }
+
+  function isVoiceHotkeyRelease(e) {
+    return keyboardVoicePress && (e.key === "." || e.code === "Period" || e.key === "Meta" || e.key === "Control");
   }
 
   function isTextHotkey(e) {
     return (e.metaKey || e.ctrlKey) && (e.key === "," || (!e.shiftKey && e.code === "Comma"));
+  }
+
+  function startKeyboardVoicePress() {
+    if (keyboardVoicePress) return;
+    keyboardVoicePress = beginVoiceGesturePress("keyboard");
+    keyboardVoicePress.timer = setTimeout(() => {
+      const press = keyboardVoicePress;
+      if (!press || press.released || press.toggledExisting) return;
+      press.timer = null;
+      promoteVoiceGesturePressToHold(press);
+    }, VOICE_HOLD_MS);
+  }
+
+  function finishKeyboardVoicePress() {
+    const press = keyboardVoicePress;
+    keyboardVoicePress = null;
+    if (!press) return;
+    if (press.timer) {
+      clearTimeout(press.timer);
+      press.timer = null;
+    }
+    finishVoiceGesturePress(press);
   }
 
   window.addEventListener(
@@ -1630,8 +1752,7 @@
       if (isVoiceHotkey(e)) {
         e.preventDefault();
         e.stopPropagation();
-        if (!root) build();
-        toggleVoiceSession();
+        if (!e.repeat) startKeyboardVoicePress();
         return;
       }
       // ⌘, → text command field.
@@ -1642,6 +1763,17 @@
         openTextSurface({ fresh: false });
         return;
       }
+    },
+    true
+  );
+
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (!isVoiceHotkeyRelease(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      finishKeyboardVoicePress();
     },
     true
   );

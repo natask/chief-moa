@@ -198,12 +198,79 @@ if (!/e\.code === "Comma"/.test(contentSource) || /toLowerCase\(\) === "k"/.test
   throw new Error("text command hotkey must be Cmd/Ctrl+Comma, not Cmd/Ctrl+K");
 }
 
+const textHotkeyBranch = sourceBetween(
+  contentSource,
+  /if \(isTextHotkey\(e\)\) \{/,
+  /\n      \}\n    \},\n    true\n  \);/,
+  "text hotkey branch"
+);
+if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\);/.test(textHotkeyBranch)) {
+  throw new Error("Cmd/Ctrl+Comma must open the text command surface");
+}
+if (/toggleVoice|startKeyboardVoicePress|beginVoiceGesturePress|commitLiveVoiceTurn|startLiveVoiceTurn/.test(textHotkeyBranch)) {
+  throw new Error("Cmd/Ctrl+Comma must not start, commit, or otherwise touch voice");
+}
+
+if (
+  !/function startKeyboardVoicePress/.test(contentSource) ||
+  !/keyboardVoicePress = beginVoiceGesturePress\("keyboard"\)/.test(contentSource) ||
+  !/if \(!e\.repeat\) startKeyboardVoicePress\(\);/.test(contentSource) ||
+  !/window\.addEventListener\(\s*"keyup"[\s\S]{0,260}finishKeyboardVoicePress\(\);/.test(contentSource) ||
+  !/promoteVoiceGesturePressToHold\(press\)/.test(contentSource) ||
+  !/finishVoiceGesturePress\(press\)/.test(contentSource)
+) {
+  throw new Error("Cmd/Ctrl+Period must use press/release state with repeat guarding and hold promotion");
+}
+
 if (/case "done":[\s\S]{0,180}setInputText\(msg\.summary/.test(contentSource)) {
   throw new Error("done replies must render in the result surface, not inside the command input");
 }
 
 if (!/VOICE_AUTO_COMMIT_SILENCE_MS/.test(backgroundSource) || !/autoCommitVoiceSession/.test(backgroundSource)) {
   throw new Error("browser voice must auto-commit microphone turns after speech silence");
+}
+
+if (
+  !/MAX_QUEUED_VOICE_AUDIO_BYTES/.test(backgroundSource) ||
+  !/function queueVoiceSessionAudio/.test(backgroundSource) ||
+  !/function flushQueuedVoiceAudio/.test(backgroundSource) ||
+  !/function markVoiceSessionReady/.test(backgroundSource) ||
+  !/pendingCommitMessage/.test(backgroundSource)
+) {
+  throw new Error("background.js must keep a bounded early-audio queue until session_ready");
+}
+
+const voiceSessionOpenBody = sourceBetween(
+  backgroundSource,
+  /ws\.onopen = \(\) => \{/,
+  /ws\.onmessage = /,
+  "voice WebSocket open handler"
+);
+if (
+  !/sendVoiceSessionJson\(session,[\s\S]{0,900}type:\s*"session_start"/.test(voiceSessionOpenBody) ||
+  !/startVoiceSessionCapture\(session\)/.test(voiceSessionOpenBody)
+) {
+  throw new Error("offscreen microphone capture must start after WebSocket open/session_start is sent");
+}
+
+const forwardVoiceSessionEventBody = sourceBetween(
+  backgroundSource,
+  /async function forwardVoiceSessionEvent\(/,
+  /function sendVoiceSessionAudio\(/,
+  "voice session event forwarding"
+);
+if (/startOffscreenVoiceCapture/.test(forwardVoiceSessionEventBody) || !/parsed\?\.type === "session_ready"[\s\S]{0,120}markVoiceSessionReady\(session\)/.test(forwardVoiceSessionEventBody)) {
+  throw new Error("session_ready must flush queued audio, not start microphone capture");
+}
+
+const sendVoiceSessionAudioBody = sourceBetween(
+  backgroundSource,
+  /function sendVoiceSessionAudio\(/,
+  /async function sendVoiceSessionControl\(/,
+  "voice audio send path"
+);
+if (!/!session\.gatewayReady[\s\S]{0,180}queueVoiceSessionAudio\(session, buffer\)/.test(sendVoiceSessionAudioBody)) {
+  throw new Error("voice audio must queue before gateway session_ready");
 }
 
 if (
@@ -289,7 +356,7 @@ if (!/function isIdentityProfileControl/.test(contentSource) || !/your name/.tes
   throw new Error("browser Live voice must route spoken assistant-name changes through the gateway profile-control path");
 }
 
-if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,220}conversationActive = true;/.test(contentSource)) {
+if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,220}conversationActive = options\.conversation !== false;/.test(contentSource)) {
   throw new Error("browser voice start must keep the input surface open while the user speaks");
 }
 
@@ -353,8 +420,13 @@ const launcherDoubleClickHoldBody = sourceBetween(
   /function cancelLauncherDoubleClickHold\(/,
   "launcher double-click-hold handler"
 );
-if (!/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) || !/startLauncherPushToTalk\(\)/.test(launcherDoubleClickHoldBody)) {
-  throw new Error("double-click-and-hold must start launcher push-to-talk after the hold threshold");
+if (
+  !/launcherVoicePress = startLauncherPushToTalk\(\);[\s\S]{0,120}setTimeout/.test(launcherDoubleClickHoldBody) ||
+  !/VOICE_HOLD_MS/.test(launcherDoubleClickHoldBody) ||
+  !/promoteVoiceGesturePressToHold\(launcherVoicePress\)/.test(launcherDoubleClickHoldBody) ||
+  !/function startLauncherPushToTalk\(\)\s*\{[\s\S]{0,80}return beginVoiceGesturePress\("launcher"\)/.test(contentSource)
+) {
+  throw new Error("double-click-and-hold must start capture immediately and promote to push-to-talk after the hold threshold");
 }
 
 if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {
