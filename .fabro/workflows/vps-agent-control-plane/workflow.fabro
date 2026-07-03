@@ -1,0 +1,66 @@
+digraph VpsAgentControlPlane {
+    graph [goal="Produce an isolated VPS-first agent control-plane milestone with lane artifacts, verification, and an explicit promotion blocker"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    capture [
+        label="Capture Intent",
+        prompt="Read scratch/agent-loop/runs/20260703-011850-vps-agent-control-plane/00-intent.md and 00-critique.md. Preserve the user nouns and boundaries."
+    ]
+
+    infra [
+        label="VPS Deploy Contract",
+        prompt="Write the VPS deployment and MOA_MODE contract artifact. Do not mutate active deployment files."
+    ]
+
+    credentials [
+        label="Account Connection Policy",
+        prompt="Write the credential/account connection policy artifact. Exclude account-abuse automation and keep credentials off Android/browser."
+    ]
+
+    worker [
+        label="Worker Pull Contract",
+        prompt="Write the bounded worker-pull execution contract artifact. No inbound port to the execution machine."
+    ]
+
+    clients [
+        label="Client Onboarding",
+        prompt="Write the browser/mobile stable gateway onboarding and diagnostics artifact."
+    ]
+
+    voice [
+        label="Voice Work History",
+        prompt="Write the voice control-plane and work-history artifact."
+    ]
+
+    integrate [
+        label="Integrate",
+        prompt="Integrate the lane outputs into the remote-hosted-gateway plan and execution notes."
+    ]
+
+    verify [
+        label="Verify",
+        shape=parallelogram,
+        script="fabro validate .fabro/workflows/vps-agent-control-plane/workflow.fabro 2>&1",
+        goal_gate=true
+    ]
+
+    promote [shape=hexagon, label="Human Promotion Gate"]
+
+    start -> capture
+    capture -> infra
+    capture -> credentials
+    capture -> worker
+    capture -> clients
+    capture -> voice
+    infra -> integrate
+    credentials -> integrate
+    worker -> integrate
+    clients -> integrate
+    voice -> integrate
+    integrate -> verify -> promote
+    promote -> exit      [label="[A] Accept preview only"]
+    promote -> integrate [label="[R] Revise"]
+}
