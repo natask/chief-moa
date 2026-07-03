@@ -83,7 +83,7 @@ async function main() {
     checks: [
       "each fixture's input transcript matches its expected text within the WER tolerance",
       "each fixture produces assistant audio with non-zero bytes",
-      "the user audio is captured and stored (pcm file non-empty)",
+      "the user audio is stored byte-for-byte, including a frame sent before session_ready (no leading-audio loss)",
       LIVE
         ? "the real Vertex socket reaches session_ready and returns audio without a 1007 close"
         : "the fixture-echo provider round-trips through the real session server",
@@ -118,7 +118,10 @@ async function runFixture(fixture) {
   const wer = wordErrorRate(fixture.expected_transcript, outcome.transcript);
   const transcriptMatch = wer <= WER_TOLERANCE;
   const audioOk = outcome.assistantAudioBytes > 0;
-  const storedOk = outcome.storedPcmBytes > 0;
+  // Byte-for-byte, not just non-empty: driveTurn sends the first frame before
+  // session_ready, so this asserts leading audio is buffered and flushed, never
+  // dropped — the start-of-utterance truncation regression.
+  const storedOk = outcome.storedPcmBytes === fixture.pcm.length;
 
   let judge = null;
   if (JUDGE) {
@@ -181,6 +184,12 @@ async function driveTurn(provider, fixture) {
         reject(new Error(`timed out waiting for turn_done on fixture ${fixture.id}`));
       }, LIVE ? 60000 : 8000);
 
+      // The first frame goes out with session_start, BEFORE session_ready, the
+      // way a client that opens the mic immediately streams it. The gateway
+      // must buffer and flush it into the turn; runFixture asserts the stored
+      // PCM matches the fixture byte-for-byte.
+      const leadingFrameBytes = Math.min(640, fixture.pcm.length);
+
       ws.on("open", () => {
         ws.send(JSON.stringify({
           type: "session_start",
@@ -188,6 +197,7 @@ async function driveTurn(provider, fixture) {
           turn_id: turnId,
           format: AUDIO_FORMAT,
         }));
+        ws.send(fixture.pcm.subarray(0, leadingFrameBytes));
       });
 
       ws.on("message", (data, isBinary) => {
@@ -198,9 +208,9 @@ async function driveTurn(provider, fixture) {
         const event = JSON.parse(Buffer.from(data).toString("utf8"));
         events.push(event);
         if (event.type === "session_ready") {
-          // Send the fixture audio in 640-byte frames, then commit.
+          // Send the rest of the fixture audio in 640-byte frames, then commit.
           const pcm = fixture.pcm;
-          for (let offset = 0; offset < pcm.length; offset += 640) {
+          for (let offset = leadingFrameBytes; offset < pcm.length; offset += 640) {
             ws.send(pcm.subarray(offset, Math.min(offset + 640, pcm.length)));
           }
           ws.send(JSON.stringify({ type: "commit_turn", turn_id: turnId }));
