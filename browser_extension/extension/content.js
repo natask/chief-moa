@@ -45,7 +45,7 @@
     holdToTalkPointerId = null,
     doubleClickHoldPending = false,
     lastLauncherTap = null,
-    // The Aggie mark stays where the user drops it and reacts visually to state.
+    // The A.G. mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
   const assistantPlaybackSources = new Set();
@@ -164,12 +164,12 @@
     root.id = "agee-root";
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <button id="agee-launcher" type="button" title="Click for chat · drag to move · double-click and hold to talk" aria-label="Aggie">
+      <button id="agee-launcher" type="button" title="Click for chat · drag to move · double-click and hold to talk" aria-label="A.G.">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
       </button>
-      <div id="agee-panel" role="dialog" aria-label="Aggie command">
+      <div id="agee-panel" role="dialog" aria-label="A.G. command">
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
@@ -177,7 +177,7 @@
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
-          <textarea id="agee-input" rows="1" placeholder="Ask Aggie" autocomplete="off" spellcheck="true"></textarea>
+          <textarea id="agee-input" rows="1" placeholder="Ask A.G." autocomplete="off" spellcheck="true"></textarea>
           <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice"></button>
           <button id="agee-stop" type="button" title="Stop current task" aria-label="Stop current task">Stop</button>
         </div>
@@ -536,7 +536,7 @@
           <button type="button" data-agee-confirm="yes">Allow</button>
           <button type="button" data-agee-confirm="no">Cancel</button>
         </div>`;
-      row.querySelector(".agee-confirm-text").textContent = text || "Allow Aggie to continue?";
+      row.querySelector(".agee-confirm-text").textContent = text || "Allow A.G. to continue?";
       row.addEventListener("click", (event) => {
         const button = event.target.closest("[data-agee-confirm]");
         if (!button) return;
@@ -677,7 +677,7 @@
     card.dataset.cue = cueId;
     const you = document.createElement("div");
     you.className = "agee-row agee-you";
-    you.textContent = String(label || entry?.label || "Aggie");
+    you.textContent = String(label || entry?.label || "A.G.");
     const status = document.createElement("div");
     status.className = "agee-cue-status";
     status.textContent = statusText || "";
@@ -873,6 +873,22 @@
   // keeps talking, each utterance becomes its own concurrent lane.
   function submitInstruction(instruction, displayText = instruction) {
     if (!instruction) return;
+    // Fast local stop path for typed input: a whole-utterance "stop / shut up /
+    // be quiet" halts playback and live turns immediately and silently. It never
+    // sends the instruction to the gateway and never produces an assistant reply;
+    // the only feedback is a minimal cue and the launcher returning to idle.
+    if (isStopCommand(instruction)) {
+      window.__ageeLastStopHalt = { source: "typed", at: Date.now() };
+      const cueId = newCueId();
+      openTextSurface({ fresh: false });
+      createCue(cueId, displayText, { presentation: "card" });
+      stopAllLiveVoiceTurns("cancel");
+      stopSpeaking();
+      updateCue(cueId, "", "done");
+      setSurfacePhase("editing");
+      input.focus();
+      return;
+    }
     const cueId = newCueId();
     openTextSurface({ fresh: false });
     createCue(cueId, displayText, { presentation: "card" });
@@ -1047,6 +1063,13 @@
       if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
       ensureVoiceCueCard(state, text, "");
+      // Fast local stop path: a whole-utterance "stop / shut up / be quiet"
+      // halts playback and every live turn at once, silently. It never sends the
+      // transcript on as a turn and never produces an assistant reply.
+      if (msg.type === "transcript_final" && isStopCommand(text)) {
+        haltForStopCommand(state);
+        return;
+      }
       if (msg.type === "transcript_final" && isCurrentTurn && applySpeechOverlapPolicyFromTranscript(state, text)) {
         return;
       }
@@ -1186,6 +1209,50 @@
     liveVoice = null;
     setVoiceState(false);
     if (agentState !== "idle") setAgentState("idle");
+  }
+
+  // Inline mirror of extension/stop-intent.js. content.js is a classic
+  // content-script IIFE and cannot import the module, so the whole-utterance
+  // stop matcher is duplicated here; the verify harness pins the two copies
+  // together. Keep STOP_PHRASES and TRAILING_FILLERS aligned with that module.
+  const STOP_PHRASES = [
+    "stop",
+    "stop it",
+    "stop talking",
+    "stop speaking",
+    "shut up",
+    "be quiet",
+    "quiet",
+    "silence",
+    "hush",
+    "enough",
+  ];
+  const STOP_TRAILING_FILLERS = ["please", "now", "already", "ok", "okay", "agee", "a g"];
+
+  function isStopCommand(text) {
+    const lower = normalizeSpokenCommand(text);
+    if (!lower) return false;
+    let words = lower.split(" ").filter(Boolean);
+    let changed = true;
+    while (changed && words.length > 1) {
+      changed = false;
+      if (STOP_TRAILING_FILLERS.includes(words[words.length - 1])) {
+        words = words.slice(0, -1);
+        changed = true;
+      }
+    }
+    return STOP_PHRASES.includes(words.join(" "));
+  }
+
+  // Halt everything the stop command should silence: assistant playback and
+  // every live voice turn, with no spoken or written acknowledgment. The
+  // matched transcript is dropped, not sent on as a turn. Records a window flag
+  // for smoke inspection only; it is not user-facing.
+  function haltForStopCommand(state) {
+    window.__ageeLastStopHalt = { source: "voice", at: Date.now() };
+    if (state) untrackLiveVoiceState(state);
+    stopAllLiveVoiceTurns("cancel");
+    stopSpeaking();
   }
 
   function revokeLiveVoiceState(state, _reason = "revoked") {
@@ -1763,7 +1830,7 @@
     }
     try {
       if (el) el.scrollIntoView({ block: "center", behavior: "instant" });
-      if (needsConfirmation(el, req) && !(await askInlineConfirm(`Let Aggie ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
+      if (needsConfirmation(el, req) && !(await askInlineConfirm(`Let A.G. ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
         return { result: `user cancelled ${req.action}` };
       }
       switch (req.action) {
@@ -1838,10 +1905,16 @@
         act(msg).then(reply);
         return true;
       case "confirm":
-        askInlineConfirm(msg.text || "Allow Aggie to continue?").then((ok) => reply({ ok }));
+        askInlineConfirm(msg.text || "Allow A.G. to continue?").then((ok) => reply({ ok }));
         return true;
       case "progress":
         updateCue(msg.cueId, msg.text, "running");
+        return false;
+      case "stop":
+        // Silent halt requested by the background stop guard: cut playback and
+        // every live turn, no chime, no reply. The done that follows closes the
+        // cue with empty text.
+        haltForStopCommand(null);
         return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");

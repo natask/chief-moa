@@ -6,6 +6,7 @@
 import { getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent, parseOpenTabIntent } from "./browser-task-intent.js";
+import { isStopCommand } from "./stop-intent.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
@@ -45,7 +46,7 @@ async function getConfig() {
 // Returns the parsed JSON body for the given path (e.g. "/v1/chat", "/health").
 async function callGateway(cfg, path, { method = "POST", body, signal } = {}) {
   if (!cfg.gatewayUrl) {
-    throw new Error("No gateway URL set. Open Aggie Options and set the Agent gateway URL.");
+    throw new Error("No gateway URL set. Open A.G. Options and set the Agent gateway URL.");
   }
   const headers = { "content-type": "application/json" };
   if (cfg.gatewayToken) headers.authorization = `Bearer ${cfg.gatewayToken}`;
@@ -59,7 +60,7 @@ async function callGateway(cfg, path, { method = "POST", body, signal } = {}) {
   if (!resp.ok) {
     if (resp.status === 401) {
       throw new Error(
-        "Gateway rejected the token (401). Open Aggie Options and set a valid Gateway token, then Save."
+        "Gateway rejected the token (401). Open A.G. Options and set a valid Gateway token, then Save."
       );
     }
     throw new Error(`gateway ${resp.status}: ${text.slice(0, 300)}`);
@@ -1032,7 +1033,7 @@ async function ensureOffscreenVoiceDocument() {
     creatingOffscreenVoiceDocument = chrome.offscreen.createDocument({
       url: OFFSCREEN_VOICE_DOCUMENT,
       reasons: ["USER_MEDIA"],
-      justification: "Aggie captures microphone audio from the extension origin and streams it to the configured gateway.",
+      justification: "A.G. captures microphone audio from the extension origin and streams it to the configured gateway.",
     }).finally(() => {
       creatingOffscreenVoiceDocument = null;
     });
@@ -1043,7 +1044,7 @@ async function ensureOffscreenVoiceDocument() {
 function extensionMicApprovalMessage(error) {
   const detail = String(error?.message || error || "").trim();
   const suffix = detail ? ` (${detail})` : "";
-  return `Aggie could not open the extension microphone. Open the Aggie toolbar icon > Options, click "Grant microphone", and allow microphone access for the extension. If Chrome has blocked it, open chrome://extensions/?id=${chrome.runtime.id}, choose Details or Site settings, set Microphone to Allow, then start voice again.${suffix}`;
+  return `A.G. could not open the extension microphone. Open the A.G. toolbar icon > Options, click "Grant microphone", and allow microphone access for the extension. If Chrome has blocked it, open chrome://extensions/?id=${chrome.runtime.id}, choose Details or Site settings, set Microphone to Allow, then start voice again.${suffix}`;
 }
 
 async function startOffscreenVoiceCapture(id) {
@@ -1530,7 +1531,7 @@ async function confirmNavigation(tabId, url) {
   try {
     const response = await ask(tabId, {
       cmd: "confirm",
-      text: `Allow Aggie to navigate from ${from || "this page"} to ${to}?`,
+      text: `Allow A.G. to navigate from ${from || "this page"} to ${to}?`,
     });
     return response?.ok === true;
   } catch {
@@ -1634,7 +1635,7 @@ async function describePage(tabId, controller, cueId) {
     // Thin client: page description is produced by the user's gateway. There is
     // no in-browser model path.
     if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the Aggie toolbar icon → Options and set the Agent gateway URL." });
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the A.G. toolbar icon → Options and set the Agent gateway URL." });
       return;
     }
     await describePageViaGateway(tabId, cfg, signal, cueId);
@@ -1656,7 +1657,7 @@ async function runAgent(tabId, instruction, controller, cueId) {
     // Thin client: every turn is handled by the user's self-hosted gateway.
     // There is no in-browser model path or provider key.
     if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the Aggie toolbar icon → Options and set the Agent gateway URL." });
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the A.G. toolbar icon → Options and set the Agent gateway URL." });
       return;
     }
 
@@ -1664,6 +1665,15 @@ async function runAgent(tabId, instruction, controller, cueId) {
     // they are changing settings by talking to the agent ("be terser", "set
     // the system prompt to …"). Either is handled through the profile
     // endpoints instead of running a conversational turn.
+    // Fast local stop path, defense in depth. The overlay already halts typed
+    // "stop / shut up / be quiet" before it reaches here, but if a stop utterance
+    // ever arrives as a run it must halt silently and never touch a model. Tell
+    // the overlay to stop playback and live turns; do not produce a reply.
+    if (isStopCommand(instruction)) {
+      send(tabId, { cmd: "stop", cueId });
+      send(tabId, { cmd: "done", cueId, summary: "", text: "" });
+      return;
+    }
     if (await maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId)) {
       return;
     }

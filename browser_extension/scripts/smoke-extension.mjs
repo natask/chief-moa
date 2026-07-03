@@ -413,6 +413,51 @@ async function main() {
       throw new Error(`result cue did not render above the command input: ${JSON.stringify(resultPlacement)}`);
     }
 
+    // Fast local stop path (typed): "stop" must halt locally and never send a
+    // run to the background. The overlay records __ageeLastStopHalt for this
+    // check; there is no user-facing text beyond the minimal cue.
+    const typedStop = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        await chrome.tabs.sendMessage(tabId, { cmd: "open" });
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            window.__ageeLastStopHalt = null;
+            window.__ageeSmokeRunCount = 0;
+            const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+            chrome.runtime.sendMessage = (message, ...rest) => {
+              if (message && message.cmd === "run") window.__ageeSmokeRunCount += 1;
+              return orig(message, ...rest);
+            };
+            const input = document.querySelector("#agee-input");
+            if (input) {
+              input.value = "stop";
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              input.focus();
+              input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+            }
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => ({
+            halt: window.__ageeLastStopHalt || null,
+            runCount: window.__ageeSmokeRunCount || 0,
+            launcherState: document.querySelector("#agee-root")?.dataset?.ageeState || null,
+          }),
+        });
+        return result?.result;
+      })()
+    `);
+    if (typedStop?.halt?.source !== "typed") {
+      throw new Error(`typed stop did not halt locally: ${JSON.stringify(typedStop)}`);
+    }
+    if (typedStop?.runCount !== 0) {
+      throw new Error(`typed stop must not send a run to the gateway: ${JSON.stringify(typedStop)}`);
+    }
+
     const workerResult = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};

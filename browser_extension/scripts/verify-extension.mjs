@@ -437,6 +437,7 @@ for (const file of [
   "extension/tweaks.js",
   "extension/options.js",
   "extension/settings-intent.js",
+  "extension/stop-intent.js",
   "extension/dev.js",
   "scripts/dev-extension.mjs",
   "scripts/doctor.mjs",
@@ -457,6 +458,70 @@ for (const file of [
 
 const { parseSettingsIntent, looksLikeGatewayProfileControlIntent } = await import("../extension/settings-intent.js");
 const { parseBrowserTaskIntent, parseOpenTabIntent } = await import("../extension/browser-task-intent.js");
+
+// Fast local stop path. The matcher must halt whole-utterance stop commands and
+// must NOT swallow a real instruction that merely starts with "stop".
+const settingsIntentSource = readFileSync("extension/settings-intent.js", "utf8");
+const stopIntentSource = readFileSync("extension/stop-intent.js", "utf8");
+const { isStopCommand: verifyIsStopCommand } = await import("../extension/stop-intent.js");
+for (const phrase of ["stop", "shut up", "be quiet", "quiet", "silence", "stop please", "shut up now", "stop talking"]) {
+  if (!verifyIsStopCommand(phrase)) {
+    throw new Error(`stop-intent must halt on: ${phrase}`);
+  }
+}
+for (const phrase of [
+  "stop opening tabs",
+  "stop sharing my location",
+  "be quiet about the weather later",
+  "quiet the notifications",
+  "tell me how to stop the process",
+  "",
+]) {
+  if (verifyIsStopCommand(phrase)) {
+    throw new Error(`stop-intent must NOT swallow: ${phrase}`);
+  }
+}
+
+// The content-script mirror of the stop matcher must stay aligned with the
+// module. Both must carry the same STOP_PHRASES so a spoken stop and a typed
+// stop halt identically.
+for (const source of [stopIntentSource, contentSource]) {
+  for (const phrase of ["\"shut up\"", "\"be quiet\"", "\"stop talking\"", "\"silence\""]) {
+    if (!source.includes(phrase)) {
+      throw new Error(`stop matcher copy missing phrase ${phrase}`);
+    }
+  }
+}
+if (!/const STOP_PHRASES = \[/.test(contentSource) || !/function isStopCommand\(/.test(contentSource)) {
+  throw new Error("content.js must mirror the stop-intent matcher inline (STOP_PHRASES + isStopCommand)");
+}
+
+// Live voice path: a final transcript that is a stop command must halt before
+// the overlap and gateway-route checks, and must not be sent on as a turn.
+if (!/if \(msg\.type === "transcript_final" && isStopCommand\(text\)\) \{\s*\n\s*haltForStopCommand\(state\);/.test(contentSource)) {
+  throw new Error("content.js live voice path must short-circuit a stop transcript to haltForStopCommand before routing");
+}
+if (!/function haltForStopCommand\(/.test(contentSource) || !/stopAllLiveVoiceTurns\("cancel"\);\s*\n\s*stopSpeaking\(\);/.test(contentSource)) {
+  throw new Error("haltForStopCommand must stop all live turns and assistant playback");
+}
+
+// Typed path: submitInstruction must halt a stop locally and never send it on.
+if (!/if \(isStopCommand\(instruction\)\) \{/.test(contentSource)) {
+  throw new Error("content.js submitInstruction must halt a typed stop command locally, before sending a run");
+}
+
+// Background defense in depth: a stop that reaches runAgent must halt without a
+// model turn or spoken/written reply.
+if (!/import \{ isStopCommand \} from "\.\/stop-intent\.js"/.test(backgroundSource)) {
+  throw new Error("background.js must import the shared stop-intent matcher");
+}
+if (!/if \(isStopCommand\(instruction\)\) \{\s*\n\s*send\(tabId, \{ cmd: "stop", cueId \}\);/.test(backgroundSource)) {
+  throw new Error("background.js runAgent must halt a stop command via a silent stop message, not a model turn");
+}
+if (!/case "stop":/.test(contentSource) || !/haltForStopCommand\(null\)/.test(contentSource)) {
+  throw new Error("content.js must handle the background stop message by halting silently");
+}
+void settingsIntentSource;
 const devExtensionSource = readFileSync("scripts/dev-extension.mjs", "utf8");
 const pokeDevReloadSource = readFileSync("scripts/poke-dev-reload.mjs", "utf8");
 
