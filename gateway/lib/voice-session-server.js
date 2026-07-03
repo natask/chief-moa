@@ -26,6 +26,9 @@ function createVoiceSessionServer(options) {
     // Pass the runtime agent profile so the provider reads the effective `voice`
     // per session — the agent can change its own spoken voice by talking.
     agentProfile: options?.agentProfile,
+    // The cascaded voice provider (Chirp STT -> gateway LLM -> Cloud TTS) calls
+    // this to run the gateway's durable, model-agnostic reply turn after STT.
+    reasoner: typeof options?.reasoner === "function" ? options.reasoner : null,
   });
   fs.mkdirSync(sessionsDir, { recursive: true });
 
@@ -612,6 +615,11 @@ class VoiceSessionConnection {
           chunks: turn.assistantAudioChunks,
         },
         transcription_only: providerResult?.transcription_only === true,
+        // Cascaded pipeline: reply (OUTPUT) language and whether hosted TTS
+        // actually spoke, so history records both and the client knows if it
+        // must speak the reply text locally (e.g. Amharic).
+        reply_language: providerResult?.reply_language || "",
+        tts_spoke: providerResult?.tts_spoke === true,
         provider_events: Array.isArray(turn.providerEvents?.events) ? turn.providerEvents.events : [],
       });
     } catch (error) {
