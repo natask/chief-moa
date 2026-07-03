@@ -1,4 +1,4 @@
-import { getEffectiveGatewayConfig, normalizeGatewayUrl, seedGatewayConfig } from "./config.js";
+import { gatewayUrlDiagnostic, getEffectiveGatewayConfig, normalizeGatewayUrl, seedGatewayConfig } from "./config.js";
 import { parseSettingsIntent, PROFILE_FIELDS } from "./settings-intent.js";
 
 const gatewayUrlEl = document.getElementById("gatewayUrl");
@@ -74,6 +74,23 @@ function gatewayHeaders(token, withBody) {
   return headers;
 }
 
+function networkFailureMessage(url, path, error) {
+  const detail = String(error?.message || error || "").trim();
+  const detailSuffix = detail && detail !== "Failed to fetch" ? ` (${detail})` : "";
+  const diagnostic = gatewayUrlDiagnostic(url);
+  const diagnosticSuffix = diagnostic.message ? ` ${diagnostic.message}` : "";
+  return `Could not reach the configured gateway ${url || "(unset)"} while calling ${path}. Check DNS, TLS, and the saved gateway URL.${diagnosticSuffix}${detailSuffix}`;
+}
+
+function parseJsonOrNull(text) {
+  if (!String(text || "").trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 async function getStableDeviceId() {
   const { ageeDeviceId } = await chrome.storage.local.get("ageeDeviceId");
   if (ageeDeviceId) return ageeDeviceId;
@@ -104,23 +121,30 @@ document.getElementById("save").addEventListener("click", async () => {
 
 document.getElementById("testGateway").addEventListener("click", async () => {
   const url = normalizeGatewayUrl(gatewayUrlEl.value);
-  if (!url) {
-    flash("Enter a gateway URL first.", false);
+  const diagnostic = gatewayUrlDiagnostic(url);
+  if (!diagnostic.ok) {
+    flash(diagnostic.message, false);
     return;
   }
-  flash("Testing…");
+  const warning = diagnostic.severity === "warning" ? diagnostic.message : "";
+  flash(warning ? `${warning} Testing anyway…` : "Testing…", !warning);
   const token = gatewayTokenEl.value.trim();
   const headers = token ? { authorization: `Bearer ${token}` } : {};
   let data;
   try {
     const resp = await fetch(`${url}/health`, { headers });
-    data = await resp.json().catch(() => ({}));
+    const text = await resp.text();
+    data = parseJsonOrNull(text);
+    if (!data) {
+      flash(`The URL responded, but it is not a healthy Moa gateway (${url}).`, false);
+      return;
+    }
     if (!resp.ok || !data.ok) {
-      flash(`Gateway responded ${resp.status}`, false);
+      flash(`The URL responded, but it is not a healthy Moa gateway (${resp.status}).`, false);
       return;
     }
   } catch (err) {
-    flash(`Unreachable: ${String(err.message || err)}`, false);
+    flash(networkFailureMessage(url, "/health", err), false);
     return;
   }
 
@@ -132,19 +156,23 @@ document.getElementById("testGateway").addEventListener("click", async () => {
   try {
     const authResp = await fetch(`${url}/v1/sessions`, { headers });
     if (authResp.ok) {
-      flash(`OK ✓ ${tag} · token valid`);
-    } else if (authResp.status === 401) {
-      flash(
-        token
-          ? "Gateway reachable, but token rejected (401). Check the Gateway token."
-          : "Gateway reachable, but it requires a token. Add the Gateway token below.",
-        false
-      );
+      flash(warning ? `OK ✓ ${tag} · token valid. ${warning}` : `OK ✓ ${tag} · token valid`);
+    } else if (authResp.status === 401 || authResp.status === 403) {
+      if (warning) {
+        flash("Gateway reachable, but the token may belong to a different gateway. Confirm the stable VPS URL, then re-register.", false);
+      } else {
+        flash(
+          token
+            ? `Gateway reachable, but the saved token was rejected (${authResp.status}). Re-register this browser or paste a fresh token.`
+            : `Gateway reachable, but this route requires a device token (${authResp.status}). Add the Gateway token below.`,
+          false
+        );
+      }
     } else {
       flash(`Gateway reachable; auth check returned ${authResp.status}`, false);
     }
   } catch (err) {
-    flash(`Gateway reachable; auth check failed: ${String(err.message || err)}`, false);
+    flash(`Gateway reachable; auth check failed. ${networkFailureMessage(url, "/v1/sessions", err)}`, false);
   }
 });
 
@@ -421,7 +449,7 @@ async function loadProfile() {
       renderProfile(cached);
       flashProfile(`Gateway offline; showing last known profile`, false);
     } else {
-      flashProfile(`Unreachable: ${String(err.message || err)}`, false);
+      flashProfile(networkFailureMessage(url, "/v1/agent/profile", err), false);
     }
   }
 }

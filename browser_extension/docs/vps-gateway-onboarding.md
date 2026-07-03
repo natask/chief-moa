@@ -137,15 +137,24 @@ Manual browser check:
 - Use Cmd+. or Ctrl+. to start voice and confirm transcript/audio or a specific
   voice diagnostic.
 
-## Source Follow-Ups
+## Implemented Browser Slice
 
-- `extension/config.js`: update hosted default URL and stale URL handling for
-  both ZeroTier IPs.
-- `extension/options.js`: add URL classification before `/health` and keep the
-  authenticated probe.
-- `extension/background.js`: make fetch failures and pre-open voice socket
-  failures actionable instead of generic.
+- `extension/config.js`: hosted builds default to `https://api.agee.app`.
+  Non-user-owned saved URLs for the old main-machine or local Mac gateways are
+  treated as stale seeded defaults and migrate to the baked/stable URL. A URL
+  explicitly saved from Options remains user-owned, so intentional local-dev
+  testing is not overwritten.
+- `extension/options.js`: classifies missing schemes, endpoint paths, stale
+  ZeroTier/local URLs, wrong-server responses, and token failures before showing
+  success.
+- `extension/background.js`: gateway fetch failures and pre-open voice socket
+  failures include the configured gateway URL and likely DNS/TLS/WebSocket
+  remediation.
+- `scripts/doctor.mjs` and `scripts/verify-extension.mjs`: check stale URL
+  migration, hosted defaults, and clear network diagnostics without printing
+  bearer tokens.
 - `extension/manifest.json`: confirm stable HTTPS/WSS permissions and bump the
   package version when source changes ship.
-- `scripts/configure.mjs` and `scripts/doctor.mjs`: default to the stable VPS
-  shape for hosted onboarding while keeping `configure:local` for local dev.
+- `scripts/configure.mjs`: still needs a follow-up outside this slice to default
+  `npm run configure` itself to the stable VPS shape while keeping
+  `configure:local` for local dev.

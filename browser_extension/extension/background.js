@@ -3,7 +3,7 @@
 // provider API keys and no direct model calls live in the browser; the gateway
 // owns model routing and credentials.
 
-import { getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
+import { gatewayUrlDiagnostic, getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent, parseOpenTabIntent } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
@@ -42,6 +42,48 @@ async function getConfig() {
   return getEffectiveGatewayConfig();
 }
 
+function gatewayDiagnosticSuffix(gatewayUrl) {
+  const diagnostic = gatewayUrlDiagnostic(gatewayUrl);
+  return diagnostic.message ? ` ${diagnostic.message}` : "";
+}
+
+function formatGatewayNetworkError(gatewayUrl, path, error) {
+  const detail = String(error?.message || error || "").trim();
+  const detailSuffix = detail && detail !== "Failed to fetch" ? ` (${detail})` : "";
+  return `Could not reach the configured gateway ${gatewayUrl || "(unset)"} while calling ${path}. Check DNS, TLS, and the saved gateway URL.${gatewayDiagnosticSuffix(gatewayUrl)}${detailSuffix}`;
+}
+
+function formatGatewayHttpError(cfg, path, resp, text) {
+  const gatewayUrl = cfg.gatewayUrl || "(unset)";
+  const body = String(text || "").trim().slice(0, 300);
+  const diagnostic = gatewayUrlDiagnostic(cfg.gatewayUrl);
+  const staleOrLocal = diagnostic.code === "stale_or_local_url";
+  const voiceRoute = path.startsWith("/v1/voice/");
+
+  if ((resp.status === 401 || resp.status === 403) && path === "/v1/voice/session-ticket") {
+    return `Gateway reachable at ${gatewayUrl}, but the voice ticket was denied (${resp.status}). Check the device token in A.G. Options.`;
+  }
+  if (resp.status === 401 || resp.status === 403) {
+    if (staleOrLocal) {
+      return `Gateway reachable at ${gatewayUrl}, but the saved token may belong to a different gateway. Confirm the stable VPS URL, then re-register or paste a fresh token. ${diagnostic.message}`;
+    }
+    return cfg.gatewayToken
+      ? `Gateway reachable at ${gatewayUrl}, but the saved token was rejected (${resp.status}). Re-register this browser or paste a fresh token in A.G. Options.`
+      : `Gateway reachable at ${gatewayUrl}, but this route requires a device token (${resp.status}). Add the Gateway token in A.G. Options.`;
+  }
+  if (resp.status === 404 && voiceRoute) {
+    return `Gateway reachable at ${gatewayUrl}, but voice routes are not deployed at this URL (${path} returned 404).`;
+  }
+  return `Gateway ${gatewayUrl} returned ${resp.status} for ${path}${body ? `: ${body}` : ""}`;
+}
+
+function formatVoiceSocketNetworkError(cfg, ticket, reason) {
+  const gatewayUrl = cfg.gatewayUrl || "(unset)";
+  const detail = String(reason || "").trim();
+  const ticketHint = ticket?.ws_url ? " The gateway returned a voice ticket, but the socket did not open." : "";
+  return `Voice socket could not connect for configured gateway ${gatewayUrl}.${ticketHint} Check Cloudflare WebSocket proxying, TLS, and the gateway voice route.${gatewayDiagnosticSuffix(gatewayUrl)}${detail ? ` (${detail})` : ""}`;
+}
+
 // Pipe a request into the user's own agent gateway instead of the model vendor.
 // Returns the parsed JSON body for the given path (e.g. "/v1/chat", "/health").
 async function callGateway(cfg, path, { method = "POST", body, signal } = {}) {
@@ -50,20 +92,20 @@ async function callGateway(cfg, path, { method = "POST", body, signal } = {}) {
   }
   const headers = { "content-type": "application/json" };
   if (cfg.gatewayToken) headers.authorization = `Bearer ${cfg.gatewayToken}`;
-  const resp = await fetch(`${cfg.gatewayUrl}${path}`, {
-    method,
-    signal,
-    headers,
-    body: body == null ? undefined : JSON.stringify(body),
-  });
+  let resp;
+  try {
+    resp = await fetch(`${cfg.gatewayUrl}${path}`, {
+      method,
+      signal,
+      headers,
+      body: body == null ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new Error(formatGatewayNetworkError(cfg.gatewayUrl, path, error));
+  }
   const text = await resp.text();
   if (!resp.ok) {
-    if (resp.status === 401) {
-      throw new Error(
-        "Gateway rejected the token (401). Open A.G. Options and set a valid Gateway token, then Save."
-      );
-    }
-    throw new Error(`gateway ${resp.status}: ${text.slice(0, 300)}`);
+    throw new Error(formatGatewayHttpError(cfg, path, resp, text));
   }
   if (resp.status === 204 || !text.trim()) {
     return null;
@@ -1121,12 +1163,21 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
 async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit } = {}) {
   const cfg = await getConfig();
   const ticket = await createVoiceSessionTicket(cfg);
-  if (!ticket?.ws_url) throw new Error("gateway did not return a voice session WebSocket URL");
+  if (!ticket?.ws_url) {
+    throw new Error(`Gateway reachable at ${cfg.gatewayUrl || "(unset)"}, but it did not return a voice session WebSocket URL.`);
+  }
 
   const id = voiceSessionId();
   return new Promise((resolve, reject) => {
     let settled = false;
-    const ws = new WebSocket(ticket.ws_url);
+    let ws;
+    try {
+      ws = new WebSocket(ticket.ws_url);
+    } catch (error) {
+      settled = true;
+      reject(new Error(formatVoiceSocketNetworkError(cfg, ticket, String(error?.message || error))));
+      return;
+    }
     const session = {
       id,
       tabId,
@@ -1149,20 +1200,22 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
     voiceSessions.set(id, session);
     ws.binaryType = "arraybuffer";
 
-    const failBeforeOpen = (message) => {
+    const failBeforeOpen = (message, { voiceSocket = true } = {}) => {
       voiceSessions.delete(id);
       try {
         ws.close();
       } catch {}
       if (!settled) {
         settled = true;
-        reject(new Error(message));
+        reject(new Error(voiceSocket ? formatVoiceSocketNetworkError(cfg, ticket, message) : message));
       }
     };
 
     ws.onopen = () => {
       if (!voiceSessionSocketOpen(session)) {
-        failBeforeOpen(session.revoked ? "Live voice session was revoked." : "Live voice connection closed.");
+        failBeforeOpen(session.revoked ? "Live voice session was revoked." : "Live voice connection closed.", {
+          voiceSocket: !session.revoked,
+        });
         return;
       }
       const started = sendVoiceSessionJson(session, {
@@ -1190,7 +1243,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
         },
       });
       if (!started) {
-        failBeforeOpen("Live voice connection failed.");
+        failBeforeOpen("session_start could not be sent");
         return;
       }
       session.opened = true;

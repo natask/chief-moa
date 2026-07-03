@@ -11,9 +11,10 @@ import { join, resolve } from "node:path";
 const root = resolve(new URL("..", import.meta.url).pathname);
 const extensionDir = join(root, "extension");
 const configPath = join(extensionDir, "agee.config.json");
-const defaultGatewayUrl = "http://10.147.17.10:8787";
+const defaultGatewayUrl = "https://api.agee.app";
+const legacyMainGatewayUrl = "http://10.147.17.10:8787";
 const localGatewayUrl = "http://10.147.17.6:8787";
-const staleGatewayUrls = new Set(["http://10.147.17.10:8788"]);
+const staleGatewayUrls = new Set([legacyMainGatewayUrl, "http://10.147.17.10:8788", localGatewayUrl]);
 const staleError = "No gateway URL and no API key set";
 const manifest = readJson(join(extensionDir, "manifest.json"));
 const extensionLabel = manifest.name || "agee";
@@ -39,6 +40,45 @@ function info(text) {
 
 function normalizeUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function gatewayUrlDiagnostic(value) {
+  const raw = normalizeUrl(value);
+  if (!raw) return { code: "missing_config", message: "baked config has no gatewayUrl" };
+  if (!/^https?:\/\//i.test(raw)) {
+    return { code: "missing_scheme", message: `enter the full gateway URL, for example ${defaultGatewayUrl}` };
+  }
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { code: "invalid_url", message: `enter a valid gateway URL, for example ${defaultGatewayUrl}` };
+  }
+  const path = url.pathname.replace(/\/+$/, "") || "/";
+  if (path !== "/" && (path === "/health" || path.startsWith("/v1/"))) {
+    return { code: "endpoint_path", message: "save only the gateway origin, not an endpoint path" };
+  }
+  if (url.hostname === "10.147.17.10") {
+    return {
+      code: "stale_main_machine",
+      message: "points at the old main-machine ZeroTier gateway; use the VPS URL unless intentionally testing local dev",
+    };
+  }
+  if (url.hostname === "10.147.17.6") {
+    return {
+      code: "local_mac",
+      message: "points at the local Mac gateway; use the VPS URL for browser/mobile onboarding",
+    };
+  }
+  return { code: "ok", message: "" };
+}
+
+function networkFailureMessage(url, path, error) {
+  const diagnostic = gatewayUrlDiagnostic(url);
+  const hint = diagnostic.message ? ` ${diagnostic.message}.` : "";
+  const detail = String(error?.message || error || "").trim();
+  const suffix = detail && detail !== "Failed to fetch" ? ` (${detail})` : "";
+  return `could not reach configured gateway ${url || "(unset)"} while calling ${path}; check DNS, TLS, and the saved URL.${hint}${suffix}`;
 }
 
 function readJson(path) {
@@ -72,9 +112,14 @@ function checkSource() {
     pass("current background.js does not contain the stale Anthropic-key fallback error");
   }
   if (config.includes(defaultGatewayUrl)) {
-    pass(`current config.js has the main-machine gateway default ${defaultGatewayUrl}`);
+    pass(`current config.js has the hosted gateway default ${defaultGatewayUrl}`);
   } else {
-    fail(`current config.js is missing the main-machine gateway default ${defaultGatewayUrl}`);
+    fail(`current config.js is missing the hosted gateway default ${defaultGatewayUrl}`);
+  }
+  if (config.includes(legacyMainGatewayUrl) && config.includes(localGatewayUrl) && config.includes("isKnownStaleGatewayUrl")) {
+    pass("current config.js treats legacy ZeroTier/local gateway URLs as stale seeded defaults");
+  } else {
+    fail("current config.js does not cover stale legacy/local gateway URL migration");
   }
 }
 
@@ -93,12 +138,15 @@ function checkBakedConfig() {
 
   const gatewayUrl = normalizeUrl(config.gatewayUrl);
   const gatewayToken = String(config.gatewayToken || "");
-  if (!gatewayUrl) {
-    fail("baked config has no gatewayUrl");
-  } else if (staleGatewayUrls.has(gatewayUrl)) {
+  const diagnostic = gatewayUrlDiagnostic(gatewayUrl);
+  if (diagnostic.code === "missing_config") {
+    fail(diagnostic.message);
+  } else if (diagnostic.code === "local_mac") {
+    warn(`baked config gateway URL ${diagnostic.message}`);
+  } else if (staleGatewayUrls.has(gatewayUrl) || diagnostic.code === "stale_main_machine") {
     fail(`baked config still points at stale gateway ${gatewayUrl}; run \`npm run configure\``);
-  } else if (gatewayUrl === localGatewayUrl) {
-    pass(`baked config gateway URL is local dev gateway ${gatewayUrl}`);
+  } else if (diagnostic.code !== "ok") {
+    fail(`baked config gateway URL is invalid: ${diagnostic.message}`);
   } else {
     pass(`baked config gateway URL is ${gatewayUrl}`);
   }
@@ -122,7 +170,7 @@ async function checkGateway(config) {
       fail(`/health returned HTTP ${resp.status}`);
     }
   } catch (error) {
-    fail(`/health unreachable: ${error.message}`);
+    fail(`/health unreachable: ${networkFailureMessage(config.gatewayUrl, "/health", error)}`);
     return;
   }
 
@@ -155,7 +203,7 @@ async function checkGateway(config) {
       fail(`/v1/voice/turns returned HTTP ${resp.status}`);
     }
   } catch (error) {
-    fail(`/v1/voice/turns failed: ${error.message}`);
+    fail(`/v1/voice/turns failed: ${networkFailureMessage(config.gatewayUrl, "/v1/voice/turns", error)}`);
   }
 }
 

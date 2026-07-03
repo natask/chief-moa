@@ -40,6 +40,7 @@ for (const file of requiredFiles) {
 
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
 const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
@@ -85,6 +86,55 @@ if (
 
 if (backgroundSource.includes('import "./dev-reload.js"')) {
   throw new Error("background.js must not import the stale always-on dev reload loop");
+}
+
+if (!/DEFAULT_GATEWAY_URL\s*=\s*"https:\/\/api\.agee\.app"/.test(configSource)) {
+  throw new Error("extension config must default hosted onboarding to https://api.agee.app");
+}
+
+if (
+  !configSource.includes('"http://10.147.17.10:8787"') ||
+  !configSource.includes('"http://10.147.17.6:8787"') ||
+  !/function isKnownStaleGatewayUrl/.test(configSource) ||
+  !/!userOwnsUrl && isKnownStaleGatewayUrl/.test(configSource)
+) {
+  throw new Error("extension config must migrate known stale ZeroTier/local URLs unless the user owns the saved URL");
+}
+
+if (
+  !/function gatewayUrlDiagnostic/.test(configSource) ||
+  !/Enter the full gateway URL/.test(configSource) ||
+  !/Save only the gateway origin/.test(configSource) ||
+  !/old main-machine ZeroTier gateway/.test(configSource) ||
+  !/local Mac gateway/.test(configSource)
+) {
+  throw new Error("extension config must classify missing schemes, endpoint paths, and stale/local gateway URLs");
+}
+
+if (
+  !/function formatGatewayNetworkError/.test(backgroundSource) ||
+  !/Could not reach the configured gateway/.test(backgroundSource) ||
+  !/Check DNS, TLS, and the saved gateway URL/.test(backgroundSource) ||
+  !/cfg\.gatewayUrl/.test(backgroundSource)
+) {
+  throw new Error("background.js must turn fetch failures into configured-gateway diagnostics");
+}
+
+if (
+  !/function formatVoiceSocketNetworkError/.test(backgroundSource) ||
+  !/Voice socket could not connect for configured gateway/.test(backgroundSource) ||
+  !/Check Cloudflare WebSocket proxying, TLS, and the gateway voice route/.test(backgroundSource) ||
+  /WebSocket: \$\{ticket\.ws_url\}/.test(backgroundSource)
+) {
+  throw new Error("background.js must make pre-open voice socket failures actionable without printing ticket URLs");
+}
+
+if (
+  !/gatewayUrlDiagnostic/.test(optionsSource) ||
+  !/Could not reach the configured gateway/.test(optionsSource) ||
+  !/token may belong to a different gateway/.test(optionsSource)
+) {
+  throw new Error("options.js must preflight gateway URLs and show clear network/token diagnostics");
 }
 
 if (/new\s+WebSocket\s*\(/.test(contentSource)) {
@@ -479,6 +529,46 @@ for (const file of [
 
 const { parseSettingsIntent, looksLikeGatewayProfileControlIntent } = await import("../extension/settings-intent.js");
 const { parseBrowserTaskIntent, parseOpenTabIntent } = await import("../extension/browser-task-intent.js");
+const {
+  DEFAULT_GATEWAY_URL,
+  effectiveGatewayUrl,
+  gatewayUrlDiagnostic,
+  normalizeDefaultGatewayUrl,
+} = await import("../extension/config.js");
+
+if (DEFAULT_GATEWAY_URL !== "https://api.agee.app") {
+  throw new Error(`unexpected hosted default gateway URL: ${DEFAULT_GATEWAY_URL}`);
+}
+if (normalizeDefaultGatewayUrl("http://10.147.17.10:8787") !== DEFAULT_GATEWAY_URL) {
+  throw new Error("legacy main-machine gateway must normalize to the hosted default");
+}
+if (normalizeDefaultGatewayUrl("http://10.147.17.6:8787") !== DEFAULT_GATEWAY_URL) {
+  throw new Error("legacy local Mac gateway must normalize to the hosted default unless user-owned in storage");
+}
+if (effectiveGatewayUrl("http://10.147.17.10:8787", DEFAULT_GATEWAY_URL, false) !== DEFAULT_GATEWAY_URL) {
+  throw new Error("non-user-owned legacy main-machine URL must migrate to baked/stable config");
+}
+if (effectiveGatewayUrl("http://10.147.17.10:8787", DEFAULT_GATEWAY_URL, true) !== "http://10.147.17.10:8787") {
+  throw new Error("user-owned legacy main-machine URL must not be overwritten by seeding");
+}
+if (effectiveGatewayUrl("http://10.147.17.6:8787", DEFAULT_GATEWAY_URL, false) !== DEFAULT_GATEWAY_URL) {
+  throw new Error("non-user-owned local Mac URL must migrate to baked/stable config");
+}
+if (effectiveGatewayUrl("http://10.147.17.6:8787", DEFAULT_GATEWAY_URL, true) !== "http://10.147.17.6:8787") {
+  throw new Error("user-owned local Mac URL must stay available for intentional local dev");
+}
+if (gatewayUrlDiagnostic("api.agee.app").code !== "missing_scheme") {
+  throw new Error("gateway diagnostics must flag missing schemes");
+}
+if (gatewayUrlDiagnostic("https://api.agee.app/v1/voice/turns").code !== "endpoint_path") {
+  throw new Error("gateway diagnostics must flag endpoint paths saved as origins");
+}
+if (gatewayUrlDiagnostic("http://10.147.17.10:8787").code !== "stale_or_local_url") {
+  throw new Error("gateway diagnostics must flag the old main-machine ZeroTier URL");
+}
+if (gatewayUrlDiagnostic("http://10.147.17.6:8787").code !== "stale_or_local_url") {
+  throw new Error("gateway diagnostics must flag the local Mac URL");
+}
 
 // Fast local stop path. The matcher must halt whole-utterance stop commands and
 // must NOT swallow a real instruction that merely starts with "stop".
