@@ -1,0 +1,11 @@
+{
+  "id": "en-hello",
+  "language": "en-US",
+  "format": {
+    "encoding": "pcm16",
+    "sample_rate": 16000,
+    "channels": 1
+  },
+  "expected_transcript": "hello can you hear me",
+  "note": "PCM is a deterministic tone for fixtures mode; transcript matching uses expected_transcript. Replace with a real speech recording for VOICE_EVAL_LIVE re-STT."
+}
