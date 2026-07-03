@@ -45,6 +45,8 @@ assert.ok(shouldRunAgentFromVoice("make progress on the overlay"));
 assert.ok(shouldRunAgentFromVoice("push code to the home machine"));
 assert.ok(shouldRunAgentFromVoice("what are all the projects I have ongoing"));
 assert.ok(shouldRunAgentFromVoice("look at the Chrome extension Android app and mobile gateway"));
+assert.ok(shouldRunAgentFromVoice("what is going on with the operational systems"));
+assert.ok(!shouldRunAgentFromVoice("what is going on here on this trading page"));
 assert.ok(!shouldRunAgentFromVoice("what is the weather"));
 assert.ok(!shouldRunAgentFromVoice(""));
 
@@ -59,6 +61,7 @@ assert.strictEqual(classifyVoiceTurn({}, "run gemini and claude"), "multi_agent"
 assert.strictEqual(classifyVoiceTurn({}, "/agent ship it"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "agent_run");
+assert.strictEqual(classifyVoiceTurn({}, "what is going on here, what does closing orders only mean?"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "profile_control");

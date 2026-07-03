@@ -85,9 +85,11 @@ function shouldRunAgentFromVoice(text) {
     || lower.includes("home machine")
     || lower.includes("in the repo")
     || lower.includes("in the app")
-    || lower.includes("operational systems")
-    || lower.includes("what s going on")
-    || lower.includes("what is going on")
+    || isOperationalAgentStatusQuery(lower);
+}
+
+function isOperationalAgentStatusQuery(lower) {
+  return lower.includes("operational systems")
     || lower.includes("things operating")
     || lower.includes("projects i have ongoing")
     || lower.includes("all the projects")
