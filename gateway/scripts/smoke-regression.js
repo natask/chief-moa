@@ -237,7 +237,7 @@ async function assertAgentProfileOptionsCatalog(baseUrl) {
   assert.ok(Array.isArray(catalog.models) && catalog.models.some((model) => model.id === "smoke-model" && model.current === true), "catalog must list the current gateway model");
   assert.ok(catalog.fields?.model?.values?.includes("smoke-model"), "catalog model field must include the current gateway model");
   assert.ok(Array.isArray(catalog.voices) && catalog.voices.length >= 8, "catalog must list supported voices");
-  assert.ok(Array.isArray(catalog.languages) && catalog.languages.length >= 40, "catalog must list supported languages");
+  assert.deepEqual(catalog.languages.map((language) => language.code), ["en-US", "am-ET"], "catalog must expose only English and Amharic for now");
 
   const aoede = catalog.voices.find((voice) => voice.id === "Aoede");
   const charon = catalog.voices.find((voice) => voice.id === "Charon");
@@ -252,15 +252,15 @@ async function assertAgentProfileOptionsCatalog(baseUrl) {
     source: "smoke-regression",
     profile: {
       voice: "feminine",
-      language: "Spanish,French",
+      language: "English,Amharic",
       input_languages: "English,Amharic",
       language_auto_switch: false,
     },
   });
   assert.equal(valid.status, 200);
   assert.equal(valid.json.profile.voice, "Aoede", "voice alias must canonicalize to a supported voice id");
-  assert.equal(valid.json.profile.language, "es-ES,fr-FR");
-  assert.equal(valid.json.profile.language_primary, "es-ES", "reply primary must derive from first reply code");
+  assert.equal(valid.json.profile.language, "en-US,am-ET");
+  assert.equal(valid.json.profile.language_primary, "en-US", "reply primary must derive from first reply code");
   assert.equal(valid.json.profile.input_languages, "en-US,am-ET");
   assert.equal(valid.json.profile.input_language_primary, "en-US", "input primary must derive from first heard code");
   const versionAfterValid = valid.json.current_version;
@@ -269,14 +269,14 @@ async function assertAgentProfileOptionsCatalog(baseUrl) {
     source: "smoke-regression",
     profile: {
       voice: "not-a-real-voice",
-      language: "xx-YY",
+      language: "Spanish,French",
       input_languages: "en-US,not-a-language",
     },
   });
   assert.equal(invalid.status, 200);
   assert.equal(invalid.json.current_version, versionAfterValid, "invalid-only patch must not create a new profile version");
   assert.equal(invalid.json.profile.voice, "Aoede", "invalid voice must not persist");
-  assert.equal(invalid.json.profile.language, "es-ES,fr-FR", "invalid reply language must not persist");
+  assert.equal(invalid.json.profile.language, "en-US,am-ET", "invalid reply language must not persist");
   assert.equal(invalid.json.profile.input_languages, "en-US,am-ET", "mixed invalid heard-language list must not persist");
 
   const languageOptionsTurn = await postJson(`${baseUrl}/v1/voice/turns`, {

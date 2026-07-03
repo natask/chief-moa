@@ -10,8 +10,8 @@ conversation open, show state and transcript, interrupt playback, start or
 continue agent work, and let the user change the assistant's behavior by voice.
 The user also needs explicit language control. Automatic language switching can
 be an optional demo/provider feature, but the normal Moa behavior must be a
-visible state change: "speak Amharic", "switch back to English", "answer in
-Spanish until I change it."
+visible state change: "speak Amharic", "switch back to English", or "use
+English and Amharic until I change it."
 
 The core constraint remains unchanged: Android owns UI, permissions, approvals,
 and phone-local execution. The gateway owns provider credentials, routing,
@@ -129,7 +129,7 @@ The agent profile includes:
 
 ```text
 language.mode = explicit
-language.primary = en-US | am-ET | es-ES | ...
+language.primary = en-US | am-ET
 language.output = same_as_input | primary_only | configured_value
 language.auto_switch = false by default
 ```

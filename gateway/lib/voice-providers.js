@@ -678,14 +678,11 @@ class GeminiLiveVoiceProvider {
     return this.languageCode;
   }
 
-  // Live response modalities for the NEXT turn. The user set response_modality
-  // by talking: "text" -> the model writes, no audio; "speech"/"auto" -> it
-  // speaks (a live session is voice-initiated, so auto means speak). Read fresh
-  // so "respond in text from now on" takes effect on the next turn.
+  // Gemini native-audio Live sessions must always request provider audio. The
+  // same profile can still carry text-mode preferences for non-Live surfaces,
+  // but sending ["TEXT"] to the native-audio model closes the socket before the
+  // turn can transcribe or reply.
   effectiveResponseModalities(profile) {
-    const effectiveProfile = profile || this.profileForTurn();
-    const modality = String(effectiveProfile?.response_modality || "").trim().toLowerCase();
-    if (modality === "text") return ["TEXT"];
     return ["AUDIO"];
   }
 
@@ -706,7 +703,7 @@ class GeminiLiveVoiceProvider {
       // already in the durable context above; answering questions needs no tool.
       "Tool discipline: answer every question and request by speaking out loud, using the durable context already provided. Never call a tool just to answer or recall something. Call remember_user_fact ONLY when the user explicitly tells you to remember, save, or note something; call update_agent_profile ONLY when the user explicitly asks to change a setting, voice, or language. When in doubt, speak instead of calling a tool.",
       modality === "text"
-        ? "Reply in text only. Do not speak your replies out loud."
+        ? "This is a live voice session on an audio-only provider. Speak the reply out loud; the client may also display the transcript as text."
         : "",
     ].filter(Boolean).join("\n\n");
   }
@@ -1254,13 +1251,13 @@ class GeminiLiveVoiceProvider {
           },
           {
             name: "update_agent_profile",
-            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a preference about how you behave - especially voice and language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. If the user says what language THEY speak ('I only speak French', 'I'm talking to you in Amharic now'), set input_languages. If they ask what language YOU reply in ('speak Spanish', 'answer in English', 'switch to Japanese'), set language. The user does not need to name a setting; infer it from natural speech in ANY language and persist it. After calling, confirm briefly in your reply.",
+            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a clear preference about your voice or language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. Supported languages are currently English and Amharic only. If the user says what language THEY speak ('I only speak Amharic', 'I can speak English and Amharic'), set input_languages. If they ask what language YOU reply in ('speak Amharic', 'answer in English'), set language. Do not infer unrelated languages. Do not set response_modality='text' for goodbye, bye, stop, hush, or silence requests; those are current-turn controls, not durable profile changes. After calling, confirm briefly in your reply.",
             parameters: {
               type: "OBJECT",
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak. The gateway derives primary language from the first code, so do not expose primary language as a user-facing setting. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how you deliver replies - \"text\" (write, do not speak), \"speech\" (speak out loud), or \"auto\" (match the user: typed -> text, spoken -> speech). Set \"text\" when the user says \"respond in text\"/\"stop speaking, just write\"; set \"speech\" when they say \"talk to me\"/\"use your voice\". Other fields: system_prompt, assistant_name, model, temperature, voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak. Currently valid language codes are en-US and am-ET only. The gateway derives primary language from the first code, so do not expose primary language as a user-facing setting. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
                 },
                 scope: {
                   type: "STRING",

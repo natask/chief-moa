@@ -482,9 +482,9 @@ if (
 ) {
   throw new Error(`settings parser should lock the language profile, got: ${JSON.stringify(languageIntent)}`);
 }
-const arabicIntent = parseSettingsIntent("respond in Arabic", null);
-if (arabicIntent?.patch?.language !== "ar-XA") {
-  throw new Error(`settings parser should use gateway-supported Arabic code, got: ${JSON.stringify(arabicIntent)}`);
+const unsupportedLanguageIntent = parseSettingsIntent("respond in Arabic", null);
+if (unsupportedLanguageIntent !== null) {
+  throw new Error(`settings parser should reject unsupported languages for now, got: ${JSON.stringify(unsupportedLanguageIntent)}`);
 }
 if (parseSettingsIntent(setupParagraph, null) !== null) {
   throw new Error("settings parser should ignore quoted settings examples inside setup text");

@@ -81,10 +81,12 @@ assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
 const optionsPayload = profileOptionsPayload();
 assert.ok(optionsPayload.voices.some((voice) => voice.id === "Aoede"), "profile options must expose Aoede");
 assert.ok(optionsPayload.voices.some((voice) => voice.id === "Charon"), "profile options must expose Charon");
+assert.deepStrictEqual(optionsPayload.languages.map((language) => language.code), ["en-US", "am-ET"]);
+assert.ok(optionsPayload.languages.some((language) => language.code === "en-US"), "profile options must expose English");
 assert.ok(optionsPayload.languages.some((language) => language.code === "am-ET"), "profile options must expose Amharic");
-assert.ok(optionsPayload.languages.some((language) => language.code === "ti-ET"), "profile options must expose Tigrinya");
 assert.equal(normalizeLanguageListValue("English and Amharic"), "en-US,am-ET");
-assert.equal(normalizeLanguageListValue(["Tigrinya", "Amharic"]), "ti-ET,am-ET");
+assert.equal(normalizeLanguageListValue(["Spanish", "Amharic"]), "");
+assert.equal(normalizeLanguageListValue("A-M-H-A-R-I-C"), "am-ET");
 
 const inputLanguageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
 assert.deepStrictEqual(inputLanguageLock.patch, {
@@ -112,25 +114,10 @@ assert.deepStrictEqual(bothSides.patch, {
   input_language_primary: "am-ET",
 });
 
-// Arbitrary languages beyond the original six resolve to their BCP-47 codes.
-assert.deepStrictEqual(parseProfileControlIntent("respond in Swahili").patch, {
-  language: "sw-KE",
-  language_primary: "sw-KE",
-  language_mode: "explicit",
-  language_output: "primary_only",
-  language_auto_switch: false,
-});
-assert.deepStrictEqual(parseProfileControlIntent("respond in Tigrinya and Amharic").patch, {
-  language: "ti-ET,am-ET",
-  language_primary: "ti-ET",
-  language_mode: "explicit",
-  language_output: "primary_only",
-  language_auto_switch: false,
-});
-assert.deepStrictEqual(parseProfileControlIntent("I speak Japanese and Korean").patch, {
-  input_languages: "ja-JP,ko-KR",
-  input_language_primary: "ja-JP",
-});
+// For now, unsupported languages do not become profile-control updates.
+assert.strictEqual(parseProfileControlIntent("respond in Swahili"), null);
+assert.strictEqual(parseProfileControlIntent("respond in Tigrinya"), null);
+assert.strictEqual(parseProfileControlIntent("I speak Japanese and Korean"), null);
 
 assert.deepStrictEqual(parseProfileControlIntent("only process English and Amharic").patch, {
   input_languages: "en-US,am-ET",
@@ -139,6 +126,13 @@ assert.deepStrictEqual(parseProfileControlIntent("only process English and Amhar
 
 assert.deepStrictEqual(parseProfileControlIntent("speak Amharic and English").patch, {
   language: "am-ET,en-US",
+  language_primary: "am-ET",
+  language_mode: "explicit",
+  language_output: "primary_only",
+  language_auto_switch: false,
+});
+assert.deepStrictEqual(parseProfileControlIntent("speak A-M-H-A-R-I-C").patch, {
+  language: "am-ET",
   language_primary: "am-ET",
   language_mode: "explicit",
   language_output: "primary_only",
