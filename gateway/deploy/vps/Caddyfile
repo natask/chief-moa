@@ -1,0 +1,11 @@
+# TLS termination for the VPS gateway. Caddy fetches and renews a Let's
+# Encrypt certificate for MOA_DOMAIN and proxies HTTP and WebSocket traffic
+# (including /v1/voice/sessions) to the gateway service on the compose network.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$MOA_DOMAIN} {
+	reverse_proxy gateway:8787
+}

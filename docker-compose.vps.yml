@@ -1,0 +1,32 @@
+# VPS TLS overlay: adds Caddy in front of the gateway.
+#
+# Caddy terminates TLS with an automatic Let's Encrypt certificate for
+# MOA_DOMAIN and proxies HTTP plus the voice WebSocket to the gateway over the
+# compose network. The gateway's own published port stays loopback-only (see
+# GATEWAY_BIND in docker-compose.yml).
+#
+# Requires in the compose env file:
+#   MOA_DOMAIN=api.example.com
+#   ACME_EMAIL=you@example.com
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      MOA_DOMAIN: ${MOA_DOMAIN:?set MOA_DOMAIN in the compose env file}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in the compose env file}
+    volumes:
+      - ./gateway/deploy/vps/Caddyfile:/etc/caddy/Caddyfile:ro
+      - moa-caddy-data:/data
+      - moa-caddy-config:/config
+
+volumes:
+  moa-caddy-data:
+  moa-caddy-config:
