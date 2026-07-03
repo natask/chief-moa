@@ -12,6 +12,16 @@ Postgres is the production store, a file fallback stays for local dev, and auth
 depends on deployment mode. This change makes that concrete for a remote VPS and
 maps the auth step onto better-auth.
 
+Committed lane artifacts now fill in the surrounding contracts for this change:
+`vps-deploy-mode-contract.md` for the preview image/Compose scaffold,
+`worker-pull-contract.md` for execution-machine claiming,
+`client-onboarding-contract.md` for Android/browser setup,
+`account-connection-policy.md` for connected provider accounts,
+`voice-work-history-control-plane.md` for work evidence and feedback,
+`backup-restore-runbook.md` for the promotion gate, the Cloudflare,
+DigitalOcean, and Railway runbooks for operations, and
+`product-packaging.md` plus `self-host-user-journey.md` for product boundaries.
+
 ## Decisions
 
 ### Decision: one image, three modes
@@ -63,6 +73,20 @@ Concrete mapping onto better-auth primitives:
 The single token maps to a seeded owner user so existing writes keep one stable
 owner id through the migration. Nothing loses its author.
 
+### Decision: account connections stay gateway-owned
+
+Connected provider accounts are modeled as `account_connection` records scoped
+to a better-auth user. The gateway owns OAuth callbacks, manual secret-entry
+forms, refresh, reauth, credential-health state, non-secret summaries, and audit
+events. Android and the browser may display labels, status, expiry, action
+URLs/codes, and reauth prompts, but they never receive raw provider
+credentials, provider cookies, refresh tokens, API keys, PATs, service-account
+material, or worker tokens.
+
+The detailed endpoint, data, refresh, reauth, notification, and audit contract
+lives in `account-connection-policy.md`; implementation slices live in
+`account-connection-tasks.md`.
+
 ### Decision: device registration flow
 
 Android and the extension already store a gateway URL and a token. Registration
@@ -79,6 +103,21 @@ device shows a short code or opens a registration URL
 
 The client still holds only a URL and a token. It never holds provider keys or
 account passwords. Registration is the only new step, and it is one approval.
+
+### Decision: client onboarding proves URL, auth, and voice separately
+
+Remote onboarding uses one stable HTTPS gateway origin such as
+`https://api.agee.app` or `https://api.<domain>`. The clients keep the same
+storage shape, but setup must classify stale ZeroTier/local URLs, malformed
+origins, endpoint paths, DNS/TLS failures, token failures, missing voice routes,
+provider voice unavailability, microphone permission failures, and
+WebSocket/TLS/proxy failures as separate states. A passing `/health` proves
+reachability only; a protected lightweight route proves token validity; voice
+readiness is a third check.
+
+The shared contract is in `client-onboarding-contract.md`, with Android/browser
+source follow-ups in `client-onboarding-tasks.md` and the client docs under
+`android_app/docs/` and `browser_extension/docs/`.
 
 ### Decision: Postgres required for remote modes
 
@@ -129,6 +168,25 @@ token, not a new execution authority.
 The worker token is a distinct credential from device tokens. It authorizes
 claiming and reporting on runs, nothing else.
 
+The bounded endpoint and event contract is `worker-pull-contract.md`. Its
+implementation ledger is `worker-pull-tasks.md`. The first runtime slice should
+prove an outbound-only `echo` worker before enabling Codex, Claude, Gemini, or
+other local harness profiles.
+
+### Decision: voice drives the control plane, not hidden execution
+
+Voice and text can create durable tasks, ask status, attach feedback, ask for
+deployment links, and request that a client open a UI route. Those operations
+write or query gateway records and proposals. Harness execution, browser/page
+actions, Android actions, local UI opens, and active deployment promotion still
+require the owning worker or client to claim, validate, execute or reject, and
+post a receipt.
+
+The evidence model for `work_task`, `repo_snapshot_ref`, `diff_ref`,
+`verification_artifact`, `deployment_record`, `user_feedback`, and `ui.open`
+request/receipt records is in `voice-work-history-control-plane.md`; staged
+smoke tasks are in `voice-work-history-tasks.md`.
+
 ### Decision: Cloudflare split
 
 The static frontend and marketing site go on Cloudflare Pages, where agee.app
@@ -146,6 +204,10 @@ proxied record. The gateway itself does not run in Workers: Workers cannot hold
 the long-lived voice socket or the Node harness-worker boundary. Pages serves
 data-only surfaces; the extension keeps loading customizations as data per the
 Manifest V3 rule, not as hosted privileged code.
+
+`cloudflare-dns-tls-runbook.md` is the operational checklist for this split.
+`digitalocean-self-host-runbook.md` and `railway-self-host-runbook.md` cover
+the first droplet and one-image PaaS preview paths from the same image.
 
 ### Decision: single sticky voice instance first
 
@@ -166,6 +228,26 @@ take a Postgres dump and a `DATA_DIR` snapshot, and run a read-only restore chec
 against a scratch target. This matches the versioned-state rule: the shared event
 store must survive version churn, and a restore path must be proven before a
 mutation.
+
+The concrete promotion gate is `backup-restore-runbook.md` plus
+`scripts/vps-backup.sh` and `scripts/vps-restore-check.sh`. The scripts are
+preview/promotion tooling only; this change does not claim that any active
+backup, restore, deploy, apply, service restart, client cutover, OTA publish, or
+browser reload has happened.
+
+### Decision: product package is a control plane plus bounded workers
+
+The first package is for builders who already have provider accounts, model or
+agent subscriptions, local repos, local harness CLIs, and deployment targets.
+The gateway is the control plane and durable state boundary; thin clients are
+control surfaces; workers are outbound-only local executors. Hosted convenience
+may automate VPS operations, DNS/TLS, backups, restore checks, and package
+configuration, but it must not turn the hosted gateway into a harness host, a
+provider-account creator, a subscription-limit bypasser, or an active-deploy
+authority.
+
+The packaging line and first journey are recorded in `product-packaging.md` and
+`self-host-user-journey.md`.
 
 ## Boundary summary
 

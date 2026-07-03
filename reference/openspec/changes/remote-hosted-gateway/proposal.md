@@ -39,6 +39,17 @@ Scaling is deferred.
   off any host mount.
 - Add Postgres dump plus `DATA_DIR` snapshot before any promotion, with a
   restore check.
+- Integrate the committed lane contracts for account connections, worker-pull
+  execution, client onboarding, voice work history, backup/restore, operations
+  runbooks, and product packaging into the main OpenSpec plan.
+
+Committed artifacts now include the gateway Docker/Compose scaffold, backup and
+restore scripts, the Cloudflare/DigitalOcean/Railway runbooks, Android/browser
+onboarding notes, the account-connection and worker-pull contracts, the voice
+work-history control-plane contract, and the first self-host/product packaging
+journey. These are preview/spec/scaffold outputs. They do not mean an active
+deployment was applied, an active URL was switched, a live service was restarted,
+an OTA was published, or a browser extension was reloaded.
 
 ## Non-Goals
 
@@ -60,9 +71,18 @@ Scaling is deferred.
 - Auth gains users, sessions, and per-device tokens without changing the client
   trust boundary: Android and the extension still hold only a gateway URL and a
   token.
+- Account connections become a gateway-owned credential-health surface:
+  providers, labels, statuses, refresh/reauth actions, and audit events are
+  visible to clients, while raw provider credentials remain server-side.
 - Storage requires Postgres in remote modes, so hosted and self-hosted runs use
   the same data model.
 - The execution machine changes from an inbound harness host to an outbound
-  worker that claims queued runs.
+  worker that claims queued runs with a scoped worker token and bounded payloads
+  that exclude shell/env/credential authority.
 - The frontend moves to Cloudflare Pages; the API and voice WebSocket stay on
   the VPS behind Cloudflare DNS.
+- Client onboarding changes from "save whichever ZeroTier URL works" to a
+  stable HTTPS gateway origin plus separate reachability, auth, and voice
+  diagnostics.
+- Operations now have explicit preview runbooks and a backup/restore promotion
+  gate before any active service mutation.
