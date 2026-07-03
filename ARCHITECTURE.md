@@ -268,7 +268,9 @@ a new fork, invoke a directory-backed workflow package, or take the
 direct-answer path. It does not cancel active work merely because a new message
 arrived. Workflow selection is an explicit route decision: research-heavy
 messages can target a research workflow, implementation requests can target
-coding, and simple messages can stay on the direct-answer path.
+coding, and simple messages can stay on the direct-answer path. Explicit broker
+launch starts at most one selected launchable route in this slice; ordinary
+messages still only store decisions and context packs.
 
 Broker route decisions also materialize launch context packs. The editable
 profile file is `gateway/agent-launcher-profiles.json`: each profile names the
@@ -277,10 +279,13 @@ verification checks for routes such as direct-answer, coding, QA, research,
 design, and writing. The workflow directories live under
 `gateway/agent-workflows/<workflow>/`. The gateway stores bounded packs under
 `DATA_DIR/broker-context-packs` and links them from route decisions. A pack is
-launchable context for an explicit `/v1/agent/runs` or router activation; it is
-not itself permission to execute hidden work. When a message targets an active
-run, the gateway appends a `broker_evidence_attached` event to that run without
-canceling it.
+launchable context for an explicit `/v1/agent/runs`, router activation, or
+broker launch request; it is not itself permission to execute hidden work. When
+the broker request explicitly asks to launch an agent, the gateway activates the
+strongest workflow or new-fork route as a non-blocking `agent_run`, stores the
+run id on the route decision and broker event, and appends a `broker_activated`
+event to the run. When a message targets an active run, the gateway appends a
+`broker_evidence_attached` event to that run without canceling it.
 
 Every user turn is a possible fork. A new spoken or typed message can create a
 new `agent_run` without canceling existing active runs, and subsequent user

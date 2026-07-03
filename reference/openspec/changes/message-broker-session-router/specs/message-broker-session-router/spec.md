@@ -36,6 +36,15 @@ arrived.
 - **THEN** it may recommend or create a new forked run with `wait=false`
 - **AND** existing active runs continue unless cancellation is explicit
 
+#### Scenario: Explicit broker launch starts selected work
+- **WHEN** a broker message explicitly requests agent launch
+- **AND** the broker has selected a launchable workflow or new-fork route
+- **THEN** the gateway starts one non-blocking `agent_run` from that route's
+  context pack
+- **AND** the broker response and stored broker event include the launched run id
+  linked to the route decision and context pack
+- **AND** the launched run records a `broker_activated` event
+
 ### Requirement: Workflow Package Selection
 The broker SHALL be able to select explicit directory-backed workflows when a message
 requires specialized handling.

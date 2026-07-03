@@ -1099,8 +1099,15 @@ async function recordBrokerProductEvent(event) {
         action: decision.action,
         confidence: decision.confidence,
         reason: decision.reason,
+        launch: decision.launch ? {
+          status: decision.launch.status || "",
+          agent_run_id: decision.launch.agent_run_id || "",
+          context_pack_id: decision.launch.context_pack_id || "",
+          launcher_profile_id: decision.launch.launcher_profile_id || "",
+        } : null,
       })),
       context_pack_refs: event.context_pack_refs || [],
+      launch_refs: event.launch_refs || [],
     },
   });
 }
@@ -1202,6 +1209,7 @@ async function handleBrokerMessage(request, response) {
   const event = buildBrokerEvent(body, text);
   const decisions = brokerRouteDecisions(event, body);
   const contextPacks = brokerContextPacksForDecisions(event, decisions, body);
+  const launches = launchBrokerRunsIfRequested(event, decisions, contextPacks, body);
   writeBrokerContextPacks(contextPacks);
   const stored = {
     ...event,
@@ -1212,6 +1220,13 @@ async function handleBrokerMessage(request, response) {
       launcher_profile_id: pack.launcher_profile_id,
       path: `broker-context-packs/${pack.id}.json`,
     })),
+    launch_refs: launches.map((launch) => ({
+      agent_run_id: launch.agent_run_id || "",
+      route_decision_id: launch.route_decision_id,
+      context_pack_id: launch.context_pack_id,
+      launcher_profile_id: launch.launcher_profile_id,
+      status: launch.status,
+    })),
     updated_at: new Date().toISOString(),
   };
   writeBrokerEvent(stored);
@@ -1221,6 +1236,7 @@ async function handleBrokerMessage(request, response) {
     event: stored,
     decisions,
     context_packs: contextPacks,
+    launches,
   });
 }
 
@@ -1456,6 +1472,101 @@ function brokerContextPacksForDecisions(event, decisions, body = {}) {
     decision.instruction_file = pack.instruction_file;
     return pack;
   });
+}
+
+function launchBrokerRunsIfRequested(event, decisions, contextPacks, body = {}) {
+  if (!brokerLaunchRequested(body)) {
+    return [];
+  }
+
+  const launchable = decisions.filter((decision) =>
+    decision.action === "invoke_workflow" || decision.action === "create_new_fork");
+  if (launchable.length === 0) {
+    return [];
+  }
+
+  const decision = launchable[0];
+  const pack = contextPacks.find((candidate) => candidate.route_decision_id === decision.id);
+  const resultBase = {
+    route_decision_id: decision.id,
+    context_pack_id: decision.context_pack_id || pack?.id || "",
+    launcher_profile_id: decision.launcher_profile_id || pack?.launcher_profile_id || "",
+    target_type: decision.target_type,
+    target_id: decision.target_id,
+    action: decision.action,
+    wait: false,
+    requested_at: new Date().toISOString(),
+  };
+
+  if (!pack?.launcher?.prompt) {
+    const blocked = {
+      ...resultBase,
+      status: "blocked",
+      error: "selected route has no launchable context pack",
+    };
+    decision.launch = blocked;
+    if (pack) pack.launch_result = blocked;
+    return [blocked];
+  }
+
+  try {
+    const run = startAgentRun({
+      prompt: pack.launcher.prompt,
+      harness: pack.launcher.harness,
+      source: pack.launcher.source || "broker-workflow-router",
+      conversation_id: event.conversation_id || event.session_id || "",
+      session_id: event.session_id || event.conversation_id || "",
+      profile_version: event.profile_version || "",
+      project_id: event.project_id || "",
+      working_dir: body.working_dir || body.cwd || "",
+    });
+    const launched = {
+      ...resultBase,
+      status: "launched",
+      agent_run_id: run.id,
+      harness: run.harness,
+      run_status: run.status,
+      workflow_directory: pack.workflow_directory,
+      instruction_file: pack.instruction_file,
+      source: run.source,
+      created_at: run.created_at,
+    };
+    decision.launch = launched;
+    pack.launch_result = launched;
+    appendAgentEvent(run.id, "broker_activated", {
+      broker_event_id: event.id,
+      route_decision_id: decision.id,
+      context_pack_id: pack.id,
+      launcher_profile_id: pack.launcher_profile_id,
+      workflow_directory: pack.workflow_directory,
+      instruction_file: pack.instruction_file,
+      action: decision.action,
+      reason: decision.reason,
+    });
+    return [launched];
+  } catch (error) {
+    const failed = {
+      ...resultBase,
+      status: "failed",
+      error: cleanError(error),
+    };
+    decision.launch = failed;
+    pack.launch_result = failed;
+    return [failed];
+  }
+}
+
+function brokerLaunchRequested(body = {}) {
+  const raw = body.launch_agent_run
+    ?? body.launch_agent
+    ?? body.launch
+    ?? body.activate
+    ?? body.auto_launch
+    ?? body.router?.launch;
+  if (raw === true) return true;
+  if (raw === false || raw == null) return false;
+  const normalized = String(raw).trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "agent" || normalized === "run";
 }
 
 function brokerLauncherProfiles() {

@@ -20,6 +20,9 @@ route decisions with reasons.
 - Route each message to one or more outcomes: continue an existing session,
   attach evidence to active runs, create a new fork, invoke a directory-backed
   workflow package, or dismiss as irrelevant.
+- When the caller explicitly asks to launch, activate the selected workflow or
+  new-fork route as a non-blocking agent run and store the run linkage with the
+  broker event.
 - Make workflow package invocation explicit: the broker can choose research,
   coding, design, writing, QA, or other workflow directories and construct
   focused context packs for each.
