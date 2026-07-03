@@ -7,6 +7,9 @@ The gateway SHALL classify each completed voice turn into one of `chat`, `agent_
 - **WHEN** the user submits a spoken question without clear agent-work language
 - **THEN** the gateway classifies the turn as `chat`
 - **AND** returns a mobile-safe answer
+- **AND** broad world-status questions such as "what is going on in this world"
+  remain `chat` unless they also name Moa, repo, project, app, gateway, or
+  agent-work context
 
 #### Scenario: Agent work request
 - **WHEN** the user submits a spoken request to build, fix, change, test, or make progress in the repo

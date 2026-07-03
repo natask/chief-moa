@@ -18,6 +18,8 @@ async function main() {
     { body: {}, transcript: "/agent ship it", expected: "agent_run" },
     { body: {}, transcript: "fix the bug", expected: "agent_run" },
     { body: {}, transcript: "what is going on with the operational systems", expected: "agent_run" },
+    { body: {}, transcript: "what is going on in this world", expected: "chat" },
+    { body: {}, transcript: "what's going on in this world", expected: "chat" },
     { body: {}, transcript: "only speak English and Amharic; don't switch up", expected: "profile_control" },
     { body: {}, transcript: "respond only in English", expected: "profile_control" },
     { body: {}, transcript: "speak Amharic and English", expected: "profile_control" },
