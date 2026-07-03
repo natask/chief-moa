@@ -2697,6 +2697,12 @@ async function handleVoiceTurn(request, response) {
     sendJson(response, 400, { error: "transcript or text is required" });
     return;
   }
+  // A synthetic placeholder is not user speech. Refuse it here so no client can
+  // prompt the model with fabricated transcript text.
+  if (normalizeTranscriptSource(body.transcript_source, transcript, "client_stt") === "synthetic") {
+    sendJson(response, 422, { error: "no speech was transcribed", code: "no_speech" });
+    return;
+  }
 
   const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id, crypto.randomUUID());
   const conversationId = sanitizeOptionalId(body.conversation_id || sessionId, sessionId);
@@ -4012,6 +4018,21 @@ function normalizeTranscriptSource(explicit, transcript, fallback = "stt") {
   return fallback;
 }
 
+// User-transcript text for a model context pack. Never render the legacy
+// "Voice captured." placeholder (or any synthetic transcript) as something the
+// user said — the model learns to parrot it back. An explicit marker keeps the
+// turn visible without teaching the phrase.
+function contextUserTranscript(transcript, source) {
+  const text = String(transcript || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (text === "Voice captured." || String(source || "") === "synthetic") {
+    return "(speech was not transcribed)";
+  }
+  return text;
+}
+
 function voiceMessages(body, transcript) {
   const messages = Array.isArray(body.messages) ? normalizeMessages(body.messages) : [];
   const last = messages[messages.length - 1];
@@ -5264,7 +5285,7 @@ function voiceLiveContextPrompt(turn) {
   if (records.length > 0) {
     lines.push("", "Recent turns, oldest to newest:");
     for (const record of records) {
-      const user = truncate(String(record.transcript || ""), 480);
+      const user = truncate(contextUserTranscript(record.transcript, record.transcript_source), 480);
       const assistant = truncate(String(record.response?.display || record.response?.speak || record.response?.text || ""), 480);
       const interrupted = record.references?.voice_session?.incomplete === true || record.classification === "interrupted";
       lines.push(`- user (${record.classification || "turn"}, ${record.profile_version || "profile_unknown"}): ${user || "(empty)"}`);
@@ -5606,7 +5627,7 @@ function durableSessionContextBlock(options = {}) {
   if (voiceTurns.length > 0) {
     lines.push("", "Recent voice turns, oldest to newest:");
     for (const turn of voiceTurns) {
-      const user = truncate(String(turn.transcript || ""), 500);
+      const user = truncate(contextUserTranscript(turn.transcript, turn.transcript_source), 500);
       const assistant = truncate(String(turn.response?.display || turn.response?.text || turn.response?.speak || ""), 500);
       const interrupted = turn.references?.voice_session?.incomplete === true || turn.classification === "interrupted";
       lines.push(`- user (${turn.classification || "turn"}, branch=${turn.branch_id || "default"}): ${user || "(empty)"}`);

@@ -27,6 +27,11 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const tasks = new Map();
 const voiceSessions = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
+// Microphone capture starts as soon as a voice session is requested — in
+// parallel with the ticket/WebSocket handshake — so the start of the utterance
+// is never lost. PCM captured before the gateway's session_ready is buffered
+// here (drop-oldest beyond ~8s) and flushed once the turn is ready.
+const MAX_PENDING_VOICE_AUDIO_BYTES = 16000 * 2 * 8;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
 const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
 const VOICE_AUTO_COMMIT_ENABLED = true;
@@ -1195,6 +1200,9 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
       pendingEvents: [],
       capture: capture || "content-script",
       captureStarted: false,
+      ready: false,
+      pendingAudio: [],
+      pendingAudioBytes: 0,
       autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
       audioStartedAt: 0,
       lastSpeechAt: 0,
@@ -1206,6 +1214,14 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
     };
     voiceSessions.set(id, session);
     ws.binaryType = "arraybuffer";
+
+    // Open the microphone NOW, in parallel with the ticket/WS/session_start
+    // handshake, so nothing the user says while the session spins up is lost.
+    // Frames land in session.pendingAudio until session_ready flushes them.
+    if (session.capture === "extension-offscreen") {
+      session.captureStarted = true;
+      startOffscreenVoiceCapture(id).catch((error) => handleOffscreenVoiceError(id, error));
+    }
 
     const failBeforeOpen = (message) => {
       voiceSessions.delete(id);
@@ -1311,6 +1327,9 @@ function markVoiceSessionSendFailed(session, reason = "send failed") {
   if (!session || session.closed) return;
   session.closed = true;
   session.closedReason = reason;
+  session.commitWhenReady = null;
+  session.pendingAudio = [];
+  session.pendingAudioBytes = 0;
   voiceSessions.delete(session.id);
   clearVoiceAutoCommit(session);
   stopOffscreenVoiceCapture(session.id).catch(() => {});
@@ -1380,20 +1399,55 @@ async function forwardVoiceSessionEvent(session, event) {
   try {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
-  if (parsed?.type === "session_ready" && session.capture === "extension-offscreen" && !session.captureStarted) {
-    session.captureStarted = true;
-    startOffscreenVoiceCapture(session.id).catch((error) => handleOffscreenVoiceError(session.id, error));
+  if (parsed?.type === "session_ready") {
+    session.ready = true;
+    if (session.capture === "extension-offscreen" && !session.captureStarted) {
+      session.captureStarted = true;
+      startOffscreenVoiceCapture(session.id).catch((error) => handleOffscreenVoiceError(session.id, error));
+    }
+    flushPendingVoiceAudio(session);
+    if (session.commitWhenReady) {
+      const commit = session.commitWhenReady;
+      session.commitWhenReady = null;
+      sendVoiceSessionJson(session, commit);
+    }
   }
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
   });
 }
 
+function bufferPendingVoiceAudio(session, buffer) {
+  session.pendingAudio.push(buffer);
+  session.pendingAudioBytes += buffer.byteLength;
+  while (session.pendingAudioBytes > MAX_PENDING_VOICE_AUDIO_BYTES && session.pendingAudio.length > 0) {
+    const dropped = session.pendingAudio.shift();
+    session.pendingAudioBytes -= dropped.byteLength;
+  }
+}
+
+function flushPendingVoiceAudio(session) {
+  const pending = session.pendingAudio;
+  session.pendingAudio = [];
+  session.pendingAudioBytes = 0;
+  for (const buffer of pending) {
+    if (!sendVoiceSessionBinary(session, buffer)) return false;
+  }
+  return true;
+}
+
 function sendVoiceSessionAudio(id, audio) {
   const session = voiceSessions.get(id);
-  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  if (!session || session.closed || session.committed) return { ok: false, error: "voice session is not open" };
   const buffer = base64ToBuffer(audio);
   noteVoiceSessionAudio(session, buffer);
+  if (!session.ready || session.ws?.readyState !== WebSocket.OPEN) {
+    // Capture is running before the gateway turn is ready; hold the frames so
+    // the utterance start survives the handshake.
+    bufferPendingVoiceAudio(session, buffer);
+    return { ok: true, buffered: true };
+  }
+  if (!flushPendingVoiceAudio(session)) return { ok: false, error: "voice session is not open" };
   if (!sendVoiceSessionBinary(session, buffer)) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
@@ -1401,8 +1455,18 @@ function sendVoiceSessionAudio(id, audio) {
 async function sendVoiceSessionControl(id, message) {
   const session = voiceSessions.get(id);
   if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
-  if (message?.type === "commit_turn" || message?.type === "cancel_turn") {
+  if (message?.type === "commit_turn") {
     session.committed = true;
+    clearVoiceAutoCommit(session);
+    await stopOffscreenVoiceCapture(id);
+    if (!commitVoiceSession(session, message)) return { ok: false, error: "voice session is not open" };
+    return { ok: true };
+  }
+  if (message?.type === "cancel_turn") {
+    session.committed = true;
+    session.commitWhenReady = null;
+    session.pendingAudio = [];
+    session.pendingAudioBytes = 0;
     clearVoiceAutoCommit(session);
     await stopOffscreenVoiceCapture(id);
   }
@@ -1410,11 +1474,35 @@ async function sendVoiceSessionControl(id, message) {
   return { ok: true };
 }
 
+// Commit path shared by the client-driven and auto-commit routes. Buffered
+// audio always goes out before the commit so the gateway never commits a
+// truncated turn. If the gateway turn is not ready yet, the commit is deferred
+// to session_ready (mirrors the Android controller) with a bounded wait.
+function commitVoiceSession(session, message) {
+  if (!session.ready) {
+    session.commitWhenReady = message;
+    setTimeout(() => {
+      if (!session.commitWhenReady || session.closed) return;
+      session.commitWhenReady = null;
+      deliverVoiceSessionEvent(session, {
+        event: { type: "error", message: "Voice gateway did not become ready in time." },
+      });
+      closeVoiceSession(session.id, "commit timed out before session_ready");
+    }, 8000);
+    return true;
+  }
+  if (!flushPendingVoiceAudio(session)) return false;
+  return sendVoiceSessionJson(session, message);
+}
+
 function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   const session = voiceSessions.get(id);
   if (!session) return;
   session.closedReason = reason;
   session.revoked = revoked === true;
+  session.commitWhenReady = null;
+  session.pendingAudio = [];
+  session.pendingAudioBytes = 0;
   voiceSessions.delete(id);
   clearVoiceAutoCommit(session);
   stopOffscreenVoiceCapture(id).catch(() => {});
@@ -1496,7 +1584,7 @@ async function autoCommitVoiceSession(id, reason) {
   session.committed = true;
   clearVoiceAutoCommit(session);
   await stopOffscreenVoiceCapture(id);
-  sendVoiceSessionJson(session, {
+  commitVoiceSession(session, {
     type: "commit_turn",
     turn_id: session.turnId,
     reason: `browser_auto_commit:${reason}`,
