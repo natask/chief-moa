@@ -38,17 +38,56 @@ async function routeVoiceTurn(body, transcript, opts = {}) {
     : Boolean(opts.useLlm);
   if (useLlm && typeof opts.callModel === "function") {
     try {
-      const raw = await opts.callModel(routerMessages(transcript));
+      // Bound the classification round-trip. A slow model call must not stack
+      // seconds of latency before the turn is answered; if it overruns, fall
+      // back to the deterministic heuristic immediately.
+      const raw = await withTimeout(
+        opts.callModel(routerMessages(transcript)),
+        routerLlmTimeoutMs(opts),
+      );
       const actions = validActionsFromModel(raw);
       if (actions.length > 0) {
         return { actions, source: "llm" };
       }
     } catch (_error) {
-      // Fall through to the faithful heuristic safety net.
+      // Fall through to the faithful heuristic safety net (includes timeout).
     }
   }
 
   return { actions: heuristicActions(transcript), source: "heuristic" };
+}
+
+function routerLlmTimeoutMs(opts) {
+  const fromOpts = Number(opts?.llmTimeoutMs);
+  if (Number.isFinite(fromOpts) && fromOpts > 0) {
+    return fromOpts;
+  }
+  const fromEnv = Number(process.env.VOICE_ROUTER_LLM_TIMEOUT_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+    return fromEnv;
+  }
+  return 800;
+}
+
+function withTimeout(promise, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`voice router model call timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function classificationFromActions(actions) {

@@ -248,7 +248,34 @@ class VoiceSessionConnection {
     this.turn = turn;
     if (typeof this.voiceProvider.createLiveTurnSession === "function") {
       turn.providerEvents = this.createProviderEvents(turn);
-      turn.liveSession = this.voiceProvider.createLiveTurnSession(turn, this.providerHooks(turn, turn.providerEvents));
+      // createLiveTurnSession opens the provider socket but returns immediately;
+      // it does not block on provider readiness, so session_ready below is not
+      // gated on the Live cold start. Inbound audio is buffered client-side
+      // until session_ready and, once the live session exists, queued behind the
+      // provider's own readiness promise. A synchronous throw here (misconfig,
+      // bad auth) must fail this turn with a visible error, not a generic catch.
+      try {
+        turn.liveSession = this.voiceProvider.createLiveTurnSession(turn, this.providerHooks(turn, turn.providerEvents));
+      } catch (error) {
+        turn.status = "error";
+        await closeAudioStream(turn);
+        await this.recordProviderEvent(turn, turn.providerEvents, "turn_error", {
+          error: cleanError(error),
+        });
+        writeTurnMetadata(turn, { status: "error", error: cleanError(error) });
+        this.sendError(`failed to start voice turn: ${cleanError(error)}`);
+        await this.sendEvent({
+          type: "turn_done",
+          session_id: sessionId,
+          branch_id: branchId,
+          turn_id: turnId,
+          status: "error",
+        });
+        if (this.turn === turn) {
+          this.turn = null;
+        }
+        return;
+      }
       turn.liveSession.done
         .then((providerResult) => this.completeLiveTurn(turn, providerResult))
         .catch((error) => this.failLiveTurn(turn, error));

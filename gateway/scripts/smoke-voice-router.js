@@ -91,6 +91,22 @@ async function main() {
   assert.strictEqual(failedLlm.source, "heuristic");
   assert.strictEqual(classificationFromActions(failedLlm.actions), "agent_run");
 
+  // A slow classification call must fall back to the heuristic within the
+  // configured bound instead of stacking latency before the reply.
+  const slowStart = Date.now();
+  const slowLlm = await routeVoiceTurn({}, "fix the bug", {
+    useLlm: true,
+    llmTimeoutMs: 60,
+    callModel: () => new Promise((resolve) => {
+      const timer = setTimeout(() => resolve("{\"actions\":[{\"type\":\"chat\"}]}"), 5000);
+      if (typeof timer.unref === "function") timer.unref();
+    }),
+  });
+  const slowElapsed = Date.now() - slowStart;
+  assert.strictEqual(slowLlm.source, "heuristic");
+  assert.strictEqual(classificationFromActions(slowLlm.actions), "agent_run");
+  assert.ok(slowElapsed < 2000, `router should time out fast, took ${slowElapsed}ms`);
+
   const stop = await routeVoiceTurn({}, "stop", { useLlm: false });
   assert.deepStrictEqual(stop.actions, [{ type: "stop_speech" }]);
   const cancel = await routeVoiceTurn({}, "cancel the run", { useLlm: false });
