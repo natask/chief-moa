@@ -1,0 +1,52 @@
+digraph VoiceLanguageIntentHosting {
+    graph [goal="Spoken input reliably becomes a transcript, profile update, remembered intent, or routed run with visible state"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the intent, critique, OpenSpec, and lane tickets. Produce a concise implementation plan and name the exact files for the current wave."
+    ]
+
+    voice_trace [
+        label="Voice Trace",
+        prompt="Add or inspect evidence for Android hold/release voice commit. Keep changes scoped to traceability and do not alter provider behavior until the failing boundary is known."
+    ]
+
+    voice_fix [
+        label="Voice Fix",
+        prompt="Fix the first proven manual voice commit failure and add transcription-only behavior. Preserve Android/gateway authority boundaries."
+    ]
+
+    profile [
+        label="Profile",
+        prompt="Finish explicit language, voice, and persona profile-control behavior with versioned gateway profile state and visible Android/full-app feedback."
+    ]
+
+    intent [
+        label="Intent",
+        prompt="Add intent/thought management over broker/product events so a thought can be captured, remembered, routed, listed, and linked without hidden execution."
+    ]
+
+    auth_preview [
+        label="Auth Preview",
+        prompt="Implement or refine the hosted/self-hostable auth/deploy preview path. Keep local/no-auth and remote bearer modes separate from hosted Better Auth mode."
+    ]
+
+    verify [
+        label="Verify",
+        shape=parallelogram,
+        script="cd gateway && npm run check 2>&1",
+        retry_target="voice_fix",
+        goal_gate=true
+    ]
+
+    phone_qa [shape=hexagon, label="Phone QA Gate"]
+    deploy_gate [shape=hexagon, label="Approve Deploy/Promotion"]
+
+    start -> plan -> voice_trace -> voice_fix -> profile -> intent -> auth_preview -> verify -> phone_qa -> deploy_gate
+    deploy_gate -> exit         [label="[A] Accept"]
+    deploy_gate -> voice_trace  [label="[R] Revise"]
+}
