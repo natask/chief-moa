@@ -8,7 +8,7 @@
 //   1. MOA_GATEWAY_TOKEN in the environment (CI / explicit override)
 //   2. the main machine over SSH (reclaim@10.147.17.10), read from its .env
 //
-// URL override: AGEE_GATEWAY_URL (defaults to the main-machine gateway).
+// URL override: AGEE_GATEWAY_URL (defaults to the hosted gateway).
 //
 // Run:  npm run configure
 //       npm run configure:local
@@ -21,7 +21,7 @@ import { join, resolve } from "node:path";
 const root = resolve(new URL("..", import.meta.url).pathname);
 const outFile = join(root, "extension", "agee.config.json");
 
-const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || "http://10.147.17.10:8787").replace(/\/+$/, "");
+const GATEWAY_URL = (process.env.AGEE_GATEWAY_URL || "https://api.agee.app").replace(/\/+$/, "");
 const MODEL = process.env.AGEE_MODEL || "claude-opus-4-8";
 const SSH_TARGET = process.env.AGEE_SSH_TARGET || "reclaim@10.147.17.10";
 const SERVICE = process.env.AGEE_SERVICE || "moa-gateway.service";

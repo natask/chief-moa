@@ -559,7 +559,27 @@ public final class MainActivity extends Activity {
 
     private void checkGatewayHealth(String gatewayUrl) {
         final int generation = ++gatewayHealthGeneration;
+        final MoaPrefs.GatewayUrlIssue urlIssue = MoaPrefs.classifyGatewayUrl(gatewayUrl);
+        if (urlIssue == MoaPrefs.GatewayUrlIssue.MISSING_SCHEME
+                || urlIssue == MoaPrefs.GatewayUrlIssue.ENDPOINT_PATH) {
+            if (gatewayStatus != null) {
+                gatewayStatus.setText(urlIssue == MoaPrefs.GatewayUrlIssue.MISSING_SCHEME
+                        ? "URL needs http(s)://"
+                        : "Save origin, not endpoint");
+                gatewayStatus.setTextColor(MoaColors.WARN);
+            }
+            return;
+        }
+        if (gatewayStatus != null && urlIssue == MoaPrefs.GatewayUrlIssue.STALE_MAIN_MACHINE) {
+            gatewayStatus.setText("Checking old ZeroTier URL...");
+            gatewayStatus.setTextColor(MoaColors.WARN);
+        } else if (gatewayStatus != null && urlIssue == MoaPrefs.GatewayUrlIssue.LOCAL_DEV) {
+            gatewayStatus.setText("Checking local dev URL...");
+            gatewayStatus.setTextColor(MoaColors.WARN);
+        }
         final String healthUrl = gatewayEndpoint(gatewayUrl, "/health");
+        final String authProbeUrl = gatewayEndpoint(gatewayUrl, "/v1/sessions?limit=1");
+        final String gatewayToken = MoaPrefs.gatewayToken(this);
 
         new Thread(() -> {
             boolean reachable = false;
@@ -581,16 +601,56 @@ public final class MainActivity extends Activity {
                 }
             }
 
+            boolean tokenProblem = false;
+            if (reachable) {
+                // /health never requires auth, so a green "Reachable" alone can
+                // hide a bad token. Probe one protected route to split "wrong
+                // URL" from "reachable but token rejected" before the first turn.
+                int authCode = gatewayStatusCode(authProbeUrl, gatewayToken);
+                if (authCode >= 200 && authCode < 300) {
+                    label = "Reachable / token OK";
+                } else if (authCode == 401 || authCode == 403) {
+                    tokenProblem = true;
+                    label = gatewayToken.isEmpty() ? "Token required" : "Token rejected";
+                }
+            }
+            if (urlIssue == MoaPrefs.GatewayUrlIssue.STALE_MAIN_MACHINE) {
+                label = label + " / old ZeroTier URL";
+            } else if (urlIssue == MoaPrefs.GatewayUrlIssue.LOCAL_DEV) {
+                label = label + " / local dev URL";
+            }
+
             final boolean isReachable = reachable;
+            final boolean isTokenProblem = tokenProblem;
             final String status = label;
             mainHandler.post(() -> {
                 if (generation != gatewayHealthGeneration || gatewayStatus == null) {
                     return;
                 }
                 gatewayStatus.setText(status);
-                gatewayStatus.setTextColor(isReachable ? MoaColors.OK : MoaColors.WARN);
+                gatewayStatus.setTextColor(isReachable && !isTokenProblem ? MoaColors.OK : MoaColors.WARN);
             });
         }, "moa-gateway-health").start();
+    }
+
+    private static int gatewayStatusCode(String url, String bearerToken) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(2500);
+            connection.setReadTimeout(2500);
+            if (bearerToken != null && !bearerToken.isEmpty()) {
+                connection.setRequestProperty("Authorization", "Bearer " + bearerToken);
+            }
+            return connection.getResponseCode();
+        } catch (Exception ignored) {
+            return -1;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
     }
 
     private void checkForAppUpdate(boolean userInitiated) {

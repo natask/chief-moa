@@ -53,9 +53,9 @@ provider key or account password stored in either client.
 - [ ] 3.3 `MoaPrefs` or a small shared helper: add URL classification for
   stable, local-dev, stale-main-machine, missing-scheme, and endpoint-path
   inputs.
-- [ ] 3.4 `MainActivity.java`: update the Voice agent setup card to show
+- [x] 3.4 `MainActivity.java`: update the Voice agent setup card to show
   stale-IP warnings for `10.147.17.10` and `10.147.17.6` before running health.
-- [ ] 3.5 `MainActivity.java`: after `GET /health` succeeds, run a protected
+- [x] 3.5 `MainActivity.java`: after `GET /health` succeeds, run a protected
   lightweight auth probe such as `GET /v1/sessions`; show bad-token guidance
   separately from network failure.
 - [ ] 3.6 `MainActivity.java`: add a "Register this device" path once the
@@ -79,9 +79,9 @@ bad", and "voice unavailable" apart before the user starts a voice turn.
   with the stable VPS origin or a generated config value, and expand
   `STALE_DEFAULT_GATEWAY_URLS` to include the old main-machine and local-dev
   ZeroTier URLs when they were auto-seeded.
-- [ ] 4.2 `browser_extension/extension/agee.config.example.json`: update the
+- [x] 4.2 `browser_extension/extension/agee.config.example.json`: update the
   example gateway URL to the stable VPS shape.
-- [ ] 4.3 `browser_extension/scripts/configure.mjs`: default to the stable VPS
+- [x] 4.3 `browser_extension/scripts/configure.mjs`: default to the stable VPS
   origin for hosted onboarding; keep `configure:local` for
   `http://10.147.17.6:8787`.
 - [ ] 4.4 `browser_extension/scripts/doctor.mjs`: report `10.147.17.10` and
@@ -99,7 +99,7 @@ bad", and "voice unavailable" apart before the user starts a voice turn.
   "Live voice connection failed/closed" with diagnostics for ticket denied,
   missing voice route, and WebSocket/TLS/proxy failure. Include the gateway URL
   from config, not the opaque ticket token.
-- [ ] 4.9 `browser_extension/extension/manifest.json`: confirm the packaged
+- [x] 4.9 `browser_extension/extension/manifest.json`: confirm the packaged
   extension can fetch the stable HTTPS origin and open the stable WSS voice URL;
   add explicit `wss://api.agee.app/*` or self-host permission coverage if the
   current host permissions are insufficient.
