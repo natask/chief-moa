@@ -261,6 +261,43 @@ launch a new fork, attach it to several active runs, or dismiss it as irrelevant
 The user must be able to inspect which runs are active and what each is trying
 to accomplish.
 
+### Voice Work-History Control Plane
+
+```text
+spoken/typed work-history turn
+  -> gateway stores the turn + one canonical broker_event (broker-first)
+  -> deterministic intent parser maps ONE spoken operation:
+     create task/run, status query, feedback, deployment link, ui.open
+  -> gateway appends durable proposal records as product events
+     (work_task, queued run, user_feedback, run_control_request,
+      deployment_request, ui.open tool_request)
+  -> workers claim queued runs and post before/after repo snapshots,
+     diff refs, verification artifacts, and lifecycle events
+  -> clients claim ui.open tool requests and post receipts
+  -> status/deployment/run-detail answers fold from projections only
+```
+
+This is the first implementation slice of
+`reference/openspec/changes/remote-hosted-gateway/voice-work-history-control-plane.md`.
+Voice creates durable intent and queries history; it never executes shell,
+browser, Android, or deployment work. A queued run stays inert until a worker
+records `run.claimed`. A spoken correction attaches as `user_feedback` without
+canceling; explicit pause/cancel creates a `run_control_request` that only the
+owning worker can claim and receipt. Deployment-link questions read
+`deployment_record` projections; an applied record is rejected unless it carries
+an explicit promotion marker plus backup and restore-check refs. "Open the run
+on my phone" queues a `ui.open` tool request through the cross-device tool hub;
+the gateway never opens UI itself. All records are product events, so every
+projection (status, run detail, deployment links) rebuilds from the event log.
+
+Endpoints live under `/v1/work-history/*`: `turns` (spoken/text entry),
+`status`, `tasks`, `runs` (+ `claim`, `events`, `snapshots`, `diffs`,
+`verifications`), `feedback`, `controls` (claim/receipt), and `deployments`
+(+ `requests`). `POST /v1/voice/turns` routes matching transcripts through the
+same path before the legacy dispatch branch, so a status question never
+launches work and an explicit "queue a run" creates a queued run instead of
+starting a harness.
+
 ### Router Activation Loop
 
 ```text
@@ -362,6 +399,21 @@ claim, validate, execute, and receipt it.
   can show passive status but must not capture voice or claim local cues.
 - `browser_task`: a gateway-created browser work request that a Chrome extension
   client must claim, execute locally with allowlisted actions, and receipt.
+- `work_task`: the user-facing durable unit of intent in the work-history
+  control plane, linking broker event, session, runs, and status events.
+- `repo_snapshot_ref`: a worker-recorded before/after/checkpoint codebase state
+  (branch, commit sha, dirty state) attached to a claimed run.
+- `diff_ref`: the before->after link between two repo snapshots with changed
+  paths, stats, and a patch artifact ref.
+- `verification_artifact`: one command/smoke/manual-QA result with surface,
+  exit code, status, and speakable summary, attached to a run.
+- `user_feedback`: a follow-up utterance stored as evidence against tasks,
+  runs, or deployment records; non-interrupting unless explicitly cancellation.
+- `run_control_request`: a pause/cancel/redirect proposal the owning worker
+  must claim and receipt before the run state changes.
+- `deployment_record`: preview/artifact/applied deployment state with URLs and
+  commit sha; applied records require explicit promotion plus backup and
+  restore-check evidence.
 - `tool_source`: an agent-callable integration source such as OpenAPI, MCP,
   GraphQL, or a custom gateway function.
 - `tool_request`: a gateway-queued request for a specific device or surface to
@@ -413,6 +465,15 @@ queues.
 - `gateway/lib/voice-intent.js`: pure voice-turn classifier
   (chat / agent_run / multi_agent / control), unit-tested in
   `scripts/smoke-voice-intent.js`.
+- `gateway/lib/work-history-intent.js`: deterministic parser for the spoken
+  work-history operations (create/status/feedback/deployment/ui-open),
+  unit-tested in `scripts/smoke-work-history-intent.js`.
+- `gateway/lib/work-history.js`: event-sourced work-history control-plane
+  store: tasks, queued runs, claims, snapshots, diffs, verifications, feedback,
+  control requests, deployment records, and rebuildable projections.
+- `gateway/scripts/smoke-work-history.js`: end-to-end control-plane smoke
+  (voice create, worker evidence, status, feedback, cancel receipt, deployment
+  links, ui.open claim/receipt), run via `npm run smoke:work-history`.
 - `gateway/lib/voice-session-server.js`: WebSocket PCM voice
   transport, turn storage, transcript events, and assistant audio events.
 - `gateway/lib/voice-providers.js`: Swappable streaming voice
