@@ -27,6 +27,7 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const tasks = new Map();
 const voiceSessions = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
+const MAX_QUEUED_VOICE_AUDIO_BYTES = 16000 * 2 * 20;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
 const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
 const VOICE_AUTO_COMMIT_ENABLED = true;
@@ -1070,13 +1071,15 @@ async function stopOffscreenVoiceCapture(id) {
 function handleOffscreenVoiceError(id, error) {
   const session = voiceSessions.get(id);
   if (!session) return;
+  const message = extensionMicApprovalMessage(error);
+  session.setupErrorMessage = message;
   chrome.runtime.openOptionsPage?.().catch(() => {});
   deliverVoiceSessionEvent(session, {
     event: {
       type: "error",
       code: "microphone_capture_failed",
       recoverable: false,
-      message: extensionMicApprovalMessage(error),
+      message,
     },
   });
   closeVoiceSession(id, "microphone capture failed");
@@ -1119,41 +1122,59 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
 }
 
 async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit } = {}) {
-  const cfg = await getConfig();
-  const ticket = await createVoiceSessionTicket(cfg);
-  if (!ticket?.ws_url) throw new Error("gateway did not return a voice session WebSocket URL");
-
   const id = voiceSessionId();
+  const session = {
+    id,
+    tabId,
+    ws: null,
+    turnId,
+    opened: false,
+    gatewayReady: false,
+    attached: false,
+    pendingEvents: [],
+    pendingCommitMessage: null,
+    capture: capture || "content-script",
+    captureStarted: false,
+    autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
+    queuedAudio: [],
+    queuedAudioBytes: 0,
+    queuedAudioDroppedBytes: 0,
+    audioStartedAt: 0,
+    lastSpeechAt: 0,
+    speechMs: 0,
+    recordingMs: 0,
+    committed: false,
+    autoCommitTimer: null,
+    maxCommitTimer: null,
+  };
+  voiceSessions.set(id, session);
+
+  if (session.capture === "extension-offscreen") {
+    startOffscreenVoiceCapture(id)
+      .then(() => {
+        if (voiceSessions.get(id) === session) session.captureStarted = true;
+      })
+      .catch((error) => handleOffscreenVoiceError(id, error));
+  }
+
+  let ticket;
+  try {
+    const cfg = await getConfig();
+    ticket = await createVoiceSessionTicket(cfg);
+    if (!ticket?.ws_url) throw new Error("gateway did not return a voice session WebSocket URL");
+  } catch (error) {
+    closeVoiceSession(id, "voice session setup failed");
+    throw error;
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     const ws = new WebSocket(ticket.ws_url);
-    const session = {
-      id,
-      tabId,
-      ws,
-      turnId,
-      opened: false,
-      attached: false,
-      pendingEvents: [],
-      capture: capture || "content-script",
-      captureStarted: false,
-      autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
-      audioStartedAt: 0,
-      lastSpeechAt: 0,
-      speechMs: 0,
-      recordingMs: 0,
-      committed: false,
-      autoCommitTimer: null,
-      maxCommitTimer: null,
-    };
-    voiceSessions.set(id, session);
+    session.ws = ws;
     ws.binaryType = "arraybuffer";
 
     const failBeforeOpen = (message) => {
-      voiceSessions.delete(id);
-      try {
-        ws.close();
-      } catch {}
+      closeVoiceSession(id, message);
       if (!settled) {
         settled = true;
         reject(new Error(message));
@@ -1162,7 +1183,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
 
     ws.onopen = () => {
       if (!voiceSessionSocketOpen(session)) {
-        failBeforeOpen(session.revoked ? "Live voice session was revoked." : "Live voice connection closed.");
+        failBeforeOpen(session.setupErrorMessage || (session.revoked ? "Live voice session was revoked." : "Live voice connection closed."));
         return;
       }
       const started = sendVoiceSessionJson(session, {
@@ -1283,6 +1304,55 @@ function sendVoiceSessionBinary(session, buffer) {
   }
 }
 
+function queueVoiceSessionAudio(session, buffer) {
+  if (!session || session.closed || !buffer?.byteLength) return false;
+  session.queuedAudio ||= [];
+  session.queuedAudioBytes = (session.queuedAudioBytes || 0) + buffer.byteLength;
+  session.queuedAudio.push(buffer);
+  while (session.queuedAudioBytes > MAX_QUEUED_VOICE_AUDIO_BYTES && session.queuedAudio.length > 1) {
+    const dropped = session.queuedAudio.shift();
+    session.queuedAudioBytes -= dropped?.byteLength || 0;
+    session.queuedAudioDroppedBytes = (session.queuedAudioDroppedBytes || 0) + (dropped?.byteLength || 0);
+  }
+  return true;
+}
+
+function flushQueuedVoiceSessionAudio(session) {
+  if (!session?.queuedAudio?.length || !voiceSessionSocketOpen(session) || !session.gatewayReady) return false;
+  const queued = session.queuedAudio;
+  session.queuedAudio = [];
+  session.queuedAudioBytes = 0;
+  for (const buffer of queued) {
+    if (!sendVoiceSessionBinary(session, buffer)) {
+      queueVoiceSessionAudio(session, buffer);
+      return false;
+    }
+  }
+  return true;
+}
+
+function sendOrQueueVoiceSessionCommit(session, message) {
+  if (!session || session.closed) return false;
+  if (!voiceSessionSocketOpen(session) || !session.gatewayReady || session.queuedAudio?.length) {
+    session.pendingCommitMessage = message || {};
+    return true;
+  }
+  if (session.queuedAudio?.length && !flushQueuedVoiceSessionAudio(session)) return false;
+  const pending = session.pendingCommitMessage || message || {};
+  session.pendingCommitMessage = null;
+  return sendVoiceSessionJson(session, pending);
+}
+
+function flushQueuedVoiceSessionMedia(session) {
+  if (!session || !session.gatewayReady) return;
+  flushQueuedVoiceSessionAudio(session);
+  if (session.pendingCommitMessage && !session.queuedAudio?.length) {
+    const pending = session.pendingCommitMessage;
+    session.pendingCommitMessage = null;
+    sendVoiceSessionJson(session, pending);
+  }
+}
+
 function deliverVoiceSessionEvent(session, payload) {
   if (!session) return;
   const message = { cmd: "voiceSessionEvent", voiceSessionId: session.id, ...payload };
@@ -1322,9 +1392,16 @@ async function forwardVoiceSessionEvent(session, event) {
   try {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
-  if (parsed?.type === "session_ready" && session.capture === "extension-offscreen" && !session.captureStarted) {
-    session.captureStarted = true;
-    startOffscreenVoiceCapture(session.id).catch((error) => handleOffscreenVoiceError(session.id, error));
+  if (parsed?.type === "session_ready") {
+    session.gatewayReady = true;
+    flushQueuedVoiceSessionMedia(session);
+    if (session.capture === "extension-offscreen" && !session.captureStarted) {
+      startOffscreenVoiceCapture(session.id)
+        .then(() => {
+          if (voiceSessions.get(session.id) === session) session.captureStarted = true;
+        })
+        .catch((error) => handleOffscreenVoiceError(session.id, error));
+    }
   }
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
@@ -1333,21 +1410,33 @@ async function forwardVoiceSessionEvent(session, event) {
 
 function sendVoiceSessionAudio(id, audio) {
   const session = voiceSessions.get(id);
-  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  if (!session || session.closed) return { ok: false, error: "voice session is not open" };
   const buffer = base64ToBuffer(audio);
   noteVoiceSessionAudio(session, buffer);
+  if (!voiceSessionSocketOpen(session) || !session.gatewayReady) {
+    return queueVoiceSessionAudio(session, buffer)
+      ? { ok: true, queued: true, queuedBytes: session.queuedAudioBytes || 0 }
+      : { ok: false, error: "voice session is not open" };
+  }
+  if (session.queuedAudio?.length) flushQueuedVoiceSessionAudio(session);
   if (!sendVoiceSessionBinary(session, buffer)) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
 
 async function sendVoiceSessionControl(id, message) {
   const session = voiceSessions.get(id);
-  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  if (!session || session.closed) return { ok: false, error: "voice session is not open" };
   if (message?.type === "commit_turn" || message?.type === "cancel_turn") {
     session.committed = true;
     clearVoiceAutoCommit(session);
     await stopOffscreenVoiceCapture(id);
   }
+  if (message?.type === "commit_turn") {
+    if (!sendOrQueueVoiceSessionCommit(session, message || {})) return { ok: false, error: "voice session is not open" };
+    return { ok: true, queued: session.pendingCommitMessage === message };
+  }
+  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  if (session.gatewayReady && session.queuedAudio?.length) flushQueuedVoiceSessionAudio(session);
   if (!sendVoiceSessionJson(session, message || {})) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
@@ -1359,9 +1448,12 @@ function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   session.revoked = revoked === true;
   voiceSessions.delete(id);
   clearVoiceAutoCommit(session);
+  session.pendingCommitMessage = null;
+  session.queuedAudio = [];
+  session.queuedAudioBytes = 0;
   stopOffscreenVoiceCapture(id).catch(() => {});
   try {
-    session.ws.close(1000, reason);
+    session.ws?.close(1000, reason);
   } catch {}
 }
 
@@ -1438,7 +1530,7 @@ async function autoCommitVoiceSession(id, reason) {
   session.committed = true;
   clearVoiceAutoCommit(session);
   await stopOffscreenVoiceCapture(id);
-  sendVoiceSessionJson(session, {
+  sendOrQueueVoiceSessionCommit(session, {
     type: "commit_turn",
     turn_id: session.turnId,
     reason: `browser_auto_commit:${reason}`,
@@ -2303,7 +2395,10 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if ((command !== "toggle-agee" && command !== "toggle-agee-voice") || !tab?.id) return;
   try {
     await ensureContent(tab.id);
-    await chrome.tabs.sendMessage(tab.id, { cmd: command === "toggle-agee-voice" ? "toggleVoice" : "open" });
+    await chrome.tabs.sendMessage(tab.id, {
+      cmd: command === "toggle-agee-voice" ? "toggleVoice" : "open",
+      source: "command",
+    });
   } catch {
     // Restricted browser pages cannot receive content scripts.
   }

@@ -1,6 +1,6 @@
 # agee
 
-An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or single-click the on-page control to type, drag it to move it, or double-click and hold it to talk directly on the website you are using. **Cmd/Ctrl+.** also starts voice. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
+An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or single-click the on-page control to type, drag it to move it, or double-click and hold it to talk directly on the website you are using. **Cmd/Ctrl+.** uses the same voice path: tap to start, tap again to commit, or hold to talk until release. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
 
 ## Principles
 
@@ -14,7 +14,7 @@ An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or single-cli
 
 MVP - a Chrome (Manifest V3) extension you can load unpacked today.
 
-**Works now:** Cmd+, text intent field · Cmd+. gateway Live voice wake with live transcript/reply feedback above the input · on-page Moa mark · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · one-current-intent overlay state with no visible scrollback.
+**Works now:** Cmd+, text intent field · Cmd+. gateway Live voice tap/hold with live transcript/reply feedback above the input · on-page Moa mark · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · one-current-intent overlay state with no visible scrollback.
 
 **Next:** engine-served declarative UI spec · userScripts opt-in walkthrough · richer voice mode · cross-navigation task continuity · MOA integration · hosted/self-hosted engine switching.
 
@@ -73,11 +73,15 @@ text streams into the result stack above the input. The extension does not
 render visible chat history; session history stays on the gateway and can be
 queried by asking Moa.
 Voice uses an extension offscreen document for microphone capture, so websites
-do not need per-site microphone approval for A.G. turns. Spoken turns
-auto-commit after speech silence and re-arm while conversation mode is active.
-The Moa mark mirrors Android: single click opens the chat menu, click and hold
-while moving drags the mark, and double-click-and-hold starts manual voice mode;
-release commits that manual voice turn immediately.
+do not need per-site microphone approval for A.G. turns. Capture starts before
+the gateway has finished opening the voice session; early PCM chunks queue until
+`session_ready`, then flush in order before any commit so the first syllables are
+preserved. Cmd/Ctrl+. and the Moa mark's double-click share one voice contract:
+quick tap/double-click toggles a manual turn on, the next quick press commits
+it, and holding Cmd/Ctrl+. or the second mark click captures only for the hold
+and commits on release. The Moa mark mirrors Android for text and movement:
+single click opens the chat menu, and click-and-hold while moving drags the
+mark.
 If Chrome blocks offscreen microphone capture, the overlay shows a visible
 permission error and opens the A.G. Options page; grant the microphone there or
 set Microphone to Allow for the extension from `chrome://extensions`.

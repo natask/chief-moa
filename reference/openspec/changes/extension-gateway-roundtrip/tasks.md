@@ -27,3 +27,12 @@
 - [x] 1.15 Keep exactly one Aggie root on each top-level page after extension
       reload/reinjection, while blocking iframe duplicates. Verified by
       `npm run verify` and `npm run smoke`.
+- [x] 1.16 Align Cmd/Ctrl+Period with the browser mark voice contract: quick
+      tap/double-click toggles a manual voice turn, the next quick press commits
+      it, holding Cmd/Ctrl+Period or the second mark click commits on release,
+      and Cmd/Ctrl+Comma remains text-open only. Verified by `npm run verify`
+      and `npm run smoke`.
+- [x] 1.17 Buffer extension-owned offscreen microphone PCM captured before
+      gateway `session_ready`, then flush it in order before any pending
+      `commit_turn` so the first spoken audio is not dropped. Verified by
+      `npm run verify` and `npm run smoke`.

@@ -183,6 +183,7 @@ if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
 if (
   !/command !== "toggle-agee" && command !== "toggle-agee-voice"/.test(backgroundSource) ||
   !/cmd:\s*command === "toggle-agee-voice" \? "toggleVoice" : "open"/.test(backgroundSource) ||
+  !/source:\s*"command"/.test(backgroundSource) ||
   !/case "toggleVoice":/.test(contentSource) ||
   !/function ensureContentOnOpenTabs/.test(backgroundSource) ||
   !/chrome\.runtime\.onStartup\.addListener/.test(backgroundSource)
@@ -198,12 +199,45 @@ if (!/e\.code === "Comma"/.test(contentSource) || /toLowerCase\(\) === "k"/.test
   throw new Error("text command hotkey must be Cmd/Ctrl+Comma, not Cmd/Ctrl+K");
 }
 
+if (
+  !/isTextHotkey\(e\)[\s\S]{0,180}openTextSurface\(\{\s*fresh:\s*false\s*\}\)/.test(contentSource) ||
+  /isTextHotkey\(e\)[\s\S]{0,220}toggleVoice|toggleTextSurface\(\)/.test(contentSource)
+) {
+  throw new Error("Cmd/Ctrl+Comma must match launcher single-click: open text only, preserving drafts and never starting voice");
+}
+
+if (
+	  !/function beginVoiceHotkey\(/.test(contentSource) ||
+	  !/function beginVoiceCommandHotkey\(/.test(contentSource) ||
+	  !/function finishVoiceHotkey\(/.test(contentSource) ||
+	  !/window\.addEventListener\(\s*"keyup"[\s\S]{0,260}finishVoiceHotkey\(\)/.test(contentSource) ||
+	  !/if \(e\.repeat \|\| voiceHotkeyState\) return;/.test(contentSource) ||
+	  !/case "toggleVoice":[\s\S]{0,220}beginVoiceCommandHotkey\(\)/.test(contentSource) ||
+	  !/function beginManualVoiceGesture\(/.test(contentSource) ||
+	  !/function finishManualPushToTalk\(/.test(contentSource) ||
+	  !/autoCommit:\s*false/.test(contentSource)
+) {
+  throw new Error("Cmd/Ctrl+Period must support repeat-safe tap toggle and held push-to-talk through the manual voice gesture path");
+}
+
 if (/case "done":[\s\S]{0,180}setInputText\(msg\.summary/.test(contentSource)) {
   throw new Error("done replies must render in the result surface, not inside the command input");
 }
 
 if (!/VOICE_AUTO_COMMIT_SILENCE_MS/.test(backgroundSource) || !/autoCommitVoiceSession/.test(backgroundSource)) {
   throw new Error("browser voice must auto-commit microphone turns after speech silence");
+}
+
+if (
+  !/MAX_QUEUED_VOICE_AUDIO_BYTES/.test(backgroundSource) ||
+  !/queuedAudio:\s*\[\]/.test(backgroundSource) ||
+  !/function queueVoiceSessionAudio/.test(backgroundSource) ||
+  !/function flushQueuedVoiceSessionAudio/.test(backgroundSource) ||
+  !/function sendOrQueueVoiceSessionCommit/.test(backgroundSource) ||
+  !/!voiceSessionSocketOpen\(session\) \|\| !session\.gatewayReady/.test(backgroundSource) ||
+  !/parsed\?\.type === "session_ready"[\s\S]{0,180}session\.gatewayReady = true;[\s\S]{0,180}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource)
+) {
+  throw new Error("browser voice must buffer early offscreen PCM and flush it after session_ready before commit");
 }
 
 if (
@@ -353,8 +387,12 @@ const launcherDoubleClickHoldBody = sourceBetween(
   /function cancelLauncherDoubleClickHold\(/,
   "launcher double-click-hold handler"
 );
-if (!/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) || !/startLauncherPushToTalk\(\)/.test(launcherDoubleClickHoldBody)) {
-  throw new Error("double-click-and-hold must start launcher push-to-talk after the hold threshold");
+if (
+  !/beginManualVoiceGesture\(\)/.test(launcherDoubleClickHoldBody) ||
+  !/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) ||
+  !/holdToTalkActive = true/.test(launcherDoubleClickHoldBody)
+) {
+  throw new Error("double-click-and-hold must start recording on the second press and use the hold threshold only to decide release-to-commit");
 }
 
 if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {

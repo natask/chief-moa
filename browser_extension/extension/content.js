@@ -45,17 +45,23 @@
     holdToTalkPointerId = null,
     doubleClickHoldPending = false,
     lastLauncherTap = null,
+    launcherSecondTapAction = null,
+    voiceHotkeyState = null,
+    voiceHotkeyHoldTimer = null,
+    lastLocalVoiceHotkeyAt = 0,
+    lastExternalVoiceCommandAt = 0,
     // The A.G. mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
   const assistantPlaybackSources = new Set();
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
-  const DOUBLE_CLICK_HOLD_MS = 120;
+  const DOUBLE_CLICK_HOLD_MS = 260;
   const LAUNCHER_DOUBLE_CLICK_MS = 280;
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
+  const COMMAND_ECHO_DEDUPE_MS = 450;
   let browserAgentOwner = null;
   let browserAgentOwnerState = "unknown";
   let assistantSpeechOverlap = false;
@@ -294,6 +300,7 @@
       doubleClickHoldPending = false;
       holdToTalkActive = false;
       holdToTalkPointerId = null;
+      launcherSecondTapAction = null;
     }
     launcher.setPointerCapture(e.pointerId);
     launcher.addEventListener("pointermove", moveLauncherDrag);
@@ -308,7 +315,7 @@
     const dy = e.clientY - dragState.startY;
     if (Math.abs(dx) + Math.abs(dy) > LAUNCHER_DRAG_SLOP) {
       dragState.moved = true;
-      cancelLauncherDoubleClickHold();
+      cancelLauncherDoubleClickHold({ cancelStartedVoice: true });
     }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
   }
@@ -324,18 +331,14 @@
     launcher.removeEventListener("pointermove", moveLauncherDrag);
     launcher.removeEventListener("pointerup", stopLauncherDrag);
     launcher.removeEventListener("pointercancel", stopLauncherDrag);
-    cancelLauncherDoubleClickHold();
+    cancelLauncherDoubleClickHold({ cancelStartedVoice: e.type === "pointercancel" });
     if (wasHoldToTalk) {
       finishLauncherPushToTalk();
       return;
     }
     if (wasPendingDoubleClickHold) {
-      // Released before the push-to-talk hold threshold = a quick double-click.
-      // Toggle voice: first quick double-click starts listening, the next one
-      // commits and sends. (Double-click and hold stays push-to-talk above.)
-      openTextSurface({ fresh: false });
-      primeAudio();
-      toggleVoice();
+      // The second press already started or stopped voice. A quick release
+      // keeps that toggle state; a held release commits in the hold branch.
       return;
     }
     if (moved) {
@@ -379,20 +382,24 @@
     cancelLauncherDoubleClickHold();
     doubleClickHoldPending = true;
     holdToTalkPointerId = e.pointerId;
+    launcherSecondTapAction = beginManualVoiceGesture();
     holdToTalkTimer = setTimeout(() => {
       holdToTalkTimer = null;
-      if (!doubleClickHoldPending || !dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
+      if (!doubleClickHoldPending || launcherSecondTapAction !== "started" || !dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
       doubleClickHoldPending = false;
       holdToTalkActive = true;
-      startLauncherPushToTalk();
     }, DOUBLE_CLICK_HOLD_MS);
   }
 
-  function cancelLauncherDoubleClickHold() {
+  function cancelLauncherDoubleClickHold({ cancelStartedVoice = false } = {}) {
     if (holdToTalkTimer) {
       clearTimeout(holdToTalkTimer);
       holdToTalkTimer = null;
     }
+    if (cancelStartedVoice && launcherSecondTapAction === "started" && liveVoice && listening) {
+      stopLiveVoiceTurn("cancel");
+    }
+    launcherSecondTapAction = null;
     if (!holdToTalkActive) {
       holdToTalkPointerId = null;
       doubleClickHoldPending = false;
@@ -400,22 +407,37 @@
   }
 
   function startLauncherPushToTalk() {
+    launcherSecondTapAction = "started";
+    beginManualVoiceGesture();
+  }
+
+  function beginManualVoiceGesture() {
     openTextSurface({ fresh: false });
     primeAudio();
-    if (liveVoice) stopLiveVoiceTurn("cancel");
+    if (liveVoice && listening) {
+      commitLiveVoiceTurn();
+      return "committed";
+    }
+    if (liveVoice) {
+      stopLiveVoiceTurn("cancel");
+    }
     startLiveVoiceTurn({
       preserveAssistantPlayback: assistantSpeechOverlap === true,
       conversation: false,
       autoCommit: false,
     });
+    return "started";
   }
 
   function finishLauncherPushToTalk() {
     holdToTalkActive = false;
     holdToTalkPointerId = null;
-    if (liveVoice && listening) {
-      commitLiveVoiceTurn();
-    }
+    launcherSecondTapAction = null;
+    finishManualPushToTalk();
+  }
+
+  function finishManualPushToTalk() {
+    if (liveVoice && listening) commitLiveVoiceTurn();
   }
 
   function toggle(force) {
@@ -1468,6 +1490,63 @@
     toggleVoice();
   }
 
+  function toggleManualVoiceSession() {
+    beginManualVoiceGesture();
+  }
+
+  function clearVoiceHotkeyHoldTimer() {
+    if (!voiceHotkeyHoldTimer) return;
+    clearTimeout(voiceHotkeyHoldTimer);
+    voiceHotkeyHoldTimer = null;
+  }
+
+  function armVoiceHotkeyGesture() {
+    const startedAt = Date.now();
+    const action = beginManualVoiceGesture();
+    voiceHotkeyState = { action, hold: false, startedAt };
+    clearVoiceHotkeyHoldTimer();
+    if (action !== "started") return;
+    voiceHotkeyHoldTimer = setTimeout(() => {
+      voiceHotkeyHoldTimer = null;
+      if (!voiceHotkeyState || voiceHotkeyState.action !== "started") return;
+      voiceHotkeyState.hold = true;
+    }, DOUBLE_CLICK_HOLD_MS);
+  }
+
+  function beginVoiceHotkey(e) {
+    if (e.repeat || voiceHotkeyState) return;
+    if (lastExternalVoiceCommandAt && Date.now() - lastExternalVoiceCommandAt < COMMAND_ECHO_DEDUPE_MS) return;
+    lastLocalVoiceHotkeyAt = Date.now();
+    armVoiceHotkeyGesture();
+  }
+
+  function beginVoiceCommandHotkey() {
+    lastExternalVoiceCommandAt = Date.now();
+    if (voiceHotkeyState || isLocalVoiceHotkeyRecent()) return;
+    armVoiceHotkeyGesture();
+  }
+
+  function finishVoiceHotkey() {
+    if (!voiceHotkeyState) return;
+    const state = voiceHotkeyState;
+    voiceHotkeyState = null;
+    clearVoiceHotkeyHoldTimer();
+    const heldLongEnough = state.startedAt && Date.now() - state.startedAt >= DOUBLE_CLICK_HOLD_MS;
+    if (state.action === "started" && (state.hold || heldLongEnough)) finishManualPushToTalk();
+  }
+
+  function cancelVoiceHotkey() {
+    if (!voiceHotkeyState) return;
+    const state = voiceHotkeyState;
+    voiceHotkeyState = null;
+    clearVoiceHotkeyHoldTimer();
+    if (state.action === "started" && state.hold) finishManualPushToTalk();
+  }
+
+  function isLocalVoiceHotkeyRecent() {
+    return lastLocalVoiceHotkeyAt > 0 && Date.now() - lastLocalVoiceHotkeyAt < COMMAND_ECHO_DEDUPE_MS;
+  }
+
   function shouldRouteLiveTranscriptThroughGateway(text) {
     return isProfileControlTranscript(text);
   }
@@ -1679,15 +1758,20 @@
 
   // ---- Hotkeys: Cmd/Ctrl+. = voice, Cmd/Ctrl+, = text ------------------
   // Two ways in, both hands-on-keyboard, no clicking:
-  //   ⌘.  (or Ctrl+.)         → wake the agent and listen (speech); again to run
+  //   ⌘.  (or Ctrl+.)         → quick voice toggle; hold for push-to-talk
   //   ⌘,  (or Ctrl+,)         → open the text command field
 
   function isVoiceHotkey(e) {
-    return (e.metaKey || e.ctrlKey) && e.key === ".";
+    return (e.metaKey || e.ctrlKey) && (e.key === "." || e.code === "Period");
   }
 
   function isTextHotkey(e) {
     return (e.metaKey || e.ctrlKey) && (e.key === "," || (!e.shiftKey && e.code === "Comma"));
+  }
+
+  function isVoiceHotkeyRelease(e) {
+    if (!voiceHotkeyState) return false;
+    return e.key === "." || e.code === "Period" || e.key === "Meta" || e.key === "Control";
   }
 
   window.addEventListener(
@@ -1698,7 +1782,7 @@
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
-        toggleVoiceSession();
+        beginVoiceHotkey(e);
         return;
       }
       // ⌘, → text command field.
@@ -1712,6 +1796,21 @@
     },
     true
   );
+
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (!isVoiceHotkeyRelease(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      finishVoiceHotkey();
+    },
+    true
+  );
+
+  window.addEventListener("blur", () => {
+    cancelVoiceHotkey();
+  });
 
   // ---- Perception -------------------------------------------------------
   const SELECTOR =
@@ -1895,7 +1994,11 @@
         return true;
       case "toggleVoice":
         if (!root) build();
-        toggleVoiceSession();
+        if (msg.source === "command") {
+          beginVoiceCommandHotkey();
+        } else {
+          toggleManualVoiceSession();
+        }
         reply({ ok: true });
         return true;
       case "snapshot":
