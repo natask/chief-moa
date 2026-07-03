@@ -111,6 +111,13 @@ Android owns playback: it consumes that action by opening one text-only Live
 session per sample with a session-only voice override, so samples do not mutate
 the saved profile voice.
 
+Spoken input must never be lost. Each stored voice turn keeps the exact final
+transcript with a transcript source label (real STT, typed text, or synthetic
+placeholder), streaming partials merge into the final record when the provider
+result is a placeholder, and stored turns are queryable by id
+(`GET /v1/voice/turns/{turnId}`). A control intent such as "what did you hear"
+returns the prior user transcript verbatim.
+
 Voice turns can also become replayable verification evidence. When retention is
 enabled, the gateway stores or references the user audio, transcript, assistant
 text, assistant audio, profile version, provider version, and expected-test
@@ -325,8 +332,10 @@ claim, validate, execute, and receipt it.
   attached to a turn, profile version, provider version, and test criteria.
 - `agent_profile`: a versioned gateway-owned runtime profile for hard settings
   such as assistant voice, input languages, reply languages, response modality,
-  model behavior, and mission-agent access policy. The global profile applies
-  to all devices; device overrides persist only for a named device client.
+  persona (vetted catalog or sanitized free-form system prompt), model behavior,
+  and mission-agent access policy. The global profile applies to all devices;
+  device overrides persist only for a named device client. Profile-change
+  responses report the scope and device id they applied to.
 - `browser_agent_owner`: the single active browser tab/page/run that may listen,
   speak, and show browser-local task cues for a browser session; non-owner tabs
   can show passive status but must not capture voice or claim local cues.
