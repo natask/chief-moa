@@ -144,7 +144,7 @@ public final class MainActivity extends Activity {
         root.addView(eyebrow);
 
         TextView title = new TextView(this);
-        title.setText("Aggie lives above\nthe phone.");
+        title.setText("A.G. lives above\nthe phone.");
         title.setTextColor(MoaColors.PAPER);
         title.setTextSize(36);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
@@ -206,7 +206,7 @@ public final class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "Voice agent setup");
 
-        TextView hint = label("Run the Aggie gateway on your server, then point this app at it. Model keys stay on the server and chat turns are saved there.", 0xB8EEF8E8, 15, false);
+        TextView hint = label("Run the A.G. gateway on your server, then point this app at it. Model keys stay on the server and chat turns are saved there.", 0xB8EEF8E8, 15, false);
         hint.setLineSpacing(dp(2), 1f);
         hint.setPadding(0, 0, 0, dp(10));
         card.addView(hint);
@@ -244,19 +244,19 @@ public final class MainActivity extends Activity {
     private View actionCard() {
         LinearLayout card = card();
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        addCardTitle(card, "Launch Aggie");
+        addCardTitle(card, "Launch A.G.");
 
         overlayButton = primaryButton("Enable overlay permission");
         overlayButton.setOnClickListener(v -> openOverlaySettings());
         card.addView(overlayButton);
-        addHint(card, "Draw over other apps is required for the floating orb. This button opens Aggie's overlay permission screen; Android still requires you to allow it.");
+        addHint(card, "Draw over other apps is required for the floating orb. This button opens A.G.'s overlay permission screen; Android still requires you to allow it.");
 
         accessibilityButton = primaryButton("Enable screen access");
         accessibilityButton.setOnClickListener(v -> openAccessibilitySettings());
         card.addView(accessibilityButton);
-        addHint(card, "Screen access is required for current-screen context and controlled screen actions. If Android blocks the toggle with restricted settings, open App info for Aggie, tap the three-dot menu, Allow restricted settings, return, then enable Screen access.");
+        addHint(card, "Screen access is required for current-screen context and controlled screen actions. If Android blocks the toggle with restricted settings, open App info for A.G., tap the three-dot menu, Allow restricted settings, return, then enable Screen access.");
 
-        appInfoButton = secondaryButton("Open Aggie app info");
+        appInfoButton = secondaryButton("Open A.G. app info");
         appInfoButton.setOnClickListener(v -> openAppInfoSettings());
         card.addView(appInfoButton);
 
@@ -286,8 +286,8 @@ public final class MainActivity extends Activity {
         addBullet(card, "Gemini-style live transcript overlay while speaking.");
         addBullet(card, "Manual orb voice sends the released transcript through the gateway voice-turn route.");
         addBullet(card, "Screen access reads visible app text and passes it to gateway replies and home-machine agent runs.");
-        addBullet(card, "Assistant calls the self-hosted Aggie gateway when configured, with local fallback replies if the server is unavailable.");
-        addBullet(card, "Voice commands that ask Aggie to build, fix, change, or test something can run the Gemini harness on the home machine.");
+        addBullet(card, "Assistant calls the self-hosted A.G. gateway when configured, with local fallback replies if the server is unavailable.");
+        addBullet(card, "Voice commands that ask A.G. to build, fix, change, or test something can run the Gemini harness on the home machine.");
         addBullet(card, "Voice-originated replies speak back with Android TextToSpeech.");
         return card;
     }
@@ -846,9 +846,9 @@ public final class MainActivity extends Activity {
         appendMissing(missing, accessibilityGranted, "Screen access");
         appendMissing(missing, micGranted, "Microphone");
         if (missing.length() == 0) {
-            return "Required access is ready. Start the assistant circle when you want Aggie above other apps.";
+            return "Required access is ready. Start the assistant circle when you want A.G. above other apps.";
         }
-        return "Missing: " + missing + ". Aggie can request microphone access, but Android requires you to approve overlay and Screen access in system settings.";
+        return "Missing: " + missing + ". A.G. can request microphone access, but Android requires you to approve overlay and Screen access in system settings.";
     }
 
     private void appendMissing(StringBuilder builder, boolean granted, String label) {

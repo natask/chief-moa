@@ -34,7 +34,7 @@ final class MoaActionBroker {
         if (lower.equals("/screen")) {
             Capability capability = CAPABILITIES.get("screen.summary");
             if (!MoaAccessibilityService.isRunning()) {
-                return LocalActionResult.handled("Screen access is not running. Open Aggie and enable screen access in Android accessibility settings.");
+                return LocalActionResult.handled("Screen access is not running. Open A.G. and enable screen access in Android accessibility settings.");
             }
             String summary = MoaAccessibilityService.currentScreenSummary();
             if (summary.isEmpty()) {

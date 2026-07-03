@@ -28,11 +28,11 @@ If `adb devices` does not show the phone:
 ## First Run
 
 1. Open `Moa`.
-2. Grant overlay permission from Aggie's direct draw-over-apps settings button.
+2. Grant overlay permission from A.G.'s direct draw-over-apps settings button.
 3. Grant microphone permission when prompted or from `Enable microphone`.
 4. Grant Screen access in Accessibility settings when you want screen context.
    If Android says restricted settings are blocking it, open App info for
-   Aggie, tap the three-dot menu, choose `Allow restricted settings`, return,
+   A.G., tap the three-dot menu, choose `Allow restricted settings`, return,
    then enable Screen access.
 5. Save the gateway URL and token.
 6. Tap `Start assistant circle`.

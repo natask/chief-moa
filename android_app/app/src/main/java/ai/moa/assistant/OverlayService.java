@@ -277,10 +277,10 @@ public final class OverlayService extends Service {
 
         NotificationChannel channel = new NotificationChannel(
                 OVERLAY_CHANNEL_ID,
-                "Aggie overlay",
+                "A.G. overlay",
                 NotificationManager.IMPORTANCE_LOW
         );
-        channel.setDescription("Keeps the Aggie overlay available above other apps.");
+        channel.setDescription("Keeps the A.G. overlay available above other apps.");
         channel.setShowBadge(false);
         channel.setSound(null, null);
         channel.enableVibration(false);
@@ -306,7 +306,7 @@ public final class OverlayService extends Service {
             builder = new Notification.Builder(this);
         }
         builder.setSmallIcon(R.drawable.ic_moa_orb)
-                .setContentTitle("Aggie overlay")
+                .setContentTitle("A.G. overlay")
                 .setContentText("Ready for commands on the current screen.")
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -633,7 +633,7 @@ public final class OverlayService extends Service {
 
     private void showCurrentScreenContext() {
         if (!actionBroker.isScreenAccessRunning()) {
-            updateVoiceAssistantTranscript("Screen access is off. Enable it in Aggie settings.");
+            updateVoiceAssistantTranscript("Screen access is off. Enable it in A.G. settings.");
             return;
         }
         String summary = actionBroker.currentScreenSummary();
@@ -734,7 +734,7 @@ public final class OverlayService extends Service {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text(assistant ? "Aggie" : "You", assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
+        TextView label = text(assistant ? "A.G." : "You", assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(5), 0, dp(5), dp(3));
 
@@ -1019,7 +1019,7 @@ public final class OverlayService extends Service {
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text("Aggie", MoaColors.PAPER, 17, true);
+        TextView label = text("A.G.", MoaColors.PAPER, 17, true);
         label.setLetterSpacing(0.02f);
         copy.addView(label);
         runStatusView = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
@@ -1047,7 +1047,7 @@ public final class OverlayService extends Service {
         row.setLayoutParams(rowParams);
 
         composer = new EditText(this);
-        composer.setHint("Message Aggie");
+        composer.setHint("Message A.G.");
         composer.setHintTextColor(0x66B8C9C2);
         composer.setTextColor(MoaColors.PAPER);
         composer.setTextSize(15);
@@ -1107,7 +1107,7 @@ public final class OverlayService extends Service {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text(message.assistant ? "Aggie" : "You", message.assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
+        TextView label = text(message.assistant ? "A.G." : "You", message.assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(4), 0, dp(4), dp(3));
 
@@ -1421,7 +1421,7 @@ public final class OverlayService extends Service {
 
     private void requestAgentRun(String prompt, boolean fromVoice) {
         if (gatewayUrl.isEmpty()) {
-            deliverReply("Agent actions need the Aggie gateway. Set the home-machine URL first.", fromVoice);
+            deliverReply("Agent actions need the A.G. gateway. Set the home-machine URL first.", fromVoice);
             return;
         }
 
@@ -1880,7 +1880,7 @@ public final class OverlayService extends Service {
     }
 
     private String spokenAgentPrompt(String text) {
-        return "The user spoke this from the Aggie Android overlay and expects forward progress, not a chat-only answer.\n\n"
+        return "The user spoke this from the A.G. Android overlay and expects forward progress, not a chat-only answer.\n\n"
                 + "User request:\n"
                 + safe(text)
                 + "\n\nWork in the configured repository. Inspect the current state, make the smallest useful code changes, run the relevant verification, and report the result plainly. Ask for clarification only if the task is genuinely blocked.";
@@ -1906,7 +1906,7 @@ public final class OverlayService extends Service {
             return "Build the debug APK with ./gradlew assembleDebug, then install it with adb install app/build/outputs/apk/debug/app-debug.apk.";
         }
         if (lower.contains("gemini") || lower.contains("replace")) {
-            return "The replacement shape is clear: one always-available Aggie circle, local overlay controls, voice capture, and your model gateway behind it.";
+            return "The replacement shape is clear: one always-available A.G. circle, local overlay controls, voice capture, and your model gateway behind it.";
         }
         return "I heard you. The product loop is: capture the command fast, keep context from the current screen, answer in place, and stay out of the way.";
     }

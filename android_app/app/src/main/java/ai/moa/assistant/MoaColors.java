@@ -1,8 +1,8 @@
 package ai.moa.assistant;
 
 final class MoaColors {
-    // Dark Agee theme. Warm near-black ground, gold + violet accents, paper
-    // text, muted secondary text. No green: the brand is the gold Agee mark.
+    // Dark A.G. theme. Warm near-black ground, gold + violet accents, paper
+    // text, muted secondary text. No green: the brand is the gold A.G. mark.
     static final int INK = 0xFF07110D;
     static final int PAPER = 0xFFF7FFF1;
     static final int MUTED = 0xFF9FB3AC;

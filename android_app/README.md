@@ -16,17 +16,17 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Run
 
-1. Open Aggie on the phone.
-2. Grant `Draw over other apps`. The setup screen opens Aggie's overlay permission page; Android requires you to allow it there.
+1. Open A.G. on the phone.
+2. Grant `Draw over other apps`. The setup screen opens A.G.'s overlay permission page; Android requires you to allow it there.
 3. Grant microphone access when Android prompts, or tap `Enable microphone`.
-4. Grant `Screen access` in Android accessibility settings for current-screen context and controlled actions. If Android blocks the toggle with restricted settings, open App info for Aggie, tap the three-dot menu, choose `Allow restricted settings`, return, then enable Screen access.
+4. Grant `Screen access` in Android accessibility settings for current-screen context and controlled actions. If Android blocks the toggle with restricted settings, open App info for A.G., tap the three-dot menu, choose `Allow restricted settings`, return, then enable Screen access.
 5. Set the Moa Gateway URL. The default is the main-machine gateway
    `http://10.147.17.10:8787`. Use `http://10.147.17.6:8787` only when you are
    intentionally pointing the app at this Mac's local gateway over ZeroTier.
 6. Tap `Start assistant circle`.
 7. Leave the app. The Moa circle stays over the screen.
 
-The setup screen lists every missing requirement. Aggie can request microphone
+The setup screen lists every missing requirement. A.G. can request microphone
 permission and open the exact Android settings pages, but it cannot silently
 grant overlay or Accessibility access.
 

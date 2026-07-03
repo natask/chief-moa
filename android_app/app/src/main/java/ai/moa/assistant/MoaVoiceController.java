@@ -115,7 +115,7 @@ final class MoaVoiceController {
         }
 
         if (!hasMicPermission()) {
-            callback.onAssistantMessage("Microphone permission is missing. Open the Aggie app and enable microphone access first.");
+            callback.onAssistantMessage("Microphone permission is missing. Open the A.G. app and enable microphone access first.");
             return;
         }
 
@@ -141,7 +141,7 @@ final class MoaVoiceController {
         }
         if (!hasMicPermission()) {
             callback.onShowPanelRequested();
-            callback.onAssistantMessage("Microphone permission is missing. Open the Aggie app and enable microphone access first.");
+            callback.onAssistantMessage("Microphone permission is missing. Open the A.G. app and enable microphone access first.");
             return;
         }
         liveTranscript = "";

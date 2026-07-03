@@ -17,11 +17,11 @@ final class MoaAssistLaunchDecision {
 
     static String permissionHint(boolean overlayPermissionGranted, boolean microphonePermissionGranted) {
         if (!overlayPermissionGranted && !microphonePermissionGranted) {
-            return "Open Aggie once to grant overlay and microphone permissions.";
+            return "Open A.G. once to grant overlay and microphone permissions.";
         }
         if (!overlayPermissionGranted) {
-            return "Open Aggie once to grant overlay permission.";
+            return "Open A.G. once to grant overlay permission.";
         }
-        return "Open Aggie once to grant microphone permission.";
+        return "Open A.G. once to grant microphone permission.";
     }
 }

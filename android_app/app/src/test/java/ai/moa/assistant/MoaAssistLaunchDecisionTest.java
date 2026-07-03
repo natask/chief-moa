@@ -32,15 +32,15 @@ public final class MoaAssistLaunchDecisionTest {
     @Test
     public void permissionHintsNameTheMissingPermission() {
         assertEquals(
-                "Open Aggie once to grant overlay and microphone permissions.",
+                "Open A.G. once to grant overlay and microphone permissions.",
                 MoaAssistLaunchDecision.permissionHint(false, false)
         );
         assertEquals(
-                "Open Aggie once to grant overlay permission.",
+                "Open A.G. once to grant overlay permission.",
                 MoaAssistLaunchDecision.permissionHint(false, true)
         );
         assertEquals(
-                "Open Aggie once to grant microphone permission.",
+                "Open A.G. once to grant microphone permission.",
                 MoaAssistLaunchDecision.permissionHint(true, false)
         );
     }
