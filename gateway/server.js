@@ -3696,7 +3696,7 @@ async function callModel(messages, profile) {
 
 async function callVertexModel(messages, profile) {
   const effective = profile || agentProfile.effective();
-  const accessToken = vertexAccessToken();
+  const accessToken = await vertexAccessToken();
   const { systemInstruction, contents } = vertexPayload(messages, effective);
   const body = {
     contents,
@@ -6068,12 +6068,19 @@ function profileLanguageInstruction(profile) {
   return lines.filter(Boolean).join("\n");
 }
 
-function vertexAccessToken() {
+async function vertexAccessToken() {
   if (process.env.VERTEX_ACCESS_TOKEN) {
     return process.env.VERTEX_ACCESS_TOKEN;
   }
   if (cachedVertexToken.value && cachedVertexToken.expiresAt > Date.now()) {
     return cachedVertexToken.value;
+  }
+
+  const credentialFile = googleCredentialFile();
+  if (credentialFile) {
+    const token = await vertexAccessTokenFromCredentialFile(credentialFile);
+    cachedVertexToken = token;
+    return token.value;
   }
 
   const gcloud = process.env.GCLOUD_BIN || "gcloud";
@@ -6093,6 +6100,112 @@ function vertexAccessToken() {
     expiresAt: Date.now() + 45 * 60 * 1000,
   };
   return token;
+}
+
+function googleCredentialFile() {
+  const explicit = process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
+  if (explicit && fs.existsSync(explicit)) return explicit;
+  const adc = path.join(process.env.HOME || "", ".config", "gcloud", "application_default_credentials.json");
+  return fs.existsSync(adc) ? adc : "";
+}
+
+async function vertexAccessTokenFromCredentialFile(file) {
+  let credential;
+  try {
+    credential = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    throw new Error(`failed to read Google ADC file: ${truncate(error.message, 200)}`);
+  }
+  if (credential.type === "service_account") {
+    return serviceAccountAccessToken(credential);
+  }
+  if (credential.type === "authorized_user") {
+    return authorizedUserAccessToken(credential);
+  }
+  throw new Error(`unsupported Google ADC credential type: ${credential.type || "missing"}`);
+}
+
+async function serviceAccountAccessToken(serviceAccount) {
+  if (!serviceAccount.client_email || !serviceAccount.private_key) {
+    throw new Error("service account ADC is missing client_email or private_key");
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const header = {
+    alg: "RS256",
+    typ: "JWT",
+    kid: serviceAccount.private_key_id,
+  };
+  const payload = {
+    iss: serviceAccount.client_email,
+    sub: serviceAccount.client_email,
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+    scope: "https://www.googleapis.com/auth/cloud-platform",
+  };
+  const unsigned = `${base64urlJson(header)}.${base64urlJson(payload)}`;
+  const signature = crypto.sign("RSA-SHA256", Buffer.from(unsigned), serviceAccount.private_key);
+  const assertion = `${unsigned}.${base64url(signature)}`;
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    }),
+  });
+  return parseGoogleTokenResponse(response, "service account token exchange");
+}
+
+async function authorizedUserAccessToken(credential) {
+  const missing = ["client_id", "client_secret", "refresh_token"].filter((key) => !credential[key]);
+  if (missing.length > 0) {
+    throw new Error(`authorized-user ADC is missing ${missing.join(", ")}`);
+  }
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: credential.client_id,
+      client_secret: credential.client_secret,
+      refresh_token: credential.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+  return parseGoogleTokenResponse(response, "authorized-user token refresh");
+}
+
+async function parseGoogleTokenResponse(response, label) {
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`${label} failed (${response.status}): ${truncate(text, 400)}`);
+  }
+  let token;
+  try {
+    token = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${label} returned non-JSON response: ${truncate(text, 200)}`);
+  }
+  const value = String(token.access_token || "");
+  if (!value) {
+    throw new Error(`${label} returned an empty access token`);
+  }
+  return {
+    value,
+    expiresAt: Date.now() + Math.max(1, Number(token.expires_in || 3600) - 300) * 1000,
+  };
+}
+
+function base64urlJson(value) {
+  return base64url(Buffer.from(JSON.stringify(value), "utf8"));
+}
+
+function base64url(value) {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
 function vertexCredentialHint() {
