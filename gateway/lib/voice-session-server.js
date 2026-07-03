@@ -548,6 +548,7 @@ class VoiceSessionConnection {
         tool_call_id: call?.id || "",
         result,
       });
+      await this.forwardTurnAction(turn, result);
       return result;
     } catch (error) {
       const result = { ok: false, error: cleanError(error) };
@@ -558,6 +559,28 @@ class VoiceSessionConnection {
       });
       return result;
     }
+  }
+
+  // A tool result may carry a client-actionable action (today only page_tweak).
+  // The tool response we send the provider is not visible to the extension, and
+  // native-audio models go silent after a tool call, so the visual confirmation
+  // is the primary feedback. Forward the action as its own control event on the
+  // session socket, following the same envelope the HTTP turn path attaches to
+  // actions[], so the client can apply it the same way on both paths.
+  async forwardTurnAction(turn, result) {
+    const action = result && typeof result === "object" ? result.action : null;
+    if (!action || typeof action !== "object" || action.type !== "page_tweak" || !action.record) {
+      return;
+    }
+    await this.sendEvent({
+      type: "page_tweak",
+      session_id: turn.sessionId,
+      branch_id: turn.branchId,
+      turn_id: turn.turnId,
+      action,
+      record: action.record,
+      message: typeof result.message === "string" ? result.message : "",
+    });
   }
 
   async completeLiveTurn(turn, providerResult) {

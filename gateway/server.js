@@ -2885,8 +2885,12 @@ async function handleVoiceTurn(request, response) {
     const modelMessages = systemBlocks.length
       ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
       : messages;
-    const text = await callModelOrFallback(modelMessages, profile);
+    // Browser-sourced turns get one bounded tool round so "hide the sidebar" or
+    // "make the text bigger" can propose a page_tweak action; every other source
+    // (and Vertex/unconfigured providers) gets a plain chat reply.
+    const { text, action: pageTweakAction } = await chatTurnWithPageTweakTool(modelMessages, profile, source);
     const speak = capSpeakText(text, profile.voice_max_chars);
+    const turnActions = pageTweakAction ? [pageTweakAction] : [];
     const savedMessages = messages.concat([{ role: "assistant", content: text }]);
     const now = new Date().toISOString();
     fs.writeFileSync(conversationPath(conversationId), JSON.stringify({
@@ -2917,7 +2921,7 @@ async function handleVoiceTurn(request, response) {
     const payload = voiceTurnPayload(baseRecord, {
       speak,
       display: text,
-      actions: [],
+      actions: turnActions,
       follow_up_expected: false,
     });
     await writeCompletedVoiceTurnRecord({
@@ -3472,6 +3476,104 @@ async function callModelOrFallback(messages, profile) {
   }
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   return gatewayFallbackReply(lastUser?.content || "");
+}
+
+// The OpenAI-compatible tool schema for propose_page_tweak, mirroring the Gemini
+// Live declaration so a browser-sourced HTTP turn can offer the same tool to a
+// chat-completions model.
+const PAGE_TWEAK_TOOL_SCHEMA = {
+  type: "function",
+  function: {
+    name: "propose_page_tweak",
+    description: "Propose a reversible visual change to the browser page the user is on (hide an element, dark or black background, bigger/smaller font, or a readable width). You do NOT write CSS: you pass a bounded record and the browser compiles and applies it locally, and the user can undo it. kind must be one of: hide, css-selector-hide, font-scale, font-size, dark, black, width. Call this when the user asks to hide, remove, darken, resize, or reformat something on the current page.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          description: "One of: hide (params.selectors: array of CSS selectors), css-selector-hide (params.selector: one CSS selector), font-scale (params.factor: 0.5-4), font-size (params.px: 8-72), dark (no params), black (no params), width (params.maxWidth: 320-1600).",
+        },
+        params: {
+          type: "object",
+          description: "The parameters for the chosen kind. Plain CSS selectors and numbers only; no CSS or code strings.",
+        },
+        name: {
+          type: "string",
+          description: "Optional short human-readable label for the change, such as 'Hide sidebar'.",
+        },
+      },
+      required: ["kind"],
+    },
+  },
+};
+
+// Browser-sourced HTTP turns that reach the chat path get one bounded tool round
+// so the model can propose a page tweak the same way the live socket does. The
+// round is capped at a single model call: if the model calls propose_page_tweak
+// the validated action is returned for actions[]; otherwise the plain reply text
+// stands. Only the OpenAI-compatible provider path is offered the tool; other
+// providers (Vertex text) fall through to a plain chat reply. Never fails the
+// turn: any tool error degrades to text.
+async function chatTurnWithPageTweakTool(messages, profile, source) {
+  const wantsTool = isBrowserSourcedCall({ source });
+  if (!wantsTool || MODEL_PROVIDER === "vertex" || !providerConfigured()) {
+    const text = await callModelOrFallback(messages, profile);
+    return { text, action: null };
+  }
+  const effective = profile || agentProfile.effective();
+  let json;
+  try {
+    const upstreamResponse = await fetch(`${MODEL_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: modelHeaders(),
+      body: JSON.stringify({
+        model: effective.model || MODEL_ID,
+        messages: [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages),
+        temperature: effective.temperature,
+        tools: [PAGE_TWEAK_TOOL_SCHEMA],
+        tool_choice: "auto",
+        stream: false,
+      }),
+    });
+    const responseText = await upstreamResponse.text();
+    if (!upstreamResponse.ok) {
+      throw new Error(`model HTTP ${upstreamResponse.status}: ${truncate(responseText, 400)}`);
+    }
+    json = JSON.parse(responseText);
+  } catch (error) {
+    // Tool round failed to reach or parse the model; fall back to a plain reply
+    // so a page-change request still gets an answer instead of an error turn.
+    const text = await callModelOrFallback(messages, profile);
+    return { text, action: null, tool_error: cleanError(error) };
+  }
+
+  const message = json.choices?.[0]?.message || {};
+  const toolCall = Array.isArray(message.tool_calls)
+    ? message.tool_calls.find((c) => c?.function?.name === "propose_page_tweak")
+    : null;
+  if (!toolCall) {
+    const text = String(message.content || json.output_text || "").trim();
+    return { text, action: null };
+  }
+
+  let args = {};
+  try {
+    args = JSON.parse(toolCall.function?.arguments || "{}");
+  } catch {
+    args = {};
+  }
+  // Reuse the exact same validation and browser-source gate as the live tool.
+  const result = liveToolProposePageTweak({ source }, args);
+  if (!result.ok || !result.action) {
+    // The model called the tool with an invalid/unknown record. Give a plain
+    // spoken reply rather than surfacing raw tool JSON.
+    const fallbackText = String(message.content || "").trim()
+      || "I could not turn that into a change I can safely apply to this page.";
+    return { text: fallbackText, action: null };
+  }
+  const confirm = String(message.content || "").trim()
+    || `Done — ${result.record.name || result.record.kind} on this page.`;
+  return { text: confirm, action: result.action };
 }
 
 function localUtilityReply(prompt) {

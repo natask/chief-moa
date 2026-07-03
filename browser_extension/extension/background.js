@@ -2352,6 +2352,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
+  // A page_tweak action that arrived over the live voice socket is routed here by
+  // the overlay content script (content.js cannot message tweaks.js directly).
+  // Forward the record to the tweaks module in the same tab via the same
+  // tweak:applyRecord message the HTTP turn path uses.
+  if (msg.cmd === "tweakApplyRecord" && sender.tab) {
+    ask(sender.tab.id, { cmd: "tweak:applyRecord", record: msg.record })
+      .then((res) => sendResponse(res || { ok: false, error: "no tweak result" }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
 });
 
 // Stop the ambient loop if its tab goes away, so it never posts against a dead tab.

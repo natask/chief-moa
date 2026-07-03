@@ -673,6 +673,39 @@
     });
   }
 
+  // Apply a page_tweak action that arrived over the live voice socket. content.js
+  // and tweaks.js are separate content scripts in the same tab and cannot message
+  // each other directly, so the record is routed through the background, which
+  // forwards it to the tweaks module as tweak:applyRecord — the same apply core the
+  // HTTP turn path uses. After apply, the live cue shows the done summary and the
+  // "Changes on this page" review affordance, matching the typed path.
+  function applyLiveVoicePageTweak(state, action) {
+    const record = action && action.type === "page_tweak" ? action.record : null;
+    if (!record || typeof record !== "object") return;
+    const cueId = state.cueId;
+    updateCue(cueId, "changing this page…", "running");
+    safeRuntimeSendMessage({ cmd: "tweakApplyRecord", record }).then((res) => {
+      if (!res && extensionContextInvalidated) return;
+      if (!res?.ok) {
+        const message = res?.error || "That page change was not a bounded tweak I can apply.";
+        state.assistantText = message;
+        updateCue(cueId, message, "done");
+        return;
+      }
+      const tweak = res.tweak || {};
+      const summary = `Changed this page — ${tweak.name || record.name || "page tweak"} is saved for ${res.origin || "this site"}.`;
+      state.assistantText = summary;
+      ensureVoiceCueCard(state, state.transcript || "Voice", summary);
+      updateCue(cueId, summary, "done");
+      holdCueOpen(cueId);
+      attachTweakReview(cueId);
+    }).catch((error) => {
+      const message = `Page tweak failed: ${String(error?.message || error)}`;
+      state.assistantText = message;
+      updateCue(cueId, message, "done");
+    });
+  }
+
   function holdCueOpen(cueId) {
     const entry = cues.get(cueId);
     if (entry?.dismissTimer) {
@@ -1142,6 +1175,13 @@
       return;
     }
     if (msg.type === "profile_applied") {
+      return;
+    }
+    if (msg.type === "page_tweak") {
+      // The live model proposed a bounded page change on this browser turn. The
+      // native-audio model goes silent after a tool call, so the applied change
+      // plus this cue is the primary confirmation; do not wait for spoken audio.
+      applyLiveVoicePageTweak(state, msg.action || (msg.record ? { type: "page_tweak", record: msg.record } : null));
       return;
     }
     if (msg.type === "revoked") {
