@@ -88,11 +88,19 @@ const VOICE_ALIAS_TO_ID = Object.freeze({
 const VOICE_ALIASES_BY_KEY = new Map(Object.entries(VOICE_ALIAS_TO_ID).map(([alias, id]) => [normalizeSpeechKey(alias), id]));
 
 const LANGUAGE_OPTIONS = Object.freeze([
-  { label: "English", code: "en-US", keys: ["english"] },
-  { label: "Amharic", code: "am-ET", keys: ["amharic", "a m h a r i c", "a-m-h-a-r-i-c"] },
+  { label: "English", code: "en-US", keys: ["english"], native_names: [] },
+  {
+    label: "Amharic",
+    code: "am-ET",
+    keys: ["amharic", "a m h a r i c", "a-m-h-a-r-i-c"],
+    // Native script names. normalizeSpeechKey strips non-ASCII, so these are
+    // matched against the raw utterance, not the normalized form.
+    native_names: ["አማርኛ", "amarNa"],
+  },
 ].map((language) => Object.freeze({
   ...language,
   keys: Object.freeze(language.keys.slice()),
+  native_names: Object.freeze((language.native_names || []).slice()),
 })));
 
 // Vetted starter personas. A "become X" utterance maps to one of these when the
@@ -168,10 +176,16 @@ function personaOptionsPayload() {
 
 const LANGUAGE_BY_CODE = new Map(LANGUAGE_OPTIONS.map((language) => [language.code.toLowerCase(), language]));
 const LANGUAGE_BY_KEY = new Map();
+// Native-script names (e.g. "አማርኛ") keyed on the trimmed lowercase raw value,
+// since normalizeSpeechKey strips non-ASCII characters to nothing.
+const LANGUAGE_BY_NATIVE = new Map();
 for (const language of LANGUAGE_OPTIONS) {
   LANGUAGE_BY_KEY.set(normalizeSpeechKey(language.label), language);
   for (const key of language.keys) {
     LANGUAGE_BY_KEY.set(normalizeSpeechKey(key), language);
+  }
+  for (const native of language.native_names || []) {
+    LANGUAGE_BY_NATIVE.set(String(native).trim().toLowerCase(), language);
   }
 }
 
@@ -205,6 +219,10 @@ function normalizeLanguageCode(value) {
   const exact = LANGUAGE_BY_CODE.get(raw.toLowerCase());
   if (exact) {
     return exact.code;
+  }
+  const native = LANGUAGE_BY_NATIVE.get(raw.toLowerCase());
+  if (native) {
+    return native.code;
   }
   const codeMatch = raw.match(/\b[a-z]{2,3}(?:-[a-z0-9]{2,8})+\b/i);
   if (codeMatch) {
@@ -258,6 +276,55 @@ function languageOptionsPayload() {
     code: language.code,
     aliases: language.keys.slice(),
   }));
+}
+
+// Human-readable list of the languages the pipeline currently supports, used in
+// the message shown when a request names an unsupported language.
+const SUPPORTED_LANGUAGE_LABELS = Object.freeze(LANGUAGE_OPTIONS.map((l) => l.label));
+
+function supportedLanguagesSentence() {
+  const labels = SUPPORTED_LANGUAGE_LABELS.slice();
+  if (labels.length <= 1) {
+    return labels.join("");
+  }
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+// Inspect a profile patch for language fields whose requested value contains a
+// code we do not support. Returns the field names that were rejected (so the
+// caller can keep the previous setting and tell the user), not a thrown error.
+// A field counts as rejected only when the user asked for something and none of
+// it resolved to a supported code, or part of it did not.
+const LANGUAGE_LIST_FIELDS = Object.freeze(["language", "input_languages", "language_output"]);
+const LANGUAGE_CODE_FIELDS = Object.freeze(["language_primary", "input_language_primary"]);
+
+function rejectedLanguageFields(patch) {
+  if (!patch || typeof patch !== "object") {
+    return [];
+  }
+  const rejected = [];
+  for (const field of LANGUAGE_LIST_FIELDS) {
+    const raw = patch[field];
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    // language_output also accepts enum modes (same_as_input/primary_only/…);
+    // only treat it as a language list when it does not name a known mode.
+    if (field === "language_output"
+      && ["same_as_input", "primary_only", "configured_value"].includes(raw.trim().toLowerCase())) {
+      continue;
+    }
+    const list = normalizeLanguageList(raw);
+    if (list.invalid.length > 0 || list.codes.length === 0) {
+      rejected.push(field);
+    }
+  }
+  for (const field of LANGUAGE_CODE_FIELDS) {
+    const raw = patch[field];
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    if (!normalizeLanguageCode(raw)) {
+      rejected.push(field);
+    }
+  }
+  return rejected;
 }
 
 function voiceOptionsPayload() {
@@ -371,6 +438,9 @@ module.exports = {
   normalizeLanguageList,
   normalizeLanguageListValue,
   languageOptionsPayload,
+  supportedLanguagesSentence,
+  rejectedLanguageFields,
+  SUPPORTED_LANGUAGE_LABELS,
   modelOptionsPayload,
   voiceOptionsPayload,
   profileOptionsPayload,

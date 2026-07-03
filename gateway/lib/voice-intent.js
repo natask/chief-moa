@@ -199,6 +199,12 @@ function parseProfileControlIntent(text) {
   if (languageIntent) {
     return { action: "update", patch: languageIntent.patch, summary: languageIntent.summary, scope };
   }
+  // A clear language-change request that named no supported language: reject it
+  // and keep the current setting rather than falling through to a chat turn or
+  // silently ignoring it. Keeps the app reversible; the user hears why.
+  if (wantsUnsupportedLanguageChange(lower, raw)) {
+    return { action: "reject", subject: "language", scope };
+  }
 
   const modality = modalityUpdateFrom(lower);
   if (modality) {
@@ -440,13 +446,20 @@ function promptUpdateFrom(text) {
   return "";
 }
 
-// Find every known language named in a phrase, in spoken order.
-function matchedLanguages(lower) {
+// Find every known language named in a phrase, in spoken order. `lower` is the
+// ASCII-normalized form; `raw` is the original utterance, needed to match
+// native-script names (e.g. "አማርኛ") that normalizeSpeech strips to nothing.
+function matchedLanguages(lower, raw = "") {
+  const rawLower = String(raw || "").toLowerCase();
   const out = [];
   for (const language of LANGUAGE_DEFINITIONS) {
     const indexes = language.keys
       .map((key) => lower.indexOf(key))
       .filter((index) => index >= 0);
+    for (const native of language.native_names || []) {
+      const idx = rawLower.indexOf(String(native).toLowerCase());
+      if (idx >= 0) indexes.push(idx);
+    }
     if (indexes.length > 0 && !out.some((item) => item.code === language.code)) {
       out.push({ ...language, index: Math.min(...indexes) });
     }
@@ -480,16 +493,19 @@ function parseLanguageIntent(text) {
   const raw = String(text || "");
   const lower = normalizeSpeech(raw);
   if (!lower) return null;
-  if (!/\blanguages?\b/.test(lower) && matchedLanguages(lower).length === 0) {
+  if (!/\blanguages?\b/.test(lower) && matchedLanguages(lower, raw).length === 0) {
     return null;
   }
 
   const input = [];
   const output = [];
   let lastSide = null;
-  for (const clause of lower.split(/\s*(?:\band\b|,|;|\bbut\b|\bwhile\b)\s*/)) {
-    if (!clause.trim()) continue;
-    const langs = matchedLanguages(clause);
+  // Split the raw text on ASCII delimiters so native-script names survive into
+  // each clause; normalize per clause for side detection.
+  for (const rawClause of raw.split(/\s*(?:\band\b|,|;|\bbut\b|\bwhile\b)\s*/i)) {
+    const clause = normalizeSpeech(rawClause);
+    if (!clause.trim() && !rawClause.trim()) continue;
+    const langs = matchedLanguages(clause, rawClause);
     let side = languageSideOf(clause) || lastSide || (langs.length ? "output" : null);
     if (!side) continue;
     (side === "input" ? input : output).push(...langs);
@@ -525,6 +541,61 @@ function parseLanguageIntent(text) {
     parts.push(`understand ${inLangs.map((l) => l.label).join(" + ")}`);
   }
   return { patch, summary: parts.join("; ") };
+}
+
+// Common human languages the pipeline does not support. Used only to recognize
+// a clear "speak <language>" request so it can be rejected with a spoken reason
+// instead of silently falling through. Not exhaustive, and deliberately excludes
+// words like "code" or "json" so "reply in code" is never treated as a language.
+const UNSUPPORTED_LANGUAGE_NAMES = new Set([
+  "spanish", "french", "german", "italian", "portuguese", "dutch", "russian",
+  "arabic", "hebrew", "hindi", "urdu", "bengali", "punjabi", "turkish",
+  "japanese", "chinese", "mandarin", "cantonese", "korean", "vietnamese",
+  "thai", "indonesian", "malay", "tagalog", "filipino", "swahili", "somali",
+  "yoruba", "igbo", "hausa", "oromo", "tigrinya", "swedish", "norwegian",
+  "danish", "finnish", "polish", "czech", "greek", "romanian", "hungarian",
+  "ukrainian", "persian", "farsi", "pashto", "tamil", "telugu", "gujarati",
+  "marathi", "kannada", "malayalam",
+]);
+
+// True when the utterance is clearly a request to change the input or reply
+// language but names no supported language. parseLanguageIntent returns null in
+// that case (no supported language matched), so without this the request would
+// silently fall through. Requires an explicit language cue so ordinary speech is
+// not swept up; the presence of a supported language is already handled by
+// parseLanguageIntent before this runs.
+function wantsUnsupportedLanguageChange(lower, raw = "") {
+  if (matchedLanguages(lower, raw).length > 0) {
+    return false;
+  }
+  // A named unsupported language paired with a language-change verb, e.g.
+  // "speak French", "reply in Spanish", "switch to German".
+  if (/\b(?:speak|talk|respond|reply|answer|switch|change|set|say it)\b/.test(lower)) {
+    for (const name of UNSUPPORTED_LANGUAGE_NAMES) {
+      if (new RegExp(`\\b${name}\\b`).test(lower)) {
+        return true;
+      }
+    }
+  }
+  const changeVerb = /\b(?:speak|talk|respond|reply|answer|switch|change|set|use)\b/.test(lower);
+  if (!changeVerb) return false;
+  // "speak/reply/switch ... in/to <language>" or an explicit "language" mention
+  // tied to a change verb.
+  if (/\b(?:speak|talk|respond|reply|answer|switch|change|set)\b[^.]*\b(?:in|to|into)\b/.test(lower)
+    && /\blanguages?\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:speak|reply|respond|answer)\s+(?:to me\s+)?in\s+[a-z]+/.test(lower)
+    && /\blanguage\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:change|set|switch)\s+(?:the\s+|your\s+|my\s+)?language\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(?:i|you)\b[^.]*\b(?:only\s+)?(?:speak|understand)\b[^.]*\blanguage\b/.test(lower)) {
+    return true;
+  }
+  return false;
 }
 
 // Change the agent's OWN spoken voice. Three shapes, in priority order:

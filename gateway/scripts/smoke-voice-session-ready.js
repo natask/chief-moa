@@ -124,7 +124,10 @@ async function assertSyncCreateFailureSurfacesError() {
         if (isBinary) return;
         const event = JSON.parse(Buffer.from(data).toString("utf8"));
         events.push(event);
-        if (event.type === "turn_done" || event.type === "error") {
+        if (
+          events.some((item) => item.type === "error") &&
+          events.some((item) => item.type === "turn_done")
+        ) {
           clearTimeout(timeout);
           closeQuietly(ws);
           resolve();

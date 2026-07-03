@@ -114,10 +114,19 @@ assert.deepStrictEqual(bothSides.patch, {
   input_language_primary: "am-ET",
 });
 
-// For now, unsupported languages do not become profile-control updates.
-assert.strictEqual(parseProfileControlIntent("respond in Swahili"), null);
-assert.strictEqual(parseProfileControlIntent("respond in Tigrinya"), null);
-assert.strictEqual(parseProfileControlIntent("I speak Japanese and Korean"), null);
+// An unsupported language is rejected with a spoken reason, not silently
+// dropped: the current setting stays and the user is told only English and
+// Amharic are supported. It must never persist an unsupported language.
+for (const utterance of [
+  "respond in Swahili",
+  "respond in Tigrinya",
+  "I speak Japanese and Korean",
+]) {
+  const rejected = parseProfileControlIntent(utterance);
+  assert.ok(rejected && rejected.action === "reject", `expected a language rejection for "${utterance}"`);
+  assert.strictEqual(rejected.subject, "language");
+  assert.ok(!rejected.patch, "a language rejection must carry no profile patch");
+}
 
 assert.deepStrictEqual(parseProfileControlIntent("only process English and Amharic").patch, {
   input_languages: "en-US,am-ET",

@@ -91,7 +91,7 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
   reasoning: Object.freeze({
     gateway: providerRegistryEntry({
       id: "gateway",
-      label: "Aggie gateway voice-turn router",
+      label: "A.G. gateway voice-turn router",
       capabilities: {},
       configured: () => true,
     }),
@@ -638,7 +638,7 @@ class GeminiLiveVoiceProvider {
     // server VAD so barge-in / interrupt-handoff behavior is unchanged.
     this.manualActivityDetection = env.GEMINI_LIVE_MANUAL_VAD === "1";
     this.sendChunkBytes = Math.max(3200, numberFrom(env.GEMINI_LIVE_SEND_CHUNK_BYTES, 32000));
-    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are Aggie. Your name is Aggie; if asked who you are, say Aggie — never say you are Gemini or Google. Speak tersely. Use the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
+    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are A.G. Your name is A.G., spoken as the two letters \"ay jee\"; if asked who you are, say A.G. — never say you are Gemini or Google. When speaking your name out loud, pronounce it as the two separate letters, not as a single word. Speak tersely. Use the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
   }
 
   // The voice used for the NEXT session/turn: the effective agent profile's
@@ -1187,7 +1187,7 @@ class GeminiLiveVoiceProvider {
         functionDeclarations: [
           {
             name: "launch_agent_run",
-            description: "Start a durable Aggie gateway agent run on the home machine for work that should continue outside the live voice response.",
+            description: "Start a durable A.G. gateway agent run on the home machine for work that should continue outside the live voice response.",
             parameters: {
               type: "OBJECT",
               properties: {
@@ -1353,7 +1353,7 @@ class GeminiLiveVoiceProvider {
         ],
       }],
       inputAudioTranscription: {},
-      outputAudioTranscription: {},
+      ...(this.supportsOutputTranscription() ? { outputAudioTranscription: {} } : {}),
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: this.manualActivityDetection,
@@ -1380,6 +1380,19 @@ class GeminiLiveVoiceProvider {
       return { Authorization: `Bearer ${this.accessToken()}` };
     }
     return {};
+  }
+
+  // Vertex native-audio Live models reject any text-output request and close the
+  // socket with 1007 "Text output is not supported for native audio output
+  // model" — this includes outputAudioTranscription, which asks the model to
+  // emit the assistant transcript as text. Input transcription (the user's STT)
+  // is a separate capability the error does not name and stays on, so the
+  // exact-transcript echo-back path keeps working. On these models assistant_text
+  // is empty because the model emits neither output transcription nor text parts;
+  // downstream already treats empty assistant_text as "no transcript" and does
+  // not crash. Non-native Live models keep output transcription.
+  supportsOutputTranscription() {
+    return !/native-audio/i.test(String(this.model || ""));
   }
 
   modelResource() {
@@ -1659,7 +1672,7 @@ function languageCodes(value) {
 }
 
 function profileIdentityInstruction(profile) {
-  const name = String(profile?.assistant_name || "Aggie").trim();
+  const name = String(profile?.assistant_name || "A.G.").trim();
   if (!name) {
     return "";
   }
@@ -1668,6 +1681,7 @@ function profileIdentityInstruction(profile) {
     "- this identity profile overrides any older name in the base prompt",
     `- current assistant name: ${name}`,
     `- if asked who or what you are, say you are ${name}`,
+    "- if your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word",
     "- use the user's requested form of address, title, or interaction style when provided",
   ].join("\n");
 }
