@@ -10,6 +10,13 @@
 #   ACME_EMAIL=you@example.com
 
 services:
+  gateway:
+    volumes:
+      # Optional provider credential bind mount. When unset, this mounts
+      # /dev/null to an unused path so the stack still boots with loopback
+      # providers and no host credential file.
+      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH:-/dev/null}:${GOOGLE_APPLICATION_CREDENTIALS:-/tmp/no-google-credentials.json}:ro
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
