@@ -35,6 +35,10 @@ if [ "$SKIP_BACKUP" = "1" ]; then
 else
   "$SCRIPT_DIR/backup.sh"
   latest_backup="$(ls -1d "$BACKUP_DIR"/*/ 2>/dev/null | sort | tail -n 1)"
+  if [ -z "$latest_backup" ]; then
+    echo "Backup did not create a backup directory under $BACKUP_DIR." >&2
+    exit 1
+  fi
   "$SCRIPT_DIR/restore-check.sh" "${latest_backup%/}"
 fi
 
