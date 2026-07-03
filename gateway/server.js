@@ -23,6 +23,8 @@ const { createBrain } = require("./lib/brain");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
 const { createEventSubstrateStore } = require("./lib/event-substrate");
+const { createWorkHistoryStore } = require("./lib/work-history");
+const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const {
   buildEvaluatorMessages,
   parseFinal: parsePresentationFinal,
@@ -174,6 +176,12 @@ const eventSubstrate = createEventSubstrateStore({
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
   originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
 });
+
+// Voice work-history control plane: durable tasks, queued runs, before/after
+// repo evidence, verification artifacts, feedback, control requests, and
+// deployment link records, all stored as canonical product events on the event
+// substrate. Voice creates and queries; workers/clients claim and receipt.
+const workHistory = createWorkHistoryStore({ events: eventSubstrate });
 
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
@@ -819,6 +827,18 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    // Voice work-history control plane. Voice/text creates durable proposals
+    // and queries projections; workers and clients claim and receipt. The
+    // gateway never executes harness, browser, phone, or deployment work here.
+    if (url.pathname.startsWith("/v1/work-history/")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const handled = await routeWorkHistory(request, response, url);
+      if (handled) return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/chat") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -1198,6 +1218,18 @@ async function handleBrokerMessage(request, response) {
     sendJson(response, 400, { error: "text or transcript is required" });
     return;
   }
+  const { stored, decisions, contextPacks } = await storeBrokerMessage(body, text);
+  sendJson(response, 202, {
+    event: stored,
+    decisions,
+    context_packs: contextPacks,
+  });
+}
+
+// Store one spoken/typed message as a canonical broker event with route
+// decisions and launcher context packs. Shared by the broker endpoint and the
+// work-history control plane so every control-plane turn is broker-first.
+async function storeBrokerMessage(body, text) {
   const event = buildBrokerEvent(body, text);
   const decisions = brokerRouteDecisions(event, body);
   const contextPacks = brokerContextPacksForDecisions(event, decisions, body);
@@ -1216,11 +1248,449 @@ async function handleBrokerMessage(request, response) {
   writeBrokerEvent(stored);
   attachBrokerEvidenceToRuns(stored);
   await recordBrokerProductEvent(stored);
-  sendJson(response, 202, {
-    event: stored,
-    decisions,
-    context_packs: contextPacks,
+  return { stored, decisions, contextPacks };
+}
+
+// --- Voice work-history control plane ---------------------------------------
+// reference/openspec/changes/remote-hosted-gateway/voice-work-history-control-plane.md
+//
+// Voice/text turns become durable proposals (tasks, queued runs, feedback,
+// control requests, deployment requests, ui.open tool requests) and status
+// answers come from projections over product events. Workers claim runs and
+// post before/after repo snapshots, diffs, verification artifacts, and
+// lifecycle events; clients claim ui.open requests and post receipts. The
+// gateway never executes any of that work itself.
+
+async function routeWorkHistory(request, response, url) {
+  const method = request.method;
+  const pathname = url.pathname;
+
+  try {
+    if (method === "POST" && pathname === "/v1/work-history/turns") {
+      await handleWorkHistoryTurn(request, response);
+      return true;
+    }
+    if (method === "GET" && pathname === "/v1/work-history/status") {
+      sendJson(response, 200, await workHistory.statusSummary());
+      return true;
+    }
+    if (method === "GET" && pathname === "/v1/work-history/tasks") {
+      const summary = await workHistory.statusSummary();
+      sendJson(response, 200, { tasks: summary.tasks });
+      return true;
+    }
+    const taskMatch = pathname.match(/^\/v1\/work-history\/tasks\/([^/]+)$/);
+    if (method === "GET" && taskMatch) {
+      const detail = await workHistory.taskDetail(decodeURIComponent(taskMatch[1]));
+      if (!detail) {
+        sendJson(response, 404, { error: "work task not found" });
+        return true;
+      }
+      sendJson(response, 200, detail);
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/work-history/runs") {
+      const body = await readJsonBody(request);
+      const run = await workHistory.queueRun({ ...body, actor: body.actor || { kind: "user", id: body.source || "api" } });
+      sendJson(response, 202, { run });
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/work-history/runs/claim") {
+      const body = await readJsonBody(request);
+      const result = await workHistory.claimRun(body);
+      if (!result.run) {
+        sendJson(response, 204, {});
+        return true;
+      }
+      sendJson(response, 200, result);
+      return true;
+    }
+    const runActionMatch = pathname.match(/^\/v1\/work-history\/runs\/([^/]+)\/(events|snapshots|diffs|verifications)$/);
+    if (method === "POST" && runActionMatch) {
+      const runId = decodeURIComponent(runActionMatch[1]);
+      const body = await readJsonBody(request);
+      const input = { ...body, run_id: runId };
+      if (runActionMatch[2] === "events") {
+        sendJson(response, 201, { event: await workHistory.appendRunEvent(input) });
+      } else if (runActionMatch[2] === "snapshots") {
+        sendJson(response, 201, { snapshot: await workHistory.recordSnapshot(input) });
+      } else if (runActionMatch[2] === "diffs") {
+        sendJson(response, 201, { diff: await workHistory.recordDiff(input) });
+      } else {
+        sendJson(response, 201, { verification: await workHistory.recordVerification(input) });
+      }
+      return true;
+    }
+    const runMatch = pathname.match(/^\/v1\/work-history\/runs\/([^/]+)$/);
+    if (method === "GET" && runMatch) {
+      const detail = await workHistory.runDetail(decodeURIComponent(runMatch[1]));
+      if (!detail) {
+        sendJson(response, 404, { error: "work run not found" });
+        return true;
+      }
+      sendJson(response, 200, detail);
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/work-history/feedback") {
+      const body = await readJsonBody(request);
+      sendJson(response, 201, await workHistory.attachFeedback(body));
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/work-history/controls/claim") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await workHistory.claimControlRequest(body));
+      return true;
+    }
+    const controlReceiptMatch = pathname.match(/^\/v1\/work-history\/controls\/([^/]+)\/receipt$/);
+    if (method === "POST" && controlReceiptMatch) {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await workHistory.receiptControlRequest({
+        ...body,
+        control_id: decodeURIComponent(controlReceiptMatch[1]),
+      }));
+      return true;
+    }
+    if (method === "GET" && pathname === "/v1/work-history/deployments") {
+      sendJson(response, 200, await workHistory.deploymentLinks({ target: url.searchParams.get("target") || "" }));
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/work-history/deployments") {
+      const body = await readJsonBody(request);
+      sendJson(response, 201, { deployment: await workHistory.recordDeployment(body) });
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/work-history/deployments/requests") {
+      const body = await readJsonBody(request);
+      sendJson(response, 202, { request: await workHistory.requestDeployment(body) });
+      return true;
+    }
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+    return true;
+  }
+
+  sendJson(response, 404, { error: "unknown work-history endpoint" });
+  return true;
+}
+
+// Control-plane entry for one spoken/typed message. Stores the message broker-
+// first, parses the deterministic work-history intent, executes the durable
+// proposal or projection query, and answers with speakable text plus record ids.
+async function handleWorkHistoryTurn(request, response) {
+  const body = await readJsonBody(request);
+  const transcript = String(body.transcript || body.text || "").trim();
+  if (!transcript) {
+    sendJson(response, 400, { error: "transcript or text is required" });
+    return;
+  }
+  const intent = parseWorkHistoryIntent(transcript);
+  if (!intent) {
+    sendJson(response, 422, {
+      handled: false,
+      error: "no work-history intent recognized; use the normal voice/chat route",
+    });
+    return;
+  }
+  const turnId = sanitizeOptionalId(body.turn_id, randomId("turn"));
+  const { stored: brokerEvent } = await storeBrokerMessage(
+    { ...body, source: body.source || "work-history-turn" },
+    truncate(transcript, 16000),
+  );
+  const result = await executeWorkHistoryIntent(intent, {
+    transcript,
+    turnId,
+    brokerEvent,
+    sessionId: sanitizeOptionalId(body.session_id || body.conversation_id, ""),
+    branchId: sanitizeOptionalId(body.branch_id, "default"),
+    body,
   });
+  sendJson(response, result.status_code || 200, {
+    handled: true,
+    turn_id: turnId,
+    broker_event_id: brokerEvent.id,
+    intent,
+    speak: result.speak,
+    display: result.display || result.speak,
+    actions: result.actions || [],
+    refs: result.refs || {},
+  });
+}
+
+// Execute one parsed work-history intent. Every branch either appends durable
+// proposal records or answers from projections; none of them starts a harness,
+// opens a UI, applies a deployment, or cancels work without a worker receipt.
+async function executeWorkHistoryIntent(intent, context) {
+  const { transcript, turnId, brokerEvent, sessionId, branchId, body = {} } = context;
+  const topDecision = (brokerEvent?.decisions || [])[0] || null;
+
+  if (intent.kind === "create_work") {
+    const objective = intent.objective || transcript;
+    const task = await workHistory.createTask({
+      title: firstLine(objective).slice(0, 120),
+      objective,
+      owner_hint: intent.owner_hint || "",
+      session_id: sessionId,
+      branch_id: branchId,
+      project_id: body.project_id || "",
+      created_from_broker_event_id: brokerEvent?.id || "",
+      created_from_turn_id: turnId,
+      actor: { kind: "user", id: body.device_id || body.source || "voice" },
+    });
+    let run = null;
+    if (intent.wants_run !== false) {
+      run = await workHistory.queueRun({
+        task_id: task.task_id,
+        objective,
+        owner_hint: intent.owner_hint || "",
+        harness_hint: body.harness || "",
+        session_id: sessionId,
+        branch_id: branchId,
+        project_id: body.project_id || "",
+        created_from_broker_event_id: brokerEvent?.id || "",
+        created_from_turn_id: turnId,
+        route_decision_id: topDecision?.id || "",
+        context_pack_ref: topDecision?.context_pack_id || "",
+        profile_version: brokerEvent?.profile_version || "",
+        actor: { kind: "user", id: body.device_id || body.source || "voice" },
+      });
+    }
+    const speak = run
+      ? `Created task ${task.task_id} and queued run ${run.run_id}. It stays queued until a worker claims it.`
+      : `Created task ${task.task_id}. No run queued yet.`;
+    return {
+      status_code: 202,
+      speak,
+      refs: { task_id: task.task_id, run_id: run?.run_id || "", run_status: run?.status || "" },
+    };
+  }
+
+  if (intent.kind === "status_query") {
+    const summary = await workHistory.statusSummary();
+    return {
+      speak: workHistoryStatusSpeech(intent, summary, await workHistoryChangedDetail(intent, summary)),
+      refs: {
+        queued_run_ids: summary.queued.map((run) => run.run_id),
+        active_run_ids: summary.active.map((run) => run.run_id),
+        blocked_run_ids: summary.blocked.map((run) => run.run_id),
+        failed_run_ids: summary.failed.map((run) => run.run_id),
+      },
+    };
+  }
+
+  if (intent.kind === "feedback") {
+    const result = await workHistory.attachFeedback({
+      targets: intent.target ? [intent.target] : [],
+      transcript: intent.text || transcript,
+      summary: firstLine(intent.text || transcript).slice(0, 300),
+      intent: intent.intent,
+      control_action: intent.control_action || "",
+      source_turn_id: turnId,
+      source_broker_event_id: brokerEvent?.id || "",
+      actor: { kind: "user", id: body.device_id || body.source || "voice" },
+    });
+    const targetNames = result.feedback.target_refs.map((ref) => ref.id).join(", ");
+    const speak = intent.intent === "cancellation"
+      ? `Queued a ${intent.control_action || "cancel"} request for ${targetNames}. The owning worker must claim and confirm it; nothing is canceled yet.`
+      : `Attached your feedback to ${targetNames}. The work keeps running.`;
+    return {
+      status_code: intent.intent === "cancellation" ? 202 : 200,
+      speak,
+      refs: {
+        feedback_id: result.feedback.feedback_id,
+        feedback_status: result.feedback.status,
+        control_request_ids: result.control_requests.map((control) => control.control_id),
+      },
+    };
+  }
+
+  if (intent.kind === "deployment_link") {
+    const links = await workHistory.deploymentLinks({ target: workHistoryDeploymentTarget(transcript) });
+    const parts = [];
+    if (links.latest_preview) {
+      parts.push(`Latest preview: ${links.latest_preview.preview_url || links.latest_preview.deployment_id} (${links.latest_preview.status}).`);
+    }
+    if (links.latest_applied) {
+      parts.push(`Active: ${links.latest_applied.active_url || links.latest_applied.deployment_id}, applied at ${links.latest_applied.applied_at || links.latest_applied.recorded_at}.`);
+    }
+    if (parts.length === 0) {
+      parts.push("No deployment records yet. Say 'create a deploy request' to queue one; nothing gets applied without your explicit promotion.");
+    }
+    return {
+      speak: parts.join(" "),
+      refs: {
+        latest_preview_id: links.latest_preview?.deployment_id || "",
+        latest_applied_id: links.latest_applied?.deployment_id || "",
+        preview_url: links.latest_preview?.preview_url || "",
+        active_url: links.latest_applied?.active_url || "",
+      },
+    };
+  }
+
+  if (intent.kind === "deployment_request") {
+    const request = await workHistory.requestDeployment({
+      target: workHistoryDeploymentTarget(transcript),
+      mode: "preview",
+      run_id: intent.target && intent.target.startsWith("wr_") ? intent.target : "",
+      branch: body.branch || "",
+      reason: transcript,
+      source_turn_id: turnId,
+      actor: { kind: "user", id: body.device_id || body.source || "voice" },
+    });
+    return {
+      status_code: 202,
+      speak: `Queued deployment request ${request.request_id} for ${request.target} as a preview. It will not be applied without your explicit promotion.`,
+      refs: { deployment_request_id: request.request_id },
+    };
+  }
+
+  if (intent.kind === "ui_open") {
+    const route = await workHistory.resolveUiRoute({ route_kind: intent.route_kind, target: intent.target });
+    if (!route) {
+      return {
+        status_code: 404,
+        speak: `I could not find a ${intent.route_kind} record to open yet.`,
+        refs: {},
+      };
+    }
+    let toolRequest = null;
+    let queueError = "";
+    try {
+      toolRequest = createToolRequest({
+        tool: "ui.open",
+        target_surface_type: intent.surface || "",
+        source: "work-history-voice",
+        session_id: sessionId,
+        branch_id: branchId,
+        instruction: truncate(transcript, 2000),
+        input: {
+          route_kind: route.route_kind,
+          route_ref: route.route_ref,
+          safe_url: route.safe_url,
+          created_from_turn_id: turnId,
+        },
+      });
+      await recordToolRequestProductEvent(toolRequest, "queued");
+    } catch (error) {
+      // No addressable client: keep the answer useful by returning the link as
+      // text, per the contract. The gateway itself never opens any UI.
+      queueError = cleanError(error);
+    }
+    const surfaceName = intent.surface === "android" ? "your phone" : intent.surface === "browser_extension" ? "your browser" : "a client";
+    const speak = toolRequest
+      ? `Asked ${surfaceName} to open the ${route.route_kind} ${route.route_ref}. It opens only after the client claims the request.`
+      : `No client is reachable right now. Open it yourself at ${route.safe_url}.`;
+    return {
+      status_code: toolRequest ? 202 : 200,
+      speak,
+      actions: toolRequest ? [{ type: "ui_open_requested", request_id: toolRequest.id, safe_url: route.safe_url }] : [],
+      refs: {
+        tool_request_id: toolRequest?.id || "",
+        route_kind: route.route_kind,
+        route_ref: route.route_ref,
+        safe_url: route.safe_url,
+        queue_error: queueError,
+      },
+    };
+  }
+
+  throw new Error(`unsupported work-history intent: ${intent.kind}`);
+}
+
+function workHistoryDeploymentTarget(transcript) {
+  const lower = normalizeSpeech(transcript);
+  if (/\bgateway\b/.test(lower)) return "gateway";
+  if (/\bandroid|phone\b/.test(lower)) return "android";
+  if (/\bextension\b/.test(lower)) return "browser_extension";
+  if (/\bwebsite|site\b/.test(lower)) return "website";
+  return "";
+}
+
+// Speakable status built ONLY from projections. Names ids, states, blocking
+// reasons, and the latest meaningful event; it never launches new work.
+function workHistoryStatusSpeech(intent, summary, changedDetail) {
+  if (intent.scope === "changed" && changedDetail) {
+    return changedDetail;
+  }
+  if (intent.scope === "failed") {
+    if (summary.failed.length === 0) {
+      return "Nothing has failed.";
+    }
+    return summary.failed.map((run) => {
+      const reason = run.blocking_reason || run.latest_summary || "no failure detail recorded";
+      return `Run ${run.run_id} ${run.status}: ${reason}.`;
+    }).join(" ");
+  }
+  if (intent.scope === "waiting") {
+    const waiting = summary.waiting_on_user.concat(summary.queued);
+    if (waiting.length === 0) {
+      return "Nothing is waiting on you.";
+    }
+    return waiting.map((run) => `Run ${run.run_id}: ${run.blocking_reason || run.status}.`).join(" ");
+  }
+  const parts = [];
+  if (summary.active.length > 0) {
+    parts.push(`Active: ${summary.active.map((run) => `${run.run_id} (${run.status}${run.worker_id ? ` on ${run.worker_id}` : ""})`).join(", ")}.`);
+  }
+  if (summary.queued.length > 0) {
+    parts.push(`Queued and waiting for a worker: ${summary.queued.map((run) => run.run_id).join(", ")}.`);
+  }
+  if (summary.blocked.length > 0) {
+    parts.push(`Blocked: ${summary.blocked.map((run) => `${run.run_id} (${run.blocking_reason})`).join("; ")}.`);
+  }
+  if (summary.completed.length > 0) {
+    parts.push(`Completed: ${summary.completed.map((run) => run.run_id).join(", ")}.`);
+  }
+  if (summary.failed.length > 0) {
+    parts.push(`Failed or canceled: ${summary.failed.map((run) => run.run_id).join(", ")}.`);
+  }
+  if (parts.length === 0) {
+    return "No work-history tasks or runs recorded yet.";
+  }
+  return parts.join(" ");
+}
+
+// "What did <run> change" answered from before/after snapshots, the diff ref,
+// and verification artifacts recorded by the claiming worker.
+async function workHistoryChangedDetail(intent, summary) {
+  if (intent.scope !== "changed") {
+    return "";
+  }
+  let runId = intent.target || "";
+  if (!runId) {
+    const candidates = summary.runs
+      .filter((run) => run.diff_count > 0 || ["completed", "running", "claimed"].includes(run.status))
+      .sort((a, b) => String(b.latest_event_at).localeCompare(String(a.latest_event_at)));
+    runId = candidates[0]?.run_id || "";
+  }
+  if (!runId) {
+    return "No runs with recorded changes yet.";
+  }
+  const detail = await workHistory.runDetail(runId);
+  if (!detail) {
+    return `I have no work run named ${runId}.`;
+  }
+  const parts = [`Run ${runId} is ${detail.status}.`];
+  if (detail.before_snapshot && detail.after_snapshot) {
+    parts.push(`It moved ${detail.before_snapshot.branch || "the repo"} from commit ${shortSha(detail.before_snapshot.commit_sha)} to ${shortSha(detail.after_snapshot.commit_sha)}.`);
+  } else if (detail.before_snapshot) {
+    parts.push(`It started from commit ${shortSha(detail.before_snapshot.commit_sha)}; no after snapshot yet.`);
+  } else {
+    parts.push("No repo snapshots recorded yet.");
+  }
+  const diff = detail.diffs.slice(-1)[0];
+  if (diff) {
+    parts.push(`The diff ${diff.diff_id} touches ${diff.stats.files || diff.changed_paths.length} files, +${diff.stats.insertions} -${diff.stats.deletions}.`);
+  }
+  const verification = detail.verifications.slice(-1)[0];
+  if (verification) {
+    parts.push(`Latest verification ${verification.status}: ${verification.command || verification.verification_id}.`);
+  }
+  return parts.join(" ");
+}
+
+function shortSha(sha) {
+  const safe = String(sha || "").trim();
+  return safe ? safe.slice(0, 10) : "unknown";
 }
 
 function brokerMessageText(body) {
@@ -2798,6 +3268,62 @@ async function handleVoiceTurn(request, response) {
     });
     await writeCompletedVoiceTurnRecord({ ...baseRecord, updated_at: new Date().toISOString(), response: payload });
     sendJson(response, 200, payload);
+    return;
+  }
+
+  // Voice work-history control plane: explicit task/run creation, status and
+  // change/failure queries, feedback attachment, deployment links, and client
+  // UI-open requests become durable proposals or projection answers here —
+  // BEFORE the legacy dispatch path, so a status question never launches work
+  // and a create request queues a run instead of executing one.
+  const workHistoryIntent = parseWorkHistoryIntent(transcript);
+  if (workHistoryIntent) {
+    let payload;
+    let statusCode = 200;
+    try {
+      const { stored: brokerEvent } = await storeBrokerMessage({
+        source,
+        session_id: sessionId,
+        conversation_id: conversationId,
+        branch_id: branchId,
+        device_id: deviceId,
+      }, truncate(transcript, 16000));
+      const result = await executeWorkHistoryIntent(workHistoryIntent, {
+        transcript,
+        turnId,
+        brokerEvent,
+        sessionId,
+        branchId,
+        body,
+      });
+      statusCode = result.status_code || 200;
+      payload = {
+        ...voiceTurnPayload(baseRecord, {
+          classification: "work_history",
+          speak: capSpeakText(result.speak, profile.voice_max_chars),
+          display: result.display || result.speak,
+          actions: result.actions || [],
+          follow_up_expected: false,
+        }),
+        work_history: { intent: workHistoryIntent, ...(result.refs || {}) },
+      };
+    } catch (error) {
+      payload = voiceTurnPayload(baseRecord, {
+        classification: "work_history",
+        speak: capSpeakText(`I could not do that: ${cleanError(error)}.`, profile.voice_max_chars),
+        display: `Work-history request failed: ${cleanError(error)}`,
+        actions: [],
+        follow_up_expected: false,
+      });
+    }
+    await writeCompletedVoiceTurnRecord({
+      ...baseRecord,
+      classification: "work_history",
+      updated_at: new Date().toISOString(),
+      response: payload,
+      references: payload.work_history || {},
+    });
+    sendJson(response, statusCode, payload);
     return;
   }
 
