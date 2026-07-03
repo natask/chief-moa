@@ -60,14 +60,14 @@ written to the mounted volume.
 
 ## 2. Remote Config-Mode Hardening
 
-- [ ] 2.1 Implement `MOA_MODE` (`local` | `self-host` | `hosted`) as the single
+- [x] 2.1 Implement `MOA_MODE` (`local` | `self-host` | `hosted`) as the single
   mode selector for auth defaults, bind address, trust-proxy behavior, and store
   selection.
-- [ ] 2.2 In `self-host` and `hosted`, refuse startup without
+- [x] 2.2 In `self-host` and `hosted`, refuse startup without
   `MOA_GATEWAY_TOKEN` or better-auth, and without `DATABASE_URL`.
-- [ ] 2.3 Keep local mode developer-friendly: loopback bind by default, file
+- [x] 2.3 Keep local mode developer-friendly: loopback bind by default, file
   fallback allowed, and no remote-mode auth assumptions.
-- [ ] 2.4 Add health/runtime fields that report mode, auth requirement,
+- [x] 2.4 Add health/runtime fields that report mode, auth requirement,
   Postgres/event-store status, public base URL when configured, and voice
   runtime summary without leaking secrets.
 
@@ -110,13 +110,16 @@ Verification:
   audit events, and store contract in `account-connection-policy.md`.
 - [x] 4.2 Split follow-up gateway implementation tickets in
   `account-connection-tasks.md`.
-- [ ] 4.3 Implement `GET /v1/account-providers` with stable provider ids and no
+- [x] 4.3 Implement `GET /v1/account-providers` with stable provider ids and no
   secret exposure.
-- [ ] 4.4 Implement account connection store, non-secret serializers, and
+- [x] 4.4 Implement account connection store, non-secret serializers, and
   per-user query scoping for list/detail/patch.
-- [ ] 4.5 Implement connection start, OAuth callback, gateway-secret form,
-  explicit refresh, manual reauth actions, device notification requests,
-  disable, disconnect, and revocation audit.
+- [ ] 4.5 Complete full connection lifecycle beyond the current safe MVP:
+  provider-specific OAuth callback handling, gateway-secret form UI,
+  provider-backed refresh success paths, device notification delivery, and
+  revocation audit across the future Postgres store. The current gateway slice
+  implements non-secret create/list/detail/patch, manual reauth action
+  generation, refresh-needed status, disable, and disconnect.
 
 Acceptance: users can connect and inspect provider accounts while Android and
 the browser receive only labels, statuses, action URLs/codes, and non-secret
@@ -138,14 +141,14 @@ Verification:
   criteria.
 - [x] 5.2 Split follow-up gateway, worker, and smoke tickets in
   `worker-pull-tasks.md`.
-- [ ] 5.3 Implement owner-approved worker registration with one-use setup codes
+- [x] 5.3 Implement owner-approved worker registration with one-use setup codes
   and hashed worker tokens distinct from device tokens.
-- [ ] 5.4 Extend queued agent runs with lease fields and explicit session,
+- [x] 5.4 Extend queued agent runs with lease fields and explicit session,
   branch, work, artifact, and deployment references.
-- [ ] 5.5 Implement `POST /v1/agent/workers/claim` for outbound long-poll
+- [x] 5.5 Implement `POST /v1/agent/workers/claim` for outbound long-poll
   claiming with bounded payloads that exclude `command`, `args`, `shell`, raw
   env, raw credentials, and arbitrary absolute paths.
-- [ ] 5.6 Implement worker heartbeat, event append, terminal result, stale claim
+- [x] 5.6 Implement worker heartbeat, event append, terminal result, stale claim
   rejection, cancellation observation, lease expiry, and retry semantics.
 - [ ] 5.7 Build the local worker runtime pull loop for an allowlisted `echo`
   harness before enabling Codex/Claude/Gemini harness profiles.
@@ -169,15 +172,17 @@ Verification:
 - [x] 6.2 Split Android, browser, gateway diagnostics, smoke, and promotion
   boundary tasks in `client-onboarding-tasks.md`.
 - [x] 6.3 Add Android and browser onboarding notes under the client docs.
-- [ ] 6.4 Implement shared URL normalization and stale/local URL diagnostics
+- [x] 6.4 Implement shared URL normalization and stale/local URL diagnostics
   for `https://api.agee.app`, `https://api.<domain>`, `10.147.17.10`,
   `10.147.17.6`, missing schemes, and endpoint paths.
-- [ ] 6.5 Android: derive hosted voice from the configured gateway origin,
-  add an authenticated probe after `/health`, add registration UI when gateway
-  registration exists, and expand voice setup diagnostics.
-- [ ] 6.6 Browser extension: update hosted default/config examples,
-  Options/doctor diagnostics, pre-open voice errors, host permissions, and
-  package version when source changes ship.
+- [ ] 6.5 Android: complete the gateway registration UI and authenticated probe
+  once gateway device registration exists. The current Android slice derives
+  voice from the configured gateway origin, migrates stale dev defaults, expands
+  setup diagnostics, and verifies with unit tests plus `assembleDebug`.
+- [ ] 6.6 Browser extension: complete package-version/release handling when the
+  source change is promoted. The current browser slice updates hosted
+  defaults/config examples, Options/doctor diagnostics, pre-open voice errors,
+  and verification coverage.
 - [ ] 6.7 Gateway: return structured diagnostics for health, protected auth
   probes, voice ticket denial, missing voice routes, and provider/runtime
   unavailability.
