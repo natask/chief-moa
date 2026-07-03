@@ -143,6 +143,77 @@ const LANGUAGE_OPTIONS = Object.freeze([
   keys: Object.freeze(language.keys.slice()),
 })));
 
+// Vetted starter personas. A "become X" utterance maps to one of these when the
+// name matches a key/alias; otherwise the free-form description after "become"
+// is stored as a persona prompt (validated in agent-profile.js). A persona may
+// carry its own voice + reply language, applied together with the prompt.
+const PERSONA_OPTIONS = Object.freeze([
+  {
+    id: "pirate",
+    label: "Pirate",
+    keys: ["pirate", "a pirate", "buccaneer"],
+    prompt: "You are a swashbuckling pirate. Speak in pirate cant with 'arr', 'matey', and 'ye'. Stay playful and terse.",
+    voice: "Fenrir",
+  },
+  {
+    id: "butler",
+    label: "Butler",
+    keys: ["butler", "a butler", "valet"],
+    prompt: "You are a proper English butler. Speak formally and deferentially, address the user as 'sir' or 'madam', and stay terse.",
+    voice: "Orus",
+  },
+  {
+    id: "coach",
+    label: "Coach",
+    keys: ["coach", "a coach", "motivational coach", "life coach"],
+    prompt: "You are an upbeat motivational coach. Be encouraging, direct, and action-oriented. Keep it terse.",
+    voice: "Puck",
+  },
+  {
+    id: "therapist",
+    label: "Therapist",
+    keys: ["therapist", "a therapist", "counselor", "counsellor"],
+    prompt: "You are a warm, reflective counselor. Listen, validate, and ask gentle questions. Never diagnose or prescribe. Keep replies terse.",
+    voice: "Leda",
+  },
+  {
+    id: "scientist",
+    label: "Scientist",
+    keys: ["scientist", "a scientist", "researcher"],
+    prompt: "You are a precise research scientist. Explain plainly, cite uncertainty, and stay terse.",
+    voice: "Kore",
+  },
+].map(Object.freeze));
+
+const PERSONA_BY_KEY = new Map();
+for (const persona of PERSONA_OPTIONS) {
+  PERSONA_BY_KEY.set(normalizeSpeechKey(persona.label), persona);
+  PERSONA_BY_KEY.set(normalizeSpeechKey(persona.id), persona);
+  for (const key of persona.keys) {
+    PERSONA_BY_KEY.set(normalizeSpeechKey(key), persona);
+  }
+}
+
+function canonicalPersona(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const key = normalizeSpeechKey(value);
+  if (!key) {
+    return null;
+  }
+  return PERSONA_BY_KEY.get(key) || null;
+}
+
+function personaOptionsPayload() {
+  return PERSONA_OPTIONS.map((persona) => ({
+    id: persona.id,
+    label: persona.label,
+    aliases: persona.keys.slice(),
+    voice: persona.voice || "",
+  }));
+}
+
 const LANGUAGE_BY_CODE = new Map(LANGUAGE_OPTIONS.map((language) => [language.code.toLowerCase(), language]));
 const LANGUAGE_BY_KEY = new Map();
 for (const language of LANGUAGE_OPTIONS) {
@@ -289,6 +360,7 @@ function profileOptionsPayload(options = {}) {
     },
     voices: voiceOptionsPayload(),
     languages: languageOptionsPayload(),
+    personas: personaOptionsPayload(),
     models,
     fields: {
       model: {
@@ -337,8 +409,11 @@ function profileOptionsPayload(options = {}) {
 module.exports = {
   LANGUAGE_OPTIONS,
   VOICE_OPTIONS,
+  PERSONA_OPTIONS,
   CORE_VOICES,
   canonicalVoice,
+  canonicalPersona,
+  personaOptionsPayload,
   normalizeVoiceChoice,
   normalizeLanguageCode,
   normalizeLanguageList,

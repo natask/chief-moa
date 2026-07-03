@@ -640,8 +640,37 @@ function normalizeAssistantName(value) {
   return cleaned;
 }
 
+// Phrases a spoken "become X" / "set your prompt to X" must never smuggle in:
+// attempts to override the gateway's own guidelines, safety rules, or identity
+// boundary. Matched on the lowercased prompt; a match strips that clause rather
+// than persisting it, so a persona stays a persona and cannot rewrite the rules.
+const OVERRIDE_QUALIFIER = "(?:your|all|any|the|previous|prior|earlier|above|its)";
+const OVERRIDE_TARGET = "(?:guidelines?|rules?|instructions?|policies|policy|constraints?|safety|system\\s+prompt|restrictions?|limits?|filters?)";
+const PROMPT_OVERRIDE_PATTERNS = [
+  new RegExp(`\\b(?:ignore|disregard|forget|override|bypass|disable|drop|remove|skip)\\s+(?:${OVERRIDE_QUALIFIER}\\s+)+${OVERRIDE_TARGET}\\b[^.!?]*`, "gi"),
+  /\byou\s+have\s+no\s+(?:guidelines?|rules?|restrictions?|limits?|constraints?|safety|filters?)\b[^.!?]*/gi,
+  /\b(?:there\s+are\s+no|without\s+any)\s+(?:guidelines?|rules?|restrictions?|limits?|constraints?|filters?|safety)\b[^.!?]*/gi,
+  /\b(?:jailbreak|developer\s+mode|dan\s+mode|do\s+anything\s+now)\b[^.!?]*/gi,
+  /\byou\s+are\s+not\s+bound\s+by\b[^.!?]*/gi,
+];
+const PROMPT_MAX_CHARS = 1200;
+
+// Strip adversarial override clauses and cap length. Returns the cleaned prompt,
+// or "" when nothing usable is left. Never persists a rule-override attempt.
+function sanitizePersonaPrompt(value) {
+  let prompt = String(value || "").trim();
+  if (!prompt) {
+    return "";
+  }
+  for (const pattern of PROMPT_OVERRIDE_PATTERNS) {
+    prompt = prompt.replace(pattern, " ");
+  }
+  prompt = prompt.replace(/\s+/g, " ").trim().slice(0, PROMPT_MAX_CHARS).trim();
+  return prompt;
+}
+
 function normalizeSystemPromptField(value) {
-  const prompt = String(value || "").trim();
+  const prompt = sanitizePersonaPrompt(value);
   return prompt ? withRequiredVoiceStyle(prompt) : "";
 }
 
@@ -745,6 +774,7 @@ module.exports = {
   normalizeAssistantName,
   normalizeDeviceId,
   normalizeSystemPromptField,
+  sanitizePersonaPrompt,
   safeSystemPromptForProvider,
   withRequiredVoiceStyle,
 };
