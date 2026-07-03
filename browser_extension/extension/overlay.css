@@ -551,6 +551,69 @@
 .agee-confirm-actions button:hover {
   background: #292932;
 }
+/* Tweak review: the "Changes on this page" affordance on a page_tweak done cue.
+   Tiny, overlay-styled; deep management stays in options. */
+.agee-tweak-review {
+  margin-top: 8px;
+}
+.agee-tweak-toggle {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #cfcfd4;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1;
+  padding: 6px 9px;
+  min-height: 28px;
+}
+.agee-tweak-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.agee-tweak-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.agee-tweak-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: #dcdce0;
+}
+.agee-tweak-name {
+  overflow-wrap: anywhere;
+}
+.agee-tweak-remove {
+  appearance: none;
+  border: 1px solid #34343a;
+  border-radius: 7px;
+  background: #202026;
+  color: #ff8278;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  min-height: 26px;
+  flex: 0 0 auto;
+}
+.agee-tweak-remove:hover {
+  background: #292932;
+}
+.agee-tweak-remove:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.agee-tweak-empty {
+  font-size: 11.5px;
+  color: var(--agee-muted);
+}
 @media (max-width: 380px) {
   #agee-panel {
     width: calc(100vw - 16px);

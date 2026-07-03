@@ -266,46 +266,92 @@ async function main() {
     const finalList = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
     assert(finalList.tweaks.length === 0, "no tweaks should remain after removal");
 
-    // 5) OVERLAY COMMAND PATH: the same natural-language command must work
-    // through the normal user surface, not only by sending tweak:* messages.
+    // 5) MESSAGE API INTACT: the free-text local page-tweak detector in the
+    // background is demoted (page-change requests now flow to the gateway model
+    // turn, which returns a page_tweak action). The tweak:apply message API that
+    // the smoke and options paths use must still apply + persist a tweak locally.
+    // The overlay is confirmed openable, then the tweak lands through tweak:apply.
     const opened = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "open" });
     assert(opened.ok, "overlay should open");
-    await evaluate(pageCdp, `
-      (() => {
-        const input = document.getElementById('agee-input');
-        if (!input) throw new Error('no agee input');
-        input.value = 'remove the cookie banner';
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        return true;
-      })()
-    `);
-    const hiddenViaOverlay = await waitForEval(pageCdp, `(${BANNER_VISIBLE_EXPR}) === false ? "hidden" : null`);
-    assert(hiddenViaOverlay === "hidden", "overlay command path should apply the tweak");
-    const overlayList = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
-    assert(overlayList.tweaks.length === 1, "overlay path should persist one tweak");
+    const applyMsg = await tweakMsg(workerCdp, "http://localhost/*", {
+      cmd: "tweak:apply",
+      instruction: "remove the cookie banner",
+    });
+    assert(applyMsg.ok && applyMsg.tweak.kind === "hide", "tweak:apply message API should still apply a tweak");
+    const hiddenViaApi = await waitForEval(pageCdp, `(${BANNER_VISIBLE_EXPR}) === false ? "hidden" : null`);
+    assert(hiddenViaApi === "hidden", "tweak:apply should hide the banner");
+    const apiList = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
+    assert(apiList.tweaks.length === 1, "tweak:apply should persist one tweak");
     await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:clear" });
 
-    // 6) BLACK PAGE COMMAND: the phrase from the voice path must stay local and
-    // become a page tweak instead of falling through to the gateway/model.
-    await evaluate(pageCdp, `
-      (() => {
-        const input = document.getElementById('agee-input');
-        if (!input) throw new Error('no agee input');
-        input.value = 'make this page all black';
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        return true;
-      })()
-    `);
-    const blackViaOverlay = await waitForEval(pageCdp, `
+    // 6) BLACK PAGE via the message API: the black kind still compiles and applies
+    // locally through tweak:apply (the local compiler is unchanged; only the
+    // background keyword trigger was demoted).
+    const blackMsg = await tweakMsg(workerCdp, "http://localhost/*", {
+      cmd: "tweak:apply",
+      instruction: "make this page all black",
+    });
+    assert(blackMsg.ok && blackMsg.tweak.kind === "black", "tweak:apply should build a black tweak");
+    const blackViaApi = await waitForEval(pageCdp, `
       (() => {
         const bg = getComputedStyle(document.body).backgroundColor;
         return bg === 'rgb(0, 0, 0)' ? 'black' : null;
       })()
     `);
-    assert(blackViaOverlay === "black", "overlay command path should make the page black");
+    assert(blackViaApi === "black", "tweak:apply should make the page black");
     const blackList = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
     assert(blackList.tweaks.length === 1 && blackList.tweaks[0].kind === "black", "black page tweak should persist");
     await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:clear" });
+
+    // 7) AGENT-DRIVEN RECORD PATH: a pre-planned record (as the gateway model
+    // would emit and background would forward via tweak:applyRecord) applies,
+    // persists across reload, and stays inspectable — no free text involved.
+    const recordApplied = await tweakMsg(workerCdp, "http://localhost/*", {
+      cmd: "tweak:applyRecord",
+      record: { kind: "hide", params: { selectors: ["#cookie-banner"] }, name: "Hide cookie banner (agent)" },
+    });
+    assert(recordApplied.ok, `applyRecord should succeed: ${JSON.stringify(recordApplied)}`);
+    assert(recordApplied.tweak && recordApplied.tweak.kind === "hide", "applyRecord tweak kind should be hide");
+    assert(
+      typeof recordApplied.tweak.css === "string" && recordApplied.tweak.css.includes("display: none"),
+      "applyRecord css must be inspectable",
+    );
+    const recordId = recordApplied.tweak.id;
+    assert((await evaluate(pageCdp, BANNER_VISIBLE_EXPR)) === false, "banner hidden right after applyRecord");
+    await pageCdp.send("Page.reload");
+    await waitForEval(pageCdp, `document.readyState === "complete" && !!document.getElementById('cookie-banner')`);
+    const recordAfterReload = await waitForEval(pageCdp, `(${BANNER_VISIBLE_EXPR}) === false ? "hidden" : null`);
+    assert(recordAfterReload === "hidden", "applyRecord tweak should AUTO-RE-APPLY after reload");
+    const recordPersist = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
+    assert(
+      recordPersist.tweaks.length === 1 && recordPersist.tweaks[0].id === recordId,
+      "applyRecord tweak should persist across reload",
+    );
+
+    // 8) UNKNOWN KIND REJECTED: the agent path never compiles an effect it does
+    // not understand. No CSS or JS is accepted from outside.
+    const badKind = await tweakMsg(workerCdp, "http://localhost/*", {
+      cmd: "tweak:applyRecord",
+      record: { kind: "inject-script", params: { code: "alert(1)" } },
+    });
+    assert(!badKind.ok && /unknown tweak kind/i.test(String(badKind.error || "")), "unknown kind must be rejected");
+    const stillOne = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
+    assert(stillOne.tweaks.length === 1, "rejected record must not be stored");
+
+    // 9) REVIEW-PATH REMOVE: the overlay review panel routes tweak:list/remove
+    // through the background, which forwards to the same tab. Drive the same
+    // tweak:list -> tweak:remove path the panel uses and prove undo works.
+    const reviewList = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
+    assert(reviewList.tweaks.length === 1 && reviewList.tweaks[0].id === recordId, "review list should show the tweak");
+    const reviewRemove = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:remove", id: recordId });
+    assert(reviewRemove.ok && reviewRemove.remaining === 0, "review remove should undo the tweak");
+    assert((await evaluate(pageCdp, BANNER_VISIBLE_EXPR)) === true, "banner back immediately after review remove");
+    await pageCdp.send("Page.reload");
+    await waitForEval(pageCdp, `document.readyState === "complete" && !!document.getElementById('cookie-banner')`);
+    const reviewAfterReload = await waitForEval(pageCdp, `(${BANNER_VISIBLE_EXPR}) === true ? "visible" : null`);
+    assert(reviewAfterReload === "visible", "banner stays visible after reload once removed via review path");
+    const reviewFinal = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
+    assert(reviewFinal.tweaks.length === 0, "no tweaks remain after review remove");
 
     console.log(
       `tweaks smoke passed (REAL extension, headless Chrome for Testing): id=${extensionId}\n` +
@@ -313,8 +359,11 @@ async function main() {
         `  reload      -> tweak PERSISTED + AUTO-RE-APPLIED (style live, banner still hidden)\n` +
         `  per-origin  -> ${otherList.origin} saw 0 tweaks, banner VISIBLE (scope held)\n` +
         `  removal     -> tweak removed + reversible, banner back after reload\n` +
-        `  overlay     -> "remove the cookie banner" through the normal command bar hid + persisted\n` +
-        `  black page  -> "make this page all black" stayed local and persisted kind=black\n` +
+        `  message api -> tweak:apply still applies + persists (local detector demoted, API intact)\n` +
+        `  black page  -> tweak:apply "make this page all black" compiled + persisted kind=black\n` +
+        `  applyRecord -> agent-driven record ${recordId} (kind=hide) applied + AUTO-RE-APPLIED after reload\n` +
+        `  bad kind    -> unknown kind rejected, nothing stored\n` +
+        `  review path -> tweak:list + tweak:remove (overlay review) undid + reversible after reload\n` +
         `  no window shown, no focus taken.`,
     );
   } finally {
