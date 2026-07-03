@@ -116,7 +116,26 @@ transcript with a transcript source label (real STT, typed text, or synthetic
 placeholder), streaming partials merge into the final record when the provider
 result is a placeholder, and stored turns are queryable by id
 (`GET /v1/voice/turns/{turnId}`). A control intent such as "what did you hear"
-returns the prior user transcript verbatim.
+returns the prior user transcript verbatim. Echo-back depends on the user input
+transcript, which the gateway always requests from the Live provider
+(`inputAudioTranscription`), so the exact-transcript guarantee holds on every
+Live model.
+
+Native-audio Live models are audio-only for output: they reject any text-output
+request and close the socket with 1007 "Text output is not supported for native
+audio output model." The gateway therefore omits `outputAudioTranscription` for
+native-audio models (keeping it for non-native Live models) and keeps
+`responseModalities` at `["AUDIO"]`. On native-audio the assistant-side text
+mirror (`assistant_text`) is empty because the model emits neither an output
+transcription nor text parts; downstream treats empty `assistant_text` as "no
+assistant transcript" and does not depend on it, so the turn still returns audio
+and the stored user transcript.
+
+The English + Amharic language allowlist (see `agent_profile` below) is enforced
+in the same profile-control path: an unsupported language is dropped by the
+sanitizer with the previous setting kept, and a spoken or typed request for one
+returns a reply stating only English and Amharic are supported rather than
+silently failing.
 
 Voice turns can also become replayable verification evidence. When retention is
 enabled, the gateway stores or references the user audio, transcript, assistant
