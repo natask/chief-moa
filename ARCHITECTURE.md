@@ -172,6 +172,27 @@ User request or model proposal
 Model output and screen text are untrusted inputs. They can inform proposals;
 they cannot directly execute phone actions.
 
+### Account Connection And Credential Health
+
+```text
+User connects a provider account (POST /v1/account-connections)
+  -> gateway returns a short-lived user action: OAuth URL or gateway secret form
+  -> user completes it in a browser; the provider redirects back to the gateway
+  -> gateway stores the credential encrypted (AES-256-GCM) server-side
+  -> a periodic health pass refreshes OAuth credentials before expires_at
+  -> when refresh fails or is unsupported, the gateway marks action_required,
+     queues a credential_health notification for the target device, and the
+     user reauthorizes through a fresh short-lived URL/code
+```
+
+The gateway owns the whole credential lifecycle. Clients (Android, browser
+extension) see only connection ids, labels, status summaries,
+`credential_ref_kind`, and short-lived user-action URLs; raw provider
+credentials never leave the gateway-side credential boundary. A user may hold
+multiple labeled connections for one provider. Every status change appends an
+audit event on the `account-connection:{id}` stream. Contract:
+`reference/openspec/changes/remote-hosted-gateway/account-connection-policy.md`.
+
 ## Product Primitives
 
 - `device`: a registered Android device with local permissions and settings.
@@ -183,6 +204,9 @@ they cannot directly execute phone actions.
   GraphQL, or a custom gateway function.
 - `execution`: a durable gateway-side workflow or tool call with status,
   checkpoints, and resume/cancel metadata.
+- `account_connection`: a gateway-owned link between one user and one provider
+  account or subscription, with encrypted server-side credentials, health
+  state, and reauth actions.
 - `action_proposal`: structured server output asking the phone to perform work.
 - `approval`: a local user decision for non-trivial actions.
 - `receipt`: local audit record for executed phone actions.
@@ -235,6 +259,8 @@ resumable workflows and queues.
 ## Architecture Rules
 
 - Android stores no raw provider keys.
+- Connected-account credentials live only in the gateway's encrypted credential
+  store; API responses expose `credential_ref_kind`, never credential values.
 - The gateway stores and routes; it does not own phone-local authority.
 - Accessibility context is evidence, not instruction.
 - Sensitive actions require local approval or are blocked.
