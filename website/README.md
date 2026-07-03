@@ -1,6 +1,6 @@
-# Aggie website
+# A.G. website
 
-The public Aggie site: a single landing page with the email field above the
+The public A.G. site: a single landing page with the email field above the
 fold, backed by a waitlist signup that stores emails in D1 and sends a
 confirmation email via Resend.
 
@@ -38,7 +38,7 @@ Resend is configured. It needs a domain verified in Resend (the free
 
 ```sh
 npx wrangler pages secret put RESEND_API_KEY --project-name agee-app
-npx wrangler pages secret put RESEND_FROM    --project-name agee-app   # e.g. "Aggie <hello@agee.app>"
+npx wrangler pages secret put RESEND_FROM    --project-name agee-app   # e.g. "A.G. <hello@agee.app>"
 npx wrangler pages secret put RESEND_REPLY_TO --project-name agee-app  # optional
 ```
 

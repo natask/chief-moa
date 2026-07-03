@@ -71,7 +71,7 @@ export async function onRequestPost({ request, env }) {
 }
 
 async function sendConfirmation(env, to) {
-  const from = env.RESEND_FROM; // e.g. "Aggie <hello@yourdomain.com>"
+  const from = env.RESEND_FROM; // e.g. "A.G. <hello@yourdomain.com>"
   const replyTo = env.RESEND_REPLY_TO || undefined;
 
   const res = await fetch("https://api.resend.com/emails", {
@@ -84,7 +84,7 @@ async function sendConfirmation(env, to) {
       from,
       to,
       ...(replyTo ? { reply_to: replyTo } : {}),
-      subject: "You're on the Aggie waitlist",
+      subject: "You're on the A.G. waitlist",
       text: confirmationText(),
       html: confirmationHtml(),
     }),
@@ -108,7 +108,7 @@ function confirmationText() {
   return [
     "Thanks for hopping on the waitlist.",
     "",
-    "Aggie is an interactive voice agent, wherever you are. You speak, it does the work, you stay in control.",
+    "A.G. is an interactive voice agent, wherever you are. You speak, it does the work, you stay in control.",
     "",
     "We're building it right now. We'll keep in touch as we open up access.",
     "",
@@ -120,9 +120,9 @@ function confirmationHtml() {
   return `<!DOCTYPE html>
 <html><body style="margin:0;background:#F4F2EA;font-family:Georgia,'Times New Roman',serif;color:#191B1E">
   <div style="max-width:520px;margin:0 auto;padding:48px 28px">
-    <p style="font-family:monospace;font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:#7A7D84;margin:0 0 24px">Aggie</p>
+    <p style="font-family:monospace;font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:#7A7D84;margin:0 0 24px">A.G.</p>
     <h1 style="font-size:34px;font-weight:300;line-height:1.1;margin:0 0 20px">Thanks for hopping on the <span style="color:#E5482B;font-style:italic">waitlist.</span></h1>
-    <p style="font-size:17px;line-height:1.6;margin:0 0 16px">Aggie is an interactive voice agent, wherever you are. You speak, it does the work, you stay in control.</p>
+    <p style="font-size:17px;line-height:1.6;margin:0 0 16px">A.G. is an interactive voice agent, wherever you are. You speak, it does the work, you stay in control.</p>
     <p style="font-size:17px;line-height:1.6;margin:0 0 28px">We're building it right now. We'll keep in touch as we open up access.</p>
     <p style="font-family:monospace;font-size:13px;color:#7A7D84;margin:0">— Natnael Kahssay</p>
   </div>
