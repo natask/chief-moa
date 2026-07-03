@@ -595,7 +595,7 @@ function normalizeProfile(defaults) {
   const languagePrimary = picked.language_primary || picked.language || "en-US";
   return {
     system_prompt: picked.system_prompt || "",
-    assistant_name: picked.assistant_name || "Aggie",
+    assistant_name: picked.assistant_name || "A.G.",
     model: picked.model || "",
     temperature: picked.temperature !== undefined ? picked.temperature : 0.4,
     voice_max_chars: picked.voice_max_chars !== undefined ? picked.voice_max_chars : 280,
@@ -679,7 +679,7 @@ function safeSystemPromptForProvider(profile, fallback = "") {
 }
 
 function withRequiredVoiceStyle(prompt, fallback = "") {
-  const value = String(prompt || "").trim() || String(fallback || "").trim() || "You are Aggie.";
+  const value = String(prompt || "").trim() || String(fallback || "").trim() || "You are A.G.";
   const lower = value.toLowerCase();
   const hasTerseStyle = lower.includes("terse") || lower.includes("tersely");
   if (hasTerseStyle && hasAddressPreferenceRule(lower)) {

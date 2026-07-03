@@ -154,7 +154,7 @@ async function assertReset(baseUrl) {
   assert.equal(reset.status, 200, "reset must return 200");
   const after = await getJson(`${baseUrl}/v1/ui/spec`);
   assert.equal(after.is_customized, false, "after reset is_customized must be false");
-  assert.equal(after.spec.surfaces[0].title, "Aggie", "after reset the default title returns");
+  assert.equal(after.spec.surfaces[0].title, "A.G.", "after reset the default title returns");
 }
 
 async function startGateway({ port, dataDir }) {
