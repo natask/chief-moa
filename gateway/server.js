@@ -2933,7 +2933,8 @@ function recordStreamingVoiceTurn(turn) {
         model: turn.model || "",
         // Language pair recorded on the canonical turn so audio-analysis agents
         // can fetch the stored PCM and know the input/output languages. Input
-        // language comes from the STT restriction; reply_language is the OUTPUT.
+        // languages come from the STT restriction; reply_language is the OUTPUT.
+        input_languages: Array.isArray(turn.input_languages) ? turn.input_languages : [],
         reply_language: turn.reply_language || "",
         tts_spoke: turn.tts_spoke === true,
         audio: turn.audio || null,

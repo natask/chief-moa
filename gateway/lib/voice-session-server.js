@@ -574,6 +574,9 @@ class VoiceSessionConnection {
         },
         incomplete: true,
         status,
+        // Input languages the STT leg restricted to, so an interrupted turn's
+        // stored PCM still carries its language for later audio analysis.
+        input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
         provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
       });
     } catch (error) {
@@ -620,6 +623,10 @@ class VoiceSessionConnection {
         // must speak the reply text locally (e.g. Amharic).
         reply_language: providerResult?.reply_language || "",
         tts_spoke: providerResult?.tts_spoke === true,
+        // The restricted INPUT languages the STT leg recognized, captured at
+        // session start. Recorded on the canonical turn so a later audio-analysis
+        // agent can fetch the stored PCM and know both input and output languages.
+        input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
         provider_events: Array.isArray(turn.providerEvents?.events) ? turn.providerEvents.events : [],
       });
     } catch (error) {
@@ -957,4 +964,7 @@ module.exports = {
   VOICE_SESSION_ENDPOINT,
   createVoiceSessionServer,
   generatePcm16Tone: generateProviderTone,
+  // Exported for in-process smoke tests that drive the connection without a real
+  // HTTP upgrade. Not part of the runtime API surface.
+  VoiceSessionConnection,
 };
