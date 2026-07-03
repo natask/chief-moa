@@ -44,6 +44,21 @@ through an intent.
 - **AND** it does not show older chat-history turns unless the user explicitly
   asks for history through an intent
 
+#### Scenario: Text shortcut toggles the command surface
+- **WHEN** the user presses Cmd+, or Ctrl+, while the browser page is active
+- **THEN** the extension toggles the command input surface open or closed
+- **AND** pressing Escape from the Aggie input closes that surface
+
+#### Scenario: Voice shortcut matches mark voice gestures
+- **WHEN** the user quick-presses Cmd+. or Ctrl+.
+- **THEN** the extension applies the same voice toggle as a quick browser-mark
+  double-click
+- **AND** holding Cmd+. or Ctrl+. starts the same manual push-to-talk turn as a
+  browser-mark double-click-and-hold
+- **AND** releasing the held shortcut commits the manual turn immediately
+- **AND** that manual shortcut turn does not re-arm the microphone after the
+  assistant reply
+
 ### Requirement: Describe round trip through gateway
 The extension SHALL render page descriptions that originate from the configured
 gateway `/v1/chat` endpoint.

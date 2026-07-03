@@ -2293,7 +2293,10 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if ((command !== "toggle-agee" && command !== "toggle-agee-voice") || !tab?.id) return;
   try {
     await ensureContent(tab.id);
-    await chrome.tabs.sendMessage(tab.id, { cmd: command === "toggle-agee-voice" ? "toggleVoice" : "open" });
+    await chrome.tabs.sendMessage(tab.id, {
+      cmd: command === "toggle-agee-voice" ? "toggleVoice" : "toggle",
+      source: "command",
+    });
   } catch {
     // Restricted browser pages cannot receive content scripts.
   }

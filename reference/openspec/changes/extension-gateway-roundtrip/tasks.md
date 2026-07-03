@@ -27,3 +27,9 @@
 - [x] 1.15 Keep exactly one Aggie root on each top-level page after extension
       reload/reinjection, while blocking iframe duplicates. Verified by
       `npm run verify` and `npm run smoke`.
+- [x] 1.16 Make keyboard shortcuts match the browser mark: Cmd/Ctrl+, toggles the
+      text command surface and Escape closes it from the Aggie input; quick
+      Cmd/Ctrl+. matches quick mark double-click voice toggle, while held
+      Cmd/Ctrl+. matches double-click-and-hold manual push-to-talk and commits
+      on release. Verified by `npm run verify`; `npm run smoke` adds the text
+      toggle and Escape runtime check.

@@ -373,9 +373,80 @@ async function main() {
       throw new Error(`overlay exposed separate top voice strip during voice: ${JSON.stringify(overlayMetrics)}`);
     }
 
+    const shortcutSurface = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const readOpen = async () => {
+          const [result] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => ({
+              open: document.querySelector("#agee-root")?.classList.contains("agee-open") || false,
+              focusedInput: document.activeElement === document.querySelector("#agee-input"),
+            }),
+          });
+          return result?.result || {};
+        };
+        const dispatchCmdComma = async () => {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              window.dispatchEvent(new KeyboardEvent("keydown", {
+                key: ",",
+                code: "Comma",
+                metaKey: true,
+                bubbles: true,
+                cancelable: true,
+              }));
+            },
+          });
+          await sleep(100);
+          return readOpen();
+        };
+
+        await chrome.tabs.sendMessage(tabId, { cmd: "toggle" });
+        await sleep(100);
+        const closedByToggle = await readOpen();
+        const openedByHotkey = await dispatchCmdComma();
+        const closedByHotkey = await dispatchCmdComma();
+        await sleep(450);
+        await chrome.tabs.sendMessage(tabId, { cmd: "toggle", source: "command" });
+        await sleep(100);
+        const openedByCommand = await readOpen();
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const input = document.querySelector("#agee-input");
+            input?.dispatchEvent(new KeyboardEvent("keydown", {
+              key: "Escape",
+              code: "Escape",
+              bubbles: true,
+              cancelable: true,
+            }));
+          },
+        });
+        await sleep(100);
+        const closedByEscape = await readOpen();
+        return { closedByToggle, openedByHotkey, closedByHotkey, openedByCommand, closedByEscape };
+      })()
+    `);
+    if (
+      shortcutSurface?.closedByToggle?.open ||
+      !shortcutSurface?.openedByHotkey?.open ||
+      !shortcutSurface?.openedByHotkey?.focusedInput ||
+      shortcutSurface?.closedByHotkey?.open ||
+      !shortcutSurface?.openedByCommand?.open ||
+      !shortcutSurface?.openedByCommand?.focusedInput ||
+      shortcutSurface?.closedByEscape?.open
+    ) {
+      throw new Error(`text shortcut toggle/Escape smoke failed: ${JSON.stringify(shortcutSurface)}`);
+    }
+
     const resultPlacement = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
+        await chrome.tabs.sendMessage(tabId, { cmd: "open" });
+        await new Promise((resolve) => setTimeout(resolve, 80));
         await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {

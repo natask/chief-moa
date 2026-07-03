@@ -45,6 +45,10 @@
     holdToTalkPointerId = null,
     doubleClickHoldPending = false,
     lastLauncherTap = null,
+    voiceHotkeyState = null,
+    voiceHotkeyHoldTimer = null,
+    lastLocalTextHotkeyAt = 0,
+    lastLocalVoiceHotkeyAt = 0,
     // The Aggie mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
@@ -56,6 +60,7 @@
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
+  const COMMAND_ECHO_DEDUPE_MS = 400;
   let browserAgentOwner = null;
   let browserAgentOwnerState = "unknown";
   let assistantSpeechOverlap = false;
@@ -264,6 +269,8 @@
         // field so whatever the user was typing stays visible while it streams.
         submitInstruction(text);
       } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
         closeTextSurface();
       }
     });
@@ -447,6 +454,16 @@
   }
 
   function startLauncherPushToTalk() {
+    startManualPushToTalk();
+  }
+
+  function finishLauncherPushToTalk() {
+    holdToTalkActive = false;
+    holdToTalkPointerId = null;
+    finishManualPushToTalk();
+  }
+
+  function startManualPushToTalk() {
     openTextSurface({ fresh: false });
     primeAudio();
     if (liveVoice) stopLiveVoiceTurn("cancel");
@@ -457,9 +474,7 @@
     });
   }
 
-  function finishLauncherPushToTalk() {
-    holdToTalkActive = false;
-    holdToTalkPointerId = null;
+  function finishManualPushToTalk() {
     if (liveVoice && listening) {
       commitLiveVoiceTurn();
     }
@@ -512,6 +527,11 @@
   function closeTextSurface() {
     toggle(false);
     if (surfacePhase !== "pending") setSurfacePhase("idle");
+  }
+
+  function toggleTextSurface() {
+    if (open) closeTextSurface();
+    else openTextSurface({ fresh: false });
   }
 
   function setSurfacePhase(next) {
@@ -1448,6 +1468,14 @@
     toggleVoice();
   }
 
+  function startKeyboardPushToTalk() {
+    startManualPushToTalk();
+  }
+
+  function finishKeyboardPushToTalk() {
+    finishManualPushToTalk();
+  }
+
   function shouldRouteLiveTranscriptThroughGateway(text) {
     return isProfileControlTranscript(text);
   }
@@ -1659,15 +1687,65 @@
 
   // ---- Hotkeys: Cmd/Ctrl+. = voice, Cmd/Ctrl+, = text ------------------
   // Two ways in, both hands-on-keyboard, no clicking:
-  //   ⌘.  (or Ctrl+.)         → wake the agent and listen (speech); again to run
-  //   ⌘,  (or Ctrl+,)         → open the text command field
+  //   ⌘.  (or Ctrl+.)         → quick voice toggle; hold for push-to-talk
+  //   ⌘,  (or Ctrl+,)         → toggle the text command field
 
   function isVoiceHotkey(e) {
-    return (e.metaKey || e.ctrlKey) && e.key === ".";
+    return (e.metaKey || e.ctrlKey) && (e.key === "." || e.code === "Period");
   }
 
   function isTextHotkey(e) {
     return (e.metaKey || e.ctrlKey) && (e.key === "," || (!e.shiftKey && e.code === "Comma"));
+  }
+
+  function isVoiceHotkeyRelease(e) {
+    if (!voiceHotkeyState) return false;
+    return e.key === "." || e.code === "Period" || e.key === "Meta" || e.key === "Control";
+  }
+
+  function commandEchoIsRecent(kind) {
+    const last = kind === "voice" ? lastLocalVoiceHotkeyAt : lastLocalTextHotkeyAt;
+    return last > 0 && Date.now() - last < COMMAND_ECHO_DEDUPE_MS;
+  }
+
+  function clearVoiceHotkeyHoldTimer() {
+    if (!voiceHotkeyHoldTimer) return;
+    clearTimeout(voiceHotkeyHoldTimer);
+    voiceHotkeyHoldTimer = null;
+  }
+
+  function beginVoiceHotkey(e) {
+    if (voiceHotkeyState) return;
+    lastLocalVoiceHotkeyAt = Date.now();
+    voiceHotkeyState = { manualActive: false, key: e.key, code: e.code };
+    clearVoiceHotkeyHoldTimer();
+    voiceHotkeyHoldTimer = setTimeout(() => {
+      voiceHotkeyHoldTimer = null;
+      if (!voiceHotkeyState || voiceHotkeyState.manualActive) return;
+      voiceHotkeyState.manualActive = true;
+      startKeyboardPushToTalk();
+    }, DOUBLE_CLICK_HOLD_MS);
+  }
+
+  function finishVoiceHotkey() {
+    if (!voiceHotkeyState) return;
+    const wasManual = voiceHotkeyState.manualActive;
+    voiceHotkeyState = null;
+    clearVoiceHotkeyHoldTimer();
+    if (wasManual) {
+      finishKeyboardPushToTalk();
+      return;
+    }
+    openTextSurface({ fresh: false });
+    primeAudio();
+    toggleVoiceSession();
+  }
+
+  function cancelVoiceHotkey() {
+    const wasManual = voiceHotkeyState?.manualActive;
+    voiceHotkeyState = null;
+    clearVoiceHotkeyHoldTimer();
+    if (wasManual) finishKeyboardPushToTalk();
   }
 
   window.addEventListener(
@@ -1678,7 +1756,7 @@
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
-        toggleVoiceSession();
+        beginVoiceHotkey(e);
         return;
       }
       // ⌘, → text command field.
@@ -1686,12 +1764,28 @@
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
-        openTextSurface({ fresh: false });
+        lastLocalTextHotkeyAt = Date.now();
+        toggleTextSurface();
         return;
       }
     },
     true
   );
+
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (!isVoiceHotkeyRelease(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      finishVoiceHotkey();
+    },
+    true
+  );
+
+  window.addEventListener("blur", () => {
+    cancelVoiceHotkey();
+  });
 
   // ---- Perception -------------------------------------------------------
   const SELECTOR =
@@ -1865,8 +1959,9 @@
         reply({ ok: true });
         return true;
       case "toggle":
-        if (open) closeTextSurface();
-        else openTextSurface({ fresh: false });
+        if (!(msg.source === "command" && commandEchoIsRecent("text"))) {
+          toggleTextSurface();
+        }
         reply({ ok: true });
         return true;
       case "open":
@@ -1875,7 +1970,9 @@
         return true;
       case "toggleVoice":
         if (!root) build();
-        toggleVoiceSession();
+        if (!(msg.source === "command" && commandEchoIsRecent("voice"))) {
+          toggleVoiceSession();
+        }
         reply({ ok: true });
         return true;
       case "snapshot":

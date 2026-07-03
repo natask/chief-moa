@@ -182,7 +182,8 @@ if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
 
 if (
   !/command !== "toggle-agee" && command !== "toggle-agee-voice"/.test(backgroundSource) ||
-  !/cmd:\s*command === "toggle-agee-voice" \? "toggleVoice" : "open"/.test(backgroundSource) ||
+  !/cmd:\s*command === "toggle-agee-voice" \? "toggleVoice" : "toggle"/.test(backgroundSource) ||
+  !/source:\s*"command"/.test(backgroundSource) ||
   !/case "toggleVoice":/.test(contentSource) ||
   !/function ensureContentOnOpenTabs/.test(backgroundSource) ||
   !/chrome\.runtime\.onStartup\.addListener/.test(backgroundSource)
@@ -196,6 +197,26 @@ if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePage
 
 if (!/e\.code === "Comma"/.test(contentSource) || /toLowerCase\(\) === "k"/.test(contentSource)) {
   throw new Error("text command hotkey must be Cmd/Ctrl+Comma, not Cmd/Ctrl+K");
+}
+
+if (
+  !/function toggleTextSurface\(\)/.test(contentSource) ||
+  !/case "toggle":[\s\S]{0,180}toggleTextSurface\(\)/.test(contentSource) ||
+  !/lastLocalTextHotkeyAt\s*=\s*Date\.now\(\);[\s\S]{0,80}toggleTextSurface\(\)/.test(contentSource) ||
+  !/e\.key === "Escape"[\s\S]{0,160}closeTextSurface\(\)/.test(contentSource)
+) {
+  throw new Error("Cmd/Ctrl+Comma must toggle the text surface, and Escape in the Aggie input must close it");
+}
+
+if (
+  !/function beginVoiceHotkey\(/.test(contentSource) ||
+  !/function finishVoiceHotkey\(/.test(contentSource) ||
+  !/window\.addEventListener\(\s*"keyup"[\s\S]{0,260}finishVoiceHotkey\(\)/.test(contentSource) ||
+  !/startKeyboardPushToTalk\(\)/.test(contentSource) ||
+  !/finishKeyboardPushToTalk\(\)/.test(contentSource) ||
+  !/autoCommit:\s*false/.test(contentSource)
+) {
+  throw new Error("Cmd/Ctrl+Period must support quick voice toggle and held push-to-talk parity with the browser mark");
 }
 
 if (/case "done":[\s\S]{0,180}setInputText\(msg\.summary/.test(contentSource)) {
