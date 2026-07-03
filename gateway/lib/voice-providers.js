@@ -2,6 +2,7 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { WebSocket } = require("ws");
 const { safeSystemPromptForProvider } = require("./agent-profile");
@@ -616,6 +617,7 @@ class GeminiLiveVoiceProvider {
     this.vertexProject = env.VERTEX_PROJECT || env.GOOGLE_CLOUD_PROJECT || "";
     this.vertexLocation = env.VERTEX_LOCATION || env.GOOGLE_CLOUD_LOCATION || "global";
     this.gcloudBin = env.GCLOUD_BIN || "gcloud";
+    this.tokenCache = { value: "", expiresAt: 0 };
     this.endpoint = this.authMode === "vertex"
       ? env.VERTEX_LIVE_ENDPOINT || this.defaultVertexEndpoint(providerOptions?.defaultEndpoint || VERTEX_LIVE_EXPRESS_ENDPOINT)
       : env.GEMINI_LIVE_ENDPOINT || providerOptions?.defaultEndpoint || GEMINI_LIVE_ENDPOINT;
@@ -832,10 +834,7 @@ class GeminiLiveVoiceProvider {
       rejected: false,
       generationComplete: false,
     };
-    const websocket = new WebSocket(this.websocketUrl(), {
-      headers: this.websocketHeaders(),
-      maxPayload: 32 * 1024 * 1024,
-    });
+    let websocket = null;
     let chain = Promise.resolve();
     let ready = false;
     let closed = false;
@@ -937,58 +936,75 @@ class GeminiLiveVoiceProvider {
     }, this.timeoutMs);
     timeout.unref();
 
-    websocket.on("open", () => {
-      websocket.send(JSON.stringify({ setup: this.setupMessage(turn) }), (error) => {
-        if (error) rejectOnce(error);
-      });
-    });
-
-    websocket.on("message", (data, isBinary) => {
-      let message = null;
-      if (isBinary) {
-        message = parsePossibleJsonMessage(data);
-        if (!message) {
-          queueProviderTask(async () => {
-            await this.handleBinaryAudio(data, hooks, state);
-            scheduleIdleComplete();
-          });
-          return;
-        }
-      } else {
-        try {
-          message = parseJsonMessage(data);
-        } catch (error) {
-          rejectOnce(error);
-          return;
-        }
-      }
-
-      if (message.setupComplete) {
-        ready = true;
-        if (this.manualActivityDetection) {
-          // Manual VAD: open the user's activity window before any audio so the
-          // model treats the whole push-to-talk capture as one turn.
-          sendGeminiJson(websocket, { realtimeInput: { activityStart: {} } }).catch(rejectOnce);
-        }
-        resolveReady();
+    // websocketHeaders may refresh an ADC token over the network, so the
+    // socket opens after that resolves. Session methods below stay safe: every
+    // send queues behind readyPromise, which only resolves once this socket
+    // reports setupComplete.
+    const connect = async () => {
+      const headers = await this.websocketHeaders();
+      if (state.resolved || state.rejected) {
         return;
       }
+      websocket = new WebSocket(this.websocketUrl(), {
+        headers,
+        maxPayload: 32 * 1024 * 1024,
+      });
 
-      queueProviderTask(async () => {
-        await this.handleServerMessage(message, hooks, state, resolveOnce, rejectOnce);
-        if (state.assistantAudioStarted && !state.generationComplete) {
-          scheduleIdleComplete();
+      websocket.on("open", () => {
+        websocket.send(JSON.stringify({ setup: this.setupMessage(turn) }), (error) => {
+          if (error) rejectOnce(error);
+        });
+      });
+
+      websocket.on("message", (data, isBinary) => {
+        let message = null;
+        if (isBinary) {
+          message = parsePossibleJsonMessage(data);
+          if (!message) {
+            queueProviderTask(async () => {
+              await this.handleBinaryAudio(data, hooks, state);
+              scheduleIdleComplete();
+            });
+            return;
+          }
+        } else {
+          try {
+            message = parseJsonMessage(data);
+          } catch (error) {
+            rejectOnce(error);
+            return;
+          }
+        }
+
+        if (message.setupComplete) {
+          ready = true;
+          if (this.manualActivityDetection) {
+            // Manual VAD: open the user's activity window before any audio so the
+            // model treats the whole push-to-talk capture as one turn.
+            sendGeminiJson(websocket, { realtimeInput: { activityStart: {} } }).catch(rejectOnce);
+          }
+          resolveReady();
+          return;
+        }
+
+        queueProviderTask(async () => {
+          await this.handleServerMessage(message, hooks, state, resolveOnce, rejectOnce);
+          if (state.assistantAudioStarted && !state.generationComplete) {
+            scheduleIdleComplete();
+          }
+        });
+      });
+
+      websocket.on("error", rejectOnce);
+      websocket.on("close", (code, reason) => {
+        closed = true;
+        if (!state.completed && !state.rejected) {
+          rejectOnce(new Error(`gemini-live websocket closed before turn completion: ${code} ${Buffer.from(reason || "").toString("utf8")}`));
         }
       });
-    });
+    };
 
-    websocket.on("error", rejectOnce);
-    websocket.on("close", (code, reason) => {
-      closed = true;
-      if (!state.completed && !state.rejected) {
-        rejectOnce(new Error(`gemini-live websocket closed before turn completion: ${code} ${Buffer.from(reason || "").toString("utf8")}`));
-      }
-    });
+    connect().catch(rejectOnce);
 
     return {
       done,
@@ -1064,10 +1080,13 @@ class GeminiLiveVoiceProvider {
     };
   }
 
-  runWebSocketTurn(turn, hooks, state) {
+  async runWebSocketTurn(turn, hooks, state) {
+    // websocketHeaders may refresh an ADC token over the network; resolve it
+    // before the socket opens so the handshake carries a real bearer token.
+    const headers = await this.websocketHeaders();
     return new Promise((resolve, reject) => {
       const websocket = new WebSocket(this.websocketUrl(), {
-        headers: this.websocketHeaders(),
+        headers,
         maxPayload: 32 * 1024 * 1024,
       });
       let chain = Promise.resolve();
@@ -1372,12 +1391,12 @@ class GeminiLiveVoiceProvider {
     return url.toString();
   }
 
-  websocketHeaders() {
+  async websocketHeaders() {
     if (this.authMode === "google-ai-api-key") {
       return { "x-goog-api-key": this.apiKey };
     }
     if (this.authMode === "vertex" && !this.apiKey) {
-      return { Authorization: `Bearer ${this.accessToken()}` };
+      return { Authorization: `Bearer ${await this.accessToken()}` };
     }
     return {};
   }
@@ -1418,7 +1437,21 @@ class GeminiLiveVoiceProvider {
     return `wss://${this.vertexLocation}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`;
   }
 
-  accessToken() {
+  // The gateway container has no gcloud binary, so ADC files (service_account
+  // or authorized_user) are exchanged for access tokens directly against
+  // oauth2.googleapis.com — same approach as vertexAccessToken in server.js.
+  // gcloud stays as the last-resort fallback for host installs that have it.
+  async accessToken() {
+    const now = Date.now();
+    if (this.tokenCache.value && this.tokenCache.expiresAt > now + 300000) {
+      return this.tokenCache.value;
+    }
+    const credentialFile = googleCredentialFile(this.env);
+    if (credentialFile) {
+      const token = await adcAccessToken(credentialFile);
+      this.tokenCache = token;
+      return token.value;
+    }
     try {
       return execFileSync(this.gcloudBin, ["auth", "application-default", "print-access-token"], {
         encoding: "utf8",
@@ -1825,6 +1858,67 @@ async function serviceAccountAccessToken(serviceAccountKeyJson) {
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`GCP token exchange failed (${response.status}): ${cleanError(text)}`);
+  }
+  const token = await response.json();
+  return {
+    value: String(token.access_token || ""),
+    expiresAt: Date.now() + Math.max(1, Number(token.expires_in || 3600)) * 1000,
+  };
+}
+
+// Mirrors googleCredentialFile in server.js, but reads from the provider's
+// env so tests can inject credentials without touching process.env.
+function googleCredentialFile(env) {
+  const explicit = env.GOOGLE_APPLICATION_CREDENTIALS || "";
+  if (explicit && fs.existsSync(explicit)) return explicit;
+  const adc = path.join(env.HOME || "", ".config", "gcloud", "application_default_credentials.json");
+  return fs.existsSync(adc) ? adc : "";
+}
+
+// ADC files come in two shapes: a service_account key (signed-JWT exchange)
+// and an authorized_user refresh token from `gcloud auth application-default
+// login`. Both exchange directly against oauth2.googleapis.com — no gcloud
+// binary needed in the container.
+async function adcAccessToken(file) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    throw new Error(`failed to read Google ADC file: ${cleanError(error)}`);
+  }
+  let credential;
+  try {
+    credential = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`invalid Google ADC JSON: ${cleanError(error)}`);
+  }
+  if (credential.type === "service_account") {
+    return serviceAccountAccessToken(raw);
+  }
+  if (credential.type === "authorized_user") {
+    return authorizedUserAccessToken(credential);
+  }
+  throw new Error(`unsupported Google ADC credential type: ${credential.type || "missing"}`);
+}
+
+async function authorizedUserAccessToken(credential) {
+  const missing = ["client_id", "client_secret", "refresh_token"].filter((key) => !credential[key]);
+  if (missing.length > 0) {
+    throw new Error(`authorized-user ADC is missing ${missing.join(", ")}`);
+  }
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: credential.client_id,
+      client_secret: credential.client_secret,
+      refresh_token: credential.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`authorized-user token refresh failed (${response.status}): ${cleanError(text)}`);
   }
   const token = await response.json();
   return {
