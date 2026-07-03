@@ -29,12 +29,14 @@ main().catch((error) => {
 async function main() {
   await assertSessionReadyBeforeProviderReady();
   await assertSyncCreateFailureSurfacesError();
+  await assertAsyncProviderFailureStoresCapturedAudio();
   console.log(JSON.stringify({
     ok: true,
     checks: [
       "session_ready is emitted before the live provider finishes its cold start",
       "audio sent after session_ready is delivered to the provider once it is ready",
       "a synchronous createLiveTurnSession failure surfaces a turn error and turn_done",
+      "an async Live provider failure after audio capture stores a canonical synthetic transcript",
     ],
   }, null, 2));
 }
@@ -146,6 +148,69 @@ async function assertSyncCreateFailureSurfacesError() {
   });
 }
 
+async function assertAsyncProviderFailureStoresCapturedAudio() {
+  const completedTurns = [];
+  const receivedAudio = [];
+  const provider = failingAfterAudioProvider(receivedAudio);
+  await withServer(provider, async (target) => {
+    const events = [];
+    await new Promise((resolve, reject) => {
+      const ws = new WebSocket(target);
+      const timeout = setTimeout(() => {
+        closeQuietly(ws);
+        reject(new Error("timed out waiting for async provider failure"));
+      }, 5000);
+      ws.on("open", () => {
+        ws.send(JSON.stringify({
+          type: "session_start",
+          session_id: "async_fail_session",
+          turn_id: "async_fail_turn",
+          format: AUDIO_FORMAT,
+        }));
+      });
+      ws.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const event = JSON.parse(Buffer.from(data).toString("utf8"));
+        events.push(event);
+        if (event.type === "session_ready") {
+          ws.send(Buffer.alloc(640, 5));
+          ws.send(JSON.stringify({ type: "commit_turn", turn_id: "async_fail_turn" }));
+        }
+        if (event.type === "error") {
+          clearTimeout(timeout);
+          closeQuietly(ws);
+          resolve();
+        }
+      });
+      ws.on("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+
+    assert.ok(events.some((event) => event.type === "error"), "no error event on async provider failure");
+    assert.ok(
+      receivedAudio.reduce((sum, chunk) => sum + chunk.length, 0) >= 640,
+      "provider never received the captured audio before failing",
+    );
+    const stored = await pollFor(
+      () => completedTurns.find((turn) => turn.turn_id === "async_fail_turn") || null,
+      3000,
+      "async failed turn was not stored canonically",
+    );
+    assert.equal(stored.transcript, "Voice captured.");
+    assert.equal(stored.transcript_source, "synthetic");
+    assert.equal(stored.incomplete, true);
+    assert.equal(stored.status, "error");
+    assert.match(stored.error, /provider timed out/i);
+    assert.ok(stored.audio.bytes >= 640, "stored canonical turn must point at captured audio bytes");
+  }, {
+    onTurnCompleted: (turn) => {
+      completedTurns.push(turn);
+    },
+  });
+}
+
 function coldStartProvider({ readyGate, audioSeen, receivedAudio }) {
   return {
     status: providerStatus,
@@ -198,6 +263,30 @@ function throwingProvider() {
   };
 }
 
+function failingAfterAudioProvider(receivedAudio) {
+  return {
+    status: providerStatus,
+    createLiveTurnSession() {
+      let rejectDone;
+      const done = new Promise((_resolve, reject) => {
+        rejectDone = reject;
+      });
+      return {
+        done,
+        sendAudio(chunk) {
+          receivedAudio.push(Buffer.from(chunk));
+        },
+        commit() {
+          rejectDone(new Error("provider timed out after audio capture"));
+        },
+        cancel() {
+          rejectDone(new Error("provider canceled"));
+        },
+      };
+    },
+  };
+}
+
 function providerStatus() {
   return {
     provider: "cold-start-test",
@@ -215,10 +304,14 @@ function providerStatus() {
   };
 }
 
-async function withServer(provider, run) {
+async function withServer(provider, run, options = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-voice-session-ready-"));
   const dataDir = path.join(tempDir, "data");
-  const voiceServer = createVoiceSessionServer({ dataDir, voiceProvider: provider });
+  const voiceServer = createVoiceSessionServer({
+    dataDir,
+    voiceProvider: provider,
+    onTurnCompleted: options.onTurnCompleted,
+  });
   const server = http.createServer();
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -244,6 +337,16 @@ function deferred() {
     resolve = res;
   });
   return { promise, resolve };
+}
+
+async function pollFor(fn, timeoutMs, message) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await fn();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(message);
 }
 
 function listen(server) {
