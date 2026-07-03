@@ -5,8 +5,8 @@ Self-hosted model and agent gateway for the Android voice assistant. The phone s
 For mobile use outside the private network, deploy the gateway to a VPS and put
 Cloudflare in front of it. The runbook is
 [deploy/vps/README.md](deploy/vps/README.md). Clients should use
-`https://api.<domain>` for HTTP and the gateway will derive
-`wss://api.<domain>/v1/voice/sessions` for voice.
+`https://api.agee.app` for HTTP and the gateway will derive
+`wss://api.agee.app/v1/voice/sessions` for voice.
 
 The development Android URL is `http://10.147.17.6:8787` for this Mac over
 ZeroTier. Use `http://10.147.17.10:8787` when the private main-machine gateway
@@ -25,7 +25,7 @@ npm start
 ```
 
 Then set the Android app gateway URL to `http://<server-ip>:8787` for a private
-machine, or `https://api.<domain>` for a VPS deployment, and the token to
+machine, or `https://api.agee.app` for a VPS deployment, and the token to
 `MOA_GATEWAY_TOKEN` when token auth is enabled.
 If `.env` is missing, `npm start` still boots the gateway with defaults. In that
 mode, Moa stores voice turns and can route explicit agent runs, but normal chat

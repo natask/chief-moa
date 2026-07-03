@@ -55,7 +55,7 @@ is separate from the quiet flow on purpose:
 1. Run `npm run configure`. This bakes the gateway URL and token into
    `extension/agee.config.json` (git-ignored), so the extension works on load
    with no Options visit. For a VPS gateway, pass
-   `AGEE_GATEWAY_URL=https://api.<domain>` and `AGEE_GATEWAY_TOKEN=...` (or
+   `AGEE_GATEWAY_URL=https://api.agee.app` and `AGEE_GATEWAY_TOKEN=...` (or
    `MOA_GATEWAY_URL` / `MOA_GATEWAY_TOKEN`) in your environment. Legacy
    private-network installs can still read the token from the main machine over
    SSH; hosted HTTPS configs require an explicit env token. Tokens are never

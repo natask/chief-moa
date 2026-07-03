@@ -6,32 +6,60 @@ local or ZeroTier-only machine.
 
 ## Target Shape
 
+Default target:
+
+```text
+Provider: DigitalOcean Droplet
+Region:   sfo3
+Size:     s-2vcpu-4gb first, resize down only after observing memory
+Image:    Ubuntu 24.04 LTS
+Host dir: /opt/chief-moa
+DNS:      api.agee.app proxied through Cloudflare
+```
+
+Why this target: the gateway is a long-running Node + WebSocket process with a
+local Postgres container and persistent artifacts. It needs a plain VM with a
+public IPv4 address, Docker Compose, stable inbound HTTPS/WSS, and predictable
+ops. DigitalOcean is the first deploy target because it is the simplest fit for
+that shape: Droplets include public IPv4, SSD storage, included outbound
+transfer, a documented API/CLI, and per-second billing with a monthly cap. Use
+Hetzner later only if cost pressure beats operational simplicity; recent 2026
+price changes and region variance make it a worse first target. Linode/Akamai
+and Vultr are fine fallbacks but do not beat DigitalOcean for this repo's
+already-documented DigitalOcean + Cloudflare path.
+
 ```text
 Android / browser extension
-  -> https://api.<domain>
+  -> https://api.agee.app
   -> Cloudflare proxied DNS record
-  -> VPS Docker Compose stack
+  -> DigitalOcean Droplet Docker Compose stack
   -> gateway container + Postgres + DATA_DIR volume
 ```
 
 Cloudflare Pages can continue serving `agee.app` or other static frontend
 surfaces. The API and voice WebSocket stay on the VPS:
 
-- HTTP API: `https://api.<domain>`
-- Voice WebSocket: `wss://api.<domain>/v1/voice/sessions`
+- HTTP API: `https://api.agee.app`
+- Voice WebSocket: `wss://api.agee.app/v1/voice/sessions`
 
 ## VPS Prep
 
-1. Create a droplet or VPS with Docker Engine and the Docker Compose plugin.
-2. Attach or provision persistent storage for `/opt/chief-moa`.
-3. Create the app directory:
+1. Create a DigitalOcean Ubuntu 24.04 Droplet in `sfo3`, size `s-2vcpu-4gb`.
+2. Enable monitoring and backups. Attach a volume later if `DATA_DIR` grows
+   beyond the root disk; the first deploy can use `/opt/chief-moa` on root SSD.
+3. Install Docker Engine and the Docker Compose plugin.
+4. Point Cloudflare DNS `api.agee.app` at the Droplet public IPv4.
+5. Provision TLS through Cloudflare and a reverse proxy, or use the direct
+   container port only for first smoke.
+6. Attach or provision persistent storage for `/opt/chief-moa`.
+7. Create the app directory:
 
 ```sh
 sudo mkdir -p /opt/chief-moa
 sudo chown "$USER:$USER" /opt/chief-moa
 ```
 
-4. Copy [env.example](env.example) to `/opt/chief-moa/.env` on the VPS and fill
+8. Copy [env.example](env.example) to `/opt/chief-moa/.env` on the VPS and fill
    the secrets there. Do not commit the filled file.
 
 Minimum remote-mode env:
@@ -39,7 +67,7 @@ Minimum remote-mode env:
 ```env
 MOA_MODE=self-host
 TRUST_PROXY=1
-PUBLIC_GATEWAY_URL=https://api.<domain>
+PUBLIC_GATEWAY_URL=https://api.agee.app
 GATEWAY_HOST_PORT=8787
 GATEWAY_PORT=8787
 MOA_GATEWAY_TOKEN=<long-random-token>
@@ -88,7 +116,7 @@ From a verified, committed checkout:
 ```sh
 VPS_REMOTE=root@203.0.113.10 \
 VPS_DIR=/opt/chief-moa \
-VPS_GATEWAY_URL=https://api.<domain> \
+VPS_GATEWAY_URL=https://api.agee.app \
 bash scripts/deploy.sh vps
 ```
 
@@ -101,7 +129,7 @@ VPS, and optionally checks public `/health` via `VPS_GATEWAY_URL`.
 Android OTA build:
 
 ```sh
-MOA_DEFAULT_GATEWAY_URL=https://api.<domain> \
+MOA_DEFAULT_GATEWAY_URL=https://api.agee.app \
 bash scripts/deploy.sh android
 ```
 
@@ -109,7 +137,7 @@ Browser extension config:
 
 ```sh
 cd browser_extension
-AGEE_GATEWAY_URL=https://api.<domain> \
+AGEE_GATEWAY_URL=https://api.agee.app \
 AGEE_GATEWAY_TOKEN=<gateway-token> \
 npm run configure
 ```
@@ -141,7 +169,7 @@ docker compose -p chief-moa-vps-smoke down -v
 Public gateway smoke after DNS/TLS is live:
 
 ```sh
-MOA_GATEWAY_URL=https://api.<domain> \
+MOA_GATEWAY_URL=https://api.agee.app \
 MOA_GATEWAY_TOKEN=<gateway-token> \
 cd gateway && npm run smoke:gateway
 ```

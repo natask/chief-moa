@@ -55,7 +55,7 @@ VPS gateway deploy path:
 
 ```sh
 VPS_REMOTE=root@203.0.113.10 \
-VPS_GATEWAY_URL=https://api.<domain> \
+VPS_GATEWAY_URL=https://api.agee.app \
 bash scripts/deploy.sh vps
 ```
 

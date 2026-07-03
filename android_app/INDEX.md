@@ -60,7 +60,7 @@ MODEL_ID=gpt-4o-mini
 ```
 
 The packaged default gateway URL comes from `MOA_DEFAULT_GATEWAY_URL` at build
-time. Use `https://api.<domain>` for a VPS/mobile deployment. The legacy fallback
+time. Use `https://api.agee.app` for a VPS/mobile deployment. The legacy fallback
 is `http://10.147.17.10:8787`; use `http://10.147.17.6:8787` only when
 intentionally pointing the app at this Mac's local gateway over ZeroTier.
 
