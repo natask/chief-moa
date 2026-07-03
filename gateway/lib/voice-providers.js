@@ -615,7 +615,14 @@ class GeminiLiveVoiceProvider {
       ? env.VERTEX_EXPRESS_API_KEY || env.VERTEX_API_KEY || env.GOOGLE_API_KEY || env.GEMINI_API_KEY || ""
       : env.GEMINI_API_KEY || env.GOOGLE_API_KEY || "";
     this.vertexProject = env.VERTEX_PROJECT || env.GOOGLE_CLOUD_PROJECT || "";
-    this.vertexLocation = env.VERTEX_LOCATION || env.GOOGLE_CLOUD_LOCATION || "global";
+    this.vertexLocation = env.VERTEX_LIVE_LOCATION || env.VERTEX_LOCATION || env.GOOGLE_CLOUD_LOCATION || "global";
+    // The Live API (LlmBidiService) is regional: with `global` the ws upgrade
+    // 404s on the `global-` host form and the publisher model closes 1008
+    // "Publisher model ... was not found" on the bare host. Pin the Live
+    // socket to a serving region; chat HTTP keeps VERTEX_LOCATION=global.
+    if (this.authMode === "vertex" && this.vertexLocation === "global") {
+      this.vertexLocation = "us-central1";
+    }
     this.gcloudBin = env.GCLOUD_BIN || "gcloud";
     this.tokenCache = { value: "", expiresAt: 0 };
     this.endpoint = this.authMode === "vertex"
@@ -1432,6 +1439,12 @@ class GeminiLiveVoiceProvider {
 
   defaultVertexEndpoint(expressEndpoint) {
     if (this.apiKey) {
+      return expressEndpoint;
+    }
+    // There is no `global-aiplatform.googleapis.com` host: the ws upgrade
+    // 404s on it. The bare host serves the global location — same host split
+    // server.js uses for text Vertex requests.
+    if (this.vertexLocation === "global") {
       return expressEndpoint;
     }
     return `wss://${this.vertexLocation}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`;
