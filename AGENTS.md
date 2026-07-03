@@ -61,15 +61,21 @@ re-deriving the commands. Each is a thin wrapper over the repo's real
 `npm`/`bash` commands and respects the live-gateway freeze.
 
 - `moa-voice-qa` - verify a spoken turn flows phone/browser -> gateway ->
-  Gemini/Vertex Live -> reply, and audit why a voice turn failed. Runs
-  `gateway npm run check` + `npm run eval:voice` (deterministic by default;
-  `live` arg hits the real Live socket and costs money). Reads `/health` and
-  stored voice turns read-only. Use for "voice doesn't respond" reports.
-- `moa-extension-refresh` - verify + smoke + package + reload the unpacked
-  browser extension via `scripts/deploy.sh extension`. Auto-bumps the manifest
-  version before packaging (Chrome caches by version). Records a blocker with
-  the package path when the dev reload bridge is not enabled. For deep fuzzing
-  use `chrome-extension-qa-ralph` instead.
+  reply, and audit why a voice turn failed. Primary path is the cascaded Chirp 3
+  pipeline (STT en-US + am-ET -> LLM -> Chirp 3 TTS); Gemini/Vertex Live is a
+  switchable `legacy-live` mode. Detects the active pipeline from `/health`
+  `voice_stream.provider` at runtime. Runs `gateway npm run check` +
+  `npm run eval:voice` (deterministic by default; `live` arg hits real provider
+  sockets and costs money). Reads `/health` and stored voice turns read-only.
+  Reports a missing hosted TTS leg as a known migration gap. Use for "voice
+  doesn't respond" reports.
+- `moa-extension-refresh` - verify + smoke + auto-bump the manifest patch
+  version as a tracked edit + package + reload the unpacked browser extension
+  via `scripts/deploy.sh extension`, then VERIFY the loaded extension actually
+  reloaded (the poke is a fire-and-forget 12s window). Reports the reload as
+  confirmed, blocked, or unverified -- never claims success when only the poke
+  fired. Records a blocker with the package path when the reload is blocked or
+  unverified. For deep fuzzing use `chrome-extension-qa-ralph` instead.
 - `moa-gateway-refresh` - audit-first gateway health, drift, and change review.
   Audit mode is read-only and never restarts the live service. Promotion
   (`scripts/deploy.sh gateway`) requires the user to explicitly say
