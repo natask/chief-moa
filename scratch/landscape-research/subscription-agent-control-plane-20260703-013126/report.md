@@ -1,138 +1,120 @@
-# Subscription Agent Control Plane Research Report
+# Research Report: Subscription, Agent Account, Chat History, And Work Progress Control Plane
 
-Retrieved: 2026-07-03
+Date: 2026-07-03
 
-## Executive Summary
+## Bottom Line
 
-No existing project is exactly the product requested: one self-hostable panel
-that manages AI/SaaS subscriptions, OAuth grants, raw credentials, browser
-sessions, chat histories, and automatic agent work progress. The market has
-strong pieces, but not the complete Chief Moa-shaped system.
+No single existing product solves the full Chief Moa shape: one signed-in control panel for subscriptions, OAuth/API credentials, browser sessions, legitimate account/persona provisioning, chat-history retrieval, task extraction, and automatic agent fanout.
 
-The right product direction is a Chief Moa-owned control plane composed from
-four registries and one work graph:
+The best path is a hybrid:
 
-1. Connected Account / Grant Registry
-2. Persona / Agent Identity Registry
-3. Browser Session Vault
-4. Subscription / Provider Metadata Registry
-5. CH-backed Work Graph and Artifact Store
+1. Build Chief Moa's own control-plane model and audit/work graph.
+2. Use Nango-style OAuth connection brokerage behind a provider-neutral interface.
+3. Use Playwright/browser-context primitives for web sessions, with Browserbase/Browserless as optional remote providers.
+4. Use CH/common-chat as the local history importer.
+5. Use CASS/Callimachus retrieval patterns for cited search and context packs.
+6. Use DBOS-style durable Postgres workflows for broker/reducer/agent-supervision loops.
 
-## Best Build-On Path
+## Recommended Architecture
 
-Use **CH/common-chat** as the owned history substrate. Add a **CASS or
-AgentsView-style index** for fast search and retrieval. Add a **Nango/Auth0
-Token Vault-style OAuth registry** for connected accounts and token health. Use
-**1Password/Infisical-style secret brokering** for raw secrets. Use **DBOS or
-Temporal** for durable background work. Keep Android/browser approvals and
-receipts as Chief Moa-owned boundaries.
+`Chief Moa Gateway -> policy/entitlement check -> connection/session broker -> agent worker/tool/browser -> receipt/artifact/work event`
 
-## Ranking By Product Need
+The gateway remains the authority for credentials, broker events, provider routing, conversation/work storage, agent-run storage, and audit. Android and browser-extension clients receive only connection IDs, approval URLs, context-pack IDs, action proposals, and receipts.
 
-### 1. Credential And Subscription Control
+## Track Findings
 
-Top candidates:
+### 1. Subscription And Credential Panel
 
-- Arcade: best reference for agent-native authorization, tool-call policy, MCP
-  runtime, and audit.
-- Nango: best build-on candidate for OAuth/API integration and token refresh.
-- Auth0 Token Vault: best identity-backed token vault pattern for AI agents.
-- 1Password Agentic Autofill: best reference for browser credential use without
-  exposing secrets to agents.
-- Infisical Agent Vault: best open-source credential-proxy reference.
-- Torii/Zluri: best subscription/spend panel references, but not credential
-  brokers.
+Best build-on candidate: [Nango](https://nango.dev/docs/guides/auth/auth-guide).
 
-Conclusion: build the subscription panel in Moa; do not expect a SaaS management
-suite to solve agent credential delegation.
+Nango is the closest reusable layer for OAuth/API-key connection management, token refresh, validation, and app-facing connection IDs. It does not solve agent policy, subscription UX, or work receipts, so Chief Moa should wrap it in its own model.
+
+Useful references:
+
+- [Arcade](https://docs.arcade.dev/en/get-started/about-arcade) and [Composio](https://docs.composio.dev/reference/api-reference/connected-accounts) for agent-facing delegated access and tool-call governance.
+- [Auth0 Token Vault](https://auth0.com/ai/docs/intro/token-vault) and [WorkOS Pipes](https://workos.com/pipes) if Chief Moa chooses an enterprise identity vendor.
+- [Infisical Agent Vault](https://github.com/Infisical/agent-vault), [1Password service accounts](https://www.1password.dev/service-accounts/get-started), and [HashiCorp Vault](https://developer.hashicorp.com/vault/docs/audit) for raw-secret and audit patterns.
+- [Stripe Entitlements](https://docs.stripe.com/billing/entitlements), [Lago](https://github.com/getlago/lago), [OpenMeter](https://openmeter.io/docs/billing/entitlements/quickstart), and [Keygen](https://keygen.sh/docs/api/) for plan/license/entitlement metadata.
 
 ### 2. Account And Session Provisioning
 
-Top candidates:
+Best base primitive: [Playwright auth state](https://playwright.dev/docs/auth) plus encrypted browser profile leases.
 
-- SCIM/JML via Okta, Entra, SailPoint: mature account lifecycle model.
-- Browserbase/Browserless/Airtop: persistent browser-session/profile patterns.
-- RPA control rooms: credential vault, unattended robot, queue, receipt
-  patterns.
-- QA inbox tools: legitimate owned-flow email testing only.
+Managed remote session candidates:
 
-Conclusion: support legitimate persona provisioning inside owned or
-customer-authorized tenants. Do not automate consumer signup abuse. External
-services should use official APIs, approved OAuth, sandbox tenants, or
-user-supervised browser sessions.
+- [Browserbase Contexts](https://docs.browserbase.com/platform/browser/core-features/contexts)
+- [Browserless session persistence](https://docs.browserless.io/baas/session-management/persisting-state)
+- [Steel Browser](https://github.com/steel-dev/steel-browser)
+- [browser-use](https://github.com/browser-use/browser-use)
 
-### 3. Chat History Search
+Email and account identity should split into two classes:
 
-Top candidates:
+- Stable user-approved aliases for real workflows, for example [Fastmail masked email](https://support.1password.com/fastmail/).
+- QA-only inboxes for owned systems, for example [AgentMail](https://www.agentmail.to), [MailSlurp](https://www.mailslurp.com/docs/wait-for/), or [Mailosaur](https://mailosaur.com/docs/api).
 
-- CH/common-chat: best local fit because it already exists and supports native
-  session parsing/sync/writeback.
-- CASS: best retrieval/index reference; SQLite authoritative archive plus
-  Tantivy/semantic derived indexes.
-- AgentsView: best dashboard/analytics reference.
-- MyChatArchive: useful for web-chat exports and MCP retrieval.
+Safe product boundary: Chief Moa can create and manage personas for owned tenants, test systems, and customer-authorized accounts. It should not automate provider signup, CAPTCHA/MFA/payment, or account creation in ways that bypass provider policy. Human takeover and explicit approval are required for consequential identity and payment steps.
 
-Conclusion: Chief Moa should not replace CH. It should wrap CH with a stronger
-index, extraction, dedupe, and work-item layer.
+### 3. Chat History And Retrieval
 
-### 4. Agent Orchestration
+Best local substrate: [CH/common-chat](/Users/natnaelkahssay/projs/common-chat/README.md:1).
 
-Top candidates:
+CH already detects local histories across Codex, Claude Code, OpenCode, and Gemini. Current local count is 3,935 sessions:
 
-- LangGraph: best agent-thread/interrupt abstraction.
-- DBOS: best Postgres-first durable workflow fit for the existing Chief Moa
-  direction.
-- Temporal: most mature durable workflow runtime.
-- OpenHands Agent Canvas: best product/UI reference for a self-hosted agent
-  workbench.
-- browser-use/Stagehand/Skyvern/Steel and SWE-agent: useful execution backends,
-  not the central control plane.
+- OpenCode: 2,391
+- Codex: 1,132
+- Claude Code: 283
+- Gemini: 129
 
-Conclusion: use Moa broker/work artifacts as the product source of truth. DBOS
-or Temporal can provide crash-proof execution; LangGraph-like concepts can shape
-thread/run/interrupt semantics.
+Strong retrieval references:
 
-## Chief Moa Architecture Map
+- [CASS](https://github.com/Dicklesworthstone/coding_agent_session_search) for SQLite source-of-truth, BM25, vectors, hybrid retrieval, and cited packs.
+- [Callimachus](https://github.com/BetaBots-LLC/callimachus) for SQLite FTS/vector search and MCP-style access.
+- [AgentsView](https://github.com/kenn-io/agentsview), [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer), and [SpecStory](https://docs.specstory.com) for UI/export/artifact references.
 
-| User Need | Chief Moa Primitive | External Reference |
-| --- | --- | --- |
-| One sign-in to control server | Gateway auth/session token | Auth0, WorkOS |
-| Manage OAuth grants | Connected account + grant registry | Nango, Auth0 Token Vault, Arcade |
-| Know when credentials expire | Grant health and notification policy | Nango/Auth0 token refresh state |
-| Agents use subscriptions safely | Agent identity + allowed scopes + approval rules | Arcade, Composio, Apono |
-| Browser login without leaking secrets | Browser session vault + human-approved autofill | 1Password, Browserbase |
-| Account/persona lifecycle | Persona registry and SCIM-shaped state | SCIM, Okta, Entra |
-| Search all chat history | CH import + FTS/BM25/vector index | CH, CASS, AgentsView |
-| Turn chats into work | Extracted work-item queue | common-chat STATE/WORKFLOW, OpenHands |
-| Keep work ongoing | Durable work nodes, events, artifacts | DBOS, Temporal, LangGraph |
-| User approves risky actions | Approval events and receipts | Existing Chief Moa Android/browser boundary |
+Decision: use CH as importer, not as the whole product database. Chief Moa should store imported sessions, chunks, derived summaries, candidate tasks, and context packs in the gateway/work graph with source hashes and citations.
+
+### 4. Agent Orchestration And Project Progress
+
+Best architecture pattern: DBOS-style durable Postgres workflows.
+
+Use Chief Moa gateway Postgres as the canonical source for:
+
+- `broker_event`
+- `route_decision`
+- `work_node`
+- `node_event`
+- `artifact`
+- `agent_run`
+- `verification_result`
+- `cancellation_request`
+
+Useful references:
+
+- [DBOS](https://docs.dbos.dev/ai/ai-quickstart) for Postgres-centered durable workflows.
+- [Temporal](https://temporal.io/blog/building-durable-agents-with-temporal-and-ai-sdk-by-vercel) for mature workflow semantics if the system outgrows the simpler model.
+- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) for agent-internal thread checkpointing.
+- [OpenHands](https://github.com/OpenHands/OpenHands), [Omnara](https://github.com/omnara-ai/omnara), and [Nimbalyst](https://github.com/nimbalyst/nimbalyst) for agent dashboard and worker UX references.
+
+## Why Not One Agent Per Chat History
+
+The local history count is too high for raw fanout. There are 3,935 sessions, many duplicates, old contexts, partial threads, and project references that would require repo-specific safety checks.
+
+The safe version is:
+
+1. Index sessions.
+2. Extract cited candidate tasks.
+3. Deduplicate and rank.
+4. Promote tasks into work nodes.
+5. Launch agents only for promoted work nodes with explicit repo, tool, credential, and deployment policy.
 
 ## First Implementation Slice
 
-Do not begin with credential use. Begin with read-only work intake:
+1. Add a read-only CH import worker that creates `history_session` and `history_chunk` records with source hashes.
+2. Add a candidate-task extractor that emits cited `candidate_task` artifacts and duplicate groups.
+3. Add an `account_connection` schema/spec that models OAuth/API credentials, browser profiles, email aliases, subscription metadata, health, expiry, and reauth state without storing raw secrets in clients.
+4. Add a broker fanout policy: max concurrent agents, allowed repos, allowed account grants, approval requirements, deploy freeze behavior, and cancellation semantics.
+5. Add a control-center view with four tabs: Accounts, Sessions, Runs, History Inbox.
 
-1. Add `ch_import_sessions` or equivalent gateway command that shells to CH or
-   imports from `.chat/` without mutating native histories.
-2. Store normalized session metadata and message hashes in the gateway/work
-   artifact store.
-3. Add a lexical search endpoint backed by SQLite/Postgres FTS or Tantivy.
-4. Extract candidate work items from recent user messages with conservative
-   rules: project, session id, source tool, request snippet, status, dedupe key.
-5. Show candidate work items in the control center and let the user approve
-   which ones become agent runs.
-6. Later, add connected-account registry and grant health, still without using
-   credentials automatically.
+## Key Boundary
 
-## Safety Boundary
-
-The system may recommend account/session provisioning workflows but must not
-execute external account creation without explicit user approval and a legal,
-provider-allowed basis. For third-party services, prefer official APIs and OAuth
-grants. Browser automation should be visible, leased, revocable, and recorded.
-
-## Decision
-
-Build the Chief Moa control plane. Reuse ideas and possibly libraries from
-Nango/Auth0/Infisical/CH/CASS/DBOS, but keep the product source of truth in Moa:
-broker events, route decisions, context packs, work nodes, agent runs,
-approvals, receipts, and artifacts.
+Agents may request capabilities. They do not receive raw credentials. Provider accounts, subscriptions, browser sessions, email aliases, and OAuth grants are user-owned or tenant-authorized resources, accessed only through scoped brokered operations with receipts.

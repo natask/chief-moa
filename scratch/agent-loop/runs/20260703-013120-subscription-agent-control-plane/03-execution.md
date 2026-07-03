@@ -1,105 +1,109 @@
-# Execution
+# Execution Log
 
-## Wave 1
+## Skills Used
 
-- ticket: T1
-- agent: current session
-- status: verified
-- verification:
-  - `ch tools` showed 3,921 local sessions across detected tools:
-    Codex 1,119; Claude Code 282; OpenCode 2,391; Gemini 129;
-    Antigravity 0.
-  - `ch projects` showed current high-volume projects including `moa`
-    461 sessions, `branch-continue` 345, `projs` 271, `my-harness` 217,
-    `codefour_negotiations` 170, `better-cmdk` 152, `natstack` 149,
-    `masterbranch` 147, `chief-moa` 141+.
-  - `ch search --help` confirmed literal, regex, fuzzy, role-filtered,
-    project-filtered, all-project, and JSON-capable search.
-- files: none changed by CH commands
-- risk: CH search output can include sensitive raw prompt text; downstream
-  task extraction must redact and store only metadata plus reviewed snippets.
+- `landscape-research`: prior-art/product research and source-backed ranking.
+- `ch`: local AI-tool chat history inventory and targeted search.
+- `agent-loop`: durable run artifacts and ticket ledger.
 
-## Wave 1
+## Repository Reads
 
-- ticket: T2
-- agent: subagent `019f271b-5aa5-7163-ae16-4cee7cc00f4e`
-- status: verified
-- verification: completed read-only research pass for credential and
-  subscription control planes.
-- files: consolidated into landscape research artifacts.
-- risk: adoption counts and pricing can change; candidates need verification
-  before procurement or integration.
+Required first reads completed before scratch artifact work:
 
-## Wave 1
+- `README.md`
+- `ARCHITECTURE.md`
+- `AGENT_WORKFLOW.md`
+- `reference/openspec/changes/define-android-core-product-map`
 
-- ticket: T3
-- agent: subagent `019f271b-71c2-7e40-bb68-089b9a5e22e1`
-- status: verified
-- verification: completed read-only research pass for account and browser
-  session provisioning.
-- files: consolidated into landscape research artifacts.
-- risk: external account provisioning must stay within owned tenants,
-  provider-approved APIs, or explicit user-supervised browser sessions.
+Relevant additional OpenSpecs inspected:
 
-## Wave 1
+- `reference/openspec/changes/message-broker-session-router`
+- `reference/openspec/changes/postgres-work-graph-artifact-store`
 
-- ticket: T4
-- agent: subagent `019f271b-7fa9-7db2-8278-1e18b7da2b10`
-- status: verified
-- verification: completed read-only research pass for chat-history search and
-  retrieval.
-- files: consolidated into landscape research artifacts.
-- risk: CH/common-chat is locally strong but public adoption could not be
-  verified from the web; CASS/AgentsView have stronger external adoption but
-  weaker native writeback fit.
+## Subagents
 
-## Wave 1
+| Track | Agent | Purpose | Status |
+|---|---|---|---|
+| A | Darwin `019f271b-61ce-7b81-991f-fcd5feb48189` | Credential/subscription/OAuth control plane research | complete |
+| B | Jason `019f271b-734a-7f41-b64d-2530b4941333` | Account/session/browser/email provisioning research | complete |
+| C | Rawls `019f271b-83f0-7c91-aa8f-38c729638abf` | Chat-history/search/RAG/CH research | complete |
+| D | Feynman `019f271b-a072-7b92-9521-d7f58badb2d7` | Agent orchestration/project workflow research | complete |
 
-- ticket: T5
-- agent: subagent `019f271b-8fac-77a3-9e3a-7c0a365c9662`
-- status: verified
-- verification: completed read-only research pass for durable agent
-  orchestration.
-- files: consolidated into landscape research artifacts.
-- risk: LangGraph/Temporal/DBOS/Restate each imply different operational
-  commitments; first Chief Moa slice should avoid premature runtime lock-in.
+Additional earlier pass artifacts were also present and preserved:
 
-## Wave 2
+- `passes/track-a-subscription-credential.md`
+- `passes/track-c-chat-history.md`
 
-- ticket: T6
-- agent: current session
-- status: verified
-- verification: landscape report, projects table, source register, and
-  clickable HTML index were written.
-- files:
-  - `scratch/landscape-research/subscription-agent-control-plane-20260703-013126/report.md`
-  - `scratch/landscape-research/subscription-agent-control-plane-20260703-013126/projects.md`
-  - `scratch/landscape-research/subscription-agent-control-plane-20260703-013126/sources.md`
-  - `scratch/landscape-research/subscription-agent-control-plane-20260703-013126/index.html`
-- risk: report is a research artifact, not an implementation approval.
+## Local CH Findings
 
-## Wave 3
+- Latest detected local sessions: 3,935.
+- Tool coverage: OpenCode, Codex, Claude Code, Gemini, Antigravity.
+- High-signal projects include `chief-moa`, `moa`, `moa-assistant`,
+  `common-chat`, `natstack`, `agent_launcher`, `branch-continue`, and
+  `masterbranch`.
+- Prior relevant sessions already contain the same product direction:
+  self-hosted/VPS agent control plane, credential expiry pings, chat-history
+  backed project memory, first-class agent launcher, and Fabro/work-graph
+  continuation.
 
-- ticket: T7
-- agent: current session
-- status: verified
-- verification:
-  - `fabro validate .fabro/workflows/subscription-agent-control-plane/workflow.fabro`
-  - Result: `Validation: OK`
-  - Warning: `verify` has `goal_gate=true` but no retry target. This does not
-    block validation.
-- files:
-  - `.fabro/workflows/subscription-agent-control-plane/workflow.fabro`
-  - `.fabro/workflows/subscription-agent-control-plane/workflow.toml`
-- risk: workflow is a planning/continuation artifact. It does not promote or
-  deploy any active surface.
+## Artifacts Created Or Updated
 
-## Ledger
+Agent-loop run:
 
-- T0041: Inventory CH local history - verified
-- T0043: Research credential and subscription control planes - verified
-- T0045: Research account and browser-session provisioning - verified
-- T0048: Research chat-history search systems - verified
-- T0050: Research agent orchestration systems - verified
-- T0052: Synthesize Chief Moa architecture map - verified
-- T0054: Create first implementation workflow - verified
+- `00-intent.md`
+- `00-critique.md`
+- `01-openspec.md`
+- `02-fabro.md`
+- `03-execution.md`
+- `04-verification.md`
+- `05-feedback.md`
+- `ch-inventory.md`
+
+Landscape research:
+
+- `brief.md`
+- `passes/track-a-credential-control-plane.md`
+- `passes/track-a-subscription-credential.md`
+- `passes/track-b-account-session-provisioning.md`
+- `passes/track-c-chat-history-search.md`
+- `passes/track-c-chat-history.md`
+- `passes/track-d-agent-orchestration.md`
+- `sources.md`
+- `projects.md`
+- `report.md`
+- `index.html`
+
+## Ledger Status
+
+Verified:
+
+- T0041 Inventory CH local history
+- T0043 Research credential and subscription control planes
+- T0045 Research account and browser-session provisioning
+- T0048 Research chat-history search systems
+- T0050 Research agent orchestration systems
+- T0052 Synthesize Chief Moa architecture map
+- T0054 Create first implementation workflow
+
+Open implementation/spec work:
+
+- T0042 Design AccountConnection registry and credential-health states
+- T0044 Prototype Nango-compatible OAuth broker adapter
+- T0046 Import CH sessions into gateway work-history index read-only
+- T0047 Extract cited candidate tasks from chat history with dedupe
+- T0049 Create bounded agent fanout policy from promoted candidate tasks
+- T0051 Specify control center tabs for accounts sessions runs and history inbox
+- T0053 Specify browser-session and email-alias provisioning contract
+- T0055 Build read-only credential and history smoke checks
+
+## Working Tree Boundary
+
+Existing gateway source changes were present before this artifact pass:
+
+- `gateway/server.js`
+- `gateway/lib/account-connections.js`
+- `gateway/lib/remote-mode.js`
+- `gateway/lib/worker-pull.js`
+
+They were not edited here. This run wrote only ignored scratch research and
+planning artifacts.

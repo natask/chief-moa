@@ -7,192 +7,164 @@
   <style>
     :root {
       color-scheme: light;
-      --bg: #f7f8fa;
-      --ink: #20242a;
-      --muted: #626b76;
-      --line: #d7dce2;
-      --panel: #ffffff;
-      --accent: #1f6feb;
-      --green: #176f45;
-      --amber: #8a5a00;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+      color: #1c232b;
+      background: #f7f8fa;
     }
-    * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--ink);
-      line-height: 1.5;
+      padding: 32px;
     }
     main {
-      max-width: 1180px;
+      max-width: 1080px;
       margin: 0 auto;
-      padding: 32px 18px 56px;
+      background: #ffffff;
+      border: 1px solid #d7dde5;
+      border-radius: 8px;
+      padding: 28px;
     }
-    h1, h2, h3 { line-height: 1.15; margin: 0 0 12px; }
-    h1 { font-size: clamp(2rem, 4vw, 3.7rem); max-width: 880px; }
-    h2 { margin-top: 34px; font-size: 1.45rem; }
-    p { margin: 0 0 14px; color: var(--muted); max-width: 900px; }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .lede {
-      font-size: 1.08rem;
-      margin-top: 12px;
+    h1, h2, h3 {
+      line-height: 1.15;
+      margin: 0 0 12px;
     }
-    .links {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin: 22px 0 26px;
+    h1 {
+      font-size: 30px;
     }
-    .links a {
-      border: 1px solid var(--line);
-      background: var(--panel);
-      padding: 8px 11px;
-      border-radius: 6px;
+    h2 {
+      font-size: 21px;
+      margin-top: 28px;
+      border-top: 1px solid #e5e9ef;
+      padding-top: 22px;
+    }
+    p {
+      margin: 0 0 14px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 22px;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid #e5e9ef;
+      padding: 9px 8px;
+      vertical-align: top;
+    }
+    th {
+      background: #f0f3f7;
       font-weight: 650;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #eef2f6;
+      border-radius: 4px;
+      padding: 1px 4px;
+    }
+    a {
+      color: #145ea8;
+    }
+    .lede {
+      font-size: 17px;
+      max-width: 880px;
+    }
+    .callout {
+      border-left: 4px solid #2f6f73;
+      background: #eef7f5;
+      padding: 12px 14px;
+      margin: 18px 0;
     }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
       gap: 12px;
-      margin: 18px 0 26px;
     }
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--line);
+    .tile {
+      border: 1px solid #d7dde5;
       border-radius: 8px;
-      padding: 15px;
-      min-height: 150px;
+      padding: 14px;
+      background: #fbfcfd;
     }
-    .card strong {
-      display: block;
-      font-size: 1rem;
+    .tile h3 {
+      font-size: 16px;
       margin-bottom: 8px;
     }
-    .tag {
-      display: inline-block;
-      font-size: .78rem;
-      font-weight: 700;
-      border-radius: 999px;
-      padding: 2px 8px;
-      margin-bottom: 10px;
-      color: #fff;
-      background: var(--accent);
-    }
-    .tag.green { background: var(--green); }
-    .tag.amber { background: var(--amber); }
-    .table-wrap {
-      overflow-x: auto;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel);
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 760px;
-    }
-    th, td {
-      border-bottom: 1px solid var(--line);
-      padding: 10px 11px;
-      vertical-align: top;
-      text-align: left;
-      font-size: .94rem;
-    }
-    th {
-      background: #eef2f7;
-      color: #313943;
-    }
-    tr:last-child td { border-bottom: 0; }
-    .note {
-      border-left: 4px solid var(--accent);
-      background: var(--panel);
-      padding: 12px 14px;
-      border-radius: 0 8px 8px 0;
-      margin-top: 18px;
-    }
-    @media (max-width: 700px) {
-      main { padding-top: 22px; }
-      .card { min-height: 0; }
-      table { min-width: 680px; }
+    ul {
+      margin-top: 8px;
+      padding-left: 20px;
     }
   </style>
 </head>
 <body>
   <main>
     <h1>Subscription Agent Control Plane Research</h1>
-    <p class="lede">No single existing product covers the whole request. The practical path is a Chief Moa-owned control plane that joins OAuth grants, credentials, browser sessions, subscriptions, CH-backed history, and durable agent work.</p>
+    <p class="lede">Current as of 2026-07-03. This report researches a Chief Moa control plane for subscription/account credentials, browser sessions, chat-history recovery, and bounded agent fanout.</p>
 
-    <div class="links">
-      <a href="./report.md">Report</a>
-      <a href="./projects.md">Projects</a>
-      <a href="./sources.md">Sources</a>
-      <a href="./brief.md">Brief</a>
-      <a href="./passes/track-a-subscription-credential.md">Credential Pass</a>
-      <a href="./passes/track-b-account-session-provisioning.md">Provisioning Pass</a>
-      <a href="./passes/track-c-chat-history.md">History Pass</a>
-      <a href="./passes/track-d-agent-orchestration.md">Orchestration Pass</a>
+    <div class="callout">
+      <strong>Bottom line:</strong> no single product solves the whole system. Build Chief Moa's own control plane and use Nango-style OAuth brokerage, Playwright/browser contexts, CH/common-chat import, CASS-style retrieval, and DBOS-style durable Postgres workflows as the first stack.
     </div>
 
-    <h2>Top Recommendation</h2>
-    <div class="note">
-      Use CH/common-chat as the owned history substrate, add a CASS/AgentsView-style search index, add a Nango/Auth0/Arcade-style grant registry, broker raw credentials through 1Password/Infisical-style controls, and persist all work through Moa broker events, work nodes, artifacts, approvals, and receipts.
-    </div>
+    <h2>Recommended Stack</h2>
+    <table>
+      <thead>
+        <tr><th>Layer</th><th>Recommendation</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>OAuth/API broker</td><td><a href="https://nango.dev/docs/guides/auth/auth-guide">Nango-compatible adapter</a></td><td>Connection IDs, refresh, validation, Node-friendly API.</td></tr>
+        <tr><td>Raw secrets</td><td><a href="https://github.com/Infisical/agent-vault">Infisical Agent Vault</a> or <a href="https://www.1password.dev/service-accounts/get-started">1Password refs</a></td><td>Keep secrets out of agents; fetch or proxy just in time.</td></tr>
+        <tr><td>Browser sessions</td><td><a href="https://playwright.dev/docs/auth">Playwright</a>, optional <a href="https://docs.browserbase.com/platform/browser/core-features/contexts">Browserbase</a></td><td>Persistent auth state and browser profile leases.</td></tr>
+        <tr><td>Chat history import</td><td>Local CH/common-chat</td><td>Already sees Codex, Claude Code, OpenCode, and Gemini histories.</td></tr>
+        <tr><td>Search design</td><td><a href="https://github.com/Dicklesworthstone/coding_agent_session_search">CASS</a> and <a href="https://github.com/BetaBots-LLC/callimachus">Callimachus</a></td><td>BM25, vector search, cited snippets, bounded evidence packs.</td></tr>
+        <tr><td>Work orchestration</td><td><a href="https://docs.dbos.dev/ai/ai-quickstart">DBOS-style Postgres workflows</a></td><td>Matches Chief Moa's gateway/Postgres work graph.</td></tr>
+      </tbody>
+    </table>
 
-    <h2>Best Fit By Layer</h2>
+    <h2>Local History Inventory</h2>
+    <p>CH detects 3,935 local sessions: 2,391 OpenCode, 1,132 Codex, 283 Claude Code, and 129 Gemini sessions. This confirms the need for indexing, dedupe, candidate-task extraction, and promotion gates before any agent fanout.</p>
+
+    <h2>Control Plane Primitives</h2>
     <div class="grid">
-      <section class="card">
-        <span class="tag green">History</span>
-        <strong>CH + CASS/AgentsView patterns</strong>
-        <p>CH is the local owned substrate. CASS and AgentsView show the stronger retrieval and dashboard shape.</p>
+      <section class="tile">
+        <h3><code>account_connection</code></h3>
+        <p>Provider connection, broker ref, scopes, health, expiry, reauth URL, revocation state.</p>
       </section>
-      <section class="card">
-        <span class="tag green">Credentials</span>
-        <strong>Nango/Auth0 + 1Password/Infisical</strong>
-        <p>Separate OAuth grants from raw secrets. Agents request capabilities, not plaintext credentials.</p>
+      <section class="tile">
+        <h3><code>browser_session</code></h3>
+        <p>Encrypted browser profile/context ref, lease owner, TTL, allowed domains, user takeover.</p>
       </section>
-      <section class="card">
-        <span class="tag amber">Provisioning</span>
-        <strong>SCIM + browser session vault</strong>
-        <p>Provision only owned or authorized personas. Use leased browser profiles for user-supervised web sessions.</p>
+      <section class="tile">
+        <h3><code>candidate_task</code></h3>
+        <p>Extracted task with citations, duplicate group, risk, and promotion state.</p>
       </section>
-      <section class="card">
-        <span class="tag">Orchestration</span>
-        <strong>DBOS/Temporal + LangGraph concepts</strong>
-        <p>Durable queues and approvals underneath; agent threads, interrupts, and streaming above.</p>
+      <section class="tile">
+        <h3><code>work_node</code></h3>
+        <p>Canonical unit of progress with agent runs, artifacts, verification, and receipts.</p>
       </section>
     </div>
 
-    <h2>Ranked Candidates</h2>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Rank</th>
-            <th>Candidate</th>
-            <th>Role</th>
-            <th>Chief Moa Fit</th>
-            <th>Main Gap</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>1</td><td><a href="https://github.com/NangoHQ/nango">Nango</a></td><td>OAuth/API connection registry</td><td>Build-on candidate for token refresh and connected-account state</td><td>No subscription panel or Moa approval model by itself</td></tr>
-          <tr><td>2</td><td><a href="https://auth0.com/features/token-vault">Auth0 Token Vault</a></td><td>Identity-backed token vault</td><td>Strong reference for tokens held away from agents</td><td>Vendor identity-plane commitment</td></tr>
-          <tr><td>3</td><td><a href="https://docs.arcade.dev/en/get-started/about-arcade">Arcade</a></td><td>Agent authorization runtime</td><td>Best reference for tool-call policy, MCP runtime, audit</td><td>Not spend/subscription management</td></tr>
-          <tr><td>4</td><td><a href="https://www.1password.dev/agentic-autofill">1Password Agentic Autofill</a></td><td>Credential use approval</td><td>Best browser credential safety pattern</td><td>Not OAuth grant registry</td></tr>
-          <tr><td>5</td><td><a href="https://github.com/Dicklesworthstone/coding_agent_session_search">CASS</a></td><td>Chat-history search</td><td>Best retrieval/index reference</td><td>Read-only and license needs review</td></tr>
-          <tr><td>6</td><td><a href="https://github.com/kenn-io/agentsview">AgentsView</a></td><td>History dashboard</td><td>Best UI/analytics reference</td><td>No native writeback</td></tr>
-          <tr><td>7</td><td><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph</a></td><td>Agent threads and interrupts</td><td>Strong thread/run/interrupt model</td><td>Needs durable runtime choice</td></tr>
-          <tr><td>8</td><td><a href="https://www.dbos.dev/blog/postgres-is-all-you-need-for-durable-execution">DBOS</a></td><td>Durable Postgres workflows</td><td>Best fit if Moa standardizes on Postgres</td><td>Younger than Temporal</td></tr>
-          <tr><td>9</td><td><a href="https://github.com/OpenHands/openhands">OpenHands</a></td><td>Agent workbench</td><td>Best product reference for self-hosted agent control</td><td>Coding-agent centered</td></tr>
-          <tr><td>10</td><td><a href="https://datatracker.ietf.org/doc/html/rfc7644">SCIM</a></td><td>Persona/account lifecycle</td><td>Best lifecycle shape for owned personas</td><td>Only valid in authorized tenants</td></tr>
-        </tbody>
-      </table>
-    </div>
+    <h2>First Milestone</h2>
+    <ul>
+      <li>Read-only CH import worker and source-hashed history chunks.</li>
+      <li>Cited candidate-task extractor with duplicate grouping.</li>
+      <li>Account connection and credential-health schema/spec.</li>
+      <li>Nango-compatible broker interface with mock-provider smoke tests.</li>
+      <li>Control center IA: Accounts, Sessions, Runs, History Inbox.</li>
+    </ul>
 
-    <h2>First Slice</h2>
-    <p>Start with a read-only CH work-intake slice: import session metadata, index it, extract candidate work items, dedupe them, and display the queue. Add connected-account and grant health next, still without automatic credential use.</p>
+    <h2>Artifacts</h2>
+    <ul>
+      <li><a href="./report.md">report.md</a></li>
+      <li><a href="./projects.md">projects.md</a></li>
+      <li><a href="./sources.md">sources.md</a></li>
+      <li><a href="./passes/track-a-credential-control-plane.md">Track A</a></li>
+      <li><a href="./passes/track-b-account-session-provisioning.md">Track B</a></li>
+      <li><a href="./passes/track-c-chat-history-search.md">Track C</a></li>
+      <li><a href="./passes/track-d-agent-orchestration.md">Track D</a></li>
+    </ul>
+
+    <h2>Boundary</h2>
+    <p>Agents may request capabilities. They do not receive raw credentials. External account creation, MFA, CAPTCHA, payment, deploys, and policy-sensitive actions require explicit human approval and receipts.</p>
   </main>
 </body>
 </html>

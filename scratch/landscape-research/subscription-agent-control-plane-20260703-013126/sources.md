@@ -1,48 +1,78 @@
 # Source Register
 
-Retrieved: 2026-07-03
+Retrieval date: 2026-07-03
 
-| Source | Type | Key Fact Used | Confidence |
-| --- | --- | --- | --- |
-| https://docs.arcade.dev/en/get-started/about-arcade | Official docs | Arcade is an MCP/action runtime with auth providers, user-facing agent docs, audit logs, and self-host/hybrid references. | High |
-| https://github.com/NangoHQ/nango | GitHub primary | Nango supports 800+ APIs, works with agent SDKs, and handles auth, execution, scaling, and observability. | High |
-| https://auth0.com/features/token-vault | Vendor primary | Auth0 Token Vault stores, retrieves, and refreshes third-party OAuth tokens for AI agents without exposing credentials. | High |
-| https://www.1password.dev/agentic-autofill | Vendor primary | 1Password Agentic Autofill lets agents sign in without directly handling secrets and prompts user approval. | High |
-| https://infisical.com/blog/agent-vault-the-open-source-credential-proxy-and-vault-for-agents | Vendor/open-source blog | Infisical Agent Vault is a credential proxy/vault concept for agents. | Medium |
-| https://composio.dev/toolkits | Vendor primary | Composio provides many toolkits and managed agent authentication/tool execution patterns. | Medium |
-| https://pipedream.com/docs/connect | Vendor primary | Pipedream Connect provides managed auth, connected accounts, API proxy, and MCP tools. | High |
-| https://www.toriihq.com/pricing | Vendor primary | Torii is a SaaS/AI management reference for app discovery, subscriptions, renewals, and spend. | Medium |
-| https://www.zluri.com/saas-management | Vendor primary | Zluri is a SaaS management reference with app discovery and license/spend workflows. | Medium |
-| https://developer.hashicorp.com/vault/docs/audit | Official docs | Vault has mature audit devices and dynamic secret primitives. | High |
-| https://datatracker.ietf.org/doc/html/rfc7644 | RFC | SCIM defines HTTP provisioning and management of Users, Groups, and extensions. | High |
-| https://learn.microsoft.com/en-us/entra/id-governance/what-are-lifecycle-workflows | Official docs | Entra lifecycle workflows model joiner/mover/leaver account lifecycle. | High |
-| https://help.okta.com/oie/en-us/content/topics/provisioning/lcm/lcm-provisioning-workflow.htm | Official docs | Okta lifecycle provisioning supports creating, updating, deactivating, and syncing account access. | High |
-| https://docs.browserbase.com/platform/browser/core-features/contexts | Official docs | Browserbase contexts provide persistent browser session/profile patterns. | High |
-| https://docs.browserless.io/baas/session-management/persisting-state | Official docs | Browserless documents browser state persistence. | High |
-| https://docs.airtop.ai/guides/how-to/creating-a-session | Official docs | Airtop has explicit browser-session creation APIs. | High |
-| https://docs.uipath.com/orchestrator/automation-cloud/latest/user-guide/managing-credential-stores | Official docs | UiPath Orchestrator has credential store patterns. | High |
-| https://docs.automationanywhere.com/bundle/enterprise-v2019/page/enterprise-cloud/topics/control-room/bots/credentials/cloud-credentials-overview.html | Official docs | Automation Anywhere has credential vault/control-room concepts. | High |
-| https://documentation.blueprism.com/bp-7-3/en-us/helpCredentials.htm | Official docs | Blue Prism has credential manager concepts. | High |
-| https://playwright.dev/docs/auth | Official docs | Playwright supports saved authenticated state for browser contexts. | High |
-| https://mailosaur.com/docs/api | Official docs | Mailosaur supports API-created test inboxes. | High |
-| https://www.mailslurp.com/docs/ | Official docs | MailSlurp supports API inbox/message workflows. | High |
-| https://docs.mailtrap.io/developers | Official docs | Mailtrap provides sandbox email workflows. | High |
-| https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool | Official docs | Anthropic computer-use docs are relevant to browser/computer action boundaries. | High |
-| https://github.com/Dicklesworthstone/coding_agent_session_search | GitHub primary | CASS indexes local coding-agent history, uses SQLite as ground truth, and rebuilds Tantivy search indexes. | High |
-| https://github.com/kenn-io/agentsview | GitHub primary | AgentsView is local-first search, analytics, and token-use stats for coding agents; MIT; 3.5k stars at retrieval. | High |
-| /Users/natnaelkahssay/projs/common-chat/README.md | Local primary | CH/common-chat parses native AI tool histories, stores `.chat/`, and supports daemon sync/writeback. | High |
-| /Users/natnaelkahssay/projs/common-chat/docs/STATE.md | Local primary | common-chat's current goal is project operating layer and intent provenance. | High |
-| https://github.com/1ch1n/mychatarchive | GitHub primary | MyChatArchive is a local archive/search reference for exported web chats and MCP access. | Medium |
-| https://github.com/rohitg00/agentmemory | GitHub primary | agentmemory is a persistent memory/reference system with multiple retrieval modes. | Medium |
-| https://github.com/yigitkonur/cli-continues | GitHub primary | continues is a handoff tool for moving sessions between AI coding CLIs. | High |
-| https://docs.langchain.com/oss/python/langgraph/overview | Official docs | LangGraph focuses on durable execution, streaming, human-in-the-loop, and persistence for agents. | High |
-| https://www.dbos.dev/blog/postgres-is-all-you-need-for-durable-execution | Vendor primary | DBOS/Postgres-backed workflows checkpoint steps in Postgres and recover after crashes. | High |
-| https://temporal.io/blog/build-resilient-agentic-ai-with-temporal | Vendor primary | Temporal supports durable workflows and human-in-the-loop approvals via workflow primitives. | High |
-| https://github.com/OpenHands/openhands | GitHub primary | OpenHands Agent Canvas is a self-hosted agent control center that can use OpenHands, Claude Code, Codex, Gemini, and ACP agents. | High |
-| https://docs.restate.dev/use-cases/ai-agents | Official docs | Restate is a durable services/workflow reference for AI agents. | Medium |
-| https://mastra.ai/ | Vendor primary | Mastra is a TypeScript agent/workflow reference. | Medium |
-| https://trigger.dev/product/ai-agents | Vendor primary | Trigger.dev provides long-running task/run infrastructure for AI agents. | Medium |
-| https://github.com/browser-use/browser-use | GitHub primary | browser-use is a widely adopted browser-agent backend reference. | High |
-| https://github.com/browserbase/stagehand | GitHub primary | Stagehand is a browser automation SDK reference. | High |
-| https://github.com/Skyvern-AI/skyvern | GitHub primary | Skyvern is a browser workflow automation reference. | High |
-| https://github.com/swe-agent/swe-agent | GitHub primary | SWE-agent provides issue-to-patch trajectories and evidence artifacts. | High |
+## Credential, Subscription, And OAuth
+
+- [Nango auth guide](https://nango.dev/docs/guides/auth/auth-guide) - managed OAuth/API auth, credential storage, refresh/validation, connection IDs.
+- [Nango GitHub](https://github.com/NangoHQ/nango) - open-source/commercial project, active Node-friendly connection broker.
+- [Scalekit AgentKit](https://docs.scalekit.com/agentkit/overview/) - agent-focused connected accounts, token vault, lifecycle webhooks.
+- [Composio connected accounts](https://docs.composio.dev/reference/api-reference/connected-accounts) - per-user connected accounts and tool/runtime integration.
+- [Composio auth docs](https://docs.composio.dev/docs/authentication) - OAuth/API credential handling.
+- [Auth0 Token Vault](https://auth0.com/ai/docs/intro/token-vault) - external-provider token vault for agents and token exchange.
+- [WorkOS Pipes](https://workos.com/pipes) - third-party OAuth/API-key connections and refresh.
+- [Arcade about](https://docs.arcade.dev/en/get-started/about-arcade) - authorization layer for agent tool use.
+- [Arcade auth docs](https://docs.arcade.dev/home/auth/how-arcade-helps) - OAuth/API-key/user-token handling for agents.
+- [Pipedream Connect](https://pipedream.com/docs/connect) - managed auth, MCP/tools/proxy custom requests.
+- [Infisical Agent Vault](https://github.com/Infisical/agent-vault) - open-source credential broker/proxy that keeps credentials out of agents.
+- [Infisical audit logs](https://infisical.com/docs/documentation/getting-started/concepts/audit-logs) - secret platform audit/RBAC reference.
+- [HashiCorp Vault audit docs](https://developer.hashicorp.com/vault/docs/audit) - secret-audit substrate reference.
+- [Stripe Billing Entitlements](https://docs.stripe.com/billing/entitlements) - subscription/feature entitlement reference.
+- [Lago](https://github.com/getlago/lago) - open-source billing/usage reference.
+- [OpenMeter entitlements](https://openmeter.io/docs/billing/entitlements/quickstart) - usage metering and entitlements reference.
+- [Keygen API](https://keygen.sh/docs/api/) - license/entitlement API reference.
+
+## Official AI Subscription/Auth Notes
+
+- [OpenAI Codex authentication](https://developers.openai.com/codex/auth) - Codex supports ChatGPT sign-in and API key auth; tokens are cached locally and should not be copied or committed.
+- [OpenAI Codex with ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan) - Codex availability under ChatGPT plans and account sign-in model.
+- [Claude Code with Pro/Max](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan) - Claude Code subscription auth and API-key override behavior.
+- [Anthropic managed-agent vaults](https://github.com/anthropics/skills/blob/main/skills/claude-api/shared/managed-agents-tools.md) - vault pattern where secrets are write-only and substituted at egress.
+
+## Browser, Session, Email, And Account Provisioning
+
+- [Playwright authentication](https://playwright.dev/docs/auth) - `storageState` and browser auth-state patterns.
+- [Playwright persistent context API](https://playwright.dev/docs/api/class-browsertype) - persistent `userDataDir` browser contexts.
+- [Browserbase Contexts](https://docs.browserbase.com/platform/browser/core-features/contexts) - persistent encrypted browser contexts.
+- [Browserless persisting state](https://docs.browserless.io/baas/session-management/persisting-state) - persistent browser session state.
+- [Steel Browser](https://github.com/steel-dev/steel-browser) - open-source browser API for agent sessions, pages, processes, cookies, localStorage.
+- [Stagehand](https://github.com/browserbase/stagehand) - agent-friendly browser automation SDK.
+- [browser-use](https://github.com/browser-use/browser-use) - browser agent harness with local Chrome/current profile and storage-state support.
+- [AgentMail](https://www.agentmail.to) - email inbox API for agents and browser automation OTP/link flows.
+- [MailSlurp wait-for docs](https://www.mailslurp.com/docs/wait-for/) - QA inbox wait/extraction reference.
+- [Mailosaur API](https://mailosaur.com/docs/api) - QA inbox API reference.
+- [1Password Service Accounts](https://www.1password.dev/service-accounts/get-started) - vault item access via service accounts.
+- [1Password Fastmail masked email](https://support.1password.com/fastmail/) - stable masked email integration reference.
+- [Fastmail developer docs](https://www.fastmail.com/dev/) - JMAP/API surface for mail workflows.
+- [SCIM RFC 7644](https://datatracker.ietf.org/doc/html/rfc7644) - account provisioning protocol.
+- [Microsoft Entra lifecycle workflows](https://learn.microsoft.com/en-us/entra/id-governance/what-are-lifecycle-workflows) - identity lifecycle workflow reference.
+- [Okta lifecycle provisioning](https://help.okta.com/oie/en-us/content/topics/provisioning/lcm/lcm-provisioning-workflow.htm) - joiner/mover/leaver provisioning reference.
+
+## Chat History And Retrieval
+
+- [CH/common-chat local README](/Users/natnaelkahssay/projs/common-chat/README.md:1) - local canonicalization/import/write-back project.
+- [CH/common-chat state doc](/Users/natnaelkahssay/projs/common-chat/docs/STATE.md:1) - project intent and current operating layer.
+- [CASS](https://github.com/Dicklesworthstone/coding_agent_session_search) - SQLite archive, BM25, vectors, hybrid search, source-linked snippets.
+- [Callimachus](https://github.com/BetaBots-LLC/callimachus) - local SQLite FTS/vector search across agent sessions.
+- [AgentsView](https://github.com/kenn-io/agentsview) - local agent-session viewer/indexer.
+- [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) - offline/headless history viewer across coding agents.
+- [SpecStory docs](https://docs.specstory.com) - conversation-to-markdown and rules/decision preservation.
+- [cli-continues](https://github.com/yigitkonur/cli-continues) - cross-agent handoff/resume.
+- [cross-agent-session-resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) - native session handoff/read-back verification.
+- [PostgreSQL text search controls](https://www.postgresql.org/docs/current/textsearch-controls.html) - gateway lexical search option.
+- [pgvector](https://github.com/pgvector/pgvector) - gateway vector search option.
+
+## Orchestration, Project Management, And Agent Runtimes
+
+- [DBOS AI quickstart](https://docs.dbos.dev/ai/ai-quickstart) - durable workflows for AI agents on Postgres.
+- [Temporal durable agents article](https://temporal.io/blog/building-durable-agents-with-temporal-and-ai-sdk-by-vercel) - durable agents with event history and recovery.
+- [Hatchet](https://github.com/hatchet-dev/hatchet) - Postgres-backed durable task/workflow platform.
+- [Trigger.dev](https://trigger.dev) - TypeScript task/checkpoint platform.
+- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) - thread checkpointers and stores.
+- [OpenHands](https://github.com/OpenHands/OpenHands) - self-hosted agent development platform and Agent Canvas.
+- [SWE-agent](https://github.com/SWE-agent/SWE-agent) - code-agent task harness.
+- [mini-SWE-agent](https://github.com/SWE-agent/mini-swe-agent) - small code-agent task harness.
+- [Omnara](https://github.com/omnara-ai/omnara) - dashboard for coding agents and remote/headless launch.
+- [Nimbalyst](https://github.com/nimbalyst/nimbalyst) - local visual session manager for coding agents.
+- [CrewAI](https://github.com/crewAIInc/crewAI) - multi-agent crews/flows.
+- [AutoGen](https://github.com/microsoft/autogen) - multi-agent team framework.

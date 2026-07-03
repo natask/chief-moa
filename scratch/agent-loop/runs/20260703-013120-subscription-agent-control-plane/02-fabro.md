@@ -1,38 +1,123 @@
-# Fabro: Subscription Agent Control Plane
+# Fabro Workflow Draft
 
-## Workflow
+Run: `20260703-013120-subscription-agent-control-plane`
 
-- path: `.fabro/workflows/subscription-agent-control-plane/workflow.fabro`
-- goal: produce a research-backed first implementation plan for a Chief
-  Moa-owned subscription, credential, chat-history, and agent-work control plane
-- gates: human approval before implementation, credential use, account
-  provisioning, or deploy
-- artifacts:
-  - `00-intent.md`
-  - `00-critique.md`
-  - `01-openspec.md`
-  - `02-fabro.md`
-  - landscape research report under
-    `scratch/landscape-research/subscription-agent-control-plane-20260703-013126/`
-  - `03-execution.md`
-  - `04-verification.md`
+Workflow path: `.fabro/workflows/subscription-agent-control-plane/workflow.fabro`
 
-## Tickets
+Ledger: `scratch/agent-loop/tickets.tsv`
 
-| id | title | track | depends | acceptance | agent | verification |
-| --- | --- | --- | --- | --- | --- | --- |
-| T1 | Inventory CH local history | workflow | none | Tool counts, project counts, search capabilities, and open-thread themes are summarized without exposing secrets | current session | `ch tools`, `ch projects`, `ch search --help` |
-| T2 | Research credential and subscription control planes | workflow | none | Ranked candidate table covers OAuth brokers, secrets managers, agent auth runtimes, and SaaS spend references | subagent A | source-backed pass file |
-| T3 | Research account and browser-session provisioning | workflow | none | Ranked candidate table covers SCIM/JML, browser session vaults, RPA credential governance, QA inboxes, and safety boundaries | subagent B | source-backed pass file |
-| T4 | Research chat-history search systems | workflow | none | Ranked candidate table compares CH/common-chat, CASS, AgentsView, and adjacent archive/search tools | subagent C | source-backed pass file |
-| T5 | Research agent orchestration systems | workflow | none | Ranked candidate table compares LangGraph, Temporal, DBOS, OpenHands, Restate, and related systems | subagent D | source-backed pass file |
-| T6 | Synthesize Chief Moa architecture map | docs | T1,T2,T3,T4,T5 | Report maps product needs to Moa primitives and names first implementation slices | current session | manual artifact review |
-| T7 | Create first implementation workflow | workflow | T6 | Fabro workflow validates and ticket ledger contains the implementation queue | current session | `fabro validate ...` |
+## Goal
+
+Produce a research-backed first implementation plan for a Chief Moa-owned
+subscription, credential, chat-history, and agent-work control plane.
+
+Gates:
+
+- Human approval before implementation.
+- Human approval before credential use.
+- Human approval before external account provisioning.
+- Human approval before deploy or active service mutation.
+
+## Ticket Graph
+
+| Ticket | Track | Title | Depends | Status |
+|---|---|---|---|---|
+| T0041 | workflow | Inventory CH local history | none | verified |
+| T0042 | backend | Design AccountConnection registry and credential-health states | none | open |
+| T0043 | workflow | Research credential and subscription control planes | none | verified |
+| T0044 | backend | Prototype Nango-compatible OAuth broker adapter | T0042 | open |
+| T0045 | workflow | Research account and browser-session provisioning | none | verified |
+| T0046 | history | Import CH sessions into gateway work-history index read-only | none | open |
+| T0047 | history | Extract cited candidate tasks from chat history with dedupe | T0046 | open |
+| T0048 | workflow | Research chat-history search systems | none | verified |
+| T0049 | workflow | Create bounded agent fanout policy from promoted candidate tasks | T0047 | open |
+| T0050 | workflow | Research agent orchestration systems | none | verified |
+| T0051 | frontend | Specify control center tabs for accounts sessions runs and history inbox | T0042,T0046 | open |
+| T0052 | docs | Synthesize Chief Moa architecture map | T0041,T0043,T0045,T0048,T0050 | verified |
+| T0053 | backend | Specify browser-session and email-alias provisioning contract | T0042 | open |
+| T0054 | workflow | Create first implementation workflow | T0052 | verified |
+| T0055 | verification | Build read-only credential and history smoke checks | T0044,T0046 | open |
 
 ## Waves
 
-| wave | tickets | rule |
-| --- | --- | --- |
-| 1 | T1,T2,T3,T4,T5 | Run in parallel where possible; all are read-only |
-| 2 | T6 | Synthesize after research passes complete |
-| 3 | T7 | Create and validate the continuation workflow |
+### Wave 0: Research And Inventory
+
+Status: complete.
+
+Artifacts:
+
+- `scratch/landscape-research/subscription-agent-control-plane-20260703-013126/report.md`
+- `scratch/landscape-research/subscription-agent-control-plane-20260703-013126/projects.md`
+- `scratch/landscape-research/subscription-agent-control-plane-20260703-013126/sources.md`
+- `scratch/agent-loop/runs/20260703-013120-subscription-agent-control-plane/ch-inventory.md`
+
+### Wave 1: Spec The Data Contracts
+
+Tickets: T0042, T0053, T0049.
+
+Output:
+
+- OpenSpec change under `reference/openspec/changes/`.
+- Gateway schema/API proposal for account connections, browser sessions, email
+  aliases, candidate tasks, and fanout policies.
+- No secret-reading implementation.
+
+### Wave 2: Read-Only History Intake
+
+Tickets: T0046, T0047.
+
+Output:
+
+- CH importer that reads local histories and emits source-hashed session/chunk
+  records.
+- Candidate-task extractor with citations, duplicate groups, and promotion
+  state.
+- Smoke check over a small project subset before full-device indexing.
+
+### Wave 3: OAuth Broker Prototype
+
+Tickets: T0044, T0055.
+
+Output:
+
+- Nango-compatible adapter interface.
+- Local mock provider for verification without real credentials.
+- Health-state smoke checks for healthy, expiring, expired, and needs-reauth.
+
+### Wave 4: Control Center IA
+
+Ticket: T0051.
+
+Output:
+
+- Accounts tab: connection health, reauth actions, scopes, owner, status.
+- Sessions tab: browser sessions, leases, allowed domains, user-takeover state.
+- Runs tab: active/completed agent runs and receipts.
+- History Inbox tab: candidate tasks, citations, duplicate groups, promote/reject.
+
+### Wave 5: Bounded Agent Fanout
+
+Ticket: T0049.
+
+Output:
+
+- Promote candidate task to work node.
+- Launch at most N agents by policy.
+- No deploys unless explicit promotion applies.
+- Store context pack, route decision, agent output, verification, and receipt.
+
+## Validation
+
+`fabro validate .fabro/workflows/subscription-agent-control-plane/workflow.fabro`
+
+Result: `Validation: OK`
+
+Warning: `verify` has `goal_gate=true` but no retry target.
+
+## Stop Conditions
+
+- Any credential material appears in logs, prompts, source, or artifacts.
+- Any flow requires automating external signup, CAPTCHA, MFA, payment, or policy
+  evasion.
+- Any work attempts to mutate active app services without a maintenance window.
+- Candidate tasks cannot cite source chat-history evidence.

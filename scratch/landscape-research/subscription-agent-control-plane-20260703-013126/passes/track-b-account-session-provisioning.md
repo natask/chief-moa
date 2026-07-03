@@ -1,43 +1,33 @@
-# Pass: Account And Browser Session Provisioning
+# Track B: Legitimate Account, Session, Browser, And Email Provisioning
 
-Agent: `019f271b-71c2-7e40-bb68-089b9a5e22e1`
+Subagent: Jason (`019f271b-734a-7f41-b64d-2530b4941333`)
 
-## Summary
+Date: 2026-07-03
 
-The safe version of "create accounts for agents" is not automated consumer
-signup farming. It is identity lifecycle management inside owned, sandbox, or
-customer-authorized tenants, paired with OAuth grants, browser-session vaults,
-and human-supervised credential use.
+## Shortlist
 
-## Best Candidates
+| Rank | Tool | Storage and session model | Fit for Chief Moa |
+|---:|---|---|---|
+| 1 | [Playwright](https://playwright.dev/docs/auth) | `storageState` files and persistent `userDataDir` browser profiles. | Base local abstraction. Treat state files/profile dirs as credential material. |
+| 2 | [Nango](https://nango.dev/docs/guides/auth/auth-guide) | OAuth/API credentials, encrypted storage, refresh. | OAuth-first account connection layer. |
+| 3 | [1Password Service Accounts](https://www.1password.dev/service-accounts/get-started) plus [Fastmail Masked Email](https://support.1password.com/fastmail/) | Vault item references, credential retrieval via approved service account, stable aliases via Fastmail/JMAP. | Good human-approved credential and alias source; store refs only in Moa. |
+| 4 | [Browserbase Contexts](https://docs.browserbase.com/platform/browser/core-features/contexts) | Encrypted remote browser contexts preserving cookies, localStorage, IndexedDB, sessionStorage, and preferences. | Best managed remote-browser candidate. Disable CAPTCHA solving and unnecessary recording for sensitive sessions. |
+| 5 | [Auth0 Token Vault](https://auth0.com/ai/docs/intro/token-vault) | Connected external-provider access/refresh tokens under Auth0. | Strong governance if Auth0 is the chosen identity layer. |
+| 6 | [MailSlurp](https://www.mailslurp.com/docs/wait-for/) and [Mailosaur](https://mailosaur.com/docs/api) | API-created inboxes, wait-for-email, code/link extraction. | Use for Chief-Moa-owned QA/staging accounts, not for external services that prohibit disposable/test inboxes. |
+| 7 | [Browserless](https://docs.browserless.io/baas/session-management/persisting-state) | Browser session persistence and self-hostable/private deployment options. | Self-hosted Browserbase alternative; watch license and avoid stealth/evasion features. |
+| 8 | [Arcade](https://docs.arcade.dev/home/auth/how-arcade-helps) | OAuth/API/user-token handling for agent tools. | Useful later for governed MCP tool execution. |
+| 9 | [browser-use](https://github.com/browser-use/browser-use) | Local Chrome/current-tab login reuse, CDP, cloud profiles, `user_data_dir`, `storage_state`. | Good harness layer; do not depend on stealth or CAPTCHA features. |
+| 10 | [SCIM RFC 7644](https://datatracker.ietf.org/doc/html/rfc7644), Okta, Entra, Keycloak, FusionAuth | Account lifecycle, user/group provisioning, ownership, revocation, audit. | Reuse the lifecycle model for personas in owned/customer-authorized tenants. |
 
-| Rank | Candidate | Use |
-| ---: | --- | --- |
-| 1 | SCIM + Okta / Entra / SailPoint | Account/persona lifecycle, deprovisioning, groups, audit |
-| 2 | Arcade / Nango / Composio / Pipedream / Nylas | Delegated OAuth connection brokers |
-| 3 | Browserbase / Browserless / Airtop | Managed persistent browser sessions and profiles |
-| 4 | UiPath / Automation Anywhere / Blue Prism | RPA control-plane patterns: robots, queues, credential vaults |
-| 5 | Playwright / Puppeteer / Selenium / CDP | Browser context and storage-state primitives |
-| 6 | Mailosaur / MailSlurp / Mailtrap / Ethereal | QA inboxes for owned signup/password-reset flows |
-| 7 | Auth0 / FusionAuth / Keycloak / WorkOS | Owned-tenant persona factories |
-| 8 | OpenAI Operator / ChatGPT agent / Anthropic Computer Use / browser-use | Human handoff and consequential-action boundaries |
+## Recommendation
 
-## Safe Boundary
+Build a provider-neutral `AccountConnection`/`Persona`/`BrowserSession` contract:
 
-Chief Moa should support:
+- `oauth_connection_ref`
+- `vault_item_ref`
+- `email_alias_ref`
+- `browser_profile_ref`
+- owner, tenant, allowed domains, consent receipts, rotation timestamps, risk flags
+- lease state, TTL, revocation state, user-takeover requirement
 
-- creating personas inside systems the user owns or administers
-- connecting user accounts through normal OAuth consent
-- using browser profiles only with user approval and leases
-- testing signup flows with QA inboxes only for owned apps
-- recording every action with owner, agent identity, session, target app,
-  approval, and receipt
-
-Chief Moa should not support:
-
-- fake consumer account creation
-- CAPTCHA bypass
-- bot-detection evasion
-- disposable email abuse
-- misleading OAuth/device-code consent
-- using another service against its stated automation policy
+Hard boundary: no CAPTCHA bypass, no stealth/proxy evasion, no fake identities, no hidden signup automation. CAPTCHA, MFA, payment, privileged OAuth consent, and external account creation stay human-approved and auditable.
