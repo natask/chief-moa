@@ -23,6 +23,9 @@ const { createBrain } = require("./lib/brain");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
 const { createEventSubstrateStore } = require("./lib/event-substrate");
+const { resolveRemoteMode } = require("./lib/remote-mode");
+const { createAccountConnectionStore } = require("./lib/account-connections");
+const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const {
   buildEvaluatorMessages,
   parseFinal: parsePresentationFinal,
@@ -42,7 +45,13 @@ const {
   classificationFromActions,
 } = require("./lib/voice-router");
 
-const HOST = process.env.HOST || "0.0.0.0";
+const runtimeMode = resolveRemoteMode(process.env);
+if (!runtimeMode.valid) {
+  console.error(`Gateway configuration error: ${runtimeMode.issues.join("; ")}`);
+  process.exit(1);
+}
+
+const HOST = process.env.HOST || runtimeMode.defaultHost;
 const PORT = Number(process.env.PORT || 8787);
 const GATEWAY_DIR = __dirname;
 const REPO_ROOT = path.resolve(GATEWAY_DIR, "../..");
@@ -94,6 +103,7 @@ const HARNESS_WORKDIR = path.resolve(process.env.HARNESS_WORKDIR || REPO_ROOT);
 const AGENT_RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 10 * 60 * 1000);
 const MAX_AGENT_PROMPT_BYTES = Number(process.env.MAX_AGENT_PROMPT_BYTES || 64 * 1024);
 const ALLOW_AGENT_WITHOUT_TOKEN = process.env.ALLOW_AGENT_WITHOUT_TOKEN === "1";
+const WORKER_PULL_AGENT_RUNS = runtimeMode.workerPullDefault || process.env.MOA_WORKER_PULL === "1";
 // The router activation loop launches a disposable task agent and never speaks.
 // It defaults to the deterministic `echo` harness so the loop runs with no model
 // key; an operator can point it at a real harness via env.
@@ -174,6 +184,24 @@ const eventSubstrate = createEventSubstrateStore({
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
   originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
 });
+const accountConnections = createAccountConnectionStore({
+  dataDir: DATA_DIR,
+  recordEvent: recordProductEventBestEffort,
+});
+const workerPull = createWorkerPullStore({
+  dataDir: DATA_DIR,
+  leaseDurationMs: Number(process.env.WORKER_CLAIM_LEASE_MS || 60_000),
+  heartbeatIntervalMs: Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS || 15_000),
+  recordEvent: recordProductEventBestEffort,
+  runStore: {
+    exists: (id) => fs.existsSync(agentRunPath(id)),
+    readRun: readAgentRun,
+    updateRun: updateAgentRun,
+    appendEvent: appendAgentEvent,
+    readEvents: readAgentEvents,
+    listRunsRaw: listAllAgentRunRecords,
+  },
+});
 
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
@@ -210,6 +238,8 @@ const server = http.createServer(async (request, response) => {
       const voiceProvider = voiceSessionServer.status();
       sendJson(response, 200, {
         ok: true,
+        mode: runtimeMode.mode,
+        gateway_mode: runtimeMode.health(),
         provider: MODEL_PROVIDER,
         model: MODEL_ID,
         model_base_url: MODEL_BASE_URL,
@@ -249,7 +279,10 @@ const server = http.createServer(async (request, response) => {
           default_harness: DEFAULT_HARNESS,
           harnesses: harnessStatus(),
           token_required: !ALLOW_AGENT_WITHOUT_TOKEN,
+          worker_pull_enabled: WORKER_PULL_AGENT_RUNS,
+          worker_pull: workerPull.status(),
         },
+        account_connections: accountConnections.storageInfo(),
         android_ota: androidOtaHealth(),
         event_substrate: await eventSubstrateStatus(),
         device_hub: {
@@ -268,6 +301,123 @@ const server = http.createServer(async (request, response) => {
           gbrain_home: brain.gbrainHome || "default (~/.gbrain)",
         },
       });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/account-providers") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, { providers: accountConnections.providerCatalog() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/account-connections") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, { connections: accountConnections.list({ userId: ownerUserId() }) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/account-connections") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleCreateAccountConnection(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/account-connections/oauth/callback") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 501, { error: "oauth callback storage is not implemented in this slice" });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/v1/account-connections/")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.replace("/v1/account-connections/", ""));
+      const connection = accountConnections.get(id, { userId: ownerUserId() });
+      if (!connection) {
+        sendJson(response, 404, { error: "account connection not found" });
+        return;
+      }
+      sendJson(response, 200, { connection });
+      return;
+    }
+
+    if (request.method === "PATCH" && url.pathname.startsWith("/v1/account-connections/")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.replace("/v1/account-connections/", ""));
+      await handlePatchAccountConnection(request, response, id);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/account-connections/") &&
+      url.pathname.endsWith("/reauth")
+    ) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.slice("/v1/account-connections/".length, -"/reauth".length));
+      await handleAccountConnectionReauth(request, response, id);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/account-connections/") &&
+      url.pathname.endsWith("/refresh")
+    ) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.slice("/v1/account-connections/".length, -"/refresh".length));
+      handleAccountConnectionRefresh(response, id);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/account-connections/") &&
+      url.pathname.endsWith("/disable")
+    ) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.slice("/v1/account-connections/".length, -"/disable".length));
+      handleAccountConnectionDisable(response, id);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/account-connections/") &&
+      url.pathname.endsWith("/disconnect")
+    ) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.slice("/v1/account-connections/".length, -"/disconnect".length));
+      handleAccountConnectionDisconnect(response, id);
       return;
     }
 
@@ -404,6 +554,25 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/v1/agent/workers/registrations" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCreateWorkerRegistration(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/workers/register" && request.method === "POST") {
+      await handleRegisterWorker(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/workers/claim" && request.method === "POST") {
+      await handleWorkerClaim(request, response);
+      return;
+    }
+
     if (url.pathname === "/v1/agent/runs" && request.method === "GET") {
       if (!authorizedAgent(request)) {
         sendJson(response, 401, agentAuthError());
@@ -439,6 +608,36 @@ const server = http.createServer(async (request, response) => {
       }
       const id = url.pathname.replace("/v1/agent/runs/", "").replace("/followups", "");
       await handleAgentRunFollowup(request, response, id);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/agent/runs/") &&
+      url.pathname.endsWith("/heartbeat")
+    ) {
+      const id = url.pathname.slice("/v1/agent/runs/".length, -"/heartbeat".length);
+      await handleWorkerHeartbeat(request, response, id);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/agent/runs/") &&
+      url.pathname.endsWith("/events")
+    ) {
+      const id = url.pathname.slice("/v1/agent/runs/".length, -"/events".length);
+      await handleWorkerEvents(request, response, id);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/agent/runs/") &&
+      url.pathname.endsWith("/result")
+    ) {
+      const id = url.pathname.slice("/v1/agent/runs/".length, -"/result".length);
+      await handleWorkerResult(request, response, id);
       return;
     }
 
@@ -906,6 +1105,7 @@ server.on("upgrade", (request, socket, head) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`A.G. gateway listening on http://${HOST}:${PORT}`);
+  console.log(`Mode: ${runtimeMode.mode}${WORKER_PULL_AGENT_RUNS ? " worker-pull=on" : ""}`);
   console.log(`Provider: ${MODEL_PROVIDER} model=${MODEL_ID}`);
   if (MODEL_PROVIDER === "vertex") {
     console.log(`Vertex: project=${VERTEX_PROJECT || "unset"} location=${VERTEX_LOCATION} auth=${vertexCredentialHint() || "missing"}`);
@@ -914,6 +1114,168 @@ server.listen(PORT, HOST, () => {
   }
   console.log(`Data dir: ${DATA_DIR}`);
 });
+
+async function handleCreateAccountConnection(request, response) {
+  try {
+    const body = await readJsonBody(request);
+    const connection = accountConnections.create(body, ownerActor());
+    const status = connection.needs_user_action ? 202 : 201;
+    sendJson(response, status, {
+      connection,
+      reauth_action: connection.needs_user_action ? {
+        type: connection.user_action?.action_type || "open_url",
+        url: connection.user_action?.reauth_endpoint || `/v1/account-connections/${connection.id}/reauth`,
+        expires_at: connection.user_action?.expires_at || "",
+        message: connection.user_action?.message || "Authorization is required.",
+      } : null,
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handlePatchAccountConnection(request, response, id) {
+  try {
+    const body = await readJsonBody(request);
+    const connection = accountConnections.patch(id, body, ownerActor());
+    if (!connection) {
+      sendJson(response, 404, { error: "account connection not found" });
+      return;
+    }
+    sendJson(response, 200, { connection });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handleAccountConnectionReauth(request, response, id) {
+  try {
+    const body = await readJsonBody(request);
+    const payload = accountConnections.reauth(id, body, ownerActor());
+    if (!payload) {
+      sendJson(response, 404, { error: "account connection not found" });
+      return;
+    }
+    sendJson(response, 202, payload);
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+function handleAccountConnectionRefresh(response, id) {
+  const result = accountConnections.refresh(id, ownerActor());
+  if (!result) {
+    sendJson(response, 404, { error: "account connection not found" });
+    return;
+  }
+  sendJson(response, result.status, result.body);
+}
+
+function handleAccountConnectionDisable(response, id) {
+  const connection = accountConnections.disable(id, ownerActor());
+  if (!connection) {
+    sendJson(response, 404, { error: "account connection not found" });
+    return;
+  }
+  sendJson(response, 200, { connection });
+}
+
+function handleAccountConnectionDisconnect(response, id) {
+  const connection = accountConnections.disconnect(id, ownerActor());
+  if (!connection) {
+    sendJson(response, 404, { error: "account connection not found" });
+    return;
+  }
+  sendJson(response, 200, { connection });
+}
+
+async function handleCreateWorkerRegistration(request, response) {
+  try {
+    const body = await readJsonBody(request);
+    sendJson(response, 201, workerPull.createRegistration(body, { actor: ownerActor() }));
+  } catch (error) {
+    sendWorkerError(response, error);
+  }
+}
+
+async function handleRegisterWorker(request, response) {
+  try {
+    const body = await readJsonBody(request);
+    sendJson(response, 201, workerPull.registerWorker(body));
+  } catch (error) {
+    sendWorkerError(response, error);
+  }
+}
+
+async function handleWorkerClaim(request, response) {
+  try {
+    const auth = workerPull.authenticate(request, "agent_runs:claim");
+    const body = await readJsonBody(request);
+    sendJson(response, 200, workerPull.claim(body, auth));
+  } catch (error) {
+    sendWorkerError(response, error);
+  }
+}
+
+async function handleWorkerHeartbeat(request, response, id) {
+  try {
+    const auth = workerPull.authenticate(request, "agent_runs:heartbeat");
+    const body = await readJsonBody(request);
+    sendJson(response, 200, workerPull.heartbeat(id, body, auth));
+  } catch (error) {
+    sendWorkerError(response, error);
+  }
+}
+
+async function handleWorkerEvents(request, response, id) {
+  try {
+    const auth = workerPull.authenticate(request, "agent_runs:append_event");
+    const body = await readJsonBody(request);
+    sendJson(response, 200, workerPull.appendEvents(id, body, auth));
+  } catch (error) {
+    sendWorkerError(response, error);
+  }
+}
+
+async function handleWorkerResult(request, response, id) {
+  try {
+    const auth = workerPull.authenticate(request, "agent_runs:complete");
+    const body = await readJsonBody(request);
+    sendJson(response, 200, workerPull.result(id, body, auth));
+  } catch (error) {
+    sendWorkerError(response, error);
+  }
+}
+
+function sendWorkerError(response, error) {
+  if (error instanceof WorkerPullError) {
+    sendJson(response, error.status, {
+      error: {
+        code: error.code,
+        message: error.message,
+        retryable: Boolean(error.retryable),
+      },
+      request_id: randomId("req"),
+    });
+    return;
+  }
+  sendJson(response, 400, {
+    error: {
+      code: "invalid_request",
+      message: cleanError(error),
+      retryable: false,
+    },
+    request_id: randomId("req"),
+  });
+}
+
+function ownerUserId() {
+  return sanitizeOptionalId(process.env.MOA_OWNER_USER_ID || "usr_owner", "usr_owner");
+}
+
+function ownerActor() {
+  return { kind: "user", id: ownerUserId() };
+}
 
 // Evaluate a presentation. Reads the session's voice turns as the transcript
 // (or accepts `turns` inline for testing), feeds them + the deck beats through
@@ -2134,6 +2496,17 @@ async function handleAgentRun(request, response) {
     return;
   }
 
+  if (useWorkerPullForAgentRuns()) {
+    sendJson(response, 202, {
+      ...agentRunPayload(readAgentRun(run.id)),
+      worker_pull: {
+        queued: true,
+        claim_url: "/v1/agent/workers/claim",
+      },
+    });
+    return;
+  }
+
   const wait = body.wait !== false;
   const active = { child: null, cancelRequested: false, promise: null };
   const promise = executeAgentRun(run.id, active).finally(() => activeRuns.delete(run.id));
@@ -2209,6 +2582,22 @@ async function handleRouterActivate(request, response) {
     harness,
     source: run.source,
   });
+
+  if (useWorkerPullForAgentRuns()) {
+    sendJson(response, 202, {
+      activation_id: run.id,
+      run_id: run.id,
+      status: run.status,
+      harness: run.harness,
+      intent: truncate(intent, 2000),
+      status_url: `/v1/router/activations/${run.id}`,
+      worker_pull: {
+        queued: true,
+        claim_url: "/v1/agent/workers/claim",
+      },
+    });
+    return;
+  }
 
   const active = { child: null, cancelRequested: false, promise: null };
   // Launch the disposable task agent and register the completion ping. The ping
@@ -2324,6 +2713,14 @@ function cancelAgentRunById(id) {
     return { ok: true, status: "cancel_requested", run: readAgentRun(safeId) };
   }
 
+  if (run.claim_id && ["claimed", "running"].includes(run.status)) {
+    const next = updateAgentRun(safeId, {
+      cancel_requested: true,
+      updated_at: new Date().toISOString(),
+    });
+    return { ok: true, status: "cancel_requested", run: next };
+  }
+
   const canceledAt = new Date().toISOString();
   const next = updateAgentRun(safeId, {
     status: "canceled",
@@ -2395,6 +2792,17 @@ async function handleAgentRunFollowup(request, response, id) {
   }
 
   const active = { child: null, cancelRequested: false, promise: null };
+  if (useWorkerPullForAgentRuns()) {
+    sendJson(response, 202, {
+      ...agentRunPayload(readAgentRun(run.id)),
+      parent_run_id: parent.id,
+      worker_pull: {
+        queued: true,
+        claim_url: "/v1/agent/workers/claim",
+      },
+    });
+    return;
+  }
   const promise = executeAgentRun(run.id, active).finally(() => activeRuns.delete(run.id));
   active.promise = promise;
   activeRuns.set(run.id, active);
@@ -3406,8 +3814,9 @@ function createAgentRun(body) {
 
   // A run can target a saved project (resolves its working dir + default
   // harness) or pass working_dir/harness directly. Explicit fields win.
-  const project = body.project_id ? findProject(body.project_id) : null;
-  if (body.project_id && !project) {
+  const requestedProjectId = body.project_id ? sanitizeOptionalBlankId(body.project_id) : "";
+  const project = requestedProjectId ? findProject(requestedProjectId) : null;
+  if (requestedProjectId && !project && !useWorkerPullForAgentRuns()) {
     throw new Error(`unknown project: ${body.project_id}`);
   }
   const harness = sanitizeHarness(body.harness || project?.default_harness || DEFAULT_HARNESS);
@@ -3428,9 +3837,23 @@ function createAgentRun(body) {
     screen: summarizeScreen(body.screen),
     source: String(body.source || "unknown").slice(0, 80),
     conversation_id: body.conversation_id ? sanitizeId(body.conversation_id) : "",
+    branch_id: body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default",
+    turn_id: body.turn_id ? sanitizeOptionalBlankId(body.turn_id) : "",
+    broker_event_id: body.broker_event_id ? sanitizeOptionalBlankId(body.broker_event_id) : "",
+    route_decision_id: body.route_decision_id ? sanitizeOptionalBlankId(body.route_decision_id) : "",
     profile_version: profileVersion,
     parent_run_id: body.parent_run_id ? sanitizeId(body.parent_run_id) : "",
-    project_id: project ? project.id : "",
+    project_id: project ? project.id : requestedProjectId,
+    local_project_alias: body.local_project_alias
+      ? String(body.local_project_alias).replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 120)
+      : (project ? project.name : requestedProjectId),
+    work_node_id: body.work_node_id ? sanitizeOptionalBlankId(body.work_node_id) : sanitizeOptionalBlankId(body.work?.work_node_id || ""),
+    context_pack_ref: sanitizeRelativeRef(body.context_pack_ref || body.work?.context_pack_ref || ""),
+    input_artifact_refs: sanitizeArtifactRefsForRun(body.input_artifact_refs || body.artifacts?.input_refs || []),
+    output_artifact_refs: sanitizeArtifactRefsForRun(body.output_artifact_refs || body.artifacts?.output_refs || []),
+    deployment_candidate_refs: sanitizeDeploymentRefsForRun(body.deployment_candidate_refs || body.deployments?.candidate_refs || []),
+    apply_allowed: false,
+    promotion_gate: "human",
     resume_session_id: resumeSessionId,
     session_id: "",
     working_dir: workingDir,
@@ -3454,6 +3877,14 @@ function createAgentRun(body) {
     conversation_id: run.conversation_id,
     profile_version: run.profile_version,
     project_id: run.project_id,
+    branch_id: run.branch_id,
+    turn_id: run.turn_id,
+    broker_event_id: run.broker_event_id,
+    route_decision_id: run.route_decision_id,
+    work_node_id: run.work_node_id,
+    context_pack_ref: run.context_pack_ref,
+    input_artifact_refs: run.input_artifact_refs,
+    deployment_candidate_refs: run.deployment_candidate_refs,
     resume_session_id: run.resume_session_id,
     working_dir: workingDir,
     screen: run.screen,
@@ -4004,11 +4435,18 @@ function voiceTurnPayload(record, patch) {
 
 function startAgentRun(body) {
   const run = createAgentRun(body);
+  if (useWorkerPullForAgentRuns()) {
+    return run;
+  }
   const active = { child: null, cancelRequested: false, promise: null };
   const promise = executeAgentRun(run.id, active).finally(() => activeRuns.delete(run.id));
   active.promise = promise;
   activeRuns.set(run.id, active);
   return run;
+}
+
+function useWorkerPullForAgentRuns() {
+  return WORKER_PULL_AGENT_RUNS;
 }
 
 function agentRunBodyWithSessionContext(body) {
@@ -5780,6 +6218,10 @@ function listAgentRuns(limit) {
 }
 
 function listAllAgentRuns() {
+  return listAllAgentRunRecords().map(summarizeAgentRun);
+}
+
+function listAllAgentRunRecords() {
   if (!fs.existsSync(AGENT_RUNS_DIR)) {
     return [];
   }
@@ -5788,8 +6230,7 @@ function listAllAgentRuns() {
     .filter((name) => name.endsWith(".json") && !name.endsWith(".events.json"))
     .map((name) => {
       try {
-        const run = JSON.parse(fs.readFileSync(path.join(AGENT_RUNS_DIR, name), "utf8"));
-        return summarizeAgentRun(run);
+        return JSON.parse(fs.readFileSync(path.join(AGENT_RUNS_DIR, name), "utf8"));
       } catch (error) {
         return null;
       }
@@ -6308,9 +6749,19 @@ function summarizeAgentRun(run) {
     harness: run.harness,
     source: run.source,
     conversation_id: run.conversation_id,
+    branch_id: run.branch_id || "default",
+    turn_id: run.turn_id || "",
+    broker_event_id: run.broker_event_id || "",
+    route_decision_id: run.route_decision_id || "",
     profile_version: run.profile_version || "",
     parent_run_id: run.parent_run_id,
+    project_id: run.project_id || "",
+    work_node_id: run.work_node_id || "",
+    context_pack_ref: run.context_pack_ref || "",
     working_dir: run.working_dir,
+    claimed_by_worker_id: run.claimed_by_worker_id || "",
+    claim_id: run.claim_id || "",
+    lease_expires_at: run.lease_expires_at || "",
     created_at: run.created_at,
     updated_at: run.updated_at,
     finished_at: run.finished_at,
@@ -6450,6 +6901,10 @@ function sanitizeOptionalId(id, fallback) {
   return sanitizeId(fallback || crypto.randomUUID());
 }
 
+function sanitizeOptionalBlankId(id) {
+  return String(id || "").replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
 function sanitizeBrowserTaskUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -6534,6 +6989,46 @@ function sanitizeBrowserScreenshot(value) {
   };
 }
 
+function sanitizeRelativeRef(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/[^a-zA-Z0-9_./:-]/g, "")
+    .slice(0, 500);
+}
+
+function sanitizeArtifactRefsForRun(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 50)
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      return {
+        artifact_id: sanitizeOptionalBlankId(item.artifact_id || item.artifactId || ""),
+        kind: String(item.kind || "").replace(/[^a-zA-Z0-9_.:-]/g, "").slice(0, 80),
+        uri: sanitizeRelativeRef(item.uri || ""),
+        sha256: String(item.sha256 || "").replace(/[^a-fA-F0-9]/g, "").slice(0, 64),
+      };
+    })
+    .filter((item) => item && (item.artifact_id || item.uri));
+}
+
+function sanitizeDeploymentRefsForRun(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20)
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      return {
+        candidate_id: sanitizeOptionalBlankId(item.candidate_id || item.candidateId || item.id || ""),
+        target: String(item.target || "").replace(/[^a-zA-Z0-9_.:-]/g, "").slice(0, 120),
+        preview_url: sanitizeBrowserTaskUrl(item.preview_url || item.previewUrl || ""),
+        applied: false,
+        apply_allowed: false,
+      };
+    })
+    .filter((item) => item && (item.candidate_id || item.preview_url));
+}
+
 function sanitizeHarness(harness) {
   const safe = String(harness || "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
   if (!harnessDefinitions()[safe]) {
@@ -6562,7 +7057,7 @@ function isPathInside(parent, child) {
 
 function authorized(request) {
   if (!MOA_GATEWAY_TOKEN) {
-    return true;
+    return runtimeMode.protectedRoutesOpenWithoutToken;
   }
   return request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
 }
@@ -6577,7 +7072,7 @@ function authorizedVoiceSessionUpgrade(request, url) {
 
 function consumeVoiceSessionTicket(ticket) {
   if (!MOA_GATEWAY_TOKEN) {
-    return true;
+    return runtimeMode.protectedRoutesOpenWithoutToken;
   }
   cleanupVoiceSessionTickets();
   const key = String(ticket || "");
@@ -6612,12 +7107,15 @@ function voiceSessionUrlForRequest(request, ticket) {
 
 function authorizedAgent(request) {
   if (!MOA_GATEWAY_TOKEN) {
-    return ALLOW_AGENT_WITHOUT_TOKEN;
+    return !runtimeMode.remote && ALLOW_AGENT_WITHOUT_TOKEN;
   }
   return authorized(request);
 }
 
 function agentAuthError() {
+  if (runtimeMode.remote && !MOA_GATEWAY_TOKEN) {
+    return { error: `${runtimeMode.mode} mode requires configured auth for agent endpoints` };
+  }
   if (!MOA_GATEWAY_TOKEN && !ALLOW_AGENT_WITHOUT_TOKEN) {
     return { error: "agent endpoints require MOA_GATEWAY_TOKEN; set ALLOW_AGENT_WITHOUT_TOKEN=1 only on a trusted private network" };
   }
@@ -6648,7 +7146,7 @@ function sendStaticHtml(response, filePath) {
 
 function setCors(response) {
   response.setHeader("access-control-allow-origin", "*");
-  response.setHeader("access-control-allow-methods", "GET,POST,PUT,OPTIONS");
+  response.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,OPTIONS");
   response.setHeader("access-control-allow-headers", "content-type,authorization");
 }
 
