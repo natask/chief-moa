@@ -482,49 +482,118 @@ async function main() {
       throw new Error(`result cue did not render above the command input: ${JSON.stringify(resultPlacement)}`);
     }
 
-    // Fast local stop path (typed): "stop" must halt locally and never send a
-    // run to the background. The overlay records __ageeLastStopHalt for this
-    // check; there is no user-facing text beyond the minimal cue.
+    // Fast local stop path (typed): named smoke:stop-local contract. A whole
+    // utterance "stop" must (1) halt locally, (2) send zero runs to the gateway,
+    // and (3) produce no spoken or written acknowledgment beyond the echoed
+    // command and the minimal cue. The overlay records __ageeLastStopHalt; a
+    // model reply would leave assistant text in the log, which this asserts is
+    // absent. Each stop phrase in the local matcher is exercised so a rewording
+    // of the matcher that drops a phrase fails here, not silently in production.
+    const stopPhrases = ["stop", "shut up", "be quiet", "stop please", "shut up now"];
+    const controlText = "what is the weather";
     const typedStop = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
+        const stopPhrases = ${JSON.stringify(stopPhrases)};
+        const controlText = ${JSON.stringify(controlText)};
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         await chrome.tabs.sendMessage(tabId, { cmd: "open" });
         await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
-            window.__ageeLastStopHalt = null;
             window.__ageeSmokeRunCount = 0;
-            const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
-            chrome.runtime.sendMessage = (message, ...rest) => {
-              if (message && message.cmd === "run") window.__ageeSmokeRunCount += 1;
-              return orig(message, ...rest);
-            };
-            const input = document.querySelector("#agee-input");
-            if (input) {
-              input.value = "stop";
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-              input.focus();
-              input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+            window.__ageeSmokeStopSeen = window.__ageeSmokeStopSeen || null;
+            if (!window.__ageeSmokeRunWrapped) {
+              const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+              chrome.runtime.sendMessage = (message, ...rest) => {
+                if (message && message.cmd === "run") window.__ageeSmokeRunCount += 1;
+                return orig(message, ...rest);
+              };
+              window.__ageeSmokeRunWrapped = true;
             }
           },
         });
-        await new Promise((resolve) => setTimeout(resolve, 120));
-        const [result] = await chrome.scripting.executeScript({
+
+        const submit = async (text) => {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            args: [text],
+            func: (value) => {
+              window.__ageeLastStopHalt = null;
+              const input = document.querySelector("#agee-input");
+              if (input) {
+                input.value = value;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.focus();
+                input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+              }
+            },
+          });
+          await sleep(120);
+          const [snap] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              const log = document.querySelector("#agee-log");
+              return {
+                halt: window.__ageeLastStopHalt || null,
+                runCount: window.__ageeSmokeRunCount || 0,
+                logText: log ? log.textContent : "",
+              };
+            },
+          });
+          return snap?.result || {};
+        };
+
+        // Every stop phrase halts locally with zero runs.
+        const perPhrase = {};
+        for (const phrase of stopPhrases) {
+          const before = await submit(phrase);
+          perPhrase[phrase] = { halt: before.halt, runCount: before.runCount };
+        }
+        const afterStops = perPhrase[stopPhrases[stopPhrases.length - 1]].runCount;
+
+        // A non-stop instruction is NOT swallowed: it does reach the gateway,
+        // proving the stop path is scoped and not a blanket "swallow all input".
+        const control = await submit(controlText);
+
+        const [final] = await chrome.scripting.executeScript({
           target: { tabId },
-          func: () => ({
-            halt: window.__ageeLastStopHalt || null,
-            runCount: window.__ageeSmokeRunCount || 0,
-            launcherState: document.querySelector("#agee-root")?.dataset?.ageeState || null,
-          }),
+          func: () => {
+            const log = document.querySelector("#agee-log");
+            return { logText: log ? log.textContent : "" };
+          },
         });
-        return result?.result;
+
+        return {
+          perPhrase,
+          afterStops,
+          control: { runCount: control.runCount, afterStops },
+          logText: final?.result?.logText || "",
+        };
       })()
     `);
-    if (typedStop?.halt?.source !== "typed") {
-      throw new Error(`typed stop did not halt locally: ${JSON.stringify(typedStop)}`);
+    for (const phrase of stopPhrases) {
+      const entry = typedStop?.perPhrase?.[phrase];
+      if (entry?.halt?.source !== "typed") {
+        throw new Error(`typed stop "${phrase}" did not halt locally: ${JSON.stringify(typedStop)}`);
+      }
     }
-    if (typedStop?.runCount !== 0) {
-      throw new Error(`typed stop must not send a run to the gateway: ${JSON.stringify(typedStop)}`);
+    if (typedStop?.afterStops !== 0) {
+      throw new Error(`typed stop must not send any run to the gateway: ${JSON.stringify(typedStop)}`);
+    }
+    // Acknowledgment check: after all stops, the log carries the echoed commands
+    // but no assistant reply text. A model acknowledgment ("stopping", "okay")
+    // would appear here; the stop path must stay silent.
+    const stopLog = String(typedStop?.logText || "").toLowerCase();
+    for (const ack of ["stopping", "i'll stop", "okay", "sure", "done stopping"]) {
+      if (stopLog.includes(ack)) {
+        throw new Error(`typed stop produced a spoken/written acknowledgment "${ack}": ${JSON.stringify(typedStop)}`);
+      }
+    }
+    // Scope proof: the non-stop control instruction DID reach the gateway, so
+    // the stop matcher is not swallowing ordinary input.
+    if (!(typedStop?.control?.runCount > typedStop?.control?.afterStops)) {
+      throw new Error(`non-stop instruction was wrongly swallowed by the stop path: ${JSON.stringify(typedStop)}`);
     }
 
     const workerResult = await evaluate(workerCdp, `
