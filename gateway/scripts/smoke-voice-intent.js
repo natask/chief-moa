@@ -51,6 +51,7 @@ assert.ok(shouldRunAgentFromVoice("look at the Chrome extension Android app and 
 assert.ok(!shouldRunAgentFromVoice("what is going on with the operational systems"));
 assert.ok(hasOperationalWorkContext("what is going on with the operational systems"));
 assert.ok(isOperationalStatusQuestion("what is going on with the operational systems"));
+assert.ok(!shouldRunAgentFromVoice("what is going on here on this trading page"));
 assert.ok(!shouldRunAgentFromVoice("what is the weather"));
 assert.ok(!shouldRunAgentFromVoice("what is going on in this world"));
 assert.ok(!hasOperationalWorkContext("what is going on in this world"));
@@ -73,6 +74,7 @@ assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on in this world"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what's going on in this world"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "what is going on here, what does closing orders only mean?"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "profile_control");

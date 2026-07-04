@@ -84,19 +84,8 @@ final class MoaOperationalTurnRouter {
         return shouldRunAgentFromVoice(text, true)
                 || isProfileControlIntent(text)
                 || !agentPromptFrom(text).isEmpty()
-                || lower.contains("operational")
-                || lower.contains("operating")
-                || lower.contains("what s going on")
-                || lower.contains("what is going on")
-                || lower.contains("what are all the things")
-                || lower.contains("projects i have ongoing")
-                || lower.contains("all the projects")
-                || lower.contains("what am i working on")
-                || lower.contains("forward progress")
-                || lower.contains("chrome extension")
-                || lower.contains("android app")
-                || lower.contains("mobile gateway")
-                || lower.contains("moa gateway");
+                || isOperationalAgentStatusQuery(lower)
+                || lower.contains("what are all the things");
     }
 
     static boolean isProfileControlIntent(String text) {
@@ -114,10 +103,12 @@ final class MoaOperationalTurnRouter {
         String lower = normalizeSpeech(text);
         return shouldRunAgentFromVoice(text, true)
                 || !agentPromptFrom(text).isEmpty()
-                || lower.contains("operational")
+                || isOperationalAgentStatusQuery(lower);
+    }
+
+    private static boolean isOperationalAgentStatusQuery(String lower) {
+        return lower.contains("operational")
                 || lower.contains("operating")
-                || lower.contains("what s going on")
-                || lower.contains("what is going on")
                 || lower.contains("projects i have ongoing")
                 || lower.contains("all the projects")
                 || lower.contains("what am i working on")

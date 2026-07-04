@@ -22,10 +22,10 @@ public final class MoaOperationalTurnRouterTest {
 
     @Test
     public void routesOperationalSystemQuestionsThroughMoa() {
-        assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("what is going on?"));
         assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("what's going on with the operational systems?"));
         assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("look at the Chrome extension, Android app, and mobile gateway"));
         assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("we need forward progress on all the projects"));
+        assertFalse(MoaOperationalTurnRouter.shouldRouteThroughMoa("what is going on here on this trading page?"));
         assertFalse(MoaOperationalTurnRouter.shouldRouteThroughMoa("what is the weather today?"));
     }
 
@@ -58,9 +58,10 @@ public final class MoaOperationalTurnRouterTest {
 
     @Test
     public void forcesAgentForOperationalSystemQuestions() {
-        assertTrue(MoaOperationalTurnRouter.shouldForceAgent("what is going on?"));
+        assertTrue(MoaOperationalTurnRouter.shouldForceAgent("what is going on with the operational systems?"));
         assertTrue(MoaOperationalTurnRouter.shouldForceAgent("mobile gateway status"));
         assertTrue(MoaOperationalTurnRouter.shouldForceAgent("what am I working on?"));
+        assertFalse(MoaOperationalTurnRouter.shouldForceAgent("what is going on here on this trading page?"));
         assertFalse(MoaOperationalTurnRouter.shouldForceAgent("what is the weather today?"));
     }
 
