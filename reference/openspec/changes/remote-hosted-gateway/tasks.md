@@ -403,8 +403,12 @@ before mutating the active gateway; the promotion rule is documented in
 - [ ] 8.4 Worker smoke: outbound claim of a queued run and reported completion with no inbound port on the worker.
 - [x] 8.5 Backup smoke: dump plus snapshot plus scratch restore check pass before any promotion.
 
-8.1, 8.2, and 8.5 verified locally (isolated compose projects; the live LAN
-gateway was not touched). 8.3 and 8.4 wait on tasks 3 and 4. Real-droplet
-provisioning is intentionally not run yet: the handoff is
+8.1, 8.2, and 8.5 were reverified on the consolidation branch with isolated
+local compose projects; the live LAN gateway was not touched. The compose
+health payload reported `mode=self-host`, `trust_proxy=true`, and
+`event_substrate.mode=postgres`; the restore check verified `/health`,
+`/v1/supervisor/status`, and the restored `nodes` table. 8.3 and 8.4 wait on
+tasks 3 and 4. Real-droplet provisioning is intentionally not run yet: the
+handoff is
 `scripts/vps/bootstrap.sh --domain api.<domain> --email <email>` on a fresh
 Ubuntu droplet.

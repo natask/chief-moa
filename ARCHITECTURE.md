@@ -674,6 +674,32 @@ queues.
 - `reference/openspec/changes/thin-client-gateway-architecture`: browser extension
   thin-client / persistent-engine decision record.
 
+## Deployment Topology
+
+The gateway ships as one Docker image whose behavior is selected by env, never
+by build variant (`reference/openspec/changes/remote-hosted-gateway`):
+
+```text
+MOA_MODE=local      dev default: no auth required, file fallback allowed,
+                    loopback bind
+MOA_MODE=self-host  remote: MOA_GATEWAY_TOKEN + DATABASE_URL required at boot,
+                    binds 0.0.0.0, trusts proxy-forwarded protocol
+MOA_MODE=hosted     self-host plus per-user accounts and backup expectations
+```
+
+The VPS stack (`docker-compose.yml` + `docker-compose.vps.yml`) runs gateway,
+Postgres, and Caddy TLS on one droplet. Named volumes hold the shared event
+store and `DATA_DIR` blobs; they survive image rebuilds and git updates. A
+preview stack runs under a different compose project name with its own volumes;
+that is a preview, not a rollback of the active store. Promotion (update,
+active URL change, active-service restart) requires a Postgres dump, a
+`DATA_DIR` snapshot, and a passing scratch restore check first
+(`scripts/vps/backup.sh`, `scripts/vps/restore-check.sh`).
+
+Agent harnesses and their credentials never run on or mount into the VPS
+gateway; remote agent execution uses the worker-pull model where the user's
+execution machine connects outbound to claim queued runs.
+
 ## Deployment Finish Loop
 
 Agents must treat deployment as part of completion for deployable surfaces:
