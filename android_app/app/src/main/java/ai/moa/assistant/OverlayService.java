@@ -1604,11 +1604,14 @@ public final class OverlayService extends Service {
     private JSONArray androidLocalToolManifest() throws JSONException {
         JSONArray manifest = new JSONArray();
         putToolManifestItem(manifest, "app.launch", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "app.list", "read_only", "none");
         putToolManifestItem(manifest, "system.back", "navigation", "implicit_user_command");
         putToolManifestItem(manifest, "system.home", "navigation", "implicit_user_command");
         putToolManifestItem(manifest, "screen.summary", "read_only", "none");
         putToolManifestItem(manifest, "screen.tap_text", "navigation", "implicit_user_command");
         putToolManifestItem(manifest, "audio.speak", "local_output", "implicit_user_command");
+        putToolManifestItem(manifest, "email.compose", "external_side_effect", "target_app_confirmation");
+        putToolManifestItem(manifest, "sms.compose", "external_side_effect", "target_app_confirmation");
         return manifest;
     }
 

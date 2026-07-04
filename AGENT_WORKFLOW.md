@@ -56,6 +56,10 @@ leave artifacts that another agent can resume.
 - Workflow directories, ledgers, commands, or agent context packs: workflow
   agent.
 - Cross-cutting product behavior: OpenSpec first, then implementation tickets.
+- Cross-surface Chief Moa work: use `chief-moa-orchestration` or the equivalent
+  lane split before implementation. Keep browser voice, browser action/CDP,
+  Android action/accessibility, gateway, workflow/docs, and verification/deploy
+  as separate tickets unless the change is explicitly instruction-only.
 
 The broker's launcher profiles live in `gateway/agent-launcher-profiles.json`,
 not in `AGENTS.md`. When a typed or spoken message is routed through

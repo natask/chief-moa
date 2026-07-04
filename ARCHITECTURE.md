@@ -201,7 +201,12 @@ audio returned by the selected gateway provider. The page overlay is only the
 control surface; websites must not receive microphone permission for Moa voice.
 Each spoken
 browser utterance gets its own turn id under the stable browser session id. When
-the user enables background assistant speech for the current browser session,
+the user starts a manual mascot push-to-talk turn, the extension starts
+extension-owned capture at hold start, buffers PCM while the gateway voice
+session is not ready, and sends the release/commit only after that buffered
+audio has flushed. The visible browser loop is hold to capture, release to send,
+processing, then response. When the user enables background assistant speech for
+the current browser session,
 the extension preserves older voice-session event handling and queued playback
 while it starts the next microphone turn. That overlap is scoped to the active
 page-agent owner: starting a browser agent or voice turn from another tab revokes
@@ -239,6 +244,38 @@ UI, and `userScripts` only for explicit opt-in page-acting code. The same
 extension package should work against a self-hosted or hosted engine by changing
 only the engine URL/session token.
 
+### Self-Extension Artifacts
+
+```text
+spoken or typed customization request
+  -> gateway stores the user intent as normal message/session evidence
+  -> gateway creates one or more self_extension_artifact candidates
+  -> gateway validates each candidate against a known artifact schema
+  -> gateway can expose previews and variants without applying them
+  -> user or agent applies one candidate by moving an active pointer
+  -> clients fetch a bounded runtime document
+  -> each client renders only the artifact types it explicitly supports
+  -> clients record visible/local receipts when they apply a runtime change
+```
+
+Self-extension is the mechanism for conversational customization and capability
+creation. The model does not directly mutate Moa. It proposes structured
+artifacts such as avatar behavior, theme, view, workflow, tool binding, or code
+patch specs. The gateway owns storage, validation, variant history, active
+pointers, runtime projection, and provider/tool routing. Moving an active
+pointer requires source provenance and approval metadata, even for API-driven
+development use. Android and browser clients own rendering and local execution
+for the artifact types they support.
+
+The first browser slice is `avatar_behavior`: the gateway serves an active
+declarative spec such as "thinking -> orbit -> subtle", and the extension maps
+that spec to known CSS classes on the Aggie/Lion mark. No generated JavaScript is
+executed in privileged extension code. Richer generated UI remains declarative
+or sandboxed, and page-acting code remains opt-in through the existing
+`userScripts` boundary. Browser clients preserve the last-good runtime when the
+gateway is temporarily unavailable and mark the cached runtime stale instead of
+visually clearing an applied customization.
+
 ### Agent Work
 
 ```text
@@ -271,6 +308,29 @@ messages can target a research workflow, implementation requests can target
 coding, and simple messages can stay on the direct-answer path. Explicit broker
 launch starts at most one selected launchable route in this slice; ordinary
 messages still only store decisions and context packs.
+
+The broker is also the intent-management entry point. A user intent is the
+durable user-authored message plus its source surface, session/browser/page
+context, evidence references, route decisions, context packs, linked agent runs,
+and eventual completion or input-needed pings. The user should not have to
+manage child agents directly. Agents update the gateway-owned intent/run/event
+stores as they work, and user-facing clients read those stores to show what is
+active, finished, blocked, or waiting for input.
+
+No spoken intent may be treated as ephemeral. Streaming voice stores the raw
+user PCM under the gateway voice-session archive while the provider processes
+it, stores the canonical turn transcript and assistant output, and exposes
+token-protected history/search and playback references so the user can inspect
+or replay what they sent. Local clients may keep their own capture spool while
+uploading, but the trusted gateway archive is the cross-device source of truth
+once the turn reaches the server.
+
+gbrain is the semantic recall layer for this intent store, not the store itself.
+After a broker event is durably written, the gateway may index a concise intent
+summary into gbrain under the Moa namespace so later searches can recall related
+intent threads semantically. If gbrain is unavailable, stale, or incomplete, the
+gateway still relies on broker events, voice turns, agent runs, receipts, and
+event records as the authoritative product history.
 
 Broker route decisions also materialize launch context packs. The editable
 profile file is `gateway/agent-launcher-profiles.json`: each profile names the
@@ -359,8 +419,9 @@ The gateway is only the registry and queue. It does not press phone buttons,
 open browser tabs, or speak through device speakers by itself. A browser turn
 can request an Android action such as `audio.speak`; Android must still claim,
 validate, execute with local TextToSpeech, and receipt it. An Android turn can
-request browser work such as `browser.tab.open`; the Chrome extension must still
-claim, validate, execute, and receipt it.
+request browser work such as tab list/open/activate/close/reload, page snapshot,
+or bounded `chrome.debugger` CDP actions; the Chrome extension must still claim,
+validate, execute only its advertised local tool, and receipt it.
 
 ## Product Primitives
 
@@ -405,6 +466,14 @@ claim, validate, execute, and receipt it.
 - `action_proposal`: structured server output asking the phone to perform work.
 - `approval`: a local user decision for non-trivial actions.
 - `receipt`: local audit record for executed phone actions.
+- `self_extension_artifact`: a persistent, inspectable customization or
+  capability artifact proposed from user intent. Examples include
+  `avatar_behavior`, `theme_spec`, `view_spec`, `workflow_spec`,
+  `tool_binding_spec`, and `code_patch_spec`.
+- `self_extension_variant`: a candidate artifact in a variant group so the user
+  can try parallel looks or behaviors without losing older versions.
+- `self_extension_runtime`: the bounded gateway projection of currently active
+  artifacts that clients fetch and interpret. It is data, not privileged code.
 
 Every new feature should attach to at least one primitive above. If it does not,
 the architecture is still fuzzy.
@@ -442,6 +511,9 @@ queues.
   surface for health, runtime profile, prompt history, sessions, and runs.
 - `gateway/lib/event-substrate.js`: product event substrate adapter for
   Postgres `product_events` or local `product-events.jsonl`.
+- `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
+  validators, active pointers, and runtime projection for conversational
+  customization.
 - `gateway/schema.sql`: Postgres schema for work graph records, product events,
   projection checkpoints, event blobs, and sync import checkpoints.
 - `gateway/lib/voice-intent.js`: pure voice-turn classifier
@@ -538,6 +610,10 @@ execution machine connects outbound to claim queued runs.
   generated code, never repackaged privileged extension code.
 - Browser extensions hold only engine connection state, not raw provider keys or
   subscriptions.
+- Self-extension artifacts are proposed data until the gateway validates them and
+  a supported client renders or executes them inside its own authority boundary.
+- Privileged Android and browser code must not execute arbitrary generated code
+  from self-extension artifacts.
 - The overlay remains fast and small; the full app owns inspection and control.
 - Docs and specs change with architecture-significant code changes.
 

@@ -12,6 +12,9 @@ repo workflow, or verification work.
 - Preserve the Android/gateway/browser trust boundary.
 - Treat model output and screen context as proposals/evidence, not executable
   commands.
+- For Chief Moa cross-surface work, split implementation into browser voice,
+  browser action/CDP, Android action/accessibility, gateway, workflow/docs, and
+  verification/deploy lanes before editing code.
 - Commit completed work with a Conventional Commit and deploy the changed
   deployable surface through the repo deploy script.
 

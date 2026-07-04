@@ -67,6 +67,7 @@
   let uiChimesEnabled = false;
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
   const DEV_RELOAD_POLL_MS = 900;
+  const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
   let devReloadTimer = null;
   let devReloadInFlight = false;
   let devReloadVersion = null;
@@ -76,6 +77,31 @@
     "a m h a r i c",
   ];
   const PROFILE_VOICE_NAMES = ["puck", "charon", "kore", "fenrir", "aoede", "leda", "orus", "zephyr"];
+  const AVATAR_BEHAVIOR_MOTIONS = new Set(["still", "pulse", "hop", "orbit", "float", "shake", "glow"]);
+  const AVATAR_BEHAVIOR_TRIGGERS = new Set(["idle", "editing", "listening", "thinking", "speaking", "done", "error", "attention", "busy"]);
+  const AVATAR_BEHAVIOR_INTENSITIES = new Set(["subtle", "normal", "strong"]);
+  const AVATAR_BEHAVIOR_DURATIONS = new Set(["while_active"]);
+  const AVATAR_MOTION_CLASSES = [
+    "agee-avatar-motion-still",
+    "agee-avatar-motion-pulse",
+    "agee-avatar-motion-hop",
+    "agee-avatar-motion-orbit",
+    "agee-avatar-motion-float",
+    "agee-avatar-motion-shake",
+    "agee-avatar-motion-glow",
+  ];
+  const AVATAR_TRIGGER_CLASSES = [
+    "agee-avatar-trigger-idle",
+    "agee-avatar-trigger-editing",
+    "agee-avatar-trigger-listening",
+    "agee-avatar-trigger-thinking",
+    "agee-avatar-trigger-speaking",
+    "agee-avatar-trigger-done",
+    "agee-avatar-trigger-error",
+    "agee-avatar-trigger-attention",
+    "agee-avatar-trigger-busy",
+  ];
+  let avatarBehaviorRuntime = null;
   let extensionContextInvalidated = false;
 
   function markExtensionContextInvalidated(error) {
@@ -199,6 +225,7 @@
 
     restoreLauncherPosition();
     restoreUiChimePreference();
+    loadAvatarBehaviorRuntime();
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
@@ -488,6 +515,7 @@
     // The composer stays editable through every phase. Answers live in the cue
     // cards above, never in the input, so a running turn never locks typing.
     if (input) input.readOnly = false;
+    syncAvatarBehaviorTrigger();
   }
 
   // Show the result stack whenever it holds anything (running, done, error, or
@@ -538,6 +566,7 @@
     reactLauncher("attention"); // a question needs the user: ring for attention
     openTextSurface({ fresh: false });
     root?.classList.add("agee-confirming");
+    syncAvatarBehaviorTrigger();
     return new Promise((resolve) => {
       pendingConfirm = resolve;
       const row = document.createElement("div");
@@ -556,6 +585,7 @@
         pendingConfirm = null;
         row.remove();
         root?.classList.remove("agee-confirming");
+        syncAvatarBehaviorTrigger();
         resolve(ok);
       });
       log.appendChild(row);
@@ -578,6 +608,91 @@
     // The mark glows while it is working so the user can tell it is busy even
     // with the panel closed.
     if (launcher) launcher.classList.toggle("agee-busy", anyActive());
+    syncAvatarBehaviorTrigger();
+  }
+
+  function loadAvatarBehaviorRuntime() {
+    safeStorageLocalGet({ [SELF_EXTENSION_RUNTIME_CACHE_KEY]: null })
+      .then((stored) => {
+        const cached = stored?.[SELF_EXTENSION_RUNTIME_CACHE_KEY];
+        if (cached) applyAvatarBehaviorRuntime(cached.runtime || cached);
+      })
+      .catch(() => {});
+    safeRuntimeSendMessage({ cmd: "selfExtensionRuntime" })
+      .then((response) => applyAvatarBehaviorRuntime(response?.runtime || response))
+      .catch(() => applyAvatarBehaviorRuntime(null));
+  }
+
+  function sanitizeAvatarBehaviorRuntime(runtime) {
+    const behavior = runtime?.active?.avatar_behavior;
+    const spec = behavior?.spec;
+    if (
+      runtime?.version !== 1 ||
+      behavior?.type !== "avatar_behavior" ||
+      !spec ||
+      typeof spec !== "object"
+    ) {
+      return null;
+    }
+    const motion = String(spec.motion || "");
+    const trigger = String(spec.trigger || "");
+    if (!AVATAR_BEHAVIOR_MOTIONS.has(motion) || !AVATAR_BEHAVIOR_TRIGGERS.has(trigger)) {
+      return null;
+    }
+    const intensity = AVATAR_BEHAVIOR_INTENSITIES.has(String(spec.intensity || ""))
+      ? String(spec.intensity)
+      : "normal";
+    const duration = AVATAR_BEHAVIOR_DURATIONS.has(String(spec.duration || ""))
+      ? String(spec.duration)
+      : "while_active";
+    return {
+      id: typeof behavior.artifact_id === "string" ? behavior.artifact_id.slice(0, 80) : "",
+      motion,
+      trigger,
+      intensity,
+      duration,
+    };
+  }
+
+  function applyAvatarBehaviorRuntime(runtime) {
+    avatarBehaviorRuntime = sanitizeAvatarBehaviorRuntime(runtime);
+    if (!root || !launcher) return;
+    launcher.classList.remove(...AVATAR_MOTION_CLASSES, ...AVATAR_TRIGGER_CLASSES);
+    delete root.dataset.ageeAvatarBehaviorId;
+    delete root.dataset.ageeAvatarMotion;
+    delete root.dataset.ageeAvatarTrigger;
+    delete root.dataset.ageeAvatarIntensity;
+    delete root.dataset.ageeAvatarDuration;
+    root.dataset.ageeAvatarActive = "false";
+    root.classList.remove("agee-avatar-runtime-enabled", "agee-avatar-runtime-active");
+    if (!avatarBehaviorRuntime) return;
+
+    const { id, motion, trigger, intensity, duration } = avatarBehaviorRuntime;
+    root.classList.add("agee-avatar-runtime-enabled");
+    root.dataset.ageeAvatarBehaviorId = id;
+    root.dataset.ageeAvatarMotion = motion;
+    root.dataset.ageeAvatarTrigger = trigger;
+    root.dataset.ageeAvatarIntensity = intensity;
+    root.dataset.ageeAvatarDuration = duration;
+    launcher.classList.add(`agee-avatar-motion-${motion}`, `agee-avatar-trigger-${trigger}`);
+    syncAvatarBehaviorTrigger();
+  }
+
+  function syncAvatarBehaviorTrigger() {
+    if (!root || !avatarBehaviorRuntime) return;
+    const trigger = avatarBehaviorRuntime.trigger;
+    const active =
+      (trigger === "idle" && agentState === "idle" && !anyActive()) ||
+      (trigger === "editing" && surfacePhase === "editing") ||
+      (trigger === "busy" && (anyActive() || agentState === "thinking")) ||
+      (trigger === "listening" && agentState === "listening") ||
+      (trigger === "thinking" && agentState === "thinking") ||
+      (trigger === "speaking" && agentState === "speaking") ||
+      (trigger === "done" && lastTerminal === "done" && !anyActive()) ||
+      (trigger === "error" && lastTerminal === "error" && !anyActive()) ||
+      (trigger === "attention" && root.classList.contains("agee-confirming"));
+    root.dataset.ageeAvatarActive = active ? "true" : "false";
+    root.classList.toggle("agee-avatar-runtime-active", active);
   }
 
   // ---- Cue cards --------------------------------------------------------
@@ -992,6 +1107,7 @@
       ring.classList.add("agee-ring-go");
     }
     chime(kind);
+    syncAvatarBehaviorTrigger();
   }
 
   // Fire a cue. Never blocks on a prior cue — that is the whole point: the user
@@ -1067,6 +1183,7 @@
     root.classList.toggle("agee-voicing", voicing);
     if (voiceState) voiceState.setAttribute("aria-hidden", "true");
     if (next === "idle") setTranscript("");
+    syncAvatarBehaviorTrigger();
   }
 
   // Keep the legacy transcript node inert; visible voice feedback lives in
@@ -1080,6 +1197,24 @@
   function setAmbientState(next) {
     ambientState = next === "on" ? "on" : "off";
     if (root) root.classList.toggle("agee-ambient", ambientState === "on");
+  }
+
+  function mergeLiveVoiceTranscript(previous, incoming) {
+    const prev = String(previous || "").trim();
+    const next = String(incoming || "").trim();
+    if (!prev) return next;
+    if (!next) return prev;
+    if (next.startsWith(prev)) return next;
+    if (prev.endsWith(next)) return prev;
+    const prevWords = prev.split(/\s+/);
+    const nextWords = next.split(/\s+/);
+    const maxOverlap = Math.min(prevWords.length, nextWords.length, 8);
+    for (let count = maxOverlap; count > 0; count -= 1) {
+      const prevTail = prevWords.slice(prevWords.length - count).join(" ").toLowerCase();
+      const nextHead = nextWords.slice(0, count).join(" ").toLowerCase();
+      if (prevTail === nextHead) return prevWords.concat(nextWords.slice(count)).join(" ");
+    }
+    return `${prev} ${next}`;
   }
 
   async function startLiveVoiceTurn(options = {}) {
@@ -1189,8 +1324,9 @@
       return;
     }
     if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
-      const text = String(msg.text || "").trim();
-      if (!text) return;
+      const incomingText = String(msg.text || "").trim();
+      if (!incomingText) return;
+      const text = mergeLiveVoiceTranscript(state.transcript, incomingText);
       state.transcript = text;
       if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
@@ -1280,7 +1416,7 @@
     setVoiceState(false);
     setAgentState("thinking");
     setTranscript(state.transcript || "");
-    if (state.transcript) ensureVoiceCueCard(state, state.transcript, "");
+    ensureVoiceCueCard(state, state.transcript || "Voice", "processing...");
     updateCue(state.cueId, "", "running");
     if (state.voiceSessionId) {
       safeRuntimeSendMessage({
@@ -1760,6 +1896,10 @@
       try {
         chrome.storage.onChanged.addListener((changes, area) => {
           if (area !== "local") return;
+          if (changes[SELF_EXTENSION_RUNTIME_CACHE_KEY]) {
+            const cached = changes[SELF_EXTENSION_RUNTIME_CACHE_KEY].newValue;
+            applyAvatarBehaviorRuntime(cached?.runtime || cached);
+          }
           if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
             configure().catch(() => {});
           }

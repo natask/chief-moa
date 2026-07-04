@@ -19,6 +19,7 @@ const {
   supportedLanguagesSentence,
 } = require("./lib/profile-options");
 const { createUiSpecStore } = require("./lib/ui-spec");
+const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createBrain } = require("./lib/brain");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
@@ -36,6 +37,7 @@ const {
   isStopLike,
   wantsMultipleAgents,
   shouldRunAgentFromVoice,
+  isOperationalStatusQuestion,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
   classifyVoiceTurn,
@@ -185,6 +187,7 @@ const agentProfile = createAgentProfileStore({
 // surfaces from this; a "deployment" is a spec change here, not new extension
 // code. The client live-refreshes on change (storage.onChanged pattern).
 const uiSpec = createUiSpecStore({ dataDir: DATA_DIR });
+const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_DIR });
 
 // The Brain: a fail-soft memory layer over the installed gbrain CLI. The
 // Steward recalls the user's facts/persona from here before every model turn so
@@ -561,6 +564,55 @@ const server = http.createServer(async (request, response) => {
       }
       uiSpec.reset();
       sendJson(response, 200, uiSpecPayload());
+      return;
+    }
+
+    if (url.pathname === "/v1/self-extension/artifacts" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, {
+        artifacts: selfExtensionArtifacts.list({
+          type: url.searchParams.get("type") || "",
+          status: url.searchParams.get("status") || "",
+          limit: Number(url.searchParams.get("limit") || 100),
+        }),
+        active: selfExtensionArtifacts.runtime().active,
+        known: selfExtensionArtifacts.known(),
+      });
+      return;
+    }
+
+    if (url.pathname === "/v1/self-extension/artifacts" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCreateSelfExtensionArtifact(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/self-extension/runtime" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, { runtime: selfExtensionArtifacts.runtime() });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/self-extension/artifacts/") &&
+      url.pathname.endsWith("/apply")
+    ) {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      const id = url.pathname.slice("/v1/self-extension/artifacts/".length, -"/apply".length);
+      await handleApplySelfExtensionArtifact(request, response, id);
       return;
     }
 
@@ -1019,6 +1071,19 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/v1/history/messages") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, historyMessagesPayload({
+        sessionId: url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || "",
+        q: url.searchParams.get("q") || url.searchParams.get("query") || "",
+        limit: Number(url.searchParams.get("limit") || 50),
+      }));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/v1/context/latest") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -1062,6 +1127,15 @@ const server = http.createServer(async (request, response) => {
       }
       const turnId = decodeURIComponent(url.pathname.replace("/v1/voice/turns/", "")).trim();
       handleVoiceTurnGet(response, turnId, url.searchParams.get("session_id") || "");
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/v1/voice/audio/")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendVoiceAudio(request, response, url);
       return;
     }
 
@@ -1612,6 +1686,7 @@ async function handleBrokerMessage(request, response) {
     updated_at: new Date().toISOString(),
   };
   writeBrokerEvent(stored);
+  indexBrokerEventInBrain(stored);
   attachBrokerEvidenceToRuns(stored);
   await recordBrokerProductEvent(stored);
   sendJson(response, 202, {
@@ -2251,6 +2326,53 @@ function writeBrokerEvent(event) {
   }) + "\n");
 }
 
+function indexBrokerEventInBrain(event) {
+  const summary = brokerEventBrainSummary(event);
+  if (!summary) {
+    return false;
+  }
+  const routeTags = (event.decisions || [])
+    .map((decision) => decision.target_id || decision.target_type || "")
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").slice(0, 60))
+    .filter(Boolean);
+  return brain.remember(summary, {
+    kind: "intent",
+    slug: `${brain.slugPrefix}/intent/${event.id}`,
+    title: `Intent: ${truncate(event.text || event.id, 72)}`,
+    tags: ["memory", "intent", "broker-event"].concat(routeTags),
+  });
+}
+
+function brokerEventBrainSummary(event) {
+  if (!event || !event.id || !event.text) {
+    return "";
+  }
+  const decisions = (event.decisions || [])
+    .slice(0, 8)
+    .map((decision) => [
+      `${decision.action || "route"} -> ${decision.target_type || "target"}:${decision.target_id || ""}`,
+      decision.confidence != null ? `confidence=${decision.confidence}` : "",
+      decision.reason ? `reason=${decision.reason}` : "",
+      decision.context_pack_id ? `context_pack=${decision.context_pack_id}` : "",
+    ].filter(Boolean).join(" | "));
+  const contextPackIds = (event.context_pack_refs || [])
+    .map((ref) => ref.id)
+    .filter(Boolean)
+    .slice(0, 8);
+  return [
+    `Intent ${event.id}.`,
+    `Source: ${event.source || "unknown"}.`,
+    event.session_id ? `Session: ${event.session_id}.` : "",
+    event.branch_id ? `Branch: ${event.branch_id}.` : "",
+    event.project_id ? `Project: ${event.project_id}.` : "",
+    `User message: ${truncate(event.text || "", 1200)}`,
+    decisions.length ? "Route decisions:" : "",
+    ...decisions.map((decision) => `- ${decision}`),
+    contextPackIds.length ? `Context packs: ${contextPackIds.join(", ")}.` : "",
+  ].filter(Boolean).join("\n");
+}
+
 function profileOptionsFromUrl(url) {
   const requestedScope = String(url.searchParams.get("scope") || url.searchParams.get("profile_scope") || "global").toLowerCase();
   const deviceId = normalizeDeviceId(url.searchParams.get("device_id") || url.searchParams.get("deviceId") || "");
@@ -2408,6 +2530,155 @@ async function handleUiSpecPut(request, response) {
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
   }
+}
+
+async function handleCreateSelfExtensionArtifact(request, response) {
+  const body = await readJsonBody(request);
+  const incoming = body && typeof body === "object" ? (body.artifact || body) : {};
+  try {
+    const artifact = selfExtensionArtifacts.createCandidate(incoming);
+    recordProductEventBestEffort({
+      event_type: "self_extension.artifact.created",
+      stream_id: `self-extension:${artifact.type}`,
+      idempotency_key: `self-extension-artifact-created:${artifact.id}`,
+      occurred_at: artifact.created_at,
+      actor: { kind: "agent", id: "self-extension" },
+      correlation_id: artifact.variant_group_id,
+      payload: {
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        status: artifact.status,
+        variant_group_id: artifact.variant_group_id,
+        parent_id: artifact.parent_id,
+        prompt: artifact.prompt,
+        spec: artifact.spec,
+        preview: artifact.preview,
+        validation: artifact.validation,
+        created_at: artifact.created_at,
+      },
+    });
+    sendJson(response, 201, { artifact });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handleApplySelfExtensionArtifact(request, response, id) {
+  const body = await readJsonBody(request);
+  const applyContext = selfExtensionApplyContextFromBody(body);
+  if (!applyContext.ok) {
+    sendJson(response, 400, { error: `invalid self-extension apply metadata: ${applyContext.errors.join("; ")}` });
+    return;
+  }
+  try {
+    const artifact = selfExtensionArtifacts.apply(id, applyContext.context);
+    if (!artifact) {
+      sendJson(response, 404, { error: "self-extension artifact not found" });
+      return;
+    }
+    const runtime = selfExtensionArtifacts.runtime();
+    recordProductEventBestEffort({
+      event_type: "self_extension.artifact.applied",
+      stream_id: `self-extension:${artifact.type}`,
+      idempotency_key: `self-extension-artifact-applied:${artifact.id}:${artifact.applied_at}`,
+      occurred_at: artifact.applied_at,
+      actor: selfExtensionApplyActor(artifact.apply_context),
+      correlation_id: artifact.variant_group_id,
+      payload: {
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        variant_group_id: artifact.variant_group_id,
+        spec: artifact.spec,
+        preview: artifact.preview,
+        applied_at: artifact.applied_at,
+        apply_context: artifact.apply_context,
+        runtime: runtime.active[artifact.type],
+      },
+    });
+    sendJson(response, 200, { artifact, runtime });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+function selfExtensionApplyActor(applyContext) {
+  const mode = cleanSelfExtensionToken(applyContext?.approval?.mode, 40);
+  const approvedBy = cleanSelfExtensionText(applyContext?.approval?.approved_by, 120);
+  if (mode === "explicit_user") {
+    return { kind: "user", id: approvedBy || "unknown" };
+  }
+  return { kind: "agent", id: approvedBy || "self-extension", mode: mode || "unknown" };
+}
+
+function selfExtensionApplyContextFromBody(body) {
+  const input = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  const source = input.source && typeof input.source === "object" && !Array.isArray(input.source)
+    ? input.source
+    : input.provenance && typeof input.provenance === "object" && !Array.isArray(input.provenance)
+      ? input.provenance
+      : {};
+  const approval = input.approval && typeof input.approval === "object" && !Array.isArray(input.approval)
+    ? input.approval
+    : {};
+  const sourceKind = cleanSelfExtensionToken(source.kind || input.source_kind, 40);
+  const approvalMode = cleanSelfExtensionToken(approval.mode || input.approval_mode, 40);
+  const errors = [];
+  const sourceKinds = ["user_turn", "agent_run", "manual_api", "smoke"];
+  const approvalModes = ["explicit_user", "developer", "test"];
+  if (!sourceKind) {
+    errors.push("source.kind is required");
+  } else if (!sourceKinds.includes(sourceKind)) {
+    errors.push(`source.kind must be one of: ${sourceKinds.join(", ")}`);
+  }
+  if (!approvalMode) {
+    errors.push("approval.mode is required");
+  } else if (!approvalModes.includes(approvalMode)) {
+    errors.push(`approval.mode must be one of: ${approvalModes.join(", ")}`);
+  }
+  const approvedBy = cleanSelfExtensionText(approval.approved_by || approval.approvedBy || input.approved_by, 120);
+  if (!approvedBy) {
+    errors.push("approval.approved_by is required");
+  }
+  if (errors.length > 0) {
+    return { ok: false, errors, context: {} };
+  }
+  return {
+    ok: true,
+    errors: [],
+    context: {
+      source: {
+        kind: sourceKind,
+        turn_id: cleanSelfExtensionToken(source.turn_id || source.turnId, 120),
+        broker_event_id: cleanSelfExtensionToken(source.broker_event_id || source.brokerEventId, 120),
+        agent_run_id: cleanSelfExtensionToken(source.agent_run_id || source.agentRunId, 120),
+        session_id: cleanSelfExtensionToken(source.session_id || source.sessionId, 120),
+        branch_id: cleanSelfExtensionToken(source.branch_id || source.branchId, 120),
+        device_id: cleanSelfExtensionToken(source.device_id || source.deviceId, 120),
+        surface: cleanSelfExtensionToken(source.surface, 80),
+      },
+      approval: {
+        mode: approvalMode,
+        approved_by: approvedBy,
+        approval_id: cleanSelfExtensionToken(approval.approval_id || approval.approvalId, 120),
+        policy: "self_extension_apply_requires_source_and_approval",
+      },
+      reason: cleanSelfExtensionText(input.reason || approval.reason || source.reason, 240),
+      requested_by: cleanSelfExtensionText(input.requested_by || input.requestedBy || "", 120),
+      recorded_at: new Date().toISOString(),
+    },
+  };
+}
+
+function cleanSelfExtensionToken(value, max) {
+  return typeof value === "string"
+    ? value.trim().replace(/[^a-zA-Z0-9_:-]/g, "").slice(0, max)
+    : "";
+}
+
+function cleanSelfExtensionText(value, max) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 async function handleAgentProfilePut(request, response) {
@@ -2841,7 +3112,7 @@ function cancelAgentRunById(id) {
   const active = activeRuns.get(safeId);
   if (active?.child) {
     active.cancelRequested = true;
-    active.child.kill("SIGTERM");
+    signalAgentChild(active.child, "SIGTERM");
     return { ok: true, status: "cancel_requested", run: readAgentRun(safeId) };
   }
 
@@ -4119,6 +4390,9 @@ function localUtilityReply(prompt) {
   if (isCurrentTimeQuestion(prompt)) {
     return currentTimeReply();
   }
+  if (isOperationalStatusQuestion(prompt)) {
+    return operationalStatusSummary();
+  }
   return "";
 }
 
@@ -4373,6 +4647,7 @@ async function executeAgentRun(runId, active) {
       child = spawn(command, args, {
         cwd: run.working_dir,
         env: process.env,
+        detached: process.platform !== "win32",
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -4390,9 +4665,9 @@ async function executeAgentRun(runId, active) {
     const timer = setTimeout(() => {
       timedOut = true;
       appendAgentEvent(run.id, "timeout", { timeout_ms: run.timeout_ms });
-      child.kill("SIGTERM");
+      signalAgentChild(child, "SIGTERM");
       setTimeout(() => {
-        if (!settled) child.kill("SIGKILL");
+        if (!settled) signalAgentChild(child, "SIGKILL");
       }, 2500).unref();
     }, run.timeout_ms);
     timer.unref();
@@ -4429,6 +4704,25 @@ async function executeAgentRun(runId, active) {
       });
     });
   });
+}
+
+function signalAgentChild(child, signal) {
+  if (!child) {
+    return false;
+  }
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch {
+      // Fall back to signaling the direct child. ESRCH just means it already exited.
+    }
+  }
+  try {
+    return child.kill(signal);
+  } catch {
+    return false;
+  }
 }
 
 // Emit a concise, recallable "what was done" memory for a terminal agent run.
@@ -4741,7 +5035,7 @@ function operationalStatusSummary() {
   const latestRun = recentRuns[0];
   const lines = [
     "Operational snapshot:",
-    "- Chrome/gateway path: this turn reached /v1/voice/turns and was classified as agent_run.",
+    "- Voice path: this turn reached /v1/voice/turns and gateway state is available.",
     `- Gateway: provider=${MODEL_PROVIDER}, model=${MODEL_ID}, model_configured=${providerConfigured() ? "yes" : "no"}.`,
     `- Android OTA: ${ota.configured ? `${ota.version_name || ota.version_code || "version unknown"} (${ota.git_sha || "git sha unknown"})` : "not configured"}.`,
     `- Harnesses: default=${DEFAULT_HARNESS}; available=${availableHarnesses.join(", ") || "none"}${unavailableHarnesses.length ? `; unavailable=${unavailableHarnesses.join(", ")}` : ""}.`,
@@ -6037,8 +6331,30 @@ function listVoiceTurnsForSession(sessionId) {
     transcript: String(record.transcript || ""),
     reply: String(record.response?.display || record.response?.text || record.response?.speak || ""),
     classification: String(record.classification || ""),
+    audio: voiceTurnAudioRefs(record),
     created_at: String(record.created_at || ""),
   }));
+}
+
+function listAllVoiceTurnRecords() {
+  if (!fs.existsSync(VOICE_TURNS_DIR)) {
+    return [];
+  }
+  const records = [];
+  for (const sessionName of fs.readdirSync(VOICE_TURNS_DIR)) {
+    const dir = path.join(VOICE_TURNS_DIR, sessionName);
+    if (!fs.statSync(dir).isDirectory()) continue;
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        const record = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
+        if (record && record.response) records.push(record);
+      } catch {
+        // Skip unreadable records; history must tolerate one bad turn file.
+      }
+    }
+  }
+  return records.sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
 }
 
 function listVoiceTurnRecordsForSession(sessionId, branchId) {
@@ -6083,6 +6399,88 @@ function previousUserTranscript(sessionId, branchId, currentTurnId) {
     };
   }
   return { turn_id: "", transcript: "", transcript_source: "" };
+}
+
+function voiceTurnAudioRefs(record) {
+  if (!record || typeof record !== "object") {
+    return {};
+  }
+  const user = voiceTurnAudioRef(record, "user");
+  const assistant = voiceTurnAudioRef(record, "assistant");
+  return {
+    ...(user ? { user } : {}),
+    ...(assistant ? { assistant } : {}),
+  };
+}
+
+function voiceTurnAudioRef(record, kind) {
+  const sessionId = sanitizeOptionalId(record.session_id || record.conversation_id, "");
+  const turnId = sanitizeOptionalId(record.id || record.turn_id, "");
+  if (!sessionId || !turnId) {
+    return null;
+  }
+  const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile() || stat.size <= 0) {
+    return null;
+  }
+  return {
+    kind,
+    encoding: "pcm16",
+    content_type: "audio/L16; rate=16000; channels=1",
+    bytes: stat.size,
+    href: `/v1/voice/audio/${encodeURIComponent(sessionId)}/${encodeURIComponent(turnId)}?kind=${kind}`,
+  };
+}
+
+function voiceTurnAudioPath(sessionId, turnId, kind) {
+  const safeSessionId = sanitizeOptionalId(sessionId, "default");
+  const safeTurnId = sanitizeOptionalId(turnId, "");
+  if (!safeTurnId) {
+    return "";
+  }
+  const suffix = kind === "assistant" ? ".assistant.pcm" : ".pcm";
+  return path.join(DATA_DIR, "voice-sessions", safeSessionId, `${safeTurnId}${suffix}`);
+}
+
+function sendVoiceAudio(request, response, url) {
+  const rest = url.pathname.slice("/v1/voice/audio/".length).split("/");
+  if (rest.length !== 2) {
+    sendJson(response, 404, { error: "voice audio not found" });
+    return;
+  }
+  let sessionId;
+  let turnId;
+  try {
+    sessionId = sanitizeOptionalId(decodeURIComponent(rest[0]), "default");
+    turnId = sanitizeOptionalId(decodeURIComponent(rest[1]), "");
+  } catch {
+    sendJson(response, 404, { error: "voice audio not found" });
+    return;
+  }
+  const kind = url.searchParams.get("kind") === "assistant" ? "assistant" : "user";
+  const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
+  if (!filePath || !fs.existsSync(filePath)) {
+    sendJson(response, 404, { error: "voice audio not found" });
+    return;
+  }
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) {
+    sendJson(response, 404, { error: "voice audio not found" });
+    return;
+  }
+  response.writeHead(200, {
+    "content-type": "audio/L16; rate=16000; channels=1",
+    "content-length": stat.size,
+    "cache-control": "private, no-store",
+    "x-moa-session-id": sessionId,
+    "x-moa-turn-id": turnId,
+    "x-moa-audio-kind": kind,
+  });
+  fs.createReadStream(filePath).pipe(response);
 }
 
 function sessionContextPayload({ sessionId, branchId = "default", allBranches = false }) {
@@ -7361,6 +7759,157 @@ function latestContextPayload() {
     device_clients: listDeviceClients(),
     recent_tool_requests: listToolRequests({ limit: 25 }),
   };
+}
+
+function historyMessagesPayload({ sessionId = "", q = "", limit = 50 } = {}) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const safeSessionId = sessionId ? sanitizeOptionalId(sessionId, "") : "";
+  const query = normalizeSpeech(q || "");
+  const items = []
+    .concat(listAllVoiceTurnRecords().map(historyVoiceTurnItem))
+    .concat(readChatTurnLedger().map(summarizeChatTurnRecord).map(historyChatTurnItem))
+    .concat(readBrokerEventRecords().map(historyBrokerEventItem))
+    .filter((item) => !safeSessionId || item.session_id === safeSessionId || item.conversation_id === safeSessionId)
+    .filter((item) => !query || historyItemMatchesQuery(item, query))
+    .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
+    .slice(0, safeLimit);
+  return {
+    generated_at: new Date().toISOString(),
+    session_id: safeSessionId,
+    query: q ? String(q).slice(0, 240) : "",
+    messages: items,
+    semantic_memories: query ? historySemanticMemoryHits(q, Math.min(safeLimit, 20)) : [],
+  };
+}
+
+function historySemanticMemoryHits(query, limit) {
+  const hits = brain.recall(String(query || "").trim(), Math.max(1, Math.min(Number(limit) || 10, 20)));
+  const intentPrefix = `${brain.slugPrefix}/intent/`;
+  const seen = new Set();
+  const memories = [];
+  for (const hit of hits || []) {
+    const slug = String(hit.slug || "");
+    const snippet = String(hit.snippet || "").trim();
+    if (!slug.startsWith(intentPrefix) || !snippet || seen.has(slug)) {
+      continue;
+    }
+    seen.add(slug);
+    memories.push({
+      type: "semantic_intent_memory",
+      slug,
+      score: hit.score,
+      snippet: truncate(snippet, 1000),
+      source: "gbrain",
+    });
+  }
+  return memories;
+}
+
+function historyVoiceTurnItem(record) {
+  const sessionId = String(record.session_id || record.conversation_id || "");
+  const turnId = String(record.id || record.turn_id || "");
+  return {
+    id: `voice:${sessionId}:${turnId}`,
+    type: "voice_turn",
+    source: String(record.source || ""),
+    session_id: sessionId,
+    conversation_id: String(record.conversation_id || sessionId),
+    branch_id: String(record.branch_id || "default"),
+    turn_id: turnId,
+    profile_version: String(record.profile_version || ""),
+    classification: String(record.classification || ""),
+    text: truncate(String(record.transcript || ""), 4000),
+    assistant_text: truncate(String(record.response?.display || record.response?.text || record.response?.speak || ""), 4000),
+    audio: voiceTurnAudioRefs(record),
+    refs: record.references || {},
+    created_at: String(record.created_at || record.updated_at || ""),
+    updated_at: String(record.updated_at || record.created_at || ""),
+  };
+}
+
+function historyChatTurnItem(turn) {
+  return {
+    id: `chat:${turn.session_id || turn.conversation_id}:${turn.turn_id || turn.created_at}`,
+    type: "chat_turn",
+    source: turn.source,
+    session_id: turn.session_id,
+    conversation_id: turn.conversation_id,
+    branch_id: turn.branch_id,
+    turn_id: turn.turn_id,
+    profile_version: turn.profile_version,
+    classification: "chat",
+    text: turn.user_text,
+    assistant_text: turn.response_text,
+    audio: {},
+    refs: {},
+    created_at: turn.created_at,
+    updated_at: turn.created_at,
+  };
+}
+
+function historyBrokerEventItem(event) {
+  return {
+    id: `broker:${event.id}`,
+    type: "broker_event",
+    source: String(event.source || ""),
+    session_id: String(event.session_id || event.conversation_id || ""),
+    conversation_id: String(event.conversation_id || event.session_id || ""),
+    branch_id: String(event.branch_id || "default"),
+    turn_id: "",
+    profile_version: String(event.profile_version || ""),
+    classification: "intent",
+    text: truncate(String(event.text || ""), 4000),
+    assistant_text: "",
+    audio: {},
+    refs: {
+      broker_event_id: event.id,
+      project_id: event.project_id || "",
+      subproject_id: event.subproject_id || "",
+      evidence_refs: event.evidence_refs || [],
+      decisions: (event.decisions || []).map((decision) => ({
+        target_type: decision.target_type,
+        target_id: decision.target_id,
+        action: decision.action,
+        confidence: decision.confidence,
+        reason: decision.reason,
+        context_pack_id: decision.context_pack_id || "",
+      })),
+      context_pack_refs: event.context_pack_refs || [],
+    },
+    created_at: String(event.created_at || event.updated_at || ""),
+    updated_at: String(event.updated_at || event.created_at || ""),
+  };
+}
+
+function historyItemMatchesQuery(item, query) {
+  const haystack = normalizeSpeech([
+    item.type,
+    item.source,
+    item.session_id,
+    item.branch_id,
+    item.classification,
+    item.text,
+    item.assistant_text,
+    JSON.stringify(item.refs || {}),
+  ].join(" "));
+  return query.split(/\s+/).filter(Boolean).every((token) => haystack.includes(token));
+}
+
+function readBrokerEventRecords() {
+  if (!fs.existsSync(BROKER_EVENTS_DIR)) {
+    return [];
+  }
+  const records = [];
+  for (const name of fs.readdirSync(BROKER_EVENTS_DIR)) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      const record = JSON.parse(fs.readFileSync(path.join(BROKER_EVENTS_DIR, name), "utf8"));
+      if (record && record.id) records.push(record);
+    } catch {
+      // Skip unreadable broker events.
+    }
+  }
+  return records;
 }
 
 function readVoiceTurnLedger() {

@@ -27,12 +27,14 @@ async function main() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-message-broker-smoke-"));
   const dataDir = path.join(tempDir, "data");
   const fakeGemini = writeFakeHarness(tempDir, "fake-gemini.sh");
+  const fakeGbrainStore = path.join(tempDir, "fake-gbrain-store.json");
+  const fakeGbrain = writeFakeGbrain(tempDir, fakeGbrainStore);
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   let server;
 
   try {
-    server = await startGateway({ port, dataDir, fakeGemini });
+    server = await startGateway({ port, dataDir, fakeGemini, fakeGbrain, fakeGbrainStore });
     await step("broker auth required", () => assertAuthRequired(baseUrl));
     const sessionId = `broker_session_${Date.now().toString(36)}`;
     await step("seed existing session", () => seedVoiceTurn(baseUrl, sessionId));
@@ -51,6 +53,10 @@ async function main() {
       assertRuntimeActiveRunFollowUp(baseUrl, dataDir, sessionId));
     await step("broker event persisted", () =>
       assertBrokerLedger(dataDir, continuation.event.id));
+    await step("broker event appears in history search", () =>
+      assertBrokerHistorySearch(baseUrl, continuation.event.id, sessionId));
+    await step("broker event is semantically indexed in gbrain", () =>
+      assertBrokerBrainIndex(fakeGbrainStore, continuation.event.id));
 
     console.log(JSON.stringify({
       ok: true,
@@ -69,6 +75,8 @@ async function main() {
         "a second user turn while an agent run is active leaves the run active",
         "new work message can recommend create_new_fork without cancellation",
         "broker ledger persists route reasons",
+        "brokered intents appear in /v1/history/messages search",
+        "brokered intents are indexed into gbrain as semantic summaries",
       ],
     }, null, 2));
   } finally {
@@ -361,6 +369,31 @@ function assertBrokerLedger(dataDir, eventId) {
   assert.ok(lines.some((line) => JSON.parse(line).id === eventId), "broker ledger missing event id");
 }
 
+async function assertBrokerHistorySearch(baseUrl, eventId, sessionId) {
+  const history = await getJson(`${baseUrl}/v1/history/messages?session_id=${encodeURIComponent(sessionId)}&q=continue`);
+  const item = history.messages.find((message) => message.id === `broker:${eventId}`);
+  assert.ok(item, `history search must include broker event ${eventId}`);
+  assert.equal(item.type, "broker_event");
+  assert.equal(item.classification, "intent");
+  assert.ok(
+    item.refs.decisions.some((decision) => decision.action === "continue_session"),
+    "broker history item must include route decision summary",
+  );
+  assert.ok(
+    history.semantic_memories.some((memory) => memory.slug.endsWith(`/intent/${eventId}`)),
+    "history search must include the semantic gbrain intent hit",
+  );
+}
+
+function assertBrokerBrainIndex(fakeGbrainStore, eventId) {
+  const store = JSON.parse(fs.readFileSync(fakeGbrainStore, "utf8"));
+  const slug = `moa/memory/intent/${eventId}`;
+  assert.ok(store[slug], `fake gbrain store missing ${slug}`);
+  assert.match(store[slug], new RegExp(`Intent ${eventId}`));
+  assert.match(store[slug], /continue the browser extension broker routing session/);
+  assert.match(store[slug], /Route decisions:/);
+}
+
 function readContextPack(dataDir, id) {
   assert.ok(id, "context pack id is required");
   const packPath = path.join(dataDir, "broker-context-packs", `${id}.json`);
@@ -368,7 +401,7 @@ function readContextPack(dataDir, id) {
   return JSON.parse(fs.readFileSync(packPath, "utf8"));
 }
 
-async function startGateway({ port, dataDir, fakeGemini }) {
+async function startGateway({ port, dataDir, fakeGemini, fakeGbrain, fakeGbrainStore }) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ["server.js"], {
     cwd: GATEWAY_DIR,
@@ -383,6 +416,9 @@ async function startGateway({ port, dataDir, fakeGemini }) {
       MOA_GATEWAY_TOKEN: TOKEN,
       DEFAULT_AGENT_HARNESS: "gemini",
       GEMINI_BIN: fakeGemini,
+      GBRAIN_BIN: fakeGbrain,
+      GBRAIN_HOME: path.join(path.dirname(fakeGbrainStore), "gbrain-home"),
+      FAKE_GBRAIN_STORE: fakeGbrainStore,
       AGENT_RUN_TIMEOUT_MS: "8000",
       MODEL_PROVIDER: "openai-compatible",
       MODEL_ID: "message-broker-smoke-model",
@@ -407,6 +443,87 @@ function writeFakeHarness(tempDir, fileName) {
     "echo 'fake broker harness completed'",
   ].join("\n"));
   fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function writeFakeGbrain(tempDir, storePath) {
+  const filePath = path.join(tempDir, "fake-gbrain.js");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+"use strict";
+const fs = require("node:fs");
+const storePath = process.env.FAKE_GBRAIN_STORE;
+function readStore() {
+  try {
+    return JSON.parse(fs.readFileSync(storePath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+function writeStore(store) {
+  fs.writeFileSync(storePath, JSON.stringify(store, null, 2));
+}
+function titleOf(content) {
+  const match = String(content || "").match(/^title:\\s*(.+)$/m);
+  return match ? match[1].replace(/^"|"$/g, "") : String(content || "").split("\\n").find(Boolean) || "Memory";
+}
+function tokens(value) {
+  return String(value || "").toLowerCase().split(/[^a-z0-9_-]+/).filter((token) => token.length >= 3);
+}
+const [cmd, ...args] = process.argv.slice(2);
+if (cmd === "--help" || cmd === "help") {
+  console.log("fake gbrain");
+  process.exit(0);
+}
+if (!storePath) {
+  console.error("FAKE_GBRAIN_STORE is required");
+  process.exit(2);
+}
+if (cmd === "put") {
+  const slug = args[0];
+  const contentIndex = args.indexOf("--content");
+  const content = contentIndex >= 0 ? args[contentIndex + 1] || "" : "";
+  const store = readStore();
+  store[slug] = content;
+  writeStore(store);
+  console.log(slug);
+  process.exit(0);
+}
+if (cmd === "query") {
+  const question = args[0] || "";
+  const queryTokens = tokens(question);
+  const limitIndex = args.indexOf("--limit");
+  const limit = limitIndex >= 0 ? Number(args[limitIndex + 1] || 5) : 5;
+  const store = readStore();
+  let emitted = 0;
+  for (const [slug, content] of Object.entries(store)) {
+    const haystack = String(content).toLowerCase();
+    if (queryTokens.length && !queryTokens.some((token) => haystack.includes(token))) continue;
+    console.log("[0.9000] " + slug + " -- " + titleOf(content));
+    emitted += 1;
+    if (emitted >= limit) break;
+  }
+  process.exit(0);
+}
+if (cmd === "list") {
+  const tagIndex = args.indexOf("--tag");
+  const tag = tagIndex >= 0 ? args[tagIndex + 1] || "" : "";
+  const limitIndex = args.indexOf("--limit");
+  const limit = limitIndex >= 0 ? Number(args[limitIndex + 1] || 5) : 5;
+  const store = readStore();
+  let emitted = 0;
+  for (const [slug, content] of Object.entries(store)) {
+    if (tag && !String(content).includes("- " + tag)) continue;
+    console.log(slug + "\\tnote\\t2026-06-28\\t" + titleOf(content));
+    emitted += 1;
+    if (emitted >= limit) break;
+  }
+  process.exit(0);
+}
+console.error("unsupported fake gbrain command: " + cmd);
+process.exit(2);
+`);
+  fs.chmodSync(filePath, 0o755);
+  fs.writeFileSync(storePath, "{}");
   return filePath;
 }
 

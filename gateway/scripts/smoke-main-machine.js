@@ -123,30 +123,23 @@ async function smokeOperationalVoiceTurn() {
     transcript,
   });
 
-  assert(turn.classification === "agent_run", `operational phrase classified as ${turn.classification}`);
+  assert(turn.classification === "chat", `operational phrase classified as ${turn.classification}`);
   assert(String(turn.display || "").includes("Operational snapshot:"), "operational turn did not include status snapshot");
   assert(String(turn.display || "").includes("Android OTA:"), "operational snapshot did not include Android OTA status");
   assert(String(turn.display || "").includes("Harnesses:"), "operational snapshot did not include harness status");
   const action = Array.isArray(turn.actions)
     ? turn.actions.find((candidate) => candidate?.type === "open_agent_run")
     : null;
-  assert(action?.run_id, "operational turn did not return open_agent_run action");
-  assert(action.harness === "echo", `operational turn used unexpected harness ${action.harness}`);
-
-  const detail = await pollAgentRun(action.run_id);
-  assert(detail.run?.status === "completed", `operational echo run ended with ${detail.run?.status}`);
-  const eventTypes = Array.isArray(detail.events) ? detail.events.map((event) => event.type) : [];
-  assert(eventTypes.includes("queued"), "operational echo run missing queued event");
-  assert(eventTypes.includes("completed"), "operational echo run missing completed event");
+  assert(!action, "operational status turn should not launch an agent run");
 
   return {
     transcript,
     classification: turn.classification,
     display_preview: String(turn.display || "").slice(0, 240),
-    run_id: action.run_id,
-    harness: action.harness,
-    status: detail.run.status,
-    events: eventTypes,
+    run_id: "",
+    harness: "",
+    status: "not_launched",
+    events: [],
   };
 }
 

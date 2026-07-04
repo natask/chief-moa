@@ -95,6 +95,6 @@
 - [x] 10.1 Define the gateway device-client registry: device id, surface type, session id, online status, local tool manifest, and last heartbeat.
 - [x] 10.2 Define cross-device tool request/receipt records so a browser turn can request a phone action and a phone turn can request a browser action without bypassing local approval.
 - [x] 10.3 Add Android device-client heartbeat and a minimal safe local tool manifest including `app.launch`, `system.back`, `system.home`, `screen.summary`, and `screen.tap_text`.
-- [x] 10.4 Add browser extension device-client heartbeat and a minimal safe local tool manifest including `browser.tab.open`, queued browser task claim/receipt, and page-context snapshot.
+- [x] 10.4 Add browser extension device-client heartbeat and a safe local tool manifest including tab list/open/activate/close/reload, page-context snapshot, bounded `chrome.debugger` CDP execution, queued browser task claim/receipt, and local receipts.
 - [x] 10.5 Add gateway APIs for listing active agents/runs/tool executions from any surface.
 - [x] 10.6 Add a first cross-device smoke: browser requests Android to speak a short message; Android validates locally, speaks it, and receipts it through the gateway. Verified with `cd gateway && npm run smoke:device-hub`, plus Android and extension build/verify checks.

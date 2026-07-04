@@ -60,6 +60,7 @@ function wantsMultipleAgents(text) {
 function shouldRunAgentFromVoice(text) {
   const lower = normalizeSpeech(text);
   if (!lower) return false;
+  if (isOperationalStatusQuestion(text)) return false;
   const actionStarts = [
     "make ",
     "build ",
@@ -86,17 +87,37 @@ function shouldRunAgentFromVoice(text) {
     || lower.includes("in the repo")
     || lower.includes("in the app")
     || lower.includes("operational systems")
-    || lower.includes("what s going on")
-    || lower.includes("what is going on")
     || lower.includes("things operating")
     || lower.includes("projects i have ongoing")
     || lower.includes("all the projects")
-    || lower.includes("what am i working on")
     || lower.includes("forward progress")
     || lower.includes("chrome extension")
     || lower.includes("android app")
     || lower.includes("mobile gateway")
     || lower.includes("moa gateway");
+}
+
+function isOperationalStatusQuestion(text) {
+  const lower = normalizeSpeech(text);
+  if (!lower) return false;
+  if (lower === "status" || lower === "status update") return true;
+  return lower.includes("what is going on")
+    || lower.includes("what s going on")
+    || lower.includes("whats going on")
+    || lower.includes("what is happening")
+    || lower.includes("what s happening")
+    || lower.includes("whats happening")
+    || lower.includes("what are you doing")
+    || lower.includes("what is running")
+    || lower.includes("what s running")
+    || lower.includes("whats running")
+    || lower.includes("what runs are active")
+    || lower.includes("what active runs")
+    || lower.includes("show active runs")
+    || lower.includes("active run status")
+    || lower.includes("active runs status")
+    || lower.includes("what am i working on")
+    || lower.includes("current status");
 }
 
 // An explicit "run an agent" prefix. Returns the prompt after the prefix, or "".
@@ -754,6 +775,7 @@ module.exports = {
   isStopLike,
   wantsMultipleAgents,
   shouldRunAgentFromVoice,
+  isOperationalStatusQuestion,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
   parseProfileRevertIntent,
