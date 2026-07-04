@@ -70,6 +70,7 @@ if [ ! -f "$ENV_FILE" ]; then
     -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$pg_password|" \
     -e "s|^MOA_DOMAIN=.*|MOA_DOMAIN=$DOMAIN|" \
     -e "s|^ACME_EMAIL=.*|ACME_EMAIL=$EMAIL|" \
+    -e "s|^PUBLIC_GATEWAY_URL=.*|PUBLIC_GATEWAY_URL=https://$DOMAIN|" \
     "$ENV_FILE"
   echo "Wrote $ENV_FILE with a generated gateway token and Postgres password."
 fi

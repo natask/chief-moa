@@ -77,6 +77,7 @@ const PORT = Number(process.env.PORT || 8787);
 // Behind Cloudflare/Caddy the gateway reads the forwarded protocol from proxy
 // headers. On by default in remote modes; MOA_TRUST_PROXY=0/1 overrides.
 const TRUST_PROXY = runtimeMode.trustProxy;
+const PUBLIC_GATEWAY_URL = stripTrailingSlash(process.env.PUBLIC_GATEWAY_URL || process.env.MOA_PUBLIC_ORIGIN || "");
 const GATEWAY_DIR = __dirname;
 const REPO_ROOT = path.resolve(GATEWAY_DIR, "../..");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "./data");
@@ -309,7 +310,13 @@ const server = http.createServer(async (request, response) => {
         ok: true,
         mode: runtimeMode.mode,
         gateway_mode: runtimeMode.health(),
+        remote_mode: REMOTE_MODE,
         trust_proxy: TRUST_PROXY,
+        bind: {
+          host: HOST,
+          port: PORT,
+        },
+        public_gateway_url: PUBLIC_GATEWAY_URL || undefined,
         provider: MODEL_PROVIDER,
         model: MODEL_ID,
         model_base_url: MODEL_BASE_URL,
@@ -9115,11 +9122,10 @@ function sendAndroidOtaManifest(request, response) {
     return;
   }
 
-  const host = request.headers.host || `${HOST}:${PORT}`;
-  const protocol = (TRUST_PROXY && firstForwardedValue(request.headers["x-forwarded-proto"])) || "http";
+  const origin = externalOriginForRequest(request);
   sendJson(response, 200, {
     ...manifest,
-    download_url: `${protocol}://${host}/v1/android/updates/latest.apk`,
+    download_url: `${origin}/v1/android/updates/latest.apk`,
   });
 }
 
@@ -10312,14 +10318,25 @@ function cleanupVoiceSessionTickets() {
 }
 
 function voiceSessionUrlForRequest(request, ticket) {
-  const forwardedProto = TRUST_PROXY ? firstForwardedValue(request.headers["x-forwarded-proto"]) : "";
-  const proto = forwardedProto || (request.socket?.encrypted ? "https" : "http");
-  const wsProto = proto === "https" ? "wss" : "ws";
-  const forwardedHost = TRUST_PROXY ? firstForwardedValue(request.headers["x-forwarded-host"]) : "";
-  const host = forwardedHost || String(request.headers.host || `${HOST}:${PORT}`);
-  const url = new URL(`${wsProto}://${host}${voiceSessionServer.endpoint}`);
+  const origin = new URL(externalOriginForRequest(request));
+  origin.protocol = origin.protocol === "https:" ? "wss:" : "ws:";
+  origin.pathname = voiceSessionServer.endpoint;
+  origin.search = "";
+  origin.hash = "";
+  const url = origin;
   url.searchParams.set("ticket", ticket);
   return url.toString();
+}
+
+function externalOriginForRequest(request) {
+  if (PUBLIC_GATEWAY_URL) {
+    return PUBLIC_GATEWAY_URL;
+  }
+  const forwardedProto = TRUST_PROXY ? firstForwardedValue(request.headers["x-forwarded-proto"]) : "";
+  const proto = forwardedProto || (request.socket?.encrypted ? "https" : "http");
+  const forwardedHost = TRUST_PROXY ? firstForwardedValue(request.headers["x-forwarded-host"]) : "";
+  const host = forwardedHost || firstForwardedValue(request.headers.host) || `${HOST}:${PORT}`;
+  return `${proto}://${host}`;
 }
 
 function authorizedAgent(request) {

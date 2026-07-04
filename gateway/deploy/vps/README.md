@@ -3,8 +3,25 @@
 This is the remote deployment path for the gateway: one Docker image, a
 compose stack with Postgres, and Caddy for TLS. The same image runs hosted and
 self-host; only env differs (`MOA_MODE`, see
-`reference/openspec/changes/remote-hosted-gateway`). The target is a
+`reference/openspec/changes/remote-hosted-gateway`). The default target is a
 DigitalOcean droplet, but any Ubuntu VPS with SSH works.
+
+Default target:
+
+```text
+Provider: DigitalOcean Droplet
+Region:   sfo3
+Size:     s-2vcpu-4gb first, resize down only after observing memory
+Image:    Ubuntu 24.04 LTS
+DNS:      api.agee.app proxied through Cloudflare
+Host dir: /opt/chief-moa/app
+```
+
+Cloudflare Pages can continue serving static surfaces. The API and voice
+WebSocket live on the VPS:
+
+- HTTP API: `https://api.agee.app`
+- Voice WebSocket: `wss://api.agee.app/v1/voice/sessions`
 
 What stays off the VPS:
 
@@ -14,7 +31,7 @@ What stays off the VPS:
 - Raw client secrets. Android and the extension hold only the gateway URL and
   the gateway token.
 
-## Layout on the VPS
+## Layout On The VPS
 
 ```text
 /opt/chief-moa/app          git checkout (compose files, scripts)
@@ -30,16 +47,13 @@ gateway restarts, and git updates. A preview stack uses a different compose
 project name (`-p moa-preview-x`), which gives it fresh volumes; that is a
 preview path, never a rollback of the active store.
 
-## Fresh droplet to running gateway
+## Fresh Droplet To Running Gateway
 
-1. Create the droplet: Ubuntu 24.04 LTS, 2 GB RAM is enough to start, add your
-   SSH key. Note the public IP.
+1. Create the droplet: Ubuntu 24.04 LTS, 2 GB RAM minimum, SSH key enabled.
 
 2. Point DNS before first launch so certificate issuance succeeds:
    an A record `api.<your-domain>` to the droplet IP. Cloudflare-proxied is
-   fine (the proxy passes WebSocket and the Let's Encrypt HTTP challenge). Per
-   the remote-hosted-gateway design, the static frontend stays on Cloudflare
-   Pages; only the API + voice WebSocket live here.
+   fine; the proxy passes WebSocket and the Let's Encrypt HTTP challenge.
 
 3. Bootstrap over SSH as root:
 
@@ -62,8 +76,8 @@ never drops volumes.
 curl -fsS https://api.example.com/health
 ```
 
-`mode` should read `self-host` and `ok` should be true. The voice WebSocket is
-`wss://api.example.com/v1/voice/sessions`.
+`mode` should read `self-host`, `ok` should be true, and
+`gateway_mode.remote` should be true.
 
 5. Add model credentials (BYOK) by editing `/opt/chief-moa/gateway.env`
    (`MODEL_API_KEY`, or the Vertex/Gemini variables from
@@ -75,30 +89,34 @@ docker compose -p chief-moa -f docker-compose.yml -f docker-compose.vps.yml \
   --env-file /opt/chief-moa/gateway.env up -d --no-deps gateway
 ```
 
-## Point the clients at the VPS
+## Point The Clients At The VPS
 
-Both clients already support a custom gateway URL; only their compiled
-defaults still point at the old ZeroTier main machine.
+Both clients support a custom gateway URL and token.
 
-Browser extension: open the extension settings and set the engine URL to
-`https://api.example.com` plus the `MOA_GATEWAY_TOKEN` value (stored as
-`ageeGatewayUrl` / `ageeGatewayToken`; a packaged build can bake the URL via
-`agee.config.json`).
+Browser extension: open the extension settings and set the engine URL plus the
+`MOA_GATEWAY_TOKEN` value (stored as `ageeGatewayUrl` / `ageeGatewayToken`). A
+packaged build can bake the URL with:
 
-Android app: open the full app's gateway settings and set the gateway URL to
-`https://api.example.com` plus the token. The voice socket derives
-`wss://.../v1/voice/sessions` from the `https://` URL automatically
-(`MoaVoiceGatewaySocket.voiceSocketUrl`).
+```sh
+cd browser_extension
+AGEE_GATEWAY_URL=https://api.example.com \
+AGEE_GATEWAY_TOKEN=<gateway-token> \
+npm run configure
+```
 
-Known stale-default (recorded, not fixed here — the voice agent owns Android):
-`MoaPrefs.DEFAULT_GATEWAY_URL` and `MoaVoiceGatewaySocket.DEFAULT_URL` compile
-in `http://10.147.17.10:8788` / `ws://10.147.17.10:8788/v1/voice/sessions`, and
-`browser_extension/extension/config.js` bakes the same LAN default. A fresh
-install therefore points at a LAN IP until the user sets the URL. Requirement:
-defaults must move to a config-time value (or an explicit first-run setup
-screen) when the VPS URL becomes the primary target.
+Android app: open the full app's gateway settings and set the gateway URL plus
+the token. The voice socket derives `wss://.../v1/voice/sessions` from the
+`https://` URL automatically (`MoaVoiceGatewaySocket.voiceSocketUrl`). A
+packaged Android build can set the default with:
 
-## Update the running gateway
+```sh
+MOA_DEFAULT_GATEWAY_URL=https://api.example.com bash scripts/deploy.sh android
+```
+
+The current default client endpoint is `https://api.agee.app`; stale LAN
+defaults are migrated only when no token has been stored.
+
+## Update The Running Gateway
 
 ```sh
 /opt/chief-moa/app/scripts/vps/update.sh --ref master
@@ -111,7 +129,7 @@ and untouched; schema changes apply on gateway boot (`schema.sql` is
 idempotent). If the backup or restore check fails, the update stops before
 touching the active service.
 
-## Promote a new version from your workstation
+## Promote A New Version From Your Workstation
 
 After the target branch is committed locally and ready to become the active VPS
 gateway, run the local promotion wrapper from the repo checkout:
@@ -133,7 +151,7 @@ explicitly approved deploy/promote for the current turn. The backup and restore
 gate remains on the VPS inside `update.sh`, so the active service is not rebuilt
 or restarted until the fresh backup and scratch restore check pass.
 
-## Backup and restore check
+## Backup And Restore Check
 
 ```sh
 /opt/chief-moa/app/scripts/vps/backup.sh
@@ -146,7 +164,7 @@ backup under its own compose project and port, verifies `/health` and a
 Postgres-backed read, then removes itself. Copy backups off the droplet on a
 schedule; they are plain files.
 
-## Modes and required env
+## Modes And Required Env
 
 | Env | local | self-host | hosted |
 | --- | --- | --- | --- |
@@ -155,14 +173,14 @@ schedule; they are plain files.
 | bind default | `127.0.0.1` | `0.0.0.0` | `0.0.0.0` |
 | proxy headers trusted | no | yes | yes |
 
-`HOST` and `MOA_TRUST_PROXY` override the mode defaults. `hosted` is
-`self-host` plus per-user accounts and backup expectations as they land
-(better-auth is a separate task in the same change). Minimum env for a
-self-host run: `MOA_MODE`, `MOA_GATEWAY_TOKEN`, `POSTGRES_PASSWORD` (or an
-external `DATABASE_URL`), `MOA_DOMAIN`, `ACME_EMAIL`, and one model provider's
+`HOST` and `MOA_TRUST_PROXY` override the mode defaults.
+`PUBLIC_GATEWAY_URL` or `MOA_PUBLIC_ORIGIN` overrides URL generation for OTA
+download URLs and voice WebSocket tickets. Minimum env for a self-host run:
+`MOA_MODE`, `MOA_GATEWAY_TOKEN`, `POSTGRES_PASSWORD` (or an external
+`DATABASE_URL`), `MOA_DOMAIN`, `ACME_EMAIL`, and one model provider's
 credentials. Full reference: `gateway/deploy/vps/gateway.env.example`.
 
-## One-image PaaS (Railway or similar)
+## One-Image PaaS
 
 The same image runs on any one-image PaaS with managed Postgres: deploy
 `gateway/Dockerfile`, attach a persistent volume at `/data`, set
@@ -171,7 +189,7 @@ database, and let the platform terminate TLS (skip the Caddy overlay). The
 gateway refuses to boot if `DATABASE_URL` or the token is missing, so a
 misconfigured deploy fails loudly instead of writing to container-local files.
 
-## Local smoke of the exact VPS stack
+## Local Smoke Of The Exact VPS Stack
 
 ```sh
 cat > /tmp/gateway.env <<EOF
@@ -179,6 +197,7 @@ MOA_MODE=self-host
 MOA_GATEWAY_TOKEN=$(openssl rand -hex 32)
 POSTGRES_PASSWORD=$(openssl rand -hex 32)
 GATEWAY_PORT=18787
+PUBLIC_GATEWAY_URL=http://127.0.0.1:18787
 EOF
 docker compose -p moa-local --env-file /tmp/gateway.env up -d --build
 curl -fsS http://127.0.0.1:18787/health

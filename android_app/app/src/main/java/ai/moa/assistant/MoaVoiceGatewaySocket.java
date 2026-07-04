@@ -319,6 +319,11 @@ final class MoaVoiceGatewaySocket {
         if (url.isEmpty()) {
             return DEFAULT_URL;
         }
+        return gatewayUrlToVoiceSocketUrl(url);
+    }
+
+    private static String gatewayUrlToVoiceSocketUrl(String value) {
+        String url = safe(value);
         if (url.startsWith("http://")) {
             url = "ws://" + url.substring("http://".length());
         } else if (url.startsWith("https://")) {

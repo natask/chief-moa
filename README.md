@@ -51,6 +51,16 @@ cp .env.example .env
 npm start
 ```
 
+VPS gateway deploy path:
+
+```sh
+scripts/vps/push.sh --host root@203.0.113.10 --ref master
+```
+
+See [gateway/deploy/vps/README.md](gateway/deploy/vps/README.md) before using
+this against active clients; this is an active gateway promotion, so the VPS
+backup and scratch restore gate must pass first.
+
 Browser extension check:
 
 ```sh

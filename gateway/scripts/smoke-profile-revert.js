@@ -157,7 +157,7 @@ async function assertSetupTools(dataDir) {
 // Drive a full live turn that ends with the fake provider emitting one tool call,
 // then return the tool response the gateway sent back (captured by the fake).
 async function runLiveToolCall(wsUrl, fakeLive, toolName, toolArgs, options = {}) {
-  fakeLive.nextToolCall = { name: toolName, args: toolArgs };
+  fakeLive.nextToolCall = { name: toolName, args: toolArgs, transcript: options.transcript || "" };
   fakeLive.toolResponses.length = 0;
   const sessionId = options.sessionId || `revert_smoke_${Math.random().toString(36).slice(2, 8)}`;
   const turnId = options.turnId || `turn_${Math.random().toString(36).slice(2, 8)}`;
@@ -188,7 +188,7 @@ async function assertLiveModalityTool(wsUrl, fakeLive) {
   const set = await runLiveToolCall(wsUrl, fakeLive, "update_agent_profile", {
     profile: { response_modality: "text" },
     reason: "smoke",
-  });
+  }, { transcript: "reply in text from now on" });
   assert.equal(set.ok, true, `update_agent_profile must succeed: ${JSON.stringify(set)}`);
   assert.ok(Array.isArray(set.changed) && set.changed.includes("response_modality"), `response_modality must be reported changed: ${JSON.stringify(set)}`);
 
@@ -197,14 +197,14 @@ async function assertLiveModalityTool(wsUrl, fakeLive) {
   const invalid = await runLiveToolCall(wsUrl, fakeLive, "update_agent_profile", {
     profile: { response_modality: "hologram" },
     reason: "smoke-invalid",
-  });
+  }, { transcript: "reply in text from now on" });
   assert.equal(invalid.ok, true, `invalid modality must not fail the turn: ${JSON.stringify(invalid)}`);
   assert.ok(!(Array.isArray(invalid.changed) && invalid.changed.includes("response_modality")), "invalid modality must not change the field");
 }
 
 async function assertLiveRevertTool(baseUrl, wsUrl, fakeLive) {
   // Set a distinctive value, then undo it via the revert tool.
-  await runLiveToolCall(wsUrl, fakeLive, "update_agent_profile", { profile: { voice: "Fenrir" }, reason: "smoke" });
+  await runLiveToolCall(wsUrl, fakeLive, "update_agent_profile", { profile: { voice: "Fenrir" }, reason: "smoke" }, { transcript: "use the Fenrir voice" });
   let profile = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(profile.profile.voice, "Fenrir", "precondition: voice set to Fenrir via tool");
 
@@ -363,6 +363,13 @@ async function startFakeLive() {
         if (state.nextToolCall) {
           const call = state.nextToolCall;
           state.nextToolCall = null;
+          if (call.transcript) {
+            ws.send(JSON.stringify({
+              serverContent: {
+                inputTranscription: { text: call.transcript },
+              },
+            }));
+          }
           ws.send(JSON.stringify({
             toolCall: {
               functionCalls: [{ id: `call_${Math.random().toString(36).slice(2, 8)}`, name: call.name, args: call.args }],

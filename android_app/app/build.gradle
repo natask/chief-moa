@@ -39,6 +39,7 @@ android {
         versionCode envOrDefault('MOA_ANDROID_VERSION_CODE', '1').toInteger()
         versionName envOrDefault('MOA_ANDROID_VERSION_NAME', '0.1.0')
         buildConfigField 'String', 'GIT_SHA', "\"${envOrDefault('MOA_ANDROID_GIT_SHA', gitSha())}\""
+        buildConfigField 'String', 'DEFAULT_GATEWAY_URL', "\"${envOrDefault('MOA_DEFAULT_GATEWAY_URL', 'https://api.agee.app')}\""
     }
 
     signingConfigs {

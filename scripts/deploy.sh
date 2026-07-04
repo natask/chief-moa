@@ -221,6 +221,9 @@ target_patterns() {
       ;;
     gateway)
       printf '%s\n' \
+        "docker-compose.yml" \
+        "gateway/Dockerfile" \
+        "gateway/.dockerignore" \
         "gateway/server.js" \
         "gateway/agent-launcher-profiles.json" \
         "gateway/agent-workflows/" \

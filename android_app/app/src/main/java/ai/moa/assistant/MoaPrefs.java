@@ -10,7 +10,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 final class MoaPrefs {
-    static final String HOSTED_GATEWAY_URL = "https://api.agee.app";
+    static final String HOSTED_GATEWAY_URL = BuildConfig.DEFAULT_GATEWAY_URL;
     static final String ONBOARDING_GATEWAY_URL = HOSTED_GATEWAY_URL;
     static final String DEFAULT_GATEWAY_URL = ONBOARDING_GATEWAY_URL;
     static final String LOCAL_DEV_GATEWAY_URL = "http://10.147.17.6:8787";

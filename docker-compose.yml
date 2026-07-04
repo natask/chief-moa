@@ -35,6 +35,7 @@ services:
       ANDROID_OTA_DIR: /data/android-ota
       DATABASE_URL: ${DATABASE_URL:-postgres://moa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_gateway}
       MOA_GATEWAY_TOKEN: ${MOA_GATEWAY_TOKEN:?set MOA_GATEWAY_TOKEN in the compose env file}
+      PUBLIC_GATEWAY_URL: ${PUBLIC_GATEWAY_URL:-}
       ALLOW_AGENT_WITHOUT_TOKEN: "0"
       # The remote gateway queues agent runs; harnesses run on the user's
       # execution machine (worker pull). `echo` keeps the loop testable with no
