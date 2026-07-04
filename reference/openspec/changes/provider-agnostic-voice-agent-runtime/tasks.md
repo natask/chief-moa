@@ -7,18 +7,19 @@
 
 ## 2. Versioned Agent Profile
 
-- [ ] 2.1 Add a gateway `agent_profile` store with default profile derived from current system prompt, voice style, provider settings, language, tool policy, and memory policy.
-- [ ] 2.2 Record `profile_version` on voice turns, chat turns, and agent-run records.
-- [ ] 2.3 Add gateway endpoints to read current profile, list profile versions, update profile fields, and roll back to a previous version.
-- [ ] 2.4 Route explicit spoken profile-control intents to profile updates instead of normal chat responses.
-- [ ] 2.5 Add regression tests for profile update, rollback, and per-turn profile version recording.
+- [x] 2.1 Add a gateway `agent_profile` store with default profile derived from current system prompt, voice style, provider settings, language, tool policy, and memory policy.
+- [x] 2.2 Record `profile_version` on voice turns, chat turns, and agent-run records.
+- [x] 2.3 Add gateway endpoints to read current profile, list profile versions, update profile fields, and roll back to a previous version.
+- [x] 2.4 Route explicit spoken profile-control intents to profile updates instead of normal chat responses.
+- [x] 2.5 Add regression tests for profile update, rollback, and per-turn profile version recording. Verified by `gateway/scripts/smoke-voice-profile.js` and `gateway/scripts/smoke-live-browser-continuity.js`.
 
 ## 3. Explicit Language State
 
 - [ ] 3.1 Add profile fields for explicit language mode, primary language, output language policy, and `auto_switch=false` default.
 - [ ] 3.2 Translate language state into Gemini Live setup/prompt instructions and provider metadata without allowing silent durable language changes.
 - [ ] 3.3 Add voice intents for switching language and asking which language is active.
-- [ ] 3.4 Show active language state in the Android overlay or full-app settings.
+- [x] 3.4 Show active language state in the Android overlay or full-app settings.
+      Verified 2026-06-25 with `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew testDebugUnitTest` and `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`.
 - [ ] 3.5 Verify real phone behavior: language changes persist across turns and do not change until explicitly changed again.
 
 ## 4. Canonical Voice And Provider Events
@@ -26,8 +27,8 @@
 - [ ] 4.1 Normalize voice-session events for transcript partial/final, assistant audio, speaking, interruption, completion, error, and profile application.
 - [ ] 4.2 Persist normalized provider events with session, branch, turn, provider IDs, timestamps, and profile version.
 - [ ] 4.3 Store or reference user and assistant audio artifacts per turn according to the existing local retention behavior.
-- [ ] 4.4 Add a gateway query path for current session, branch, turn, profile, provider events, runs, approvals, receipts, and memory summaries.
-- [ ] 4.5 Add smoke coverage proving a restarted provider session reconstructs context from Moa-owned history instead of provider-only memory.
+- [x] 4.4 Add a gateway query path for current session, branch, turn, profile, provider events, runs, approvals, receipts, and memory summaries. Current JSON-file path includes voice turns, chat turns, profile, provider events, runs, browser tasks, approvals/receipts placeholders, and memory summary placeholder.
+- [x] 4.5 Add smoke coverage proving a restarted provider session reconstructs context from Moa-owned history instead of provider-only memory. Verified by `gateway/scripts/smoke-live-interrupt-handoff.js`.
 
 ## 5. Continuous Overlay Voice Runtime
 
@@ -40,10 +41,11 @@
 
 ## 6. Interruption And Playback Control
 
-- [ ] 6.1 Normalize interruption events from Gemini Live and local playback stop into the same Moa runtime event.
-- [ ] 6.2 Stop or duck assistant playback when the user begins a new spoken turn during assistant audio.
+- [x] 6.1 Normalize interruption events from Gemini Live and local playback stop into the same Moa runtime event. Gateway stores interrupted live turns as canonical conversation records and provider interruption events; local playback QA remains manual.
+- [x] 6.2 Stop or duck assistant playback when the user begins a new spoken turn during assistant audio. Browser extension now stops queued assistant PCM sources when a new voice turn starts and ignores stale audio after a turn is replaced; Android streaming controller already stops playback on cancel/destroy. Verified 2026-06-20 with `cd browser_extension && npm run verify`, `cd browser_extension && npm run smoke`, `cd gateway && npm run check`, `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`, and a real main-machine voice-session smoke using spoken PCM that emitted transcript, assistant text/audio, and `turn_done`.
 - [ ] 6.3 Preserve active agent-run follow-up routing when the user speaks while an agent run is ongoing.
 - [ ] 6.4 Add phone QA for barge-in or fallback interruption when provider-native barge-in is unavailable.
+- [x] 6.5 Add browser semi-interaction mode: a spoken session command enables background assistant speech so a new browser voice turn can start without stopping already queued assistant audio, while still using one durable session id and distinct turn ids. Verified 2026-06-20 with `cd browser_extension && npm run verify`, `cd browser_extension && npm run smoke`, `cd gateway && npm run check`, and `cd gateway && node scripts/smoke-regression.js`.
 
 ## 7. Safe Mode And Recovery
 
@@ -64,5 +66,13 @@
 - [ ] 9.1 Update `ARCHITECTURE.md` with provider registry, agent profile, explicit language state, canonical memory, and recovery primitives.
 - [ ] 9.2 Add a manual QA checklist for continuous voice, language switching, profile edit, provider swap, interruption, and recovery.
 - [ ] 9.3 Run `openspec validate provider-agnostic-voice-agent-runtime --strict`.
-- [ ] 9.4 Run gateway checks and Android build after the first implementation slice.
+- [ ] 9.4 Run gateway checks and Android build after the first implementation slice. Gateway verified 2026-06-20 with `cd gateway && npm run check`; Android build not rerun for this gateway/browser slice.
 - [ ] 9.5 Deploy the first implementation slice to the main machine and verify phone E2E over the configured gateway.
+
+## 10. Voice Evidence QA And Forked Agent Sessions
+
+- [ ] 10.1 Add a first-class voice evidence record that links a spoken turn to user audio, expected/observed transcript, assistant text/audio, provider IDs, profile version, retention policy, and pass/fail criteria.
+- [ ] 10.2 Add an audio replay smoke that plays a fixture utterance through the gateway voice runtime, stores the observed transcript and assistant response, and emits a pass/fail verdict against expected criteria.
+- [ ] 10.3 Add non-interrupting forked turn routing: a voice/chat turn can start a new `agent_run` with `wait=false` while existing active runs keep running.
+- [ ] 10.4 Link subsequent user turns to relevant active runs as evidence or instruction, with a stored routing reason; irrelevant forks may self-dismiss with a no-op/dismissed result.
+- [ ] 10.5 Expose active fork/run status so the user can ask which agents are active and what each is doing.

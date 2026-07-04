@@ -47,6 +47,13 @@ store.
 - **THEN** the run can receive or query the relevant Moa context identifiers
   instead of relying on chat transcript memory alone
 
+#### Scenario: Browser task context is queryable
+- **WHEN** Gemini Live or another gateway-side agent queues browser work
+- **THEN** the gateway stores the browser task with session, branch, profile
+  version, status, claim metadata, and extension receipts
+- **AND** current session context exposes bounded recent browser tasks alongside
+  voice turns, chat turns, provider events, profile status, and runs
+
 ### Requirement: Provider Event Normalization
 The gateway SHALL normalize provider-specific voice events into Moa event types
 for transcript, audio, interruption, completion, error, and profile application.
@@ -56,3 +63,21 @@ for transcript, audio, interruption, completion, error, and profile application.
   or error event
 - **THEN** the gateway stores a normalized Moa event and may also retain the raw
   provider event for debugging according to retention policy
+
+### Requirement: Replayable Voice Evidence
+The gateway SHALL be able to turn retained spoken turns into replayable QA
+evidence records.
+
+#### Scenario: Spoken turn is retained for QA
+- **WHEN** voice evidence retention is enabled for a spoken turn
+- **THEN** the gateway stores or references the user audio, expected or observed
+  user transcript, assistant text, assistant audio reference, provider IDs,
+  profile version, and test criteria under the session and turn identifiers
+
+#### Scenario: Voice evidence is replayed
+- **WHEN** a verification smoke replays a voice evidence fixture through the
+  configured voice runtime
+- **THEN** the gateway records the observed transcript, assistant text, assistant
+  audio reference, and pass/fail verdict
+- **AND** the verdict identifies whether the failure is in capture, STT,
+  reasoning, TTS, storage, or comparison when that can be determined

@@ -1,12 +1,12 @@
 // Quiet headless smoke for "the agent changes its OWN spoken voice by talking."
 //
 // Mirrors scripts/smoke-settings.mjs: a typed instruction routed through the
-// REAL on-page overlay -> background.js -> PUT /v1/agent/profile changes the
+// REAL on-page overlay -> background.js -> POST /v1/voice/turns changes the
 // runtime agent profile against a LOCAL moa_gateway instance. Here the field is
 // `voice` (a Gemini Live core voice), and we prove the spoken gender aliases:
 //
-//   "switch to a female voice" -> PUT voice=Aoede ; gateway GET reflects it.
-//   "use a male voice"         -> PUT voice=Charon ; gateway GET reflects it.
+//   "switch to a female voice" -> profile_control voice=Aoede ; gateway GET reflects it.
+//   "use a male voice"         -> profile_control voice=Charon ; gateway GET reflects it.
 //
 // Same quiet rules as smoke-settings.mjs: --headless=new, throwaway Chrome
 // profile under .gstack/background-qa/<run>/, no visible window, no focus stolen.
@@ -386,64 +386,64 @@ async function main() {
       throw new Error(`could not resolve the overlay's isolated execution context (candidates: ${isolatedContexts.length})`);
     }
 
-    // ---- Leg 1 — "switch to a female voice" -> PUT voice=Aoede ----
+    // ---- Leg 1 — "switch to a female voice" -> profile_control voice=Aoede ----
     console.log("");
-    console.log('Leg 1 — typed "switch to a female voice" routes to the gateway profile (PUT /v1/agent/profile, voice=Aoede)');
+    console.log('Leg 1 — typed "switch to a female voice" routes to the gateway profile (/v1/voice/turns profile_control, voice=Aoede)');
     {
       await evaluate(pageCdp, triggerRunExpr("switch to a female voice"), { contextId: contentCtx });
       const reply = await waitForEval(pageCdp, renderedReplyExpr(), 20000, { contextId: contentCtx });
-      const putCall = await evaluate(workerCdp, lastGatewayCallExpr("/v1/agent/profile", "PUT"));
+      const voiceTurnCall = await evaluate(workerCdp, lastGatewayCallExpr("/v1/voice/turns", "POST"));
       const after = await fetchGatewayVoice();
 
       const ok =
         reply.kind === "done" &&
-        /settings updated/i.test(reply.text) &&
-        putCall && putCall.ok && putCall.status === 200 &&
+        /updated voice aoede/i.test(reply.text) &&
+        voiceTurnCall && voiceTurnCall.ok && voiceTurnCall.status === 200 &&
         after.profileVoice === "Aoede" &&
         after.providerVoice === "Aoede" &&
         after.isOverridden === true;
       if (ok) {
         pass(
           'female-voice alias applied through the gateway',
-          `PUT /v1/agent/profile -> HTTP 200; voice=Aoede; provider voice=Aoede; is_overridden=true`,
+          `POST /v1/voice/turns -> profile_control; voice=Aoede; provider voice=Aoede; is_overridden=true`,
         );
         console.log(`         overlay reply: "${reply.text.trim()}"`);
       } else {
         failures++;
         console.log(`  [FAIL] "switch to a female voice" did not set voice=Aoede through the gateway.`);
         console.log(`         rendered: ${JSON.stringify(reply)}`);
-        console.log(`         put call: ${JSON.stringify(putCall)}`);
+        console.log(`         voice turn call: ${JSON.stringify(voiceTurnCall)}`);
         console.log(`         gateway after: ${JSON.stringify(after)}`);
       }
     }
 
-    // ---- Leg 2 — "use a male voice" -> PUT voice=Charon ----
+    // ---- Leg 2 — "use a male voice" -> profile_control voice=Charon ----
     console.log("");
-    console.log('Leg 2 — typed "use a male voice" routes to the gateway profile (PUT /v1/agent/profile, voice=Charon)');
+    console.log('Leg 2 — typed "use a male voice" routes to the gateway profile (/v1/voice/turns profile_control, voice=Charon)');
     {
       await evaluate(pageCdp, triggerRunExpr("use a male voice"), { contextId: contentCtx });
       const reply = await waitForEval(pageCdp, renderedReplyExpr(), 20000, { contextId: contentCtx });
-      const putCall = await evaluate(workerCdp, lastGatewayCallExpr("/v1/agent/profile", "PUT"));
+      const voiceTurnCall = await evaluate(workerCdp, lastGatewayCallExpr("/v1/voice/turns", "POST"));
       const after = await fetchGatewayVoice();
 
       const ok =
         reply.kind === "done" &&
-        /settings updated/i.test(reply.text) &&
-        putCall && putCall.ok && putCall.status === 200 &&
+        /updated voice charon/i.test(reply.text) &&
+        voiceTurnCall && voiceTurnCall.ok && voiceTurnCall.status === 200 &&
         after.profileVoice === "Charon" &&
         after.providerVoice === "Charon" &&
         after.isOverridden === true;
       if (ok) {
         pass(
           'male-voice alias applied through the gateway',
-          `PUT /v1/agent/profile -> HTTP 200; voice=Charon; provider voice=Charon; is_overridden=true`,
+          `POST /v1/voice/turns -> profile_control; voice=Charon; provider voice=Charon; is_overridden=true`,
         );
         console.log(`         overlay reply: "${reply.text.trim()}"`);
       } else {
         failures++;
         console.log(`  [FAIL] "use a male voice" did not set voice=Charon through the gateway.`);
         console.log(`         rendered: ${JSON.stringify(reply)}`);
-        console.log(`         put call: ${JSON.stringify(putCall)}`);
+        console.log(`         voice turn call: ${JSON.stringify(voiceTurnCall)}`);
         console.log(`         gateway after: ${JSON.stringify(after)}`);
       }
     }
@@ -456,7 +456,7 @@ async function main() {
     }
     console.log(
       `voice-by-talking smoke passed (REAL extension + LOCAL gateway, headless): id=${extensionId}, ` +
-        `"switch to a female voice" -> PUT voice=Aoede, "use a male voice" -> PUT voice=Charon, ` +
+        `"switch to a female voice" -> profile_control voice=Aoede, "use a male voice" -> profile_control voice=Charon, ` +
         `gateway profile + provider status reflect each change, no window shown, no real secret used.`,
     );
   } finally {

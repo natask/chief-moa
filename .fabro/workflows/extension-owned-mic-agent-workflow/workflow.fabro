@@ -1,0 +1,47 @@
+digraph ExtensionOwnedMicAgentWorkflow {
+    graph [goal="Browser voice uses one extension-owned mic approval and project-agent work is staged as verified tickets."]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the OpenSpec and intent artifacts. Produce a concise plan and name the files you will change."
+    ]
+
+    implement_mic [
+        label="Implement Extension Mic",
+        prompt="Move browser microphone capture out of the content script and into an extension-owned offscreen document. Keep gateway streaming and overlay controls intact."
+    ]
+
+    verify_extension [
+        label="Verify Extension",
+        shape=parallelogram,
+        script="cd browser_extension && npm run verify && npm run smoke && npm run smoke:gateway 2>&1",
+        goal_gate=true,
+        retry_target=implement_mic
+    ]
+
+    stage_agent_work [
+        label="Stage Agent Work",
+        prompt="Use the chat-history extraction and repo OpenSpec context to keep the next browser/gateway/Android/work-graph slices represented as tickets with acceptance checks."
+    ]
+
+    validate_workflow [
+        label="Validate Workflow",
+        shape=parallelogram,
+        script="fabro validate .fabro/workflows/extension-owned-mic-agent-workflow/workflow.fabro 2>&1",
+        goal_gate=true,
+        retry_target=stage_agent_work
+    ]
+
+    manual_mic_gate [shape=hexagon, label="Manual Mic Approval Check"]
+    approve [shape=hexagon, label="Approve Result"]
+
+    start -> plan -> implement_mic -> verify_extension -> stage_agent_work -> validate_workflow -> manual_mic_gate
+    manual_mic_gate -> approve [label="[A] Grant works once"]
+    manual_mic_gate -> implement_mic [label="[R] Permission path fails"]
+    approve -> exit      [label="[A] Accept"]
+    approve -> implement_mic [label="[R] Revise"]
+}

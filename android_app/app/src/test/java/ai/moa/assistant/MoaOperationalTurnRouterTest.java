@@ -30,6 +30,33 @@ public final class MoaOperationalTurnRouterTest {
     }
 
     @Test
+    public void routesProfileControlThroughMoaWithoutForcingAgent() {
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("use the Kore voice"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("switch to a female voice"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("switch to Aoede"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("change voices"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("go through all the voices and say hello in every voice"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("sample the voices for me one after the other"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("only speak English and Amharic, don't switch up"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("respond only in English"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("speak Amharic and English"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("only process English and Amharic"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("change your language to Amharic"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("what voice is active"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("what language settings are active"));
+        assertTrue(MoaOperationalTurnRouter.isProfileControlIntent("set your system prompt to be terser"));
+        assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("use the Kore voice"));
+        assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("go through all the voices"));
+        assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("only process English and Amharic"));
+        assertTrue(MoaOperationalTurnRouter.shouldRouteThroughMoa("only speak English and Amharic, don't switch up"));
+        assertFalse(MoaOperationalTurnRouter.shouldForceAgent("use the Kore voice"));
+        assertFalse(MoaOperationalTurnRouter.shouldForceAgent("change voices"));
+        assertFalse(MoaOperationalTurnRouter.shouldForceAgent("go through all the voices"));
+        assertFalse(MoaOperationalTurnRouter.shouldForceAgent("only process English and Amharic"));
+        assertFalse(MoaOperationalTurnRouter.shouldForceAgent("only speak English and Amharic, don't switch up"));
+    }
+
+    @Test
     public void forcesAgentForOperationalSystemQuestions() {
         assertTrue(MoaOperationalTurnRouter.shouldForceAgent("what is going on?"));
         assertTrue(MoaOperationalTurnRouter.shouldForceAgent("mobile gateway status"));

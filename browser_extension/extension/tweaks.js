@@ -119,6 +119,24 @@
           "}",
         ].join("\n");
       }
+      case "black": {
+        return [
+          "html, body {",
+          "  background: #000 !important;",
+          "  color: #f5f5f5 !important;",
+          "  color-scheme: dark !important;",
+          "}",
+          "body :not(#agee-root):not(#agee-root *) {",
+          "  background-color: #000 !important;",
+          "  color: #f5f5f5 !important;",
+          "  border-color: #333 !important;",
+          "  box-shadow: none !important;",
+          "}",
+          "body a:not(#agee-root *) {",
+          "  color: #8ab4ff !important;",
+          "}",
+        ].join("\n");
+      }
       case "width": {
         const max = cssEscapeText(params.maxWidth);
         return `html body {\n  max-width: ${max}px !important;\n  margin-left: auto !important;\n  margin-right: auto !important;\n}`;
@@ -184,7 +202,10 @@
       return makeRecord({ name: "Smaller font", kind: "font-scale", params: { factor: 0.85 } });
     }
 
-    // 3) dark mode
+    // 3) dark / black page color
+    if (isBlackPageIntent(lower)) {
+      return makeRecord({ name: "Black page", kind: "black", params: {} });
+    }
     if (/\bdark\b/.test(lower) && /\bmode|theme|background|page|site\b/.test(lower)) {
       return makeRecord({ name: "Dark mode", kind: "dark", params: {} });
     }
@@ -206,6 +227,11 @@
     const n = Number(value);
     if (!Number.isFinite(n)) return min;
     return Math.min(max, Math.max(min, n));
+  }
+
+  function isBlackPageIntent(lower) {
+    return /\b(?:make|turn|set)\b.*\b(?:it|this|page|site|background|screen)\b.*\bblack\b/.test(lower) ||
+      /\ball black\b|\bblack (?:page|background|mode|theme)\b/.test(lower);
   }
 
   function makeRecord({ name, kind, params }) {

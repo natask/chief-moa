@@ -5,6 +5,10 @@ Moa SHALL maintain explicit language state in the agent profile and SHALL NOT
 silently change the durable language state from automatic model/provider
 detection by default.
 
+For the current implementation slice, the supported language catalog SHALL be
+limited to English (`en-US`) and Amharic (`am-ET`) until the user explicitly
+expands the product scope.
+
 #### Scenario: Default language active
 - **WHEN** a voice session starts with no user-requested language change
 - **THEN** Moa uses the configured default language
@@ -21,11 +25,16 @@ Moa SHALL allow the user to change spoken/input/output language by voice or
 settings, and the change SHALL remain active until changed again.
 
 #### Scenario: User switches language by voice
-- **WHEN** the user says "speak Amharic", "switch to Spanish", or an equivalent
+- **WHEN** the user says "speak Amharic", "switch to English", or an equivalent
   explicit language command
 - **THEN** Moa updates the agent profile language state
 - **AND** shows the new language state in the overlay or full app
 - **AND** uses that state for subsequent provider setup and model instructions
+
+#### Scenario: User requests an unsupported language
+- **WHEN** the user requests a language outside English or Amharic
+- **THEN** Moa does not persist that language in the durable profile
+- **AND** the supported-language catalog remains English and Amharic only
 
 #### Scenario: User switches back
 - **WHEN** the user explicitly requests a different language after a prior

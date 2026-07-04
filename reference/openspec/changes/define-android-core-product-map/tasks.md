@@ -58,12 +58,23 @@
 - [x] 7.2 Add an abstraction boundary for future streaming STT and hosted TTS.
 - [x] 7.3 Add a setting to mute spoken replies while preserving full display text.
 - [x] 7.4 Evaluate hosted TTS only after observability and action boundaries are in place.
+- [x] 7.5 Route Android Live voice profile-control utterances (voice/language
+      changes) through the gateway profile-control path so they persist and
+      apply to the next Live turn with prior context.
+- [x] 7.6 Persist hard voice, heard-language, reply-language, and response
+      behavior settings either globally for all devices or as current-device
+      overrides, and require mission agents to ask for missing access instead of
+      giving flat refusals.
+- [x] 7.7 Back hard voice/language settings with a gateway options catalog so
+      agents and clients can list supported voices/languages dynamically, map
+      masculine/feminine tone requests to valid voice ids, and reject unsupported
+      profile values before persistence.
 
 ## 8. Verification Harness
 
 - [x] 8.1 Add gateway smoke commands for health, voice turn, agent run list, and run detail.
 - [x] 8.2 Keep `./gradlew assembleDebug` as Android compile verification.
-- [x] 8.3 Add manual QA checklist for overlay tap, double tap stop, transcript, agent run start, run status, and wake restart.
+- [x] 8.3 Add manual QA checklist for overlay tap, release-to-send voice capture, transcript, agent run start, run status, and wake restart.
 - [x] 8.4 Add manual QA for AirPods/headset assistant gesture: reinstall APK, clear any prior voice-command default, trigger the earbud gesture, select Moa, and verify the overlay transcript starts.
 
 ## 9. Android OTA Deployment
@@ -73,3 +84,17 @@
 - [x] 9.3 Add full-app update check, APK checksum verification, and package-installer handoff.
 - [x] 9.4 Add commit-triggered GitHub Actions build and main-machine OTA deploy workflow.
 - [x] 9.5 Verify with Android debug build, gateway syntax check, OpenSpec validation, and a main-machine OTA smoke test. Verified 2026-06-20: `assembleDebug` BUILD SUCCESSFUL (app-debug.apk produced); `npm run check` ok with all profile/voice checks passing; `openspec validate define-android-core-product-map --strict` valid; OTA endpoint `/v1/android/updates/latest` serves version 0.1.1781720954 (git_sha 9719b68). Note: the served OTA build is from 2026-06-17; publishing a fresh OTA from current HEAD is a separate deploy step.
+- [x] 9.6 Keep OTA publish as the deploy source of truth and install the published APK directly over ADB when an authorized phone is connected; skip direct install without failing when no device is available.
+- [x] 9.7 Record deploy version metadata and monotonic target deploy sequences
+      for gateway, Android OTA, and browser extension deploys; require changed
+      browser-extension deploys to advance the manifest version after the first
+      recorded extension deploy.
+
+## 10. Cross-Device Tool Hub
+
+- [x] 10.1 Define the gateway device-client registry: device id, surface type, session id, online status, local tool manifest, and last heartbeat.
+- [x] 10.2 Define cross-device tool request/receipt records so a browser turn can request a phone action and a phone turn can request a browser action without bypassing local approval.
+- [x] 10.3 Add Android device-client heartbeat and a minimal safe local tool manifest including `app.launch`, `system.back`, `system.home`, `screen.summary`, and `screen.tap_text`.
+- [x] 10.4 Add browser extension device-client heartbeat and a minimal safe local tool manifest including `browser.tab.open`, queued browser task claim/receipt, and page-context snapshot.
+- [x] 10.5 Add gateway APIs for listing active agents/runs/tool executions from any surface.
+- [x] 10.6 Add a first cross-device smoke: browser requests Android to speak a short message; Android validates locally, speaks it, and receipts it through the gateway. Verified with `cd gateway && npm run smoke:device-hub`, plus Android and extension build/verify checks.

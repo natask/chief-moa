@@ -1,0 +1,30 @@
+digraph LiveVoiceProfileControlParity {
+    graph [goal="Live voice profile-control transcripts persist through the gateway profile-control path"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the OpenSpec and intent artifacts. Produce a concise plan and name the files you will change."
+    ]
+
+    implement [
+        label="Implement",
+        prompt="Patch gateway Live voice canonical turn handling and smoke coverage. Preserve existing profile-options changes."
+    ]
+
+    verify [
+        label="Verify",
+        shape=parallelogram,
+        script="cd gateway && npm run check 2>&1",
+        goal_gate=true
+    ]
+
+    approve [shape=hexagon, label="Approve Result"]
+
+    start -> plan -> implement -> verify -> approve
+    approve -> exit      [label="[A] Accept"]
+    approve -> implement [label="[R] Revise"]
+}

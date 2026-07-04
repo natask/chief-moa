@@ -63,7 +63,7 @@ Decision:
 - Use MV3.
 - Keep model calls in the service worker.
 - Keep DOM perception/actions in the content script.
-- Add `commands` for Cmd/Ctrl+K.
+- Add `commands` for Cmd/Ctrl+,.
 - Treat screenshots and prompts as sensitive.
 
 ### 4. Prototype Implementation
@@ -79,8 +79,8 @@ Output:
 
 Current capability:
 
-- Cmd/Ctrl+K overlay.
-- Cmd/Ctrl+K extension command entry point.
+- Cmd/Ctrl+, overlay.
+- Cmd/Ctrl+, extension command entry point.
 - On-page invocation surface.
 - Optional voice dictation via browser-native speech recognition.
 - BYO Anthropic key and model settings.
@@ -132,7 +132,7 @@ Manual runtime gate:
 - Load `extension/` unpacked in Chrome.
 - Save API key in options.
 - Open a low-risk site.
-- Press Cmd/Ctrl+K.
+- Press Cmd/Ctrl+,.
 - Ask Agee to act.
 - Confirm overlay progress and page action.
 

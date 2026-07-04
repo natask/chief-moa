@@ -14,6 +14,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -37,7 +38,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public final class OverlayService extends Service {
+    private static final String TAG = "MoaOverlay";
+
     static final String ACTION_ASSIST_BUTTON = "ai.moa.assistant.action.ASSIST_BUTTON";
+    static final String ACTION_COLLAPSE_SURFACES = "ai.moa.assistant.action.COLLAPSE_SURFACES";
     static final String EXTRA_START_VOICE = "ai.moa.assistant.extra.START_VOICE";
 
     private static final int MAX_HISTORY_MESSAGES = 50;
@@ -46,6 +50,14 @@ public final class OverlayService extends Service {
     private static final int ORB_WINDOW_DP = 96;
     private static final int ORB_EDGE_MARGIN_DP = 16;
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
+    private static final long VOICE_USER_EXIT_MS = 150;
+    private static final long VOICE_RESPONSE_HOLD_MS = 1200;
+    // After a streaming commit, if no transcript/assistant/turn_done event
+    // arrives within this window the turn is torn down so the user can retry
+    // instead of waiting on a silently stalled turn.
+    private static final long STREAMING_TURN_WATCHDOG_MS = 12000;
+    private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
+    private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -57,8 +69,8 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams orbParams;
     // Two surfaces hang off the orb. TAP opens the chat panel: a polished card
     // with bubbles + composer, the place to read the conversation and type.
-    // HOLD opens the voice surface: a compact native transcript card showing
-    // live user words and the assistant response as separate rows.
+    // DOUBLE-CLICK-AND-HOLD opens the voice surface: a compact native transcript
+    // card showing live user words and the assistant response as separate rows.
     private View panelView;
     private LinearLayout messageColumn;
     private ScrollView messageScroll;
@@ -70,14 +82,21 @@ public final class OverlayService extends Service {
     private TextView voiceUserText;
     private TextView voiceAssistantText;
     private TextView voiceMetaLine;
+    private View voiceUserRow;
+    private View voiceAssistantRow;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
     private String voiceUserTranscript = "";
     private String voiceAssistantTranscript = "";
     private boolean voiceUserTranscriptFinal;
+    private boolean voiceUserHiddenForAssistant;
+    private boolean animateNextAssistantRow;
     private boolean currentStreamingAssistantRecorded;
     private Runnable pendingAutoDismiss;
+    private Runnable pendingContinuousVoiceRestart;
+    private Runnable pendingStreamingTurnWatchdog;
     private MoaVoiceController voiceController;
     private MoaStreamingVoiceSessionController streamingVoiceController;
+    private MoaVoiceSamplePlayer voiceSamplePlayer;
     private boolean panelOpen;
     private boolean nextVoiceRunsAgent;
     private static volatile boolean running;
@@ -87,15 +106,24 @@ public final class OverlayService extends Service {
     private boolean currentStreamingTurnRouted;
     private boolean currentStreamingTurnCommitRequested;
     private String currentStreamingTranscript = "";
+    private final MoaSpeechTranscriptAccumulator streamingTranscriptAccumulator = new MoaSpeechTranscriptAccumulator();
     private final Map<String, AgentRunState> activeAgentRuns = new HashMap<>();
     private boolean agentRunPolling;
+    private boolean nextManualVoiceFollowsActiveRun;
     private boolean nextStreamingTurnFollowsActiveRun;
     private String lastActiveAgentRunId = "";
     private int streamingVoiceGeneration;
+    private boolean continuousVoiceLoop;
+    private boolean pushToTalkVoiceTurn;
+    private boolean pendingContinuousVoiceRestartAfterAudio;
+    private boolean streamingAssistantAudioPlaying;
+    private boolean deviceClientLoopRunning;
+    private boolean deviceClientPollInFlight;
 
     private enum VoiceRuntimeState {
         READY,
         LISTENING,
+        SENDING,
         THINKING,
         SPEAKING,
         INTERRUPTED,
@@ -156,18 +184,28 @@ public final class OverlayService extends Service {
             public void onVoiceTurn(String text) {
                 sendUserMessage(text, true);
             }
+
+            @Override
+            public void onSpokenReplyFinished() {
+                completeVoiceReplyPlayback();
+            }
         });
         loadSettings();
+        refreshVoiceProfile();
         // No sessions: never restore a prior conversation. Clear any history left
         // by an older build so the orb always starts fresh.
         MoaPrefs.setHistoryJson(this, "");
         promoteToForeground();
         showOrb();
+        startDeviceClientLoop();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         loadSettings();
+        Log.i(TAG, "onStartCommand id=" + startId
+                + " action=" + (intent == null ? "" : intent.getAction())
+                + " startVoice=" + shouldStartVoice(intent));
         if (!Settings.canDrawOverlays(this)) {
             stopSelf();
             return START_NOT_STICKY;
@@ -175,8 +213,12 @@ public final class OverlayService extends Service {
         if (orbView == null) {
             showOrb();
         }
+        if (ACTION_COLLAPSE_SURFACES.equals(intent != null ? intent.getAction() : null)) {
+            collapseInteractiveSurfaces();
+            return START_STICKY;
+        }
         if (shouldStartVoice(intent)) {
-            mainHandler.postDelayed(this::startStreamingVoiceTurn, 180);
+            mainHandler.post(this::startContinuousStreamingVoiceTurn);
         }
         return START_STICKY;
     }
@@ -184,6 +226,7 @@ public final class OverlayService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        cancelStreamingTurnWatchdog();
         removeTranscriptOverlay();
         removePanel();
         removeOrb();
@@ -196,6 +239,11 @@ public final class OverlayService extends Service {
             streamingVoiceController.destroy();
             streamingVoiceController = null;
         }
+        if (voiceSamplePlayer != null) {
+            voiceSamplePlayer.destroy();
+            voiceSamplePlayer = null;
+        }
+        deviceClientLoopRunning = false;
         super.onDestroy();
     }
 
@@ -229,11 +277,13 @@ public final class OverlayService extends Service {
 
         NotificationChannel channel = new NotificationChannel(
                 OVERLAY_CHANNEL_ID,
-                "Moa overlay",
+                "A.G. overlay",
                 NotificationManager.IMPORTANCE_LOW
         );
-        channel.setDescription("Keeps the Moa overlay available above other apps.");
+        channel.setDescription("Keeps the A.G. overlay available above other apps.");
         channel.setShowBadge(false);
+        channel.setSound(null, null);
+        channel.enableVibration(false);
 
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager != null) {
@@ -256,14 +306,16 @@ public final class OverlayService extends Service {
             builder = new Notification.Builder(this);
         }
         builder.setSmallIcon(R.drawable.ic_moa_orb)
-                .setContentTitle("Moa overlay")
+                .setContentTitle("A.G. overlay")
                 .setContentText("Ready for commands on the current screen.")
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
-                .setShowWhen(false);
+                .setShowWhen(false)
+                .setOnlyAlertOnce(true)
+                .setDefaults(0);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             builder.setCategory(Notification.CATEGORY_SERVICE);
-            builder.setColor(0xFF61E5C6);
+            builder.setColor(0xFFF4D35E);
         }
         return builder.build();
     }
@@ -272,6 +324,39 @@ public final class OverlayService extends Service {
         gatewayUrl = safe(MoaPrefs.gatewayUrl(this));
         gatewayToken = safe(MoaPrefs.gatewayToken(this));
         conversationId = MoaPrefs.conversationId(this);
+        applyCachedVoiceProfile();
+    }
+
+    private void applyCachedVoiceProfile() {
+        if (voiceController != null) {
+            voiceController.setLanguageTags(MoaPrefs.inputLanguageTag(this), MoaPrefs.replyLanguageTag(this));
+        }
+        updateVoiceHeaderState();
+    }
+
+    private void refreshVoiceProfile() {
+        if (gatewayUrl.isEmpty()) {
+            return;
+        }
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        final String deviceId = androidDeviceId();
+        new Thread(() -> {
+            try {
+                JSONObject payload = new MoaGatewayClient(url, token).agentProfile("device", deviceId);
+                JSONObject profile = payload.optJSONObject("profile");
+                if (profile == null) {
+                    return;
+                }
+                String profileJson = profile.toString();
+                mainHandler.post(() -> {
+                    MoaPrefs.setAgentProfileJson(this, profileJson);
+                    applyCachedVoiceProfile();
+                });
+            } catch (Exception ignored) {
+                // Profile refresh is best-effort; cached/default language still works.
+            }
+        }, "moa-voice-profile").start();
     }
 
     // No sessions: live turns stay in memory only for the panel's current view.
@@ -312,15 +397,14 @@ public final class OverlayService extends Service {
         orbParams.y = dp(164);
         orbView.setOnTouchListener(new MoaOrbTouchListener(
                 this,
-                mainHandler,
                 windowManager,
                 orbView,
                 orbParams,
                 ORB_WINDOW_DP,
                 ORB_EDGE_MARGIN_DP,
                 this::handleOrbSingleTap,
-                this::handleOrbHoldStart,
-                this::handleOrbHoldRelease
+                this::handleOrbDoublePressStart,
+                this::handleOrbVoicePressRelease
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -473,7 +557,7 @@ public final class OverlayService extends Service {
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(MoaDrawables.roundedGradient(0xF4101D18, 0xF40A1410, dp(24), 0x3361E5C6, dp(1)));
+        card.setBackground(MoaDrawables.roundedGradient(0xF4101D18, 0xF40A1410, dp(24), 0x33F4D35E, dp(1)));
         card.setElevation(dp(26));
         card.setPadding(dp(16), dp(14), dp(16), dp(16));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -549,7 +633,7 @@ public final class OverlayService extends Service {
 
     private void showCurrentScreenContext() {
         if (!actionBroker.isScreenAccessRunning()) {
-            updateVoiceAssistantTranscript("Screen access is off. Enable it in Moa settings.");
+            updateVoiceAssistantTranscript("Screen access is off. Enable it in A.G. settings.");
             return;
         }
         String summary = actionBroker.currentScreenSummary();
@@ -567,6 +651,8 @@ public final class OverlayService extends Service {
         }
         voiceUserTranscript = value;
         voiceUserTranscriptFinal = isFinal;
+        voiceUserHiddenForAssistant = false;
+        animateNextAssistantRow = false;
         if (transcriptView == null) {
             showTranscriptOverlay(value);
             return;
@@ -584,6 +670,11 @@ public final class OverlayService extends Service {
             showTranscriptOverlay("");
         }
         setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
+        if (!voiceUserHiddenForAssistant && voiceUserRow != null && !voiceUserTranscript.isEmpty()) {
+            hideVoiceUserRowThenShowAssistant();
+            return;
+        }
+        voiceUserHiddenForAssistant = true;
         renderVoiceTranscriptRows();
     }
 
@@ -594,19 +685,56 @@ public final class OverlayService extends Service {
         voiceTranscriptColumn.removeAllViews();
         voiceUserText = null;
         voiceAssistantText = null;
-        voiceTranscriptColumn.addView(voiceMessageRow(false, voiceUserTranscript, voiceUserTranscriptFinal));
+        voiceUserRow = null;
+        voiceAssistantRow = null;
+        boolean showUser = voiceAssistantTranscript.isEmpty() || !voiceUserHiddenForAssistant;
+        if (showUser) {
+            voiceTranscriptColumn.addView(voiceMessageRow(false, voiceUserTranscript, voiceUserTranscriptFinal));
+        }
         if (!voiceAssistantTranscript.isEmpty()) {
             voiceTranscriptColumn.addView(voiceMessageRow(true, voiceAssistantTranscript, true));
+            if (animateNextAssistantRow && voiceAssistantRow != null) {
+                animateNextAssistantRow = false;
+                voiceAssistantRow.setAlpha(0f);
+                voiceAssistantRow.setTranslationY(dp(8));
+                voiceAssistantRow.animate()
+                        .alpha(1f)
+                        .translationY(0f)
+                        .setDuration(170)
+                        .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                        .start();
+            }
         }
         updateVoiceHeaderState();
         scrollVoiceTranscriptToBottom();
+    }
+
+    private void hideVoiceUserRowThenShowAssistant() {
+        View row = voiceUserRow;
+        if (row == null) {
+            voiceUserHiddenForAssistant = true;
+            animateNextAssistantRow = true;
+            renderVoiceTranscriptRows();
+            return;
+        }
+        row.animate()
+                .alpha(0f)
+                .translationY(-dp(8))
+                .setDuration(VOICE_USER_EXIT_MS)
+                .setInterpolator(new android.view.animation.AccelerateInterpolator())
+                .withEndAction(() -> {
+                    voiceUserHiddenForAssistant = true;
+                    animateNextAssistantRow = true;
+                    renderVoiceTranscriptRows();
+                })
+                .start();
     }
 
     private View voiceMessageRow(boolean assistant, String text, boolean finalText) {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text(assistant ? "Moa" : "You", assistant ? MoaColors.MINT : 0xFFBFA9FF, 10, true);
+        TextView label = text(assistant ? "A.G." : "You", assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(5), 0, dp(5), dp(3));
 
@@ -645,8 +773,10 @@ public final class OverlayService extends Service {
 
         if (assistant) {
             voiceAssistantText = body;
+            voiceAssistantRow = wrap;
         } else {
             voiceUserText = body;
+            voiceUserRow = wrap;
         }
         return wrap;
     }
@@ -666,16 +796,34 @@ public final class OverlayService extends Service {
     }
 
     private String voiceStateLabel() {
+        String state;
         switch (voiceRuntimeState) {
+            case LISTENING:
+                state = "Listening";
+                break;
+            case SENDING:
+                state = "Sending";
+                break;
+            case THINKING:
+                state = "Thinking";
+                break;
+            case SPEAKING:
+                state = "Speaking";
+                break;
             case ERROR:
-                return "Error";
+                state = "Error";
+                break;
             case INTERRUPTED:
-                return "Interrupted";
+                state = "Interrupted";
+                break;
             case RECOVERING:
-                return "Recovering";
+                state = "Recovering";
+                break;
             default:
-                return "";
+                state = "Ready";
+                break;
         }
+        return state + " / " + MoaPrefs.languageStatus(this);
     }
 
     private int voiceStateColor() {
@@ -685,8 +833,10 @@ public final class OverlayService extends Service {
             case INTERRUPTED:
             case RECOVERING:
                 return MoaColors.GOLD;
+            case SENDING:
+            case THINKING:
             case SPEAKING:
-                return MoaColors.MINT;
+                return MoaColors.GOLD;
             default:
                 return MoaColors.MUTED;
         }
@@ -737,6 +887,8 @@ public final class OverlayService extends Service {
         voiceTranscriptScroll = null;
         voiceUserText = null;
         voiceAssistantText = null;
+        voiceUserRow = null;
+        voiceAssistantRow = null;
         voiceMetaLine = null;
         dying.animate()
                 .alpha(0f)
@@ -747,12 +899,13 @@ public final class OverlayService extends Service {
                 .start();
     }
 
-    // Empty voice turns can fade away; real transcripts stay until dismissed.
+    // Voice cards are per-turn surfaces. After a response has been shown or
+    // spoken, the card clears so the next turn does not show stale context.
     private void scheduleAutoDismiss(long delayMs) {
         cancelAutoDismiss();
         pendingAutoDismiss = () -> {
             pendingAutoDismiss = null;
-            if (!streamingVoiceActive() && !voiceController.isActive()) {
+            if (!streamingVoiceActive() && !voiceController.isActive() && voiceSamplePlayer == null) {
                 removeTranscriptOverlay();
             }
         };
@@ -764,6 +917,41 @@ public final class OverlayService extends Service {
             mainHandler.removeCallbacks(pendingAutoDismiss);
             pendingAutoDismiss = null;
         }
+    }
+
+    private void holdVoiceReplyThenContinueOrDismiss() {
+        mainHandler.postDelayed(this::completeVoiceReplyPlayback, VOICE_RESPONSE_HOLD_MS);
+    }
+
+    private void completeVoiceReplyPlayback() {
+        setVoiceRuntimeState(VoiceRuntimeState.READY);
+        updateMicState();
+        if (continuousVoiceLoop) {
+            scheduleContinuousVoiceRestart(streamingVoiceGeneration);
+        } else {
+            scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
+        }
+    }
+
+    private void scheduleContinuousVoiceRestart(int generation) {
+        cancelAutoDismiss();
+        cancelContinuousVoiceRestart();
+        pendingContinuousVoiceRestart = () -> {
+            pendingContinuousVoiceRestart = null;
+            if (!continuousVoiceLoop || generation != streamingVoiceGeneration) {
+                return;
+            }
+            startStreamingVoiceTurn(true, true);
+        };
+        mainHandler.postDelayed(pendingContinuousVoiceRestart, CONTINUOUS_VOICE_RESTART_MS);
+    }
+
+    private void cancelContinuousVoiceRestart() {
+        if (pendingContinuousVoiceRestart != null) {
+            mainHandler.removeCallbacks(pendingContinuousVoiceRestart);
+            pendingContinuousVoiceRestart = null;
+        }
+        pendingContinuousVoiceRestartAfterAudio = false;
     }
 
     private View createPanel() {
@@ -831,7 +1019,7 @@ public final class OverlayService extends Service {
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text("Moa", MoaColors.PAPER, 17, true);
+        TextView label = text("A.G.", MoaColors.PAPER, 17, true);
         label.setLetterSpacing(0.02f);
         copy.addView(label);
         runStatusView = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
@@ -859,7 +1047,7 @@ public final class OverlayService extends Service {
         row.setLayoutParams(rowParams);
 
         composer = new EditText(this);
-        composer.setHint("Message Moa");
+        composer.setHint("Message A.G.");
         composer.setHintTextColor(0x66B8C9C2);
         composer.setTextColor(MoaColors.PAPER);
         composer.setTextSize(15);
@@ -871,7 +1059,7 @@ public final class OverlayService extends Service {
         composer.setPadding(dp(12), dp(9), dp(8), dp(9));
         row.addView(composer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        // Round gold send button. 46dp target, teal->mint feel via gold accent.
+        // Round gold send button. 46dp target, gold brand accent.
         TextView send = new TextView(this);
         send.setText("↑");
         send.setTextColor(MoaColors.INK);
@@ -894,7 +1082,7 @@ public final class OverlayService extends Service {
 
         messageColumn.removeAllViews();
         if (messages.isEmpty()) {
-            TextView empty = text("Hold the orb to talk. Tap to type.", MoaColors.MUTED, 13, false);
+            TextView empty = text("Tap for chat. Double-click and hold to talk.", MoaColors.MUTED, 13, false);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(28), dp(8), dp(28));
             messageColumn.addView(empty);
@@ -919,7 +1107,7 @@ public final class OverlayService extends Service {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text(message.assistant ? "moa" : "you", message.assistant ? MoaColors.MINT : 0xFFBFA9FF, 10, true);
+        TextView label = text(message.assistant ? "A.G." : "You", message.assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(4), 0, dp(4), dp(3));
 
@@ -981,10 +1169,17 @@ public final class OverlayService extends Service {
         }
         boolean forcedAgent = nextVoiceRunsAgent;
         nextVoiceRunsAgent = false;
+        boolean manualVoiceFollowUp = fromVoice && nextManualVoiceFollowsActiveRun;
+        nextManualVoiceFollowsActiveRun = false;
 
         MoaActionBroker.LocalActionResult localAction = actionBroker.tryHandleLocalCommand(text);
         if (localAction.handled) {
             deliverReply(localAction.reply, fromVoice);
+            return;
+        }
+
+        if (manualVoiceFollowUp) {
+            requestAgentRunFollowUp(text, true);
             return;
         }
 
@@ -1022,12 +1217,16 @@ public final class OverlayService extends Service {
             return;
         }
         addMessage(true, reply);
+        boolean speaking = false;
         if (fromVoice) {
             updateVoiceAssistantTranscript(reply);
-            setVoiceRuntimeState(VoiceRuntimeState.READY);
+            setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
         }
         if (speakReply && fromVoice && MoaPrefs.spokenRepliesEnabled(this) && voiceController.isIdle()) {
-            voiceController.speak(reply);
+            speaking = voiceController.speak(reply);
+        }
+        if (fromVoice && !speaking) {
+            holdVoiceReplyThenContinueOrDismiss();
         }
     }
 
@@ -1074,6 +1273,7 @@ public final class OverlayService extends Service {
         JSONObject client = new JSONObject();
         client.put("platform", "android");
         client.put("source", "android-overlay");
+        client.put("device_id", androidDeviceId());
         client.put("input", fromVoice ? "voice" : "text");
         client.put("intent_hint", forcedAgent ? "agent_run" : "unknown");
         body.put("client", client);
@@ -1090,15 +1290,110 @@ public final class OverlayService extends Service {
         }
 
         boolean shouldSpeak = fromVoice && !speakText.isEmpty();
+        boolean speaking = false;
         addMessage(true, text);
         if (fromVoice) {
             updateVoiceAssistantTranscript(text);
-            setVoiceRuntimeState(VoiceRuntimeState.READY);
+            setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
         }
         trackAgentRunsFromResponse(response);
-        if (shouldSpeak && MoaPrefs.spokenRepliesEnabled(this) && voiceController.isIdle()) {
-            voiceController.speak(speakText);
+        if ("profile_control".equals(response.optString("classification", "")) || response.optJSONObject("profile") != null) {
+            refreshVoiceProfile();
         }
+        boolean samplingVoices = maybeStartVoiceSampler(response, fromVoice);
+        if (samplingVoices) {
+            shouldSpeak = false;
+            speaking = true;
+        }
+        if (shouldSpeak && MoaPrefs.spokenRepliesEnabled(this) && voiceController.isIdle()) {
+            speaking = voiceController.speak(speakText);
+        }
+        if (fromVoice && !speaking) {
+            holdVoiceReplyThenContinueOrDismiss();
+        }
+    }
+
+    private boolean maybeStartVoiceSampler(JSONObject response, boolean fromVoice) {
+        if (!fromVoice || !MoaPrefs.spokenRepliesEnabled(this)) {
+            return false;
+        }
+        JSONObject sampler = voiceSamplerActionFrom(response);
+        if (sampler == null) {
+            return false;
+        }
+        JSONArray voices = sampler.optJSONArray("voices");
+        if (voices == null || voices.length() == 0) {
+            return false;
+        }
+        if (voiceSamplePlayer != null) {
+            voiceSamplePlayer.destroy();
+            voiceSamplePlayer = null;
+        }
+        loadSettings();
+        final int total = voices.length();
+        voiceSamplePlayer = new MoaVoiceSamplePlayer(gatewayUrl, gatewayToken, conversationId, voices, new MoaVoiceSamplePlayer.Callback() {
+            @Override
+            public void onSampleStarted(String voiceId, int index, int total) {
+                mainHandler.post(() -> {
+                    updateVoiceAssistantTranscript("Sampling " + voiceId + " (" + index + "/" + total + ")");
+                    setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
+                    updateMicState();
+                });
+            }
+
+            @Override
+            public void onSampleText(String voiceId, String text) {
+                mainHandler.post(() -> {
+                    if (!safe(text).isEmpty()) {
+                        updateVoiceAssistantTranscript(text);
+                    }
+                });
+            }
+
+            @Override
+            public void onSampleDone(String voiceId, int index, int total) {
+            }
+
+            @Override
+            public void onComplete() {
+                mainHandler.post(() -> {
+                    voiceSamplePlayer = null;
+                    updateVoiceAssistantTranscript("Voice sampler finished.");
+                    setVoiceRuntimeState(VoiceRuntimeState.READY);
+                    holdVoiceReplyThenContinueOrDismiss();
+                });
+            }
+
+            @Override
+            public void onError(String message, Throwable error) {
+                mainHandler.post(() -> {
+                    voiceSamplePlayer = null;
+                    String failure = "Voice sampler failed: " + safe(message);
+                    addMessage(true, failure);
+                    updateVoiceAssistantTranscript(failure);
+                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+                    holdVoiceReplyThenContinueOrDismiss();
+                });
+            }
+        });
+        updateVoiceAssistantTranscript("Starting voice sampler (" + total + " voices).");
+        setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
+        voiceSamplePlayer.start();
+        return true;
+    }
+
+    private JSONObject voiceSamplerActionFrom(JSONObject response) {
+        JSONArray actions = response.optJSONArray("actions");
+        if (actions == null) {
+            return null;
+        }
+        for (int i = 0; i < actions.length(); i++) {
+            JSONObject action = actions.optJSONObject(i);
+            if (action != null && "voice_sampler".equals(action.optString("type", ""))) {
+                return action;
+            }
+        }
+        return null;
     }
 
     private void requestGatewayReply(String userText, boolean fromVoice) {
@@ -1126,7 +1421,7 @@ public final class OverlayService extends Service {
 
     private void requestAgentRun(String prompt, boolean fromVoice) {
         if (gatewayUrl.isEmpty()) {
-            deliverReply("Agent actions need the Moa gateway. Set the home-machine URL first.", fromVoice);
+            deliverReply("Agent actions need the A.G. gateway. Set the home-machine URL first.", fromVoice);
             return;
         }
 
@@ -1135,6 +1430,7 @@ public final class OverlayService extends Service {
             JSONObject body = new JSONObject();
             body.put("conversation_id", conversationId);
             body.put("source", "android-overlay");
+            body.put("device_id", androidDeviceId());
             body.put("wait", false);
             body.put("prompt", truncatePrompt(actionBroker.promptWithScreenContext(prompt)));
             actionBroker.putScreenContext(body);
@@ -1170,6 +1466,7 @@ public final class OverlayService extends Service {
             JSONObject body = new JSONObject();
             body.put("conversation_id", conversationId);
             body.put("source", "android-overlay");
+            body.put("device_id", androidDeviceId());
             body.put("prompt", text);
             actionBroker.putScreenContext(body);
             requestBody = body;
@@ -1196,6 +1493,7 @@ public final class OverlayService extends Service {
         JSONObject body = new JSONObject();
         body.put("conversation_id", conversationId);
         body.put("source", "android-overlay");
+        body.put("device_id", androidDeviceId());
         actionBroker.putScreenContext(body);
 
         JSONArray history = new JSONArray();
@@ -1211,8 +1509,188 @@ public final class OverlayService extends Service {
         return body;
     }
 
+    private String androidDeviceId() {
+        String raw = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+        String safe = raw == null ? "" : raw.replaceAll("[^a-zA-Z0-9_-]", "");
+        if (safe.isEmpty()) {
+            safe = "unknown";
+        }
+        return "android_" + safe;
+    }
+
     private MoaGatewayClient gatewayClient() {
         return new MoaGatewayClient(gatewayUrl, gatewayToken);
+    }
+
+    private void startDeviceClientLoop() {
+        if (deviceClientLoopRunning) {
+            return;
+        }
+        deviceClientLoopRunning = true;
+        mainHandler.post(this::pollDeviceClientThenSchedule);
+    }
+
+    private void pollDeviceClientThenSchedule() {
+        if (!deviceClientLoopRunning) {
+            return;
+        }
+        pollDeviceClientOnce();
+        mainHandler.postDelayed(this::pollDeviceClientThenSchedule, DEVICE_CLIENT_POLL_MS);
+    }
+
+    private void pollDeviceClientOnce() {
+        if (deviceClientPollInFlight) {
+            return;
+        }
+        loadSettings();
+        if (gatewayUrl.isEmpty()) {
+            return;
+        }
+
+        JSONObject heartbeat;
+        JSONObject claim;
+        try {
+            heartbeat = deviceClientHeartbeatBody();
+            claim = deviceClientClaimBody();
+        } catch (JSONException error) {
+            return;
+        }
+
+        deviceClientPollInFlight = true;
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        new Thread(() -> {
+            try {
+                MoaGatewayClient client = new MoaGatewayClient(url, token);
+                client.deviceHeartbeat(heartbeat);
+                JSONObject claimed = client.claimToolRequest(claim);
+                JSONObject request = claimed.optJSONObject("request");
+                if (request != null && !request.optString("id", "").trim().isEmpty()) {
+                    mainHandler.post(() -> executeClaimedToolRequest(request));
+                }
+            } catch (Exception ignored) {
+                // The device heartbeat is best-effort background infrastructure.
+            } finally {
+                deviceClientPollInFlight = false;
+            }
+        }, "moa-device-client").start();
+    }
+
+    private JSONObject deviceClientHeartbeatBody() throws JSONException {
+        JSONObject body = new JSONObject();
+        body.put("device_id", androidDeviceId());
+        body.put("surface_type", "android");
+        body.put("session_id", conversationId);
+        body.put("status", "online");
+        body.put("local_tool_manifest", androidLocalToolManifest());
+
+        JSONObject metadata = new JSONObject();
+        metadata.put("source", "android-overlay");
+        metadata.put("screen_access_enabled", actionBroker.isScreenAccessEnabled());
+        metadata.put("screen_access_running", actionBroker.isScreenAccessRunning());
+        metadata.put("overlay_running", true);
+        body.put("metadata", metadata);
+        return body;
+    }
+
+    private JSONObject deviceClientClaimBody() throws JSONException {
+        JSONObject body = new JSONObject();
+        body.put("device_id", androidDeviceId());
+        body.put("surface_type", "android");
+        body.put("local_tool_manifest", androidLocalToolManifest());
+        return body;
+    }
+
+    private JSONArray androidLocalToolManifest() throws JSONException {
+        JSONArray manifest = new JSONArray();
+        putToolManifestItem(manifest, "app.launch", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "system.back", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "system.home", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "screen.summary", "read_only", "none");
+        putToolManifestItem(manifest, "screen.tap_text", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "audio.speak", "local_output", "implicit_user_command");
+        return manifest;
+    }
+
+    private void putToolManifestItem(JSONArray manifest, String tool, String risk, String approval) throws JSONException {
+        JSONObject item = new JSONObject();
+        item.put("tool", tool);
+        item.put("risk", risk);
+        item.put("approval", approval);
+        manifest.put(item);
+    }
+
+    private void executeClaimedToolRequest(JSONObject request) {
+        String requestId = safe(request.optString("id", ""));
+        String tool = safe(request.optString("tool", ""));
+        JSONObject input = request.optJSONObject("input");
+        if (input == null) {
+            input = new JSONObject();
+        }
+        ToolRequestExecution execution;
+        if ("audio.speak".equals(tool)) {
+            execution = executeAudioSpeakRequest(input);
+        } else {
+            MoaActionBroker.ToolExecutionResult result = actionBroker.executeToolRequest(tool, input);
+            execution = new ToolRequestExecution(result.success, result.reply, result.receipt);
+        }
+
+        String message = execution.success
+                ? "Cross-device request completed: " + execution.summary
+                : "Cross-device request failed: " + execution.summary;
+        addMessage(true, message);
+        if (!requestId.isEmpty()) {
+            postToolRequestReceipt(requestId, execution);
+        }
+    }
+
+    private ToolRequestExecution executeAudioSpeakRequest(JSONObject input) {
+        String text = safe(input.optString("text", input.optString("message", input.optString("utterance", ""))));
+        if (text.isEmpty()) {
+            JSONObject receipt = MoaActionReceiptStore.record(this, "audio.speak", "local_output", "implicit_user_command", "", false, "Speech text is required.");
+            return new ToolRequestExecution(false, "Speech text is required.", receipt);
+        }
+        boolean spoken = voiceController != null && voiceController.speak(text);
+        JSONObject receipt = MoaActionReceiptStore.record(
+                this,
+                "audio.speak",
+                "local_output",
+                "implicit_user_command",
+                "device_speaker",
+                spoken,
+                spoken ? "Spoke requested text." : "TextToSpeech was unavailable."
+        );
+        return new ToolRequestExecution(spoken, spoken ? "Spoke requested text." : "TextToSpeech was unavailable.", receipt);
+    }
+
+    private void postToolRequestReceipt(String requestId, ToolRequestExecution execution) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("device_id", androidDeviceId());
+            body.put("ok", execution.success);
+            body.put("summary", execution.summary);
+            if (!execution.success) {
+                body.put("error", execution.summary);
+            }
+            JSONObject result = new JSONObject();
+            result.put("reply", execution.summary);
+            body.put("result", result);
+            if (execution.receipt != null) {
+                body.put("local_receipt", execution.receipt);
+            }
+        } catch (JSONException error) {
+            return;
+        }
+
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        new Thread(() -> {
+            try {
+                new MoaGatewayClient(url, token).toolRequestReceipt(requestId, body);
+            } catch (Exception ignored) {
+                // The local action already happened and was recorded locally.
+            }
+        }, "moa-tool-receipt").start();
     }
 
     private void trackAgentRunsFromResponse(JSONObject response) {
@@ -1402,7 +1880,7 @@ public final class OverlayService extends Service {
     }
 
     private String spokenAgentPrompt(String text) {
-        return "The user spoke this from the Moa Android overlay and expects forward progress, not a chat-only answer.\n\n"
+        return "The user spoke this from the A.G. Android overlay and expects forward progress, not a chat-only answer.\n\n"
                 + "User request:\n"
                 + safe(text)
                 + "\n\nWork in the configured repository. Inspect the current state, make the smallest useful code changes, run the relevant verification, and report the result plainly. Ask for clarification only if the task is genuinely blocked.";
@@ -1428,28 +1906,160 @@ public final class OverlayService extends Service {
             return "Build the debug APK with ./gradlew assembleDebug, then install it with adb install app/build/outputs/apk/debug/app-debug.apk.";
         }
         if (lower.contains("gemini") || lower.contains("replace")) {
-            return "The replacement shape is clear: one always-available Moa circle, local overlay controls, voice capture, and your model gateway behind it.";
+            return "The replacement shape is clear: one always-available A.G. circle, local overlay controls, voice capture, and your model gateway behind it.";
         }
         return "I heard you. The product loop is: capture the command fast, keep context from the current screen, answer in place, and stay out of the way.";
     }
 
-    // TAP the orb = text. Open the chat panel to read the conversation and type.
-    // If voice is mid-flight, a tap cuts it instead of opening the panel ("shut
-    // up" by touch). A second tap closes the panel.
+    // TAP the orb = chat menu. Voice is reserved for double-click-and-hold, so
+    // a normal click never commits, stops, or starts a spoken turn.
     private void handleOrbSingleTap() {
-        if (streamingVoiceActive() || voiceController.isActive()) {
+        showPanel();
+    }
+
+    private void startPushToTalkVoiceTurn() {
+        if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
             dismissOverlayUi();
+        }
+        loadSettings();
+        pushToTalkVoiceTurn = true;
+        if (streamingVoiceAvailable()) {
+            continuousVoiceLoop = false;
+            cancelContinuousVoiceRestart();
+            cancelVoiceSampler();
+            if (orbView != null) {
+                orbView.setHeld(true);
+            }
+            nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+            nextManualVoiceFollowsActiveRun = false;
+            startStreamingVoiceTurn(false, false);
             return;
         }
-        togglePanel();
+        startLocalVoiceTurn(true);
+    }
+
+    private void handleOrbVoicePressRelease() {
+        if (!pushToTalkVoiceTurn) {
+            return;
+        }
+        pushToTalkVoiceTurn = false;
+        if (orbView != null) {
+            orbView.setHeld(false);
+        }
+        if (streamingVoiceActive() && streamingVoiceController != null) {
+            commitStreamingVoiceTurnNow();
+            return;
+        }
+        if (voiceController.isCommandListening()) {
+            voiceController.commitCurrentSpeech();
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            updateMicState();
+            return;
+        }
+        updateMicState();
+    }
+
+    private void commitStreamingVoiceTurnNow() {
+        MoaStreamingVoiceSessionController controller = streamingVoiceController;
+        if (controller == null) {
+            return;
+        }
+        currentStreamingTurnCommitRequested = true;
+        String transcript = visibleVoiceContent(currentStreamingTranscript);
+        if (!transcript.isEmpty()) {
+            updateVoiceUserTranscript(transcript, true);
+        } else {
+            showTranscriptOverlay("");
+        }
+        // Show a distinct "sending" state on release. It becomes THINKING once
+        // the gateway acks the commit or the first turn event arrives.
+        setVoiceRuntimeState(VoiceRuntimeState.SENDING);
+        updateMicState();
+        if (routeCommittedStreamingTranscriptIfNeeded(transcript)) {
+            return;
+        }
+        armStreamingTurnWatchdog(streamingVoiceGeneration);
+        controller.commitTurn();
+    }
+
+    // If a committed streaming turn produces no transcript/assistant/turn_done
+    // event within the watchdog window, tear it down, show a short error, and
+    // reset the orb so the user can retry immediately.
+    private void armStreamingTurnWatchdog(int generation) {
+        cancelStreamingTurnWatchdog();
+        pendingStreamingTurnWatchdog = () -> {
+            pendingStreamingTurnWatchdog = null;
+            if (!isCurrentStreamingGeneration(generation)) {
+                return;
+            }
+            Log.w(TAG, "streaming turn watchdog fired; tearing down stalled turn");
+            if (streamingVoiceActive()) {
+                cancelStreamingVoice();
+            }
+            String failure = "No response from voice gateway. Tap to try again.";
+            updateVoiceAssistantTranscript(failure);
+            setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+            continuousVoiceLoop = false;
+            updateMicState();
+            scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
+        };
+        mainHandler.postDelayed(pendingStreamingTurnWatchdog, STREAMING_TURN_WATCHDOG_MS);
+    }
+
+    private void cancelStreamingTurnWatchdog() {
+        if (pendingStreamingTurnWatchdog != null) {
+            mainHandler.removeCallbacks(pendingStreamingTurnWatchdog);
+            pendingStreamingTurnWatchdog = null;
+        }
+    }
+
+    // The turn is making progress (commit acked or first event in). Stop the
+    // watchdog and move the visible state from "sending" to "thinking".
+    private void markStreamingTurnProgressing() {
+        cancelStreamingTurnWatchdog();
+        if (voiceRuntimeState == VoiceRuntimeState.SENDING) {
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+        }
+    }
+
+    private boolean routeCommittedStreamingTranscriptIfNeeded(String transcript) {
+        String value = safe(transcript);
+        if (value.isEmpty() || currentStreamingTurnRouted) {
+            return false;
+        }
+        if (nextStreamingTurnFollowsActiveRun || !activeAgentRuns.isEmpty()) {
+            currentStreamingTurnRouted = true;
+            currentStreamingTurnCommitRequested = false;
+            nextStreamingTurnFollowsActiveRun = false;
+            addMessage(false, value);
+            updateVoiceUserTranscript(value, true);
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            requestAgentRunFollowUp(value, true);
+            MoaStreamingVoiceSessionController controller = streamingVoiceController;
+            if (controller != null) {
+                controller.cancel();
+            }
+            updateMicState();
+            return true;
+        }
+        if (shouldRouteStreamingTranscriptThroughMoa(value)) {
+            routeStreamingTranscriptThroughMoa(value);
+            return true;
+        }
+        return false;
     }
 
     // Close every overlay surface except the orb: the chat panel, the voice
     // transcript card, and any live voice turn. Hide the keyboard too.
     private void dismissOverlayUi() {
+        pushToTalkVoiceTurn = false;
+        continuousVoiceLoop = false;
+        nextManualVoiceFollowsActiveRun = false;
+        cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
             cancelStreamingVoice();
         }
+        cancelVoiceSampler();
         voiceController.stopQuietly();
         removeTranscriptOverlay();
         hideKeyboard();
@@ -1460,38 +2070,53 @@ public final class OverlayService extends Service {
         updateMicState();
     }
 
-    // HOLD the orb = voice. Press-and-hold begins a streaming voice turn and
-    // lights the orb (shadow/glow). A held turn cuts off any reply still playing
-    // (barge-in); while an agent is mid-run it steers that run.
-    private void handleOrbHoldStart() {
-        voiceController.stopQuietly();
-        if (orbView != null) {
-            orbView.setHeld(true);
-        }
-        if (!activeAgentRuns.isEmpty()) {
-            nextStreamingTurnFollowsActiveRun = true;
-        } else {
-            nextStreamingTurnFollowsActiveRun = false;
-        }
-        resetVoiceTurnTranscript();
-        showTranscriptOverlay("");
-        setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
-        startStreamingVoiceTurn();
-    }
-
-    // Releasing the hold sends what was heard and drops the held glow.
-    private void handleOrbHoldRelease() {
+    // Used when the full app opens. Keep the foreground service and orb alive,
+    // but remove large overlay surfaces so settings and operational status are
+    // usable without the overlay stealing focus.
+    private void collapseInteractiveSurfaces() {
+        cancelVoiceSampler();
+        removeTranscriptOverlay();
+        hideKeyboard();
+        removePanel();
         if (orbView != null) {
             orbView.setHeld(false);
         }
+        updateMicState();
+    }
+
+    // DOUBLE-CLICK-AND-HOLD the orb = manual voice. Capture starts once the
+    // second press is held briefly, and release commits without provider VAD.
+    private void handleOrbDoublePressStart() {
+        startPushToTalkVoiceTurn();
+    }
+
+    private void startLocalVoiceTurn(boolean manualCommitOnly) {
+        continuousVoiceLoop = false;
+        cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
-            streamingVoiceController.commitTurn();
-            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
-            updateMicState();
+            cancelStreamingVoice();
         }
+        cancelVoiceSampler();
+        if (orbView != null) {
+            orbView.setHeld(true);
+        }
+        nextManualVoiceFollowsActiveRun = !activeAgentRuns.isEmpty();
+        nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+        resetVoiceTurnTranscript();
+        showTranscriptOverlay("");
+        setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+        voiceController.startCommandListening(manualCommitOnly);
+    }
+
+    private boolean streamingVoiceAvailable() {
+        return !safe(gatewayUrl).isEmpty() && !safe(gatewayToken).isEmpty();
     }
 
     private void cancelStreamingVoice() {
+        pushToTalkVoiceTurn = false;
+        continuousVoiceLoop = false;
+        cancelContinuousVoiceRestart();
+        cancelStreamingTurnWatchdog();
         if (streamingVoiceActive()) {
             streamingVoiceController.cancel();
             streamingVoiceController = null;
@@ -1503,6 +2128,13 @@ public final class OverlayService extends Service {
         voiceController.stopQuietly();
     }
 
+    private void cancelVoiceSampler() {
+        if (voiceSamplePlayer != null) {
+            voiceSamplePlayer.destroy();
+            voiceSamplePlayer = null;
+        }
+    }
+
     private void setComposerText(String text) {
         if (composer == null) {
             return;
@@ -1511,20 +2143,41 @@ public final class OverlayService extends Service {
         composer.setSelection(composer.getText().length());
     }
 
-    private void startStreamingVoiceTurn() {
+    private void startStreamingVoiceTurn(boolean autoCommitOnSilence) {
+        startStreamingVoiceTurn(autoCommitOnSilence, false);
+    }
+
+    private void startContinuousStreamingVoiceTurn() {
+        if (!streamingVoiceAvailable()) {
+            startLocalVoiceTurn(false);
+            return;
+        }
+        startStreamingVoiceTurn(true, true);
+    }
+
+    private void startStreamingVoiceTurn(boolean autoCommitOnSilence, boolean continuousLoop) {
         loadSettings();
+        Log.i(TAG, "startStreamingVoiceTurn autoCommit=" + autoCommitOnSilence
+                + " continuousLoop=" + continuousLoop
+                + " gatewayConfigured=" + !safe(gatewayUrl).isEmpty()
+                + " token=" + (safe(gatewayToken).isEmpty() ? "missing" : "set"));
+        cancelContinuousVoiceRestart();
+        cancelStreamingTurnWatchdog();
         if (streamingVoiceController != null) {
             streamingVoiceController.destroy();
         }
+        continuousVoiceLoop = continuousLoop;
         final int generation = ++streamingVoiceGeneration;
         currentStreamingTurnRouted = false;
         currentStreamingTurnCommitRequested = false;
         currentStreamingAssistantRecorded = false;
         currentStreamingTranscript = "";
+        streamingTranscriptAccumulator.reset();
+        streamingAssistantAudioPlaying = false;
         resetVoiceTurnTranscript();
         final String stableSessionId = conversationId.isEmpty() ? MoaPrefs.conversationId(this) : conversationId;
         updateConversationId(stableSessionId);
-        streamingVoiceController = new MoaStreamingVoiceSessionController(gatewayUrl, gatewayToken, MoaPrefs.spokenRepliesEnabled(this), stableSessionId, "default", new MoaStreamingVoiceSessionController.Callback() {
+        streamingVoiceController = new MoaStreamingVoiceSessionController(gatewayUrl, gatewayToken, MoaPrefs.spokenRepliesEnabled(this), stableSessionId, "default", autoCommitOnSilence, new MoaStreamingVoiceSessionController.Callback() {
             @Override
             public void onSessionStarted(String sessionId, String turnId) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -1541,7 +2194,14 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+                // If the user already released (commit deferred until now), the
+                // turn is in flight: promote to THINKING and drop the watchdog's
+                // "sending" state instead of falling back to LISTENING.
+                if (voiceRuntimeState == VoiceRuntimeState.SENDING || currentStreamingTurnCommitRequested) {
+                    markStreamingTurnProgressing();
+                } else {
+                    setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+                }
                 updateMicState();
             }
 
@@ -1573,9 +2233,11 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                currentStreamingTranscript = safe(text);
-                updateVoiceUserTranscript(currentStreamingTranscript, false);
-                setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+                markStreamingTurnProgressing();
+                String transcript = streamingTranscriptAccumulator.update(text);
+                currentStreamingTranscript = safe(transcript);
+                updateVoiceUserTranscript(currentStreamingTranscript, currentStreamingTurnCommitRequested);
+                setVoiceRuntimeState(currentStreamingTurnCommitRequested ? VoiceRuntimeState.THINKING : VoiceRuntimeState.LISTENING);
                 if (currentStreamingTurnCommitRequested && shouldRouteStreamingTranscriptThroughMoa(currentStreamingTranscript)) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript);
                 }
@@ -1586,7 +2248,8 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                String transcript = safe(text);
+                markStreamingTurnProgressing();
+                String transcript = safe(streamingTranscriptAccumulator.update(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
                     if (nextStreamingTurnFollowsActiveRun || !activeAgentRuns.isEmpty()) {
@@ -1609,6 +2272,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                markStreamingTurnProgressing();
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -1622,9 +2286,11 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                cancelStreamingTurnWatchdog();
                 if (currentStreamingTurnRouted) {
                     return;
                 }
+                streamingAssistantAudioPlaying = true;
                 setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
                 updateMicState();
             }
@@ -1637,7 +2303,12 @@ public final class OverlayService extends Service {
                 if (currentStreamingTurnRouted) {
                     return;
                 }
+                streamingAssistantAudioPlaying = false;
                 setVoiceRuntimeState(VoiceRuntimeState.READY);
+                if (pendingContinuousVoiceRestartAfterAudio) {
+                    pendingContinuousVoiceRestartAfterAudio = false;
+                    showReadyForNextVoiceTurn(generation);
+                }
             }
 
             @Override
@@ -1645,6 +2316,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                cancelStreamingTurnWatchdog();
                 if (transcriptionOnly && !currentStreamingTurnRouted && !currentStreamingTranscript.isEmpty()) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript, !voiceUserTranscriptFinal);
                     return;
@@ -1654,12 +2326,17 @@ public final class OverlayService extends Service {
                     recordCurrentStreamingAssistant();
                 }
                 if ("completed".equals(safe(status))) {
-                    showReadyForNextVoiceTurn();
+                    refreshVoiceProfile();
+                    if (streamingAssistantAudioPlaying) {
+                        pendingContinuousVoiceRestartAfterAudio = true;
+                        return;
+                    }
+                    showReadyForNextVoiceTurn(generation);
                     return;
                 }
                 mainHandler.postDelayed(() -> {
                     if (isCurrentStreamingGeneration(generation)) {
-                        showReadyForNextVoiceTurn();
+                        showReadyForNextVoiceTurn(generation);
                     }
                 }, 700);
             }
@@ -1669,9 +2346,16 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                cancelStreamingTurnWatchdog();
+                if (currentStreamingTurnRouted) {
+                    return;
+                }
+                if (continuousVoiceLoop && currentStreamingTranscript.isEmpty() && voiceAssistantTranscript.isEmpty()) {
+                    continuousVoiceLoop = false;
+                }
                 mainHandler.postDelayed(() -> {
                     if (isCurrentStreamingGeneration(generation)) {
-                        showReadyForNextVoiceTurn();
+                        showReadyForNextVoiceTurn(generation);
                     }
                 }, 700);
             }
@@ -1681,19 +2365,51 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                cancelStreamingTurnWatchdog();
                 nextStreamingTurnFollowsActiveRun = false;
+                if (isRecoverableStreamingVoiceError(message)) {
+                    recoverStreamingVoiceTurn(generation);
+                    return;
+                }
                 String failure = "Streaming voice failed: " + message;
                 addMessage(true, failure);
                 updateVoiceAssistantTranscript(failure);
                 setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+                continuousVoiceLoop = false;
                 mainHandler.postDelayed(() -> {
                     if (isCurrentStreamingGeneration(generation)) {
-                        showReadyForNextVoiceTurn();
+                        showReadyForNextVoiceTurn(generation);
                     }
                 }, 900);
             }
         });
         streamingVoiceController.startSession();
+    }
+
+    private boolean isRecoverableStreamingVoiceError(String message) {
+        String normalized = safe(message).toLowerCase(Locale.US);
+        return normalized.contains("gemini-live generation was interrupted")
+                || normalized.contains("failed to complete turn: gemini-live");
+    }
+
+    private void recoverStreamingVoiceTurn(int generation) {
+        Log.i(TAG, "recovering from interrupted streaming voice turn");
+        if (!currentStreamingTurnRouted) {
+            recordCurrentStreamingAssistant();
+        }
+        if (streamingVoiceController != null) {
+            streamingVoiceController.destroy();
+            streamingVoiceController = null;
+        }
+        streamingAssistantAudioPlaying = false;
+        pendingContinuousVoiceRestartAfterAudio = false;
+        setVoiceRuntimeState(VoiceRuntimeState.RECOVERING);
+        updateMicState();
+        mainHandler.postDelayed(() -> {
+            if (isCurrentStreamingGeneration(generation)) {
+                showReadyForNextVoiceTurn(generation);
+            }
+        }, 250);
     }
 
     private boolean isCurrentStreamingGeneration(int generation) {
@@ -1704,6 +2420,8 @@ public final class OverlayService extends Service {
         voiceUserTranscript = "";
         voiceAssistantTranscript = "";
         voiceUserTranscriptFinal = false;
+        voiceUserHiddenForAssistant = false;
+        animateNextAssistantRow = false;
         currentStreamingAssistantRecorded = false;
         renderVoiceTranscriptRows();
     }
@@ -1754,14 +2472,17 @@ public final class OverlayService extends Service {
         if (controller != null) {
             controller.cancel();
         }
+        updateMicState();
     }
 
-    private void showReadyForNextVoiceTurn() {
+    private void showReadyForNextVoiceTurn(int generation) {
         setVoiceRuntimeState(VoiceRuntimeState.READY);
         updateMicState();
-        if (voiceUserTranscript.isEmpty() && voiceAssistantTranscript.isEmpty()) {
-            scheduleAutoDismiss(1200);
+        if (continuousVoiceLoop && generation == streamingVoiceGeneration) {
+            scheduleContinuousVoiceRestart(generation);
+            return;
         }
+        scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
     }
 
     private boolean shouldStartVoice(Intent intent) {
@@ -1778,7 +2499,7 @@ public final class OverlayService extends Service {
 
     private void updateMicState() {
         if (orbView != null) {
-            orbView.setListening(voiceController.isActive() || streamingVoiceActive());
+            orbView.setListening(voiceController.isActive() || streamingVoiceActive() || voiceSamplePlayer != null);
         }
     }
 
@@ -1851,6 +2572,18 @@ public final class OverlayService extends Service {
                     : Math.min(parentSize, maxHeight);
             int cappedHeight = View.MeasureSpec.makeMeasureSpec(cap, View.MeasureSpec.AT_MOST);
             super.onMeasure(widthMeasureSpec, cappedHeight);
+        }
+    }
+
+    private static final class ToolRequestExecution {
+        final boolean success;
+        final String summary;
+        final JSONObject receipt;
+
+        ToolRequestExecution(boolean success, String summary, JSONObject receipt) {
+            this.success = success;
+            this.summary = summary == null ? "" : summary.trim();
+            this.receipt = receipt;
         }
     }
 

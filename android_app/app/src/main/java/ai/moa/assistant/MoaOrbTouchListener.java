@@ -2,122 +2,199 @@ package ai.moa.assistant;
 
 import android.content.Context;
 import android.os.Handler;
+import android.os.Looper;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.WindowManager;
 
-// Push-to-talk orb gestures:
-//   hold (press past HOLD_MS, no drag) -> onHoldStart, begin speaking
-//   release after a hold              -> onHoldRelease, send what was heard
-//   quick tap (release before HOLD_MS) -> onSingleTap, open the keyboard
-//   drag                              -> reposition the orb, no callback
+// Orb gestures, matched to the Android overlay contract:
+//   single tap             -> onSingleTap, chat menu
+//   first press and drag   -> reposition the orb, no callback
+//   double-click and hold  -> onDoublePressStart / onPressToTalkRelease
+// A single tap is confirmed only after the double-tap window passes, so the
+// chat menu never flashes before a double-click hold engages voice.
 final class MoaOrbTouchListener implements View.OnTouchListener {
-    // How long a press must be held before it engages voice. Shorter than the
-    // platform long-press so push-to-talk feels immediate, long enough that a
-    // normal tap never trips it.
-    private static final long HOLD_MS = 240;
+    private static final long DOUBLE_CLICK_HOLD_MS = 120;
+    private static final long SINGLE_TAP_MAX_MS = ViewConfiguration.getLongPressTimeout();
+    private static final long DOUBLE_TAP_TIMEOUT_MS = ViewConfiguration.getDoubleTapTimeout();
 
     private final Context context;
-    private final Handler mainHandler;
     private final WindowManager windowManager;
     private final OrbView orbView;
     private final WindowManager.LayoutParams orbParams;
-    private final Runnable onSingleTap;
-    private final Runnable onHoldStart;
-    private final Runnable onHoldRelease;
     private final int orbWindowDp;
     private final int edgeMarginDp;
+    private final Runnable onSingleTap;
+    private final Runnable onDoublePressStart;
+    private final Runnable onPressToTalkRelease;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final int touchSlop;
+    private final int doubleTapSlop;
 
     private int startX;
     private int startY;
     private float downX;
     private float downY;
+    private long downTimeMs;
     private boolean moved;
-    private boolean holdStarted;
-    private Runnable pendingHold;
+    private boolean doublePressPending;
+    private boolean doublePressActive;
+    private boolean lastTapCandidate;
+    private long lastTapUpTimeMs;
+    private float lastTapUpX;
+    private float lastTapUpY;
+    private Runnable pendingSingleTap;
+    private Runnable pendingDoublePressStart;
 
     MoaOrbTouchListener(
             Context context,
-            Handler mainHandler,
             WindowManager windowManager,
             OrbView orbView,
             WindowManager.LayoutParams orbParams,
             int orbWindowDp,
             int edgeMarginDp,
             Runnable onSingleTap,
-            Runnable onHoldStart,
-            Runnable onHoldRelease
+            Runnable onDoublePressStart,
+            Runnable onPressToTalkRelease
     ) {
         this.context = context;
-        this.mainHandler = mainHandler;
         this.windowManager = windowManager;
         this.orbView = orbView;
         this.orbParams = orbParams;
         this.orbWindowDp = orbWindowDp;
         this.edgeMarginDp = edgeMarginDp;
         this.onSingleTap = onSingleTap;
-        this.onHoldStart = onHoldStart;
-        this.onHoldRelease = onHoldRelease;
+        this.onDoublePressStart = onDoublePressStart;
+        this.onPressToTalkRelease = onPressToTalkRelease;
+        ViewConfiguration viewConfiguration = ViewConfiguration.get(context);
+        this.touchSlop = viewConfiguration.getScaledTouchSlop();
+        this.doubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
     }
 
     @Override
     public boolean onTouch(View view, MotionEvent event) {
-        switch (event.getActionMasked()) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            startX = orbParams.x;
+            startY = orbParams.y;
+            downX = event.getRawX();
+            downY = event.getRawY();
+            downTimeMs = event.getEventTime();
+            moved = false;
+
+            if (isSecondTap(event)) {
+                cancelPendingSingleTap();
+                beginPendingDoublePress();
+            } else {
+                cancelPendingSingleTap();
+                lastTapCandidate = false;
+                doublePressPending = false;
+                doublePressActive = false;
+            }
+        }
+
+        switch (action) {
             case MotionEvent.ACTION_DOWN:
-                cancelPendingHold();
-                startX = orbParams.x;
-                startY = orbParams.y;
-                downX = event.getRawX();
-                downY = event.getRawY();
-                moved = false;
-                holdStarted = false;
-                pendingHold = () -> {
-                    pendingHold = null;
-                    holdStarted = true;
-                    onHoldStart.run();
-                };
-                mainHandler.postDelayed(pendingHold, HOLD_MS);
                 return true;
             case MotionEvent.ACTION_MOVE:
-                // Once speaking, ignore movement so the orb stays put while held.
-                if (holdStarted) {
+                if (doublePressActive) {
                     return true;
                 }
                 int dx = Math.round(event.getRawX() - downX);
                 int dy = Math.round(event.getRawY() - downY);
-                if (Math.abs(dx) > dp(5) || Math.abs(dy) > dp(5)) {
+                if (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop) {
                     moved = true;
-                    cancelPendingHold();
+                    cancelPendingDoublePress();
                 }
                 orbParams.x = clampOrbX(startX + dx);
                 orbParams.y = clampOrbY(startY + dy);
                 windowManager.updateViewLayout(orbView, orbParams);
                 return true;
             case MotionEvent.ACTION_UP:
-                cancelPendingHold();
-                if (holdStarted) {
-                    onHoldRelease.run();
-                } else if (!moved) {
-                    onSingleTap.run();
-                }
-                return true;
             case MotionEvent.ACTION_CANCEL:
-                cancelPendingHold();
-                // A held turn interrupted by the system still sends what was heard.
-                if (holdStarted) {
-                    onHoldRelease.run();
+                cancelPendingDoublePress();
+                if (doublePressActive) {
+                    doublePressActive = false;
+                    lastTapCandidate = false;
+                    onPressToTalkRelease.run();
+                    return true;
                 }
+                if (doublePressPending) {
+                    doublePressPending = false;
+                    lastTapCandidate = false;
+                    return true;
+                }
+                if (moved || action == MotionEvent.ACTION_CANCEL || event.getEventTime() - downTimeMs > SINGLE_TAP_MAX_MS) {
+                    lastTapCandidate = false;
+                    return true;
+                }
+                scheduleSingleTap(event);
                 return true;
             default:
                 return false;
         }
     }
 
-    private void cancelPendingHold() {
-        if (pendingHold != null) {
-            mainHandler.removeCallbacks(pendingHold);
-            pendingHold = null;
+    private boolean isSecondTap(MotionEvent event) {
+        if (!lastTapCandidate || pendingSingleTap == null) {
+            return false;
         }
+        long elapsedMs = event.getEventTime() - lastTapUpTimeMs;
+        if (elapsedMs < 0 || elapsedMs > DOUBLE_TAP_TIMEOUT_MS) {
+            return false;
+        }
+        float dx = event.getRawX() - lastTapUpX;
+        float dy = event.getRawY() - lastTapUpY;
+        return dx * dx + dy * dy <= doubleTapSlop * doubleTapSlop;
+    }
+
+    private void scheduleSingleTap(MotionEvent event) {
+        cancelPendingSingleTap();
+        lastTapCandidate = true;
+        lastTapUpTimeMs = event.getEventTime();
+        lastTapUpX = event.getRawX();
+        lastTapUpY = event.getRawY();
+        pendingSingleTap = () -> {
+            pendingSingleTap = null;
+            if (lastTapCandidate) {
+                lastTapCandidate = false;
+                onSingleTap.run();
+            }
+        };
+        mainHandler.postDelayed(pendingSingleTap, DOUBLE_TAP_TIMEOUT_MS);
+    }
+
+    private void cancelPendingSingleTap() {
+        if (pendingSingleTap == null) {
+            return;
+        }
+        mainHandler.removeCallbacks(pendingSingleTap);
+        pendingSingleTap = null;
+    }
+
+    private void beginPendingDoublePress() {
+        doublePressPending = true;
+        lastTapCandidate = false;
+        cancelPendingDoublePress();
+        pendingDoublePressStart = () -> {
+            pendingDoublePressStart = null;
+            if (!doublePressPending || moved) {
+                return;
+            }
+            doublePressPending = false;
+            doublePressActive = true;
+            onDoublePressStart.run();
+        };
+        mainHandler.postDelayed(pendingDoublePressStart, DOUBLE_CLICK_HOLD_MS);
+    }
+
+    private void cancelPendingDoublePress() {
+        if (pendingDoublePressStart == null) {
+            return;
+        }
+        mainHandler.removeCallbacks(pendingDoublePressStart);
+        pendingDoublePressStart = null;
     }
 
     private int clampOrbX(int value) {

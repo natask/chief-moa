@@ -7,7 +7,7 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">#07110D</item>
         <item name="android:navigationBarColor">#07110D</item>
-        <item name="android:colorAccent">#61E5C6</item>
+        <item name="android:colorAccent">#F4D35E</item>
     </style>
 
     <style name="AssistTheme" parent="android:style/Theme.Material.NoActionBar">

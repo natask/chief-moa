@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 "use strict";
 
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { WebSocket } = require("ws");
 
 const target = process.argv[2] || process.env.MOA_VOICE_WS_URL || "ws://127.0.0.1:8787/v1/voice/sessions";
 const token = process.argv[3] || process.env.MOA_GATEWAY_TOKEN || "";
+const timeoutMs = Number(process.env.MOA_VOICE_SMOKE_TIMEOUT_MS || 30000);
+const smokeAudio = voiceSmokePcm();
 const sessionId = `smoke_${Date.now()}`;
 const turnId = `turn_${Date.now()}`;
 const requiredEvents = new Set([
@@ -21,7 +27,7 @@ const headers = token ? { Authorization: `Bearer ${token}` } : {};
 const ws = new WebSocket(target, { headers });
 const timeout = setTimeout(() => {
   fail(`timed out waiting for ${target}`);
-}, 10000);
+}, timeoutMs);
 
 ws.on("open", () => {
   ws.send(JSON.stringify({
@@ -51,7 +57,7 @@ ws.on("message", (data, isBinary) => {
 
   seenEvents.add(event.type);
   if (event.type === "session_ready") {
-    ws.send(generatePcm16Tone(16000, 220, 0.2, 320));
+    ws.send(smokeAudio);
     ws.send(JSON.stringify({
       type: "commit_turn",
       turn_id: turnId,
@@ -88,6 +94,7 @@ function finish() {
     target,
     session_id: sessionId,
     turn_id: turnId,
+    input_audio_bytes: smokeAudio.length,
     events: [...seenEvents],
     assistant_audio_bytes: audioBytes,
   }, null, 2));
@@ -100,6 +107,7 @@ function fail(message) {
     ok: false,
     target,
     error: message,
+    input_audio_bytes: smokeAudio.length,
     events: [...seenEvents],
     assistant_audio_bytes: audioBytes,
   }, null, 2));
@@ -109,6 +117,61 @@ function fail(message) {
     // Ignore close errors during failure reporting.
   }
   process.exitCode = 1;
+}
+
+function voiceSmokePcm() {
+  const explicitPath = process.env.MOA_VOICE_SMOKE_PCM;
+  if (explicitPath) {
+    return fs.readFileSync(explicitPath);
+  }
+
+  if (process.platform !== "darwin") {
+    return generatePcm16Tone(16000, 220, 0.2, 1200);
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-voice-smoke-"));
+  const aiffPath = path.join(dir, "speech.aiff");
+  const pcmPath = path.join(dir, "speech.pcm");
+  try {
+    const say = spawnSync("say", [
+      "-o",
+      aiffPath,
+      "Say the word ready.",
+    ], {
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    if (say.status !== 0) {
+      return generatePcm16Tone(16000, 220, 0.2, 1200);
+    }
+
+    const ffmpeg = spawnSync("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      aiffPath,
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-f",
+      "s16le",
+      pcmPath,
+    ], {
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    if (ffmpeg.status !== 0) {
+      return generatePcm16Tone(16000, 220, 0.2, 1200);
+    }
+
+    const pcm = fs.readFileSync(pcmPath);
+    return pcm.length > 0 ? pcm : generatePcm16Tone(16000, 220, 0.2, 1200);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function generatePcm16Tone(sampleRate, frequencyHz, volume, durationMs) {

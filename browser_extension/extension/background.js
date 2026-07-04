@@ -3,50 +3,109 @@
 // provider API keys and no direct model calls live in the browser; the gateway
 // owns model routing and credentials.
 
-import { getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
-import { parseSettingsIntent, parseProfileQueryIntent } from "./settings-intent.js";
-import { parseBrowserTaskIntent } from "./browser-task-intent.js";
+import { gatewayUrlDiagnostic, getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
+import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
+import { parseBrowserTaskIntent, parseOpenTabIntent } from "./browser-task-intent.js";
+import { isStopCommand } from "./stop-intent.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
 // fills blanks — a value the user typed always wins.
 chrome.runtime.onInstalled.addListener(async () => {
   await seedGatewayConfig();
+  await ensureContentOnOpenTabs();
 });
 void seedGatewayConfig();
+chrome.runtime.onStartup.addListener(() => {
+  ensureContentOnOpenTabs().catch(() => {});
+});
 const MAX_ELEMENTS = 100;
 const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 // Cues run concurrently: the user keeps talking, each utterance is its own lane.
 // Keyed by cueId (a per-cue string), each value is { controller, tabId } so we
 // can cancel one cue or all cues on a tab without blocking new ones.
 const tasks = new Map();
+const voiceSessions = new Map();
+const MAX_PENDING_VOICE_EVENTS = 50;
+const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
+const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
+const VOICE_AUTO_COMMIT_ENABLED = true;
+const VOICE_AUTO_COMMIT_SILENCE_MS = 900;
+const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
+const VOICE_AUTO_COMMIT_MAX_RECORDING_MS = 18000;
+const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
+const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
+let activeAgentTabId = null;
+let creatingOffscreenVoiceDocument = null;
 
 async function getConfig() {
   return getEffectiveGatewayConfig();
+}
+
+function gatewayDiagnosticSuffix(gatewayUrl) {
+  const diagnostic = gatewayUrlDiagnostic(gatewayUrl);
+  return diagnostic.message ? ` ${diagnostic.message}` : "";
+}
+
+function formatGatewayNetworkError(gatewayUrl, path, error) {
+  const detail = String(error?.message || error || "").trim();
+  const detailSuffix = detail && detail !== "Failed to fetch" ? ` (${detail})` : "";
+  return `Could not reach the configured gateway ${gatewayUrl || "(unset)"} while calling ${path}. Check DNS, TLS, and the saved gateway URL.${gatewayDiagnosticSuffix(gatewayUrl)}${detailSuffix}`;
+}
+
+function formatGatewayHttpError(cfg, path, resp, text) {
+  const gatewayUrl = cfg.gatewayUrl || "(unset)";
+  const body = String(text || "").trim().slice(0, 300);
+  const diagnostic = gatewayUrlDiagnostic(cfg.gatewayUrl);
+  const staleOrLocal = diagnostic.code === "stale_or_local_url";
+  const voiceRoute = path.startsWith("/v1/voice/");
+
+  if ((resp.status === 401 || resp.status === 403) && path === "/v1/voice/session-ticket") {
+    return `Gateway reachable at ${gatewayUrl}, but the voice ticket was denied (${resp.status}). Check the device token in A.G. Options.`;
+  }
+  if (resp.status === 401 || resp.status === 403) {
+    if (staleOrLocal) {
+      return `Gateway reachable at ${gatewayUrl}, but the saved token may belong to a different gateway. Confirm the stable VPS URL, then re-register or paste a fresh token. ${diagnostic.message}`;
+    }
+    return cfg.gatewayToken
+      ? `Gateway reachable at ${gatewayUrl}, but the saved token was rejected (${resp.status}). Re-register this browser or paste a fresh token in A.G. Options.`
+      : `Gateway reachable at ${gatewayUrl}, but this route requires a device token (${resp.status}). Add the Gateway token in A.G. Options.`;
+  }
+  if (resp.status === 404 && voiceRoute) {
+    return `Gateway reachable at ${gatewayUrl}, but voice routes are not deployed at this URL (${path} returned 404).`;
+  }
+  return `Gateway ${gatewayUrl} returned ${resp.status} for ${path}${body ? `: ${body}` : ""}`;
+}
+
+function formatVoiceSocketNetworkError(cfg, ticket, reason) {
+  const gatewayUrl = cfg.gatewayUrl || "(unset)";
+  const detail = String(reason || "").trim();
+  const ticketHint = ticket?.ws_url ? " The gateway returned a voice ticket, but the socket did not open." : "";
+  return `Voice socket could not connect for configured gateway ${gatewayUrl}.${ticketHint} Check Cloudflare WebSocket proxying, TLS, and the gateway voice route.${gatewayDiagnosticSuffix(gatewayUrl)}${detail ? ` (${detail})` : ""}`;
 }
 
 // Pipe a request into the user's own agent gateway instead of the model vendor.
 // Returns the parsed JSON body for the given path (e.g. "/v1/chat", "/health").
 async function callGateway(cfg, path, { method = "POST", body, signal } = {}) {
   if (!cfg.gatewayUrl) {
-    throw new Error("No gateway URL set. Open agee Options and set the Agent gateway URL.");
+    throw new Error("No gateway URL set. Open A.G. Options and set the Agent gateway URL.");
   }
   const headers = { "content-type": "application/json" };
   if (cfg.gatewayToken) headers.authorization = `Bearer ${cfg.gatewayToken}`;
-  const resp = await fetch(`${cfg.gatewayUrl}${path}`, {
-    method,
-    signal,
-    headers,
-    body: body == null ? undefined : JSON.stringify(body),
-  });
+  let resp;
+  try {
+    resp = await fetch(`${cfg.gatewayUrl}${path}`, {
+      method,
+      signal,
+      headers,
+      body: body == null ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new Error(formatGatewayNetworkError(cfg.gatewayUrl, path, error));
+  }
   const text = await resp.text();
   if (!resp.ok) {
-    if (resp.status === 401) {
-      throw new Error(
-        "Gateway rejected the token (401). Open agee Options and set a valid Gateway token, then Save."
-      );
-    }
-    throw new Error(`gateway ${resp.status}: ${text.slice(0, 300)}`);
+    throw new Error(formatGatewayHttpError(cfg, path, resp, text));
   }
   if (resp.status === 204 || !text.trim()) {
     return null;
@@ -69,17 +128,28 @@ async function gatewayHealth(cfg, signal) {
 // receipt back to the gateway.
 const BROWSER_TASK_CLIENT_ID = `agee-extension-${chrome.runtime.id}`;
 const BROWSER_TASK_POLL_MS = 2000;
+const DEV_RELOAD_ALARM = "agee-dev-reload-poll";
+const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
+const DEV_RELOAD_POLL_MS = 1500;
+const DEVICE_CLIENT_HEARTBEAT_MS = 15000;
 let browserTaskPollInFlight = false;
 let browserTaskPollTimer = null;
+let browserToolRequestPollInFlight = false;
+let devReloadPollTimer = null;
+let devReloadPollInFlight = false;
+let deviceClientHeartbeatTimer = null;
+let deviceClientHeartbeatInFlight = false;
 
 function startBrowserTaskPolling() {
   if (!chrome?.storage?.local || !chrome?.alarms || !chrome?.debugger || !chrome?.tabs) return;
   if (browserTaskPollTimer) return;
   browserTaskPollTimer = setInterval(() => {
     pollBrowserTasks().catch(() => {});
+    pollBrowserToolRequests().catch(() => {});
   }, BROWSER_TASK_POLL_MS);
   chrome.alarms.create("agee-browser-task-poll", { periodInMinutes: 0.5 });
   pollBrowserTasks().catch(() => {});
+  pollBrowserToolRequests().catch(() => {});
 }
 
 async function pollBrowserTasks() {
@@ -105,6 +175,85 @@ async function pollBrowserTasks() {
     // reported as receipts when a task was claimed.
   } finally {
     browserTaskPollInFlight = false;
+  }
+}
+
+async function pollBrowserToolRequests() {
+  if (browserToolRequestPollInFlight) return;
+  browserToolRequestPollInFlight = true;
+  try {
+    const cfg = await getConfig();
+    if (!cfg.gatewayUrl) return;
+    const deviceId = await getStableDeviceId();
+    const claimed = await callGateway(cfg, "/v1/tool/requests/claim", {
+      body: {
+        device_id: deviceId,
+        surface_type: "browser_extension",
+        local_tool_manifest: browserLocalToolManifest(),
+      },
+    });
+    const request = claimed?.request;
+    if (!request?.id) return;
+    const receipt = await executeBrowserToolRequest(request);
+    await callGateway(cfg, `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, {
+      body: {
+        device_id: deviceId,
+        ...receipt,
+      },
+    });
+  } catch {
+    // Background polling stays quiet; claimed work reports through receipts.
+  } finally {
+    browserToolRequestPollInFlight = false;
+  }
+}
+
+async function executeBrowserToolRequest(request) {
+  const tool = String(request?.tool || "");
+  const input = request?.input && typeof request.input === "object" ? request.input : {};
+  try {
+    if (tool === "browser.tab.open") {
+      const url = allowedBrowserTaskUrl(input.url || input.href || input.target);
+      if (!url) {
+        return { ok: false, error: "blocked or invalid browser.tab.open URL", summary: "Browser tab open request was blocked." };
+      }
+      const tab = await chrome.tabs.create({ url, active: true });
+      return {
+        ok: true,
+        summary: `Browser opened ${tab.url || url}.`,
+        result: { tab_id: tab.id || null, url: tab.url || url },
+        local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "page.snapshot") {
+      const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+      if (!active?.id) {
+        return { ok: false, error: "no active tab", summary: "No active browser tab was available." };
+      }
+      await ensureContent(active.id);
+      const snap = await ask(active.id, { cmd: "snapshot" });
+      return {
+        ok: true,
+        summary: `Captured page snapshot for ${snap?.title || active.title || "active tab"}.`,
+        result: { screen: snapToScreen(snap) },
+        local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "browser.task.claim") {
+      return {
+        ok: true,
+        summary: "Browser queued-task claim loop is active.",
+        local_receipt: { tool, success: true },
+      };
+    }
+    return { ok: false, error: `unsupported browser tool: ${tool}`, summary: `Unsupported browser tool: ${tool}` };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message || error),
+      summary: `Browser tool request failed: ${tool}`,
+      local_receipt: { tool, success: false },
+    };
   }
 }
 
@@ -193,6 +342,18 @@ async function executeGatewayBrowserTask(task) {
 async function browserTaskStartUrl(task) {
   const explicit = allowedBrowserTaskUrl(task?.url);
   if (explicit) return explicit;
+  const owner = await getActiveBrowserAgentOwner();
+  const ownerTabId = Number(owner?.tab_id ?? owner?.tabId);
+  if (Number.isFinite(ownerTabId)) {
+    try {
+      const tab = await chrome.tabs.get(ownerTabId);
+      const ownerUrl = allowedBrowserTaskUrl(tab?.url || owner?.page_url);
+      if (ownerUrl) return ownerUrl;
+    } catch {
+      const ownerUrl = allowedBrowserTaskUrl(owner?.page_url);
+      if (ownerUrl) return ownerUrl;
+    }
+  }
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   return allowedBrowserTaskUrl(active?.url);
 }
@@ -248,10 +409,183 @@ if (chrome?.alarms?.onAlarm) {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === "agee-browser-task-poll") {
       pollBrowserTasks().catch(() => {});
+      pollBrowserToolRequests().catch(() => {});
+    } else if (alarm.name === DEV_RELOAD_ALARM) {
+      pollDevReloadVersion("alarm").catch(() => {});
     }
   });
 }
 startBrowserTaskPolling();
+startDevReloadPolling().catch(() => {});
+startDeviceClientHeartbeat().catch(() => {});
+reloadDevTabsAfterExtensionRestart().catch(() => {});
+
+// ---- Gateway device-client heartbeat --------------------------------------
+// The gateway is the shared registry; the extension advertises only browser-local
+// capabilities. It does not execute phone actions and it never stores provider
+// keys.
+async function startDeviceClientHeartbeat() {
+  if (!chrome?.storage?.local) return;
+  if (deviceClientHeartbeatTimer) return;
+  deviceClientHeartbeatTimer = setInterval(() => {
+    heartbeatDeviceClient().catch(() => {});
+  }, DEVICE_CLIENT_HEARTBEAT_MS);
+  heartbeatDeviceClient().catch(() => {});
+}
+
+async function heartbeatDeviceClient() {
+  if (deviceClientHeartbeatInFlight) return;
+  deviceClientHeartbeatInFlight = true;
+  try {
+    const cfg = await getConfig();
+    if (!cfg.gatewayUrl) return;
+    const deviceId = await getStableDeviceId();
+    const sessionId = await getStableSessionId();
+    const owner = await getActiveBrowserAgentOwner();
+    await callGateway(cfg, "/v1/device-clients/heartbeat", {
+      body: {
+        device_id: deviceId,
+        surface_type: "browser_extension",
+        session_id: sessionId,
+        status: "online",
+        local_tool_manifest: browserLocalToolManifest(),
+        metadata: {
+          source: "agee-extension",
+          extension_id: chrome.runtime.id,
+          active_owner: owner || null,
+        },
+      },
+    });
+  } finally {
+    deviceClientHeartbeatInFlight = false;
+  }
+}
+
+function browserLocalToolManifest() {
+  return [
+    { tool: "browser.tab.open", risk: "navigation", approval: "implicit_user_command" },
+    { tool: "browser.task.claim", risk: "browser_local", approval: "none" },
+    { tool: "page.snapshot", risk: "read_only", approval: "none" },
+  ];
+}
+
+// ---- Developer auto-reload -----------------------------------------------
+// Disabled by default. The developer bridge (`dev.html`) opts this in by
+// writing ageeDevReloadEnabled + ageeDevReloadServer to storage. Once enabled,
+// the already-loaded extension can notice source edits without keeping the
+// bridge page open: active content scripts poll the dev server and this
+// background worker also polls while awake / via alarms.
+
+async function startDevReloadPolling() {
+  if (!chrome?.storage?.local || !chrome?.alarms) return;
+  const cfg = await devReloadConfig();
+  if (!cfg.enabled) return;
+  ensureDevReloadTimer();
+}
+
+function ensureDevReloadTimer() {
+  if (devReloadPollTimer) return;
+  devReloadPollTimer = setInterval(() => {
+    pollDevReloadVersion("interval").catch(() => {});
+  }, DEV_RELOAD_POLL_MS);
+  chrome.alarms.create(DEV_RELOAD_ALARM, { periodInMinutes: 0.5 });
+  pollDevReloadVersion("startup").catch(() => {});
+}
+
+async function stopDevReloadTimer() {
+  if (devReloadPollTimer) {
+    clearInterval(devReloadPollTimer);
+    devReloadPollTimer = null;
+  }
+  try {
+    await chrome.alarms.clear(DEV_RELOAD_ALARM);
+  } catch {}
+}
+
+async function devReloadConfig() {
+  const stored = await chrome.storage.local.get({
+    ageeDevReloadEnabled: false,
+    ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
+    ageeDevReloadVersion: null,
+  });
+  const server = String(stored.ageeDevReloadServer || DEV_RELOAD_DEFAULT_SERVER).replace(/\/+$/, "");
+  return {
+    enabled: Boolean(stored.ageeDevReloadEnabled),
+    server,
+    version: stored.ageeDevReloadVersion == null ? null : Number(stored.ageeDevReloadVersion),
+  };
+}
+
+async function fetchDevReloadVersion(server) {
+  const resp = await fetch(`${server}/__agee-dev/version?ts=${Date.now()}`, { cache: "no-store" });
+  if (!resp.ok) throw new Error(`dev server returned ${resp.status}`);
+  return resp.json();
+}
+
+async function pollDevReloadVersion(source) {
+  if (devReloadPollInFlight) return;
+  devReloadPollInFlight = true;
+  try {
+    const cfg = await devReloadConfig();
+    if (!cfg.enabled) {
+      await stopDevReloadTimer();
+      return;
+    }
+    const info = await fetchDevReloadVersion(cfg.server);
+    await maybeReloadForDevVersion(info, { server: cfg.server, previousVersion: cfg.version, source });
+  } catch {
+    // Dev server may be offline. Keep quiet; dev.html surfaces connection state.
+  } finally {
+    devReloadPollInFlight = false;
+  }
+}
+
+async function maybeReloadForDevVersion(info, { server, previousVersion, source }) {
+  const nextVersion = Number(info?.version || 0);
+  if (!nextVersion) return;
+  if (!previousVersion) {
+    await chrome.storage.local.set({ ageeDevReloadVersion: nextVersion });
+    return;
+  }
+  if (nextVersion === previousVersion) return;
+  await chrome.storage.local.set({
+    ageeDevReloadVersion: nextVersion,
+    ageeDevReloadPendingLocalhostRefresh: true,
+    ageeDevReloadLastReload: {
+      previousVersion,
+      nextVersion,
+      source,
+      server,
+      at: new Date().toISOString(),
+    },
+  });
+  chrome.runtime.reload();
+}
+
+async function reloadDevTabsAfterExtensionRestart() {
+  if (!chrome?.storage?.local || !chrome?.tabs) return;
+  const { ageeDevReloadPendingLocalhostRefresh } = await chrome.storage.local.get({
+    ageeDevReloadPendingLocalhostRefresh: false,
+  });
+  if (!ageeDevReloadPendingLocalhostRefresh) return;
+  await chrome.storage.local.set({ ageeDevReloadPendingLocalhostRefresh: false });
+  await reloadLocalhostTabs();
+}
+
+async function reloadLocalhostTabs() {
+  const tabs = await chrome.tabs.query({ url: ["http://localhost/*", "http://127.0.0.1/*"] });
+  await Promise.all(tabs.filter((tab) => tab.id).map((tab) => chrome.tabs.reload(tab.id).catch(() => {})));
+}
+
+if (chrome?.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (!changes.ageeDevReloadEnabled && !changes.ageeDevReloadServer) return;
+    const enabled = Boolean(changes.ageeDevReloadEnabled?.newValue);
+    if (enabled) ensureDevReloadTimer();
+    else if (changes.ageeDevReloadEnabled) stopDevReloadTimer().catch(() => {});
+  });
+}
 
 // ---- Router activation loop (the gateway side of a branch) -----------------
 // The sterile router on the gateway launches a disposable agent run and never
@@ -263,7 +597,8 @@ startBrowserTaskPolling();
 // `parentRunId` threads fan-out lineage so two concurrent activations share a
 // parent. The harness/echo output stays a proposal — we only render its summary.
 async function routerActivate(cfg, { intent, screen, parentRunId, signal }) {
-  const body = { intent, source: "agee-extension" };
+  const deviceId = await getStableDeviceId();
+  const body = { intent, source: "agee-extension", device_id: deviceId };
   if (screen) body.screen = screen;
   if (parentRunId) body.parent_run_id = parentRunId;
   const activation = await callGateway(cfg, "/v1/router/activate", { signal, body });
@@ -298,11 +633,17 @@ async function getGatewayProfile(cfg, signal) {
 
 // Patch + persist a profile change through the gateway (PUT /v1/agent/profile)
 // and cache the authoritative result so the settings surface stays in sync.
-async function putGatewayProfile(cfg, patch, signal, source = "agee-extension") {
+async function putGatewayProfile(cfg, patch, signal, source = "agee-extension", options = {}) {
+  const deviceId = await getStableDeviceId();
   const payload = await callGateway(cfg, "/v1/agent/profile", {
     method: "PUT",
     signal,
-    body: { profile: patch, source },
+    body: {
+      profile: patch,
+      source,
+      scope: options.scope || "global",
+      device_id: deviceId,
+    },
   });
   await chrome.storage.local.set({ [PROFILE_CACHE_KEY]: payload });
   return payload;
@@ -342,7 +683,7 @@ async function maybeApplySettingsChange(tabId, instruction, cfg, signal, cueId) 
   send(tabId, { cmd: "progress", cueId, text: "updating settings…" });
   throwIfAborted(signal);
 
-  await putGatewayProfile(cfg, intent.patch, signal, "agee-extension");
+  await putGatewayProfile(cfg, intent.patch, signal, "agee-extension", { scope: intent.scope || "global" });
   const summary = `Settings updated — ${intent.summary}. It takes effect on the next turn.`;
   send(tabId, { cmd: "done", cueId, summary });
   await saveTaskState(cueId, { status: "done", instruction, step: 1, lastResult: summary.slice(0, 400), tabId });
@@ -384,6 +725,26 @@ async function maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId) {
   return true;
 }
 
+// Voice/language/profile controls belong in the canonical gateway turn router,
+// even when typed. That path stores a profile_control turn and applies the
+// versioned profile update/query. Keep the direct PUT fallback below for older
+// extension-only tweaks the gateway parser does not yet understand.
+async function maybeRouteGatewayProfileControl(tabId, instruction, cfg, signal, cueId) {
+  if (!looksLikeGatewayProfileControlIntent(instruction)) {
+    return false;
+  }
+  const data = await runViaGateway(tabId, instruction, cfg, signal, cueId);
+  if (data?.classification === "profile_control") {
+    try {
+      const profilePayload = await getGatewayProfile(cfg, signal);
+      await chrome.storage.local.set({ [PROFILE_CACHE_KEY]: profilePayload });
+    } catch {
+      // The profile-control turn already completed; cache refresh is best-effort.
+    }
+  }
+  return true;
+}
+
 // Page tweaks are local-first page customizations, handled by tweaks.js in the
 // content world. This is deliberately before the model turn: bounded CSS tweaks
 // such as "hide the sidebar" should happen immediately, stay inspectable, and
@@ -413,7 +774,7 @@ async function maybeApplyPageTweak(tabId, instruction, signal, cueId) {
   }
 
   const tweak = result.tweak || {};
-  const summary = `Changed this page — ${tweak.label || "page tweak"} is now saved for ${result.origin || "this site"}.`;
+  const summary = `Changed this page — ${tweak.name || tweak.label || "page tweak"} is now saved for ${result.origin || "this site"}.`;
   send(tabId, { cmd: "done", cueId, summary, speak: summary });
   await saveTaskState(cueId, {
     status: "done",
@@ -431,7 +792,9 @@ function looksLikePageTweak(raw) {
   if (!raw) return false;
   return (
     /\b(hide|remove|get rid of|dismiss|kill)\b/i.test(raw) ||
-    /\b(dark mode|readable|narrow width|make (?:the )?(?:text|font) (?:bigger|larger|smaller))\b/i.test(raw)
+    /\b(dark mode|readable|narrow width|make (?:the )?(?:text|font) (?:bigger|larger|smaller))\b/i.test(raw) ||
+    /\b(?:make|turn|set)\b.*\b(?:it|this|page|site|background|screen)\b.*\bblack\b/i.test(raw) ||
+    /\ball black\b|\bblack (?:page|background|mode|theme)\b/i.test(raw)
   );
 }
 
@@ -460,6 +823,95 @@ async function getStableSessionId() {
   return sessionId;
 }
 
+async function getStableDeviceId() {
+  const { ageeDeviceId } = await chrome.storage.local.get("ageeDeviceId");
+  if (ageeDeviceId) return ageeDeviceId;
+  const deviceId = `browser_${crypto.randomUUID().replace(/-/g, "")}`;
+  await chrome.storage.local.set({ ageeDeviceId: deviceId });
+  return deviceId;
+}
+
+async function getActiveBrowserAgentOwner() {
+  const stored = await chrome.storage.local.get(ACTIVE_BROWSER_AGENT_OWNER_KEY);
+  return stored[ACTIVE_BROWSER_AGENT_OWNER_KEY] || null;
+}
+
+async function setActiveBrowserAgentOwner(tabId, reason = "browser agent owner changed", patch = {}) {
+  if (tabId == null || !chrome?.storage?.local) return null;
+  let tab = null;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {}
+  const sessionId = await getStableSessionId();
+  const owner = {
+    browser_session_id: sessionId,
+    tab_id: tabId,
+    window_id: tab?.windowId ?? patch.window_id ?? null,
+    page_url: tab?.url || patch.page_url || "",
+    page_title: tab?.title || patch.page_title || "",
+    cue_id: patch.cue_id || patch.cueId || null,
+    voice_session_id: patch.voice_session_id || patch.voiceSessionId || null,
+    agent_run_id: patch.agent_run_id || patch.agentRunId || null,
+    status: patch.status || "active",
+    last_result: patch.last_result || patch.lastResult || "",
+    reason,
+    updated_at: new Date().toISOString(),
+  };
+  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: owner });
+  await notifyBrowserAgentOwner(owner);
+  return owner;
+}
+
+async function updateActiveBrowserAgentOwner(patch = {}) {
+  const owner = await getActiveBrowserAgentOwner();
+  if (!owner) return null;
+  const next = {
+    ...owner,
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: next });
+  await notifyBrowserAgentOwner(next);
+  return next;
+}
+
+async function updateActiveBrowserAgentOwnerFromTask(cueId, patch) {
+  if (!patch || patch.tabId == null) return;
+  const owner = await getActiveBrowserAgentOwner();
+  if (!owner || owner.tab_id !== patch.tabId) return;
+  if (owner.cue_id && cueId && owner.cue_id !== cueId) return;
+  await updateActiveBrowserAgentOwner({
+    cue_id: cueId || owner.cue_id || null,
+    status: patch.status || owner.status || "active",
+    last_result: patch.lastResult || owner.last_result || "",
+  });
+}
+
+async function clearActiveBrowserAgentOwner(tabId, reason = "browser agent owner cleared") {
+  const owner = await getActiveBrowserAgentOwner();
+  if (!owner || (tabId != null && owner.tab_id !== tabId)) return;
+  const cleared = {
+    ...owner,
+    status: "cleared",
+    reason,
+    updated_at: new Date().toISOString(),
+  };
+  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: cleared });
+  await notifyBrowserAgentOwner(cleared);
+}
+
+async function notifyBrowserAgentOwner(owner) {
+  if (!chrome?.tabs) return;
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] }).catch(() => []);
+  await Promise.allSettled(tabs.filter((tab) => tab.id != null).map((tab) => (
+    chrome.tabs.sendMessage(tab.id, {
+      cmd: "browserAgentOwnerChanged",
+      owner,
+      isOwner: owner?.tab_id === tab.id && owner?.status !== "cleared",
+    }).catch(() => {})
+  )));
+}
+
 // Read the persisted conversation's ordered turns from the gateway so the
 // overlay can render prior turns when it reopens. Returns [] when nothing is
 // configured/stored yet (a fresh conversation simply has no history).
@@ -470,6 +922,26 @@ async function loadHistory(cfg) {
     method: "GET",
   });
   return Array.isArray(data?.turns) ? data.turns : [];
+}
+
+async function createVoiceSessionTicket(cfg, signal) {
+  const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
+  const data = await callGateway(cfg, "/v1/voice/session-ticket", {
+    signal,
+    body: {
+      source: "agee-extension",
+      device_id: deviceId,
+      session_id: sessionId,
+      conversation_id: sessionId,
+    },
+  });
+  return {
+    ...data,
+    session_id: sessionId,
+    conversation_id: sessionId,
+    device_id: deviceId,
+  };
 }
 
 // Conversational turn through the user's gateway (/v1/voice/turns).
@@ -493,14 +965,23 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
   // accumulates them (and the overlay can reload them). The cueId becomes the
   // branch_id, preserving per-cue distinction without fragmenting the session.
   const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
   const data = await callGateway(cfg, "/v1/voice/turns", {
     signal,
     body: {
       source: "agee-extension",
+      device_id: deviceId,
       session_id: sessionId,
       conversation_id: sessionId,
       branch_id: cueId,
+      all_branches_context: true,
       transcript: instruction,
+      client: {
+        platform: "browser",
+        source: "agee-extension",
+        device_id: deviceId,
+        input: "text",
+      },
       screen,
     },
   });
@@ -520,6 +1001,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
     tabId,
     lastResult: `[${data.classification || "chat"}] ${summary.slice(0, 400)}`,
   });
+  return data;
 }
 
 function send(tabId, msg) {
@@ -539,8 +1021,495 @@ async function ensureContent(tabId) {
   }
 }
 
+async function ensureContentOnOpenTabs() {
+  if (!chrome?.tabs || !chrome?.scripting) return;
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+  await Promise.allSettled(tabs.filter((tab) => tab.id != null).map((tab) => ensureContent(tab.id)));
+}
+
 function throwIfAborted(signal) {
   if (signal?.aborted) throw new Error("Task cancelled.");
+}
+
+function bytesToBase64(buffer) {
+  const bytes = new Uint8Array(buffer || 0);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBuffer(value) {
+  const binary = atob(String(value || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function voiceSessionId() {
+  return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function hasOffscreenVoiceDocument() {
+  if (!chrome?.offscreen) return false;
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_VOICE_DOCUMENT);
+  if (chrome.runtime.getContexts) {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+      documentUrls: [offscreenUrl],
+    });
+    return contexts.length > 0;
+  }
+  const clients = await self.clients.matchAll();
+  return clients.some((client) => client.url === offscreenUrl);
+}
+
+async function ensureOffscreenVoiceDocument() {
+  if (!chrome?.offscreen?.createDocument) {
+    throw new Error("Extension microphone capture is not supported in this Chrome build.");
+  }
+  if (await hasOffscreenVoiceDocument()) return;
+  if (!creatingOffscreenVoiceDocument) {
+    creatingOffscreenVoiceDocument = chrome.offscreen.createDocument({
+      url: OFFSCREEN_VOICE_DOCUMENT,
+      reasons: ["USER_MEDIA"],
+      justification: "A.G. captures microphone audio from the extension origin and streams it to the configured gateway.",
+    }).finally(() => {
+      creatingOffscreenVoiceDocument = null;
+    });
+  }
+  await creatingOffscreenVoiceDocument;
+}
+
+function extensionMicApprovalMessage(error) {
+  const detail = String(error?.message || error || "").trim();
+  const suffix = detail ? ` (${detail})` : "";
+  return `A.G. could not open the extension microphone. Open the A.G. toolbar icon > Options, click "Grant microphone", and allow microphone access for the extension. If Chrome has blocked it, open chrome://extensions/?id=${chrome.runtime.id}, choose Details or Site settings, set Microphone to Allow, then start voice again.${suffix}`;
+}
+
+async function startOffscreenVoiceCapture(id) {
+  await ensureOffscreenVoiceDocument();
+  const response = await chrome.runtime.sendMessage({
+    cmd: "offscreenVoiceCaptureStart",
+    voiceSessionId: id,
+  });
+  if (!response?.ok) throw new Error(response?.error || "extension microphone capture did not start");
+}
+
+async function stopOffscreenVoiceCapture(id) {
+  if (!chrome?.offscreen) return;
+  if (!(await hasOffscreenVoiceDocument())) return;
+  await chrome.runtime
+    .sendMessage({
+      cmd: "offscreenVoiceCaptureStop",
+      voiceSessionId: id || null,
+    })
+    .catch(() => {});
+}
+
+function handleOffscreenVoiceError(id, error) {
+  const session = voiceSessions.get(id);
+  if (!session) return;
+  chrome.runtime.openOptionsPage?.().catch(() => {});
+  deliverVoiceSessionEvent(session, {
+    event: {
+      type: "error",
+      code: "microphone_capture_failed",
+      recoverable: false,
+      message: extensionMicApprovalMessage(error),
+    },
+  });
+  closeVoiceSession(id, "microphone capture failed");
+}
+
+function claimActiveAgentTab(tabId, reason = "another page became active", patch = {}) {
+  if (tabId == null) return;
+  const revokedTabs = new Map();
+
+  for (const [cueId, task] of [...tasks]) {
+    if (task.tabId === tabId) continue;
+    try {
+      task.controller.abort();
+    } catch {}
+    tasks.delete(cueId);
+    if (!revokedTabs.has(task.tabId)) revokedTabs.set(task.tabId, []);
+    revokedTabs.get(task.tabId).push(cueId);
+  }
+
+  for (const oldTabId of revokeOtherTabVoiceSessions(tabId, reason)) {
+    if (!revokedTabs.has(oldTabId)) revokedTabs.set(oldTabId, []);
+  }
+
+  for (const [oldTabId, cueIds] of revokedTabs) {
+    send(oldTabId, { cmd: "agentRevoked", cueIds, reason });
+  }
+  activeAgentTabId = tabId;
+  setActiveBrowserAgentOwner(tabId, reason, patch).catch(() => {});
+}
+
+function revokeOtherTabVoiceSessions(tabId, reason) {
+  const tabIds = new Set();
+  if (activeAgentTabId != null && activeAgentTabId !== tabId) tabIds.add(activeAgentTabId);
+  for (const [id, session] of [...voiceSessions]) {
+    if (session.tabId === tabId) continue;
+    tabIds.add(session.tabId);
+    closeVoiceSession(id, reason, { revoked: true });
+  }
+  return tabIds;
+}
+
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit } = {}) {
+  const cfg = await getConfig();
+  const ticket = await createVoiceSessionTicket(cfg);
+  if (!ticket?.ws_url) {
+    throw new Error(`Gateway reachable at ${cfg.gatewayUrl || "(unset)"}, but it did not return a voice session WebSocket URL.`);
+  }
+
+  const id = voiceSessionId();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let ws;
+    try {
+      ws = new WebSocket(ticket.ws_url);
+    } catch (error) {
+      settled = true;
+      reject(new Error(formatVoiceSocketNetworkError(cfg, ticket, String(error?.message || error))));
+      return;
+    }
+    const session = {
+      id,
+      tabId,
+      ws,
+      turnId,
+      opened: false,
+      attached: false,
+      pendingEvents: [],
+      capture: capture || "content-script",
+      captureStarted: false,
+      autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
+      audioStartedAt: 0,
+      lastSpeechAt: 0,
+      speechMs: 0,
+      recordingMs: 0,
+      committed: false,
+      autoCommitTimer: null,
+      maxCommitTimer: null,
+    };
+    voiceSessions.set(id, session);
+    ws.binaryType = "arraybuffer";
+
+    const failBeforeOpen = (message, { voiceSocket = true } = {}) => {
+      voiceSessions.delete(id);
+      try {
+        ws.close();
+      } catch {}
+      if (!settled) {
+        settled = true;
+        reject(new Error(voiceSocket ? formatVoiceSocketNetworkError(cfg, ticket, message) : message));
+      }
+    };
+
+    ws.onopen = () => {
+      if (!voiceSessionSocketOpen(session)) {
+        failBeforeOpen(session.revoked ? "Live voice session was revoked." : "Live voice connection closed.", {
+          voiceSocket: !session.revoked,
+        });
+        return;
+      }
+      const started = sendVoiceSessionJson(session, {
+        type: "session_start",
+        source: "agee-extension",
+        device_id: ticket.device_id || "",
+        session_id: ticket.session_id,
+        conversation_id: ticket.conversation_id || ticket.session_id,
+        branch_id: cueId,
+        turn_id: turnId,
+        all_branches_context: true,
+        client: {
+          platform: "browser",
+          source: "agee-extension",
+          device_id: ticket.device_id || "",
+          input: "voice",
+        },
+        playback_policy: {
+          assistant_overlap: assistantOverlap === true,
+        },
+        format: {
+          encoding: "pcm16",
+          sample_rate: 16000,
+          channels: 1,
+        },
+      });
+      if (!started) {
+        failBeforeOpen("session_start could not be sent");
+        return;
+      }
+      session.opened = true;
+      settled = true;
+      resolve({
+        voiceSessionId: id,
+        session_id: ticket.session_id,
+        conversation_id: ticket.conversation_id || ticket.session_id,
+      });
+    };
+
+    ws.onmessage = (event) => forwardVoiceSessionEvent(session, event).catch(() => {});
+    ws.onerror = () => {
+      if (!session.opened) {
+        failBeforeOpen("Live voice connection failed.");
+        return;
+      }
+      deliverVoiceSessionEvent(session, {
+        event: { type: "error", message: "Live voice connection failed." },
+      });
+    };
+    ws.onclose = () => {
+      if (!session.opened) {
+        if (session.revoked) {
+          if (!settled) {
+            settled = true;
+            resolve({ voiceSessionId: id, revoked: true });
+          }
+          session.closed = true;
+          deliverVoiceSessionEvent(session, {
+            event: { type: "revoked", reason: session.closedReason || "revoked" },
+          });
+          if (session.attached) voiceSessions.delete(id);
+          else setTimeout(() => voiceSessions.delete(id), 5000);
+          return;
+        }
+        failBeforeOpen("Live voice connection closed.");
+        return;
+      }
+      session.closed = true;
+      deliverVoiceSessionEvent(session, {
+        event: session.revoked
+          ? { type: "revoked", reason: session.closedReason || "revoked" }
+          : { type: "connection_closed" },
+      });
+      if (session.attached) voiceSessions.delete(id);
+      else setTimeout(() => voiceSessions.delete(id), 5000);
+    };
+  });
+}
+
+function voiceSessionSocketOpen(session) {
+  return !!session
+    && !session.closed
+    && voiceSessions.get(session.id) === session
+    && session.ws?.readyState === WebSocket.OPEN;
+}
+
+function markVoiceSessionSendFailed(session, reason = "send failed") {
+  if (!session || session.closed) return;
+  session.closed = true;
+  session.closedReason = reason;
+  voiceSessions.delete(session.id);
+  clearVoiceAutoCommit(session);
+  stopOffscreenVoiceCapture(session.id).catch(() => {});
+  try {
+    session.ws?.close(1000, reason);
+  } catch {}
+}
+
+function sendVoiceSessionJson(session, message) {
+  if (!voiceSessionSocketOpen(session)) return false;
+  try {
+    session.ws.send(JSON.stringify(message || {}));
+    return true;
+  } catch {
+    markVoiceSessionSendFailed(session);
+    return false;
+  }
+}
+
+function sendVoiceSessionBinary(session, buffer) {
+  if (!voiceSessionSocketOpen(session)) return false;
+  try {
+    session.ws.send(buffer);
+    return true;
+  } catch {
+    markVoiceSessionSendFailed(session);
+    return false;
+  }
+}
+
+function deliverVoiceSessionEvent(session, payload) {
+  if (!session) return;
+  const message = { cmd: "voiceSessionEvent", voiceSessionId: session.id, ...payload };
+  if (!session.attached) {
+    session.pendingEvents = session.pendingEvents || [];
+    session.pendingEvents.push(message);
+    if (session.pendingEvents.length > MAX_PENDING_VOICE_EVENTS) session.pendingEvents.shift();
+    return;
+  }
+  send(session.tabId, message);
+}
+
+function attachVoiceSession(id, tabId) {
+  const session = voiceSessions.get(id);
+  if (!session || session.tabId !== tabId) return { ok: false, error: "voice session not found" };
+  session.attached = true;
+  const pendingEvents = session.pendingEvents || [];
+  session.pendingEvents = [];
+  for (const event of pendingEvents) send(session.tabId, event);
+  if (session.closed) voiceSessions.delete(id);
+  return { ok: true, flushed: pendingEvents.length };
+}
+
+async function forwardVoiceSessionEvent(session, event) {
+  if (!voiceSessions.has(session.id)) return;
+  const data = event.data;
+  if (data instanceof ArrayBuffer) {
+    deliverVoiceSessionEvent(session, { audio: bytesToBase64(data) });
+    return;
+  }
+  if (data instanceof Blob) {
+    const buffer = await data.arrayBuffer();
+    deliverVoiceSessionEvent(session, { audio: bytesToBase64(buffer) });
+    return;
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(String(data || "{}"));
+  } catch {}
+  if (parsed?.type === "session_ready" && session.capture === "extension-offscreen" && !session.captureStarted) {
+    session.captureStarted = true;
+    startOffscreenVoiceCapture(session.id).catch((error) => handleOffscreenVoiceError(session.id, error));
+  }
+  deliverVoiceSessionEvent(session, {
+    event: parsed || { type: "raw", data: String(data || "") },
+  });
+}
+
+function sendVoiceSessionAudio(id, audio) {
+  const session = voiceSessions.get(id);
+  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  const buffer = base64ToBuffer(audio);
+  noteVoiceSessionAudio(session, buffer);
+  if (!sendVoiceSessionBinary(session, buffer)) return { ok: false, error: "voice session is not open" };
+  return { ok: true };
+}
+
+async function sendVoiceSessionControl(id, message) {
+  const session = voiceSessions.get(id);
+  if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  if (message?.type === "commit_turn" || message?.type === "cancel_turn") {
+    session.committed = true;
+    clearVoiceAutoCommit(session);
+    await stopOffscreenVoiceCapture(id);
+  }
+  if (!sendVoiceSessionJson(session, message || {})) return { ok: false, error: "voice session is not open" };
+  return { ok: true };
+}
+
+function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
+  const session = voiceSessions.get(id);
+  if (!session) return;
+  session.closedReason = reason;
+  session.revoked = revoked === true;
+  voiceSessions.delete(id);
+  clearVoiceAutoCommit(session);
+  stopOffscreenVoiceCapture(id).catch(() => {});
+  try {
+    session.ws.close(1000, reason);
+  } catch {}
+}
+
+function noteVoiceSessionAudio(session, buffer) {
+  if (!session?.autoCommitEnabled || session.committed || !buffer?.byteLength) return;
+  const now = Date.now();
+  const durationMs = Math.max(1, Math.round((buffer.byteLength / 2 / 16000) * 1000));
+  session.audioStartedAt ||= now;
+  session.recordingMs = (session.recordingMs || 0) + durationMs;
+  const activity = pcm16VoiceActivity(buffer);
+  if (activity.speech) {
+    session.lastSpeechAt = now;
+    session.speechMs = (session.speechMs || 0) + durationMs;
+  }
+  if (
+    !activity.speech &&
+    session.lastSpeechAt &&
+    (session.speechMs || 0) >= VOICE_AUTO_COMMIT_MIN_SPEECH_MS &&
+    now - session.lastSpeechAt >= VOICE_AUTO_COMMIT_SILENCE_MS
+  ) {
+    autoCommitVoiceSession(session.id, "silence audio").catch(() => {});
+    return;
+  }
+  if (session.lastSpeechAt) {
+    scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS);
+  }
+  if (session.lastSpeechAt && !session.maxCommitTimer) {
+    session.maxCommitTimer = setTimeout(() => {
+      autoCommitVoiceSession(session.id, "max recording reached").catch(() => {});
+    }, VOICE_AUTO_COMMIT_MAX_RECORDING_MS);
+  }
+}
+
+function pcm16VoiceActivity(buffer) {
+  const view = new DataView(buffer);
+  const samples = Math.floor(buffer.byteLength / 2);
+  if (!samples) return { speech: false, rms: 0, peak: 0 };
+  let sumSquares = 0;
+  let peak = 0;
+  for (let offset = 0; offset + 1 < buffer.byteLength; offset += 2) {
+    const sample = view.getInt16(offset, true) / 32768;
+    const abs = Math.abs(sample);
+    sumSquares += sample * sample;
+    if (abs > peak) peak = abs;
+  }
+  const rms = Math.sqrt(sumSquares / samples);
+  return {
+    speech: rms >= VOICE_ACTIVITY_RMS_THRESHOLD || peak >= VOICE_ACTIVITY_PEAK_THRESHOLD,
+    rms,
+    peak,
+  };
+}
+
+function scheduleVoiceAutoCommit(session, delayMs) {
+  if (!session || session.committed) return;
+  if (session.autoCommitTimer) clearTimeout(session.autoCommitTimer);
+  session.autoCommitTimer = setTimeout(() => {
+    autoCommitVoiceSession(session.id, "silence after speech").catch(() => {});
+  }, Math.max(120, delayMs));
+}
+
+async function autoCommitVoiceSession(id, reason) {
+  const session = voiceSessions.get(id);
+  if (!session || session.committed || !voiceSessionSocketOpen(session)) return;
+  if (!session.lastSpeechAt || (session.speechMs || 0) < VOICE_AUTO_COMMIT_MIN_SPEECH_MS) {
+    scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS);
+    return;
+  }
+  const silenceMs = Date.now() - session.lastSpeechAt;
+  if (reason !== "max recording reached" && silenceMs < VOICE_AUTO_COMMIT_SILENCE_MS) {
+    scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS - silenceMs);
+    return;
+  }
+  session.committed = true;
+  clearVoiceAutoCommit(session);
+  await stopOffscreenVoiceCapture(id);
+  sendVoiceSessionJson(session, {
+    type: "commit_turn",
+    turn_id: session.turnId,
+    reason: `browser_auto_commit:${reason}`,
+  });
+}
+
+function clearVoiceAutoCommit(session) {
+  if (!session) return;
+  if (session.autoCommitTimer) clearTimeout(session.autoCommitTimer);
+  if (session.maxCommitTimer) clearTimeout(session.maxCommitTimer);
+  session.autoCommitTimer = null;
+  session.maxCommitTimer = null;
+}
+
+function closeTabVoiceSessions(tabId) {
+  for (const session of voiceSessions.values()) {
+    if (session.tabId === tabId) closeVoiceSession(session.id, "tab closed");
+  }
 }
 
 // Persist per-cue state (keyed by cueId) so concurrent cues don't clobber each
@@ -556,6 +1525,7 @@ async function saveTaskState(id, patch) {
       updatedAt: new Date().toISOString(),
     },
   });
+  await updateActiveBrowserAgentOwnerFromTask(id, patch).catch(() => {});
 }
 
 async function captureScreenshot(tabId) {
@@ -570,7 +1540,13 @@ async function captureScreenshot(tabId) {
 
 function elementsText(snap) {
   const lines = (snap.elements || []).slice(0, MAX_ELEMENTS).map((e) => `[${e.i}] <${e.tag}${e.type ? " " + e.type : ""}> ${e.label}`);
-  return `URL: ${snap.url}\nTITLE: ${snap.title}\nINTERACTABLE ELEMENTS:\n${lines.join("\n") || "(none found)"}`;
+  const pageText = truncate(String(snap.pageText || snap.page_text || "").trim(), 2800);
+  return [
+    `URL: ${snap.url}`,
+    `TITLE: ${snap.title}`,
+    pageText ? `VISIBLE PAGE TEXT:\n${pageText}` : "",
+    `INTERACTABLE ELEMENTS:\n${lines.join("\n") || "(none found)"}`,
+  ].filter(Boolean).join("\n");
 }
 
 async function snapshotBlocks(tabId, signal) {
@@ -608,7 +1584,7 @@ async function confirmNavigation(tabId, url) {
   try {
     const response = await ask(tabId, {
       cmd: "confirm",
-      text: `Allow agee to navigate from ${from || "this page"} to ${to}?`,
+      text: `Allow A.G. to navigate from ${from || "this page"} to ${to}?`,
     });
     return response?.ok === true;
   } catch {
@@ -675,11 +1651,24 @@ async function describePageViaGateway(tabId, cfg, signal, cueId) {
   throwIfAborted(signal);
   const snap = await ask(tabId, { cmd: "snapshot" });
   throwIfAborted(signal);
+  const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
   const data = await callGateway(cfg, "/v1/chat", {
     signal,
     body: {
       source: "agee-extension",
+      device_id: deviceId,
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: cueId || "describe",
+      all_branches_context: true,
       screen: snapToScreen(snap),
+      client: {
+        platform: "browser",
+        source: "agee-extension",
+        device_id: deviceId,
+        input: "text",
+      },
       messages: [
         { role: "user", content: "Describe this page in 3-5 compact bullets. Include what it is and what the user can do here. Do not claim you took any action." },
       ],
@@ -699,7 +1688,7 @@ async function describePage(tabId, controller, cueId) {
     // Thin client: page description is produced by the user's gateway. There is
     // no in-browser model path.
     if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the agee toolbar icon → Options and set the Agent gateway URL." });
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the A.G. toolbar icon → Options and set the Agent gateway URL." });
       return;
     }
     await describePageViaGateway(tabId, cfg, signal, cueId);
@@ -721,7 +1710,7 @@ async function runAgent(tabId, instruction, controller, cueId) {
     // Thin client: every turn is handled by the user's self-hosted gateway.
     // There is no in-browser model path or provider key.
     if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the agee toolbar icon → Options and set the Agent gateway URL." });
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the A.G. toolbar icon → Options and set the Agent gateway URL." });
       return;
     }
 
@@ -729,10 +1718,25 @@ async function runAgent(tabId, instruction, controller, cueId) {
     // they are changing settings by talking to the agent ("be terser", "set
     // the system prompt to …"). Either is handled through the profile
     // endpoints instead of running a conversational turn.
+    // Fast local stop path, defense in depth. The overlay already halts typed
+    // "stop / shut up / be quiet" before it reaches here, but if a stop utterance
+    // ever arrives as a run it must halt silently and never touch a model. Tell
+    // the overlay to stop playback and live turns; do not produce a reply.
+    if (isStopCommand(instruction)) {
+      send(tabId, { cmd: "stop", cueId });
+      send(tabId, { cmd: "done", cueId, summary: "", text: "" });
+      return;
+    }
     if (await maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId)) {
       return;
     }
+    if (await maybeRouteGatewayProfileControl(tabId, instruction, cfg, signal, cueId)) {
+      return;
+    }
     if (await maybeApplySettingsChange(tabId, instruction, cfg, signal, cueId)) {
+      return;
+    }
+    if (await maybeRequestAndroidSpeak(tabId, instruction, cfg, signal, cueId)) {
       return;
     }
     if (await maybeApplyPageTweak(tabId, instruction, signal, cueId)) {
@@ -743,6 +1747,9 @@ async function runAgent(tabId, instruction, controller, cueId) {
       await runBranchTaskAgent(tabId, browserTask.instruction, browserTask.url, controller, cueId);
       return;
     }
+    if (await maybeOpenRequestedTab(tabId, instruction, signal, cueId)) {
+      return;
+    }
     await runViaGateway(tabId, instruction, cfg, signal, cueId);
   } catch (err) {
     const message = signal.aborted ? "Task cancelled." : String(err.message || err);
@@ -751,6 +1758,91 @@ async function runAgent(tabId, instruction, controller, cueId) {
   } finally {
     if (tasks.get(cueId)?.controller === controller) tasks.delete(cueId);
   }
+}
+
+async function maybeRequestAndroidSpeak(tabId, instruction, cfg, signal, cueId) {
+  const text = parseAndroidSpeakIntent(instruction);
+  if (!text) return false;
+  await saveTaskState(cueId, { status: "running", instruction, step: 0, lastResult: "queueing Android speech request", tabId });
+  send(tabId, { cmd: "progress", cueId, text: "sending to phone…" });
+  throwIfAborted(signal);
+
+  const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
+  const data = await callGateway(cfg, "/v1/tool/requests", {
+    signal,
+    body: {
+      source: "agee-extension",
+      source_device_id: deviceId,
+      source_surface_type: "browser_extension",
+      target_surface_type: "android",
+      tool: "audio.speak",
+      input: { text },
+      session_id: sessionId,
+      branch_id: cueId || "browser",
+      instruction,
+    },
+  });
+  const request = data?.request || {};
+  const target = request.target_device_id
+    ? `for ${request.target_device_id}`
+    : "for the next Android client heartbeat";
+  const summary = `Queued Android speech request ${request.id || ""} ${target}.`;
+  send(tabId, { cmd: "done", cueId, summary });
+  await saveTaskState(cueId, {
+    status: "done",
+    instruction,
+    step: 1,
+    tabId,
+    lastResult: summary,
+    toolRequestId: request.id || "",
+  });
+  return true;
+}
+
+function parseAndroidSpeakIntent(instruction) {
+  const value = String(instruction || "").trim();
+  if (!value) return "";
+  const lower = value.toLowerCase();
+  if (!/\b(?:android|phone|mobile)\b/.test(lower)) return "";
+  if (!/\b(?:say|speak|read|announce)\b/.test(lower)) return "";
+
+  const quoted = value.match(/["“”']([^"“”']{1,500})["“”']/);
+  if (quoted?.[1]) return quoted[1].trim();
+
+  const patterns = [
+    /\b(?:android|phone|mobile)\b.*?\b(?:say|speak|read|announce)\b\s*:?\s*(.+)$/i,
+    /\b(?:say|speak|read|announce)\b\s+(.+?)\s+\b(?:on|from|through)\b\s+(?:the\s+)?(?:android|phone|mobile)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    const text = match?.[1]?.trim();
+    if (text) return text.replace(/[.?!]\s*$/, "").slice(0, 500);
+  }
+  return "";
+}
+
+async function maybeOpenRequestedTab(tabId, instruction, signal, cueId) {
+  const intent = parseOpenTabIntent(instruction);
+  if (!intent) return false;
+  throwIfAborted(signal);
+  const url = new URL(intent.url);
+  if (!ALLOWED_NAVIGATION_PROTOCOLS.has(url.protocol)) {
+    send(tabId, { cmd: "error", cueId, text: `Blocked unsupported URL: ${intent.url}` });
+    return true;
+  }
+  const opened = await chrome.tabs.create({ url: url.href, active: true });
+  const summary = `Opened ${opened.url || url.href}.`;
+  send(tabId, { cmd: "done", cueId, summary });
+  await saveTaskState(cueId, {
+    status: "done",
+    instruction,
+    step: 1,
+    tabId,
+    lastResult: summary,
+    openedTabId: opened.id,
+  });
+  return true;
 }
 
 // ---- CDP task agent (router → disposable background-tab agent) -------------
@@ -1045,9 +2137,11 @@ async function startAmbientCapture(tabId, intervalMs) {
   if (ambient) stopAmbientCapture();
   const interval = Math.max(AMBIENT_MIN_INTERVAL_MS, Number(intervalMs) || AMBIENT_DEFAULT_INTERVAL_MS);
   const sessionId = await getStableSessionId();
-  ambient = { tabId, timer: null, seq: 0, inFlight: false, sessionId };
+  ambient = { tabId, timer: null, seq: 0, inFlight: false, intervalMs: interval, sessionId };
   send(tabId, { cmd: "ambient", state: "on" });
   ambient.timer = setInterval(() => captureAmbientFrame().catch(() => {}), interval);
+  captureAmbientFrame().catch(() => {});
+  return { ok: true, intervalMs: interval, sessionId };
 }
 
 function stopAmbientCapture() {
@@ -1081,6 +2175,71 @@ async function captureAmbientFrame() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.cmd === "offscreenVoiceAudio") {
+    sendResponse(sendVoiceSessionAudio(msg.voiceSessionId, msg.audio));
+    return true;
+  }
+  if (msg.cmd === "offscreenVoiceError") {
+    handleOffscreenVoiceError(msg.voiceSessionId, msg.error);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.cmd === "voiceSessionStart" && sender.tab) {
+    const tabId = sender.tab.id;
+    claimActiveAgentTab(tabId, "another page voice session started", {
+      cue_id: msg.cueId || null,
+      status: "listening",
+    });
+    startVoiceSessionProxy(tabId, {
+      cueId: msg.cueId,
+      turnId: msg.turnId,
+      assistantOverlap: msg.assistantOverlap === true,
+      capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
+      autoCommit: msg.autoCommit !== false,
+    })
+      .then((session) => {
+        if (session?.voiceSessionId) {
+          setActiveBrowserAgentOwner(tabId, "browser voice session started", {
+            cue_id: msg.cueId || null,
+            voice_session_id: session.voiceSessionId,
+            status: "listening",
+          }).catch(() => {});
+        }
+        sendResponse({ ok: true, ...session });
+      })
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionAttach" && sender.tab) {
+    sendResponse(attachVoiceSession(msg.voiceSessionId, sender.tab.id));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionAudio") {
+    sendResponse(sendVoiceSessionAudio(msg.voiceSessionId, msg.audio));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionControl") {
+    sendVoiceSessionControl(msg.voiceSessionId, msg.message)
+      .then((response) => sendResponse(response))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionClose") {
+    closeVoiceSession(msg.voiceSessionId, String(msg.reason || "closed"));
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.cmd === "devReloadExtension") {
+    devReloadConfig()
+      .then((cfg) => maybeReloadForDevVersion(msg.info || {}, {
+        server: String(msg.server || cfg.server || DEV_RELOAD_DEFAULT_SERVER).replace(/\/+$/, ""),
+        previousVersion: Number(msg.previousVersion || cfg.version || 0) || null,
+        source: String(msg.source || "message"),
+      }))
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
   if (msg.cmd === "history") {
     getConfig()
       .then((cfg) => loadHistory(cfg))
@@ -1088,9 +2247,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error), turns: [] }));
     return true;
   }
+  if (msg.cmd === "voiceSessionTicket") {
+    getConfig()
+      .then((cfg) => createVoiceSessionTicket(cfg))
+      .then((ticket) => sendResponse({ ok: true, ...ticket }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
   if (msg.cmd === "run" && sender.tab) {
     const tabId = sender.tab.id;
     const cueId = nextCueId(msg.cueId);
+    claimActiveAgentTab(tabId, "another page agent turn started", {
+      cue_id: cueId,
+      status: "running",
+    });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
     runAgent(tabId, msg.instruction, controller, cueId);
@@ -1099,6 +2269,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Router intent: launch a disposable task agent in its OWN background tab.
     const overlayTabId = sender.tab.id;
     const cueId = nextCueId(msg.cueId);
+    claimActiveAgentTab(overlayTabId, "another page agent turn started", {
+      cue_id: cueId,
+      status: "running",
+    });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId: overlayTabId });
     runBranchTaskAgent(overlayTabId, msg.instruction, msg.url, controller, cueId);
@@ -1115,11 +2289,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       controllersByCue.set(cueId, controller);
       return { instruction: b.instruction, url: b.url, cueId };
     });
+    claimActiveAgentTab(overlayTabId, "another page agent turn started", {
+      cue_id: branches[0]?.cueId || null,
+      status: "running",
+    });
     runBranchFanout(overlayTabId, branches, controllersByCue);
   }
   if (msg.cmd === "describe" && sender.tab) {
     const tabId = sender.tab.id;
     const cueId = nextCueId(msg.cueId);
+    claimActiveAgentTab(tabId, "another page agent turn started", {
+      cue_id: cueId,
+      status: "running",
+    });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
     describePage(tabId, controller, cueId);
@@ -1134,16 +2316,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
   }
   if (msg.cmd === "ambientStart" && sender.tab) {
-    startAmbientCapture(sender.tab.id, msg.intervalMs);
+    const tabId = sender.tab.id;
+    claimActiveAgentTab(tabId, "another page ambient session started", {
+      status: "ambient",
+    });
+    startAmbientCapture(tabId, msg.intervalMs)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
   }
   if (msg.cmd === "ambientStop") {
     stopAmbientCapture();
+    sendResponse({ ok: true });
+    return true;
   }
 });
 
 // Stop the ambient loop if its tab goes away, so it never posts against a dead tab.
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (ambient && ambient.tabId === tabId) stopAmbientCapture();
+  if (activeAgentTabId === tabId) {
+    activeAgentTabId = null;
+    clearActiveBrowserAgentOwner(tabId, "owner tab closed").catch(() => {});
+  }
+  closeTabVoiceSessions(tabId);
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
@@ -1157,10 +2353,13 @@ chrome.action.onClicked.addListener(async (tab) => {
 });
 
 chrome.commands.onCommand.addListener(async (command, tab) => {
-  if (command !== "toggle-agee" || !tab?.id) return;
+  if ((command !== "toggle-agee" && command !== "toggle-agee-voice") || !tab?.id) return;
   try {
     await ensureContent(tab.id);
-    await chrome.tabs.sendMessage(tab.id, { cmd: "open" });
+    await chrome.tabs.sendMessage(tab.id, {
+      cmd: command === "toggle-agee-voice" ? "toggleVoice" : "toggle",
+      source: "command",
+    });
   } catch {
     // Restricted browser pages cannot receive content scripts.
   }

@@ -58,28 +58,91 @@ matches the proposal.
 ```text
 Hold the orb (push-to-talk)
   -> Android captures either a SpeechRecognizer transcript or PCM16 audio chunks
-  -> release sends the turn: POST /v1/voice/turns or WS /v1/voice/sessions
+  -> release sends the turn immediately: POST /v1/voice/turns or WS /v1/voice/sessions
   -> gateway routes through configured provider packages
   -> gateway returns speak/display text or transcript + assistant audio chunks
   -> phone updates transcript/chat and may speak or play the short response
 ```
 
-Orb gestures (overlay): hold to speak, release to send; a held turn cuts off any
-reply playing (barge-in) and steers an active agent run. A quick tap opens the
-typing panel. Drag repositions. The browser extension mirrors this hands-on-
-keyboard: Cmd. (Ctrl+.) wakes voice, Cmd, (Ctrl+,) opens the text command bar.
+Orb gestures (overlay): one single tap opens the chat menu, first-press hold and
+drag repositions the orb without starting voice, and double-click-and-hold is
+the manual push-to-talk path. Recording starts only after the second press is
+held briefly, and release commits the turn without waiting for silence
+detection. Continuous voice is an optional secondary loop for launch paths that
+do not have a release event, where silence commits each turn and the mic re-arms
+after the reply. The browser extension
+mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
+Cmd+. (Ctrl+.) wakes voice. Browser voice auto-commits after speech silence and
+then re-arms while conversation mode is active. The browser mark uses the same
+pointer contract as Android: single click opens the chat menu, first-press hold
+and drag repositions the mark without starting voice, and double-click-and-hold
+starts a manual voice session with browser silence auto-commit disabled. Release
+commits the manual turn without re-arming the mic. Browser voice can opt a
+session into background assistant speech, where starting a new spoken turn opens
+a new gateway voice turn without stopping already queued assistant audio.
 
-The overlay surface stays small: it shows live turns and compact run state, not
-a full scrollback manager. The gateway still stores durable session, branch,
-turn, transcript, provider-event, and agent-run history. Realtime providers
-receive a bounded Moa-owned context pack at session start so provider memory is
-not the product database.
+The overlay surface stays small: it shows the current intent/result and compact
+run state, not a full scrollback manager. Browser text replies render in the
+result stack above the command input; replies, errors, and voice state never
+clear or replace the user's current input draft. Browser voice keeps that input
+available, shows partial/final user transcript feedback above it, and streams
+assistant text into the result stack above the input. The gateway still stores
+durable session, branch, turn, transcript, provider-event, and agent-run
+history. Realtime providers receive a bounded Moa-owned context pack at session
+start so provider memory is not the product database. If the user wants history,
+they ask Moa for it through the same intent surface instead of browsing visible
+scrollback.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript
 and assistant text the provider produced before the cutoff. That partial turn
 flows into the next session's context pack, so a user can interrupt the model on
 one device and resume the thread on another against the same dataset.
+Spoken profile-control requests such as voice and language changes are routed
+through the gateway profile store; Gemini Live reads the effective voice,
+language, and Moa-owned context when the next Live session starts. Profile
+settings are hard settings: global changes apply to every device, while
+device-scoped changes persist as per-device overrides layered on top of the
+global profile for the current phone or browser client.
+Voice discovery and voice sampling use the same profile-control surface. The
+gateway owns the canonical supported voice catalog and returns a `voice_sampler`
+action when the user asks to sample, test, preview, or go through all voices.
+Android owns playback: it consumes that action by opening one text-only Live
+session per sample with a session-only voice override, so samples do not mutate
+the saved profile voice.
+
+Spoken input must never be lost. Each stored voice turn keeps the exact final
+transcript with a transcript source label (real STT, typed text, or synthetic
+placeholder), streaming partials merge into the final record when the provider
+result is a placeholder, and stored turns are queryable by id
+(`GET /v1/voice/turns/{turnId}`). A control intent such as "what did you hear"
+returns the prior user transcript verbatim. Echo-back depends on the user input
+transcript, which the gateway always requests from the Live provider
+(`inputAudioTranscription`), so the exact-transcript guarantee holds on every
+Live model.
+
+Native-audio Live models are audio-only for output: they reject any text-output
+request and close the socket with 1007 "Text output is not supported for native
+audio output model." The gateway therefore omits `outputAudioTranscription` for
+native-audio models (keeping it for non-native Live models) and keeps
+`responseModalities` at `["AUDIO"]`. On native-audio the assistant-side text
+mirror (`assistant_text`) is empty because the model emits neither an output
+transcription nor text parts; downstream treats empty `assistant_text` as "no
+assistant transcript" and does not depend on it, so the turn still returns audio
+and the stored user transcript.
+
+The English + Amharic language allowlist (see `agent_profile` below) is enforced
+in the same profile-control path: an unsupported language is dropped by the
+sanitizer with the previous setting kept, and a spoken or typed request for one
+returns a reply stating only English and Amharic are supported rather than
+silently failing.
+
+Voice turns can also become replayable verification evidence. When retention is
+enabled, the gateway stores or references the user audio, transcript, assistant
+text, assistant audio, profile version, provider version, and expected-test
+criteria so a later smoke can replay the same utterance through the configured
+voice pipeline and report whether transcription and response behavior still
+match.
 
 Streaming voice providers are gateway-only. Android sends microphone audio to
 Moa Gateway, but raw model/API keys stay on the gateway machine. The provider
@@ -92,11 +155,34 @@ durable voice-turn router.
 
 ```text
 Browser overlay or command bar
-  -> captures text/voice and optional page context
-  -> sends the turn to the configured engine URL with a session token
-  -> receives an answer, run status, action proposal, or declarative UI spec
+  -> captures text or PCM16 microphone audio and optional page context
+  -> sends text turns to the configured engine URL with a session token
+  -> mints a short-lived voice-session ticket for browser WebSocket voice
+  -> streams voice turns to WS /v1/voice/sessions
+  -> receives an answer, streamed assistant audio, run status, action proposal, or declarative UI spec
   -> brokers any page-local action through extension-owned checks
 ```
+
+Browser voice uses the same gateway streaming voice contract as Android, adapted
+for browser WebSocket authentication. The extension authenticates to the gateway
+over normal HTTP with its stored gateway token, receives a one-use
+`/v1/voice/sessions` ticket, captures microphone audio from an extension-owned
+offscreen document, streams PCM16 audio to the gateway, and plays assistant PCM
+audio returned by the selected gateway provider. The page overlay is only the
+control surface; websites must not receive microphone permission for Moa voice.
+Each spoken
+browser utterance gets its own turn id under the stable browser session id. When
+the user enables background assistant speech for the current browser session,
+the extension preserves older voice-session event handling and queued playback
+while it starts the next microphone turn. That overlap is scoped to the active
+page-agent owner: starting a browser agent or voice turn from another tab revokes
+other-tab voice sessions, stops queued assistant playback in those tabs, and
+cancels their browser-local task cues. The active browser-agent owner is shared
+extension/gateway-facing state keyed by the stable browser session, current tab,
+page URL/title, cue/voice-session ids, and latest status/result; it is not
+content-script-local memory. It must not use browser Web Speech APIs as the
+production voice path, and it must not hold raw Gemini/OpenAI/Anthropic provider
+credentials.
 
 Gateway-originated browser work uses the same ownership boundary. The gateway
 stores `/v1/browser/tasks` records and Live/tool agents may enqueue bounded
@@ -104,6 +190,17 @@ browser work, but the Chrome extension must claim the task, run allowlisted CDP
 methods locally through `chrome.debugger`, and POST a receipt back to the
 gateway. The gateway records that receipt against the task and linked agent run;
 it does not execute browser CDP itself.
+
+Browser-originated chat and describe turns carry the same gateway session and
+branch identifiers as voice turns. The gateway context APIs expose bounded
+recent voice turns, chat turns, provider events, active/completed runs, profile
+status, and browser task receipts so a later voice session can recover what the
+browser surface did without relying on provider memory.
+
+Browser continuous/ambient mode is explicit start/stop. When active, the
+extension samples page context and posts a frame to `POST /v1/voice/frames` on a
+200 ms target interval. The gateway stores those frames as session evidence only;
+this path does not run model calls on the 200 ms cadence.
 
 The extension is a stable packaged client, not a per-user deployment unit. Chrome
 Manifest V3 forbids remotely hosted executable code in privileged extension
@@ -125,6 +222,44 @@ User asks for build/fix/change/test work
 
 Voice-started agent work should be async by default. The phone should not block
 on a long-running harness.
+
+### Message Broker
+
+```text
+voice or text message
+  -> gateway stores one canonical broker_event
+  -> broker evaluates active sessions, projects, subprojects, runs, and workflow packages
+  -> broker emits route decisions with reasons and cancellation behavior
+  -> downstream chat, voice, workflow packages, or agent runs reference the event
+```
+
+The broker is the durable routing layer before provider/model execution. A user
+message may continue an existing session, attach evidence to active runs, create
+a new fork, invoke a directory-backed workflow package, or take the
+direct-answer path. It does not cancel active work merely because a new message
+arrived. Workflow selection is an explicit route decision: research-heavy
+messages can target a research workflow, implementation requests can target
+coding, and simple messages can stay on the direct-answer path.
+
+Broker route decisions also materialize launch context packs. The editable
+profile file is `gateway/agent-launcher-profiles.json`: each profile names the
+workflow directory, instruction file, required files, expected output, and
+verification checks for routes such as direct-answer, coding, QA, research,
+design, and writing. The workflow directories live under
+`gateway/agent-workflows/<workflow>/`. The gateway stores bounded packs under
+`DATA_DIR/broker-context-packs` and links them from route decisions. A pack is
+launchable context for an explicit `/v1/agent/runs` or router activation; it is
+not itself permission to execute hidden work. When a message targets an active
+run, the gateway appends a `broker_evidence_attached` event to that run without
+canceling it.
+
+Every user turn is a possible fork. A new spoken or typed message can create a
+new `agent_run` without canceling existing active runs, and subsequent user
+turns can be attached as non-interrupting evidence to relevant active runs. The
+gateway owns the agent-manager decision: route the turn to an existing run,
+launch a new fork, attach it to several active runs, or dismiss it as irrelevant.
+The user must be able to inspect which runs are active and what each is trying
+to accomplish.
 
 ### Router Activation Loop
 
@@ -172,15 +307,65 @@ User request or model proposal
 Model output and screen text are untrusted inputs. They can inform proposals;
 they cannot directly execute phone actions.
 
+### Cross-Device Tool Hub
+
+```text
+Android or browser client
+  -> heartbeats to the gateway with device id, surface type, session id, and
+     local tool manifest
+other surface or agent
+  -> creates a gateway tool_request for a target device or surface
+target client
+  -> claims only requests matching its advertised local tools
+  -> validates and executes the local action inside that client boundary
+  -> posts a receipt back to the gateway
+```
+
+The gateway is only the registry and queue. It does not press phone buttons,
+open browser tabs, or speak through device speakers by itself. A browser turn
+can request an Android action such as `audio.speak`; Android must still claim,
+validate, execute with local TextToSpeech, and receipt it. An Android turn can
+request browser work such as `browser.tab.open`; the Chrome extension must still
+claim, validate, execute, and receipt it.
+
 ## Product Primitives
 
 - `device`: a registered Android device with local permissions and settings.
+- `device_client`: a connected Android, browser, or future desktop surface that
+  heartbeats its online state and local tool manifest to the gateway.
 - `session`: a coherent mobile work session.
 - `branch`: a thread of work inside a session, initially `default`.
 - `turn`: one voice or chat input with optional screen context.
+- `broker_event`: one inbound user message stored before routing to sessions,
+  workflow packages, chat, voice, or agent runs.
+- `product_event`: one canonical append-only event in the self-hostable event
+  substrate, carrying origin, stream, version, actor, authority, causation,
+  correlation, idempotency, payload, blob refs, and CRDT refs.
+- `route_decision`: an inspectable broker decision with target, action,
+  confidence, reason, context refs, workflow directory refs, and cancellation
+  behavior.
 - `agent_run`: a gateway-created execution-machine job with lifecycle events.
+- `agent_fork`: a turn-linked async `agent_run` that can continue while later
+  user turns create or update other forks.
+- `voice_evidence`: replayable user/assistant audio and transcript artifacts
+  attached to a turn, profile version, provider version, and test criteria.
+- `agent_profile`: a versioned gateway-owned runtime profile for hard settings
+  such as assistant voice, input languages, reply languages, response modality,
+  persona (vetted catalog or sanitized free-form system prompt), model behavior,
+  and mission-agent access policy. The global profile applies to all devices;
+  device overrides persist only for a named device client. Profile-change
+  responses report the scope and device id they applied to. The current
+  language catalog is intentionally limited to English (`en-US`) and Amharic
+  (`am-ET`) until the product scope explicitly expands.
+- `browser_agent_owner`: the single active browser tab/page/run that may listen,
+  speak, and show browser-local task cues for a browser session; non-owner tabs
+  can show passive status but must not capture voice or claim local cues.
+- `browser_task`: a gateway-created browser work request that a Chrome extension
+  client must claim, execute locally with allowlisted actions, and receipt.
 - `tool_source`: an agent-callable integration source such as OpenAPI, MCP,
   GraphQL, or a custom gateway function.
+- `tool_request`: a gateway-queued request for a specific device or surface to
+  run one advertised local tool and post a receipt.
 - `execution`: a durable gateway-side workflow or tool call with status,
   checkpoints, and resume/cancel metadata.
 - `action_proposal`: structured server output asking the phone to perform work.
@@ -195,42 +380,116 @@ Postgres is the production store target. The work graph now uses Postgres when
 `DATABASE_URL` is set: nodes, append-only work events, and produced artifacts
 are queryable gateway records. Agent-run files, sessions, tool sources,
 executions, approvals, and receipts should continue moving behind the same
-Postgres storage boundary, with DBOS-style durable execution considered for
-resumable workflows and queues.
+Postgres storage boundary. The gateway also exposes the first product event
+substrate slice: `/v1/events` appends and queries canonical `product_events`,
+with the same envelope persisted to a local `product-events.jsonl` fallback when
+Postgres is not configured. Chat turns, voice turns, profile changes, agent-run
+events, browser tasks, tool requests, receipts, work events, and work artifacts
+now mirror into that substrate while legacy read paths remain intact. DBOS-style
+durable execution remains a separate consideration for resumable workflows and
+queues.
 
 ## Source Map
 
-- `software/android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
   setup/full-app entry surface.
-- `software/android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
   floating orb, transcript, voice loop, chat panel, TTS, and gateway calls.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:
   Android client for gateway endpoints.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
   local routing for screen context and local action commands.
-- `software/android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
+- `android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
   accessibility-backed screen context and visible UI operations.
-- `software/moa_gateway/server.js`: HTTP API, voice router, model calls,
-  conversation storage, and agent-run execution.
-- `software/moa_gateway/public/gateway-ui.html`: gateway-served browser control
+- `gateway/server.js`: HTTP API, voice router, model calls,
+  conversation storage, agent-run execution, device-client registry, and
+  cross-device tool-request queue.
+- `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
-- `software/moa_gateway/lib/voice-intent.js`: pure voice-turn classifier
+- `gateway/lib/event-substrate.js`: product event substrate adapter for
+  Postgres `product_events` or local `product-events.jsonl`.
+- `gateway/schema.sql`: Postgres schema for work graph records, product events,
+  projection checkpoints, event blobs, and sync import checkpoints.
+- `gateway/lib/voice-intent.js`: pure voice-turn classifier
   (chat / agent_run / multi_agent / control), unit-tested in
   `scripts/smoke-voice-intent.js`.
-- `software/moa_gateway/lib/voice-session-server.js`: WebSocket PCM voice
+- `gateway/lib/voice-session-server.js`: WebSocket PCM voice
   transport, turn storage, transcript events, and assistant audio events.
-- `software/moa_gateway/lib/voice-providers.js`: Swappable streaming voice
+- `gateway/lib/voice-providers.js`: Swappable streaming voice
   provider package boundary, currently loopback and Gemini Live.
-- `software/android_app/deploy/ota`: Android APK OTA artifact build and
+- `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
-- `software/browser_extension/extension`: thin browser client for command,
+- `browser_extension/extension`: thin browser client for command,
   voice, page context, settings, and engine-routed browser actions.
+- `scripts/deploy.sh`: shared deploy entrypoint for gateway, Android OTA,
+  browser extension, and committed-change auto-deploy.
 - `.github/workflows/android-ota.yml`: commit-triggered Android OTA artifact
   build and main-machine deploy.
-- `openspec/changes/define-android-core-product-map`: current product map,
+- `gateway/Dockerfile`, `docker-compose.yml`, `docker-compose.vps.yml`: one
+  gateway image and the VPS stack (gateway + Postgres + Caddy TLS).
+- `gateway/deploy/vps`: VPS runbook, Caddyfile, and compose env example.
+- `scripts/vps`: droplet bootstrap, update, backup, and restore-check scripts.
+- `reference/openspec/changes/define-android-core-product-map`: current product map,
   capability specs, staged tasks, and acceptance criteria.
-- `openspec/changes/thin-client-gateway-architecture`: browser extension
+- `reference/openspec/changes/thin-client-gateway-architecture`: browser extension
   thin-client / persistent-engine decision record.
+
+## Deployment Finish Loop
+
+Agents must treat deployment as part of completion for deployable surfaces:
+
+```text
+verify changed surface
+  -> fix failures
+  -> commit the unit
+  -> deploy the changed target
+  -> smoke-check the deployed target
+  -> record any blocker
+```
+
+`scripts/deploy.sh auto` is the repo-level hook target. It deploys only committed
+gateway, Android, and browser-extension changes since each target's last
+successful deploy marker, and skips dirty target files so uncommitted work is not
+published. Explicit deploy targets remain available when a human or agent needs
+one surface: `gateway`, `android`, `extension`, or `all`.
+
+Each successful target deploy records a monotonic deploy sequence, git SHA, and
+target version metadata next to the existing deploy marker. Android OTA builds
+generate timestamp version codes; browser-extension releases use
+`browser_extension/extension/manifest.json` and changed extension deploys are
+blocked after the first recorded deploy unless that manifest version has moved.
+
+Browser-extension deployment has two parts. The package step creates the Chrome
+Web Store upload artifact under `browser_extension/dist/`. The local-browser step
+serves a short dev-reload signal for an already-loaded unpacked extension; the
+extension reloads in the user's browser only if the dev auto-reload bridge has
+been enabled from `extension/dev.html`.
+
+## Deployment
+
+The gateway ships as one Docker image whose behavior is selected by env, never
+by build variant (`reference/openspec/changes/remote-hosted-gateway`):
+
+```text
+MOA_MODE=local      dev default: no auth required, file fallback allowed,
+                    loopback bind
+MOA_MODE=self-host  remote: MOA_GATEWAY_TOKEN + DATABASE_URL required at boot,
+                    binds 0.0.0.0, trusts proxy-forwarded protocol
+MOA_MODE=hosted     self-host plus per-user accounts and backup expectations
+```
+
+The VPS stack (`docker-compose.yml` + `docker-compose.vps.yml`) runs gateway,
+Postgres, and Caddy TLS on one droplet. Named volumes hold the shared event
+store and `DATA_DIR` blobs; they survive image rebuilds and git updates. A
+preview stack runs under a different compose project name with its own
+volumes; that is a preview, not a rollback of the active store. Promotion
+(update, active URL change, active-service restart) requires a Postgres dump,
+a `DATA_DIR` snapshot, and a passing scratch restore check first
+(`scripts/vps/backup.sh`, `scripts/vps/restore-check.sh`).
+
+Agent harnesses and their credentials never run on or mount into the VPS
+gateway; remote agent execution uses the worker-pull model where the user's
+execution machine connects outbound to claim queued runs.
 
 ## Architecture Rules
 
@@ -252,9 +511,12 @@ resumable workflows and queues.
 
 Use the smallest real check that covers the changed surface:
 
-- Android compile: `cd software/android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
-- Gateway syntax: `cd software/moa_gateway && npm run check`
+- Android compile: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- Gateway syntax: `cd gateway && npm run check`
+- Browser extension: `cd browser_extension && npm run verify && npm run smoke`
 - Gateway smoke: `GET /health`, `POST /v1/voice/turns`, `GET /v1/agent/runs`
-- Product/spec check: `openspec validate define-android-core-product-map --strict`
-- Manual phone QA: hold orb to speak / release to send, tap to type, transcript
-  display, agent run start/status, and local action approval behavior.
+- Product/spec check: inspect `reference/openspec/changes/<change>` and run the
+  matching OpenSpec validation if the CLI has been initialized for this checkout.
+- Manual phone QA: tap orb for chat, drag to move, double-click-and-hold to
+  speak / release to send, transcript display, agent run start/status, and
+  local action approval behavior.

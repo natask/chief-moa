@@ -285,6 +285,28 @@ async function main() {
     assert(overlayList.tweaks.length === 1, "overlay path should persist one tweak");
     await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:clear" });
 
+    // 6) BLACK PAGE COMMAND: the phrase from the voice path must stay local and
+    // become a page tweak instead of falling through to the gateway/model.
+    await evaluate(pageCdp, `
+      (() => {
+        const input = document.getElementById('agee-input');
+        if (!input) throw new Error('no agee input');
+        input.value = 'make this page all black';
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        return true;
+      })()
+    `);
+    const blackViaOverlay = await waitForEval(pageCdp, `
+      (() => {
+        const bg = getComputedStyle(document.body).backgroundColor;
+        return bg === 'rgb(0, 0, 0)' ? 'black' : null;
+      })()
+    `);
+    assert(blackViaOverlay === "black", "overlay command path should make the page black");
+    const blackList = await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:list" });
+    assert(blackList.tweaks.length === 1 && blackList.tweaks[0].kind === "black", "black page tweak should persist");
+    await tweakMsg(workerCdp, "http://localhost/*", { cmd: "tweak:clear" });
+
     console.log(
       `tweaks smoke passed (REAL extension, headless Chrome for Testing): id=${extensionId}\n` +
         `  apply       -> "hide the cookie banner" built tweak ${tweakId} (kind=hide), banner hidden, css inspectable\n` +
@@ -292,6 +314,7 @@ async function main() {
         `  per-origin  -> ${otherList.origin} saw 0 tweaks, banner VISIBLE (scope held)\n` +
         `  removal     -> tweak removed + reversible, banner back after reload\n` +
         `  overlay     -> "remove the cookie banner" through the normal command bar hid + persisted\n` +
+        `  black page  -> "make this page all black" stayed local and persisted kind=black\n` +
         `  no window shown, no focus taken.`,
     );
   } finally {

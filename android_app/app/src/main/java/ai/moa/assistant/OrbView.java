@@ -9,16 +9,16 @@ import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 
-// The floating Moa mark: just the animal, no disc. The dark silhouette would
-// vanish on dark app backgrounds, so a soft light halo (the bird shape feathered
+// The floating Moa lion mark: just the animal, no disc. The dark silhouette would
+// vanish on dark app backgrounds, so a soft light halo (the mark feathered
 // behind itself) gives it contrast on any screen. Listening tints the halo gold
-// and grows the bird a touch instead of lighting up an orb. Holding the orb (the
-// push-to-talk gesture) lights a soft teal glow behind it so the press reads.
+// and grows the mark a touch instead of lighting up an orb. A held voice turn
+// lights a soft gold glow behind it so the live state reads.
 final class OrbView extends View {
-    // Viewport box of the bird inside ic_moa_glyph (108x108). Used to center it.
+    // The lion mark fills its own square frame, so the animal centers on the box.
     private static final float GLYPH_VIEWPORT = 108f;
     private static final float BIRD_CX = 54f;
-    private static final float BIRD_CY = 50.5f;
+    private static final float BIRD_CY = 54f;
 
     private final Drawable bird;
     private final Drawable halo;
@@ -28,8 +28,8 @@ final class OrbView extends View {
 
     OrbView(Context context) {
         super(context);
-        bird = context.getDrawable(R.drawable.ic_moa_glyph);
-        halo = context.getDrawable(R.drawable.ic_moa_glyph);
+        bird = context.getDrawable(R.drawable.moa_mark);
+        halo = context.getDrawable(R.drawable.moa_mark);
         if (halo != null) {
             halo.mutate();
         }
@@ -40,7 +40,7 @@ final class OrbView extends View {
         invalidate();
     }
 
-    // Held = finger down for push-to-talk. Lights the glow and grows a touch.
+    // Held = manual voice turn engaged. Lights the glow and grows a touch.
     void setHeld(boolean held) {
         this.held = held;
         invalidate();
@@ -73,12 +73,12 @@ final class OrbView extends View {
         bird.draw(canvas);
     }
 
-    // Soft radial bloom behind the mark. Teal while held, gold while listening,
-    // so push-to-talk gets an unmistakable lit state without adding a disc.
+    // Soft gold radial bloom behind the mark. Stronger while held, softer while
+    // listening, so a live voice turn gets an unmistakable lit state without a disc.
     private void drawGlow(Canvas canvas, float cx, float cy, float box) {
         float radius = box * 0.62f;
-        int core = held ? 0x6661E5C6 : 0x55F4D35E;
-        int edge = 0x0061E5C6;
+        int core = held ? 0x66F4D35E : 0x55F4D35E;
+        int edge = 0x00F4D35E;
         glowPaint.setShader(new RadialGradient(cx, cy, radius, core, edge, Shader.TileMode.CLAMP));
         canvas.drawCircle(cx, cy, radius, glowPaint);
         glowPaint.setShader(null);

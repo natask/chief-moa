@@ -12,7 +12,7 @@ can speak replies with Android `TextToSpeech`.
 ## Deploy To A Phone
 
 ```sh
-cd software/android_app
+cd android_app
 ./gradlew assembleDebug
 adb devices
 adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -28,11 +28,18 @@ If `adb devices` does not show the phone:
 ## First Run
 
 1. Open `Moa`.
-2. Grant overlay permission.
-3. Grant microphone permission.
-4. Save the gateway URL and token.
-5. Tap `Start assistant circle`.
-6. Leave the app and use the floating orb.
+2. Grant overlay permission from A.G.'s direct draw-over-apps settings button.
+3. Grant microphone permission when prompted or from `Enable microphone`.
+4. Grant Screen access in Accessibility settings when you want screen context.
+   If Android says restricted settings are blocking it, open App info for
+   A.G., tap the three-dot menu, choose `Allow restricted settings`, return,
+   then enable Screen access.
+5. Save the gateway URL and token.
+6. Tap `Start assistant circle`.
+7. Leave the app and use the floating orb.
+
+The setup screen lists missing requirements. The app can request microphone and
+open settings; it cannot silently grant draw-over-apps or Accessibility access.
 
 ## Gateway Setup
 
@@ -52,9 +59,20 @@ MODEL_API_KEY=<provider-key>
 MODEL_ID=gpt-4o-mini
 ```
 
-The Android app default gateway URL is `http://10.147.17.6:8787`, which is
-this Mac's current ZeroTier address. Use `http://10.147.17.10:8787` when the
-main-machine gateway is online.
+The Android app default gateway URL is the main-machine gateway,
+`http://10.147.17.10:8787`. Use `http://10.147.17.6:8787` only when intentionally
+pointing the app at this Mac's local gateway over ZeroTier.
+
+## Repo Deploy
+
+```sh
+bash scripts/deploy.sh android
+```
+
+This builds the timestamp-versioned OTA APK, syncs it to the gateway, and then
+installs `gateway/data/android-ota/moa-assistant.apk` over ADB when an
+authorized phone is connected. If no authorized device is present, direct
+install is skipped without failing deploy.
 
 ## Main Files
 
@@ -71,12 +89,9 @@ main-machine gateway is online.
 
 ## Assistant Orb Controls
 
-- Drag: move the orb.
-- Single tap while idle: start listening.
-- Single tap while listening: submit the current transcript and start a fresh
-  listening loop.
-- Double tap: stop listening and stop speech output without sending a reply.
-- Long press: show or hide the chat panel.
+- Single tap: open the chat menu.
+- Click and hold while moving: reposition the orb without starting voice.
+- Double-click and hold: start manual voice capture; release to send.
 
 ## Current Server Shape
 

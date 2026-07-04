@@ -8,12 +8,21 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  CORE_VOICES,
+  normalizeLanguageCode,
+  normalizeLanguageList,
+  normalizeVoiceChoice,
+} = require("./profile-options");
 
 const PROFILE_FILENAME = "agent-profile.json";
 const PROFILE_VERSIONS_FILENAME = "agent-profile-versions.json";
+const DEVICE_OVERRIDES_FILENAME = "agent-profile-device-overrides.json";
+const REQUIRED_VOICE_STYLE_RULE = "Voice style requirement: speak tersely. Honor the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
 // Only these fields may be patched/persisted/overridden; anything else is ignored.
 const PROFILE_FIELDS = [
   "system_prompt",
+  "assistant_name",
   "model",
   "temperature",
   "voice_max_chars",
@@ -23,6 +32,9 @@ const PROFILE_FIELDS = [
   "language_primary",
   "language_output",
   "language_auto_switch",
+  "input_languages",
+  "input_language_primary",
+  "response_modality",
   "voice_provider",
   "stt_provider",
   "reasoning_provider",
@@ -33,45 +45,42 @@ const PROFILE_FIELDS = [
   "recovery_mode",
 ];
 
-// The Gemini Live core voices that are safe on any live model. The agent can
-// switch its OWN spoken voice to one of these by talking to itself; an unknown
-// value is rejected (the field is left unchanged) so a typo never blanks it.
-// Google labels these by style, not gender — gender aliases are defined in the
-// extension's settings-intent parser, which maps to one of these canonical names.
-const CORE_VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
-const CORE_VOICES_BY_LOWER = new Map(CORE_VOICES.map((name) => [name.toLowerCase(), name]));
-
-// Canonicalize a requested voice to its proper-case core-voice name, or return
-// null if it is not one of the core 8 (case-insensitive). Null means "reject".
+// Canonicalize a requested voice to its proper-case core-voice name, including
+// approved tone aliases such as feminine/masculine. Null means "reject".
 function normalizeVoice(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  return CORE_VOICES_BY_LOWER.get(value.trim().toLowerCase()) || null;
+  return normalizeVoiceChoice(value);
 }
 
 function createAgentProfileStore(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
   const profilePath = path.join(dataDir, PROFILE_FILENAME);
   const versionsPath = path.join(dataDir, PROFILE_VERSIONS_FILENAME);
+  const deviceOverridesPath = path.join(dataDir, DEVICE_OVERRIDES_FILENAME);
   // The env default is computed once at boot; it is the immutable baseline.
   const defaults = freeze(normalizeProfile(options?.defaults || {}));
 
   fs.mkdirSync(dataDir, { recursive: true });
 
   let state = loadVersionState({ profilePath, versionsPath, defaults });
+  let deviceState = loadDeviceOverrideState(deviceOverridesPath);
 
-  function effective() {
-    return { ...currentVersionRecord().profile };
+  function effective(options = {}) {
+    const profile = { ...currentVersionRecord().profile };
+    const deviceId = normalizeDeviceId(options?.deviceId || options?.device_id);
+    if (!deviceId) {
+      return profile;
+    }
+    const patch = currentDevicePatch(deviceId);
+    return Object.keys(patch).length > 0 ? mergeProfile(profile, patch) : profile;
   }
 
-  function isOverridden() {
-    return !profilesEqual(currentVersionRecord().profile, defaults);
+  function isOverridden(options = {}) {
+    return !profilesEqual(effective(options), defaults);
   }
 
   // Merge a per-request override onto the effective profile WITHOUT persisting.
-  function effectiveWithOverrides(overrides) {
-    const base = effective();
+  function effectiveWithOverrides(overrides, options = {}) {
+    const base = effective(options);
     const patch = pickProfileFields(overrides);
     return Object.keys(patch).length > 0 ? mergeProfile(base, patch) : base;
   }
@@ -81,7 +90,11 @@ function createAgentProfileStore(options) {
   function patch(updates, metadata = {}) {
     const next = pickProfileFields(updates);
     if (Object.keys(next).length === 0) {
-      return effective();
+      return effective(metadata);
+    }
+    const deviceId = normalizeDeviceId(metadata.deviceId || metadata.device_id);
+    if (metadata.scope === "device" && deviceId) {
+      return patchDevice(deviceId, next, metadata);
     }
     const before = currentVersionRecord();
     const profile = mergeProfile(before.profile, next);
@@ -99,6 +112,10 @@ function createAgentProfileStore(options) {
 
   // Return to the env default by appending a new version.
   function reset(metadata = {}) {
+    const deviceId = normalizeDeviceId(metadata.deviceId || metadata.device_id);
+    if (metadata.scope === "device" && deviceId) {
+      return resetDevice(deviceId, metadata);
+    }
     const before = currentVersionRecord();
     if (!profilesEqual(before.profile, defaults)) {
       appendVersion(defaults, {
@@ -127,11 +144,21 @@ function createAgentProfileStore(options) {
     return effective();
   }
 
-  function currentVersion() {
-    return currentVersionRecord().version;
+  function currentVersion(options = {}) {
+    const globalVersion = currentVersionRecord().version;
+    const deviceId = normalizeDeviceId(options?.deviceId || options?.device_id);
+    if (!deviceId) {
+      return globalVersion;
+    }
+    const deviceVersion = currentDeviceVersion(deviceId);
+    return deviceVersion ? `${globalVersion}_${deviceVersion}` : globalVersion;
   }
 
   function listVersions(options = {}) {
+    const deviceId = normalizeDeviceId(options.deviceId || options.device_id);
+    if (deviceId) {
+      return listDeviceVersions(deviceId, options);
+    }
     const limit = Math.max(1, Math.min(Number(options.limit || state.versions.length) || state.versions.length, 500));
     const records = state.versions.slice().reverse().slice(0, limit);
     return records.map(publicVersionRecord);
@@ -169,9 +196,105 @@ function createAgentProfileStore(options) {
     return entry;
   }
 
+  function patchDevice(deviceId, next, metadata) {
+    const entry = ensureDeviceEntry(deviceId);
+    const beforePatch = currentDevicePatch(deviceId);
+    const patch = mergePatch(beforePatch, next);
+    if (patchesEqual(beforePatch, patch)) {
+      return effective({ deviceId });
+    }
+    appendDeviceVersion(deviceId, patch, {
+      source: metadata.source || "api",
+      reason: metadata.reason || "device_patch",
+      parent_version: entry.current_version || "",
+      changed: changedPatchFields(beforePatch, patch),
+    });
+    return effective({ deviceId });
+  }
+
+  function resetDevice(deviceId, metadata) {
+    const beforePatch = currentDevicePatch(deviceId);
+    if (Object.keys(beforePatch).length === 0) {
+      return effective({ deviceId });
+    }
+    const entry = ensureDeviceEntry(deviceId);
+    appendDeviceVersion(deviceId, {}, {
+      source: metadata.source || "api",
+      reason: metadata.reason || "device_reset",
+      parent_version: entry.current_version || "",
+      changed: changedPatchFields(beforePatch, {}),
+    });
+    return effective({ deviceId });
+  }
+
+  function ensureDeviceEntry(deviceId) {
+    const id = normalizeDeviceId(deviceId);
+    if (!id) {
+      throw new Error("device id is required");
+    }
+    deviceState.devices[id] = deviceState.devices[id] || { current_version: "", versions: [] };
+    return deviceState.devices[id];
+  }
+
+  function currentDeviceRecord(deviceId) {
+    const id = normalizeDeviceId(deviceId);
+    const entry = id ? deviceState.devices[id] : null;
+    if (!entry || !Array.isArray(entry.versions) || entry.versions.length === 0) {
+      return null;
+    }
+    return entry.versions.find((version) => version.version === entry.current_version) || entry.versions[entry.versions.length - 1];
+  }
+
+  function currentDevicePatch(deviceId) {
+    return { ...(currentDeviceRecord(deviceId)?.patch || {}) };
+  }
+
+  function currentDeviceVersion(deviceId) {
+    return currentDeviceRecord(deviceId)?.version || "";
+  }
+
+  function appendDeviceVersion(deviceId, patch, metadata) {
+    const id = normalizeDeviceId(deviceId);
+    const entry = ensureDeviceEntry(id);
+    const now = new Date().toISOString();
+    const sequence = nextSequence(entry.versions);
+    const versionEntry = {
+      version: deviceVersionId(sequence),
+      sequence,
+      created_at: now,
+      source: cleanSource(metadata?.source),
+      reason: String(metadata?.reason || "device_patch").slice(0, 80),
+      parent_version: metadata?.parent_version || entry.current_version || "",
+      changed: Array.isArray(metadata?.changed) ? metadata.changed : [],
+      patch: pickProfileFields(patch),
+    };
+    entry.versions.push(versionEntry);
+    entry.current_version = versionEntry.version;
+    persistDeviceOverrideState(deviceOverridesPath, deviceState);
+    return versionEntry;
+  }
+
+  function listDeviceVersions(deviceId, options = {}) {
+    const entry = deviceState.devices[normalizeDeviceId(deviceId)];
+    const versions = Array.isArray(entry?.versions) ? entry.versions : [];
+    const limit = Math.max(1, Math.min(Number(options.limit || versions.length) || versions.length || 1, 500));
+    return versions.slice().reverse().slice(0, limit).map((version) => ({
+      version: version.version,
+      sequence: version.sequence,
+      created_at: version.created_at,
+      source: version.source,
+      reason: version.reason,
+      parent_version: version.parent_version,
+      changed: version.changed,
+      patch: { ...(version.patch || {}) },
+      profile: mergeProfile(currentVersionRecord().profile, version.patch || {}),
+    }));
+  }
+
   return {
     profilePath,
     versionsPath,
+    deviceOverridesPath,
     defaults: () => ({ ...defaults }),
     effective,
     effectiveWithOverrides,
@@ -182,6 +305,7 @@ function createAgentProfileStore(options) {
     currentVersion,
     versions: listVersions,
     fields: () => PROFILE_FIELDS.slice(),
+    normalizeDeviceId,
   };
 }
 
@@ -245,7 +369,7 @@ function loadVersionsFile(versionsPath, defaults) {
         parent_version: String(entry.parent_version || ""),
         rollback_from_version: String(entry.rollback_from_version || ""),
         changed: Array.isArray(entry.changed) ? entry.changed.filter((field) => PROFILE_FIELDS.includes(field)) : [],
-        profile: normalizeProfile({ ...defaults, ...(entry.profile || {}) }),
+        profile: mergeProfile(defaults, entry.profile || {}),
       };
     });
     if (versions.length === 0) {
@@ -258,6 +382,48 @@ function loadVersionsFile(versionsPath, defaults) {
     };
   } catch {
     return null;
+  }
+}
+
+function loadDeviceOverrideState(deviceOverridesPath) {
+  const empty = { devices: {} };
+  if (!fs.existsSync(deviceOverridesPath)) {
+    return empty;
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(deviceOverridesPath, "utf8"));
+    const devices = {};
+    const incoming = raw?.devices && typeof raw.devices === "object" && !Array.isArray(raw.devices)
+      ? raw.devices
+      : {};
+    for (const [rawDeviceId, entry] of Object.entries(incoming)) {
+      const deviceId = normalizeDeviceId(rawDeviceId);
+      if (!deviceId) continue;
+      const versions = Array.isArray(entry?.versions)
+        ? entry.versions.map((version, index) => {
+          const sequence = Number(version.sequence || index + 1);
+          return {
+            version: String(version.version || deviceVersionId(sequence)),
+            sequence,
+            created_at: typeof version.created_at === "string" ? version.created_at : new Date().toISOString(),
+            source: cleanSource(version.source),
+            reason: String(version.reason || "loaded").slice(0, 80),
+            parent_version: String(version.parent_version || ""),
+            changed: Array.isArray(version.changed) ? version.changed.filter((field) => PROFILE_FIELDS.includes(field)) : [],
+            patch: pickProfileFields(version.patch || version.profile || {}),
+          };
+        })
+        : [];
+      devices[deviceId] = {
+        current_version: versions.some((version) => version.version === entry?.current_version)
+          ? String(entry.current_version)
+          : (versions[versions.length - 1]?.version || ""),
+        versions,
+      };
+    }
+    return { devices };
+  } catch {
+    return empty;
   }
 }
 
@@ -282,6 +448,12 @@ function persistState({ versionsPath, profilePath, state, defaults }) {
   writeLegacyCurrent(profilePath, state, defaults);
 }
 
+function persistDeviceOverrideState(deviceOverridesPath, deviceState) {
+  const tmpPath = `${deviceOverridesPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(deviceState, null, 2));
+  fs.renameSync(tmpPath, deviceOverridesPath);
+}
+
 function writeLegacyCurrent(profilePath, state, defaults) {
   const current = state.versions.find((entry) => entry.version === state.current_version) || state.versions[state.versions.length - 1];
   const patch = diffProfile(defaults, current.profile);
@@ -300,6 +472,10 @@ function mergeProfile(base, patch) {
   return { ...base, ...pickProfileFields(patch) };
 }
 
+function mergePatch(base, patch) {
+  return { ...pickProfileFields(base), ...pickProfileFields(patch) };
+}
+
 // Coerce and keep only known fields with usable values. Unknown keys, empty
 // strings, and invalid numbers are dropped so a patch never blanks a field.
 function pickProfileFields(input) {
@@ -308,7 +484,16 @@ function pickProfileFields(input) {
   }
   const out = {};
   if (typeof input.system_prompt === "string" && input.system_prompt.trim()) {
-    out.system_prompt = input.system_prompt.trim();
+    const prompt = normalizeSystemPromptField(input.system_prompt);
+    if (prompt) {
+      out.system_prompt = prompt;
+    }
+  }
+  if (typeof input.assistant_name === "string" && input.assistant_name.trim()) {
+    const name = normalizeAssistantName(input.assistant_name);
+    if (name) {
+      out.assistant_name = name;
+    }
   }
   if (typeof input.model === "string" && input.model.trim()) {
     out.model = input.model.trim();
@@ -326,7 +511,13 @@ function pickProfileFields(input) {
     }
   }
   if (typeof input.language === "string" && input.language.trim()) {
-    out.language = input.language.trim().slice(0, 40);
+    const list = normalizeLanguageList(input.language);
+    if (list.codes.length > 0 && list.invalid.length === 0) {
+      out.language = list.codes.join(",");
+      if (typeof input.language_primary !== "string" || !input.language_primary.trim()) {
+        out.language_primary = list.codes[0];
+      }
+    }
   }
   if (typeof input.language_mode === "string" && input.language_mode.trim()) {
     const value = input.language_mode.trim().toLowerCase();
@@ -335,7 +526,10 @@ function pickProfileFields(input) {
     }
   }
   if (typeof input.language_primary === "string" && input.language_primary.trim()) {
-    out.language_primary = input.language_primary.trim().slice(0, 40);
+    const primary = normalizeLanguageCode(input.language_primary);
+    if (primary) {
+      out.language_primary = primary;
+    }
   }
   if (typeof input.language_output === "string" && input.language_output.trim()) {
     const value = input.language_output.trim().toLowerCase();
@@ -345,6 +539,32 @@ function pickProfileFields(input) {
   }
   if (typeof input.language_auto_switch === "boolean") {
     out.language_auto_switch = input.language_auto_switch;
+  }
+  // Languages the USER speaks. Modular STT providers can use these as direct
+  // language hints; Gemini Live native audio infers input language and receives
+  // these through Moa-owned context instead.
+  if (typeof input.input_languages === "string" && input.input_languages.trim()) {
+    const list = normalizeLanguageList(input.input_languages);
+    if (list.codes.length > 0 && list.invalid.length === 0) {
+      out.input_languages = list.codes.join(",");
+      if (typeof input.input_language_primary !== "string" || !input.input_language_primary.trim()) {
+        out.input_language_primary = list.codes[0];
+      }
+    }
+  }
+  if (typeof input.input_language_primary === "string" && input.input_language_primary.trim()) {
+    const primary = normalizeLanguageCode(input.input_language_primary);
+    if (primary) {
+      out.input_language_primary = primary;
+    }
+  }
+  // How the agent delivers replies: "speech" (speak), "text" (write, no audio),
+  // or "auto" (match the input — typed turn -> text, spoken turn -> speech).
+  if (typeof input.response_modality === "string" && input.response_modality.trim()) {
+    const value = input.response_modality.trim().toLowerCase();
+    if (["speech", "text", "auto"].includes(value)) {
+      out.response_modality = value;
+    }
   }
   for (const field of ["voice_provider", "stt_provider", "reasoning_provider", "tts_provider"]) {
     if (typeof input[field] === "string" && input[field].trim()) {
@@ -375,6 +595,7 @@ function normalizeProfile(defaults) {
   const languagePrimary = picked.language_primary || picked.language || "en-US";
   return {
     system_prompt: picked.system_prompt || "",
+    assistant_name: picked.assistant_name || "A.G.",
     model: picked.model || "",
     temperature: picked.temperature !== undefined ? picked.temperature : 0.4,
     voice_max_chars: picked.voice_max_chars !== undefined ? picked.voice_max_chars : 280,
@@ -386,6 +607,11 @@ function normalizeProfile(defaults) {
     language_primary: languagePrimary,
     language_output: picked.language_output || "primary_only",
     language_auto_switch: picked.language_auto_switch === true,
+    input_languages: picked.input_languages || "en-US",
+    input_language_primary: picked.input_language_primary
+      || (picked.input_languages ? picked.input_languages.split(",")[0].trim() : "")
+      || "en-US",
+    response_modality: picked.response_modality || "auto",
     voice_provider: picked.voice_provider || "",
     stt_provider: picked.stt_provider || "",
     reasoning_provider: picked.reasoning_provider || "",
@@ -397,6 +623,79 @@ function normalizeProfile(defaults) {
   };
 }
 
+function normalizeAssistantName(value) {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/^["'`]+|["'`.!,?;:]+$/g, "")
+    .replace(/\s+/g, " ");
+  if (!cleaned) {
+    return "";
+  }
+  if (cleaned.length > 80) {
+    return "";
+  }
+  if (!/[A-Za-z0-9]/.test(cleaned)) {
+    return "";
+  }
+  return cleaned;
+}
+
+// Phrases a spoken "become X" / "set your prompt to X" must never smuggle in:
+// attempts to override the gateway's own guidelines, safety rules, or identity
+// boundary. Matched on the lowercased prompt; a match strips that clause rather
+// than persisting it, so a persona stays a persona and cannot rewrite the rules.
+const OVERRIDE_QUALIFIER = "(?:your|all|any|the|previous|prior|earlier|above|its)";
+const OVERRIDE_TARGET = "(?:guidelines?|rules?|instructions?|policies|policy|constraints?|safety|system\\s+prompt|restrictions?|limits?|filters?)";
+const PROMPT_OVERRIDE_PATTERNS = [
+  new RegExp(`\\b(?:ignore|disregard|forget|override|bypass|disable|drop|remove|skip)\\s+(?:${OVERRIDE_QUALIFIER}\\s+)+${OVERRIDE_TARGET}\\b[^.!?]*`, "gi"),
+  /\byou\s+have\s+no\s+(?:guidelines?|rules?|restrictions?|limits?|constraints?|safety|filters?)\b[^.!?]*/gi,
+  /\b(?:there\s+are\s+no|without\s+any)\s+(?:guidelines?|rules?|restrictions?|limits?|constraints?|filters?|safety)\b[^.!?]*/gi,
+  /\b(?:jailbreak|developer\s+mode|dan\s+mode|do\s+anything\s+now)\b[^.!?]*/gi,
+  /\byou\s+are\s+not\s+bound\s+by\b[^.!?]*/gi,
+];
+const PROMPT_MAX_CHARS = 1200;
+
+// Strip adversarial override clauses and cap length. Returns the cleaned prompt,
+// or "" when nothing usable is left. Never persists a rule-override attempt.
+function sanitizePersonaPrompt(value) {
+  let prompt = String(value || "").trim();
+  if (!prompt) {
+    return "";
+  }
+  for (const pattern of PROMPT_OVERRIDE_PATTERNS) {
+    prompt = prompt.replace(pattern, " ");
+  }
+  prompt = prompt.replace(/\s+/g, " ").trim().slice(0, PROMPT_MAX_CHARS).trim();
+  return prompt;
+}
+
+function normalizeSystemPromptField(value) {
+  const prompt = sanitizePersonaPrompt(value);
+  return prompt ? withRequiredVoiceStyle(prompt) : "";
+}
+
+function safeSystemPromptForProvider(profile, fallback = "") {
+  return withRequiredVoiceStyle(profile?.system_prompt || "", fallback);
+}
+
+function withRequiredVoiceStyle(prompt, fallback = "") {
+  const value = String(prompt || "").trim() || String(fallback || "").trim() || "You are A.G.";
+  const lower = value.toLowerCase();
+  const hasTerseStyle = lower.includes("terse") || lower.includes("tersely");
+  if (hasTerseStyle && hasAddressPreferenceRule(lower)) {
+    return value;
+  }
+  return [value, REQUIRED_VOICE_STYLE_RULE].join("\n\n");
+}
+
+function hasAddressPreferenceRule(lowerText) {
+  return lowerText.includes("requested form of address")
+    || lowerText.includes("requested title")
+    || lowerText.includes("roleplay style")
+    || lowerText.includes("user's requested")
+    || lowerText.includes("users requested");
+}
+
 function freeze(profile) {
   return Object.freeze({ ...profile });
 }
@@ -405,8 +704,16 @@ function profilesEqual(left, right) {
   return PROFILE_FIELDS.every((field) => left?.[field] === right?.[field]);
 }
 
+function patchesEqual(left, right) {
+  return PROFILE_FIELDS.every((field) => (left?.[field] || undefined) === (right?.[field] || undefined));
+}
+
 function changedFields(before, after) {
   return PROFILE_FIELDS.filter((field) => before?.[field] !== after?.[field]);
+}
+
+function changedPatchFields(before, after) {
+  return PROFILE_FIELDS.filter((field) => (before?.[field] || undefined) !== (after?.[field] || undefined));
 }
 
 function diffProfile(defaults, profile) {
@@ -425,6 +732,20 @@ function nextSequence(versions) {
 
 function versionId(sequence) {
   return `profile_v${String(Math.max(1, Number(sequence) || 1)).padStart(4, "0")}`;
+}
+
+function deviceVersionId(sequence) {
+  return `device_profile_v${String(Math.max(1, Number(sequence) || 1)).padStart(4, "0")}`;
+}
+
+function normalizeDeviceId(value) {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+  return cleaned || "";
 }
 
 function cleanSource(source) {
@@ -450,4 +771,10 @@ module.exports = {
   PROFILE_FIELDS,
   CORE_VOICES,
   normalizeVoice,
+  normalizeAssistantName,
+  normalizeDeviceId,
+  normalizeSystemPromptField,
+  sanitizePersonaPrompt,
+  safeSystemPromptForProvider,
+  withRequiredVoiceStyle,
 };

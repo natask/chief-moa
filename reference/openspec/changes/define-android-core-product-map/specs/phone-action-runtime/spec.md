@@ -30,7 +30,7 @@ The Android app SHALL require approval based on action risk.
 - **THEN** the app may read screen context without an extra confirmation
 
 #### Scenario: Explicit navigation command
-- **WHEN** the user explicitly asks to go back or tap a visible label
+- **WHEN** the user explicitly asks to go back, go home, tap a visible label, or open an installed app
 - **THEN** the app may execute that local navigation action and record a receipt
 
 #### Scenario: External side effect

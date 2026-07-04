@@ -20,7 +20,21 @@
 
 // Profile fields the gateway accepts. Kept aligned with moa_gateway's
 // lib/agent-profile.js PROFILE_FIELDS; we never invent field names.
-const PROFILE_FIELDS = ["system_prompt", "model", "temperature", "voice_max_chars", "language", "voice"];
+const PROFILE_FIELDS = [
+  "system_prompt",
+  "model",
+  "temperature",
+  "voice_max_chars",
+  "language",
+  "voice",
+  "language_mode",
+  "language_primary",
+  "language_output",
+  "language_auto_switch",
+  "input_languages",
+  "input_language_primary",
+  "response_modality",
+];
 
 // The Gemini Live core-8 voices the gateway accepts for the agent's OWN spoken
 // voice. Kept aligned with moa_gateway's lib/agent-profile.js CORE_VOICES. Google
@@ -31,6 +45,12 @@ const CORE_VOICES_BY_LOWER = new Map(CORE_VOICES.map((name) => [name.toLowerCase
 // maps to Aoede, a man's voice to Charon.
 const FEMALE_VOICE = "Aoede";
 const MALE_VOICE = "Charon";
+
+const LANGUAGE_DEFINITIONS = [
+  { label: "English", code: "en-US", keys: ["english"] },
+  { label: "Amharic", code: "am-ET", keys: ["amharic", "a m h a r i c", "a-m-h-a-r-i-c"] },
+];
+const GATEWAY_PROFILE_LANGUAGE_NAMES = LANGUAGE_DEFINITIONS.flatMap((language) => language.keys);
 
 const DEFAULT_VOICE_MAX_CHARS = 280;
 const TERSE_MAX_CHARS = 140;
@@ -84,15 +104,50 @@ function matchVoiceMaxChars(raw) {
   return { patch: { voice_max_chars: value }, summary: `spoken reply limit set to ${value} chars` };
 }
 
-// "set language to French" / "reply in Spanish" / "speak English".
+// "set language to Amharic" / "reply in English" / "speak English".
 function matchLanguage(raw) {
-  const m =
-    raw.match(/(?:set\s+)?language\s*(?:to|=|:)\s*([a-zA-Z][a-zA-Z \-]{0,38})/i) ||
-    raw.match(/(?:reply|respond|answer|speak|talk)\s+(?:to me\s+)?in\s+([a-zA-Z][a-zA-Z \-]{0,38})/i);
-  if (!m) return null;
-  const value = stripQuotes(m[1].trim());
-  if (!value) return null;
-  return { patch: { language: value }, summary: `language set to ${value}` };
+  const lower = normalizeSpeech(raw);
+  const command =
+    /\b(?:set\s+)?language\s*(?:to|=|:)/i.test(raw) ||
+    /\b(?:reply|respond|answer|speak|talk)\s+(?:to me\s+)?in\b/i.test(raw) ||
+    /\bonly\s+(?:speak|talk|respond|answer)\b/i.test(raw) ||
+    /\b(?:only\s+)?(?:going to|gonna)\s+(?:speak|talk)\b/i.test(raw) ||
+    /\bthese\s+(?:two\s+)?languages\b/i.test(raw) ||
+    /\bdo\s+not\s+switch\b/i.test(raw) ||
+    /\bdon'?t\s+switch\b/i.test(raw);
+  if (!command) return null;
+  const matched = matchedLanguages(lower);
+  if (matched.length === 0) return null;
+  const locked = matched.length > 1 ||
+    /\bonly\b/i.test(raw) ||
+    /\bthese\s+(?:two\s+)?languages\b/i.test(raw) ||
+    /\bdo\s+not\s+switch\b/i.test(raw) ||
+    /\bdon'?t\s+switch\b/i.test(raw);
+  const primary = matched[0];
+  const names = matched.map((language) => language.label).join(" + ");
+  return {
+    patch: {
+      language: matched.map((language) => language.code).join(","),
+      language_primary: primary.code,
+      language_mode: "explicit",
+      language_output: "primary_only",
+      language_auto_switch: false,
+    },
+    summary: locked ? `language locked to ${names}` : `language set to ${names}`,
+  };
+}
+
+function matchedLanguages(lower) {
+  const out = [];
+  for (const language of LANGUAGE_DEFINITIONS) {
+    const indexes = language.keys
+      .map((key) => lower.indexOf(key))
+      .filter((index) => index >= 0);
+    if (indexes.length > 0 && !out.some((item) => item.code === language.code)) {
+      out.push({ ...language, index: Math.min(...indexes) });
+    }
+  }
+  return out.sort((a, b) => a.index - b.index).map(({ index, ...language }) => language);
 }
 
 // Change the agent's OWN spoken voice. Three shapes, in priority order:
@@ -180,9 +235,10 @@ const MATCHERS = [
 function parseSettingsIntent(text, current) {
   const raw = String(text || "").trim();
   if (!raw) return null;
+  const scope = profileScopeFromText(raw);
   const explicitSystemPrompt = matchSystemPrompt(raw);
   if (explicitSystemPrompt && startsWithSystemPromptSetter(raw)) {
-    return explicitSystemPrompt;
+    return withScope(explicitSystemPrompt, scope);
   }
   if (looksLikeInstructionalExample(raw)) {
     return null;
@@ -192,10 +248,36 @@ function parseSettingsIntent(text, current) {
   for (const matcher of MATCHERS) {
     const result = matcher(raw, current);
     if (result && hasUsableFields(result.patch)) {
-      return result;
+      return withScope(result, scope);
     }
   }
   return null;
+}
+
+function withScope(result, scope) {
+  return scope ? { ...result, scope } : result;
+}
+
+function profileScopeFromText(raw) {
+  const lower = normalizeSpeech(raw);
+  if (/\b(?:all|every)\s+(?:device|devices|surface|surfaces|client|clients)\b/.test(lower)
+    || /\b(?:globally|global|everywhere|for everyone|all sessions)\b/.test(lower)) {
+    return "global";
+  }
+  if (/\b(?:this|current|only this|just this)\s+(?:device|phone|browser|surface|client)\b/.test(lower)
+    || /\b(?:on|for)\s+(?:this|my)\s+(?:device|phone|browser)\b/.test(lower)
+    || /\b(?:here only|just here|only here)\b/.test(lower)) {
+    return "device";
+  }
+  return "";
+}
+
+function normalizeSpeech(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function startsWithSystemPromptSetter(raw) {
@@ -232,6 +314,82 @@ function parseProfileQueryIntent(text) {
   return asksHistory ? { kind: "prompt_history" } : null;
 }
 
+function looksLikeGatewayProfileControlIntent(text) {
+  const raw = String(text || "").trim();
+  if (looksLikeInstructionalExample(raw)) return false;
+  const lower = normalizeSpeech(raw);
+  if (!lower) return false;
+  return isGatewayPromptControl(lower) || isGatewayIdentityControl(lower) || isGatewayLanguageControl(lower) || isGatewayVoiceControl(lower);
+}
+
+function isGatewayPromptControl(lower) {
+  return lower.includes("what prompt") ||
+    lower.includes("which prompt") ||
+    lower.includes("current prompt") ||
+    /\b(set|change|update)\b.*\b(system )?prompt\b/.test(lower);
+}
+
+function isGatewayIdentityControl(lower) {
+  return lower.includes("what is your name") ||
+    lower.includes("what s your name") ||
+    lower.includes("who are you") ||
+    /\byour name\b\s*(is|should be|will be)\b/.test(lower) ||
+    /\b(call|name) yourself\b/.test(lower) ||
+    /\b(you are|youre)\b\s+(now\s+)?(called\s+|named\s+)?/.test(lower);
+}
+
+function isGatewayLanguageControl(lower) {
+  if (
+    lower.includes("what language") ||
+    lower.includes("what languages") ||
+    lower.includes("which language") ||
+    lower.includes("which languages") ||
+    lower.includes("different languages") ||
+    lower.includes("languages can you") ||
+    lower.includes("languages i can make you") ||
+    lower.includes("languages can i make you") ||
+    lower.includes("language is active") ||
+    lower.includes("language settings") ||
+    /\b(set|change|update|switch)\b.*\blanguage\b/.test(lower)
+  ) {
+    return true;
+  }
+  if (!containsProfileWord(lower, GATEWAY_PROFILE_LANGUAGE_NAMES)) return false;
+  return /\b(speak|talk|reply|respond|answer|say|process|understand|listen|recognize|restrict|select|allow)\b/.test(lower) ||
+    lower.includes(" only ") ||
+    lower.startsWith("only ") ||
+    lower.includes("do not switch") ||
+    lower.includes("don t switch") ||
+    lower.includes("dont switch") ||
+    lower.includes("these languages") ||
+    lower.includes("these two languages");
+}
+
+function isGatewayVoiceControl(lower) {
+  if (
+    lower.includes("what voice") ||
+    lower.includes("what voices") ||
+    lower.includes("which voice") ||
+    lower.includes("which voices") ||
+    lower.includes("different voices") ||
+    lower.includes("voices can you") ||
+    lower.includes("voice is active") ||
+    /\b(set|change|switch|use|make)\b.*\bvoice\b/.test(lower)
+  ) {
+    return true;
+  }
+  if (lower.includes("sound like") || lower.includes("speak like")) {
+    return /\b(female|woman|girl|feminine|lady|male|man|guy|masculine|boy)\b/.test(lower) ||
+      containsProfileWord(lower, CORE_VOICES.map((name) => name.toLowerCase()));
+  }
+  return containsProfileWord(lower, CORE_VOICES.map((name) => name.toLowerCase())) &&
+    /\b(use|switch|set|change)\b/.test(lower);
+}
+
+function containsProfileWord(lower, words) {
+  return words.some((word) => lower.includes(word));
+}
+
 function numberOr(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -243,4 +401,4 @@ function stripQuotes(value) {
   return (quoted ? quoted[1] : trimmed).trim();
 }
 
-export { parseSettingsIntent, parseProfileQueryIntent, PROFILE_FIELDS };
+export { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent, PROFILE_FIELDS };

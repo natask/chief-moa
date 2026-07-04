@@ -46,6 +46,15 @@ speaking state when the selected provider or fallback runtime supports it.
 - **THEN** Moa stops or ducks current playback
 - **AND** captures the new user speech as a new turn or interruption event
 
+#### Scenario: User opts into background assistant speech
+- **WHEN** the user tells the browser voice session to keep talking while the
+  user talks
+- **THEN** the browser client records a session-scoped background-speech policy
+- **AND** starting the next spoken turn opens a distinct gateway voice turn
+  without stopping already queued assistant playback
+- **AND** each spoken turn keeps the same durable session identifier while using
+  a distinct turn identifier
+
 #### Scenario: Provider lacks native barge-in
 - **WHEN** the selected provider does not support native barge-in
 - **THEN** Moa uses the best available local playback stop and new-turn capture

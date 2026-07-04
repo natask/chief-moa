@@ -86,21 +86,21 @@ function assertStore(dir) {
 
   const custom = {
     surfaces: [
-      { id: "command-panel", title: "my agee", controls: [{ type: "button", id: "go", label: "Go", action: "agent.run" }] },
+      { id: "command-panel", title: "my Aggie", controls: [{ type: "button", id: "go", label: "Go", action: "agent.run" }] },
     ],
   };
   const replaced = store.replace(custom);
-  assert.equal(replaced.surfaces[0].title, "my agee", "replace must persist the new title");
+  assert.equal(replaced.surfaces[0].title, "my Aggie", "replace must persist the new title");
   assert.equal(store.isCustomized(), true, "store must report customized after replace");
 
   // Invalid: not a renderable document -> throws, surface stays customized.
   assert.throws(() => store.replace({ surfaces: [] }), /invalid ui spec/, "empty surfaces must be rejected");
   assert.throws(() => store.replace({ nope: true }), /invalid ui spec/, "missing surfaces must be rejected");
-  assert.equal(store.effective().surfaces[0].title, "my agee", "rejected replace must leave the spec unchanged");
+  assert.equal(store.effective().surfaces[0].title, "my Aggie", "rejected replace must leave the spec unchanged");
 
   // A new store over the same dir sees the persisted spec.
   const reopened = createUiSpecStore({ dataDir: dir });
-  assert.equal(reopened.effective().surfaces[0].title, "my agee", "reopened store must see the persisted spec");
+  assert.equal(reopened.effective().surfaces[0].title, "my Aggie", "reopened store must see the persisted spec");
 
   reopened.reset();
   assert.equal(reopened.isCustomized(), false, "reset must clear customization");
@@ -123,7 +123,7 @@ async function assertRoundTrip(baseUrl) {
     surfaces: [
       {
         id: "command-panel",
-        title: "agee — deployed",
+        title: "Aggie — deployed",
         controls: [
           { type: "button", id: "talk", label: "Speak", action: "voice.toggle" },
           { type: "text", id: "intent", label: "Do this:", action: "agent.run" },
@@ -136,7 +136,7 @@ async function assertRoundTrip(baseUrl) {
   assert.equal(put.json.is_customized, true, "PUT response must report is_customized=true");
 
   const after = await getJson(`${baseUrl}/v1/ui/spec`);
-  assert.equal(after.spec.surfaces[0].title, "agee — deployed", "GET must reflect the deployed title");
+  assert.equal(after.spec.surfaces[0].title, "Aggie — deployed", "GET must reflect the deployed title");
   assert.equal(after.spec.surfaces[0].controls[0].label, "Speak", "GET must reflect the deployed control label");
 }
 
@@ -154,7 +154,7 @@ async function assertReset(baseUrl) {
   assert.equal(reset.status, 200, "reset must return 200");
   const after = await getJson(`${baseUrl}/v1/ui/spec`);
   assert.equal(after.is_customized, false, "after reset is_customized must be false");
-  assert.equal(after.spec.surfaces[0].title, "agee", "after reset the default title returns");
+  assert.equal(after.spec.surfaces[0].title, "A.G.", "after reset the default title returns");
 }
 
 async function startGateway({ port, dataDir }) {

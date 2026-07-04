@@ -1,6 +1,6 @@
 # agee
 
-An open-source, browser-native interface shell. Hit **Cmd/Ctrl+K** or click the on-page control, type or speak, and experiment with an agent surface directly on the website you are using. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
+An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or single-click the on-page control to type, drag it to move it, or double-click and hold it to talk directly on the website you are using. **Cmd/Ctrl+.** also starts voice. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
 
 ## Principles
 
@@ -14,7 +14,7 @@ An open-source, browser-native interface shell. Hit **Cmd/Ctrl+K** or click the 
 
 MVP - a Chrome (Manifest V3) extension you can load unpacked today.
 
-**Works now:** Cmd+K command palette · Cmd+. voice wake · Cmd+, text command bar · on-page invocation surface · optional browser-native voice dictation · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · per-cue progress in the overlay.
+**Works now:** Cmd+, text intent field · Cmd+. gateway Live voice wake with live transcript/reply feedback above the input · on-page Moa mark · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · one-current-intent overlay state with no visible scrollback.
 
 **Next:** engine-served declarative UI spec · userScripts opt-in walkthrough · richer voice mode · cross-navigation task continuity · MOA integration · hosted/self-hosted engine switching.
 
@@ -60,18 +60,72 @@ is separate from the quiet flow on purpose:
    live gateway with that token, and reports whether a daily browser profile has
    agee loaded from this repo path.
 3. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the [extension/](extension/) folder. If agee is already listed, click its reload icon and confirm the path shown in the card is this folder. It stays installed across browser restarts.
-4. Open any low-risk page (or run `npm run dev -- --no-browser` and open `http://localhost:7777/fixtures/demo.html`).
-5. Press **Cmd+K** (Mac) / **Ctrl+K**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the agee card or remove the old copy and load [extension/](extension/) again.
+4. Open the agee toolbar icon → Options → **Grant microphone** once if you plan to use voice. That grant belongs to the extension, not to the websites where the overlay appears.
+5. Open any low-risk page (or run `npm run dev -- --no-browser` and open `http://localhost:7777/fixtures/demo.html`).
+6. Press **Cmd+,** (Mac) / **Ctrl+,**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the agee card or remove the old copy and load [extension/](extension/) again.
 
-The duck floats and wanders the page when idle, glows while it works, and rings
+The Moa mark floats on the page when idle, glows while it works, and rings
 (a short chime plus a ring pulse) when a turn finishes, errors, or needs you.
+Typed replies render above the command input; responses, errors, and voice turns
+never clear or replace the draft in the command input. Voice keeps the same input surface available: partial and
+final transcript feedback appears above the input while you speak, and assistant
+text streams into the result stack above the input. The extension does not
+render visible chat history; session history stays on the gateway and can be
+queried by asking Moa.
+Voice uses an extension offscreen document for microphone capture, so websites
+do not need per-site microphone approval for A.G. turns. Spoken turns
+auto-commit after speech silence and re-arm while conversation mode is active.
+The Moa mark mirrors Android: single click opens the chat menu, click and hold
+while moving drags the mark, and double-click-and-hold starts manual voice mode;
+release commits that manual voice turn immediately.
+If Chrome blocks offscreen microphone capture, the overlay shows a visible
+permission error and opens the A.G. Options page; grant the microphone there or
+set Microphone to Allow for the extension from `chrome://extensions`.
+Explicit open-tab commands such as `open https://example.com in a new tab`
+create a browser tab locally; open-and-report requests still run through the
+background browser task path with receipts.
 To override the baked defaults, use the **agee** toolbar icon → Options.
 
 Only while developing the extension package, optionally open
 `chrome-extension://<extension-id>/dev.html?server=http://localhost:7777` in
-that browser to get the in-page reload bridge for this manual session. This is a
-developer convenience for unpacked-extension work, not an end-user deployment or
-customization path.
+that browser to get the in-page reload bridge for this manual session. Enable
+**Auto-reload this loaded extension from the dev server** there if you want the
+already-loaded unpacked extension to keep watching the local dev server after
+the bridge tab closes. When enabled, active content scripts poll
+`/__agee-dev/version`, the service worker calls `chrome.runtime.reload()` on
+source changes, and localhost tabs refresh after the extension restarts. This is
+a developer convenience for unpacked-extension work, not an end-user deployment
+or customization path.
+
+Manual reload proof:
+
+1. Run `npm run dev -- --no-browser`.
+2. Open `chrome-extension://<extension-id>/dev.html?server=http://localhost:7777`
+   from the unpacked extension loaded out of this repo.
+3. Enable **Auto-reload this loaded extension from the dev server**, then close
+   the dev bridge tab.
+4. Keep `http://localhost:7777/fixtures/demo.html` open and edit a file under
+   [extension/](extension/), for example a harmless text change in `dev.html`.
+5. The loaded extension reloads without clicking the `chrome://extensions`
+   reload icon, and the localhost demo tab refreshes after the extension
+   restarts.
+
+Local deployment for an already-loaded unpacked extension:
+
+```sh
+npm run verify
+npm run smoke
+npm run package
+npm run deploy:browser
+```
+
+`deploy:browser` sends a local dev-reload signal. If `npm run dev` is already
+serving `localhost:7777`, deploy asks that running server to bump
+`/__agee-dev/version`; otherwise it briefly serves the endpoint itself. If the
+unpacked extension has auto-reload enabled from `dev.html`, your daily browser
+reloads the extension from this checkout. If auto-reload has not been enabled,
+the package is still produced under `dist/`, but the browser needs the one-time
+`dev.html` toggle above or a manual `chrome://extensions` reload.
 
 ## Verify it
 
@@ -81,6 +135,7 @@ Run:
 npm run doctor
 npm run verify
 npm run smoke
+cd ../gateway && node scripts/smoke-browser-voice-ticket.js
 ```
 
 `doctor` is the fast operational test for the default gateway setup. It checks
@@ -94,7 +149,7 @@ missing or stale.
 
 `verify` checks that the MV3 manifest parses, required files exist, required
 permissions/commands are present, and the extension/harness JavaScript has valid
-syntax.
+syntax. It also fails if microphone capture moves back into the content script.
 
 `smoke` launches headless Chrome for Testing with a throwaway profile, loads the
 real [extension/](extension/), and confirms the agee background **service worker**
@@ -103,6 +158,18 @@ message path (`snapshot`, `type`, `click`) against the demo page and captures a
 screenshot — no window shown, no focus taken. It exercises the **real** extension;
 if the resolved Chrome ever refuses `--load-extension`, smoke fails loudly rather
 than falling back to a content-script harness.
+
+`smoke-browser-voice-ticket` proves the browser Live voice path at the gateway
+boundary: the extension-style client mints a short-lived ticket over authenticated
+HTTP, opens a headerless WebSocket to `/v1/voice/sessions`, sends PCM16 audio,
+and receives assistant PCM audio back. Browser voice is not Web Speech API
+dictation; provider credentials stay on the gateway.
+
+`smoke:ambient` proves the 200 ms ambient frame loop with the real extension and
+a throwaway local gateway. It sends `{cmd:"ambientStart", intervalMs:200}` from
+the content script, observes repeated service-worker `POST /v1/voice/frames`
+calls, and confirms the gateway stores the frame records. This is intake only:
+it does not run a model every 200 ms.
 
 ## Verify the gateway round-trip
 
@@ -119,8 +186,9 @@ It loads the real extension, writes the gateway URL + token into
 `chrome.storage.local` (exactly as the Options page does), opens the overlay, and
 drives real `run` / `describe` submits while a `fetch` recorder in the service
 worker observes which gateway path produced each rendered reply. The default
-gateway is the live one (`http://10.147.17.10:8788`); override with
-`AGEE_GATEWAY_URL`.
+gateway is the main-machine one (`http://10.147.17.10:8787`); use
+`AGEE_GATEWAY_URL=http://10.147.17.6:8787` or `npm run configure:local` when
+intentionally testing against this Mac's local gateway.
 
 **Confirmed round-trip sequence (what the smoke asserts):**
 
@@ -128,16 +196,16 @@ gateway is the live one (`http://10.147.17.10:8788`); override with
    (no token needed). This is the reachability gate.
 2. **Command** — a command submitted in the overlay is sent as `run` →
    `background.js` `POST /v1/voice/turns` (with `Authorization: Bearer <token>`)
-   → the gateway's `display`/`text` reply renders as a **done** row in the
-   overlay. The recorder confirms the reply originated from `/v1/voice/turns`.
+   → the gateway's `display`/`text` reply renders above the command input without
+   clearing or replacing its draft.
+   The recorder confirms the reply originated from `/v1/voice/turns`.
 3. **Describe** — "describe page" is sent as `describe` → `POST /v1/chat` → the
-   gateway's `text` renders as a **done** row. The recorder confirms it
-   originated from `/v1/chat`.
+   gateway's `text` renders in the same one-current-intent result surface. The
+   recorder confirms it originated from `/v1/chat`.
 4. **Loud failure** — pointed at the gateway with **no/invalid token**, the same
    command hits `POST /v1/voice/turns`, the gateway returns `401`, and the
-   overlay renders a clear **error** row ("Gateway rejected the token (401).
-   Open agee Options and set a valid Gateway token, then Save.") with a red
-   status dot. The failure is visible, never silent.
+   overlay renders the clear error above the preserved input draft with a red status dot.
+   The failure is visible, never silent.
 
 The bearer token is read **only** from `AGEE_GATEWAY_TOKEN` at run time (never
 from a file, never printed — see [.env.example](.env.example)). Without it, legs
@@ -148,7 +216,7 @@ absent.
 ## How it fits together
 
 - [extension/manifest.json](extension/manifest.json) — MV3 manifest, no build step.
-- [extension/content.js](extension/content.js) — the Cmd+K overlay, page perception, and action execution (the only part touching the DOM).
+- [extension/content.js](extension/content.js) — the Cmd+, overlay, page perception, and action execution (the only part touching the DOM).
 - [extension/background.js](extension/background.js) — routes turns to the configured gateway, captures screenshots, validates brokered page actions, and handles extension commands.
 - [extension/options.html](extension/options.html) / [options.js](extension/options.js) — gateway URL/token and runtime profile settings that read/write through gateway profile endpoints.
 - [extension/dev.html](extension/dev.html) / [dev.js](extension/dev.js) — developer-only in-page reload bridge for the manual visible dev session.

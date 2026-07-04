@@ -1,6 +1,6 @@
 # Moa Android Assistant
 
-Android-first Moa assistant prototype. It is a native app that launches a floating animated circle over the phone screen. Press the circle or mic button to start one explicit voice turn, press again while listening to submit the current transcript, double tap to stop silently, or long press to open chat. Voice-originated replies can speak back with Android TextToSpeech.
+Android-first Moa assistant prototype. It is a native app that launches a floating animated circle over the phone screen. Single tap opens the chat menu. Press and drag moves the circle. Double-click and hold starts voice mode; release sends the captured speech immediately without waiting for silence detection. Voice-originated replies can speak back with Android TextToSpeech.
 
 ## Build
 
@@ -16,21 +16,26 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Run
 
-1. Open Moa on the phone.
-2. Grant `Draw over other apps`.
-3. Grant `Screen access` in Android accessibility settings if you want current-screen context and controlled actions.
-4. Grant microphone access.
-5. Set the Moa Gateway URL. The development default is `http://10.147.17.6:8787` for this Mac over ZeroTier. Use `http://10.147.17.10:8788` when the main-machine gateway is online.
+1. Open A.G. on the phone.
+2. Grant `Draw over other apps`. The setup screen opens A.G.'s overlay permission page; Android requires you to allow it there.
+3. Grant microphone access when Android prompts, or tap `Enable microphone`.
+4. Grant `Screen access` in Android accessibility settings for current-screen context and controlled actions. If Android blocks the toggle with restricted settings, open App info for A.G., tap the three-dot menu, choose `Allow restricted settings`, return, then enable Screen access.
+5. Set the Moa Gateway URL. The default is the main-machine gateway
+   `http://10.147.17.10:8787`. Use `http://10.147.17.6:8787` only when you are
+   intentionally pointing the app at this Mac's local gateway over ZeroTier.
 6. Tap `Start assistant circle`.
 7. Leave the app. The Moa circle stays over the screen.
+
+The setup screen lists every missing requirement. A.G. can request microphone
+permission and open the exact Android settings pages, but it cannot silently
+grant overlay or Accessibility access.
 
 ## Assistant Orb
 
 - Drag: move the orb.
-- Single tap while idle: start one explicit voice turn.
-- Single tap while listening: send the current transcript and start the next turn.
-- Double tap: stop listening and speech without a confirmation reply.
-- Long press: send a spoken follow-up to the active agent run; if no run is active, open or minimize the chat panel.
+- Single tap: open the chat menu for typed input.
+- Click and hold while moving: reposition the orb without starting voice capture.
+- Double-click and hold: start voice capture; release to send.
 
 ## Gateway
 
@@ -53,10 +58,22 @@ npm start
 - Overlay chat panel with text input.
 - Android `SpeechRecognizer` mic input.
 - Android `AccessibilityService` screen context for visible text/buttons.
-- Local overlay commands: `/screen`, `/tap <visible label>`, `/back`, and `/home`.
+- Local overlay commands: `/screen`, `/tap <visible label>`, `/back`, `/home`, and `/open app <name>`.
 - Spoken build/fix/change/test commands route to the home-machine Gemini harness through Moa Gateway.
 - Android `TextToSpeech` voice replies.
 - Self-hosted gateway replies with local fallback when the server is unavailable.
+
+## Deploy
+
+Repo-level Android deploy keeps publishing the OTA artifact and also installs
+the same APK directly over ADB when an authorized device is connected:
+
+```sh
+bash ../scripts/deploy.sh android
+```
+
+If no ADB device is connected or authorized, deploy logs that direct install was
+skipped and leaves the OTA artifact available through the gateway.
 
 ## Action Runtime
 

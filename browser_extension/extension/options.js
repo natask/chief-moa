@@ -1,19 +1,32 @@
-import { getEffectiveGatewayConfig, normalizeGatewayUrl, seedGatewayConfig } from "./config.js";
+import { gatewayUrlDiagnostic, getEffectiveGatewayConfig, normalizeGatewayUrl, seedGatewayConfig } from "./config.js";
 import { parseSettingsIntent, PROFILE_FIELDS } from "./settings-intent.js";
 
 const gatewayUrlEl = document.getElementById("gatewayUrl");
 const gatewayTokenEl = document.getElementById("gatewayToken");
 const statusEl = document.getElementById("status");
+const micStatusEl = document.getElementById("micStatus");
 
 // Runtime agent profile surface.
 const profileStateEl = document.getElementById("profileState");
 const changeBoxEl = document.getElementById("changeBox");
 const talkResultEl = document.getElementById("talkResult");
+const profileScopeEl = document.getElementById("profileScope");
 const systemPromptEl = document.getElementById("systemPrompt");
 const profileModelEl = document.getElementById("profileModel");
+const modelOptionsEl = document.getElementById("modelOptions");
 const temperatureEl = document.getElementById("temperature");
 const voiceMaxCharsEl = document.getElementById("voiceMaxChars");
+const voiceNameEl = document.getElementById("voiceName");
 const languageEl = document.getElementById("language");
+const inputLanguagesEl = document.getElementById("inputLanguages");
+const languageOptionsEl = document.getElementById("languageOptions");
+const replyLanguageSelectedEl = document.getElementById("replyLanguageSelected");
+const replyLanguageSearchEl = document.getElementById("replyLanguageSearch");
+const replyLanguageOptionsEl = document.getElementById("replyLanguageOptions");
+const heardLanguageSelectedEl = document.getElementById("heardLanguageSelected");
+const heardLanguageSearchEl = document.getElementById("heardLanguageSearch");
+const heardLanguageOptionsEl = document.getElementById("heardLanguageOptions");
+const profileCatalogStateEl = document.getElementById("profileCatalogState");
 const profileStatusEl = document.getElementById("profileStatus");
 
 // Cache key written by both this page and background.js after a successful PUT,
@@ -42,6 +55,11 @@ function flashProfile(text, ok = true) {
   profileStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
 }
 
+function flashMic(text, ok = true) {
+  micStatusEl.textContent = text;
+  micStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
+}
+
 function gatewayConfig() {
   return {
     url: normalizeGatewayUrl(gatewayUrlEl.value),
@@ -56,10 +74,46 @@ function gatewayHeaders(token, withBody) {
   return headers;
 }
 
+function networkFailureMessage(url, path, error) {
+  const detail = String(error?.message || error || "").trim();
+  const detailSuffix = detail && detail !== "Failed to fetch" ? ` (${detail})` : "";
+  const diagnostic = gatewayUrlDiagnostic(url);
+  const diagnosticSuffix = diagnostic.message ? ` ${diagnostic.message}` : "";
+  return `Could not reach the configured gateway ${url || "(unset)"} while calling ${path}. Check DNS, TLS, and the saved gateway URL.${diagnosticSuffix}${detailSuffix}`;
+}
+
+function parseJsonOrNull(text) {
+  if (!String(text || "").trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+async function getStableDeviceId() {
+  const { ageeDeviceId } = await chrome.storage.local.get("ageeDeviceId");
+  if (ageeDeviceId) return ageeDeviceId;
+  const deviceId = `browser_${crypto.randomUUID().replace(/-/g, "")}`;
+  await chrome.storage.local.set({ ageeDeviceId: deviceId });
+  return deviceId;
+}
+
+async function profileQuery() {
+  if (profileScopeEl?.value !== "device") {
+    return "";
+  }
+  const deviceId = await getStableDeviceId();
+  return `?scope=device&device_id=${encodeURIComponent(deviceId)}`;
+}
+
 document.getElementById("save").addEventListener("click", async () => {
   await chrome.storage.local.set({
     ageeGatewayUrl: normalizeGatewayUrl(gatewayUrlEl.value),
     ageeGatewayToken: gatewayTokenEl.value.trim(),
+    // Mark the URL as user-owned so seeding stops overwriting it with the
+    // baked default on the next startup.
+    ageeGatewayUserSet: true,
   });
   flash("Saved ✓");
   setTimeout(() => (statusEl.textContent = ""), 1500);
@@ -67,23 +121,30 @@ document.getElementById("save").addEventListener("click", async () => {
 
 document.getElementById("testGateway").addEventListener("click", async () => {
   const url = normalizeGatewayUrl(gatewayUrlEl.value);
-  if (!url) {
-    flash("Enter a gateway URL first.", false);
+  const diagnostic = gatewayUrlDiagnostic(url);
+  if (!diagnostic.ok) {
+    flash(diagnostic.message, false);
     return;
   }
-  flash("Testing…");
+  const warning = diagnostic.severity === "warning" ? diagnostic.message : "";
+  flash(warning ? `${warning} Testing anyway…` : "Testing…", !warning);
   const token = gatewayTokenEl.value.trim();
   const headers = token ? { authorization: `Bearer ${token}` } : {};
   let data;
   try {
     const resp = await fetch(`${url}/health`, { headers });
-    data = await resp.json().catch(() => ({}));
+    const text = await resp.text();
+    data = parseJsonOrNull(text);
+    if (!data) {
+      flash(`The URL responded, but it is not a healthy Moa gateway (${url}).`, false);
+      return;
+    }
     if (!resp.ok || !data.ok) {
-      flash(`Gateway responded ${resp.status}`, false);
+      flash(`The URL responded, but it is not a healthy Moa gateway (${resp.status}).`, false);
       return;
     }
   } catch (err) {
-    flash(`Unreachable: ${String(err.message || err)}`, false);
+    flash(networkFailureMessage(url, "/health", err), false);
     return;
   }
 
@@ -95,25 +156,249 @@ document.getElementById("testGateway").addEventListener("click", async () => {
   try {
     const authResp = await fetch(`${url}/v1/sessions`, { headers });
     if (authResp.ok) {
-      flash(`OK ✓ ${tag} · token valid`);
-    } else if (authResp.status === 401) {
-      flash(
-        token
-          ? "Gateway reachable, but token rejected (401). Check the Gateway token."
-          : "Gateway reachable, but it requires a token. Add the Gateway token below.",
-        false
-      );
+      flash(warning ? `OK ✓ ${tag} · token valid. ${warning}` : `OK ✓ ${tag} · token valid`);
+    } else if (authResp.status === 401 || authResp.status === 403) {
+      if (warning) {
+        flash("Gateway reachable, but the token may belong to a different gateway. Confirm the stable VPS URL, then re-register.", false);
+      } else {
+        flash(
+          token
+            ? `Gateway reachable, but the saved token was rejected (${authResp.status}). Re-register this browser or paste a fresh token.`
+            : `Gateway reachable, but this route requires a device token (${authResp.status}). Add the Gateway token below.`,
+          false
+        );
+      }
     } else {
       flash(`Gateway reachable; auth check returned ${authResp.status}`, false);
     }
   } catch (err) {
-    flash(`Gateway reachable; auth check failed: ${String(err.message || err)}`, false);
+    flash(`Gateway reachable; auth check failed. ${networkFailureMessage(url, "/v1/sessions", err)}`, false);
+  }
+});
+
+async function microphonePermissionState() {
+  if (!navigator.permissions?.query) return "unknown";
+  try {
+    const result = await navigator.permissions.query({ name: "microphone" });
+    return result.state || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+document.getElementById("grantMic").addEventListener("click", async () => {
+  flashMic("Requesting…");
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    flashMic("Microphone granted to A.G. ✓");
+  } catch (err) {
+    flashMic(`Microphone blocked: ${String(err.message || err)}`, false);
+  } finally {
+    for (const track of stream?.getTracks?.() || []) {
+      try {
+        track.stop();
+      } catch {}
+    }
+  }
+});
+
+document.getElementById("checkMic").addEventListener("click", async () => {
+  const state = await microphonePermissionState();
+  if (state === "granted") {
+    flashMic("Microphone already granted ✓");
+  } else if (state === "denied") {
+    flashMic("Microphone blocked. Change site settings for this extension.", false);
+  } else {
+    flashMic("Microphone not granted yet.");
   }
 });
 
 // ---- Runtime agent profile -------------------------------------------------
 
 let currentProfile = null; // last effective profile we rendered
+let currentProfileOptions = null;
+let languageCatalog = [];
+
+function splitLanguageCodes(value) {
+  const seen = new Set();
+  const codes = [];
+  for (const raw of String(value || "").split(",")) {
+    const code = raw.trim();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    codes.push(code);
+  }
+  return codes;
+}
+
+function languageLabel(code) {
+  const match = languageCatalog.find((language) => language.code === code);
+  return match ? `${match.label} (${match.code})` : code;
+}
+
+function setLanguageCodes(input, codes) {
+  input.value = codes.join(",");
+}
+
+function languagePickerConfigs() {
+  return [
+    {
+      input: languageEl,
+      selected: replyLanguageSelectedEl,
+      search: replyLanguageSearchEl,
+      options: replyLanguageOptionsEl,
+      empty: "No reply languages selected.",
+    },
+    {
+      input: inputLanguagesEl,
+      selected: heardLanguageSelectedEl,
+      search: heardLanguageSearchEl,
+      options: heardLanguageOptionsEl,
+      empty: "No heard languages selected.",
+    },
+  ].filter((config) => config.input && config.selected && config.search && config.options);
+}
+
+function renderLanguagePickers() {
+  for (const config of languagePickerConfigs()) {
+    renderLanguagePicker(config);
+  }
+}
+
+function renderLanguagePicker(config) {
+  const selectedCodes = splitLanguageCodes(config.input.value);
+  config.selected.textContent = "";
+  if (selectedCodes.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "catalog-empty";
+    empty.textContent = config.empty;
+    config.selected.append(empty);
+  } else {
+    for (const code of selectedCodes) {
+      const pill = document.createElement("span");
+      pill.className = "catalog-pill";
+      pill.textContent = languageLabel(code);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "x";
+      remove.setAttribute("aria-label", `Remove ${languageLabel(code)}`);
+      remove.addEventListener("click", () => {
+        setLanguageCodes(config.input, selectedCodes.filter((item) => item !== code));
+        renderLanguagePicker(config);
+      });
+      pill.append(remove);
+      config.selected.append(pill);
+    }
+  }
+
+  const query = config.search.value.trim().toLowerCase();
+  const matches = languageCatalog
+    .filter((language) => {
+      if (!query) return true;
+      const aliases = Array.isArray(language.aliases) ? language.aliases.join(" ") : "";
+      return `${language.label} ${language.code} ${aliases}`.toLowerCase().includes(query);
+    })
+    .slice(0, 80);
+
+  config.options.textContent = "";
+  if (matches.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "catalog-empty";
+    empty.textContent = languageCatalog.length ? "No matching languages." : "Gateway language catalog unavailable.";
+    config.options.append(empty);
+    return;
+  }
+
+  for (const language of matches) {
+    const code = String(language.code || "").trim();
+    if (!code) continue;
+    const row = document.createElement("label");
+    row.className = "catalog-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedCodes.includes(code);
+    checkbox.addEventListener("change", () => {
+      const next = checkbox.checked
+        ? [...selectedCodes, code]
+        : selectedCodes.filter((item) => item !== code);
+      setLanguageCodes(config.input, next);
+      renderLanguagePicker(config);
+    });
+    const text = document.createElement("span");
+    text.textContent = String(language.label || code);
+    const small = document.createElement("small");
+    small.textContent = code;
+    row.append(checkbox, text, small);
+    config.options.append(row);
+  }
+}
+
+function renderProfileOptions(payload) {
+  if (!payload || typeof payload !== "object") return;
+  currentProfileOptions = payload;
+  const voices = Array.isArray(payload.voices) ? payload.voices : [];
+  const languages = Array.isArray(payload.languages) ? payload.languages : [];
+  const models = Array.isArray(payload.models) ? payload.models : [];
+  languageCatalog = languages
+    .map((language) => ({
+      label: String(language.label || language.code || "").trim(),
+      code: String(language.code || "").trim(),
+      aliases: Array.isArray(language.aliases) ? language.aliases.map((alias) => String(alias || "")) : [],
+    }))
+    .filter((language) => language.code);
+  if (modelOptionsEl) {
+    modelOptionsEl.textContent = "";
+    for (const model of models) {
+      const id = String(model.id || "").trim();
+      if (!id) continue;
+      const option = document.createElement("option");
+      option.value = id;
+      option.label = model.provider ? `${id} - ${model.provider}` : id;
+      modelOptionsEl.append(option);
+    }
+  }
+  if (voiceNameEl) {
+    const selected = voiceNameEl.value || currentProfile?.voice || "";
+    voiceNameEl.textContent = "";
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "Gateway default";
+    voiceNameEl.append(defaultOption);
+    for (const voice of voices) {
+      const id = String(voice.id || "").trim();
+      if (!id) continue;
+      const option = document.createElement("option");
+      option.value = id;
+      const tags = Array.isArray(voice.tone_tags) ? voice.tone_tags.join(", ") : "";
+      option.textContent = tags ? `${id} - ${tags}` : id;
+      voiceNameEl.append(option);
+    }
+    if (selected && voices.some((voice) => voice.id === selected)) {
+      voiceNameEl.value = selected;
+    }
+  }
+  if (languageOptionsEl) {
+    languageOptionsEl.textContent = "";
+    for (const language of languageCatalog) {
+      const option = document.createElement("option");
+      option.value = language.code;
+      option.label = language.label || language.code;
+      languageOptionsEl.append(option);
+    }
+  }
+  renderLanguagePickers();
+  if (profileCatalogStateEl) {
+    profileCatalogStateEl.textContent = `Loaded ${voices.length} voices, ${languageCatalog.length} languages, and ${models.length} model options from the gateway catalog.`;
+  }
+}
 
 function renderProfile(payload) {
   const profile = payload?.profile || {};
@@ -122,10 +407,13 @@ function renderProfile(payload) {
   profileModelEl.value = profile.model || "";
   temperatureEl.value = profile.temperature ?? "";
   voiceMaxCharsEl.value = profile.voice_max_chars ?? "";
-  languageEl.value = profile.language || "";
+  if (voiceNameEl) voiceNameEl.value = profile.voice || "";
+  languageEl.value = profile.language || profile.language_primary || "";
+  if (inputLanguagesEl) inputLanguagesEl.value = profile.input_languages || profile.input_language_primary || "";
+  renderLanguagePickers();
   const overridden = Boolean(payload?.is_overridden);
   profileStateEl.innerHTML =
-    `In effect on the gateway: <span class="badge ${overridden ? "overridden" : ""}">` +
+    `In effect ${payload?.scope === "device" ? "on this device" : "on the gateway"}: <span class="badge ${overridden ? "overridden" : ""}">` +
     `${overridden ? "customized" : "gateway defaults"}</span>`;
 }
 
@@ -139,7 +427,8 @@ async function loadProfile() {
   }
   flashProfile("Loading…");
   try {
-    const resp = await fetch(`${url}/v1/agent/profile`, { headers: gatewayHeaders(token, false) });
+    await loadProfileOptions(url, token);
+    const resp = await fetch(`${url}/v1/agent/profile${await profileQuery()}`, { headers: gatewayHeaders(token, false) });
     if (resp.status === 401) {
       profileStateEl.textContent = "Gateway requires a token to read the profile. Add the Gateway token and Save.";
       flashProfile("401 — token required", false);
@@ -160,21 +449,42 @@ async function loadProfile() {
       renderProfile(cached);
       flashProfile(`Gateway offline; showing last known profile`, false);
     } else {
-      flashProfile(`Unreachable: ${String(err.message || err)}`, false);
+      flashProfile(networkFailureMessage(url, "/v1/agent/profile", err), false);
+    }
+  }
+}
+
+async function loadProfileOptions(url, token) {
+  try {
+    const resp = await fetch(`${url}/v1/agent/profile/options`, { headers: gatewayHeaders(token, false) });
+    if (!resp.ok) {
+      if (profileCatalogStateEl) {
+        profileCatalogStateEl.textContent = `Gateway options catalog unavailable (${resp.status}).`;
+      }
+      return;
+    }
+    renderProfileOptions(await resp.json());
+  } catch {
+    if (profileCatalogStateEl) {
+      profileCatalogStateEl.textContent = currentProfileOptions
+        ? "Gateway options catalog offline; using last loaded options."
+        : "Gateway options catalog unavailable.";
     }
   }
 }
 
 // Patch + persist a profile change through the gateway, then re-render from the
 // gateway's authoritative response. Shared by the form save and the talk path.
-async function applyProfilePatch(patch) {
+async function applyProfilePatch(patch, options = {}) {
   const { url, token } = gatewayConfig();
   if (!url) throw new Error("Set the gateway URL first.");
   if (!patch || Object.keys(patch).length === 0) throw new Error("Nothing to change.");
+  const scope = options.scope === "device" ? "device" : (profileScopeEl?.value === "device" ? "device" : "global");
+  const deviceId = await getStableDeviceId();
   const resp = await fetch(`${url}/v1/agent/profile`, {
     method: "PUT",
     headers: gatewayHeaders(token, true),
-    body: JSON.stringify({ profile: patch }),
+    body: JSON.stringify({ profile: patch, scope, device_id: deviceId, source: "agee-options" }),
   });
   if (resp.status === 401) throw new Error("Gateway rejected the token (401).");
   if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
@@ -192,8 +502,18 @@ function patchFromForm() {
   if (model) patch.model = model;
   if (temperatureEl.value !== "") patch.temperature = Number(temperatureEl.value);
   if (voiceMaxCharsEl.value !== "") patch.voice_max_chars = Number(voiceMaxCharsEl.value);
+  const voice = voiceNameEl?.value.trim();
+  if (voice) patch.voice = voice;
   const lang = languageEl.value.trim();
-  if (lang) patch.language = lang;
+  if (lang) {
+    patch.language = lang;
+    patch.language_mode = "explicit";
+    patch.language_output = "primary_only";
+  }
+  const inputLanguages = inputLanguagesEl?.value.trim();
+  if (inputLanguages) {
+    patch.input_languages = inputLanguages;
+  }
   return patch;
 }
 
@@ -209,6 +529,10 @@ document.getElementById("saveProfile").addEventListener("click", async () => {
 });
 
 document.getElementById("refreshProfile").addEventListener("click", loadProfile);
+profileScopeEl?.addEventListener("change", loadProfile);
+for (const config of languagePickerConfigs()) {
+  config.search.addEventListener("input", () => renderLanguagePicker(config));
+}
 
 document.getElementById("resetProfile").addEventListener("click", async () => {
   const { url, token } = gatewayConfig();
@@ -220,7 +544,12 @@ document.getElementById("resetProfile").addEventListener("click", async () => {
   try {
     const resp = await fetch(`${url}/v1/agent/profile/reset`, {
       method: "POST",
-      headers: gatewayHeaders(token, false),
+      headers: gatewayHeaders(token, true),
+      body: JSON.stringify({
+        scope: profileScopeEl?.value === "device" ? "device" : "global",
+        device_id: await getStableDeviceId(),
+        source: "agee-options",
+      }),
     });
     if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
     const payload = await resp.json();
@@ -243,12 +572,12 @@ async function applyTalk(text) {
     talkResultEl.classList.add("err");
     talkResultEl.textContent =
       `Could not turn that into a settings change. Try: "be terser", "set the system prompt to …", ` +
-      `"use model gpt-4o-mini", "set temperature to 0.2", "reply in Spanish".`;
+      `"use model gpt-4o-mini", "set temperature to 0.2", "reply in Amharic".`;
     return;
   }
   talkResultEl.textContent = "Applying…";
   try {
-    await applyProfilePatch(intent.patch);
+    await applyProfilePatch(intent.patch, { scope: intent.scope });
     changeBoxEl.value = "";
     talkResultEl.textContent = `Applied: ${intent.summary}.`;
   } catch (err) {

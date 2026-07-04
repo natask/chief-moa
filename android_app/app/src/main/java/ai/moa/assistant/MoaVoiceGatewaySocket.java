@@ -1,8 +1,14 @@
 package ai.moa.assistant;
 
+import android.util.Log;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -13,7 +19,14 @@ import okhttp3.WebSocketListener;
 import okio.ByteString;
 
 final class MoaVoiceGatewaySocket {
-    static final String DEFAULT_URL = "ws://10.147.17.10:8788/v1/voice/sessions";
+    private static final String TAG = "MoaVoiceSocket";
+    static final String DEFAULT_URL = voiceSocketUrl(MoaPrefs.DEFAULT_GATEWAY_URL);
+    private static final int CONNECT_TIMEOUT_MS = 3500;
+    private static final int WRITE_TIMEOUT_MS = 10000;
+    // Keep readTimeout at 0 (infinite) so a long idle stretch mid-assistant-audio
+    // is not killed. Instead ping the socket so a dead/hung connection is
+    // detected and surfaced through onFailure, rather than hanging forever.
+    private static final int PING_INTERVAL_MS = 10000;
 
     interface Callback {
         void onSocketOpen();
@@ -44,6 +57,7 @@ final class MoaVoiceGatewaySocket {
     }
 
     private final String url;
+    private final String configuredUrl;
     private final String token;
     private final Callback callback;
     private final OkHttpClient client;
@@ -54,15 +68,19 @@ final class MoaVoiceGatewaySocket {
     private boolean destroyed;
 
     MoaVoiceGatewaySocket(Callback callback) {
-        this(DEFAULT_URL, "", callback);
+        this(MoaPrefs.DEFAULT_GATEWAY_URL, "", callback);
     }
 
     MoaVoiceGatewaySocket(String url, String token, Callback callback) {
+        this.configuredUrl = safe(url);
         this.url = voiceSocketUrl(url);
         this.token = safe(token);
         this.callback = callback;
         this.client = new OkHttpClient.Builder()
+                .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .writeTimeout(WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS)
+                .pingInterval(PING_INTERVAL_MS, TimeUnit.MILLISECONDS)
                 .build();
     }
 
@@ -71,11 +89,18 @@ final class MoaVoiceGatewaySocket {
             if (webSocket != null || destroyed) {
                 return;
             }
-            Request.Builder builder = new Request.Builder().url(url);
-            if (!token.isEmpty()) {
-                builder.header("Authorization", "Bearer " + token);
+            Log.i(TAG, "connect -> " + redactedUrl(url) + " token=" + (token.isEmpty() ? "MISSING" : "set(" + token.length() + ")"));
+            try {
+                Request.Builder builder = new Request.Builder().url(url);
+                if (!token.isEmpty()) {
+                    builder.header("Authorization", "Bearer " + token);
+                }
+                webSocket = client.newWebSocket(builder.build(), new Listener());
+            } catch (IllegalArgumentException error) {
+                String message = socketFailureMessage(configuredUrl, url, error, null);
+                Log.e(TAG, "invalid voice gateway URL: " + message, error);
+                reportFailure(message, error);
             }
-            webSocket = client.newWebSocket(builder.build(), new Listener());
         }
     }
 
@@ -100,6 +125,10 @@ final class MoaVoiceGatewaySocket {
     }
 
     boolean sendSessionStart(String sessionId, String turnId, String branchId) {
+        return sendSessionStart(sessionId, turnId, branchId, null, "android-overlay");
+    }
+
+    boolean sendSessionStart(String sessionId, String turnId, String branchId, JSONObject profileOverride, String source) {
         try {
             JSONObject format = new JSONObject();
             format.put("encoding", MoaAudioCaptureController.ENCODING);
@@ -113,10 +142,26 @@ final class MoaVoiceGatewaySocket {
             body.put("branch_id", safe(branchId).isEmpty() ? "default" : safe(branchId));
             body.put("turn_id", turnId);
             body.put("format", format);
-            body.put("source", "android-overlay");
+            body.put("source", safe(source).isEmpty() ? "android-overlay" : safe(source));
+            if (profileOverride != null && profileOverride.length() > 0) {
+                body.put("profile_override", profileOverride);
+            }
             return sendJson(body);
         } catch (JSONException error) {
             reportFailure("Could not build session_start event.", error);
+            return false;
+        }
+    }
+
+    boolean sendTextTurn(String turnId, String text) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("type", "text_turn");
+            body.put("turn_id", turnId);
+            body.put("text", safe(text));
+            return sendJson(body);
+        } catch (JSONException error) {
+            reportFailure("Could not build text_turn event.", error);
             return false;
         }
     }
@@ -189,6 +234,7 @@ final class MoaVoiceGatewaySocket {
         String type = event.optString("type", "").trim();
         switch (type) {
             case "session_ready":
+                Log.i(TAG, "session_ready session_id=" + event.optString("session_id", ""));
                 if (callback != null) {
                     callback.onSessionReady(event.optString("session_id", ""));
                 }
@@ -234,6 +280,7 @@ final class MoaVoiceGatewaySocket {
                 }
                 break;
             case "error":
+                Log.e(TAG, "gateway error event: " + event.optString("message", "gateway error"));
                 if (callback != null) {
                     callback.onGatewayError(event.optString("message", "gateway error"));
                 }
@@ -267,7 +314,7 @@ final class MoaVoiceGatewaySocket {
         return value == null ? "" : value.trim();
     }
 
-    private static String voiceSocketUrl(String value) {
+    static String voiceSocketUrl(String value) {
         String url = safe(value);
         if (url.isEmpty()) {
             return DEFAULT_URL;
@@ -290,6 +337,9 @@ final class MoaVoiceGatewaySocket {
     }
 
     private static String cleanError(Throwable error) {
+        if (error == null) {
+            return "unknown error";
+        }
         String message = error.getMessage();
         if (message == null || message.trim().isEmpty()) {
             return error.getClass().getSimpleName();
@@ -297,9 +347,91 @@ final class MoaVoiceGatewaySocket {
         return message.replace('\n', ' ').replace('\r', ' ').trim();
     }
 
+    static String socketFailureMessage(String configuredUrl, String socketUrl, Throwable error, Response response) {
+        String target = redactedUrl(safe(socketUrl).isEmpty() ? configuredUrl : socketUrl);
+        String urlDiagnostic = MoaPrefs.gatewayUrlDiagnosticMessage(configuredUrl);
+        if (response != null) {
+            int status = response.code();
+            if (status == 401 || status == 403) {
+                return "Gateway reachable at " + target + ", but the voice socket token was rejected (HTTP "
+                        + status + "). " + tokenGuidance(configuredUrl);
+            }
+            if (status == 404) {
+                if (!urlDiagnostic.isEmpty()) {
+                    return "Voice gateway URL issue at " + target + ". " + urlDiagnostic;
+                }
+                return "Gateway is reachable, but voice routes are not deployed at "
+                        + target + " (HTTP 404). Check that this URL points at the stable VPS gateway or a local gateway with voice deployed.";
+            }
+            return "Voice gateway socket failed at " + target + " (HTTP " + status + ").";
+        }
+        if (!urlDiagnostic.isEmpty()) {
+            return "Voice gateway URL issue at " + target + ". " + urlDiagnostic;
+        }
+        if (isTimeout(error)) {
+            return "Could not reach voice gateway at " + target + " within " + CONNECT_TIMEOUT_MS + "ms. "
+                    + stableOrLocalGatewayGuidance();
+        }
+        if (error instanceof UnknownHostException) {
+            return "Could not resolve voice gateway host for " + target + ". Enter the stable VPS URL "
+                    + MoaPrefs.ONBOARDING_GATEWAY_URL + " or verify DNS/TLS for your self-hosted gateway.";
+        }
+        if (error instanceof ConnectException) {
+            return "Could not connect to voice gateway at " + target + ". "
+                    + stableOrLocalGatewayGuidance();
+        }
+        return "Voice socket could not connect at " + target + ": " + cleanError(error)
+                + ". Check Cloudflare WebSocket proxying, TLS, the gateway voice route, and the saved gateway URL.";
+    }
+
+    private static String stableOrLocalGatewayGuidance() {
+        return "Use the stable VPS URL " + MoaPrefs.ONBOARDING_GATEWAY_URL
+                + " or confirm this phone is on the same network/VPN as the local gateway.";
+    }
+
+    private static String tokenGuidance(String configuredUrl) {
+        MoaPrefs.GatewayUrlIssue issue = MoaPrefs.classifyGatewayUrl(configuredUrl);
+        if (issue == MoaPrefs.GatewayUrlIssue.STALE_MAIN_MACHINE || issue == MoaPrefs.GatewayUrlIssue.LOCAL_DEV) {
+            return "The token may belong to a different gateway. Confirm the stable VPS URL "
+                    + MoaPrefs.ONBOARDING_GATEWAY_URL + ", then re-register this phone or paste a fresh token.";
+        }
+        return "Re-register this phone or paste a fresh device token.";
+    }
+
+    private static boolean isTimeout(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        if (error instanceof SocketTimeoutException) {
+            return true;
+        }
+        String message = error.getMessage();
+        return message != null && message.toLowerCase(java.util.Locale.US).contains("timeout");
+    }
+
+    private static String redactedUrl(String value) {
+        String fallback = safe(value);
+        try {
+            URI uri = new URI(fallback);
+            StringBuilder builder = new StringBuilder();
+            builder.append(uri.getScheme()).append("://").append(uri.getHost());
+            if (uri.getPort() >= 0) {
+                builder.append(":").append(uri.getPort());
+            }
+            String path = uri.getPath();
+            if (path != null && !path.isEmpty()) {
+                builder.append(path);
+            }
+            return builder.toString();
+        } catch (Exception error) {
+            return fallback;
+        }
+    }
+
     private final class Listener extends WebSocketListener {
         @Override
         public void onOpen(WebSocket socket, Response response) {
+            Log.i(TAG, "onOpen HTTP " + (response != null ? response.code() : -1) + " (socket upgraded)");
             if (callback != null) {
                 callback.onSocketOpen();
             }
@@ -317,6 +449,7 @@ final class MoaVoiceGatewaySocket {
 
         @Override
         public void onClosed(WebSocket socket, int code, String reason) {
+            Log.i(TAG, "onClosed code=" + code + " reason=" + reason);
             synchronized (lock) {
                 if (webSocket == socket) {
                     webSocket = null;
@@ -330,13 +463,32 @@ final class MoaVoiceGatewaySocket {
 
         @Override
         public void onFailure(WebSocket socket, Throwable error, Response response) {
+            boolean expectedTeardown;
             synchronized (lock) {
+                expectedTeardown = destroyed && isSocketClosed(error);
                 if (webSocket == socket) {
                     webSocket = null;
                 }
                 assistantAudioOpen = false;
             }
-            reportFailure("Voice gateway socket failed: " + cleanError(error) + ".", error);
+            if (expectedTeardown) {
+                Log.i(TAG, "socket closed during teardown");
+                return;
+            }
+            Log.e(TAG, "onFailure HTTP " + (response != null ? response.code() : -1)
+                    + " err=" + (error != null ? error.getClass().getSimpleName() + ":" + cleanError(error) : "none")
+                    + " msg=" + socketFailureMessage(configuredUrl, url, error, response), error);
+            reportFailure(socketFailureMessage(configuredUrl, url, error, response), error);
         }
+    }
+
+    private static boolean isSocketClosed(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        String message = error.getMessage();
+        return error instanceof java.net.SocketException
+                && message != null
+                && message.toLowerCase(java.util.Locale.US).contains("socket closed");
     }
 }

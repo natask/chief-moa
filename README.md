@@ -10,6 +10,10 @@ proposal before any local action runs.
 ## Start here
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): system boundary and runtime flows.
+- [ENGINEERING_STRATEGY.md](ENGINEERING_STRATEGY.md): contribution tracks,
+  ownership strategy, and definition of done.
+- [CONTRIBUTING.md](CONTRIBUTING.md): contributor setup, trust boundary, and
+  pull request checklist.
 - [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md): how intent becomes specs, tickets,
   implementation, and verification.
 - [AGENTS.md](AGENTS.md): operating contract for coding agents.
@@ -54,6 +58,16 @@ cd browser_extension
 npm run verify
 ```
 
+Browser extension local deploy:
+
+```sh
+bash scripts/deploy.sh extension
+```
+
+Extension deploys package the version in
+`browser_extension/extension/manifest.json`; bump that version for changed
+extension releases.
+
 Android OTA artifact:
 
 ```sh
@@ -65,3 +79,12 @@ Main-machine Android OTA sync:
 ```sh
 android_app/deploy/ota/sync-main-machine.sh
 ```
+
+Auto-deploy committed target changes:
+
+```sh
+bash scripts/deploy.sh auto
+```
+
+Deploys record target version metadata under the git deploy marker directory, so
+`scripts/deploy.sh` output shows the deployed version and deploy sequence.

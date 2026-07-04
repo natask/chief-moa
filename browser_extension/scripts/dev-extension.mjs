@@ -35,6 +35,12 @@ const server = createServer((req, res) => {
     sendJson(res, { version, changedAt });
     return;
   }
+  if (url.pathname === "/__agee-dev/bump") {
+    const source = url.searchParams.get("source") || "manual";
+    bumpVersion(`reload-bump:${source}`);
+    sendJson(res, { version, changedAt, source });
+    return;
+  }
 
   const pathname = url.pathname === "/" ? "/fixtures/demo.html" : url.pathname;
   const file = resolve(root, pathname.replace(/^\/+/, ""));
@@ -84,11 +90,15 @@ function watchForChanges() {
 function scheduleVersionBump(changed) {
   if (changeTimer) clearTimeout(changeTimer);
   changeTimer = setTimeout(() => {
-    version = Date.now();
-    changedAt = new Date().toISOString();
-    console.log(`[agee-dev] changed ${changed}; version=${version}`);
-    if (bridge) reloadExtension(changed);
+    bumpVersion(changed);
   }, 120);
+}
+
+function bumpVersion(reason) {
+  version = Date.now();
+  changedAt = new Date().toISOString();
+  console.log(`[agee-dev] changed ${reason}; version=${version}`);
+  if (bridge) reloadExtension(reason);
 }
 
 function injectLiveReload(html) {
@@ -322,6 +332,7 @@ function printReady() {
     console.log("");
     console.log("[agee-dev] running server only (--no-browser).");
     console.log("[agee-dev] To SEE the extension, load it manually: chrome://extensions -> Load unpacked. See README.");
+    console.log("[agee-dev] For loaded-extension auto-reload, open extension/dev.html?server=" + devUrl + " and enable auto-reload.");
   }
   console.log("");
 }
@@ -383,5 +394,6 @@ function printHelp() {
 Serves the localhost demo, watches extension/ + fixtures/, and reloads the real
 extension in a headless Chrome for Testing instance on file changes. No window
 is shown and focus is never taken. To SEE the extension, load it manually via
-chrome://extensions -> Load unpacked (see README).`);
+chrome://extensions -> Load unpacked. For a visible loaded extension, open the
+extension dev bridge and enable auto-reload (see README).`);
 }

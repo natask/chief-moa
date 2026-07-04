@@ -1,12 +1,28 @@
 // agee - content script. Owns the on-page surface, perceives the page, executes actions.
 
 (() => {
-  if (window.__ageeLoaded) return;
+  const AGGIE_ROOT_ID = "agee-root";
+  const existingAggies = () => Array.from(document.querySelectorAll(`#${AGGIE_ROOT_ID}`));
+  const pruneDuplicateAggies = () => {
+    const nodes = existingAggies();
+    const keep = nodes.find((node) => node.querySelector("#agee-launcher")) || nodes[0] || null;
+    for (const node of nodes) {
+      if (node !== keep) node.remove();
+    }
+  };
+
+  if (window.top !== window) return;
+  if (window.__ageeLoaded) {
+    pruneDuplicateAggies();
+    return;
+  }
   window.__ageeLoaded = true;
+  existingAggies().forEach((node) => node.remove());
 
   // ---- Overlay UI -------------------------------------------------------
   let root,
     launcher,
+    panel,
     input,
     voiceButton,
     stopButton,
@@ -15,75 +31,165 @@
     open = false,
     voiceState,
     transcriptEl,
-    recognition = null,
+    liveVoice = null,
+    surfacePhase = "idle",
     listening = false,
+    ambientState = "off",
+    // Conversation mode: once you start talking, the mark keeps listening after
+    // each reply so it works like speaking, not click-to-send. Stop ends it.
+    conversationActive = false,
     dragState = null,
-    suppressLauncherClick = false,
-    // The duck is alive: it floats, wanders the page when idle, reacts to state,
-    // and rings when something lands. audioCtx is created lazily on first gesture.
-    audioCtx = null,
-    wanderTimer = null,
-    wanderPauseUntil = 0,
-    wanderHover = false,
-    historyLoaded = false;
+    clickTimer = null,
+    holdToTalkTimer = null,
+    holdToTalkActive = false,
+    holdToTalkPointerId = null,
+    doubleClickHoldPending = false,
+    lastLauncherTap = null,
+    voiceHotkeyState = null,
+    voiceHotkeyHoldTimer = null,
+    lastLocalTextHotkeyAt = 0,
+    lastLocalVoiceHotkeyAt = 0,
+    // The A.G. mark stays where the user drops it and reacts visually to state.
+    // audioCtx is created lazily when explicit voice playback needs it.
+    audioCtx = null;
+  const assistantPlaybackSources = new Set();
+  const liveVoiceStates = new Set();
+  const liveVoiceBySessionId = new Map();
+  const DOUBLE_CLICK_HOLD_MS = 120;
+  const LAUNCHER_DOUBLE_CLICK_MS = 280;
+  const LAUNCHER_TAP_MAX_MS = 500;
+  const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
+  const LAUNCHER_DRAG_SLOP = 4;
+  const COMMAND_ECHO_DEDUPE_MS = 400;
+  let browserAgentOwner = null;
+  let browserAgentOwnerState = "unknown";
+  let assistantSpeechOverlap = false;
+  let uiChimesEnabled = false;
+  const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
+  const DEV_RELOAD_POLL_MS = 900;
+  let devReloadTimer = null;
+  let devReloadInFlight = false;
+  let devReloadVersion = null;
+  const PROFILE_LANGUAGE_NAMES = [
+    "english",
+    "amharic",
+    "a m h a r i c",
+  ];
+  const PROFILE_VOICE_NAMES = ["puck", "charon", "kore", "fenrir", "aoede", "leda", "orus", "zephyr"];
+  let extensionContextInvalidated = false;
 
-  // The overlay's voice surface runs a small state machine so the screen always
-  // shows whether the agent is up and what it is doing:
+  function markExtensionContextInvalidated(error) {
+    const message = String(error?.message || error || "");
+    if (!/extension context invalidated|context invalidated/i.test(message)) return false;
+    extensionContextInvalidated = true;
+    return true;
+  }
+
+  function canCallExtensionApi() {
+    if (extensionContextInvalidated) return false;
+    try {
+      if (typeof chrome === "undefined") {
+        extensionContextInvalidated = true;
+        return false;
+      }
+      if (!chrome?.runtime?.id) {
+        extensionContextInvalidated = true;
+        return false;
+      }
+      return true;
+    } catch (error) {
+      markExtensionContextInvalidated(error);
+      return false;
+    }
+  }
+
+  function safeRuntimeSendMessage(message) {
+    if (!canCallExtensionApi() || !chrome?.runtime?.sendMessage) return Promise.resolve(null);
+    try {
+      return Promise.resolve(chrome.runtime.sendMessage(message)).catch((error) => {
+        if (markExtensionContextInvalidated(error)) return null;
+        throw error;
+      });
+    } catch (error) {
+      if (markExtensionContextInvalidated(error)) return Promise.resolve(null);
+      return Promise.reject(error);
+    }
+  }
+
+  function safeStorageLocalGet(defaults) {
+    if (!canCallExtensionApi() || !chrome?.storage?.local?.get) return Promise.resolve(defaults);
+    try {
+      return Promise.resolve(chrome.storage.local.get(defaults)).catch((error) => {
+        if (markExtensionContextInvalidated(error)) return defaults;
+        throw error;
+      });
+    } catch (error) {
+      if (markExtensionContextInvalidated(error)) return Promise.resolve(defaults);
+      return Promise.reject(error);
+    }
+  }
+
+  function safeStorageLocalSet(items) {
+    if (!canCallExtensionApi() || !chrome?.storage?.local?.set) return Promise.resolve(null);
+    try {
+      return Promise.resolve(chrome.storage.local.set(items)).catch((error) => {
+        if (markExtensionContextInvalidated(error)) return null;
+        throw error;
+      });
+    } catch (error) {
+      if (markExtensionContextInvalidated(error)) return Promise.resolve(null);
+      return Promise.reject(error);
+    }
+  }
+
+  function base64ToBuffer(value) {
+    const binary = atob(String(value || ""));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  // The voice path is icon-first. It uses state for launcher glow/audio routing,
+  // not for a visible chat transcript:
   //   idle      - no voice session
-  //   listening - mic open, transcript bar live with the user's words
+  //   listening - mic open
   //   thinking  - utterance submitted, waiting on the gateway
   //   speaking  - reply is being spoken back
   let agentState = "idle";
 
-  // Many cues can be in flight at once: the user keeps talking, each utterance is
-  // its own lane with its own card in the log. cues maps cueId -> { statusEl };
-  // activeCues tracks which are still running so the launcher dot reflects "busy"
-  // without ever blocking a new cue.
+  // The gateway may still identify each turn with a cue id, but the page surface
+  // presents one current intent/result rather than a visible chat history.
   let cueSeq = 0;
+  let currentCueId = null;
   const cues = new Map();
   const activeCues = new Set();
-  // Replies are spoken one after another (parallel cues finishing together must
-  // not talk over each other).
-  const speechQueue = [];
-  let speaking = false;
-
+  const revokedCueIds = new Set();
   function build() {
     root = document.createElement("div");
     root.id = "agee-root";
+    root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <button id="agee-launcher" type="button" title="⌘. to talk · ⌘, to type" aria-label="agee">
+      <button id="agee-launcher" type="button" title="Click for chat · drag to move · double-click and hold to talk" aria-label="A.G.">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
-        <svg class="agee-bird" viewBox="0 0 50 50" aria-hidden="true">
-          <g fill="currentColor" stroke="none">
-            <polygon points="9,29 1,33 11,37"/>
-            <ellipse cx="22" cy="29" rx="13" ry="10"/>
-            <circle cx="33" cy="20" r="7"/>
-            <polygon points="40,18 49,19.5 40,23"/>
-          </g>
-          <path d="M14 26 Q 24 33 31 26" fill="none" stroke="#111114" stroke-width="1.6" stroke-linecap="round"/>
-          <circle cx="34.5" cy="18.5" r="1.3" fill="#111114"/>
-          <g stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <line x1="21" y1="38" x2="20" y2="46"/>
-            <line x1="27" y1="38" x2="28" y2="46"/>
-          </g>
-        </svg>
+        <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
       </button>
-      <div id="agee-panel">
+      <div id="agee-panel" role="dialog" aria-label="A.G. command">
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
         </div>
+        <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
-          <input id="agee-input" placeholder="Ask agee…  ⌘. to talk" autocomplete="off" />
-          <button id="agee-voice" type="button" title="Speak instruction">Voice</button>
-          <button id="agee-stop" type="button" title="Stop current task">Stop</button>
+          <textarea id="agee-input" rows="1" placeholder="Ask A.G." autocomplete="off" spellcheck="true"></textarea>
+          <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice"></button>
+          <button id="agee-stop" type="button" title="Stop current task" aria-label="Stop current task">Stop</button>
         </div>
-        <div id="agee-log"></div>
       </div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
+    panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
     voiceButton = root.querySelector("#agee-voice");
     stopButton = root.querySelector("#agee-stop");
@@ -92,67 +198,72 @@
     transcriptEl = root.querySelector("#agee-transcript");
 
     restoreLauncherPosition();
+    restoreUiChimePreference();
+    // Launcher gestures intentionally match the Android orb:
+    //   single click            -> chat menu
+    //   first press + movement  -> drag the mark
+    //   double-click and hold   -> manual push-to-talk
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (suppressLauncherClick) {
-        suppressLauncherClick = false;
-        return;
-      }
-      if (!open && !anyActive() && !log?.childElementCount) {
-        describePage();
-      } else {
-        toggle(true);
-      }
     });
     launcher.addEventListener("pointerdown", startLauncherDrag);
+    window.addEventListener("resize", () => {
+      if (open) positionPanel();
+    });
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Enter" && input.value.trim()) {
-        submitInstruction(input.value.trim());
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text) return;
+        // The composer is a draft buffer. Fire the message without clearing the
+        // field so whatever the user was typing stays visible while it streams.
+        submitInstruction(text);
       } else if (e.key === "Escape") {
-        toggle(false);
+        e.preventDefault();
+        e.stopPropagation();
+        closeTextSurface();
       }
+    });
+    input.addEventListener("input", () => {
+      resizeInput();
+      setSurfacePhase("editing");
     });
 
     voiceButton.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      openTextSurface({ fresh: false });
+      primeAudio();
       toggleVoice();
     });
 
     stopButton.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      chrome.runtime.sendMessage({ cmd: "cancel" });
+      safeRuntimeSendMessage({ cmd: "cancel" });
+      stopAllLiveVoiceTurns("cancel");
       stopSpeaking();
-      addLog("agee", "stopping…");
     });
 
-    // Hovering the duck pauses its wandering so it is easy to grab or click; a
-    // pointerdown anywhere primes the audio context so the chime can play later
-    // (browsers only allow sound after a user gesture).
-    launcher.addEventListener("pointerenter", () => {
-      wanderHover = true;
-    });
-    launcher.addEventListener("pointerleave", () => {
-      wanderHover = false;
-    });
-    window.addEventListener("pointerdown", primeAudio, { once: true });
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) scheduleWander();
-    });
-    scheduleWander();
+    // Explicit voice playback primes audio from the voice path itself.
+  }
+
+  function restoreUiChimePreference() {
+    safeStorageLocalGet({ ageeUiChimesEnabled: false }).then(({ ageeUiChimesEnabled }) => {
+      uiChimesEnabled = ageeUiChimesEnabled === true;
+    }).catch(() => {});
   }
 
   function restoreLauncherPosition() {
-    chrome.storage.local.get({ ageeLauncherPosition: null }, ({ ageeLauncherPosition }) => {
+    safeStorageLocalGet({ ageeLauncherPosition: null }).then(({ ageeLauncherPosition }) => {
       if (!launcher || !ageeLauncherPosition) return;
       const { x, y } = ageeLauncherPosition;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
       placeLauncher(x, y, false);
-    });
+    }).catch(() => {});
   }
 
   function placeLauncher(x, y, persist) {
@@ -164,20 +275,33 @@
     launcher.style.top = `${nextY}px`;
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
-    if (persist) chrome.storage.local.set({ ageeLauncherPosition: { x: nextX, y: nextY } });
+    if (open) positionPanel(); // keep the surface anchored if the mark moves
+    if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
   }
 
   function startLauncherDrag(e) {
     if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
     const rect = launcher.getBoundingClientRect();
     dragState = {
       pointerId: e.pointerId,
+      startTime: e.timeStamp,
       startX: e.clientX,
       startY: e.clientY,
       left: rect.left,
       top: rect.top,
       moved: false,
     };
+    if (isLauncherSecondTap(e)) {
+      cancelLauncherTap();
+      scheduleLauncherDoubleClickHold(e);
+    } else {
+      cancelLauncherTap();
+      doubleClickHoldPending = false;
+      holdToTalkActive = false;
+      holdToTalkPointerId = null;
+    }
     launcher.setPointerCapture(e.pointerId);
     launcher.addEventListener("pointermove", moveLauncherDrag);
     launcher.addEventListener("pointerup", stopLauncherDrag);
@@ -186,69 +310,212 @@
 
   function moveLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
+    if (holdToTalkActive && e.pointerId === holdToTalkPointerId) return;
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
-    if (Math.abs(dx) + Math.abs(dy) > 4) dragState.moved = true;
+    if (Math.abs(dx) + Math.abs(dy) > LAUNCHER_DRAG_SLOP) {
+      dragState.moved = true;
+      cancelLauncherDoubleClickHold();
+    }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
   }
 
   function stopLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
+    const wasHoldToTalk = holdToTalkActive && e.pointerId === holdToTalkPointerId;
+    const wasPendingDoubleClickHold = doubleClickHoldPending && e.pointerId === holdToTalkPointerId;
     const moved = dragState.moved;
+    const downMs = e.timeStamp - dragState.startTime;
     dragState = null;
     launcher.releasePointerCapture(e.pointerId);
     launcher.removeEventListener("pointermove", moveLauncherDrag);
     launcher.removeEventListener("pointerup", stopLauncherDrag);
     launcher.removeEventListener("pointercancel", stopLauncherDrag);
+    cancelLauncherDoubleClickHold();
+    if (wasHoldToTalk) {
+      finishLauncherPushToTalk();
+      return;
+    }
+    if (wasPendingDoubleClickHold) {
+      // Released before the push-to-talk hold threshold = a quick double-click.
+      // Toggle voice: first quick double-click starts listening, the next one
+      // commits and sends. (Double-click and hold stays push-to-talk above.)
+      openTextSurface({ fresh: false });
+      primeAudio();
+      toggleVoice();
+      return;
+    }
     if (moved) {
       const rect = launcher.getBoundingClientRect();
       placeLauncher(rect.left, rect.top, true);
-      suppressLauncherClick = true;
+      return;
+    }
+    if (e.type === "pointercancel" || downMs > LAUNCHER_TAP_MAX_MS) return;
+    scheduleLauncherTap(e);
+  }
+
+  function isLauncherSecondTap(e) {
+    if (!lastLauncherTap || !clickTimer) return false;
+    const elapsed = e.timeStamp - lastLauncherTap.time;
+    if (elapsed < 0 || elapsed > LAUNCHER_DOUBLE_CLICK_MS) return false;
+    const dx = e.clientX - lastLauncherTap.x;
+    const dy = e.clientY - lastLauncherTap.y;
+    return (dx * dx + dy * dy) <= LAUNCHER_DOUBLE_CLICK_SLOP * LAUNCHER_DOUBLE_CLICK_SLOP;
+  }
+
+  function scheduleLauncherTap(e) {
+    cancelLauncherTap();
+    lastLauncherTap = { time: e.timeStamp, x: e.clientX, y: e.clientY };
+    clickTimer = setTimeout(() => {
+      clickTimer = null;
+      const tap = lastLauncherTap;
+      lastLauncherTap = null;
+      if (tap) openTextSurface({ fresh: false });
+    }, LAUNCHER_DOUBLE_CLICK_MS);
+  }
+
+  function cancelLauncherTap() {
+    if (clickTimer) {
+      clearTimeout(clickTimer);
+      clickTimer = null;
+    }
+    lastLauncherTap = null;
+  }
+
+  function scheduleLauncherDoubleClickHold(e) {
+    cancelLauncherDoubleClickHold();
+    doubleClickHoldPending = true;
+    holdToTalkPointerId = e.pointerId;
+    holdToTalkTimer = setTimeout(() => {
+      holdToTalkTimer = null;
+      if (!doubleClickHoldPending || !dragState || dragState.pointerId !== e.pointerId || dragState.moved || holdToTalkActive) return;
+      doubleClickHoldPending = false;
+      holdToTalkActive = true;
+      startLauncherPushToTalk();
+    }, DOUBLE_CLICK_HOLD_MS);
+  }
+
+  function cancelLauncherDoubleClickHold() {
+    if (holdToTalkTimer) {
+      clearTimeout(holdToTalkTimer);
+      holdToTalkTimer = null;
+    }
+    if (!holdToTalkActive) {
+      holdToTalkPointerId = null;
+      doubleClickHoldPending = false;
+    }
+  }
+
+  function startLauncherPushToTalk() {
+    openTextSurface({ fresh: false });
+    primeAudio();
+    if (liveVoice) stopLiveVoiceTurn("cancel");
+    startLiveVoiceTurn({
+      preserveAssistantPlayback: assistantSpeechOverlap === true,
+      conversation: false,
+      autoCommit: false,
+    });
+  }
+
+  function finishLauncherPushToTalk() {
+    holdToTalkActive = false;
+    holdToTalkPointerId = null;
+    if (liveVoice && listening) {
+      commitLiveVoiceTurn();
     }
   }
 
   function toggle(force) {
+    const was = open;
     open = typeof force === "boolean" ? force : !open;
     if (!root) build();
     root.classList.toggle("agee-open", open);
     if (open) {
+      positionPanel(); // anchor the surface to the mark, not a fixed corner
+      if (!was) chime("wake");
       setTimeout(() => input.focus(), 0);
-      loadConversationHistory();
     }
   }
 
-  function loadConversationHistory() {
-    if (historyLoaded) return;
-    historyLoaded = true;
-    chrome.runtime.sendMessage({ cmd: "history" }).then((response) => {
-      if (!response?.ok || !Array.isArray(response.turns) || response.turns.length === 0) return;
-      renderHistory(response.turns);
-    }).catch(() => {});
+  // Anchor the panel to the floating mark so the input opens right where the
+  // agent is. It opens above the mark and grows upward (its bottom stays pinned
+  // just above the mark), so streamed results stack up where the input sits. If
+  // the mark is near the top of the screen, it opens below instead.
+  function positionPanel() {
+    if (!panel || !launcher) return;
+    const lr = launcher.getBoundingClientRect();
+    const gap = 12;
+    const pw = panel.offsetWidth || Math.min(540, window.innerWidth - 24);
+    let left = lr.left + lr.width / 2 - pw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    panel.style.left = `${left}px`;
+    panel.style.right = "auto";
+    if (lr.top > 140) {
+      panel.style.bottom = `${Math.max(8, window.innerHeight - lr.top + gap)}px`;
+      panel.style.top = "auto";
+    } else {
+      panel.style.top = `${lr.bottom + gap}px`;
+      panel.style.bottom = "auto";
+    }
   }
 
-  function renderHistory(turns) {
-    if (!log || log.childElementCount) return;
-    const recent = turns.slice(-12);
-    for (const turn of recent) {
-      const userText = pickTurnText(turn, ["user", "transcript", "input", "prompt"]);
-      const assistantText = pickTurnText(turn, ["assistant", "display", "text", "reply", "speak"]);
-      if (userText) log.appendChild(makeRow("you", userText));
-      if (assistantText) log.appendChild(makeRow("done", assistantText));
+  function openTextSurface({ fresh = false } = {}) {
+    if (!root) build();
+    toggle(true);
+    if (fresh) {
+      setInputText("");
+      setSurfacePhase("editing");
     }
-    if (log.childElementCount) log.scrollTop = log.scrollHeight;
+    setTimeout(() => input.focus(), 0);
   }
 
-  function pickTurnText(turn, fields) {
-    for (const field of fields) {
-      const value = turn?.[field];
-      if (typeof value === "string" && value.trim()) return value.trim();
+  function closeTextSurface() {
+    toggle(false);
+    if (surfacePhase !== "pending") setSurfacePhase("idle");
+  }
+
+  function toggleTextSurface() {
+    if (open) closeTextSurface();
+    else openTextSurface({ fresh: false });
+  }
+
+  function setSurfacePhase(next) {
+    surfacePhase = next;
+    if (!root) return;
+    for (const phase of ["idle", "editing", "pending", "result", "error"]) {
+      root.classList.toggle(`agee-phase-${phase}`, phase === next);
     }
-    if (Array.isArray(turn?.messages)) {
-      const wanted = fields.includes("user") ? "user" : "assistant";
-      const msg = [...turn.messages].reverse().find((m) => m?.role === wanted && typeof m?.content === "string" && m.content.trim());
-      if (msg) return msg.content.trim();
+    // The composer stays editable through every phase. Answers live in the cue
+    // cards above, never in the input, so a running turn never locks typing.
+    if (input) input.readOnly = false;
+  }
+
+  // Show the result stack whenever it holds anything (running, done, error, or
+  // confirm rows), so answers sit above the composer until their linger timer
+  // removes them.
+  function syncLogVisibility() {
+    if (!root || !log) return;
+    const hasVisibleWork = log.children.length > 0;
+    root.classList.toggle("agee-has-log", hasVisibleWork);
+  }
+
+  function setInputText(text, { select = false } = {}) {
+    if (!input) return;
+    input.value = String(text || "");
+    resizeInput();
+    if (select) {
+      setTimeout(() => {
+        input.focus();
+        input.select();
+      }, 0);
     }
-    return "";
+  }
+
+  function resizeInput() {
+    if (!input) return;
+    input.style.height = "auto";
+    const max = Math.max(96, Math.round(window.innerHeight * 0.32));
+    input.style.height = `${Math.min(input.scrollHeight || 0, max)}px`;
   }
 
   function makeRow(who, text) {
@@ -261,6 +528,7 @@
   function addLog(who, text) {
     if (!log) return;
     log.appendChild(makeRow(who, text));
+    syncLogVisibility();
     log.scrollTop = log.scrollHeight;
   }
 
@@ -268,7 +536,8 @@
     if (!log) return Promise.resolve(false);
     if (pendingConfirm) pendingConfirm(false);
     reactLauncher("attention"); // a question needs the user: ring for attention
-    toggle(true);
+    openTextSurface({ fresh: false });
+    root?.classList.add("agee-confirming");
     return new Promise((resolve) => {
       pendingConfirm = resolve;
       const row = document.createElement("div");
@@ -279,13 +548,14 @@
           <button type="button" data-agee-confirm="yes">Allow</button>
           <button type="button" data-agee-confirm="no">Cancel</button>
         </div>`;
-      row.querySelector(".agee-confirm-text").textContent = text || "Allow agee to continue?";
+      row.querySelector(".agee-confirm-text").textContent = text || "Allow A.G. to continue?";
       row.addEventListener("click", (event) => {
         const button = event.target.closest("[data-agee-confirm]");
         if (!button) return;
         const ok = button.getAttribute("data-agee-confirm") === "yes";
         pendingConfirm = null;
         row.remove();
+        root?.classList.remove("agee-confirming");
         resolve(ok);
       });
       log.appendChild(row);
@@ -305,8 +575,8 @@
     const dot = root && root.querySelector("#agee-dot");
     if (dot) dot.className = anyActive() ? "running" : lastTerminal;
     if (stopButton) stopButton.classList.toggle("visible", anyActive());
-    // The duck glows while it is working so the user can tell it is busy even
-    // with the panel closed. Busy also halts wandering — it stays put and thinks.
+    // The mark glows while it is working so the user can tell it is busy even
+    // with the panel closed.
     if (launcher) launcher.classList.toggle("agee-busy", anyActive());
   }
 
@@ -318,33 +588,159 @@
     return `c_${cueSeq}_${Date.now().toString(36)}`;
   }
 
-  function createCue(cueId, label) {
+  // Cards stack as the user keeps sending. Drop the oldest finished ones past the
+  // cap so the log stays bounded; a running card is never pruned.
+  const MAX_CUE_CARDS = 12;
+  function pruneCueCards() {
     if (!log) return;
+    const cards = [...log.querySelectorAll(".agee-cue")];
+    let removable = cards.length - MAX_CUE_CARDS;
+    for (const card of cards) {
+      if (removable <= 0) break;
+      const id = card.dataset.cue;
+      if (activeCues.has(id)) continue;
+      removeCueCard(id);
+      removable -= 1;
+    }
+  }
+
+  // The surface is not a chat. A card lives only while its turn is in flight, then
+  // lingers just long enough to read the answer and fades out. A running card is
+  // never auto-dismissed — it waits for its response.
+  const CUE_LINGER_DONE_MS = 6000;
+  const CUE_LINGER_ERROR_MS = 9000;
+
+  function scheduleCueDismiss(cueId, kind) {
+    const entry = cues.get(cueId);
+    if (!entry) return;
+    if (entry.dismissTimer) clearTimeout(entry.dismissTimer);
+    const delay = kind === "error" ? CUE_LINGER_ERROR_MS : CUE_LINGER_DONE_MS;
+    entry.dismissTimer = setTimeout(() => dismissCue(cueId), delay);
+  }
+
+  // Fade a finished card out, then remove it. In-flight cards are left alone.
+  function dismissCue(cueId) {
+    const entry = cues.get(cueId);
+    if (!entry || activeCues.has(cueId)) return;
+    if (entry.dismissTimer) {
+      clearTimeout(entry.dismissTimer);
+      entry.dismissTimer = null;
+    }
+    const card = entry.cardEl;
+    cues.delete(cueId);
+    if (!card) return;
+    card.classList.add("agee-cue-leaving");
+    const finalize = () => {
+      card.remove();
+      syncLogVisibility();
+    };
+    card.addEventListener("animationend", finalize, { once: true });
+    setTimeout(finalize, 400); // fallback if the animation never fires
+  }
+
+  // Remove a card right now, no fade. Used by prune and when a new turn arrives.
+  function removeCueCard(cueId) {
+    const entry = cues.get(cueId);
+    if (entry?.dismissTimer) clearTimeout(entry.dismissTimer);
+    cues.delete(cueId);
+    activeCues.delete(cueId);
+    entry?.cardEl?.remove();
+    log?.querySelector(`.agee-cue[data-cue="${cueId}"]`)?.remove();
+    syncLogVisibility();
+  }
+
+  function rememberRevokedCue(cueId) {
+    if (!cueId) return;
+    revokedCueIds.add(cueId);
+    setTimeout(() => revokedCueIds.delete(cueId), 30000);
+  }
+
+  // Sending a new message clears whatever already finished, so only live turns
+  // stay on screen. Running cards are kept — several intents can run at once.
+  function clearFinishedCues() {
+    if (!log) return;
+    for (const card of [...log.querySelectorAll(".agee-cue")]) {
+      const id = card.dataset.cue;
+      if (activeCues.has(id)) continue;
+      removeCueCard(id);
+    }
+    syncLogVisibility();
+  }
+
+  function createCue(cueId, label, { presentation = "card" } = {}) {
+    if (presentation === "icon") {
+      currentCueId = cueId;
+      cues.set(cueId, { presentation, label: String(label || "") });
+      activeCues.add(cueId);
+      refreshStatus();
+      return;
+    }
+    materializeCue(cueId, label, "thinking...");
+  }
+
+  function materializeCue(cueId, label, statusText = "thinking...") {
+    if (!log) return null;
+    let entry = cues.get(cueId);
+    if (entry?.cardEl && entry?.statusEl) return entry;
+    clearFinishedCues(); // a new turn wipes whatever already answered
+    currentCueId = cueId;
     const card = document.createElement("div");
     card.className = "agee-cue agee-cue-running";
     card.dataset.cue = cueId;
     const you = document.createElement("div");
     you.className = "agee-row agee-you";
-    you.textContent = label;
+    you.textContent = String(label || entry?.label || "A.G.");
     const status = document.createElement("div");
     status.className = "agee-cue-status";
-    status.textContent = "thinking…";
+    status.textContent = statusText || "";
     card.appendChild(you);
     card.appendChild(status);
     log.appendChild(card);
-    log.scrollTop = log.scrollHeight;
-    cues.set(cueId, { statusEl: status, cardEl: card });
+    entry = {
+      ...(entry || {}),
+      statusEl: status,
+      cardEl: card,
+      labelEl: you,
+      presentation: "card",
+      label: you.textContent,
+    };
+    cues.set(cueId, entry);
     activeCues.add(cueId);
+    pruneCueCards();
+    syncLogVisibility();
+    log.scrollTop = log.scrollHeight;
     refreshStatus();
+    return entry;
+  }
+
+  function ensureVoiceCueCard(state, label = "", statusText = "") {
+    if (!state?.cueId) return null;
+    const entry = cues.get(state.cueId);
+    if (entry?.statusEl) {
+      if (label) updateCueLabel(state.cueId, label);
+      if (statusText) entry.statusEl.textContent = statusText;
+      return entry;
+    }
+    return materializeCue(state.cueId, label || state.transcript || "Voice", statusText || "");
+  }
+
+  function updateCueLabel(cueId, text) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    const entry = cues.get(cueId);
+    if (entry && !entry.labelEl) entry.label = value;
+    if (entry?.labelEl) entry.labelEl.textContent = value;
   }
 
   // Update a cue's status line. kind: "running" | "done" | "error".
   function updateCue(cueId, text, kind) {
-    const entry = cues.get(cueId);
+    if (cueId && revokedCueIds.has(cueId)) return;
+    let entry = cues.get(cueId);
     // A message for an unknown cue (e.g. server-generated id) falls back to a row.
-    // Tag the terminal kind so a done row is distinguishable from interim
-    // progress rows (error -> agee-error, done -> agee-done, running -> agee-agee).
+    // Tag the terminal kind so harnesses can distinguish final state from
+    // interim progress in the hidden one-turn ledger.
     if (!entry) {
+      if (cueId && currentCueId && cueId !== currentCueId) return;
       addLog(kind === "error" ? "error" : kind === "done" ? "done" : "agee", text);
       if (kind === "done" || kind === "error") {
         lastTerminal = kind;
@@ -352,60 +748,87 @@
       }
       return;
     }
+    if (!entry.statusEl) {
+      if (kind === "error") {
+        entry = materializeCue(cueId, entry.label || "Voice", text || "Voice failed.");
+      } else if (kind === "done") {
+        activeCues.delete(cueId);
+        cues.delete(cueId);
+        lastTerminal = kind;
+        refreshStatus();
+        syncLogVisibility();
+        return;
+      } else {
+        refreshStatus();
+        return;
+      }
+    }
+    if (!entry?.statusEl) return;
     if (typeof text === "string" && text) entry.statusEl.textContent = text;
     if (kind === "done" || kind === "error") {
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
+      scheduleCueDismiss(cueId, kind); // served → linger briefly, then fade out
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
   }
 
-  // Speak replies one at a time so parallel cues finishing together don't overlap.
-  function speak(text) {
-    const t = String(text || "").trim();
-    if (!t) return;
-    speechQueue.push(t);
-    drainSpeech();
+  function visibleErrorMessage(message) {
+    const text = String(message || "").trim();
+    if (!text) return "";
+    if (/extension context invalidated/i.test(text)) return "";
+    if (/failed to complete turn:\s*gemini-live generation was interrupted/i.test(text)) return "";
+    if (/gemini-live generation was interrupted/i.test(text)) return "";
+    return text;
   }
 
-  function drainSpeech() {
-    if (speaking) return;
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    const next = speechQueue.shift();
-    if (!next) {
-      // Nothing left to say: a live voice session falls back to idle so the orb
-      // stops pulsing and the surface settles.
-      if (agentState !== "idle") setAgentState("idle");
-      return;
+  function showCueError(cueId, message, { react = true } = {}) {
+    const text = visibleErrorMessage(message);
+    if (!text) {
+      removeCueCard(cueId);
+      refreshStatus();
+      return false;
     }
-    speaking = true;
-    if (agentState !== "idle") setAgentState("speaking");
-    try {
-      const utterance = new SpeechSynthesisUtterance(next);
-      utterance.lang = navigator.language || "en-US";
-      utterance.onend = utterance.onerror = () => {
-        speaking = false;
-        drainSpeech();
-      };
-      synth.speak(utterance);
-    } catch {
-      speaking = false;
-    }
+    updateCue(cueId, text, "error");
+    if (react) reactLauncher("error");
+    return true;
   }
 
   function stopSpeaking() {
-    speechQueue.length = 0;
-    speaking = false;
+    stopAllAssistantPlayback();
     if (agentState === "speaking") setAgentState("idle");
-    try {
-      window.speechSynthesis && window.speechSynthesis.cancel();
-    } catch {}
   }
 
-  // ---- The duck: sound, reactions, wandering ----------------------------
+  function trackLiveVoiceState(state) {
+    if (!state) return;
+    liveVoiceStates.add(state);
+  }
+
+  function attachLiveVoiceSession(state, voiceSessionId) {
+    if (!state) return;
+    if (state.voiceSessionId) liveVoiceBySessionId.delete(state.voiceSessionId);
+    state.voiceSessionId = voiceSessionId || null;
+    if (state.voiceSessionId) {
+      liveVoiceBySessionId.set(state.voiceSessionId, state);
+      safeRuntimeSendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId })
+        .catch(() => {});
+    }
+  }
+
+  function untrackLiveVoiceState(state) {
+    if (!state) return;
+    liveVoiceStates.delete(state);
+    if (state.voiceSessionId) liveVoiceBySessionId.delete(state.voiceSessionId);
+    if (liveVoice === state) liveVoice = null;
+  }
+
+  function isLiveVoiceStateActive(state) {
+    return !!state && liveVoiceStates.has(state);
+  }
+
+  // ---- The mark: sound, reactions ---------------------------------------
   // A short synthesized chime so something *rings* when a turn lands. No asset,
   // no network: two quick sine notes. "done" rises (happy), "error" falls,
   // "attention" is a single insistent note (a question needs the user).
@@ -417,11 +840,15 @@
   }
 
   function chime(kind = "done") {
+    if (!uiChimesEnabled) return;
     primeAudio();
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
     const notes =
-      kind === "error" ? [493.9, 329.6] : kind === "attention" ? [587.3, 587.3] : [659.3, 880.0];
+      kind === "error" ? [493.9, 329.6]
+      : kind === "attention" ? [587.3, 587.3]
+      : kind === "wake" ? [523.25, 783.99] // soft rising fifth, C5 → G5: a friendly "ready"
+      : [659.3, 880.0];
     notes.forEach((freq, i) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -452,69 +879,56 @@
       ring.classList.add("agee-ring-go");
     }
     chime(kind);
-    // A reaction means something happened: hop in place, then resume roaming.
-    wanderPauseUntil = Date.now() + 2600;
-  }
-
-  // ---- Wandering --------------------------------------------------------
-  // When idle (overlay closed, nothing running, not just dragged or hovered),
-  // the duck glides to a new spot every so often so it feels alive on the page.
-  function scheduleWander() {
-    clearTimeout(wanderTimer);
-    wanderTimer = setTimeout(wanderStep, 5000 + Math.random() * 7000);
-  }
-
-  function wanderStep() {
-    const blocked =
-      !launcher || open || anyActive() || wanderHover || dragState || document.hidden ||
-      Date.now() < wanderPauseUntil;
-    if (!blocked) {
-      const rect = launcher.getBoundingClientRect();
-      const margin = 18;
-      const x = margin + Math.random() * Math.max(0, window.innerWidth - rect.width - margin * 2);
-      const y = margin + Math.random() * Math.max(0, window.innerHeight - rect.height - margin * 2);
-      glideTo(x, y);
-    }
-    scheduleWander();
-  }
-
-  // Glide (not snap) to a target, facing the direction of travel. Wander moves
-  // are not persisted — only a deliberate drag pins the duck (see stopLauncherDrag).
-  function glideTo(x, y) {
-    if (!launcher) return;
-    const from = launcher.getBoundingClientRect().left;
-    launcher.classList.add("agee-gliding");
-    launcher.classList.toggle("agee-face-left", x < from);
-    placeLauncher(x, y, false);
-    setTimeout(() => launcher && launcher.classList.remove("agee-gliding"), 2400);
   }
 
   // Fire a cue. Never blocks on a prior cue — that is the whole point: the user
   // keeps talking, each utterance becomes its own concurrent lane.
   function submitInstruction(instruction, displayText = instruction) {
     if (!instruction) return;
+    // Fast local stop path for typed input: a whole-utterance "stop / shut up /
+    // be quiet" halts playback and live turns immediately and silently. It never
+    // sends the instruction to the gateway and never produces an assistant reply;
+    // the only feedback is a minimal cue and the launcher returning to idle.
+    if (isStopCommand(instruction)) {
+      window.__ageeLastStopHalt = { source: "typed", at: Date.now() };
+      const cueId = newCueId();
+      openTextSurface({ fresh: false });
+      createCue(cueId, displayText, { presentation: "card" });
+      stopAllLiveVoiceTurns("cancel");
+      stopSpeaking();
+      updateCue(cueId, "", "done");
+      setSurfacePhase("editing");
+      input.focus();
+      return;
+    }
     const cueId = newCueId();
-    toggle(true);
-    createCue(cueId, displayText);
+    openTextSurface({ fresh: false });
+    createCue(cueId, displayText, { presentation: "card" });
+    // Keep the composer as a draft buffer. Responses render above it and must
+    // not clear or replace whatever the user is typing.
+    setSurfacePhase("editing");
     // A voice-launched turn keeps the agent surface up and moves it to thinking;
     // a typed command leaves the voice surface untouched.
     if (agentState !== "idle") {
       setTranscript(displayText);
       setAgentState("thinking");
     }
-    input.value = "";
-    input.focus(); // immediately ready for the next cue
-    chrome.runtime.sendMessage({ cmd: "run", instruction, cueId }).catch((error) => {
-      updateCue(cueId, String(error?.message || error), "error");
+    input.focus();
+    safeRuntimeSendMessage({ cmd: "run", instruction, cueId }).then(() => {
+      if (extensionContextInvalidated) removeCueCard(cueId);
+    }).catch((error) => {
+      showCueError(cueId, error?.message || error, { react: false });
     });
   }
 
   function describePage() {
     const cueId = newCueId();
-    toggle(true);
-    createCue(cueId, "Describe this page");
-    chrome.runtime.sendMessage({ cmd: "describe", cueId }).catch((error) => {
-      updateCue(cueId, String(error?.message || error), "error");
+    openTextSurface({ fresh: false });
+    createCue(cueId, "Describe this page", { presentation: "card" });
+    safeRuntimeSendMessage({ cmd: "describe", cueId }).then(() => {
+      if (extensionContextInvalidated) removeCueCard(cueId);
+    }).catch((error) => {
+      showCueError(cueId, error?.message || error, { react: false });
     });
   }
 
@@ -522,13 +936,14 @@
     listening = next;
     if (voiceButton) {
       voiceButton.classList.toggle("listening", listening);
-      voiceButton.textContent = listening ? "Listening" : "Voice";
+      voiceButton.textContent = "";
+      voiceButton.title = listening ? "Send voice" : "Start voice";
+      voiceButton.setAttribute("aria-label", listening ? "Send voice" : "Start voice");
     }
   }
 
-  // Drive the visible "agent is up" surface. Adds a class on the root so the
-  // orb, transcript bar, and panel chrome reflect the live phase. The transcript
-  // bar is only present while listening or just-submitted; it clears on idle.
+  // Drive voice state on the root. The top strip stays hidden; live transcript
+  // and assistant text render in cue cards above the input.
   function setAgentState(next) {
     agentState = next;
     if (!root) return;
@@ -537,123 +952,812 @@
     }
     const voicing = next !== "idle";
     root.classList.toggle("agee-voicing", voicing);
-    if (voiceState) voiceState.setAttribute("aria-hidden", voicing ? "false" : "true");
+    if (voiceState) voiceState.setAttribute("aria-hidden", "true");
     if (next === "idle") setTranscript("");
   }
 
-  // Render the live transcript bar. `interim` softens still-being-heard words so
-  // the user sees speech land word-by-word as the recognizer firms it up.
+  // Keep the legacy transcript node inert; visible voice feedback lives in
+  // cue cards above the input so the draft buffer remains untouched.
   function setTranscript(text, interim = false) {
     if (!transcriptEl) return;
     transcriptEl.textContent = text || "";
     transcriptEl.classList.toggle("agee-interim", !!interim && !!text);
   }
 
-  function startRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      addLog("error", "Voice input is not available in this browser. Type the instruction instead.");
-      return false;
+  function setAmbientState(next) {
+    ambientState = next === "on" ? "on" : "off";
+    if (root) root.classList.toggle("agee-ambient", ambientState === "on");
+  }
+
+  async function startLiveVoiceTurn(options = {}) {
+    const preserveAssistantPlayback = options.preserveAssistantPlayback === true || assistantSpeechOverlap === true;
+    if (!preserveAssistantPlayback) {
+      stopSpeaking();
     }
-    recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = navigator.language || "en-US";
-    recognition.onstart = () => {
-      setVoiceState(true);
-      setAgentState("listening");
+    openTextSurface({ fresh: false });
+    conversationActive = true;
+    if (options.conversation === false) conversationActive = false;
+    const cueId = newCueId();
+    createCue(cueId, "", { presentation: "icon" });
+    setVoiceState(true);
+    setAgentState("listening");
+    setTranscript("");
+
+    const state = {
+      cueId,
+      turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      voiceSessionId: null,
+      sessionReady: false,
+      committed: false,
+      playbackTime: 0,
+      playbackSources: new Set(),
+      assistantText: "",
+      transcript: "",
+      gatewayRouted: false,
+      assistantSpeechOverlap: preserveAssistantPlayback,
     };
-    recognition.onerror = (event) => {
-      setVoiceState(false);
-      setAgentState("idle");
-      addLog(
-        "error",
-        event.error === "not-allowed" || event.error === "service-not-allowed"
-          ? "Microphone blocked. Allow mic access for this site, or just type."
-          : `Voice input failed: ${event.error || "unknown error"}`
-      );
-      setTimeout(() => input.focus(), 0);
-    };
-    recognition.onend = () => {
-      setVoiceState(false);
-      // Leave the transcript visible if a turn is mid-flight (thinking/speaking);
-      // only an idle end clears the bar.
-      if (agentState === "listening") setAgentState("idle");
-    };
-    recognition.onresult = (event) => {
-      let firmed = "";
-      let pending = "";
-      for (const result of event.results) {
-        const piece = result[0]?.transcript || "";
-        if (result.isFinal) firmed += piece;
-        else pending += piece;
+    trackLiveVoiceState(state);
+    liveVoice = state;
+
+    try {
+      primeAudio();
+      if (!audioCtx) throw new Error("Web Audio is not available in this browser.");
+
+      const session = await safeRuntimeSendMessage({
+        cmd: "voiceSessionStart",
+        cueId,
+        turnId: state.turnId,
+        assistantOverlap: assistantSpeechOverlap === true,
+        capture: "extension-offscreen",
+        autoCommit: options.autoCommit !== false,
+      });
+      if (extensionContextInvalidated) {
+        stopLiveVoiceState(state, "context invalidated");
+        setVoiceState(false);
+        if (agentState !== "idle") setAgentState("idle");
+        return;
       }
-      const transcript = `${firmed} ${pending}`.replace(/\s+/g, " ").trim();
-      // Live transcript bar shows words as they land; interim styling fades the
-      // not-yet-firmed tail. The input bar mirrors it so Enter still works.
-      setTranscript(transcript, !!pending && !firmed.trim());
-      if (transcript) input.value = transcript;
+      if (!session?.ok || !session.voiceSessionId) {
+        throw new Error(session?.error || "gateway did not open a voice session");
+      }
+      attachLiveVoiceSession(state, session.voiceSessionId);
+      if (state.commitWhenReady) commitLiveVoiceTurn();
+    } catch (error) {
+      finishLiveVoiceError(state, String(error?.message || error));
+    }
+  }
+
+  function handleLiveVoiceMessage(state, payload) {
+    if (payload?.audio) {
+      playLiveAssistantPcm(state, base64ToBuffer(payload.audio));
+      return;
+    }
+    if (payload?.data instanceof ArrayBuffer) {
+      playLiveAssistantPcm(state, payload.data);
+      return;
+    }
+    if (payload?.data instanceof Blob) {
+      payload.data.arrayBuffer().then((buffer) => playLiveAssistantPcm(state, buffer));
+      return;
+    }
+
+    let msg;
+    if (payload?.event && typeof payload.event === "object") {
+      msg = payload.event;
+    } else if (payload && typeof payload === "object" && payload.type) {
+      msg = payload;
+    } else {
+      try {
+        msg = JSON.parse(String(payload?.data || payload || "{}"));
+      } catch {
+        return;
+      }
+    }
+    if (!isLiveVoiceStateActive(state) || state.gatewayRouted) return;
+    const isCurrentTurn = liveVoice === state;
+
+    if (msg.type === "session_ready") {
+      state.sessionReady = true;
+      updateCue(state.cueId, "", "running");
+      return;
+    }
+    if (msg.type === "profile_applied") {
+      return;
+    }
+    if (msg.type === "revoked") {
+      revokeLiveVoiceState(state, msg.reason || "revoked");
+      return;
+    }
+    if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
+      const text = String(msg.text || "").trim();
+      if (!text) return;
+      state.transcript = text;
+      if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
+      updateCueLabel(state.cueId, text);
+      ensureVoiceCueCard(state, text, "");
+      // Fast local stop path: a whole-utterance "stop / shut up / be quiet"
+      // halts playback and every live turn at once, silently. It never sends the
+      // transcript on as a turn and never produces an assistant reply.
+      if (msg.type === "transcript_final" && isStopCommand(text)) {
+        haltForStopCommand(state);
+        return;
+      }
+      if (msg.type === "transcript_final" && isCurrentTurn && applySpeechOverlapPolicyFromTranscript(state, text)) {
+        return;
+      }
+      if (msg.type === "transcript_final" && isCurrentTurn && shouldRouteLiveTranscriptThroughGateway(text)) {
+        routeLiveTranscriptThroughGateway(state, text);
+      }
+      return;
+    }
+    if (msg.type === "assistant_text") {
+      const text = String(msg.text || "").trim();
+      if (!text) return;
+      state.assistantText = text;
+      ensureVoiceCueCard(state, state.transcript || "Voice", text);
+      updateCue(state.cueId, text, "running");
+      return;
+    }
+    if (msg.type === "assistant_audio_start") {
+      if (isCurrentTurn) {
+        setVoiceState(false);
+        setAgentState("speaking");
+      }
+      state.playbackTime = Math.max(audioCtx?.currentTime || 0, state.playbackTime || 0) + 0.04;
+      return;
+    }
+    if (msg.type === "assistant_audio_done") {
+      return;
+    }
+    if (msg.type === "turn_done") {
+      finishLiveVoiceDone(state);
+      return;
+    }
+    if (msg.type === "error") {
+      if (msg.recoverable === false || msg.code === "microphone_capture_failed") {
+        finishLiveVoiceError(state, msg.message || "Live voice microphone capture failed.");
+        return;
+      }
+      // A turn that dies mid-generation ("failed to complete turn: ...") is not a
+      // dead end: the gateway has already stored the partial turn and will replay
+      // it into the next session. Recover silently instead of surfacing it.
+      recoverLiveVoiceTurn(state, msg.message || "live voice error");
+      return;
+    }
+    if (msg.type === "connection_closed") {
+      recoverLiveVoiceTurn(state, "connection closed");
+    }
+  }
+
+  function playLiveAssistantPcm(state, buffer) {
+    if (!buffer || !buffer.byteLength) return;
+    if (!isLiveVoiceStateActive(state)) return;
+    primeAudio();
+    if (!audioCtx) return;
+    const pcm = new Int16Array(buffer);
+    const audioBuffer = audioCtx.createBuffer(1, pcm.length, 16000);
+    const channel = audioBuffer.getChannelData(0);
+    for (let i = 0; i < pcm.length; i += 1) channel[i] = pcm[i] / 32768;
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtx.destination);
+    state.playbackSources.add(source);
+    assistantPlaybackSources.add(source);
+    source.onended = () => {
+      state.playbackSources.delete(source);
+      assistantPlaybackSources.delete(source);
     };
-    recognition.start();
+    const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
+    source.start(startAt);
+    state.playbackTime = startAt + audioBuffer.duration;
+  }
+
+  async function commitLiveVoiceTurn() {
+    const state = liveVoice;
+    if (!state || !isLiveVoiceStateActive(state)) return;
+    state.committed = true;
+    stopLiveCapture(state);
+    setVoiceState(false);
+    setAgentState("thinking");
+    setTranscript(state.transcript || "");
+    if (state.transcript) ensureVoiceCueCard(state, state.transcript, "");
+    updateCue(state.cueId, "", "running");
+    if (state.voiceSessionId) {
+      safeRuntimeSendMessage({
+        cmd: "voiceSessionControl",
+        voiceSessionId: state.voiceSessionId,
+        message: { type: "commit_turn", turn_id: state.turnId },
+      }).then((res) => {
+        if (!res && extensionContextInvalidated) return;
+        if (!res?.ok) finishLiveVoiceError(state, res?.error || "Live voice connection was not open.");
+      }).catch((error) => finishLiveVoiceError(state, String(error?.message || error)));
+    } else {
+      state.commitWhenReady = true;
+    }
+  }
+
+  function routeLiveTranscriptThroughGateway(state, transcript) {
+    if (liveVoice !== state || !isLiveVoiceStateActive(state) || state.gatewayRouted) return;
+    state.gatewayRouted = true;
+    state.committed = true;
+    stopLiveCapture(state);
+    stopLivePlayback(state);
+    setVoiceState(false);
+    setAgentState("thinking");
+    setTranscript(transcript);
+    updateCueLabel(state.cueId, transcript);
+    materializeCue(state.cueId, transcript, "updating settings...");
+    sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    closeLiveVoiceSession(state, "profile control routed to gateway");
+    untrackLiveVoiceState(state);
+    safeRuntimeSendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).then(() => {
+      if (extensionContextInvalidated) removeCueCard(state.cueId);
+    }).catch((error) => {
+      showCueError(state.cueId, error?.message || error);
+      if (agentState === "thinking") setAgentState("idle");
+    });
+  }
+
+  function stopLiveVoiceTurn(mode = "stop") {
+    // Any explicit stop/cancel/error ends conversation mode so the mark does not
+    // re-arm the mic after the current turn tears down.
+    conversationActive = false;
+    const state = liveVoice;
+    if (!state) {
+      setVoiceState(false);
+      if (agentState !== "idle") setAgentState("idle");
+      return;
+    }
+    stopLiveVoiceState(state, mode);
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+  }
+
+  function stopAllLiveVoiceTurns(mode = "stop") {
+    conversationActive = false;
+    for (const state of [...liveVoiceStates]) {
+      stopLiveVoiceState(state, mode);
+    }
+    liveVoice = null;
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+  }
+
+  // Inline mirror of extension/stop-intent.js. content.js is a classic
+  // content-script IIFE and cannot import the module, so the whole-utterance
+  // stop matcher is duplicated here; the verify harness pins the two copies
+  // together. Keep STOP_PHRASES and TRAILING_FILLERS aligned with that module.
+  const STOP_PHRASES = [
+    "stop",
+    "stop it",
+    "stop talking",
+    "stop speaking",
+    "shut up",
+    "be quiet",
+    "quiet",
+    "silence",
+    "hush",
+    "enough",
+  ];
+  const STOP_TRAILING_FILLERS = ["please", "now", "already", "ok", "okay", "agee", "a g"];
+
+  function isStopCommand(text) {
+    const lower = normalizeSpokenCommand(text);
+    if (!lower) return false;
+    let words = lower.split(" ").filter(Boolean);
+    let changed = true;
+    while (changed && words.length > 1) {
+      changed = false;
+      if (STOP_TRAILING_FILLERS.includes(words[words.length - 1])) {
+        words = words.slice(0, -1);
+        changed = true;
+      }
+    }
+    return STOP_PHRASES.includes(words.join(" "));
+  }
+
+  // Halt everything the stop command should silence: assistant playback and
+  // every live voice turn, with no spoken or written acknowledgment. The
+  // matched transcript is dropped, not sent on as a turn. Records a window flag
+  // for smoke inspection only; it is not user-facing.
+  function haltForStopCommand(state) {
+    window.__ageeLastStopHalt = { source: "voice", at: Date.now() };
+    if (state) untrackLiveVoiceState(state);
+    stopAllLiveVoiceTurns("cancel");
+    stopSpeaking();
+  }
+
+  function revokeLiveVoiceState(state, _reason = "revoked") {
+    conversationActive = false;
+    stopLiveVoiceState(state, "revoked");
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+  }
+
+  function stopLiveVoiceState(state, mode = "stop") {
+    if (!isLiveVoiceStateActive(state)) return;
+    stopLiveCapture(state);
+    stopLivePlayback(state);
+    if (mode === "cancel") sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    closeLiveVoiceSession(state, mode);
+    if (mode === "revoked") {
+      rememberRevokedCue(state.cueId);
+      removeCueCard(state.cueId);
+    }
+    untrackLiveVoiceState(state);
+  }
+
+  function handleAgentRevoked(msg = {}) {
+    conversationActive = false;
+    window.__ageeLastAgentRevoked = {
+      cueIds: Array.isArray(msg.cueIds) ? msg.cueIds : [],
+      reason: String(msg.reason || ""),
+      at: Date.now(),
+    };
+    if (root) {
+      root.dataset.ageeOwner = "passive";
+      root.dataset.ageeLastRevokedReason = String(msg.reason || "");
+    }
+    const cueIds = Array.isArray(msg.cueIds) ? msg.cueIds : [];
+    for (const cueId of cueIds) {
+      rememberRevokedCue(cueId);
+      removeCueCard(cueId);
+    }
+    stopAllLiveVoiceTurns("revoked");
+    stopSpeaking();
+    setVoiceState(false);
+    if (agentState !== "idle") setAgentState("idle");
+    refreshStatus();
+  }
+
+  function handleBrowserAgentOwnerChanged(msg = {}) {
+    browserAgentOwner = msg.owner || null;
+    browserAgentOwnerState = msg.isOwner ? "active" : browserAgentOwner?.status === "cleared" ? "cleared" : "passive";
+    window.__ageeBrowserAgentOwner = browserAgentOwner;
+    window.__ageeBrowserAgentOwnerState = browserAgentOwnerState;
+    if (!root) return;
+    root.dataset.ageeOwner = browserAgentOwnerState;
+    root.dataset.ageeOwnerStatus = browserAgentOwner?.status || "";
+    root.dataset.ageeOwnerCue = browserAgentOwner?.cue_id || "";
+    root.dataset.ageeOwnerResult = browserAgentOwner?.last_result || "";
+  }
+
+  function sendLiveVoiceControl(state, message) {
+    if (!state?.voiceSessionId) return;
+    safeRuntimeSendMessage({
+      cmd: "voiceSessionControl",
+      voiceSessionId: state.voiceSessionId,
+      message,
+    }).catch(() => {});
+  }
+
+  function closeLiveVoiceSession(state, reason) {
+    if (!state?.voiceSessionId) return;
+    const voiceSessionId = state.voiceSessionId;
+    safeRuntimeSendMessage({
+      cmd: "voiceSessionClose",
+      voiceSessionId,
+      reason,
+    }).catch(() => {});
+    liveVoiceBySessionId.delete(voiceSessionId);
+    state.voiceSessionId = null;
+  }
+
+  function stopLiveCapture(state) {
+    // Microphone capture is extension-owned in offscreen.js. Content script
+    // stop paths still call this helper so older lifecycle code stays simple,
+    // but the real capture teardown happens in background.js when the voice
+    // session is committed, canceled, or closed.
+  }
+
+  function stopLivePlayback(state) {
+    for (const source of state.playbackSources || []) {
+      stopAssistantPlaybackSource(source);
+    }
+    state.playbackSources?.clear();
+  }
+
+  function stopAllAssistantPlayback() {
+    for (const source of [...assistantPlaybackSources]) {
+      stopAssistantPlaybackSource(source);
+    }
+    assistantPlaybackSources.clear();
+  }
+
+  function stopAssistantPlaybackSource(source) {
+    assistantPlaybackSources.delete(source);
+    try {
+      source.stop();
+    } catch {}
+  }
+
+  // A live turn can die mid-generation: the provider interrupts, the socket
+  // drops, or the gateway sends "failed to complete turn". The gateway already
+  // persists that partial turn and replays it inside the NEXT session's context
+  // pack, so we never surface the failure or stop the conversation. We tear the
+  // dead turn down quietly and start a fresh one on the same session id; the
+  // model picks the thread back up with the partial it already produced. A
+  // bounded guard keeps a genuinely broken gateway from respawning forever.
+  let liveVoiceRecoveries = 0;
+  let liveVoiceRecoveryWindowAt = 0;
+  const LIVE_VOICE_MAX_RECOVERIES = 2;
+  const LIVE_VOICE_RECOVERY_WINDOW_MS = 15000;
+
+  function recoverLiveVoiceTurn(state, reason) {
+    if (!isLiveVoiceStateActive(state)) return;
+    const wasCurrentTurn = liveVoice === state;
+    // Tear the dead turn down without a red cue or state churn.
+    stopLiveCapture(state);
+    stopLivePlayback(state);
+    closeLiveVoiceSession(state, reason || "recovering");
+    untrackLiveVoiceState(state);
+    removeCueCard(state.cueId);
+
+    if (!wasCurrentTurn) {
+      return;
+    }
+
+    if (!conversationActive) {
+      // The user already ended the conversation; just settle to idle.
+      setVoiceState(false);
+      if (agentState !== "idle") setAgentState("idle");
+      return;
+    }
+
+    const now = Date.now();
+    if (now - liveVoiceRecoveryWindowAt > LIVE_VOICE_RECOVERY_WINDOW_MS) {
+      liveVoiceRecoveries = 0;
+      liveVoiceRecoveryWindowAt = now;
+    }
+    liveVoiceRecoveries += 1;
+    if (liveVoiceRecoveries > LIVE_VOICE_MAX_RECOVERIES) {
+      // Respawning is not catching — the gateway is down. Surface it once.
+      liveVoiceRecoveries = 0;
+      conversationActive = false;
+      reactLauncher("error");
+      setVoiceState(false);
+      if (agentState !== "idle") setAgentState("idle");
+      return;
+    }
+
+    startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+  }
+
+  function finishLiveVoiceDone(state) {
+    if (!isLiveVoiceStateActive(state)) return;
+    const wasCurrentTurn = liveVoice === state;
+    liveVoiceRecoveries = 0;
+    const summary = state.assistantText || "Done.";
+    ensureVoiceCueCard(state, state.transcript || "Voice", summary);
+    updateCue(state.cueId, summary, "done");
+    reactLauncher("done");
+    stopLiveCapture(state);
+    closeLiveVoiceSession(state, "turn done");
+    untrackLiveVoiceState(state);
+    if (!wasCurrentTurn) return;
+    setVoiceState(false);
+    // Wait for the spoken reply to finish playing, then either listen again (so
+    // the user just keeps talking) or fall back to idle if the conversation was
+    // stopped. Re-arming only after playback ends keeps the reply out of the mic.
+    const delayMs = Math.max(0, ((state.playbackTime || 0) - (audioCtx?.currentTime || 0)) * 1000);
+    setTimeout(() => {
+      if (liveVoice) return;
+      if (conversationActive) {
+        startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+        return;
+      }
+      if (agentState !== "idle") setAgentState("idle");
+    }, delayMs + 120);
+  }
+
+  function finishLiveVoiceError(state, message) {
+    if (!isLiveVoiceStateActive(state)) return;
+    const shown = showCueError(state.cueId, message);
+    if (liveVoice === state) {
+      stopLiveVoiceTurn("error");
+    } else {
+      stopLiveVoiceState(state, "error");
+    }
+    if (!shown && agentState !== "idle") setAgentState("idle");
+  }
+
+  function toggleVoice() {
+    if (liveVoice && listening) {
+      commitLiveVoiceTurn();
+      return;
+    }
+    if (liveVoice) {
+      if (assistantSpeechOverlap === true && liveVoice.committed) {
+        startLiveVoiceTurn({ preserveAssistantPlayback: true });
+        return;
+      }
+      stopLiveVoiceTurn("cancel");
+    }
+    startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+  }
+
+  function toggleVoiceSession() {
+    toggleVoice();
+  }
+
+  function shouldRouteLiveTranscriptThroughGateway(text) {
+    return isProfileControlTranscript(text);
+  }
+
+  function applySpeechOverlapPolicyFromTranscript(state, text) {
+    const policy = parseAssistantSpeechOverlapIntent(text);
+    if (!policy) return false;
+
+    assistantSpeechOverlap = policy.enabled;
+    state.gatewayRouted = true;
+    state.committed = true;
+    stopLiveCapture(state);
+    sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    closeLiveVoiceSession(state, policy.enabled ? "assistant speech overlap enabled" : "assistant barge-in enabled");
+    untrackLiveVoiceState(state);
+    setVoiceState(false);
+    setTranscript("");
+    updateCueLabel(state.cueId, text);
+    updateCue(
+      state.cueId,
+      policy.enabled
+        ? "Background speech is on for this session."
+        : "Barge-in is back on for this session.",
+      "done"
+    );
+    reactLauncher("done");
+    if (agentState !== "idle") setAgentState("idle");
+    if (conversationActive) {
+      setTimeout(() => {
+        if (!liveVoice && conversationActive) {
+          startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+        }
+      }, 120);
+    }
     return true;
   }
 
-  function stopRecognition(submit) {
-    if (recognition) {
+  function parseAssistantSpeechOverlapIntent(text) {
+    const lower = normalizeSpokenCommand(text);
+    if (!lower) return null;
+    const disable =
+      lower.includes("turn barge in back on") ||
+      lower.includes("barge in back on") ||
+      lower.includes("stop talking when i talk") ||
+      lower.includes("stop speaking when i speak") ||
+      lower.includes("interrupt yourself when i talk") ||
+      lower.includes("interrupt yourself when i speak") ||
+      lower.includes("do not talk over me") ||
+      lower.includes("dont talk over me");
+    if (disable) return { enabled: false };
+
+    const enable =
+      lower.includes("continue talking even though i") ||
+      lower.includes("keep talking even though i") ||
+      lower.includes("continue talking while i") ||
+      lower.includes("keep talking while i") ||
+      lower.includes("keep speaking while i") ||
+      lower.includes("continue speaking while i") ||
+      lower.includes("talk in the background") ||
+      lower.includes("speak in the background") ||
+      lower.includes("keep talking in the background") ||
+      lower.includes("do not interrupt yourself") ||
+      lower.includes("don t interrupt yourself") ||
+      lower.includes("dont interrupt yourself");
+    return enable ? { enabled: true } : null;
+  }
+
+  function isProfileControlTranscript(text) {
+    const lower = normalizeSpokenCommand(text);
+    if (!lower) return false;
+    return isPromptProfileControl(lower) || isIdentityProfileControl(lower) || isLanguageProfileControl(lower) || isVoiceProfileControl(lower);
+  }
+
+  function isPromptProfileControl(lower) {
+    return lower.includes("what prompt") ||
+      lower.includes("which prompt") ||
+      lower.includes("current prompt") ||
+      /\b(set|change|update)\b.*\b(system )?prompt\b/.test(lower);
+  }
+
+  function isIdentityProfileControl(lower) {
+    return lower.includes("what is your name") ||
+      lower.includes("what s your name") ||
+      lower.includes("who are you") ||
+      /\byour name\b\s*(is|should be|will be)\b/.test(lower) ||
+      /\b(call|name) yourself\b/.test(lower) ||
+      /\b(you are|youre)\b\s+(now\s+)?(called\s+|named\s+)?/.test(lower);
+  }
+
+  function isLanguageProfileControl(lower) {
+    if (
+      lower.includes("what language") ||
+      lower.includes("which language") ||
+      lower.includes("language is active") ||
+      /\b(set|change|update|switch)\b.*\blanguage\b/.test(lower)
+    ) {
+      return true;
+    }
+    if (!containsProfileWord(lower, PROFILE_LANGUAGE_NAMES)) return false;
+    return /\b(speak|talk|reply|respond|answer|say)\b/.test(lower) ||
+      lower.includes(" only ") ||
+      lower.startsWith("only ") ||
+      lower.includes("do not switch") ||
+      lower.includes("don t switch") ||
+      lower.includes("dont switch") ||
+      lower.includes("these languages") ||
+      lower.includes("these two languages");
+  }
+
+  function isVoiceProfileControl(lower) {
+    if (
+      lower.includes("what voice") ||
+      lower.includes("which voice") ||
+      /\b(set|change|switch|use|make)\b.*\bvoice\b/.test(lower)
+    ) {
+      return true;
+    }
+    if (lower.includes("sound like") || lower.includes("speak like")) {
+      return /\b(female|woman|girl|feminine|lady|male|man|guy|masculine|boy)\b/.test(lower) ||
+        containsProfileWord(lower, PROFILE_VOICE_NAMES);
+    }
+    return containsProfileWord(lower, PROFILE_VOICE_NAMES) && /\b(use|switch|set|change)\b/.test(lower);
+  }
+
+  function normalizeSpokenCommand(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function containsProfileWord(lower, values) {
+    return values.some((value) => lower.includes(value));
+  }
+
+  async function startDevReloadWatcher() {
+    if (!canCallExtensionApi() || !chrome?.storage?.local) return;
+    const configure = async () => {
+      const cfg = await safeStorageLocalGet({
+        ageeDevReloadEnabled: false,
+        ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
+        ageeDevReloadVersion: null,
+      });
+      devReloadVersion = cfg.ageeDevReloadVersion == null ? null : Number(cfg.ageeDevReloadVersion);
+      if (cfg.ageeDevReloadEnabled) {
+        if (!devReloadTimer) {
+          devReloadTimer = setInterval(() => pollDevReloadFromContent().catch(() => {}), DEV_RELOAD_POLL_MS);
+        }
+        pollDevReloadFromContent().catch(() => {});
+      } else if (devReloadTimer) {
+        clearInterval(devReloadTimer);
+        devReloadTimer = null;
+      }
+    };
+
+    if (chrome.storage.onChanged) {
       try {
-        recognition.stop();
-      } catch {}
-      recognition = null;
+        chrome.storage.onChanged.addListener((changes, area) => {
+          if (area !== "local") return;
+          if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
+            configure().catch(() => {});
+          }
+        });
+      } catch (error) {
+        markExtensionContextInvalidated(error);
+      }
     }
-    setVoiceState(false);
-    const text = input.value.trim();
-    if (submit && text) {
-      submitInstruction(text);
-    } else {
-      setTimeout(() => input.focus(), 0);
+    await configure();
+  }
+
+  async function pollDevReloadFromContent() {
+    if (devReloadInFlight) return;
+    devReloadInFlight = true;
+    try {
+      const cfg = await safeStorageLocalGet({
+        ageeDevReloadEnabled: false,
+        ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
+        ageeDevReloadVersion: null,
+      });
+      if (!cfg.ageeDevReloadEnabled) return;
+      const server = String(cfg.ageeDevReloadServer || DEV_RELOAD_DEFAULT_SERVER).replace(/\/+$/, "");
+      const resp = await fetch(`${server}/__agee-dev/version?ts=${Date.now()}`, { cache: "no-store" });
+      if (!resp.ok) return;
+      const info = await resp.json();
+      const nextVersion = Number(info?.version || 0);
+      const previousVersion = devReloadVersion || Number(cfg.ageeDevReloadVersion || 0) || null;
+      if (!nextVersion) return;
+      if (!previousVersion) {
+        devReloadVersion = nextVersion;
+        await safeStorageLocalSet({ ageeDevReloadVersion: nextVersion });
+        return;
+      }
+      if (nextVersion === previousVersion) return;
+      devReloadVersion = nextVersion;
+      await safeRuntimeSendMessage({
+        cmd: "devReloadExtension",
+        source: "content-script",
+        server,
+        previousVersion,
+        info,
+      });
+    } catch {
+      // The dev server is optional and usually offline during normal browsing.
+    } finally {
+      devReloadInFlight = false;
     }
   }
 
-  // Click button: toggle listening, leave transcript in the bar (user hits Enter).
-  function toggleVoice() {
-    if (recognition && listening) {
-      stopRecognition(false);
-      return;
-    }
-    toggle(true);
-    startRecognition();
-  }
-
-  // Dedicated "wake the agent" path (double-tap ⌘). Opens the overlay, shows the
-  // agent surface, and starts listening immediately. Triggering it again while
-  // listening stops and runs what was heard, so the same gesture starts and
-  // finishes a turn.
-  function toggleVoiceSession() {
-    if (recognition && listening) {
-      stopRecognition(true); // second press → run what was heard
-      return;
-    }
-    stopSpeaking(); // barge-in: a new turn cuts off any reply still playing
-    toggle(true);
-    setAgentState("listening");
-    setTranscript("Listening…", true);
-    startRecognition();
-  }
-
-  // ---- Hotkeys: ⌘. = voice, ⌘, = text, double-tap ⌘ = voice -----------
+  // ---- Hotkeys: Cmd/Ctrl+. = voice, Cmd/Ctrl+, = text ------------------
   // Two ways in, both hands-on-keyboard, no clicking:
   //   ⌘.  (or Ctrl+.)         → wake the agent and listen (speech); again to run
-  //   ⌘,  (or Ctrl+,)         → open the text command bar (type)
-  //   double-tap ⌘ (or Ctrl)  → same as ⌘. (kept as a no-chord shortcut)
-  const DOUBLE_TAP_MS = 400;
-  let lastMetaTap = 0;
+  //   ⌘,  (or Ctrl+,)         → open the text command field
 
   function isVoiceHotkey(e) {
-    return (e.metaKey || e.ctrlKey) && e.key === ".";
+    return (e.metaKey || e.ctrlKey) && (e.key === "." || e.code === "Period");
   }
 
   function isTextHotkey(e) {
-    return (e.metaKey || e.ctrlKey) && e.key === ",";
+    return (e.metaKey || e.ctrlKey) && (e.key === "," || (!e.shiftKey && e.code === "Comma"));
+  }
+
+  function isVoiceHotkeyRelease(e) {
+    if (!voiceHotkeyState) return false;
+    return e.key === "." || e.code === "Period" || e.key === "Meta" || e.key === "Control";
+  }
+
+  function commandEchoIsRecent(kind) {
+    const last = kind === "voice" ? lastLocalVoiceHotkeyAt : lastLocalTextHotkeyAt;
+    return last > 0 && Date.now() - last < COMMAND_ECHO_DEDUPE_MS;
+  }
+
+  function clearVoiceHotkeyHoldTimer() {
+    if (!voiceHotkeyHoldTimer) return;
+    clearTimeout(voiceHotkeyHoldTimer);
+    voiceHotkeyHoldTimer = null;
+  }
+
+  function startKeyboardPushToTalk() {
+    startLauncherPushToTalk();
+  }
+
+  function finishKeyboardPushToTalk() {
+    finishLauncherPushToTalk();
+  }
+
+  function beginVoiceHotkey(e) {
+    if (voiceHotkeyState) return;
+    lastLocalVoiceHotkeyAt = Date.now();
+    voiceHotkeyState = { manualActive: false, key: e.key, code: e.code };
+    clearVoiceHotkeyHoldTimer();
+    voiceHotkeyHoldTimer = setTimeout(() => {
+      voiceHotkeyHoldTimer = null;
+      if (!voiceHotkeyState || voiceHotkeyState.manualActive) return;
+      voiceHotkeyState.manualActive = true;
+      startKeyboardPushToTalk();
+    }, DOUBLE_CLICK_HOLD_MS);
+  }
+
+  function finishVoiceHotkey() {
+    if (!voiceHotkeyState) return;
+    const wasManual = voiceHotkeyState.manualActive;
+    voiceHotkeyState = null;
+    clearVoiceHotkeyHoldTimer();
+    if (wasManual) {
+      finishKeyboardPushToTalk();
+      return;
+    }
+    openTextSurface({ fresh: false });
+    primeAudio();
+    toggleVoiceSession();
+  }
+
+  function cancelVoiceHotkey() {
+    const wasManual = voiceHotkeyState?.manualActive;
+    voiceHotkeyState = null;
+    clearVoiceHotkeyHoldTimer();
+    if (wasManual) finishKeyboardPushToTalk();
   }
 
   window.addEventListener(
@@ -664,42 +1768,43 @@
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
-        toggleVoiceSession();
-        lastMetaTap = 0;
+        beginVoiceHotkey(e);
         return;
       }
-      // ⌘, → text command bar.
+      // ⌘, → text command field.
       if (isTextHotkey(e)) {
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
-        toggle(true);
-        setTimeout(() => input.focus(), 0);
-        lastMetaTap = 0;
+        lastLocalTextHotkeyAt = Date.now();
+        toggleTextSurface();
         return;
       }
-      // Double-tap the bare modifier → voice. A held key (auto-repeat) or any
-      // other key in between resets the window so chords never trigger it.
-      if (e.key === "Meta" || e.key === "Control") {
-        if (e.repeat) return;
-        const now = Date.now();
-        if (now - lastMetaTap < DOUBLE_TAP_MS) {
-          lastMetaTap = 0;
-          if (!root) build();
-          toggleVoiceSession();
-        } else {
-          lastMetaTap = now;
-        }
-        return;
-      }
-      lastMetaTap = 0;
     },
     true
   );
 
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (!isVoiceHotkeyRelease(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      finishVoiceHotkey();
+    },
+    true
+  );
+
+  window.addEventListener("blur", () => {
+    cancelVoiceHotkey();
+  });
+
   // ---- Perception -------------------------------------------------------
   const SELECTOR =
     'a[href], button, input:not([type=hidden]), textarea, select, [role=button], [role=link], [role=tab], [role=menuitem], [contenteditable=""], [contenteditable=true], [onclick]';
+  const MAX_VISIBLE_TEXT_CHARS = 5200;
+  const MAX_VISIBLE_TEXT_PARTS = 140;
+  const TEXT_NODE_EXCLUDED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS"]);
 
   function visible(el) {
     const r = el.getBoundingClientRect();
@@ -707,6 +1812,51 @@
     if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) return false;
     const s = getComputedStyle(el);
     return s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+  }
+
+  function cleanVisibleText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function textNodeVisible(node) {
+    const parent = node?.parentElement;
+    if (!parent || parent.closest("#agee-root") || TEXT_NODE_EXCLUDED_TAGS.has(parent.tagName)) return false;
+    const text = cleanVisibleText(node.nodeValue);
+    if (text.length < 2) return false;
+    const s = getComputedStyle(parent);
+    if (s.visibility === "hidden" || s.display === "none" || s.opacity === "0") return false;
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = Array.from(range.getClientRects());
+      if (typeof range.detach === "function") range.detach();
+      if (!rects.length) return visible(parent);
+      return rects.some((r) => r.width >= 1 && r.height >= 1 && r.bottom >= 0 && r.top <= innerHeight && r.right >= 0 && r.left <= innerWidth);
+    } catch {
+      return visible(parent);
+    }
+  }
+
+  function visiblePageText() {
+    if (!document.body) return "";
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        return textNodeVisible(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+    const parts = [];
+    const seen = new Set();
+    let chars = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = cleanVisibleText(node.nodeValue);
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      parts.push(text);
+      chars += text.length + 1;
+      if (parts.length >= MAX_VISIBLE_TEXT_PARTS || chars >= MAX_VISIBLE_TEXT_CHARS) break;
+    }
+    return parts.join("\n").slice(0, MAX_VISIBLE_TEXT_CHARS);
   }
 
   function label(el) {
@@ -746,7 +1896,7 @@
       indexed.push(el);
       out.push({ i, tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "", label: label(el) });
     });
-    return { url: location.href, title: document.title, elements: out };
+    return { url: location.href, title: document.title, pageText: visiblePageText(), elements: out };
   }
 
   // ---- Action -----------------------------------------------------------
@@ -766,7 +1916,7 @@
     }
     try {
       if (el) el.scrollIntoView({ block: "center", behavior: "instant" });
-      if (needsConfirmation(el, req) && !(await askInlineConfirm(`Let agee ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
+      if (needsConfirmation(el, req) && !(await askInlineConfirm(`Let A.G. ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
         return { result: `user cancelled ${req.action}` };
       }
       switch (req.action) {
@@ -821,11 +1971,20 @@
         reply({ ok: true });
         return true;
       case "toggle":
-        toggle();
+        if (!(msg.source === "command" && commandEchoIsRecent("text"))) {
+          toggleTextSurface();
+        }
         reply({ ok: true });
         return true;
       case "open":
-        toggle(true);
+        openTextSurface({ fresh: false });
+        reply({ ok: true });
+        return true;
+      case "toggleVoice":
+        if (!root) build();
+        if (!(msg.source === "command" && commandEchoIsRecent("voice"))) {
+          toggleVoiceSession();
+        }
         reply({ ok: true });
         return true;
       case "snapshot":
@@ -835,27 +1994,50 @@
         act(msg).then(reply);
         return true;
       case "confirm":
-        askInlineConfirm(msg.text || "Allow agee to continue?").then((ok) => reply({ ok }));
+        askInlineConfirm(msg.text || "Allow A.G. to continue?").then((ok) => reply({ ok }));
         return true;
       case "progress":
-        if (!open) toggle(true);
         updateCue(msg.cueId, msg.text, "running");
+        return false;
+      case "stop":
+        // Silent halt requested by the background stop guard: cut playback and
+        // every live turn, no chime, no reply. The done that follows closes the
+        // cue with empty text.
+        haltForStopCommand(null);
         return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");
+        setSurfacePhase("editing");
         reactLauncher("done"); // hop + ring + happy chime
-        speak(msg.speak);
-        // No spoken reply queued: settle the voice surface instead of leaving the
-        // orb stuck on "thinking".
-        if (!speaking && agentState === "thinking") setAgentState("idle");
+        // Replies live in the cue/result surface. The composer stays free for
+        // the next command instead of becoming a chat transcript.
+        if (agentState === "thinking") setAgentState("idle");
         return false;
       case "error":
-        updateCue(msg.cueId, msg.text, "error");
-        reactLauncher("error"); // shake + ring + falling chime
+        showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible
+        setSurfacePhase("editing");
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
+        return false;
+      case "agentRevoked":
+        handleAgentRevoked(msg);
+        return false;
+      case "browserAgentOwnerChanged":
+        handleBrowserAgentOwnerChanged(msg);
+        reply({ ok: true, ownerState: browserAgentOwnerState });
+        return true;
+      case "ambient":
+        setAmbientState(msg.state);
+        reply({ ok: true, state: ambientState });
+        return true;
+      case "voiceSessionEvent":
+        {
+          const state = liveVoiceBySessionId.get(msg.voiceSessionId);
+          if (state) handleLiveVoiceMessage(state, msg);
+        }
         return false;
     }
   });
 
   build();
+  startDevReloadWatcher().catch(() => {});
 })();

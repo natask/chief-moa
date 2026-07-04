@@ -61,6 +61,9 @@ async function main() {
     await step("next live session carries the interrupted partial in its context pack", () =>
       assertHandoffContext(wsUrl, sessionId, turn2, fake));
 
+    await step("live tool-launched run carries all-branch browser context", () =>
+      assertLiveToolLaunchContext(baseUrl, wsUrl, dataDir, sessionId));
+
     console.log(JSON.stringify({
       ok: true,
       base_url: baseUrl,
@@ -70,6 +73,7 @@ async function main() {
         "the stored turn keeps the partial transcript + partial assistant text",
         "GET /v1/sessions/:id/turns lists it; context marks incomplete=true",
         "the next live session's setup context pack includes the interrupted partial",
+        "a live tool-launched run from a later browser cue includes prior cue context",
       ],
     }, null, 2));
   } finally {
@@ -167,6 +171,59 @@ async function assertHandoffContext(wsUrl, sessionId, turnId, fake) {
   }
 }
 
+async function assertLiveToolLaunchContext(baseUrl, wsUrl, dataDir, sessionId) {
+  const marker = "browser persistence smoke marker is cobalt";
+  const seed = await postJson(`${baseUrl}/v1/voice/turns`, {
+    source: "agee-extension",
+    session_id: sessionId,
+    conversation_id: sessionId,
+    branch_id: "cue_a",
+    turn_id: "voice_browser_tool_seed",
+    transcript: `The ${marker}.`,
+  });
+  assert.equal(seed.session_id, sessionId, "seed browser voice turn must keep session id");
+  assert.equal(seed.branch_id, "cue_a", "seed browser voice turn must keep its cue branch");
+
+  const ws = await openClient(wsUrl);
+  try {
+    const turnId = `tool_${Date.now().toString(36)}`;
+    await sendJsonWs(ws, {
+      type: "session_start",
+      source: "agee-extension",
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: "cue_b",
+      turn_id: turnId,
+      all_branches_context: true,
+      format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+    });
+    await waitForEvent(ws, (msg) => msg.type === "session_ready" && msg.turn_id === turnId);
+    ws.send(Buffer.alloc(640, 2));
+    await sendJsonWs(ws, { type: "commit_turn", turn_id: turnId });
+    const toolResponse = await waitForEvent(ws, (msg) => msg.type === "tool_response" && msg.turn_id === turnId);
+    await waitForEvent(ws, (msg) => msg.type === "turn_done" && msg.turn_id === turnId);
+
+    const runId = toolResponse.responses?.[0]?.response?.run?.id;
+    assert.ok(runId, `tool response must include a launched run id, got ${JSON.stringify(toolResponse)}`);
+    const detail = await pollFor(async () => {
+      const payload = await getJson(`${baseUrl}/v1/agent/runs/${encodeURIComponent(runId)}`);
+      return payload.run?.status === "completed" ? payload : null;
+    }, 5000, "live tool-launched run did not complete");
+    assert.match(
+      detail.run.prompt,
+      new RegExp(marker),
+      "live tool-launched run prompt must include prior browser cue context",
+    );
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(dataDir, "agent-runs", `${runId}.json`), "utf8")).harness,
+      "echo",
+      "live tool smoke must use deterministic echo harness",
+    );
+  } finally {
+    ws.terminate();
+  }
+}
+
 async function startFakeLive() {
   const setups = [];
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -183,6 +240,30 @@ async function startFakeLive() {
         const parts = message.setup.systemInstruction?.parts || [];
         setups.push({ systemText: parts.map((p) => String(p.text || "")).join("\n") });
         ws.send(JSON.stringify({ setupComplete: {} }));
+        return;
+      }
+      if (message.toolResponse) {
+        ws.send(JSON.stringify({
+          serverContent: {
+            outputTranscription: { text: "Started continuity tool run." },
+            turnComplete: true,
+          },
+        }));
+        return;
+      }
+      if (message.realtimeInput?.audioStreamEnd) {
+        ws.send(JSON.stringify({
+          toolCall: {
+            functionCalls: [{
+              id: "tool_call_all_branch_context",
+              name: "launch_agent_run",
+              args: {
+                prompt: "Inspect the browser continuity context.",
+                harness: "echo",
+              },
+            }],
+          },
+        }));
         return;
       }
       if (message.realtimeInput?.audio) {
@@ -217,6 +298,7 @@ async function startGateway({ port, dataDir, fakeUrl }) {
       PORT: String(port),
       DATA_DIR: dataDir,
       ANDROID_OTA_DIR: path.join(dataDir, "android-ota"),
+      GBRAIN_HOME: path.join(path.dirname(dataDir), "gbrain"),
       MOA_GATEWAY_TOKEN: TOKEN,
       MODEL_PROVIDER: "openai-compatible",
       MODEL_ID: "live-interrupt-smoke-model",
@@ -322,6 +404,20 @@ async function step(name, fn) {
 
 async function getJson(url) {
   const response = await fetch(url, { headers: { Authorization: `Bearer ${TOKEN}` } });
+  const json = await response.json();
+  assert.ok(response.status >= 200 && response.status < 300, `${url} returned ${response.status}: ${JSON.stringify(json)}`);
+  return json;
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
   const json = await response.json();
   assert.ok(response.status >= 200 && response.status < 300, `${url} returned ${response.status}: ${JSON.stringify(json)}`);
   return json;

@@ -13,8 +13,10 @@
 
 - [ ] 3.1 Engine serves a per-user declarative UI spec (tier A) the extension renderer interprets; changes live-refresh via the existing `storage.onChanged` pattern.
 - [ ] 3.2 Bound the sandboxed paths: define where tier B (sandboxed iframe) and tier C (`userScripts`, explicit per-extension opt-in) apply and how generated code stays inspectable.
+- [x] 3.3 Keep browser-facing work lanes browser-native: gateway console projects deep-link by URL and expose an explicit browser-tab open path instead of adding nested workspace tabs.
 
 ## 4. Verify
 
 - [ ] 4.1 Confirm a customization round-trips engine → client (spec change reflected live) with the extension package unchanged.
 - [ ] 4.2 Confirm the same client works against a self-hosted engine URL and a hosted engine URL with no client code change.
+- [x] 4.3 Confirm the explicit ambient loop posts `/v1/voice/frames` at the 200 ms target cadence through the real extension service worker and stores frame records on a throwaway gateway. Verified by `cd browser_extension && npm run smoke:ambient`.

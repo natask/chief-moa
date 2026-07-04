@@ -19,6 +19,8 @@
 // result / false. A memory miss must NEVER break a chat or voice turn.
 
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const DEFAULT_BIN = process.env.GBRAIN_BIN || "gbrain";
 const DEFAULT_RECALL_LIMIT = Number(process.env.BRAIN_RECALL_LIMIT || 5);
@@ -35,6 +37,74 @@ function createBrain(options = {}) {
   const gbrainHome = options.gbrainHome || process.env.GBRAIN_HOME || "";
   const recallLimit = Number(options.recallLimit || DEFAULT_RECALL_LIMIT);
   const log = options.log || defaultLog;
+
+  // File-backed fallback store. When gbrain is not installed/callable, memories
+  // are written to and recalled from a jsonl file under DATA_DIR so "remember
+  // this" never silently vanishes. Matches the repo's other fail-soft fallbacks
+  // (event substrate, work graph). When gbrain IS available it is authoritative
+  // and this file is never touched.
+  const storeDir = options.storeDir || process.env.BRAIN_STORE_DIR || process.env.DATA_DIR
+    || path.join(__dirname, "..", "data");
+  const factsFile = path.join(storeDir, "brain-facts.jsonl");
+
+  // Probe gbrain once and memoize. Avoids per-turn spawns and log spam when the
+  // binary is absent, and keeps a single source of truth for which store is live.
+  let gbrainProbe = null;
+  function gbrainUsable() {
+    if (gbrainProbe === null) {
+      gbrainProbe = available();
+    }
+    return gbrainProbe;
+  }
+
+  function fileRemember(body, meta) {
+    try {
+      fs.mkdirSync(storeDir, { recursive: true });
+      const record = {
+        ts: new Date().toISOString(),
+        slug: buildSlug(meta.slug, meta.kind),
+        kind: String(meta.kind || "note"),
+        tags: Array.isArray(meta.tags) && meta.tags.length ? meta.tags.map(String) : ["memory"],
+        title: String(meta.title || firstLine(body) || "Memory").slice(0, 200),
+        text: body,
+      };
+      fs.appendFileSync(factsFile, `${JSON.stringify(record)}\n`);
+      return true;
+    } catch (error) {
+      log("warn", `brain.remember (file) failed: ${cleanError(error)}`);
+      return false;
+    }
+  }
+
+  function readFileFacts() {
+    try {
+      return String(fs.readFileSync(factsFile, "utf8")).split("\n")
+        .filter(Boolean)
+        .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  function fileStandingFacts(max) {
+    const facts = readFileFacts().filter((f) => Array.isArray(f.tags) && f.tags.includes("standing"));
+    return facts.slice(-max).reverse().map((f) => ({ slug: f.slug, snippet: f.title || f.text, score: null }));
+  }
+
+  function fileRecall(question, max) {
+    const terms = String(question).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+    if (!terms.length) return [];
+    const scored = [];
+    for (const f of readFileFacts()) {
+      const hay = `${f.title || ""} ${f.text || ""}`.toLowerCase();
+      let score = 0;
+      for (const term of terms) if (hay.includes(term)) score += 1;
+      if (score > 0) scored.push({ f, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, max).map((x) => ({ slug: x.f.slug, snippet: x.f.text || x.f.title, score: x.score }));
+  }
 
   function childEnv() {
     const env = { ...process.env };
@@ -63,6 +133,9 @@ function createBrain(options = {}) {
     if (!body) {
       return false;
     }
+    if (!gbrainUsable()) {
+      return fileRemember(body, meta);
+    }
     const slug = buildSlug(meta.slug, meta.kind);
     const content = buildPageContent(body, meta);
     try {
@@ -86,6 +159,9 @@ function createBrain(options = {}) {
       return [];
     }
     const max = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.round(Number(limit)) : recallLimit;
+    if (!gbrainUsable()) {
+      return fileRecall(question, max);
+    }
     try {
       const result = run(["query", question, "--limit", String(max), "--no-expand"]);
       if (result.error || result.status !== 0) {
@@ -105,6 +181,9 @@ function createBrain(options = {}) {
   // title, which for standing facts IS the fact). Never throws.
   function recallStandingFacts(limit = recallLimit) {
     const max = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.round(Number(limit)) : recallLimit;
+    if (!gbrainUsable()) {
+      return fileStandingFacts(max);
+    }
     try {
       const result = run(["list", "--tag", "standing", "--limit", String(max), "--sort", "updated_desc"]);
       if (result.error || result.status !== 0) {
@@ -143,12 +222,20 @@ function createBrain(options = {}) {
     }
   }
 
+  // Memory works in either mode; "available" stays true when the file store can
+  // be used so health reflects that adds/recalls actually function.
+  function mode() {
+    return gbrainUsable() ? "gbrain" : "file";
+  }
+
   return {
     remember,
     recall,
     recallStandingFacts,
     rememberWorkDone,
     available,
+    mode,
+    factsFile,
     slugPrefix: SLUG_PREFIX,
     gbrainHome,
   };

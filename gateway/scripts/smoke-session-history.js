@@ -38,6 +38,8 @@ async function main() {
     await step("auth required", () => assertAuthRequired(baseUrl));
     const sessionId = `agee_smoke_${Date.now().toString(36)}`;
     await step("turns persist + reload in order", () => assertSessionHistory(baseUrl, sessionId));
+    await step("past turns move into the next model context", () => assertPastTurnInModelContext(dataDir));
+    await step("context can include a selected branch or all branches", () => assertSessionContext(baseUrl, sessionId));
     await step("unknown session is empty", () => assertEmptySession(baseUrl, sessionId));
 
     console.log(JSON.stringify({
@@ -48,6 +50,8 @@ async function main() {
         "GET /v1/sessions/:id/turns requires a token",
         "two voice turns under one session id both persist",
         "history reloads in chronological order with transcript + reply",
+        "the second voice turn's model context includes the first stored turn",
+        "session context can filter to one branch or include all branches",
         "a different session id returns 0 turns",
       ],
     }, null, 2));
@@ -81,7 +85,7 @@ async function assertSessionHistory(baseUrl, sessionId) {
     source: "session-history-smoke",
     session_id: sessionId,
     conversation_id: sessionId,
-    branch_id: "cue-1",
+    branch_id: "cue-2",
     transcript: "hello there gateway",
   });
   assert.equal(first.status, 200, `first turn must succeed: ${JSON.stringify(first.json)}`);
@@ -117,6 +121,51 @@ async function assertSessionHistory(baseUrl, sessionId) {
     String(a.created_at) <= String(b.created_at),
     `turns must be in chronological order: ${a.created_at} <= ${b.created_at}`
   );
+}
+
+function assertPastTurnInModelContext(dataDir) {
+  const messages = lastRequestMessages(dataDir);
+  const systemText = messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n");
+  assert.match(
+    systemText,
+    /Durable Moa session context from prior turns/,
+    `model-context must include the durable session context block, got:\n${systemText}`
+  );
+  assert.match(
+    systemText,
+    /hello there gateway/,
+    `model-context must include the first stored voice turn, got:\n${systemText}`
+  );
+}
+
+async function assertSessionContext(baseUrl, sessionId) {
+  const branchContext = await getJson(`${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/context?branch_id=cue-2`);
+  assert.equal(branchContext.session.session_id, sessionId, "context must echo the session id");
+  assert.equal(branchContext.session.branch_id, "cue-2", "context must echo the selected branch");
+  assert.equal(branchContext.session.all_branches, false, "branch-filtered context must not claim all branches");
+  assert.equal(branchContext.turns.length, 2, `expected 2 cue-2 context turns, got ${branchContext.turns.length}`);
+  assert.ok(branchContext.turns.every((turn) => turn.branch_id === "cue-2"), "branch-filtered context must include only cue-2");
+
+  const allContext = await getJson(`${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/context?all_branches=1`);
+  assert.equal(allContext.session.all_branches, true, "all-branches context must mark all_branches");
+  assert.equal(allContext.session.turn_count, 2, `expected 2 all-branch context turns, got ${allContext.session.turn_count}`);
+  assert.deepEqual(
+    allContext.turns.map((turn) => turn.branch_id).sort(),
+    ["cue-2", "cue-2"],
+    "all-branches context must include non-default voice-turn branches"
+  );
+}
+
+function lastRequestMessages(dataDir) {
+  const file = path.join(dataDir, "turns.jsonl");
+  const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+  assert.ok(lines.length >= 2, "turns.jsonl must include both voice turns");
+  const last = JSON.parse(lines[lines.length - 1]);
+  assert.ok(Array.isArray(last.request_messages), "last turn must record request_messages");
+  return last.request_messages;
 }
 
 async function assertEmptySession(baseUrl, usedSessionId) {

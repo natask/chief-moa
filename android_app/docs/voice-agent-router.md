@@ -11,15 +11,13 @@ turn, and dispatch work to one or more agents without being talked over.
 
 The floating assistant orb is the main control.
 
-- Idle single tap: begin speech capture.
-- Listening single tap: submit the current transcript and immediately start
-  another speech loop.
-- Double tap: stop current listening and TTS output silently.
-- Long press: open or minimize the chat panel.
-- Drag: move the orb without triggering voice capture.
+- Single tap: open the chat menu.
+- Click and hold while moving: reposition the orb without triggering voice capture.
+- Double-click and hold: start push-to-talk voice capture; release sends the
+  current transcript without waiting for silence detection.
 
-This keeps the most common action on a single tap and reserves double tap for
-the explicit interruption path.
+This keeps text access on one click, reserves ordinary hold for movement, and
+requires a deliberate double-click hold before the microphone opens.
 
 ## Transcript Overlay
 
@@ -38,7 +36,7 @@ The transcript overlay should:
 
 `stop` is a control word, not a prompt.
 
-When the user says `stop`, double taps the orb, or presses a stop control:
+When the user says `stop` or presses a stop control:
 
 - Stop Android speech recognition if active.
 - Stop Android TextToSpeech if active.

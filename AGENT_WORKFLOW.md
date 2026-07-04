@@ -17,7 +17,7 @@ leave artifacts that another agent can resume.
 3. Write or update an OpenSpec change.
    - Use OpenSpec for product behavior, APIs, data contracts, and staged tasks.
    - Keep the active product map in
-     `openspec/changes/define-android-core-product-map` until it is archived.
+     `reference/openspec/changes/define-android-core-product-map` until it is archived.
 
 4. Convert the plan into tickets.
    - One ticket is one observable outcome.
@@ -36,6 +36,11 @@ leave artifacts that another agent can resume.
    - Run the narrowest real command that proves the ticket.
    - If verification fails, make the failure visible instead of silently changing
      the plan.
+   - For implementation changes, deploy the committed target after verification:
+     `bash scripts/deploy.sh auto` from the repo root, or the explicit
+     `gateway`, `android`, or `extension` target when only one surface changed.
+   - Extension releases must bump `browser_extension/extension/manifest.json`;
+     Android OTA builds get deploy-time version codes from the OTA build script.
 
 7. Update the architecture only when it changes.
    - Do not let implementation invent hidden behavior.
@@ -48,8 +53,17 @@ leave artifacts that another agent can resume.
   session with Android build verification.
 - Gateway routes, persistence, harness execution, or model routing: backend
   agent or current session with `npm run check` and endpoint smoke tests.
-- Workflow, skills, ledgers, commands, or agent context packs: workflow agent.
+- Workflow directories, ledgers, commands, or agent context packs: workflow
+  agent.
 - Cross-cutting product behavior: OpenSpec first, then implementation tickets.
+
+The broker's launcher profiles live in `gateway/agent-launcher-profiles.json`,
+not in `AGENTS.md`. When a typed or spoken message is routed through
+`POST /v1/broker/messages`, the gateway creates a bounded context pack for each
+route decision using those profiles. The pack names the workflow directory,
+instruction file, files, constraints, expected output, and verification. Verify this path with
+`cd gateway && npm run smoke:message-broker`; it must prove context-pack
+creation, QA/research workflow routing, and active-run evidence attachment.
 
 ## Context Pack Template
 
@@ -85,4 +99,3 @@ The active implementation path is still the Android core product map:
 4. Add local phone action approvals and receipts.
 5. Build the full-app control center around sessions, runs, approvals, and
    settings.
-

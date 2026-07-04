@@ -1,0 +1,11 @@
+# Copy to .dev.vars for local `wrangler pages dev`. Do not commit real keys.
+# In production these are set as Pages secrets, not from this file.
+
+# Resend API key (https://resend.com/api-keys)
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
+
+# Verified sender. Requires a domain verified in Resend.
+RESEND_FROM=Moa <hello@yourdomain.com>
+
+# Optional reply-to address
+RESEND_REPLY_TO=hello@yourdomain.com

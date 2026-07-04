@@ -2,12 +2,16 @@
 
 - [x] 1.1 Present the extension's settings (gateway URL/token, runtime profile fields incl. system prompt, model) in one settings surface.
 - [x] 1.2 Read current values from the gateway (`GET /v1/agent/profile`) and local config; show what is in effect.
+- [x] 1.3 Load model, voice, and language choices from the gateway profile-options catalog; render languages as searchable multi-select controls while persisting the existing gateway profile fields.
 
 ## 2. Change Settings By Talking To The Agent
 
 - [x] 2.1 Add a settings-intent path: the agent can turn a spoken/typed request ("set the system prompt to ...", "be terser") into a concrete settings change.
 - [x] 2.2 Apply agent-driven changes through the gateway profile endpoints (`PUT /v1/agent/profile`) and/or local config.
 - [x] 2.3 Refresh the settings surface live so spoken changes appear without a manual reload.
+- [x] 2.4 Route Chrome Live voice profile-control utterances through the same
+      settings/profile path so voice and language changes apply on the next
+      Live turn instead of staying as provider-only chat.
 
 ## 3. Verify
 

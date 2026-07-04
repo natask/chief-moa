@@ -1,10 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "agee",
-  "version": "0.1.0",
-  "description": "Open-source browser agent. Double-tap ⌘ to talk, ⌘. to type. Pipes to your self-hosted gateway. It sees your page and acts in it.",
-  "permissions": ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms"],
-  "host_permissions": ["http://localhost/*", "http://10.147.17.10/*", "http://10.147.17.6/*"],
+  "name": "A.G.",
+  "version": "0.1.10",
+  "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen"],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://10.147.17.10/*",
+    "http://10.147.17.6/*",
+    "wss://api.agee.app/*",
+    "ws://localhost/*",
+    "ws://127.0.0.1/*",
+    "ws://10.147.17.10/*",
+    "ws://10.147.17.6/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -26,13 +44,32 @@
   "commands": {
     "toggle-agee": {
       "suggested_key": {
-        "mac": "Command+K",
-        "default": "Ctrl+K"
+        "mac": "Command+Comma",
+        "default": "Ctrl+Comma"
       },
-      "description": "Open agee command mode"
+      "description": "Open A.G. command mode"
+    },
+    "toggle-agee-voice": {
+      "suggested_key": {
+        "mac": "Command+Period",
+        "default": "Ctrl+Period"
+      },
+      "description": "Start or send A.G. voice"
     }
   },
   "action": {
-    "default_title": "agee — open settings"
-  }
+    "default_title": "A.G. — open settings",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["moa-mark.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

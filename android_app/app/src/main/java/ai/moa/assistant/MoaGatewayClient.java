@@ -10,6 +10,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 final class MoaGatewayClient {
@@ -58,6 +59,42 @@ final class MoaGatewayClient {
 
     JSONObject latestContext() throws Exception {
         String responseText = getText(apiEndpoint("/v1/context/latest"), 15000);
+        return new JSONObject(responseText);
+    }
+
+    JSONObject agentProfile(String scope, String deviceId) throws Exception {
+        String query = "";
+        String safeScope = safe(scope);
+        String safeDeviceId = safe(deviceId);
+        if (!safeScope.isEmpty()) {
+            query = "?scope=" + urlEncode(safeScope);
+            if (!safeDeviceId.isEmpty()) {
+                query += "&device_id=" + urlEncode(safeDeviceId);
+            }
+        }
+        String responseText = getText(apiEndpoint("/v1/agent/profile" + query), 15000);
+        return new JSONObject(responseText);
+    }
+
+    JSONObject deviceHeartbeat(JSONObject body) throws Exception {
+        String responseText = postJson(apiEndpoint("/v1/device-clients/heartbeat"), body.toString(), 15000);
+        return new JSONObject(responseText);
+    }
+
+    JSONObject claimToolRequest(JSONObject body) throws Exception {
+        String responseText = postJson(apiEndpoint("/v1/tool/requests/claim"), body.toString(), 15000);
+        if (responseText.trim().isEmpty()) {
+            return new JSONObject();
+        }
+        return new JSONObject(responseText);
+    }
+
+    JSONObject toolRequestReceipt(String requestId, JSONObject body) throws Exception {
+        String id = safe(requestId).replaceAll("[^a-zA-Z0-9_-]", "");
+        if (id.isEmpty()) {
+            throw new IllegalArgumentException("tool request id is required");
+        }
+        String responseText = postJson(apiEndpoint("/v1/tool/requests/" + id + "/receipts"), body.toString(), 15000);
         return new JSONObject(responseText);
     }
 
@@ -199,6 +236,10 @@ final class MoaGatewayClient {
 
     private static String safe(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static String urlEncode(String value) throws Exception {
+        return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8.name());
     }
 
     static final class GatewayTextResponse {

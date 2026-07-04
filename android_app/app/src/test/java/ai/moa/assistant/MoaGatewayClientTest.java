@@ -152,6 +152,18 @@ public final class MoaGatewayClientTest {
     }
 
     @Test
+    public void agentProfileFetchesDeviceScopedProfile() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+
+        JSONObject payload = client.agentProfile("device", "android_abc");
+
+        assertEquals("am-ET", payload.getJSONObject("profile").getString("input_language_primary"));
+        assertEquals("/v1/agent/profile", requests.get(0).path);
+        assertEquals("/v1/agent/profile?scope=device&device_id=android_abc", requests.get(0).target);
+        assertEquals("Bearer secret-token", requests.get(0).authorization);
+    }
+
+    @Test
     public void httpErrorsIncludeStatus() throws Exception {
         MoaGatewayClient client = new MoaGatewayClient(baseUrl, "");
 
@@ -189,6 +201,8 @@ public final class MoaGatewayClientTest {
             return new TestResponse(200, "{\"version_code\":42,\"version_name\":\"0.1.42\"}");
         } else if ("/v1/context/latest".equals(request.path)) {
             return new TestResponse(200, "{\"store\":{\"type\":\"json-files\"},\"recent_runs\":[{\"id\":\"run_789\"}],\"recent_turns\":[],\"sessions\":[]}");
+        } else if ("/v1/agent/profile".equals(request.path)) {
+            return new TestResponse(200, "{\"profile\":{\"language\":\"am-ET\",\"language_primary\":\"am-ET\",\"input_languages\":\"am-ET,en-US\",\"input_language_primary\":\"am-ET\"}}");
         }
         return new TestResponse(404, "{\"error\":\"not found\"}");
     }

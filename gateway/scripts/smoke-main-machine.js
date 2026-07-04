@@ -289,7 +289,7 @@ function generateVoiceSmokePcm16() {
     };
   }
 
-  const phrase = process.env.MOA_MAIN_MACHINE_VOICE_PHRASE || "Can you hear me clearly? This is a Moa gateway smoke test.";
+  const phrase = process.env.MOA_MAIN_MACHINE_VOICE_PHRASE || "Can you hear me clearly? This is an A.G. gateway smoke test.";
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-voice-smoke-"));
   const aiffPath = path.join(tempDir, "speech.aiff");
   const pcmPath = path.join(tempDir, "speech.pcm");

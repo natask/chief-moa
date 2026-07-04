@@ -11,8 +11,13 @@ import { join, resolve } from "node:path";
 const root = resolve(new URL("..", import.meta.url).pathname);
 const extensionDir = join(root, "extension");
 const configPath = join(extensionDir, "agee.config.json");
-const defaultGatewayUrl = "http://10.147.17.10:8788";
+const defaultGatewayUrl = "https://api.agee.app";
+const legacyMainGatewayUrl = "http://10.147.17.10:8787";
+const localGatewayUrl = "http://10.147.17.6:8787";
+const staleGatewayUrls = new Set([legacyMainGatewayUrl, "http://10.147.17.10:8788", localGatewayUrl]);
 const staleError = "No gateway URL and no API key set";
+const manifest = readJson(join(extensionDir, "manifest.json"));
+const extensionLabel = manifest.name || "agee";
 
 let failures = 0;
 
@@ -35,6 +40,45 @@ function info(text) {
 
 function normalizeUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function gatewayUrlDiagnostic(value) {
+  const raw = normalizeUrl(value);
+  if (!raw) return { code: "missing_config", message: "baked config has no gatewayUrl" };
+  if (!/^https?:\/\//i.test(raw)) {
+    return { code: "missing_scheme", message: `enter the full gateway URL, for example ${defaultGatewayUrl}` };
+  }
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { code: "invalid_url", message: `enter a valid gateway URL, for example ${defaultGatewayUrl}` };
+  }
+  const path = url.pathname.replace(/\/+$/, "") || "/";
+  if (path !== "/" && (path === "/health" || path.startsWith("/v1/"))) {
+    return { code: "endpoint_path", message: "save only the gateway origin, not an endpoint path" };
+  }
+  if (url.hostname === "10.147.17.10") {
+    return {
+      code: "stale_main_machine",
+      message: "points at the old main-machine ZeroTier gateway; use the VPS URL unless intentionally testing local dev",
+    };
+  }
+  if (url.hostname === "10.147.17.6") {
+    return {
+      code: "local_mac",
+      message: "points at the local Mac gateway; use the VPS URL for browser/mobile onboarding",
+    };
+  }
+  return { code: "ok", message: "" };
+}
+
+function networkFailureMessage(url, path, error) {
+  const diagnostic = gatewayUrlDiagnostic(url);
+  const hint = diagnostic.message ? ` ${diagnostic.message}.` : "";
+  const detail = String(error?.message || error || "").trim();
+  const suffix = detail && detail !== "Failed to fetch" ? ` (${detail})` : "";
+  return `could not reach configured gateway ${url || "(unset)"} while calling ${path}; check DNS, TLS, and the saved URL.${hint}${suffix}`;
 }
 
 function readJson(path) {
@@ -68,9 +112,14 @@ function checkSource() {
     pass("current background.js does not contain the stale Anthropic-key fallback error");
   }
   if (config.includes(defaultGatewayUrl)) {
-    pass(`current config.js has the live gateway default ${defaultGatewayUrl}`);
+    pass(`current config.js has the hosted gateway default ${defaultGatewayUrl}`);
   } else {
-    fail(`current config.js is missing the live gateway default ${defaultGatewayUrl}`);
+    fail(`current config.js is missing the hosted gateway default ${defaultGatewayUrl}`);
+  }
+  if (config.includes(legacyMainGatewayUrl) && config.includes(localGatewayUrl) && config.includes("isKnownStaleGatewayUrl")) {
+    pass("current config.js treats legacy ZeroTier/local gateway URLs as stale seeded defaults");
+  } else {
+    fail("current config.js does not cover stale legacy/local gateway URL migration");
   }
 }
 
@@ -89,10 +138,15 @@ function checkBakedConfig() {
 
   const gatewayUrl = normalizeUrl(config.gatewayUrl);
   const gatewayToken = String(config.gatewayToken || "");
-  if (!gatewayUrl) {
-    fail("baked config has no gatewayUrl");
-  } else if (gatewayUrl === "http://10.147.17.10:8787") {
-    fail("baked config still points at legacy port 8787; run `npm run configure`");
+  const diagnostic = gatewayUrlDiagnostic(gatewayUrl);
+  if (diagnostic.code === "missing_config") {
+    fail(diagnostic.message);
+  } else if (diagnostic.code === "local_mac") {
+    warn(`baked config gateway URL ${diagnostic.message}`);
+  } else if (staleGatewayUrls.has(gatewayUrl) || diagnostic.code === "stale_main_machine") {
+    fail(`baked config still points at stale gateway ${gatewayUrl}; run \`npm run configure\``);
+  } else if (diagnostic.code !== "ok") {
+    fail(`baked config gateway URL is invalid: ${diagnostic.message}`);
   } else {
     pass(`baked config gateway URL is ${gatewayUrl}`);
   }
@@ -116,7 +170,7 @@ async function checkGateway(config) {
       fail(`/health returned HTTP ${resp.status}`);
     }
   } catch (error) {
-    fail(`/health unreachable: ${error.message}`);
+    fail(`/health unreachable: ${networkFailureMessage(config.gatewayUrl, "/health", error)}`);
     return;
   }
 
@@ -149,7 +203,7 @@ async function checkGateway(config) {
       fail(`/v1/voice/turns returned HTTP ${resp.status}`);
     }
   } catch (error) {
-    fail(`/v1/voice/turns failed: ${error.message}`);
+    fail(`/v1/voice/turns failed: ${networkFailureMessage(config.gatewayUrl, "/v1/voice/turns", error)}`);
   }
 }
 
@@ -189,9 +243,11 @@ function findInstalledAgee() {
         const description = String(manifest.description || "");
         const extPath = String(ext.path || "");
         const relevant =
+          /\baggie\b/i.test(`${name} ${description}`) ||
           /\bagee\b/i.test(`${name} ${description}`) ||
+          /\bchief\s+ag\b/i.test(`${name} ${description}`) ||
           resolve(extPath || "/") === extensionDir ||
-          /moa-assistant\/software\/browser_extension\/extension/.test(extPath);
+          /moa-assistant\/(?:software\/)?browser_extension\/extension/.test(extPath);
         if (relevant) {
           matches.push({
             browser,
@@ -209,20 +265,53 @@ function findInstalledAgee() {
   return matches;
 }
 
+function currentManifestVersion() {
+  try {
+    const manifest = readJson(join(extensionDir, "manifest.json"));
+    return String(manifest.version || "");
+  } catch {
+    return "";
+  }
+}
+
+function versionCompare(a, b) {
+  const pa = String(a || "0").split(".").map(Number);
+  const pb = String(b || "0").split(".").map(Number);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const va = Number.isFinite(pa[i]) ? pa[i] : 0;
+    const vb = Number.isFinite(pb[i]) ? pb[i] : 0;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+  }
+  return 0;
+}
+
 function checkBrowserProfiles() {
+  const repoVersion = currentManifestVersion();
   const matches = findInstalledAgee();
   if (!matches.length) {
-    warn("no agee extension is registered in common daily-browser profiles");
+    warn(`no ${extensionLabel} / agee extension is registered in common daily-browser profiles`);
     info(`load unpacked at: ${extensionDir}`);
+    if (repoVersion) {
+      info(`repo manifest version is ${repoVersion}; if a CWS install is older, bump and re-upload`);
+    }
   } else {
     for (const match of matches) {
       const currentPath = resolve(match.path || "/") === extensionDir;
       const state = match.state === 1 ? "enabled" : `state=${match.state}`;
       const prefix = currentPath ? "PASS" : "WARN";
+      const packed = !match.path || match.path.startsWith("chrome-extension://") || !match.path.includes("/");
+      const source = packed ? "(packed/CWS)" : match.path;
+      const version = match.version || "unknown";
+      const older = repoVersion && version && versionCompare(version, repoVersion) < 0;
       console.log(
-        `[${prefix}] ${match.browser}/${match.profile} has agee id=${match.id} ${state}, version=${match.version || "unknown"}, path=${match.path || "(packed)"}`
+        `[${prefix}] ${match.browser}/${match.profile} has ${extensionLabel} id=${match.id} ${state}, version=${version}, source=${source}`
       );
-      if (!currentPath) {
+      if (older) {
+        warn(`installed version ${version} is older than repo version ${repoVersion}; reload or re-upload to Chrome Web Store`);
+      }
+      if (!currentPath && !packed) {
         warn(`that profile is not using this repo extension path: ${extensionDir}`);
       }
     }
@@ -241,7 +330,7 @@ function checkBrowserProfiles() {
   }
 }
 
-console.log("agee operational doctor");
+console.log(`${extensionLabel} operational doctor`);
 console.log("");
 
 checkSource();
@@ -251,7 +340,7 @@ checkBrowserProfiles();
 
 console.log("");
 if (failures) {
-  console.log(`agee doctor failed: ${failures} issue(s) need action`);
+  console.log(`${extensionLabel} doctor failed: ${failures} issue(s) need action`);
   process.exit(1);
 }
-console.log("agee doctor passed");
+console.log(`${extensionLabel} doctor passed`);

@@ -18,7 +18,7 @@ its configured engine.
 
 ## What Changes
 
-- With a gateway URL + token configured, open the overlay via Cmd+K, submit a
+- With a gateway URL + token configured, open the overlay via Cmd+Comma, submit a
   command, and confirm the reply came from `/v1/voice/turns`.
 - Run "describe page" and confirm the output came from `/v1/chat`.
 - Capture a clear failure message when the gateway is unreachable or unauthorized.

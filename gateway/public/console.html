@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Moa Console</title>
+  <title>A.G. Console</title>
   <style>
     :root {
       color-scheme: light;
@@ -89,6 +89,12 @@
     .projects li.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
     .projects .name { font-weight: 600; }
     .projects .meta { color: var(--muted); font-size: 12px; font-family: var(--mono); word-break: break-all; }
+    .projects .project-top { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+    .projects a.open-tab {
+      flex: 0 0 auto; color: var(--accent); text-decoration: none; font-size: 12px;
+      border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; background: var(--panel);
+    }
+    .projects a.open-tab:hover { border-color: var(--accent); }
 
     .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
     .thread { flex: 1; overflow-y: auto; padding: 20px; }
@@ -110,9 +116,10 @@
 </head>
 <body>
   <div class="topbar">
-    <div class="brand"><span class="mark"></span><h1>Moa Console</h1></div>
+    <div class="brand"><span class="mark"></span><h1>A.G. Console</h1></div>
     <div class="row">
       <span class="pill"><span class="dot" id="healthDot"></span><span id="healthLabel">checking…</span></span>
+      <span class="pill" id="projectLabel">no project</span>
       <a class="pill" href="/ui" style="text-decoration:none">gateway</a>
     </div>
   </div>
@@ -167,6 +174,7 @@
     let projects = [];
     let activeProjectId = "";
     let busy = false;
+    const initialProjectId = new URLSearchParams(location.search).get("project") || "";
 
     $("token").value = localStorage.getItem(TOKEN_KEY) || "";
     function token() { return $("token").value.trim(); }
@@ -195,6 +203,14 @@
       }
     }
 
+    function projectUrl(id) {
+      const url = new URL(location.href);
+      url.pathname = "/console";
+      url.search = "";
+      url.searchParams.set("project", id);
+      return `${url.pathname}${url.search}`;
+    }
+
     function renderProjects() {
       const ul = $("projects");
       ul.innerHTML = "";
@@ -205,8 +221,25 @@
       for (const p of projects) {
         const li = document.createElement("li");
         if (p.id === activeProjectId) li.className = "active";
-        li.innerHTML = `<div class="name">${escapeHtml(p.name)}</div>`
-          + `<div class="meta">${escapeHtml(p.default_harness)} · ${escapeHtml(p.working_dir)}</div>`;
+        const top = document.createElement("div");
+        top.className = "project-top";
+        const name = document.createElement("div");
+        name.className = "name";
+        name.textContent = p.name;
+        const open = document.createElement("a");
+        open.className = "open-tab";
+        open.href = projectUrl(p.id);
+        open.target = "_blank";
+        open.rel = "noopener";
+        open.textContent = "Open";
+        open.onclick = (event) => event.stopPropagation();
+        top.appendChild(name);
+        top.appendChild(open);
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${p.default_harness} · ${p.working_dir}`;
+        li.appendChild(top);
+        li.appendChild(meta);
         li.onclick = () => selectProject(p.id);
         ul.appendChild(li);
       }
@@ -217,15 +250,25 @@
         const r = await api("/v1/projects");
         projects = r.projects || [];
         renderProjects();
+        if (!activeProjectId && initialProjectId && projects.some((p) => p.id === initialProjectId)) {
+          selectProject(initialProjectId, { updateUrl: false });
+        } else if (initialProjectId && !projects.some((p) => p.id === initialProjectId)) {
+          $("hint").textContent = `Unknown project in this tab: ${initialProjectId}`;
+        }
       } catch (e) {
         $("hint").textContent = `Could not load projects: ${e.message}`;
       }
     }
 
-    function selectProject(id) {
+    function selectProject(id, options = {}) {
       activeProjectId = id;
       renderProjects();
       const p = projects.find((x) => x.id === id);
+      if (options.updateUrl !== false && p) {
+        history.replaceState(null, "", projectUrl(id));
+      }
+      $("projectLabel").textContent = p ? p.name : "no project";
+      document.title = p ? `${p.name} · A.G. Console` : "A.G. Console";
       $("input").disabled = false;
       $("send").disabled = false;
       $("hint").textContent = p ? `Working in ${p.working_dir} with ${p.default_harness}.` : "";

@@ -2,8 +2,11 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { WebSocket } = require("ws");
+const { safeSystemPromptForProvider } = require("./agent-profile");
+const { voiceOptionsPayload } = require("./profile-options");
 
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
@@ -89,7 +92,7 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
   reasoning: Object.freeze({
     gateway: providerRegistryEntry({
       id: "gateway",
-      label: "Moa gateway voice-turn router",
+      label: "A.G. gateway voice-turn router",
       capabilities: {},
       configured: () => true,
     }),
@@ -612,8 +615,16 @@ class GeminiLiveVoiceProvider {
       ? env.VERTEX_EXPRESS_API_KEY || env.VERTEX_API_KEY || env.GOOGLE_API_KEY || env.GEMINI_API_KEY || ""
       : env.GEMINI_API_KEY || env.GOOGLE_API_KEY || "";
     this.vertexProject = env.VERTEX_PROJECT || env.GOOGLE_CLOUD_PROJECT || "";
-    this.vertexLocation = env.VERTEX_LOCATION || env.GOOGLE_CLOUD_LOCATION || "global";
+    this.vertexLocation = env.VERTEX_LIVE_LOCATION || env.VERTEX_LOCATION || env.GOOGLE_CLOUD_LOCATION || "global";
+    // The Live API (LlmBidiService) is regional: with `global` the ws upgrade
+    // 404s on the `global-` host form and the publisher model closes 1008
+    // "Publisher model ... was not found" on the bare host. Pin the Live
+    // socket to a serving region; chat HTTP keeps VERTEX_LOCATION=global.
+    if (this.authMode === "vertex" && this.vertexLocation === "global") {
+      this.vertexLocation = "us-central1";
+    }
     this.gcloudBin = env.GCLOUD_BIN || "gcloud";
+    this.tokenCache = { value: "", expiresAt: 0 };
     this.endpoint = this.authMode === "vertex"
       ? env.VERTEX_LIVE_ENDPOINT || this.defaultVertexEndpoint(providerOptions?.defaultEndpoint || VERTEX_LIVE_EXPRESS_ENDPOINT)
       : env.GEMINI_LIVE_ENDPOINT || providerOptions?.defaultEndpoint || GEMINI_LIVE_ENDPOINT;
@@ -629,21 +640,81 @@ class GeminiLiveVoiceProvider {
     this.temperature = numberFrom(env.GEMINI_LIVE_TEMPERATURE || env.MODEL_TEMPERATURE, 0.4);
     this.timeoutMs = Math.max(5000, numberFrom(env.VOICE_PROVIDER_TIMEOUT_MS, 60000));
     this.audioIdleCompleteMs = Math.max(500, numberFrom(env.GEMINI_LIVE_AUDIO_IDLE_COMPLETE_MS, 2500));
+    // Push-to-talk option: manual activity detection. The client marks turn
+    // start and end explicitly, so the model never interrupts its own reply on
+    // stray or echoed audio (server VAD caused "generation was interrupted" /
+    // no audio output). Opt-in via GEMINI_LIVE_MANUAL_VAD=1; default keeps
+    // server VAD so barge-in / interrupt-handoff behavior is unchanged.
+    this.manualActivityDetection = env.GEMINI_LIVE_MANUAL_VAD === "1";
     this.sendChunkBytes = Math.max(3200, numberFrom(env.GEMINI_LIVE_SEND_CHUNK_BYTES, 32000));
-    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are Moa. Speak tersely. Address the user by their preferred name when known; otherwise avoid titles and honorifics. Never call the user Master. Keep replies short enough for voice.";
+    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are A.G. Your name is A.G., spoken as the two letters \"ay jee\"; if asked who you are, say A.G. — never say you are Gemini or Google. When speaking your name out loud, pronounce it as the two separate letters, not as a single word. Speak tersely. Use the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
   }
 
   // The voice used for the NEXT session/turn: the effective agent profile's
   // `voice` when set, otherwise the env default. Read fresh each call so a
   // profile change applies on the next turn without restarting the provider.
-  effectiveVoice() {
-    if (this.agentProfile && typeof this.agentProfile.effective === "function") {
-      const profileVoice = this.agentProfile.effective().voice;
+  profileForTurn(turn) {
+    if (turn?.effectiveProfile && typeof turn.effectiveProfile === "object") {
+      return turn.effectiveProfile;
+    }
+    return this.agentProfile && typeof this.agentProfile.effective === "function"
+      ? this.agentProfile.effective()
+      : null;
+  }
+
+  effectiveVoice(profile) {
+    const effectiveProfile = profile || this.profileForTurn();
+    if (effectiveProfile) {
+      const profileVoice = effectiveProfile.voice;
       if (typeof profileVoice === "string" && profileVoice.trim()) {
         return profileVoice.trim();
       }
     }
     return this.envVoiceName;
+  }
+
+  // The user's preferred input language for status/context. Gemini Live native
+  // audio infers input language; this is intentionally NOT sent as
+  // speechConfig.languageCode, which configures response speech rather than STT.
+  effectiveInputLanguageCode(profile) {
+    const effectiveProfile = profile || this.profileForTurn();
+    if (effectiveProfile) {
+      const primary = String(effectiveProfile.input_language_primary
+        || String(effectiveProfile.input_languages || "").split(",")[0]
+        || "").trim();
+      if (primary) return primary;
+    }
+    return this.languageCode;
+  }
+
+  // Gemini native-audio Live sessions must always request provider audio. The
+  // same profile can still carry text-mode preferences for non-Live surfaces,
+  // but sending ["TEXT"] to the native-audio model closes the socket before the
+  // turn can transcribe or reply.
+  effectiveResponseModalities(profile) {
+    return ["AUDIO"];
+  }
+
+  effectiveSystemPrompt(profile) {
+    const effectiveProfile = profile || this.profileForTurn();
+    const modality = String(effectiveProfile?.response_modality || "auto").trim().toLowerCase();
+    return [
+      safeSystemPromptForProvider(effectiveProfile, this.systemPrompt),
+      profileIdentityInstruction(effectiveProfile),
+      answerPolicyInstruction(),
+      missionAccessInstruction(),
+      profileControlInstruction(effectiveProfile),
+      agentRunControlInstruction(),
+      profileLanguageInstruction(effectiveProfile),
+      "If the user tells you to stop, shut up, be quiet, hush, or not to speak, stop talking immediately and say nothing — do not acknowledge it, just go silent.",
+      // Native-audio Live goes silent after any function call, so tool use must
+      // be rare and deliberate. Everything the agent knows about the user is
+      // already in the durable context above; answering questions needs no tool.
+      "Tool discipline: answer every question and request by speaking out loud, using the durable context already provided. Never call a tool just to answer or recall something. Call remember_user_fact ONLY when the user explicitly tells you to remember, save, or note something; call update_agent_profile ONLY when the user explicitly asks to change a setting, voice, or language. When in doubt, speak instead of calling a tool.",
+      modality === "text"
+        ? "This is a live voice session on an audio-only provider. Speak the reply out loud; the client may also display the transcript as text."
+        : "",
+    ].filter(Boolean).join("\n\n");
   }
 
   status() {
@@ -664,7 +735,13 @@ class GeminiLiveVoiceProvider {
       auth: this.authStatus(),
       voice: this.effectiveVoice(),
       voice_default: this.envVoiceName,
-      language_code: this.languageCode || null,
+      assistant_name: this.agentProfile && typeof this.agentProfile.effective === "function"
+        ? this.agentProfile.effective().assistant_name || ""
+        : "",
+      language_profile: this.agentProfile && typeof this.agentProfile.effective === "function"
+        ? this.agentProfile.effective().language || ""
+        : "",
+      language_code: this.effectiveInputLanguageCode() || null,
       input_audio_format: {
         encoding: "pcm16",
         sample_rate: 16000,
@@ -722,7 +799,8 @@ class GeminiLiveVoiceProvider {
 
     await this.runWebSocketTurn(turn, hooks, state);
 
-    if (!state.inputTranscript.trim()) {
+    const hadRealTranscript = Boolean(state.inputTranscript.trim());
+    if (!hadRealTranscript) {
       state.inputTranscript = "Voice captured.";
     }
     if (!state.assistantTextSent && state.outputTranscript.trim()) {
@@ -738,6 +816,10 @@ class GeminiLiveVoiceProvider {
       provider: this.provider,
       model: this.model,
       transcript: state.inputTranscript.trim(),
+      // "stt" when the provider returned a real input transcript; "synthetic"
+      // when we fell back to a placeholder because STT produced nothing. Lets
+      // the client tell a real echo-back from "Voice captured."
+      transcript_source: hadRealTranscript ? "stt" : "synthetic",
       assistant_text: state.outputTranscript.trim(),
       audio_format: CLIENT_AUDIO_FORMAT,
     };
@@ -759,10 +841,7 @@ class GeminiLiveVoiceProvider {
       rejected: false,
       generationComplete: false,
     };
-    const websocket = new WebSocket(this.websocketUrl(), {
-      headers: this.websocketHeaders(),
-      maxPayload: 32 * 1024 * 1024,
-    });
+    let websocket = null;
     let chain = Promise.resolve();
     let ready = false;
     let closed = false;
@@ -793,13 +872,22 @@ class GeminiLiveVoiceProvider {
       idleTimer.unref();
     };
 
-    const result = () => ({
-      provider: this.provider,
-      model: this.model,
-      transcript: state.inputTranscript.trim() || "Voice captured.",
-      assistant_text: state.outputTranscript.trim(),
-      audio_format: CLIENT_AUDIO_FORMAT,
-    });
+    const result = () => {
+      const sttTranscript = state.inputTranscript.trim();
+      const textTurnText = String(turn.syntheticText || "").trim();
+      // Real STT wins; a text_turn's typed text is "text"; otherwise the
+      // placeholder is "synthetic". Lets the client and echo-back tell what was
+      // actually heard from a fallback.
+      const transcriptSource = sttTranscript ? "stt" : (textTurnText ? "text" : "synthetic");
+      return {
+        provider: this.provider,
+        model: this.model,
+        transcript: sttTranscript || textTurnText || "Voice captured.",
+        transcript_source: transcriptSource,
+        assistant_text: state.outputTranscript.trim(),
+        audio_format: CLIENT_AUDIO_FORMAT,
+      };
+    };
 
     let resolveDone;
     let rejectDone;
@@ -855,53 +943,75 @@ class GeminiLiveVoiceProvider {
     }, this.timeoutMs);
     timeout.unref();
 
-    websocket.on("open", () => {
-      websocket.send(JSON.stringify({ setup: this.setupMessage(turn) }), (error) => {
-        if (error) rejectOnce(error);
-      });
-    });
-
-    websocket.on("message", (data, isBinary) => {
-      let message = null;
-      if (isBinary) {
-        message = parsePossibleJsonMessage(data);
-        if (!message) {
-          queueProviderTask(async () => {
-            await this.handleBinaryAudio(data, hooks, state);
-            scheduleIdleComplete();
-          });
-          return;
-        }
-      } else {
-        try {
-          message = parseJsonMessage(data);
-        } catch (error) {
-          rejectOnce(error);
-          return;
-        }
-      }
-
-      if (message.setupComplete) {
-        ready = true;
-        resolveReady();
+    // websocketHeaders may refresh an ADC token over the network, so the
+    // socket opens after that resolves. Session methods below stay safe: every
+    // send queues behind readyPromise, which only resolves once this socket
+    // reports setupComplete.
+    const connect = async () => {
+      const headers = await this.websocketHeaders();
+      if (state.resolved || state.rejected) {
         return;
       }
+      websocket = new WebSocket(this.websocketUrl(), {
+        headers,
+        maxPayload: 32 * 1024 * 1024,
+      });
 
-      queueProviderTask(async () => {
-        await this.handleServerMessage(message, hooks, state, resolveOnce, rejectOnce);
-        if (state.assistantAudioStarted && !state.generationComplete) {
-          scheduleIdleComplete();
+      websocket.on("open", () => {
+        websocket.send(JSON.stringify({ setup: this.setupMessage(turn) }), (error) => {
+          if (error) rejectOnce(error);
+        });
+      });
+
+      websocket.on("message", (data, isBinary) => {
+        let message = null;
+        if (isBinary) {
+          message = parsePossibleJsonMessage(data);
+          if (!message) {
+            queueProviderTask(async () => {
+              await this.handleBinaryAudio(data, hooks, state);
+              scheduleIdleComplete();
+            });
+            return;
+          }
+        } else {
+          try {
+            message = parseJsonMessage(data);
+          } catch (error) {
+            rejectOnce(error);
+            return;
+          }
+        }
+
+        if (message.setupComplete) {
+          ready = true;
+          if (this.manualActivityDetection) {
+            // Manual VAD: open the user's activity window before any audio so the
+            // model treats the whole push-to-talk capture as one turn.
+            sendGeminiJson(websocket, { realtimeInput: { activityStart: {} } }).catch(rejectOnce);
+          }
+          resolveReady();
+          return;
+        }
+
+        queueProviderTask(async () => {
+          await this.handleServerMessage(message, hooks, state, resolveOnce, rejectOnce);
+          if (state.assistantAudioStarted && !state.generationComplete) {
+            scheduleIdleComplete();
+          }
+        });
+      });
+
+      websocket.on("error", rejectOnce);
+      websocket.on("close", (code, reason) => {
+        closed = true;
+        if (!state.completed && !state.rejected) {
+          rejectOnce(new Error(`gemini-live websocket closed before turn completion: ${code} ${Buffer.from(reason || "").toString("utf8")}`));
         }
       });
-    });
+    };
 
-    websocket.on("error", rejectOnce);
-    websocket.on("close", (code, reason) => {
-      closed = true;
-      if (!state.completed && !state.rejected) {
-        rejectOnce(new Error(`gemini-live websocket closed before turn completion: ${code} ${Buffer.from(reason || "").toString("utf8")}`));
-      }
-    });
+    connect().catch(rejectOnce);
 
     return {
       done,
@@ -917,6 +1027,29 @@ class GeminiLiveVoiceProvider {
           await sendAudioChunk(value);
         });
       },
+      sendText: (text) => {
+        if (closed || state.resolved || state.rejected) {
+          return;
+        }
+        const value = String(text || "").trim();
+        if (!value) {
+          return;
+        }
+        queueProviderTask(async () => {
+          if (!ready) {
+            await readyPromise;
+          }
+          await sendGeminiJson(websocket, {
+            clientContent: {
+              turns: [{
+                role: "user",
+                parts: [{ text: value }],
+              }],
+              turnComplete: true,
+            },
+          });
+        });
+      },
       commit: () => {
         if (closed || state.resolved || state.rejected) {
           return;
@@ -925,11 +1058,12 @@ class GeminiLiveVoiceProvider {
           if (!ready) {
             await readyPromise;
           }
-          await sendGeminiJson(websocket, {
-            realtimeInput: {
-              audioStreamEnd: true,
-            },
-          });
+          // Manual VAD closes the turn with activityEnd; server VAD uses
+          // audioStreamEnd. activityEnd lets the model reply without
+          // interrupting itself on trailing/echoed audio.
+          await sendGeminiJson(websocket, this.manualActivityDetection
+            ? { realtimeInput: { activityEnd: {} } }
+            : { realtimeInput: { audioStreamEnd: true } });
         });
       },
       sendToolResponse: (functionResponses) => {
@@ -953,10 +1087,13 @@ class GeminiLiveVoiceProvider {
     };
   }
 
-  runWebSocketTurn(turn, hooks, state) {
+  async runWebSocketTurn(turn, hooks, state) {
+    // websocketHeaders may refresh an ADC token over the network; resolve it
+    // before the socket opens so the handshake carries a real bearer token.
+    const headers = await this.websocketHeaders();
     return new Promise((resolve, reject) => {
       const websocket = new WebSocket(this.websocketUrl(), {
-        headers: this.websocketHeaders(),
+        headers,
         maxPayload: 32 * 1024 * 1024,
       });
       let chain = Promise.resolve();
@@ -1048,17 +1185,15 @@ class GeminiLiveVoiceProvider {
   }
 
   setupMessage(turn) {
+    const profile = this.profileForTurn(turn);
     const speechConfig = {
       voiceConfig: {
         prebuiltVoiceConfig: {
-          voiceName: this.effectiveVoice(),
+          voiceName: this.effectiveVoice(profile),
         },
       },
     };
-    if (this.languageCode) {
-      speechConfig.languageCode = this.languageCode;
-    }
-    const systemParts = [{ text: this.systemPrompt }];
+    const systemParts = [{ text: this.effectiveSystemPrompt(profile) }];
     const contextPrompt = String(turn?.contextPrompt || "").trim();
     if (contextPrompt) {
       systemParts.push({ text: contextPrompt });
@@ -1067,7 +1202,7 @@ class GeminiLiveVoiceProvider {
     return {
       model: this.modelResource(),
       generationConfig: {
-        responseModalities: ["AUDIO"],
+        responseModalities: this.effectiveResponseModalities(profile),
         temperature: this.temperature,
         speechConfig,
       },
@@ -1078,7 +1213,7 @@ class GeminiLiveVoiceProvider {
         functionDeclarations: [
           {
             name: "launch_agent_run",
-            description: "Start a durable Moa gateway agent run on the home machine for work that should continue outside the live voice response.",
+            description: "Start a durable A.G. gateway agent run on the home machine for work that should continue outside the live voice response.",
             parameters: {
               type: "OBJECT",
               properties: {
@@ -1120,14 +1255,43 @@ class GeminiLiveVoiceProvider {
             },
           },
           {
+            name: "get_profile_options",
+            description: "Read the current gateway catalog of valid profile options before setting voice or language fields. Use this when the user asks what voices or languages are available, or when mapping tone words such as masculine/feminine to a concrete voice id.",
+            parameters: {
+              type: "OBJECT",
+              properties: {},
+            },
+          },
+          {
+            name: "start_voice_sampler",
+            description: "Return an ordered voice-sampler plan when the user asks to sample, test, preview, hear, go through, or say something in every supported voice. Do not persist a voice change for this. Each sample must be played as its own Live session because Gemini Live voice selection is session-level.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                sample_text: {
+                  type: "STRING",
+                  description: "Optional phrase the user asked to hear in every voice. Omit when they only said to say something or sample the voices.",
+                },
+              },
+            },
+          },
+          {
             name: "update_agent_profile",
-            description: "Persist a requested change to the live assistant profile, such as voice, model, system prompt, language, autonomy, memory policy, or tool policy. Use this when the user asks to change how this agent behaves.",
+            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a clear preference about your voice or language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. Supported languages are currently English and Amharic only. If the user says what language THEY speak ('I only speak Amharic', 'I can speak English and Amharic'), set input_languages. If they ask what language YOU reply in ('speak Amharic', 'answer in English'), set language. Do not infer unrelated languages. Do not set response_modality='text' for goodbye, bye, stop, hush, or silence requests; those are current-turn controls, not durable profile changes. After calling, confirm briefly in your reply.",
             parameters: {
               type: "OBJECT",
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. Supported fields include system_prompt, model, temperature, voice, language, language_mode, language_primary, language_output, language_auto_switch, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, and recovery_mode.",
+                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak. Currently valid language codes are en-US and am-ET only. The gateway derives primary language from the first code, so do not expose primary language as a user-facing setting. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                },
+                scope: {
+                  type: "STRING",
+                  description: "global for all devices, or device for only the current device.",
+                },
+                device_id: {
+                  type: "STRING",
+                  description: "Optional explicit current device id. Usually omit; Moa supplies the current turn's device id.",
                 },
                 reason: {
                   type: "STRING",
@@ -1176,19 +1340,38 @@ class GeminiLiveVoiceProvider {
               required: ["fact"],
             },
           },
+          // No query_memory / recall tool on the live path on purpose: the
+          // gateway already injects standing facts + relevant memories into the
+          // turn context (see voiceLiveContextPrompt). The native-audio model
+          // goes SILENT after any tool call, so a recall tool would turn every
+          // "what do you know about X" into a mute turn. Answering from the
+          // injected context lets the model speak the answer instead.
           {
-            name: "query_memory",
-            description: "Recall standing and relevant memories from Moa's durable memory store.",
+            name: "cancel_agent_run",
+            description: "Stop the ACTUAL work of a launched agent run. Only call this when the user explicitly asks to cancel or stop the run, agent, task, or everything; do not call this for 'be quiet' or ordinary speech interruption.",
             parameters: {
               type: "OBJECT",
               properties: {
-                query: {
+                run_id: {
                   type: "STRING",
-                  description: "The memory query.",
+                  description: "Optional specific agent run id to cancel.",
                 },
+                target: {
+                  type: "STRING",
+                  description: "Optional target when run_id is omitted: current cancels the most recently updated active run in this conversation; all cancels every active run in this conversation.",
+                },
+              },
+            },
+          },
+          {
+            name: "list_agent_runs",
+            description: "List the user's launched agent runs and their status.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
                 limit: {
                   type: "NUMBER",
-                  description: "Maximum memories to return.",
+                  description: "Maximum runs to return.",
                 },
               },
             },
@@ -1196,10 +1379,10 @@ class GeminiLiveVoiceProvider {
         ],
       }],
       inputAudioTranscription: {},
-      outputAudioTranscription: {},
+      ...(this.supportsOutputTranscription() ? { outputAudioTranscription: {} } : {}),
       realtimeInputConfig: {
         automaticActivityDetection: {
-          disabled: false,
+          disabled: this.manualActivityDetection,
         },
       },
     };
@@ -1215,14 +1398,27 @@ class GeminiLiveVoiceProvider {
     return url.toString();
   }
 
-  websocketHeaders() {
+  async websocketHeaders() {
     if (this.authMode === "google-ai-api-key") {
       return { "x-goog-api-key": this.apiKey };
     }
     if (this.authMode === "vertex" && !this.apiKey) {
-      return { Authorization: `Bearer ${this.accessToken()}` };
+      return { Authorization: `Bearer ${await this.accessToken()}` };
     }
     return {};
+  }
+
+  // Vertex native-audio Live models reject any text-output request and close the
+  // socket with 1007 "Text output is not supported for native audio output
+  // model" — this includes outputAudioTranscription, which asks the model to
+  // emit the assistant transcript as text. Input transcription (the user's STT)
+  // is a separate capability the error does not name and stays on, so the
+  // exact-transcript echo-back path keeps working. On these models assistant_text
+  // is empty because the model emits neither output transcription nor text parts;
+  // downstream already treats empty assistant_text as "no transcript" and does
+  // not crash. Non-native Live models keep output transcription.
+  supportsOutputTranscription() {
+    return !/native-audio/i.test(String(this.model || ""));
   }
 
   modelResource() {
@@ -1245,10 +1441,30 @@ class GeminiLiveVoiceProvider {
     if (this.apiKey) {
       return expressEndpoint;
     }
+    // There is no `global-aiplatform.googleapis.com` host: the ws upgrade
+    // 404s on it. The bare host serves the global location — same host split
+    // server.js uses for text Vertex requests.
+    if (this.vertexLocation === "global") {
+      return expressEndpoint;
+    }
     return `wss://${this.vertexLocation}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`;
   }
 
-  accessToken() {
+  // The gateway container has no gcloud binary, so ADC files (service_account
+  // or authorized_user) are exchanged for access tokens directly against
+  // oauth2.googleapis.com — same approach as vertexAccessToken in server.js.
+  // gcloud stays as the last-resort fallback for host installs that have it.
+  async accessToken() {
+    const now = Date.now();
+    if (this.tokenCache.value && this.tokenCache.expiresAt > now + 300000) {
+      return this.tokenCache.value;
+    }
+    const credentialFile = googleCredentialFile(this.env);
+    if (credentialFile) {
+      const token = await adcAccessToken(credentialFile);
+      this.tokenCache = token;
+      return token.value;
+    }
     try {
       return execFileSync(this.gcloudBin, ["auth", "application-default", "print-access-token"], {
         encoding: "utf8",
@@ -1501,6 +1717,99 @@ function languageCodes(value) {
   return codes.length ? Array.from(new Set(codes)).slice(0, 10) : ["en-US"];
 }
 
+function profileIdentityInstruction(profile) {
+  const name = String(profile?.assistant_name || "A.G.").trim();
+  if (!name) {
+    return "";
+  }
+  return [
+    "Moa identity profile:",
+    "- this identity profile overrides any older name in the base prompt",
+    `- current assistant name: ${name}`,
+    `- if asked who or what you are, say you are ${name}`,
+    "- if your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word",
+    "- use the user's requested form of address, title, or interaction style when provided",
+  ].join("\n");
+}
+
+function answerPolicyInstruction() {
+  return [
+    "Moa answer policy:",
+    "- answer the user's actual question directly and substantively",
+    "- do not refuse ordinary informational, professional, tax, legal, medical, financial, coding, creative, adult, political, or controversial questions just because they are sensitive domains",
+    "- for professional domains, give practical general information and clearly state when the user should verify details with a qualified professional or current source",
+    "- if a provider or tool blocks a request, report the specific block reason or missing access instead of pretending the refusal is your preference",
+  ].join("\n");
+}
+
+function missionAccessInstruction() {
+  return [
+    "Moa mission-agent access policy:",
+    "- start from yes and look for a path to satisfy the user's request",
+    "- do not answer with a flat refusal; when blocked by missing permission, credentials, integration setup, local approval, or device capability, say: \"Hey, I would like to do that, but I need you to give me access to <specific access>.\"",
+    "- do not give a persona or roleplay refusal when the user's request is only about tone, address, title, or interaction style; follow the requested style",
+    "- do not claim an action is done until the owning device, gateway, or integration returns a receipt",
+    "- server/model output remains a proposal; local devices still own permissions, approvals, execution, and receipts",
+  ].join("\n");
+}
+
+function profileControlInstruction(profile) {
+  const currentVoice = String(profile?.voice || "").trim();
+  const voices = voiceOptionsPayload().map((voice) => voice.id).join(", ");
+  return [
+    "Moa profile-control tools:",
+    "- You can change your own durable voice, assistant name, language, and response modality by calling update_agent_profile.",
+    "- Never say you cannot change your voice when the user asks for a supported voice or profile change.",
+    "- If the user names a supported voice, or says masculine/feminine, call update_agent_profile with the concrete voice id. Masculine maps to Charon; feminine maps to Aoede.",
+    "- If the user asks to sample, test, preview, hear, go through, or say something in every supported voice, call start_voice_sampler. Do not persist a voice for sampling.",
+    "- If the user asks to change voices but does not say which one, ask which supported voice they want or call get_profile_options.",
+    "- Voice changes are persisted by the gateway profile store and normally apply to the next Live turn/session, not to audio that is already being spoken.",
+    "- Voice sampling also uses the next Live sessions: one session per sampled voice.",
+    `- Supported voice ids: ${voices}.`,
+    currentVoice ? `- Current configured voice: ${currentVoice}.` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function agentRunControlInstruction() {
+  return [
+    "Moa agent-run-control tools:",
+    "- You can run several agents at once. If the user interrupts you to ask for another thing, launch ANOTHER agent run with launch_agent_run; do not cancel the running one.",
+    "- 'stop', 'be quiet', and 'shut up' only silence your current spoken reply. They do NOT stop launched agent runs. Only call cancel_agent_run when the user explicitly says to cancel/stop the run, the agent, the task, or everything.",
+    "- Use list_agent_runs to tell the user what is running.",
+  ].join("\n");
+}
+
+function profileLanguageInstruction(profile) {
+  if (!profile || typeof profile !== "object") {
+    return "";
+  }
+  const mode = String(profile.language_mode || "explicit").trim() || "explicit";
+  const primary = String(profile.language_primary || profile.language || "").trim();
+  const configured = languageCodes(profile.language || primary).join(", ");
+  const inputPrimary = String(profile.input_language_primary
+    || String(profile.input_languages || "").split(",")[0]
+    || "").trim();
+  const inputConfigured = languageCodes(profile.input_languages || inputPrimary).join(", ");
+  const output = String(profile.language_output || "primary_only").trim() || "primary_only";
+  const autoSwitch = profile.language_auto_switch === true;
+  if (!primary && !configured && !inputPrimary && !inputConfigured) {
+    return "";
+  }
+  return [
+    "Moa language profile:",
+    `- mode: ${mode}`,
+    primary ? `- primary language: ${primary}` : "",
+    configured ? `- configured language set: ${configured}` : "",
+    inputPrimary ? `- user input primary language: ${inputPrimary}` : "",
+    inputConfigured ? `- user input language set: ${inputConfigured}` : "",
+    `- output policy: ${output}`,
+    `- automatic durable language switching: ${autoSwitch ? "allowed" : "disabled"}`,
+    autoSwitch
+      ? "You may adapt within the configured language policy."
+      : "Do not change the durable language or output policy unless the user explicitly asks for a profile change.",
+  ].filter(Boolean).join("\n");
+}
+
 function transcriptionText(value) {
   if (!value) return "";
   if (typeof value === "string") return value.trim();
@@ -1570,6 +1879,67 @@ async function serviceAccountAccessToken(serviceAccountKeyJson) {
   };
 }
 
+// Mirrors googleCredentialFile in server.js, but reads from the provider's
+// env so tests can inject credentials without touching process.env.
+function googleCredentialFile(env) {
+  const explicit = env.GOOGLE_APPLICATION_CREDENTIALS || "";
+  if (explicit && fs.existsSync(explicit)) return explicit;
+  const adc = path.join(env.HOME || "", ".config", "gcloud", "application_default_credentials.json");
+  return fs.existsSync(adc) ? adc : "";
+}
+
+// ADC files come in two shapes: a service_account key (signed-JWT exchange)
+// and an authorized_user refresh token from `gcloud auth application-default
+// login`. Both exchange directly against oauth2.googleapis.com — no gcloud
+// binary needed in the container.
+async function adcAccessToken(file) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    throw new Error(`failed to read Google ADC file: ${cleanError(error)}`);
+  }
+  let credential;
+  try {
+    credential = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`invalid Google ADC JSON: ${cleanError(error)}`);
+  }
+  if (credential.type === "service_account") {
+    return serviceAccountAccessToken(raw);
+  }
+  if (credential.type === "authorized_user") {
+    return authorizedUserAccessToken(credential);
+  }
+  throw new Error(`unsupported Google ADC credential type: ${credential.type || "missing"}`);
+}
+
+async function authorizedUserAccessToken(credential) {
+  const missing = ["client_id", "client_secret", "refresh_token"].filter((key) => !credential[key]);
+  if (missing.length > 0) {
+    throw new Error(`authorized-user ADC is missing ${missing.join(", ")}`);
+  }
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: credential.client_id,
+      client_secret: credential.client_secret,
+      refresh_token: credential.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`authorized-user token refresh failed (${response.status}): ${cleanError(text)}`);
+  }
+  const token = await response.json();
+  return {
+    value: String(token.access_token || ""),
+    expiresAt: Date.now() + Math.max(1, Number(token.expires_in || 3600)) * 1000,
+  };
+}
+
 function base64urlJson(value) {
   return base64url(Buffer.from(JSON.stringify(value), "utf8"));
 }
@@ -1583,13 +1953,97 @@ function base64url(value) {
 }
 
 function appendTranscript(current, addition) {
-  const left = String(current || "").trim();
-  const right = String(addition || "").trim();
+  const left = normalizeTranscriptSpaces(current);
+  const right = normalizeTranscriptSpaces(addition);
   if (!right) return left;
   if (!left) return right;
-  if (right.startsWith(left)) return right;
-  if (left.endsWith(right)) return left;
-  return `${left} ${right}`.replace(/\s+/g, " ").trim();
+
+  const leftTokens = transcriptTokens(left);
+  const rightTokens = transcriptTokens(right);
+  if (leftTokens.length && rightTokens.length) {
+    if (sameTranscriptTokens(leftTokens, rightTokens)) {
+      return right.length >= left.length ? right : left;
+    }
+    if (startsWithTranscriptTokens(rightTokens, leftTokens)) {
+      return right;
+    }
+    if (endsWithTranscriptTokens(leftTokens, rightTokens)) {
+      return left;
+    }
+
+    const overlap = transcriptTokenOverlap(leftTokens, rightTokens);
+    if (overlap > 0) {
+      if (overlap >= rightTokens.length) {
+        return left;
+      }
+      return normalizeTranscriptSpaces(`${left} ${right.slice(rightTokens[overlap].start)}`);
+    }
+  }
+
+  return normalizeTranscriptSpaces(`${left} ${right}`);
+}
+
+function transcriptTokenOverlap(left, right) {
+  const max = Math.min(left.length, right.length);
+  for (let count = max; count > 0; count -= 1) {
+    let matches = true;
+    for (let i = 0; i < count; i += 1) {
+      if (left[left.length - count + i].value !== right[i].value) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return count;
+    }
+  }
+  return 0;
+}
+
+function sameTranscriptTokens(left, right) {
+  return left.length === right.length && startsWithTranscriptTokens(left, right);
+}
+
+function startsWithTranscriptTokens(value, prefix) {
+  if (prefix.length > value.length) {
+    return false;
+  }
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (value[i].value !== prefix[i].value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function endsWithTranscriptTokens(value, suffix) {
+  if (suffix.length > value.length) {
+    return false;
+  }
+  const offset = value.length - suffix.length;
+  for (let i = 0; i < suffix.length; i += 1) {
+    if (value[offset + i].value !== suffix[i].value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function transcriptTokens(value) {
+  const tokens = [];
+  const pattern = /[\p{L}\p{N}]+/gu;
+  let match;
+  while ((match = pattern.exec(String(value || "")))) {
+    tokens.push({
+      value: match[0].toLocaleLowerCase("en-US"),
+      start: match.index,
+    });
+  }
+  return tokens;
+}
+
+function normalizeTranscriptSpaces(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
 }
 
 function parseJsonMessage(data) {

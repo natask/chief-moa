@@ -1,0 +1,30 @@
+digraph ScopedVoiceLanguageProfile {
+    graph [goal="Scoped hard voice/language profile settings work for global and current-device use."]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the scoped voice/language OpenSpec artifacts and name the files to change."
+    ]
+
+    implement [
+        label="Implement",
+        prompt="Implement scoped profile persistence, client device metadata, and mission-agent access wording. Preserve user-authored dirty changes."
+    ]
+
+    verify [
+        label="Verify",
+        shape=parallelogram,
+        script="cd gateway && npm run smoke:voice-intent && npm run smoke:regression && npm run check 2>&1",
+        goal_gate=true
+    ]
+
+    approve [shape=hexagon, label="Approve Result"]
+
+    start -> plan -> implement -> verify -> approve
+    approve -> exit      [label="[A] Accept"]
+    approve -> implement [label="[R] Revise"]
+}

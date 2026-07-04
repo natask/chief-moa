@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>agee — settings</title>
+    <title>A.G. — settings</title>
     <style>
       body {
         font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -29,16 +29,27 @@
       .talk-box button { margin-top: 0; white-space: nowrap; }
       #talkResult { margin-top: 8px; font-size: 13px; color: #444; min-height: 16px; }
       #talkResult.err { color: #c0392b; }
+      .catalog-picker { border: 1px solid #ccc; border-radius: 8px; padding: 8px; }
+      .catalog-selected { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; }
+      .catalog-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: #eef2ff; color: #1e2a62; font-size: 12px; font-weight: 600; }
+      .catalog-pill button { margin: 0; padding: 0; width: 18px; height: 18px; border-radius: 50%; background: #d8defa; color: #1e2a62; line-height: 18px; }
+      .catalog-search { margin-top: 8px; }
+      .catalog-options { margin-top: 8px; max-height: 170px; overflow: auto; border-top: 1px solid #eee; padding-top: 6px; }
+      .catalog-option { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 6px; font-size: 13px; }
+      .catalog-option:hover { background: #f6f6f6; }
+      .catalog-option input { width: auto; }
+      .catalog-option small { color: #777; }
+      .catalog-empty { padding: 8px 4px; color: #777; font-size: 13px; }
       hr { margin: 28px 0; border: 0; border-top: 1px solid #eee; }
     </style>
   </head>
   <body>
-    <h1>agee</h1>
-    <p class="sub">Open-source browser agent. Cmd/Ctrl+K on any page. Pipes to your self-hosted gateway, your machine.</p>
+    <h1>A.G.</h1>
+    <p class="sub">Open-source browser agent. Cmd/Ctrl+, on any page. Pipes to your self-hosted gateway, your machine.</p>
 
     <h2>Agent gateway</h2>
     <label for="gatewayUrl">Agent gateway URL</label>
-    <input id="gatewayUrl" type="text" placeholder="http://10.147.17.10:8788" />
+    <input id="gatewayUrl" type="text" placeholder="https://api.agee.app" />
     <div class="hint">Every turn is routed to your own agent gateway, which owns model routing and credentials. The browser never holds a provider key.</div>
 
     <label for="gatewayToken">Gateway token</label>
@@ -51,11 +62,26 @@
       <span id="status"></span>
     </div>
 
+    <h2>Voice permission</h2>
+    <p class="sub">Grant the microphone to A.G. once. Browser voice then uses the extension origin instead of asking each website.</p>
+    <div>
+      <button id="grantMic" style="background:#2563eb">Grant microphone</button>
+      <button id="checkMic" style="background:#777">Check microphone</button>
+      <span id="micStatus"></span>
+    </div>
+
     <hr />
 
     <h2>Runtime agent profile</h2>
     <p class="sub">How the agent behaves on every gateway turn. Read live from the gateway and written back to it; takes effect on the next turn with no restart.</p>
     <div class="profile-state" id="profileState">Loading profile from the gateway…</div>
+
+    <label for="profileScope">Save profile changes for</label>
+    <select id="profileScope">
+      <option value="global">All devices</option>
+      <option value="device">This device</option>
+    </select>
+    <div class="hint">All devices updates the gateway-wide profile. This device stores an override for this browser only.</div>
 
     <label for="changeBox">Change a setting by talking to the agent</label>
     <div class="talk-box">
@@ -70,7 +96,8 @@
     <div class="hint">The agent's standing instructions.</div>
 
     <label for="profileModel">Model (gateway)</label>
-    <input id="profileModel" type="text" placeholder="(gateway default)" />
+    <input id="profileModel" type="text" list="modelOptions" placeholder="(gateway default)" />
+    <datalist id="modelOptions"></datalist>
 
     <label for="temperature">Temperature</label>
     <input id="temperature" type="number" min="0" max="2" step="0.1" placeholder="0.4" />
@@ -78,8 +105,30 @@
     <label for="voiceMaxChars">Spoken reply max characters</label>
     <input id="voiceMaxChars" type="number" min="1" step="10" placeholder="280" />
 
-    <label for="language">Language</label>
-    <input id="language" type="text" placeholder="(gateway default)" />
+    <label for="voiceName">Voice</label>
+    <select id="voiceName">
+      <option value="">Gateway default</option>
+    </select>
+    <div class="hint" id="profileCatalogState">Voice and language options load from the gateway catalog.</div>
+
+    <label for="language">Reply language(s)</label>
+    <input id="language" type="hidden" />
+    <div class="catalog-picker" id="replyLanguagePicker">
+      <div class="catalog-selected" id="replyLanguageSelected"></div>
+      <input class="catalog-search" id="replyLanguageSearch" type="search" placeholder="Search gateway languages" autocomplete="off" />
+      <div class="catalog-options" id="replyLanguageOptions"></div>
+    </div>
+    <div class="hint">The first selected language becomes the provider default.</div>
+
+    <label for="inputLanguages">Heard language(s)</label>
+    <input id="inputLanguages" type="hidden" />
+    <div class="catalog-picker" id="heardLanguagePicker">
+      <div class="catalog-selected" id="heardLanguageSelected"></div>
+      <input class="catalog-search" id="heardLanguageSearch" type="search" placeholder="Search gateway languages" autocomplete="off" />
+      <div class="catalog-options" id="heardLanguageOptions"></div>
+    </div>
+    <div class="hint">Languages you may speak to the assistant.</div>
+    <datalist id="languageOptions"></datalist>
 
     <div>
       <button id="saveProfile">Save profile to gateway</button>

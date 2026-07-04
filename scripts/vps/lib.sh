@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Shared settings for the VPS gateway scripts. Every script here operates on
+# one compose project (chief-moa) whose named volumes are the shared event
+# store: they survive image rebuilds and gateway restarts. Only `down -v` on
+# the ACTIVE project would delete them, and no script here runs that.
+
+MOA_ROOT="${MOA_ROOT:-/opt/chief-moa}"
+APP_DIR="${APP_DIR:-$MOA_ROOT/app}"
+ENV_FILE="${ENV_FILE:-$MOA_ROOT/gateway.env}"
+BACKUP_DIR="${BACKUP_DIR:-$MOA_ROOT/backups}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-chief-moa}"
+
+# MOA_NO_TLS=1 runs the base stack without the Caddy TLS overlay (private
+# networks only). Default includes TLS.
+compose_files() {
+  if [ "${MOA_NO_TLS:-0}" = "1" ]; then
+    echo "-f docker-compose.yml"
+  else
+    echo "-f docker-compose.yml -f docker-compose.vps.yml"
+  fi
+}
+
+compose() {
+  # shellcheck disable=SC2046
+  docker compose -p "$COMPOSE_PROJECT" $(compose_files) --env-file "$ENV_FILE" "$@"
+}
+
+require_env_file() {
+  if [ ! -f "$ENV_FILE" ]; then
+    echo "Missing env file: $ENV_FILE" >&2
+    echo "Copy gateway/deploy/vps/gateway.env.example there and fill it in." >&2
+    exit 1
+  fi
+}
+
+env_value() {
+  # Read one KEY=value from the env file without exporting the whole file.
+  sed -n "s/^${1}=//p" "$ENV_FILE" | tail -n 1
+}
+
+wait_for_gateway_health() {
+  # $1: health URL, $2: attempts (default 30, 2s apart)
+  local url="$1" attempts="${2:-30}" i
+  for i in $(seq 1 "$attempts"); do
+    if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Gateway did not become healthy at $url" >&2
+  return 1
+}

@@ -47,7 +47,7 @@ What it proves:
 
 Gap for Agee:
 
-- Agee still needs the product shell: Cmd/Ctrl+K, BYO keys, settings, progress, safety, and an ownership story.
+- Agee still needs the product shell: Cmd/Ctrl+,, BYO keys, settings, progress, safety, and an ownership story.
 
 ### Stagehand
 
@@ -167,7 +167,7 @@ Do not start by forking another large project. The project needs a small, inspec
 
 The first version should be intentionally narrow:
 
-- Cmd/Ctrl+K opens an overlay on the current page.
+- Cmd/Ctrl+, opens an overlay on the current page.
 - A small on-page control can invoke the same overlay.
 - User types or speaks an instruction.
 - Development happens through a separate `dev.html` bridge plus a localhost demo page.

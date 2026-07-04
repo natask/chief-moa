@@ -48,12 +48,14 @@ public final class MainActivity extends Activity {
     private TextView micStatus;
     private TextView gatewayStatus;
     private TextView updateStatus;
+    private TextView requirementsSummary;
     private TextView sessionsStatus;
     private TextView runsStatus;
     private TextView receiptsStatus;
     private TextView settingsStatus;
     private Button overlayButton;
     private Button accessibilityButton;
+    private Button appInfoButton;
     private Button micButton;
     private Button startButton;
     private Button stopButton;
@@ -63,6 +65,7 @@ public final class MainActivity extends Activity {
     private CheckBox spokenRepliesInput;
     private JSONObject pendingUpdate;
     private boolean autoStartedOverlay;
+    private boolean requestedMicOnStartup;
     private int gatewayHealthGeneration;
     private int updateCheckGeneration;
 
@@ -76,6 +79,7 @@ public final class MainActivity extends Activity {
 
         applyIntentConfiguration(getIntent());
         setContentView(createContent());
+        maybeRequestMicPermission();
     }
 
     @Override
@@ -90,12 +94,19 @@ public final class MainActivity extends Activity {
             gatewayTokenInput.setText(MoaPrefs.gatewayToken(this));
         }
         updatePermissionState();
+        maybeRequestMicPermission();
+        if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
+            collapseOverlaySurfaces();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         updatePermissionState();
+        if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
+            collapseOverlaySurfaces();
+        }
         if (!autoStartedOverlay && Settings.canDrawOverlays(this)) {
             autoStartedOverlay = true;
             startOverlay();
@@ -133,7 +144,7 @@ public final class MainActivity extends Activity {
         root.addView(eyebrow);
 
         TextView title = new TextView(this);
-        title.setText("Moa lives above\nthe phone.");
+        title.setText("A.G. lives above\nthe phone.");
         title.setTextColor(MoaColors.PAPER);
         title.setTextSize(36);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
@@ -142,7 +153,7 @@ public final class MainActivity extends Activity {
         root.addView(title);
 
         TextView body = new TextView(this);
-        body.setText("Enable draw-over-apps, start the assistant circle, then tap the orb or mic button to record a voice turn.");
+        body.setText("Enable draw-over-apps, start the assistant circle, then tap for chat or double-click and hold to talk.");
         body.setTextColor(0xCCEEF8E8);
         body.setTextSize(15);
         body.setLineSpacing(dp(3), 1f);
@@ -167,6 +178,10 @@ public final class MainActivity extends Activity {
         micStatus = statusLine(card, "Microphone", "Checking...");
         gatewayStatus = statusLine(card, "Model gateway", "Checking...");
         updateStatus = statusLine(card, "App update", "Checking...");
+        requirementsSummary = label("", 0xCDEEF8E8, 14, false);
+        requirementsSummary.setLineSpacing(dp(2), 1f);
+        requirementsSummary.setPadding(0, dp(12), 0, 0);
+        card.addView(requirementsSummary);
         return card;
     }
 
@@ -178,7 +193,7 @@ public final class MainActivity extends Activity {
         sessionsStatus = statusLine(card, "Sessions", "Checking...");
         runsStatus = statusLine(card, "Runs", "Checking...");
         receiptsStatus = statusLine(card, "Receipts", "Checking...");
-        settingsStatus = statusLine(card, "Settings", MoaPrefs.spokenRepliesEnabled(this) ? "Spoken replies on" : "Text replies");
+        settingsStatus = statusLine(card, "Settings", settingsSummaryText());
 
         Button refresh = secondaryButton("Refresh control center");
         refresh.setOnClickListener(v -> refreshControlCenter());
@@ -191,7 +206,7 @@ public final class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "Voice agent setup");
 
-        TextView hint = label("Run the Moa gateway on your server, then point this app at it. Model keys stay on the server and chat turns are saved there.", 0xB8EEF8E8, 15, false);
+        TextView hint = label("Run the A.G. gateway on your server, then point this app at it. Model keys stay on the server and chat turns are saved there.", 0xB8EEF8E8, 15, false);
         hint.setLineSpacing(dp(2), 1f);
         hint.setPadding(0, 0, 0, dp(10));
         card.addView(hint);
@@ -229,19 +244,26 @@ public final class MainActivity extends Activity {
     private View actionCard() {
         LinearLayout card = card();
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        addCardTitle(card, "Launch Moa");
+        addCardTitle(card, "Launch A.G.");
 
         overlayButton = primaryButton("Enable overlay permission");
         overlayButton.setOnClickListener(v -> openOverlaySettings());
         card.addView(overlayButton);
+        addHint(card, "Draw over other apps is required for the floating orb. This button opens A.G.'s overlay permission screen; Android still requires you to allow it.");
 
         accessibilityButton = primaryButton("Enable screen access");
         accessibilityButton.setOnClickListener(v -> openAccessibilitySettings());
         card.addView(accessibilityButton);
+        addHint(card, "Screen access is required for current-screen context and controlled screen actions. If Android blocks the toggle with restricted settings, open App info for A.G., tap the three-dot menu, Allow restricted settings, return, then enable Screen access.");
+
+        appInfoButton = secondaryButton("Open A.G. app info");
+        appInfoButton.setOnClickListener(v -> openAppInfoSettings());
+        card.addView(appInfoButton);
 
         micButton = secondaryButton("Enable microphone");
         micButton.setOnClickListener(v -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO));
         card.addView(micButton);
+        addHint(card, "Microphone is requested directly when Android allows it. Voice still starts only after an explicit orb or assistant gesture.");
 
         startButton = primaryButton("Start assistant circle");
         startButton.setOnClickListener(v -> startOverlay());
@@ -259,13 +281,13 @@ public final class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "What this build does");
         addBullet(card, "Floating animated circle over other apps.");
-        addBullet(card, "Single tap or press mic to start one explicit voice turn.");
-        addBullet(card, "Single tap while listening submits the current transcript; double tap stops silently.");
+        addBullet(card, "Tap the orb for chat; click and hold to move; double-click and hold starts voice capture.");
+        addBullet(card, "Release commits the spoken turn without waiting for silence detection.");
         addBullet(card, "Gemini-style live transcript overlay while speaking.");
-        addBullet(card, "Mic button uses Android speech recognition only after you press it.");
+        addBullet(card, "Manual orb voice sends the released transcript through the gateway voice-turn route.");
         addBullet(card, "Screen access reads visible app text and passes it to gateway replies and home-machine agent runs.");
-        addBullet(card, "Assistant calls the self-hosted Moa gateway when configured, with local fallback replies if the server is unavailable.");
-        addBullet(card, "Voice commands that ask Moa to build, fix, change, or test something can run the Gemini harness on the home machine.");
+        addBullet(card, "Assistant calls the self-hosted A.G. gateway when configured, with local fallback replies if the server is unavailable.");
+        addBullet(card, "Voice commands that ask A.G. to build, fix, change, or test something can run the Gemini harness on the home machine.");
         addBullet(card, "Voice-originated replies speak back with Android TextToSpeech.");
         return card;
     }
@@ -276,18 +298,22 @@ public final class MainActivity extends Activity {
         boolean micGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
 
         if (overlayStatus != null) {
-            overlayStatus.setText(overlayGranted ? "Ready" : "Needs permission");
-            overlayStatus.setTextColor(overlayGranted ? MoaColors.MINT : MoaColors.GOLD);
+            overlayStatus.setText(overlayGranted ? "Ready" : "Needs draw-over-apps");
+            overlayStatus.setTextColor(overlayGranted ? MoaColors.OK : MoaColors.WARN);
         }
 
         if (accessibilityStatus != null) {
-            accessibilityStatus.setText(accessibilityGranted ? "Ready" : "Optional");
-            accessibilityStatus.setTextColor(accessibilityGranted ? MoaColors.MINT : MoaColors.GOLD);
+            accessibilityStatus.setText(accessibilityGranted ? "Ready" : "Needs Screen access");
+            accessibilityStatus.setTextColor(accessibilityGranted ? MoaColors.OK : MoaColors.WARN);
         }
 
         if (micStatus != null) {
-            micStatus.setText(micGranted ? "Ready" : "Needs permission");
-            micStatus.setTextColor(micGranted ? MoaColors.MINT : MoaColors.GOLD);
+            micStatus.setText(micGranted ? "Ready" : "Needs microphone");
+            micStatus.setTextColor(micGranted ? MoaColors.OK : MoaColors.WARN);
+        }
+
+        if (requirementsSummary != null) {
+            requirementsSummary.setText(requirementsSummary(overlayGranted, accessibilityGranted, micGranted));
         }
 
         if (gatewayStatus != null) {
@@ -320,6 +346,10 @@ public final class MainActivity extends Activity {
             accessibilityButton.setVisibility(accessibilityGranted ? View.GONE : View.VISIBLE);
         }
 
+        if (appInfoButton != null) {
+            appInfoButton.setVisibility(accessibilityGranted ? View.GONE : View.VISIBLE);
+        }
+
         if (micButton != null) {
             micButton.setVisibility(micGranted ? View.GONE : View.VISIBLE);
         }
@@ -346,6 +376,25 @@ public final class MainActivity extends Activity {
         startActivity(MoaAccessibilityService.settingsIntent());
     }
 
+    private void openAppInfoSettings() {
+        Intent intent = new Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getPackageName())
+        );
+        startActivity(intent);
+    }
+
+    private void maybeRequestMicPermission() {
+        if (requestedMicOnStartup) {
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        requestedMicOnStartup = true;
+        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO);
+    }
+
     private void startOverlay() {
         if (!Settings.canDrawOverlays(this)) {
             openOverlaySettings();
@@ -357,6 +406,12 @@ public final class MainActivity extends Activity {
         } else {
             startService(intent);
         }
+    }
+
+    private void collapseOverlaySurfaces() {
+        Intent intent = new Intent(this, OverlayService.class);
+        intent.setAction(OverlayService.ACTION_COLLAPSE_SURFACES);
+        startService(intent);
     }
 
     private void applyIntentConfiguration(Intent intent) {
@@ -387,15 +442,29 @@ public final class MainActivity extends Activity {
         updatePermissionState();
     }
 
+    private String settingsSummaryText() {
+        String speech = MoaPrefs.spokenRepliesEnabled(this) ? "Spoken replies on" : "Text replies";
+        return speech + " / " + MoaPrefs.languageStatus(this);
+    }
+
+    private String androidDeviceId() {
+        String raw = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+        String safe = raw == null ? "" : raw.replaceAll("[^a-zA-Z0-9_-]", "");
+        if (safe.isEmpty()) {
+            safe = "unknown";
+        }
+        return "android_" + safe;
+    }
+
     private void refreshControlCenter() {
         if (sessionsStatus == null || runsStatus == null || receiptsStatus == null) {
             return;
         }
 
         receiptsStatus.setText(MoaActionReceiptStore.receipts(this).length() + " local");
-        receiptsStatus.setTextColor(MoaColors.MINT);
+        receiptsStatus.setTextColor(MoaColors.OK);
         if (settingsStatus != null) {
-            settingsStatus.setText(MoaPrefs.spokenRepliesEnabled(this) ? "Spoken replies on" : "Text replies");
+            settingsStatus.setText(settingsSummaryText());
         }
 
         String gatewayUrl = MoaPrefs.gatewayUrl(this);
@@ -412,6 +481,7 @@ public final class MainActivity extends Activity {
         new Thread(() -> {
             String sessionsLabel = "Unavailable";
             String runsLabel = "Unavailable";
+            String fetchedProfileJson = "";
             int sessionsColor = MoaColors.GOLD;
             int runsColor = MoaColors.GOLD;
             try {
@@ -432,16 +502,28 @@ public final class MainActivity extends Activity {
                 int runCount = runs == null ? 0 : runs.length();
                 sessionsLabel = sessionCount == 1 ? "1 session" : sessionCount + " sessions";
                 runsLabel = activeRuns > 0 ? activeRuns + " active / " + runCount + " recent" : runCount + " recent";
-                sessionsColor = MoaColors.MINT;
-                runsColor = MoaColors.MINT;
+                sessionsColor = MoaColors.OK;
+                runsColor = MoaColors.OK;
+                try {
+                    JSONObject profilePayload = client.agentProfile("device", androidDeviceId());
+                    JSONObject profile = profilePayload.optJSONObject("profile");
+                    if (profile != null) {
+                        fetchedProfileJson = profile.toString();
+                    }
+                } catch (Exception ignored) {
+                }
             } catch (Exception ignored) {
             }
 
             final String nextSessions = sessionsLabel;
             final String nextRuns = runsLabel;
+            final String nextProfileJson = fetchedProfileJson;
             final int nextSessionsColor = sessionsColor;
             final int nextRunsColor = runsColor;
             mainHandler.post(() -> {
+                if (!nextProfileJson.isEmpty()) {
+                    MoaPrefs.setAgentProfileJson(this, nextProfileJson);
+                }
                 if (sessionsStatus != null) {
                     sessionsStatus.setText(nextSessions);
                     sessionsStatus.setTextColor(nextSessionsColor);
@@ -449,6 +531,9 @@ public final class MainActivity extends Activity {
                 if (runsStatus != null) {
                     runsStatus.setText(nextRuns);
                     runsStatus.setTextColor(nextRunsColor);
+                }
+                if (settingsStatus != null) {
+                    settingsStatus.setText(settingsSummaryText());
                 }
             });
         }, "moa-control-center").start();
@@ -465,13 +550,36 @@ public final class MainActivity extends Activity {
         }
         if (receiptsStatus != null) {
             receiptsStatus.setText(MoaActionReceiptStore.receipts(this).length() + " local");
-            receiptsStatus.setTextColor(MoaColors.MINT);
+            receiptsStatus.setTextColor(MoaColors.OK);
+        }
+        if (settingsStatus != null) {
+            settingsStatus.setText(settingsSummaryText());
         }
     }
 
     private void checkGatewayHealth(String gatewayUrl) {
         final int generation = ++gatewayHealthGeneration;
+        final MoaPrefs.GatewayUrlIssue urlIssue = MoaPrefs.classifyGatewayUrl(gatewayUrl);
+        if (urlIssue == MoaPrefs.GatewayUrlIssue.MISSING_SCHEME
+                || urlIssue == MoaPrefs.GatewayUrlIssue.ENDPOINT_PATH) {
+            if (gatewayStatus != null) {
+                gatewayStatus.setText(urlIssue == MoaPrefs.GatewayUrlIssue.MISSING_SCHEME
+                        ? "URL needs http(s)://"
+                        : "Save origin, not endpoint");
+                gatewayStatus.setTextColor(MoaColors.WARN);
+            }
+            return;
+        }
+        if (gatewayStatus != null && urlIssue == MoaPrefs.GatewayUrlIssue.STALE_MAIN_MACHINE) {
+            gatewayStatus.setText("Checking old ZeroTier URL...");
+            gatewayStatus.setTextColor(MoaColors.WARN);
+        } else if (gatewayStatus != null && urlIssue == MoaPrefs.GatewayUrlIssue.LOCAL_DEV) {
+            gatewayStatus.setText("Checking local dev URL...");
+            gatewayStatus.setTextColor(MoaColors.WARN);
+        }
         final String healthUrl = gatewayEndpoint(gatewayUrl, "/health");
+        final String authProbeUrl = gatewayEndpoint(gatewayUrl, "/v1/sessions?limit=1");
+        final String gatewayToken = MoaPrefs.gatewayToken(this);
 
         new Thread(() -> {
             boolean reachable = false;
@@ -493,16 +601,56 @@ public final class MainActivity extends Activity {
                 }
             }
 
+            boolean tokenProblem = false;
+            if (reachable) {
+                // /health never requires auth, so a green "Reachable" alone can
+                // hide a bad token. Probe one protected route to split "wrong
+                // URL" from "reachable but token rejected" before the first turn.
+                int authCode = gatewayStatusCode(authProbeUrl, gatewayToken);
+                if (authCode >= 200 && authCode < 300) {
+                    label = "Reachable / token OK";
+                } else if (authCode == 401 || authCode == 403) {
+                    tokenProblem = true;
+                    label = gatewayToken.isEmpty() ? "Token required" : "Token rejected";
+                }
+            }
+            if (urlIssue == MoaPrefs.GatewayUrlIssue.STALE_MAIN_MACHINE) {
+                label = label + " / old ZeroTier URL";
+            } else if (urlIssue == MoaPrefs.GatewayUrlIssue.LOCAL_DEV) {
+                label = label + " / local dev URL";
+            }
+
             final boolean isReachable = reachable;
+            final boolean isTokenProblem = tokenProblem;
             final String status = label;
             mainHandler.post(() -> {
                 if (generation != gatewayHealthGeneration || gatewayStatus == null) {
                     return;
                 }
                 gatewayStatus.setText(status);
-                gatewayStatus.setTextColor(isReachable ? MoaColors.MINT : MoaColors.GOLD);
+                gatewayStatus.setTextColor(isReachable && !isTokenProblem ? MoaColors.OK : MoaColors.WARN);
             });
         }, "moa-gateway-health").start();
+    }
+
+    private static int gatewayStatusCode(String url, String bearerToken) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(2500);
+            connection.setReadTimeout(2500);
+            if (bearerToken != null && !bearerToken.isEmpty()) {
+                connection.setRequestProperty("Authorization", "Bearer " + bearerToken);
+            }
+            return connection.getResponseCode();
+        } catch (Exception ignored) {
+            return -1;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
     }
 
     private void checkForAppUpdate(boolean userInitiated) {
@@ -528,13 +676,16 @@ public final class MainActivity extends Activity {
                 MoaGatewayClient client = new MoaGatewayClient(gatewayUrl, MoaPrefs.gatewayToken(this));
                 JSONObject manifest = client.latestAndroidUpdate();
                 long remoteVersionCode = manifest.optLong("version_code", 0);
-                if (remoteVersionCode > currentVersionCode()) {
+                String remoteGitSha = manifest.optString("git_sha", "").trim();
+                String currentGitSha = BuildConfig.GIT_SHA == null ? "" : BuildConfig.GIT_SHA.trim();
+                boolean sameSource = !remoteGitSha.isEmpty() && remoteGitSha.equals(currentGitSha);
+                if (!sameSource && remoteVersionCode > currentVersionCode()) {
                     update = manifest;
                     label = "v" + manifest.optString("version_name", String.valueOf(remoteVersionCode)) + " available";
-                    color = MoaColors.MINT;
+                    color = MoaColors.OK;
                 } else {
                     label = "Current";
-                    color = MoaColors.MINT;
+                    color = MoaColors.OK;
                 }
             } catch (Exception ignored) {
                 if (!userInitiated) {
@@ -632,7 +783,7 @@ public final class MainActivity extends Activity {
             startActivity(install);
             if (updateStatus != null) {
                 updateStatus.setText("Installer opened");
-                updateStatus.setTextColor(MoaColors.MINT);
+                updateStatus.setTextColor(MoaColors.OK);
             }
         } catch (ActivityNotFoundException error) {
             if (updateStatus != null) {
@@ -740,6 +891,34 @@ public final class MainActivity extends Activity {
         bullet.setLineSpacing(dp(2), 1f);
         bullet.setPadding(0, dp(5), 0, dp(5));
         parent.addView(bullet);
+    }
+
+    private void addHint(LinearLayout parent, String text) {
+        TextView hint = label(text, 0xAEEEF8E8, 13, false);
+        hint.setLineSpacing(dp(2), 1f);
+        hint.setPadding(0, dp(6), 0, dp(8));
+        parent.addView(hint);
+    }
+
+    private String requirementsSummary(boolean overlayGranted, boolean accessibilityGranted, boolean micGranted) {
+        StringBuilder missing = new StringBuilder();
+        appendMissing(missing, overlayGranted, "Draw over other apps");
+        appendMissing(missing, accessibilityGranted, "Screen access");
+        appendMissing(missing, micGranted, "Microphone");
+        if (missing.length() == 0) {
+            return "Required access is ready. Start the assistant circle when you want A.G. above other apps.";
+        }
+        return "Missing: " + missing + ". A.G. can request microphone access, but Android requires you to approve overlay and Screen access in system settings.";
+    }
+
+    private void appendMissing(StringBuilder builder, boolean granted, String label) {
+        if (granted) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append(", ");
+        }
+        builder.append(label);
     }
 
     private EditText textInput(String hint, String value, int inputType) {

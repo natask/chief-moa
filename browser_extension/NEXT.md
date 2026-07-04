@@ -1,8 +1,8 @@
-# Agee: Next Direction
+# A.G.: Next Direction
 
 ## What This Is
 
-Agee should start as an open source browser-native interface shell.
+A.G. should start as an open source browser-native interface shell.
 
 The immediate product is a browser extension with a small on-page surface that can be invoked by click or keyboard shortcut, then used through typing or speech. It should feel like a personal interface to agents, not a sidebar, not a separate browser agent, and not another silo.
 
@@ -41,7 +41,7 @@ Start with a Chrome extension.
 It should have two primary interaction modes:
 
 - Voice mode: speak naturally and have the agent act in the browser.
-- Command mode: use a `Cmd+K` style interface to ask for actions, explanations, or workflows.
+- Command mode: use a `Cmd+,` style interface to ask for actions, explanations, or workflows.
 
 The first loop is interface-first: summon the surface, type or speak, see progress, and keep control. Model-backed actions are experimental capability, not the whole product identity.
 
@@ -99,7 +99,7 @@ Launch a visible artifact that proves forward motion:
 
 1. A public repo with the project direction.
 2. A minimal extension shell.
-3. A working `Cmd+K` command surface.
+3. A working `Cmd+,` command surface.
 4. A separate development bridge page that reloads the extension from code changes.
 5. One experimental model-backed action loop.
 6. A short public post explaining the belief and asking people to try it.
@@ -130,12 +130,12 @@ Message people directly. Post publicly. Make the artifact legible enough that se
 
 ## One-Sentence Version
 
-Agee is an open source, user-owned browser interface that lets people invoke agents through voice or command mode on any website, starting as a Chrome extension and growing into a personal layer they can modify, self-host, and extend.
+A.G. is an open source, user-owned browser interface that lets people invoke agents through voice or command mode on any website, starting as a Chrome extension and growing into a personal layer they can modify, self-host, and extend.
 
 ## Next Actions
 
 1. Create the extension scaffold.
-2. Add the `Cmd+K` interface.
+2. Add the `Cmd+,` interface.
 3. Add screenshot capture.
 4. Add the dev bridge so code changes reload into the extension without touching normal browsing.
 5. Add model call with bring-your-own-key settings.

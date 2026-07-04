@@ -1,0 +1,105 @@
+{
+  "direct-answer": {
+    "id": "direct-answer",
+    "description": "Use for simple answers or session continuation when no larger workflow package is needed.",
+    "workflow_directory": "gateway/agent-workflows/direct-answer",
+    "instruction_file": "gateway/agent-workflows/direct-answer/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "ARCHITECTURE.md",
+      "AGENT_WORKFLOW.md"
+    ],
+    "expected_output": "A concise answer or session update grounded in the broker event and bounded session context.",
+    "verification": [
+      "cd gateway && npm run smoke:session-history",
+      "cd gateway && npm run smoke:message-broker"
+    ]
+  },
+  "coding": {
+    "id": "coding",
+    "description": "Use for implementation, bug fixing, deployment, repo workflow, and verification requests.",
+    "workflow_directory": "gateway/agent-workflows/coding",
+    "instruction_file": "gateway/agent-workflows/coding/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "ARCHITECTURE.md",
+      "AGENT_WORKFLOW.md",
+      "reference/openspec/changes/define-android-core-product-map",
+      "reference/openspec/changes/message-broker-session-router",
+      "reference/openspec/changes/define-aggie-compatible-surface"
+    ],
+    "expected_output": "A narrow implementation unit with focused verification, a Conventional Commit, and deploy attempt or recorded blocker.",
+    "verification": [
+      "cd gateway && npm run check",
+      "bash scripts/deploy.sh auto"
+    ]
+  },
+  "qa": {
+    "id": "qa",
+    "description": "Use for testing, validation, smoke checks, regressions, and runtime QA requests.",
+    "workflow_directory": "gateway/agent-workflows/qa",
+    "instruction_file": "gateway/agent-workflows/qa/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "ARCHITECTURE.md",
+      "AGENT_WORKFLOW.md",
+      "reference/openspec/changes/define-android-core-product-map/manual-qa-checklist.md",
+      "reference/openspec/changes/define-android-core-product-map/voice-model-test-plan.md"
+    ],
+    "expected_output": "A pass/fail verification report with commands, observed behavior, and blockers.",
+    "verification": [
+      "cd gateway && npm run check",
+      "cd browser_extension && npm run verify && npm run smoke",
+      "cd android_app && ANDROID_HOME=\"$HOME/Library/Android/sdk\" ./gradlew assembleDebug"
+    ]
+  },
+  "landscape-research": {
+    "id": "landscape-research",
+    "description": "Use for broad research, comparison, online search, prior art, market, and optimal-path questions.",
+    "workflow_directory": "gateway/agent-workflows/landscape-research",
+    "instruction_file": "gateway/agent-workflows/landscape-research/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "ARCHITECTURE.md",
+      "AGENT_WORKFLOW.md",
+      "reference/openspec/changes/message-broker-session-router",
+      "reference/openspec/changes/define-aggie-compatible-surface"
+    ],
+    "expected_output": "A sourced research report, comparison, recommendation, and implementation implications.",
+    "verification": [
+      "record sources and search queries in reference/scratch/landscape-research",
+      "link findings back to an OpenSpec change or tracked ticket"
+    ]
+  },
+  "design": {
+    "id": "design",
+    "description": "Use for frontend, visual design, interaction model, and UX QA requests.",
+    "workflow_directory": "gateway/agent-workflows/design",
+    "instruction_file": "gateway/agent-workflows/design/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "ARCHITECTURE.md",
+      "AGENT_WORKFLOW.md"
+    ],
+    "expected_output": "A working UI change verified with screenshots or text/layout checks.",
+    "verification": [
+      "run the target surface verify command",
+      "capture before/after screenshots when a browser or app surface changes"
+    ]
+  },
+  "writing": {
+    "id": "writing",
+    "description": "Use for writing, editing, copy, posts, emails, docs, and voice/style work.",
+    "workflow_directory": "gateway/agent-workflows/writing",
+    "instruction_file": "gateway/agent-workflows/writing/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "AGENT_WORKFLOW.md"
+    ],
+    "expected_output": "A concise draft or critique that preserves the user's intent and stores any durable product decision in repo files.",
+    "verification": [
+      "check edited docs render/read correctly",
+      "do not hand-edit generated CHANGELOG.md"
+    ]
+  }
+}

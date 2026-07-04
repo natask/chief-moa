@@ -24,19 +24,22 @@ async function main() {
   const otaDir = path.join(tempDir, "android-ota");
   const fakeGemini = writeFakeHarness(tempDir, "fake-gemini.sh", "gemini");
   const fakeCodex = writeFakeHarness(tempDir, "fake-codex.sh", "codex");
+  const fakeHermes = writeFakeHarness(tempDir, "fake-hermes.sh", "hermes");
   const port = await freePort();
   let baseUrl = `http://127.0.0.1:${port}`;
   let server;
   const completedRunIds = [];
 
   try {
-    server = await startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex });
+    server = await startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes });
 
     await step("auth required", () => assertAuthRequired(baseUrl));
     await step("health", () => assertHealth(baseUrl));
     await step("agent profile token guard", () => assertAgentProfileTokenGuard(baseUrl));
+    await step("agent profile options catalog", () => assertAgentProfileOptionsCatalog(baseUrl));
     await step("agent profile runtime cycle", () => assertAgentProfileRuntimeCycle(baseUrl, dataDir));
     await step("agent profile per-request overrides", () => assertAgentProfilePerRequestOverrides(baseUrl, dataDir));
+    await step("agent profile device scope", () => assertAgentProfileDeviceScope(baseUrl, dataDir));
     await step("streaming voice persistence", () => assertStreamingVoiceSessionPersistence(baseUrl, dataDir));
     await step("voice chat and idempotency", () => assertVoiceChatAndIdempotency(baseUrl, dataDir));
     await step("control voice turn", () => assertControlTurn(baseUrl, dataDir));
@@ -44,6 +47,7 @@ async function main() {
     await step("duplicate agent turn", async () => completedRunIds.push(await assertDuplicateAgentTurnDoesNotStartAnotherRun(baseUrl)));
     await step("multi-agent voice turn", async () => completedRunIds.push(...await assertMultiAgentVoiceTurn(baseUrl)));
     await step("direct async agent run", async () => completedRunIds.push(await assertDirectAsyncAgentRun(baseUrl, dataDir)));
+    await step("hermes agent run", async () => completedRunIds.push(await assertHermesAgentRun(baseUrl, dataDir)));
     await step("agent run follow-up", async () => completedRunIds.push(await assertAgentRunFollowUp(baseUrl, dataDir, completedRunIds[completedRunIds.length - 1])));
     await step("canceled agent run", async () => completedRunIds.push(await assertCanceledAgentRun(baseUrl, dataDir)));
     await step("failed agent run", async () => completedRunIds.push(await assertFailedAgentRun(baseUrl, dataDir)));
@@ -58,7 +62,7 @@ async function main() {
 
     const restartPort = await freePort();
     baseUrl = `http://127.0.0.1:${restartPort}`;
-    server = await startGateway({ port: restartPort, dataDir, otaDir, fakeGemini, fakeCodex });
+    server = await startGateway({ port: restartPort, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes });
     await step("restart persistence", () => assertRestartPersistence(baseUrl, completedRunIds));
 
     console.log(JSON.stringify({
@@ -68,8 +72,10 @@ async function main() {
         "auth required",
         "health",
         "agent profile token guard",
+        "agent profile options catalog (valid voices/languages + strict validation)",
         "agent profile runtime cycle (PUT -> turn -> reset, no restart)",
         "agent profile per-request overrides (not persisted)",
+        "agent profile device scope (global + current-device overrides)",
         "streaming voice persistence",
         "voice chat",
         "voice turn idempotency",
@@ -108,11 +114,11 @@ async function step(name, fn) {
   }
 }
 
-async function startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex }) {
+async function startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes }) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ["server.js"], {
     cwd: GATEWAY_DIR,
-    env: gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex }),
+    env: gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const logs = collectLogs(server);
@@ -120,7 +126,7 @@ async function startGateway({ port, dataDir, otaDir, fakeGemini, fakeCodex }) {
   return server;
 }
 
-function gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex }) {
+function gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex, fakeHermes }) {
   return {
     PATH: process.env.PATH || "",
     HOME: process.env.HOME || "",
@@ -133,6 +139,7 @@ function gatewayEnv({ port, dataDir, otaDir, fakeGemini, fakeCodex }) {
     DEFAULT_AGENT_HARNESS: "gemini",
     GEMINI_BIN: fakeGemini,
     CODEX_BIN: fakeCodex,
+    HERMES_BIN: fakeHermes,
     MODEL_PROVIDER: "openai-compatible",
     MODEL_BASE_URL: "https://api.openai.com/v1",
     MODEL_ID: "smoke-model",
@@ -173,6 +180,9 @@ async function assertHealth(baseUrl) {
   assert.equal(health.ok, true);
   assert.equal(health.agent_loop.default_harness, "gemini");
   assert.equal(health.agent_loop.token_required, true);
+  const hermes = (health.agent_loop.harnesses || []).find((harness) => harness.name === "hermes");
+  assert.ok(hermes, "hermes harness must be registered");
+  assert.equal(hermes.available, true, "fake hermes harness must be available");
   assert.equal(health.android_ota.configured, false);
   const voiceProvider = health.voice_stream?.provider;
   assert.ok(voiceProvider, "health must expose voice_stream.provider");
@@ -198,6 +208,9 @@ async function assertAgentProfileTokenGuard(baseUrl) {
   const get = await requestJson(`${baseUrl}/v1/agent/profile`, { auth: false });
   assert.equal(get.status, 401, "GET profile must require a token");
 
+  const options = await requestJson(`${baseUrl}/v1/agent/profile/options`, { auth: false });
+  assert.equal(options.status, 401, "GET profile options must require a token");
+
   const put = await putJson(`${baseUrl}/v1/agent/profile`, { system_prompt: "unauthorized" }, { auth: false });
   assert.equal(put.status, 401, "PUT profile must require a token");
 
@@ -214,6 +227,90 @@ async function assertAgentProfileTokenGuard(baseUrl) {
   const authed = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(authed.is_overridden, false, "profile must start at env default");
   assert.equal(authed.profile.model, "smoke-model", "default model must come from env");
+}
+
+async function assertAgentProfileOptionsCatalog(baseUrl) {
+  const catalog = await getJson(`${baseUrl}/v1/agent/profile/options`);
+  assert.equal(catalog.version, "profile-options/v1");
+  assert.ok(catalog.endpoints?.profile === "/v1/agent/profile", "catalog must name the profile endpoint");
+  assert.ok(catalog.endpoints?.options === "/v1/agent/profile/options", "catalog must name the options endpoint");
+  assert.ok(Array.isArray(catalog.models) && catalog.models.some((model) => model.id === "smoke-model" && model.current === true), "catalog must list the current gateway model");
+  assert.ok(catalog.fields?.model?.values?.includes("smoke-model"), "catalog model field must include the current gateway model");
+  assert.ok(Array.isArray(catalog.voices) && catalog.voices.length >= 8, "catalog must list supported voices");
+  assert.deepEqual(catalog.languages.map((language) => language.code), ["en-US", "am-ET"], "catalog must expose only English and Amharic for now");
+
+  const aoede = catalog.voices.find((voice) => voice.id === "Aoede");
+  const charon = catalog.voices.find((voice) => voice.id === "Charon");
+  assert.ok(aoede?.tone_tags?.includes("feminine"), "Aoede must carry feminine tone metadata");
+  assert.ok(charon?.tone_tags?.includes("masculine"), "Charon must carry masculine tone metadata");
+  assert.equal(catalog.fields?.voice?.aliases?.feminine, "Aoede");
+  assert.equal(catalog.fields?.voice?.aliases?.masculine, "Charon");
+  assert.ok(catalog.languages.some((language) => language.code === "en-US" && language.label === "English"));
+  assert.ok(catalog.languages.some((language) => language.code === "am-ET" && language.label === "Amharic"));
+
+  const valid = await putJson(`${baseUrl}/v1/agent/profile`, {
+    source: "smoke-regression",
+    profile: {
+      voice: "feminine",
+      language: "English,Amharic",
+      input_languages: "English,Amharic",
+      language_auto_switch: false,
+    },
+  });
+  assert.equal(valid.status, 200);
+  assert.equal(valid.json.profile.voice, "Aoede", "voice alias must canonicalize to a supported voice id");
+  assert.equal(valid.json.profile.language, "en-US,am-ET");
+  assert.equal(valid.json.profile.language_primary, "en-US", "reply primary must derive from first reply code");
+  assert.equal(valid.json.profile.input_languages, "en-US,am-ET");
+  assert.equal(valid.json.profile.input_language_primary, "en-US", "input primary must derive from first heard code");
+  const versionAfterValid = valid.json.current_version;
+
+  const invalid = await putJson(`${baseUrl}/v1/agent/profile`, {
+    source: "smoke-regression",
+    profile: {
+      voice: "not-a-real-voice",
+      language: "Spanish,French",
+      input_languages: "en-US,not-a-language",
+    },
+  });
+  assert.equal(invalid.status, 200);
+  assert.equal(invalid.json.current_version, versionAfterValid, "invalid-only patch must not create a new profile version");
+  assert.equal(invalid.json.profile.voice, "Aoede", "invalid voice must not persist");
+  assert.equal(invalid.json.profile.language, "en-US,am-ET", "invalid reply language must not persist");
+  assert.equal(invalid.json.profile.input_languages, "en-US,am-ET", "mixed invalid heard-language list must not persist");
+
+  const languageOptionsTurn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "profile_options_session",
+    branch_id: "default",
+    turn_id: "language_options_turn",
+    source: "smoke-regression",
+    transcript: "what are the different languages I can make you speak",
+  });
+  assert.equal(languageOptionsTurn.status, 200);
+  assert.equal(languageOptionsTurn.json.classification, "profile_control");
+  assert.match(languageOptionsTurn.json.display, /English \(en-US\)/);
+  assert.match(languageOptionsTurn.json.display, /Amharic \(am-ET\)/);
+  assert.equal(languageOptionsTurn.json.actions?.[0]?.subject, "language_options");
+
+  const voiceOptionsTurn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "profile_options_session",
+    branch_id: "default",
+    turn_id: "voice_options_turn",
+    source: "smoke-regression",
+    transcript: "what voices can you use",
+  });
+  assert.equal(voiceOptionsTurn.status, 200);
+  assert.equal(voiceOptionsTurn.json.classification, "profile_control");
+  assert.match(voiceOptionsTurn.json.display, /Aoede/);
+  assert.match(voiceOptionsTurn.json.display, /masculine/);
+  assert.equal(voiceOptionsTurn.json.actions?.[0]?.subject, "voice_options");
+
+  const reset = await postJson(`${baseUrl}/v1/agent/profile/reset`, {
+    source: "smoke-regression",
+    scope: "global",
+  });
+  assert.equal(reset.status, 200);
+  assert.equal(reset.json.is_overridden, false);
 }
 
 async function assertAgentProfileRuntimeCycle(baseUrl, dataDir) {
@@ -233,7 +330,10 @@ async function assertAgentProfileRuntimeCycle(baseUrl, dataDir) {
   assert.equal(put.status, 200);
   assert.equal(put.json.is_overridden, true);
   assert.equal(put.json.profile.model, "runtime-edited-model");
-  assert.equal(put.json.profile.system_prompt, "You are a terse runtime-edited assistant. Use the user's preferred name when known.");
+  assert.ok(
+    put.json.profile.system_prompt.startsWith("You are a terse runtime-edited assistant. Use the user's preferred name when known."),
+    "runtime-edited prompt must preserve the requested prompt text",
+  );
   assert.equal(put.json.profile.temperature, 0.1);
   assert.equal(put.json.profile.voice_max_chars, 64);
   // The env default is immutable even after a patch.
@@ -327,6 +427,93 @@ async function assertAgentProfilePerRequestOverrides(baseUrl, dataDir) {
   assert.equal(reset.json.is_overridden, false);
 }
 
+async function assertAgentProfileDeviceScope(baseUrl, dataDir) {
+  const deviceA = "browser_device_a";
+  const deviceB = "android_device_b";
+
+  const globalPut = await putJson(`${baseUrl}/v1/agent/profile`, {
+    source: "smoke-regression",
+    scope: "global",
+    profile: {
+      voice: "Charon",
+      language: "en-US",
+      language_primary: "en-US",
+      input_languages: "en-US",
+      input_language_primary: "en-US",
+    },
+  });
+  assert.equal(globalPut.status, 200);
+  assert.equal(globalPut.json.scope, "global");
+  assert.equal(globalPut.json.profile.voice, "Charon");
+
+  const devicePut = await putJson(`${baseUrl}/v1/agent/profile`, {
+    source: "smoke-regression",
+    scope: "device",
+    device_id: deviceA,
+    profile: {
+      voice: "Kore",
+      input_languages: "am-ET",
+      input_language_primary: "am-ET",
+    },
+  });
+  assert.equal(devicePut.status, 200);
+  assert.equal(devicePut.json.scope, "device");
+  assert.equal(devicePut.json.device_id, deviceA);
+  assert.equal(devicePut.json.profile.voice, "Kore");
+  assert.equal(devicePut.json.profile.language, "en-US", "device override must inherit global reply language");
+  assert.equal(devicePut.json.profile.input_languages, "am-ET", "device override must replace heard language");
+
+  const globalProfile = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(globalProfile.profile.voice, "Charon", "global profile must not pick up device override");
+  assert.equal(globalProfile.profile.input_languages, "en-US", "global heard language must remain unchanged");
+
+  const deviceProfile = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceA}`);
+  assert.equal(deviceProfile.scope, "device");
+  assert.equal(deviceProfile.profile.voice, "Kore");
+  assert.equal(deviceProfile.profile.input_languages, "am-ET");
+
+  const otherDeviceProfile = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceB}`);
+  assert.equal(otherDeviceProfile.profile.voice, "Charon", "other devices should inherit global voice");
+  assert.equal(otherDeviceProfile.profile.input_languages, "en-US", "other devices should inherit global input language");
+
+  const spokenDeviceUpdate = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "profile_scope_session",
+    branch_id: "default",
+    turn_id: "device_profile_voice_turn",
+    source: "smoke-regression",
+    device_id: deviceA,
+    transcript: "respond in Amharic on this device",
+  });
+  assert.equal(spokenDeviceUpdate.status, 200);
+  assert.equal(spokenDeviceUpdate.json.classification, "profile_control");
+  assert.equal(spokenDeviceUpdate.json.profile.scope, "device");
+  assert.equal(spokenDeviceUpdate.json.profile.device_id, deviceA);
+  assert.equal(spokenDeviceUpdate.json.profile.language.allowed, "am-ET");
+
+  const afterSpokenDevice = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceA}`);
+  assert.equal(afterSpokenDevice.profile.language, "am-ET", "spoken profile control must update only this device");
+  const afterSpokenGlobal = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(afterSpokenGlobal.profile.language, "en-US", "spoken device update must not mutate global reply language");
+
+  const versionsPath = path.join(dataDir, "agent-profile-device-overrides.json");
+  assert.ok(fs.existsSync(versionsPath), "device override file must persist to disk");
+
+  const resetDevice = await postJson(`${baseUrl}/v1/agent/profile/reset`, {
+    source: "smoke-regression",
+    scope: "device",
+    device_id: deviceA,
+  });
+  assert.equal(resetDevice.status, 200);
+  assert.equal(resetDevice.json.profile.voice, "Charon", "device reset should reveal inherited global voice");
+
+  const resetGlobal = await postJson(`${baseUrl}/v1/agent/profile/reset`, {
+    source: "smoke-regression",
+    scope: "global",
+  });
+  assert.equal(resetGlobal.status, 200);
+  assert.equal(resetGlobal.json.is_overridden, false);
+}
+
 async function assertStreamingVoiceSessionPersistence(baseUrl, dataDir) {
   const target = baseUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:") + "/v1/voice/sessions";
   const sessionId = "stream_smoke_session";
@@ -358,6 +545,7 @@ async function assertStreamingVoiceSessionPersistence(baseUrl, dataDir) {
   assert.equal(metadata.assistant.provider, "loopback");
   assert.equal(metadata.conversation_id, sessionId);
   assert.equal(metadata.branch_id, branchId);
+  assert.equal(metadata.playback_policy?.assistant_overlap, true, "streaming metadata missing assistant overlap playback policy");
 
   const canonicalPath = path.join(dataDir, "voice-turns", sessionId, `${turnId}.json`);
   assert.ok(fs.existsSync(canonicalPath), "streaming canonical voice-turn record missing");
@@ -370,6 +558,11 @@ async function assertStreamingVoiceSessionPersistence(baseUrl, dataDir) {
   assert.equal(canonical.classification, "chat");
   assert.equal(canonical.response.turn_id, turnId);
   assert.match(String(canonical.response.display || ""), /Streaming voice transport is connected/);
+  assert.equal(
+    canonical.references?.voice_session?.playback_policy?.assistant_overlap,
+    true,
+    "canonical voice-turn reference missing assistant overlap playback policy",
+  );
 
   const history = await getJson(`${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/turns`);
   assert.ok(Array.isArray(history.turns), "streaming session history must be an array");
@@ -396,6 +589,9 @@ function smokeStreamingVoiceSession(target, sessionId, branchId, turnId) {
         branch_id: branchId,
         turn_id: turnId,
         source: "smoke-regression",
+        playback_policy: {
+          assistant_overlap: true,
+        },
         format: {
           encoding: "pcm16",
           sample_rate: 16000,
@@ -473,6 +669,18 @@ async function assertVoiceChatAndIdempotency(baseUrl, dataDir) {
   assert.equal(persisted.id, body.turn_id);
   assert.equal(persisted.classification, "chat");
   assert.equal(persisted.response.turn_id, body.turn_id);
+
+  const time = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "smoke_session",
+    branch_id: "default",
+    turn_id: "turn_time",
+    transcript: "what time is it",
+    source: "smoke-regression",
+  });
+  assert.equal(time.status, 200);
+  assert.equal(time.json.classification, "chat");
+  assert.match(time.json.display || "", /^It's .+\.$/);
+  assert.doesNotMatch(time.json.display || "", /without a model provider|don't have access/i);
 }
 
 async function assertControlTurn(baseUrl, dataDir) {
@@ -607,6 +815,28 @@ async function assertDirectAsyncAgentRun(baseUrl, dataDir) {
   return response.json.run.id;
 }
 
+async function assertHermesAgentRun(baseUrl, dataDir) {
+  const response = await postJson(`${baseUrl}/v1/agent/runs`, {
+    source: "smoke-regression",
+    conversation_id: "smoke_hermes_session",
+    harness: "hermes",
+    wait: false,
+    prompt: "use Hermes to build a tiny smoke change",
+  });
+
+  assert.equal(response.status, 202);
+  const runId = response.json.run.id;
+  const detail = await waitForRunTerminal(baseUrl, runId);
+  assert.equal(detail.run.status, "completed");
+  assert.match(detail.run.output || "", /fake harness completed: hermes/);
+  assertPersistedRun(dataDir, runId, {
+    status: "completed",
+    harness: "hermes",
+    conversation_id: "smoke_hermes_session",
+  });
+  return runId;
+}
+
 async function assertCanceledAgentRun(baseUrl, dataDir) {
   const response = await postJson(`${baseUrl}/v1/agent/runs`, {
     source: "smoke-regression",
@@ -657,7 +887,7 @@ async function assertAgentRunFollowUp(baseUrl, dataDir, parentRunId) {
   assert.equal(childDetail.run.parent_run_id, parentRunId);
   assertPersistedRun(dataDir, childRunId, {
     status: "completed",
-    harness: "gemini",
+    harness: parentDetail.run.harness,
     conversation_id: "smoke_session",
     parent_run_id: parentRunId,
   });

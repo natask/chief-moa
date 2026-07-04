@@ -1,0 +1,30 @@
+digraph ExtensionAgentVoiceClarity {
+    graph [goal="Browser extension voice UI is quiet and page-agent activity is owned by one tab at a time."]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the OpenSpec and intent artifacts. Produce a concise plan and name the files you will change."
+    ]
+
+    implement [
+        label="Implement",
+        prompt="Suppress voice filler UI, add active-page agent revocation, update docs/spec, and keep changes scoped."
+    ]
+
+    verify [
+        label="Verify",
+        shape=parallelogram,
+        script="cd browser_extension && npm run verify && npm run smoke 2>&1",
+        goal_gate=true
+    ]
+
+    approve [shape=hexagon, label="Approve Result"]
+
+    start -> plan -> implement -> verify -> approve
+    approve -> exit      [label="[A] Accept"]
+    approve -> implement [label="[R] Revise"]
+}
