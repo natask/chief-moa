@@ -56,6 +56,27 @@ function wantsMultipleAgents(text) {
     || lower.includes("codex and gemini");
 }
 
+const OPERATIONAL_WORK_CONTEXT_PATTERNS = [
+  /\bhome machine\b/,
+  /\bin (?:the|this|my) repo\b/,
+  /\bin (?:the|this|my) app\b/,
+  /\boperational systems?\b/,
+  /\bthings operating\b/,
+  /\bprojects? i have ongoing\b/,
+  /\ball (?:the )?(?:projects|products)\b/,
+  /\bwhat am i working on\b/,
+  /\bforward progress\b/,
+  /\bchrome extension\b/,
+  /\bandroid app\b/,
+  /\bmobile gateway\b/,
+  /\bmoa gateway\b/,
+];
+
+function hasOperationalWorkContext(text) {
+  const lower = normalizeSpeech(text);
+  return OPERATIONAL_WORK_CONTEXT_PATTERNS.some((pattern) => pattern.test(lower));
+}
+
 // Heuristic: does this sound like an action to run, not a question to answer?
 function shouldRunAgentFromVoice(text) {
   const lower = normalizeSpeech(text);
@@ -83,31 +104,24 @@ function shouldRunAgentFromVoice(text) {
   return lower.includes("push code")
     || lower.includes("make it work")
     || lower.includes("run the tests")
-    || lower.includes("home machine")
-    || lower.includes("in the repo")
-    || lower.includes("in the app")
-    || lower.includes("operational systems")
-    || lower.includes("things operating")
-    || lower.includes("projects i have ongoing")
-    || lower.includes("all the projects")
-    || lower.includes("forward progress")
-    || lower.includes("chrome extension")
-    || lower.includes("android app")
-    || lower.includes("mobile gateway")
-    || lower.includes("moa gateway");
+    || hasOperationalWorkContext(lower);
 }
 
 function isOperationalStatusQuestion(text) {
   const lower = normalizeSpeech(text);
   if (!lower) return false;
   if (lower === "status" || lower === "status update") return true;
-  return lower.includes("what is going on")
+  if (
+    lower.includes("what is going on")
     || lower.includes("what s going on")
     || lower.includes("whats going on")
     || lower.includes("what is happening")
     || lower.includes("what s happening")
     || lower.includes("whats happening")
-    || lower.includes("what are you doing")
+  ) {
+    return hasOperationalWorkContext(lower);
+  }
+  return lower.includes("what are you doing")
     || lower.includes("what is running")
     || lower.includes("what s running")
     || lower.includes("whats running")
@@ -774,8 +788,9 @@ module.exports = {
   normalizeSpeech,
   isStopLike,
   wantsMultipleAgents,
-  shouldRunAgentFromVoice,
+  hasOperationalWorkContext,
   isOperationalStatusQuestion,
+  shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
   parseProfileRevertIntent,

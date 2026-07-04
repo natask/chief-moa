@@ -11,8 +11,9 @@ const {
   normalizeSpeech,
   isStopLike,
   wantsMultipleAgents,
-  shouldRunAgentFromVoice,
+  hasOperationalWorkContext,
   isOperationalStatusQuestion,
+  shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
   parseProfileRevertIntent,
@@ -48,7 +49,12 @@ assert.ok(shouldRunAgentFromVoice("push code to the home machine"));
 assert.ok(shouldRunAgentFromVoice("what are all the projects I have ongoing"));
 assert.ok(shouldRunAgentFromVoice("look at the Chrome extension Android app and mobile gateway"));
 assert.ok(!shouldRunAgentFromVoice("what is going on with the operational systems"));
+assert.ok(hasOperationalWorkContext("what is going on with the operational systems"));
+assert.ok(isOperationalStatusQuestion("what is going on with the operational systems"));
 assert.ok(!shouldRunAgentFromVoice("what is the weather"));
+assert.ok(!shouldRunAgentFromVoice("what is going on in this world"));
+assert.ok(!hasOperationalWorkContext("what is going on in this world"));
+assert.ok(!isOperationalStatusQuestion("what is going on in this world"));
 assert.ok(!shouldRunAgentFromVoice(""));
 assert.ok(isOperationalStatusQuestion("what is going on with the operational systems"));
 assert.ok(isOperationalStatusQuestion("what active runs are there"));
@@ -65,6 +71,8 @@ assert.strictEqual(classifyVoiceTurn({}, "run gemini and claude"), "multi_agent"
 assert.strictEqual(classifyVoiceTurn({}, "/agent ship it"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "agent_run");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "what is going on in this world"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "what's going on in this world"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "profile_control");

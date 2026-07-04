@@ -38,8 +38,9 @@ const {
   normalizeSpeech,
   isStopLike,
   wantsMultipleAgents,
-  shouldRunAgentFromVoice,
+  hasOperationalWorkContext,
   isOperationalStatusQuestion,
+  shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
   classifyVoiceTurn,
@@ -5622,17 +5623,7 @@ function agentRunStartedDisplay(runs, transcript) {
 function shouldAttachOperationalStatus(transcript) {
   const lower = normalizeSpeech(transcript);
   if (!lower) return false;
-  return lower.includes("what is going on")
-    || lower.includes("what s going on")
-    || lower.includes("operational systems")
-    || lower.includes("things operating")
-    || lower.includes("all the products")
-    || lower.includes("all the projects")
-    || lower.includes("forward progress")
-    || lower.includes("chrome extension")
-    || lower.includes("android app")
-    || lower.includes("mobile gateway")
-    || lower.includes("moa gateway");
+  return isOperationalStatusQuestion(lower) || hasOperationalWorkContext(lower);
 }
 
 function operationalStatusSummary() {
