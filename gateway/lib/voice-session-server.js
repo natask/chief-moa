@@ -950,6 +950,7 @@ class VoiceSessionConnection {
     }
 
     const turn = this.turn;
+    const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     if (turn.status !== "recording") {
       turn.status = status;
       await closeAudioStream(turn);
@@ -957,7 +958,7 @@ class VoiceSessionConnection {
       if (turn.liveSession) {
         turn.liveSession.cancel();
       }
-      await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), status === "interrupted" ? "interruption" : "turn_closed", {
+      await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
         status,
       });
       await this.recordIncompleteTurn(turn, status);
@@ -975,7 +976,7 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
-    await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), status === "interrupted" ? "interruption" : "turn_closed", {
+    await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
       status,
     });
     await this.recordIncompleteTurn(turn, status);
