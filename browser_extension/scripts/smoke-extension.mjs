@@ -373,73 +373,303 @@ async function main() {
       throw new Error(`overlay exposed separate top voice strip during voice: ${JSON.stringify(overlayMetrics)}`);
     }
 
-    const shortcutSurface = await evaluate(workerCdp, `
+    const shortcutVoice = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
         const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-        const readOpen = async () => {
-          const [result] = await chrome.scripting.executeScript({
-            target: { tabId },
-            func: () => ({
-              open: document.querySelector("#agee-root")?.classList.contains("agee-open") || false,
-              focusedInput: document.activeElement === document.querySelector("#agee-input"),
-            }),
-          });
-          return result?.result || {};
-        };
-        const dispatchCmdComma = async () => {
+        await chrome.tabs.sendMessage(tabId, { cmd: "open" });
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const input = document.querySelector("#agee-input");
+            if (input) {
+              input.value = "shortcut draft";
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+            window.__ageeShortcutSmoke = { calls: [], seq: 0 };
+            window.__ageeShortcutSmokeOrig = chrome.runtime.sendMessage.bind(chrome.runtime);
+            chrome.runtime.sendMessage = (message, ...rest) => {
+              const clean = JSON.parse(JSON.stringify(message || {}));
+              window.__ageeShortcutSmoke.calls.push(clean);
+              if (clean.cmd === "voiceSessionStart") {
+                window.__ageeShortcutSmoke.seq += 1;
+                return Promise.resolve({
+                  ok: true,
+                  voiceSessionId: "shortcut-smoke-" + window.__ageeShortcutSmoke.seq,
+                });
+              }
+              if (clean.cmd === "voiceSessionAttach" || clean.cmd === "voiceSessionControl" || clean.cmd === "voiceSessionClose") {
+                return Promise.resolve({ ok: true });
+              }
+              return window.__ageeShortcutSmokeOrig(message, ...rest);
+            };
+          },
+        });
+        const dispatch = async (type, key, code, holdMs = 0) => {
           await chrome.scripting.executeScript({
             target: { tabId },
-            func: () => {
-              window.dispatchEvent(new KeyboardEvent("keydown", {
-                key: ",",
-                code: "Comma",
+            args: [type, key, code],
+            func: (eventType, eventKey, eventCode) => {
+              window.dispatchEvent(new KeyboardEvent(eventType, {
+                key: eventKey,
+                code: eventCode,
                 metaKey: true,
                 bubbles: true,
                 cancelable: true,
               }));
             },
           });
-          await sleep(100);
-          return readOpen();
+          if (holdMs) await sleep(holdMs);
         };
+	        const read = async () => {
+	          const [result] = await chrome.scripting.executeScript({
+	            target: { tabId },
+	            func: () => {
+              const root = document.querySelector("#agee-root");
+              const input = document.querySelector("#agee-input");
+              const calls = window.__ageeShortcutSmoke?.calls || [];
+              return {
+                open: root?.classList.contains("agee-open") || false,
+                focusedInput: document.activeElement === input,
+                inputValue: input?.value || "",
+                listening: document.querySelector("#agee-voice")?.classList.contains("listening") || false,
+                calls,
+              };
+            },
+	          });
+	          return result?.result || {};
+	        };
+	        const resetVoiceCalls = async () => {
+	          await chrome.scripting.executeScript({
+	            target: { tabId },
+	            func: () => {
+	              if (window.__ageeShortcutSmoke) {
+	                window.__ageeShortcutSmoke.calls = [];
+	                window.__ageeShortcutSmoke.seq = 0;
+	              }
+	            },
+	          });
+	        };
+	        const finishLastAttachedVoiceTurn = async () => {
+	          const snapshot = await read();
+	          const attaches = (snapshot.calls || []).filter((call) => call.cmd === "voiceSessionAttach");
+	          const voiceSessionId = attaches[attaches.length - 1]?.voiceSessionId;
+	          if (!voiceSessionId) return;
+	          await chrome.tabs.sendMessage(tabId, {
+	            cmd: "voiceSessionEvent",
+	            voiceSessionId,
+	            event: { type: "turn_done" },
+	          }).catch(() => {});
+	          await sleep(120);
+	        };
 
-        await chrome.tabs.sendMessage(tabId, { cmd: "toggle" });
-        await sleep(100);
-        const closedByToggle = await readOpen();
-        const openedByHotkey = await dispatchCmdComma();
-        const closedByHotkey = await dispatchCmdComma();
-        await sleep(450);
-        await chrome.tabs.sendMessage(tabId, { cmd: "toggle", source: "command" });
-        await sleep(100);
-        const openedByCommand = await readOpen();
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          func: () => {
-            const input = document.querySelector("#agee-input");
-            input?.dispatchEvent(new KeyboardEvent("keydown", {
-              key: "Escape",
-              code: "Escape",
-              bubbles: true,
-              cancelable: true,
-            }));
-          },
-        });
-        await sleep(100);
-        const closedByEscape = await readOpen();
-        return { closedByToggle, openedByHotkey, closedByHotkey, openedByCommand, closedByEscape };
+	        await dispatch("keydown", ",", "Comma");
+	        await sleep(80);
+	        const comma = await read();
+
+        await dispatch("keydown", ".", "Period");
+        await dispatch("keyup", ".", "Period", 50);
+        await sleep(120);
+        const tapStarted = await read();
+
+        await dispatch("keydown", ".", "Period");
+        await dispatch("keyup", ".", "Period", 30);
+        await sleep(120);
+        const tapCommitted = await read();
+        const attach = tapCommitted.calls.find((call) => call.cmd === "voiceSessionAttach");
+        if (attach?.voiceSessionId) {
+	          await chrome.tabs.sendMessage(tabId, {
+	            cmd: "voiceSessionEvent",
+	            voiceSessionId: attach.voiceSessionId,
+	            event: { type: "turn_done" },
+	          }).catch(() => {});
+	          await sleep(120);
+	        }
+
+	        await dispatch("keydown", ".", "Period");
+	        await sleep(340);
+	        const holdBeforeRelease = await read();
+	        await dispatch("keyup", ".", "Period");
+	        await sleep(120);
+	        const holdReleased = await read();
+	        await finishLastAttachedVoiceTurn();
+
+	        await resetVoiceCalls();
+	        await chrome.tabs.sendMessage(tabId, { cmd: "toggleVoice", source: "command" });
+	        await sleep(340);
+	        const commandHoldBeforeRelease = await read();
+	        await dispatch("keyup", ".", "Period");
+	        await sleep(120);
+	        const commandHoldReleased = await read();
+
+	        await chrome.scripting.executeScript({
+	          target: { tabId },
+	          func: () => {
+            if (window.__ageeShortcutSmokeOrig) {
+              chrome.runtime.sendMessage = window.__ageeShortcutSmokeOrig;
+            }
+	          },
+	        });
+
+	        return { comma, tapStarted, tapCommitted, holdBeforeRelease, holdReleased, commandHoldBeforeRelease, commandHoldReleased };
+	      })()
+	    `);
+	    const tapStarts = shortcutVoice?.tapStarted?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
+	    const tapControls = shortcutVoice?.tapCommitted?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+	    const holdStarts = shortcutVoice?.holdBeforeRelease?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
+	    const holdControlsBefore = shortcutVoice?.holdBeforeRelease?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+	    const holdControlsAfter = shortcutVoice?.holdReleased?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+	    const commandStarts = shortcutVoice?.commandHoldBeforeRelease?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
+	    const commandControlsBefore = shortcutVoice?.commandHoldBeforeRelease?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+	    const commandControlsAfter = shortcutVoice?.commandHoldReleased?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+	    if (
+	      !shortcutVoice?.comma?.open ||
+	      !shortcutVoice?.comma?.focusedInput ||
+	      shortcutVoice?.comma?.inputValue !== "shortcut draft" ||
+      (shortcutVoice?.comma?.calls || []).some((call) => call.cmd === "voiceSessionStart") ||
+      tapStarts.length !== 1 ||
+      tapStarts[0]?.autoCommit !== false ||
+      !shortcutVoice?.tapStarted?.listening ||
+      tapControls.length !== 1 ||
+	      holdStarts.length !== 2 ||
+	      holdStarts[1]?.autoCommit !== false ||
+	      holdControlsBefore.length !== 1 ||
+	      holdControlsAfter.length !== 2 ||
+	      commandStarts.length !== 1 ||
+	      commandStarts[0]?.autoCommit !== false ||
+	      commandControlsBefore.length !== 0 ||
+	      commandControlsAfter.length !== 1
+	    ) {
+	      throw new Error(`shortcut voice/text smoke failed: ${JSON.stringify(shortcutVoice)}`);
+	    }
+
+    const earlyVoiceQueue = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const originalFetch = globalThis.fetch;
+        const originalWebSocket = globalThis.WebSocket;
+        const state = {
+          sent: [],
+          ready: false,
+          ws: null,
+        };
+        globalThis.__ageeEarlyVoiceQueueSmoke = state;
+        globalThis.fetch = async (input, init) => {
+          const url = typeof input === "string" ? input : input?.url || String(input);
+          try {
+            const parsed = new URL(url);
+            if (parsed.pathname === "/v1/voice/session-ticket") {
+              return new Response(JSON.stringify({
+                ws_url: "ws://agee-smoke.local/voice",
+                session_id: "queue-session",
+                conversation_id: "queue-session",
+                device_id: "queue-device",
+              }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              });
+            }
+          } catch {}
+          return originalFetch(input, init);
+        };
+        class SmokeWebSocket {
+          static CONNECTING = 0;
+          static OPEN = 1;
+          static CLOSING = 2;
+          static CLOSED = 3;
+          constructor(url) {
+            this.url = url;
+            this.readyState = SmokeWebSocket.CONNECTING;
+            state.ws = this;
+            setTimeout(() => {
+              this.readyState = SmokeWebSocket.OPEN;
+              this.onopen?.({});
+            }, 0);
+          }
+          send(data) {
+            if (data instanceof ArrayBuffer) {
+              state.sent.push({ kind: "audio", ready: state.ready, bytes: Array.from(new Uint8Array(data)) });
+              return;
+            }
+            let parsed = null;
+            try { parsed = JSON.parse(String(data || "{}")); } catch {}
+            state.sent.push({ kind: "json", ready: state.ready, type: parsed?.type || "", message: parsed || null });
+          }
+          close() {
+            this.readyState = SmokeWebSocket.CLOSED;
+            this.onclose?.({});
+          }
+        }
+        globalThis.WebSocket = SmokeWebSocket;
+        try {
+          const [result] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: async () => {
+              const bytesToBase64 = (values) => {
+                const bytes = new Uint8Array(values);
+                let binary = "";
+                for (const byte of bytes) binary += String.fromCharCode(byte);
+                return btoa(binary);
+              };
+              const start = await chrome.runtime.sendMessage({
+                cmd: "voiceSessionStart",
+                cueId: "queue-smoke",
+                turnId: "queue-turn",
+                capture: "content-script",
+                autoCommit: false,
+              });
+              const audio = await chrome.runtime.sendMessage({
+                cmd: "voiceSessionAudio",
+                voiceSessionId: start.voiceSessionId,
+                audio: bytesToBase64([1, 0, 2, 0]),
+              });
+              const commit = await chrome.runtime.sendMessage({
+                cmd: "voiceSessionControl",
+                voiceSessionId: start.voiceSessionId,
+                message: { type: "commit_turn", turn_id: "queue-turn" },
+              });
+              return { start, audio, commit };
+            },
+          });
+          const beforeReady = state.sent.slice();
+          state.ready = true;
+          state.ws?.onmessage?.({ data: JSON.stringify({ type: "session_ready" }) });
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          const afterReady = state.sent.slice();
+          const start = result?.result?.start || {};
+          const audio = result?.result?.audio || {};
+          const commit = result?.result?.commit || {};
+          const audioRecords = afterReady.filter((entry) => entry.kind === "audio");
+          const commitRecords = afterReady.filter((entry) => entry.kind === "json" && entry.type === "commit_turn");
+          return {
+            ok:
+              start.ok === true &&
+              audio.ok === true &&
+              audio.queued === true &&
+              commit.ok === true &&
+              commit.queued === true &&
+              beforeReady.every((entry) => entry.kind !== "audio" && entry.type !== "commit_turn") &&
+              audioRecords.length === 1 &&
+              audioRecords[0].ready === true &&
+              audioRecords[0].bytes.join(",") === "1,0,2,0" &&
+              commitRecords.length === 1 &&
+              commitRecords[0].ready === true &&
+              afterReady.findIndex((entry) => entry.kind === "audio") < afterReady.findIndex((entry) => entry.type === "commit_turn"),
+            start,
+            audio,
+            commit,
+            beforeReady,
+            afterReady,
+          };
+        } finally {
+          globalThis.fetch = originalFetch;
+          globalThis.WebSocket = originalWebSocket;
+          delete globalThis.__ageeEarlyVoiceQueueSmoke;
+        }
       })()
     `);
-    if (
-      shortcutSurface?.closedByToggle?.open ||
-      !shortcutSurface?.openedByHotkey?.open ||
-      !shortcutSurface?.openedByHotkey?.focusedInput ||
-      shortcutSurface?.closedByHotkey?.open ||
-      !shortcutSurface?.openedByCommand?.open ||
-      !shortcutSurface?.openedByCommand?.focusedInput ||
-      shortcutSurface?.closedByEscape?.open
-    ) {
-      throw new Error(`text shortcut toggle/Escape smoke failed: ${JSON.stringify(shortcutSurface)}`);
+    if (!earlyVoiceQueue?.ok) {
+      throw new Error(`early voice audio queue smoke failed: ${JSON.stringify(earlyVoiceQueue)}`);
     }
 
     const resultPlacement = await evaluate(workerCdp, `
@@ -448,6 +678,7 @@ async function main() {
         await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
+            document.querySelector("#agee-log")?.replaceChildren();
             const input = document.querySelector("#agee-input");
             if (input) {
               input.value = "draft must stay";
@@ -455,7 +686,7 @@ async function main() {
             }
           },
         });
-        await chrome.tabs.sendMessage(tabId, { cmd: "done", cueId: "smoke-result-placement", summary: "Smoke reply stays above the input." });
+        await chrome.tabs.sendMessage(tabId, { cmd: "done", cueId: null, summary: "Smoke reply stays above the input." });
         await new Promise((resolve) => setTimeout(resolve, 80));
         const [result] = await chrome.scripting.executeScript({
           target: { tabId },

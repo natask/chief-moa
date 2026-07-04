@@ -27,6 +27,7 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const tasks = new Map();
 const voiceSessions = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
+const MAX_QUEUED_VOICE_AUDIO_BYTES = 16000 * 2 * 20;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
 const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
 const BROWSER_AGENT_PROGRESS_TEXT = {
@@ -50,8 +51,6 @@ const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
 const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
 const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
-const VOICE_PREROLL_MAX_MS = 30000;
-const MAX_PENDING_VOICE_AUDIO_BYTES = 16000 * 2 * (VOICE_PREROLL_MAX_MS / 1000);
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
 
@@ -1422,13 +1421,15 @@ async function stopOffscreenVoiceCapture(id) {
 function handleOffscreenVoiceError(id, error) {
   const session = voiceSessions.get(id);
   if (!session) return;
+  const message = extensionMicApprovalMessage(error);
+  session.setupErrorMessage = message;
   chrome.runtime.openOptionsPage?.().catch(() => {});
   deliverVoiceSessionEvent(session, {
     event: {
       type: "error",
       code: "microphone_capture_failed",
       recoverable: false,
-      message: extensionMicApprovalMessage(error),
+      message,
     },
   });
   closeVoiceSession(id, "microphone capture failed");
@@ -1494,15 +1495,16 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
       ws,
       turnId,
       opened: false,
+      gatewayReady: false,
       attached: false,
       pendingEvents: [],
       capture: capture || "content-script",
       captureStarted: false,
       captureStartRequested: false,
-      sessionReady: false,
-      pendingAudio: [],
-      pendingAudioBytes: 0,
-      pendingControlMessage: null,
+      pendingCommitMessage: null,
+      queuedAudio: [],
+      queuedAudioBytes: 0,
+      queuedAudioDroppedBytes: 0,
       autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
       audioStartedAt: 0,
       lastSpeechAt: 0,
@@ -1525,7 +1527,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
 
     const failBeforeOpen = (message, { voiceSocket = true } = {}) => {
       voiceSessions.delete(id);
-      clearPendingVoiceSessionAudio(session);
+      clearQueuedVoiceSessionMedia(session);
       stopOffscreenVoiceCapture(id).catch(() => {});
       try {
         ws.close();
@@ -1599,7 +1601,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
           }
           session.closed = true;
           clearVoiceAutoCommit(session);
-          clearPendingVoiceSessionAudio(session);
+          clearQueuedVoiceSessionMedia(session);
           stopOffscreenVoiceCapture(id).catch(() => {});
           deliverVoiceSessionEvent(session, {
             event: { type: "revoked", reason: session.closedReason || "revoked" },
@@ -1613,7 +1615,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
       }
       session.closed = true;
       clearVoiceAutoCommit(session);
-      clearPendingVoiceSessionAudio(session);
+      clearQueuedVoiceSessionMedia(session);
       stopOffscreenVoiceCapture(id).catch(() => {});
       deliverVoiceSessionEvent(session, {
         event: session.revoked
@@ -1639,7 +1641,7 @@ function markVoiceSessionSendFailed(session, reason = "send failed") {
   session.closedReason = reason;
   voiceSessions.delete(session.id);
   clearVoiceAutoCommit(session);
-  clearPendingVoiceSessionAudio(session);
+  clearQueuedVoiceSessionMedia(session);
   stopOffscreenVoiceCapture(session.id).catch(() => {});
   try {
     session.ws?.close(1000, reason);
@@ -1668,42 +1670,60 @@ function sendVoiceSessionBinary(session, buffer) {
   }
 }
 
-function enqueuePendingVoiceSessionAudio(session, buffer) {
-  if (!session || !buffer?.byteLength) return;
-  session.pendingAudio ||= [];
-  session.pendingAudio.push(buffer);
-  session.pendingAudioBytes = (session.pendingAudioBytes || 0) + buffer.byteLength;
-  while (session.pendingAudioBytes > MAX_PENDING_VOICE_AUDIO_BYTES && session.pendingAudio.length) {
-    const dropped = session.pendingAudio.shift();
-    session.pendingAudioBytes = Math.max(0, session.pendingAudioBytes - (dropped?.byteLength || 0));
+function queueVoiceSessionAudio(session, buffer) {
+  if (!session || session.closed || !buffer?.byteLength) return false;
+  session.queuedAudio ||= [];
+  session.queuedAudioBytes = (session.queuedAudioBytes || 0) + buffer.byteLength;
+  session.queuedAudio.push(buffer);
+  while (session.queuedAudioBytes > MAX_QUEUED_VOICE_AUDIO_BYTES && session.queuedAudio.length > 1) {
+    const dropped = session.queuedAudio.shift();
+    session.queuedAudioBytes -= dropped?.byteLength || 0;
+    session.queuedAudioDroppedBytes = (session.queuedAudioDroppedBytes || 0) + (dropped?.byteLength || 0);
   }
-}
-
-function flushPendingVoiceSessionAudio(session) {
-  if (!voiceSessionSocketOpen(session)) return false;
-  const pending = session.pendingAudio || [];
-  while (pending.length) {
-    const buffer = pending.shift();
-    session.pendingAudioBytes = Math.max(0, (session.pendingAudioBytes || 0) - (buffer?.byteLength || 0));
-    if (buffer?.byteLength && !sendVoiceSessionBinary(session, buffer)) return false;
-  }
-  session.pendingAudio = [];
-  session.pendingAudioBytes = 0;
   return true;
 }
 
-function clearPendingVoiceSessionAudio(session) {
-  if (!session) return;
-  session.pendingAudio = [];
-  session.pendingAudioBytes = 0;
-  session.pendingControlMessage = null;
+function flushQueuedVoiceSessionAudio(session) {
+  if (!session?.queuedAudio?.length || !voiceSessionSocketOpen(session) || !session.gatewayReady) return false;
+  const queued = session.queuedAudio;
+  session.queuedAudio = [];
+  session.queuedAudioBytes = 0;
+  for (const buffer of queued) {
+    if (!sendVoiceSessionBinary(session, buffer)) {
+      queueVoiceSessionAudio(session, buffer);
+      return false;
+    }
+  }
+  return true;
 }
 
-function flushPendingVoiceSessionControl(session) {
-  if (!session?.pendingControlMessage) return true;
-  const message = session.pendingControlMessage;
-  session.pendingControlMessage = null;
-  return sendVoiceSessionJson(session, message);
+function sendOrQueueVoiceSessionCommit(session, message) {
+  if (!session || session.closed) return false;
+  if (!voiceSessionSocketOpen(session) || !session.gatewayReady) {
+    session.pendingCommitMessage = message || {};
+    return true;
+  }
+  if (session.queuedAudio?.length && !flushQueuedVoiceSessionAudio(session)) return false;
+  const pending = session.pendingCommitMessage || message || {};
+  session.pendingCommitMessage = null;
+  return sendVoiceSessionJson(session, pending);
+}
+
+function flushQueuedVoiceSessionMedia(session) {
+  if (!session || !session.gatewayReady) return;
+  flushQueuedVoiceSessionAudio(session);
+  if (session.pendingCommitMessage && !session.queuedAudio?.length) {
+    const pending = session.pendingCommitMessage;
+    session.pendingCommitMessage = null;
+    sendVoiceSessionJson(session, pending);
+  }
+}
+
+function clearQueuedVoiceSessionMedia(session) {
+  if (!session) return;
+  session.pendingCommitMessage = null;
+  session.queuedAudio = [];
+  session.queuedAudioBytes = 0;
 }
 
 function deliverVoiceSessionEvent(session, payload) {
@@ -1746,7 +1766,8 @@ async function forwardVoiceSessionEvent(session, event) {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
   if (parsed?.type === "session_ready") {
-    session.sessionReady = true;
+    session.gatewayReady = true;
+    flushQueuedVoiceSessionMedia(session);
     if (session.capture === "extension-offscreen" && !session.captureStarted && !session.captureStartRequested) {
       session.captureStartRequested = true;
       startOffscreenVoiceCapture(session.id)
@@ -1755,8 +1776,6 @@ async function forwardVoiceSessionEvent(session, event) {
         })
         .catch((error) => handleOffscreenVoiceError(session.id, error));
     }
-    if (!flushPendingVoiceSessionAudio(session)) return;
-    if (!flushPendingVoiceSessionControl(session)) return;
   }
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
@@ -1770,15 +1789,12 @@ function sendVoiceSessionAudio(id, audio) {
   }
   const buffer = base64ToBuffer(audio);
   noteVoiceSessionAudio(session, buffer);
-  if (!session.sessionReady || !voiceSessionSocketOpen(session)) {
-    enqueuePendingVoiceSessionAudio(session, buffer);
-    return { ok: true, buffered: true };
+  if (!voiceSessionSocketOpen(session) || !session.gatewayReady) {
+    return queueVoiceSessionAudio(session, buffer)
+      ? { ok: true, queued: true, queuedBytes: session.queuedAudioBytes || 0 }
+      : { ok: false, error: "voice session is not open" };
   }
-  if (session.pendingAudioBytes > 0) {
-    enqueuePendingVoiceSessionAudio(session, buffer);
-    if (!flushPendingVoiceSessionAudio(session)) return { ok: false, error: "voice session is not open" };
-    return { ok: true };
-  }
+  if (session.queuedAudio?.length) flushQueuedVoiceSessionAudio(session);
   if (!sendVoiceSessionBinary(session, buffer)) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
@@ -1794,16 +1810,14 @@ async function sendVoiceSessionControl(id, message) {
     await stopOffscreenVoiceCapture(id);
   }
   if (message?.type === "commit_turn") {
-    session.pendingControlMessage = message || {};
-    if (!session.sessionReady) return { ok: true, queued: true };
-    if (!flushPendingVoiceSessionAudio(session)) return { ok: false, error: "voice session is not open" };
-    if (!flushPendingVoiceSessionControl(session)) return { ok: false, error: "voice session is not open" };
-    return { ok: true };
+    if (!sendOrQueueVoiceSessionCommit(session, message || {})) return { ok: false, error: "voice session is not open" };
+    return { ok: true, queued: session.pendingCommitMessage === message };
   }
   if (message?.type === "cancel_turn") {
-    clearPendingVoiceSessionAudio(session);
+    clearQueuedVoiceSessionMedia(session);
   }
   if (!voiceSessionSocketOpen(session)) return { ok: false, error: "voice session is not open" };
+  if (session.gatewayReady && session.queuedAudio?.length) flushQueuedVoiceSessionAudio(session);
   if (!sendVoiceSessionJson(session, message || {})) return { ok: false, error: "voice session is not open" };
   return { ok: true };
 }
@@ -1815,10 +1829,10 @@ function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   session.revoked = revoked === true;
   voiceSessions.delete(id);
   clearVoiceAutoCommit(session);
-  clearPendingVoiceSessionAudio(session);
+  clearQueuedVoiceSessionMedia(session);
   stopOffscreenVoiceCapture(id).catch(() => {});
   try {
-    session.ws.close(1000, reason);
+    session.ws?.close(1000, reason);
   } catch {}
 }
 
@@ -3091,7 +3105,7 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   try {
     await ensureContent(tab.id);
     await chrome.tabs.sendMessage(tab.id, {
-      cmd: command === "toggle-agee-voice" ? "toggleVoice" : "toggle",
+      cmd: command === "toggle-agee-voice" ? "toggleVoice" : "open",
       source: "command",
     });
   } catch {

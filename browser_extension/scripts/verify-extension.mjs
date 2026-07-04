@@ -205,21 +205,21 @@ if (/session\.ws\.send/.test(unsafeVoiceTransportBody)) {
 }
 
 if (
-  !/VOICE_PREROLL_MAX_MS/.test(backgroundSource) ||
-  !/MAX_PENDING_VOICE_AUDIO_BYTES/.test(backgroundSource) ||
-  !/function enqueuePendingVoiceSessionAudio/.test(backgroundSource) ||
-  !/function flushPendingVoiceSessionAudio/.test(backgroundSource) ||
-  !/pendingControlMessage/.test(backgroundSource)
+  !/MAX_QUEUED_VOICE_AUDIO_BYTES/.test(backgroundSource) ||
+  !/function queueVoiceSessionAudio/.test(backgroundSource) ||
+  !/function flushQueuedVoiceSessionAudio/.test(backgroundSource) ||
+  !/function sendOrQueueVoiceSessionCommit/.test(backgroundSource) ||
+  !/pendingCommitMessage/.test(backgroundSource)
 ) {
-  throw new Error("background.js must buffer mic pre-roll audio and queued commit control before voice session_ready");
+  throw new Error("background.js must queue mic audio and commit control before voice session_ready");
 }
 
 if (
   !/voiceSessions\.set\(id, session\);[\s\S]{0,320}startOffscreenVoiceCapture\(id\)/.test(backgroundSource) ||
-  !/parsed\?\.type === "session_ready"[\s\S]{0,520}flushPendingVoiceSessionAudio\(session\)/.test(backgroundSource) ||
-  !/message\?\.type === "commit_turn"[\s\S]{0,220}pendingControlMessage/.test(backgroundSource)
+  !/parsed\?\.type === "session_ready"[\s\S]{0,520}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource) ||
+  !/message\?\.type === "commit_turn"[\s\S]{0,220}sendOrQueueVoiceSessionCommit/.test(backgroundSource)
 ) {
-  throw new Error("extension-owned voice capture must start immediately, flush pre-roll on session_ready, and send commit after the flush");
+  throw new Error("extension-owned voice capture must start immediately, flush queued audio on session_ready, and send commit after the flush");
 }
 
 if (
@@ -263,7 +263,7 @@ if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
 
 if (
   !/command !== "toggle-agee" && command !== "toggle-agee-voice"/.test(backgroundSource) ||
-  !/cmd:\s*command === "toggle-agee-voice" \? "toggleVoice" : "toggle"/.test(backgroundSource) ||
+  !/cmd:\s*command === "toggle-agee-voice" \? "toggleVoice" : "open"/.test(backgroundSource) ||
   !/source:\s*"command"/.test(backgroundSource) ||
   !/case "toggleVoice":/.test(contentSource) ||
   !/function ensureContentOnOpenTabs/.test(backgroundSource) ||
@@ -280,24 +280,28 @@ if (!/e\.code === "Comma"/.test(contentSource) || /toLowerCase\(\) === "k"/.test
   throw new Error("text command hotkey must be Cmd/Ctrl+Comma, not Cmd/Ctrl+K");
 }
 
-if (
-  !/function toggleTextSurface\(\)/.test(contentSource) ||
-  !/case "toggle":[\s\S]{0,180}toggleTextSurface\(\)/.test(contentSource) ||
-  !/lastLocalTextHotkeyAt\s*=\s*Date\.now\(\);[\s\S]{0,80}toggleTextSurface\(\)/.test(contentSource) ||
-  !/e\.key === "Escape"[\s\S]{0,160}closeTextSurface\(\)/.test(contentSource)
-) {
-  throw new Error("Cmd/Ctrl+Comma must toggle the text surface, and Escape in the Aggie input must close it");
+const textHotkeyBody = sourceBetween(
+  contentSource,
+  /if \(isTextHotkey\(e\)\)/,
+  /\/\/ ---- Perception/,
+  "text hotkey handler"
+);
+if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\)/.test(textHotkeyBody) || /toggleVoice|toggleTextSurface\(\)/.test(textHotkeyBody)) {
+  throw new Error("Cmd/Ctrl+Comma must match launcher single-click: open text only, preserving drafts and never starting voice");
 }
 
 if (
   !/function beginVoiceHotkey\(/.test(contentSource) ||
+  !/function beginVoiceCommandHotkey\(/.test(contentSource) ||
   !/function finishVoiceHotkey\(/.test(contentSource) ||
   !/window\.addEventListener\(\s*"keyup"[\s\S]{0,260}finishVoiceHotkey\(\)/.test(contentSource) ||
-  !/startKeyboardPushToTalk\(\)/.test(contentSource) ||
-  !/finishKeyboardPushToTalk\(\)/.test(contentSource) ||
+  !/if \(e\.repeat \|\| voiceHotkeyState\) return;/.test(contentSource) ||
+  !/case "toggleVoice":[\s\S]{0,220}beginVoiceCommandHotkey\(\)/.test(contentSource) ||
+  !/function beginManualVoiceGesture\(/.test(contentSource) ||
+  !/function finishManualPushToTalk\(/.test(contentSource) ||
   !/autoCommit:\s*false/.test(contentSource)
 ) {
-  throw new Error("Cmd/Ctrl+Period must support quick voice toggle and held push-to-talk parity with the browser mark");
+  throw new Error("Cmd/Ctrl+Period must support repeat-safe tap toggle and held push-to-talk through the manual voice gesture path");
 }
 
 if (/case "done":[\s\S]{0,180}setInputText\(msg\.summary/.test(contentSource)) {
@@ -306,6 +310,18 @@ if (/case "done":[\s\S]{0,180}setInputText\(msg\.summary/.test(contentSource)) {
 
 if (!/VOICE_AUTO_COMMIT_SILENCE_MS/.test(backgroundSource) || !/autoCommitVoiceSession/.test(backgroundSource)) {
   throw new Error("browser voice must auto-commit microphone turns after speech silence");
+}
+
+if (
+  !/MAX_QUEUED_VOICE_AUDIO_BYTES/.test(backgroundSource) ||
+  !/queuedAudio:\s*\[\]/.test(backgroundSource) ||
+  !/function queueVoiceSessionAudio/.test(backgroundSource) ||
+  !/function flushQueuedVoiceSessionAudio/.test(backgroundSource) ||
+  !/function sendOrQueueVoiceSessionCommit/.test(backgroundSource) ||
+  !/!voiceSessionSocketOpen\(session\) \|\| !session\.gatewayReady/.test(backgroundSource) ||
+  !/parsed\?\.type === "session_ready"[\s\S]{0,180}session\.gatewayReady = true;[\s\S]{0,180}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource)
+) {
+  throw new Error("browser voice must buffer early offscreen PCM and flush it after session_ready before commit");
 }
 
 if (
@@ -535,8 +551,12 @@ const launcherDoubleClickHoldBody = sourceBetween(
   /function cancelLauncherDoubleClickHold\(/,
   "launcher double-click-hold handler"
 );
-if (!/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) || !/startLauncherPushToTalk\(\)/.test(launcherDoubleClickHoldBody)) {
-  throw new Error("double-click-and-hold must start launcher push-to-talk after the hold threshold");
+if (
+  !/beginManualVoiceGesture\(\)/.test(launcherDoubleClickHoldBody) ||
+  !/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) ||
+  !/holdToTalkActive = true/.test(launcherDoubleClickHoldBody)
+) {
+  throw new Error("double-click-and-hold must start recording on the second press and use the hold threshold only to decide release-to-commit");
 }
 
 if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {

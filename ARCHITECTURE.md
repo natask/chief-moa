@@ -72,14 +72,15 @@ detection. Continuous voice is an optional secondary loop for launch paths that
 do not have a release event, where silence commits each turn and the mic re-arms
 after the reply. The browser extension
 mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
-Cmd+. (Ctrl+.) wakes voice. Browser voice auto-commits after speech silence and
-then re-arms while conversation mode is active. The browser mark uses the same
-pointer contract as Android: single click opens the chat menu, first-press hold
-and drag repositions the mark without starting voice, and double-click-and-hold
-starts a manual voice session with browser silence auto-commit disabled. Release
-commits the manual turn without re-arming the mic. Browser voice can opt a
-session into background assistant speech, where starting a new spoken turn opens
-a new gateway voice turn without stopping already queued assistant audio.
+Cmd+. (Ctrl+.) mirrors the browser mark's double-click voice path. A quick
+Cmd+. tap, or a quick mark double-click, toggles a manual voice turn on; the
+next quick Cmd+. tap or double-click commits it. Holding Cmd+. or holding the
+second mark click uses push-to-talk: capture starts immediately, browser
+silence auto-commit is disabled, and release commits the turn without re-arming
+the mic. The browser mark's single click opens the chat menu, and first-press
+hold with movement only repositions the mark. Browser voice can opt a session
+into background assistant speech, where starting a new spoken turn opens a new
+gateway voice turn without stopping already queued assistant audio.
 
 The overlay surface stays small: it shows the current intent/result and compact
 run state, not a full scrollback manager. Browser text replies render in the
@@ -237,8 +238,11 @@ for browser WebSocket authentication. The extension authenticates to the gateway
 over normal HTTP with its stored gateway token, receives a one-use
 `/v1/voice/sessions` ticket, captures microphone audio from an extension-owned
 offscreen document, streams PCM16 audio to the gateway, and plays assistant PCM
-audio returned by the selected gateway provider. The page overlay is only the
-control surface; websites must not receive microphone permission for Moa voice.
+audio returned by the selected gateway provider. Offscreen capture starts as
+soon as the extension owns a local voice-session id; PCM chunks captured before
+gateway `session_ready` are buffered in order and flushed before any pending
+commit so the start of the utterance is not dropped. The page overlay is only
+the control surface; websites must not receive microphone permission for Moa voice.
 Each spoken
 browser utterance gets its own turn id under the stable browser session id. When
 the user starts a manual mascot push-to-talk turn, the extension starts
