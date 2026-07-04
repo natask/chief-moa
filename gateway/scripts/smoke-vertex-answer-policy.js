@@ -56,6 +56,9 @@ async function main() {
     assert.match(systemText, /Answer policy:/, "system instruction must include answer policy");
     assert.match(systemText, /tax, legal, medical, financial/i, "answer policy must name ordinary professional domains");
     assert.match(systemText, /give practical general information/i, "answer policy must steer professional-domain answers");
+    assert.match(systemText, /live brokerage, bank, crypto, checkout, or payment flow/i, "answer policy must cover live transaction screens");
+    assert.match(systemText, /do not recommend a specific transaction/i, "answer policy must avoid transaction-specific advice");
+    assert.match(systemText, /submit\/preview\/place orders/i, "answer policy must avoid order submission help");
 
     console.log(JSON.stringify({
       ok: true,
@@ -63,6 +66,7 @@ async function main() {
         "ordinary tax-advice voice turn routes as chat",
         "Vertex request includes BLOCK_NONE safetySettings for configurable categories",
         "Vertex system instruction includes ordinary professional-domain answer policy",
+        "Vertex system instruction covers live transaction screens without transaction-specific help",
       ],
     }, null, 2));
   } finally {
