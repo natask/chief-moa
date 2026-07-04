@@ -65,6 +65,9 @@ async function main() {
     await step("live tool-launched run carries all-branch browser context", () =>
       assertLiveToolLaunchContext(baseUrl, wsUrl, dataDir, sessionId));
 
+    await step("noisy live tool calls are blocked", () =>
+      assertNoisyLiveToolCallsBlocked(baseUrl, wsUrl, sessionId));
+
     console.log(JSON.stringify({
       ok: true,
       base_url: baseUrl,
@@ -75,6 +78,7 @@ async function main() {
         "GET /v1/sessions/:id/turns lists it; context marks incomplete=true",
         "the next live session's setup context pack includes the interrupted partial",
         "a live tool-launched run from a later browser cue includes prior cue context",
+        "Live tool calls from noisy transcripts are rejected before launching runs or mutating profile",
       ],
     }, null, 2));
   } finally {
@@ -225,12 +229,58 @@ async function assertLiveToolLaunchContext(baseUrl, wsUrl, dataDir, sessionId) {
   }
 }
 
+async function assertNoisyLiveToolCallsBlocked(baseUrl, wsUrl, sessionId) {
+  const beforeProfile = await getJson(`${baseUrl}/v1/agent/profile`);
+  const beforeRuns = await getJson(`${baseUrl}/v1/agent/runs?limit=50`);
+  const ws = await openClient(wsUrl);
+  try {
+    const turnId = `noisy_${Date.now().toString(36)}`;
+    await sendJsonWs(ws, {
+      type: "session_start",
+      source: "agee-extension",
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: "noisy_tool",
+      turn_id: turnId,
+      format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+    });
+    await waitForEvent(ws, (msg) => msg.type === "session_ready" && msg.turn_id === turnId);
+    ws.send(Buffer.alloc(640, 3));
+    await sendJsonWs(ws, { type: "commit_turn", turn_id: turnId });
+    const toolResponse = await waitForEvent(ws, (msg) => msg.type === "tool_response" && msg.turn_id === turnId);
+    await waitForEvent(ws, (msg) => msg.type === "turn_done" && msg.turn_id === turnId);
+
+    const responses = toolResponse.responses || [];
+    assert.equal(responses.length, 2, `expected two blocked tool responses, got ${JSON.stringify(toolResponse)}`);
+    for (const entry of responses) {
+      assert.equal(entry.response?.ok, false, `tool response should be blocked: ${JSON.stringify(entry)}`);
+      assert.equal(entry.response?.type, "live_tool_blocked", `tool response should name live_tool_blocked: ${JSON.stringify(entry)}`);
+    }
+
+    const afterProfile = await getJson(`${baseUrl}/v1/agent/profile`);
+    assert.equal(
+      afterProfile.profile_version,
+      beforeProfile.profile_version,
+      "blocked profile tool call must not create a new profile version",
+    );
+    const afterRuns = await getJson(`${baseUrl}/v1/agent/runs?limit=50`);
+    assert.equal(
+      (afterRuns.runs || []).length,
+      (beforeRuns.runs || []).length,
+      "blocked launch_agent_run tool call must not create a new run",
+    );
+  } finally {
+    ws.terminate();
+  }
+}
+
 async function startFakeLive() {
   const setups = [];
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(wss, "listening");
   wss.on("connection", (ws) => {
-    let marker = 0;
+    let isToolLaunchTurn = false;
+    let isNoisyToolTurn = false;
     ws.on("message", (data) => {
       let message;
       try {
@@ -240,7 +290,10 @@ async function startFakeLive() {
       }
       if (message.setup) {
         const parts = message.setup.systemInstruction?.parts || [];
-        setups.push({ systemText: parts.map((p) => String(p.text || "")).join("\n") });
+        const systemText = parts.map((p) => String(p.text || "")).join("\n");
+        isToolLaunchTurn = systemText.includes("branch_id=cue_b");
+        isNoisyToolTurn = systemText.includes("branch_id=noisy_tool");
+        setups.push({ systemText });
         ws.send(JSON.stringify({ setupComplete: {} }));
         return;
       }
@@ -254,6 +307,43 @@ async function startFakeLive() {
         return;
       }
       if (message.realtimeInput?.audioStreamEnd) {
+        if (isNoisyToolTurn) {
+          ws.send(JSON.stringify({
+            serverContent: {
+              inputTranscription: { text: "ਸلام, بيع نهج." },
+            },
+          }));
+          setTimeout(() => {
+            ws.send(JSON.stringify({
+              toolCall: {
+                functionCalls: [
+                  {
+                    id: "tool_call_noisy_profile",
+                    name: "update_agent_profile",
+                    args: {
+                      profile: { language: "am-ET" },
+                      reason: "User requested to switch to Amharic.",
+                    },
+                  },
+                  {
+                    id: "tool_call_noisy_agent",
+                    name: "launch_agent_run",
+                    args: {
+                      prompt: "calculate the square root of 9",
+                      harness: "echo",
+                    },
+                  },
+                ],
+              },
+            }));
+          }, 20);
+          return;
+        }
+        ws.send(JSON.stringify({
+          serverContent: {
+            inputTranscription: { text: "/agent inspect the browser continuity context" },
+          },
+        }));
         ws.send(JSON.stringify({
           toolCall: {
             functionCalls: [{
@@ -269,13 +359,7 @@ async function startFakeLive() {
         return;
       }
       if (message.realtimeInput?.audio) {
-        marker = Buffer.from(String(message.realtimeInput.audio.data || ""), "base64")[0] || 0;
-        if (marker === 2) {
-          ws.send(JSON.stringify({
-            serverContent: {
-              inputTranscription: { text: TOOL_TRANSCRIPT },
-            },
-          }));
+        if (isToolLaunchTurn) {
           return;
         }
         // Emit a partial transcript + partial answer, but never turnComplete:

@@ -56,6 +56,7 @@ assert.ok(!shouldRunAgentFromVoice("what is the weather"));
 assert.ok(!shouldRunAgentFromVoice("what is going on in this world"));
 assert.ok(!hasOperationalWorkContext("what is going on in this world"));
 assert.ok(!isOperationalStatusQuestion("what is going on in this world"));
+assert.ok(!shouldRunAgentFromVoice("what is going on"));
 assert.ok(!shouldRunAgentFromVoice(""));
 assert.ok(isOperationalStatusQuestion("what is going on with the operational systems"));
 assert.ok(isOperationalStatusQuestion("what active runs are there"));
@@ -75,6 +76,7 @@ assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational 
 assert.strictEqual(classifyVoiceTurn({}, "what is going on in this world"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what's going on in this world"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on here, what does closing orders only mean?"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "what is going on?"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "profile_control");

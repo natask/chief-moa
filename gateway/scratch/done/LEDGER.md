@@ -1,2 +1,3 @@
 - Indexed brokered intents into gbrain semantic recall while keeping broker events authoritative — agent: Codex/GPT-5 — entire checkpoint: broker-gbrain-intent-index
 - Added sent-message history search and archived voice PCM playback refs — agent: Codex/GPT-5 — entire checkpoint: intent-history-voice-playback
+- Fixed Vertex Live voice to use regional endpoints instead of `global` — agent: Codex/GPT-5 — c6eb268

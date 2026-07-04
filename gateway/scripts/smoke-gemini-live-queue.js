@@ -11,6 +11,8 @@ main().catch((error) => {
 });
 
 async function main() {
+  assertVertexLiveRegionalDefaults();
+
   const received = [];
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(server, "listening");
@@ -110,6 +112,39 @@ async function main() {
   } finally {
     await closeServer(server);
   }
+}
+
+function assertVertexLiveRegionalDefaults() {
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "vertex-live",
+      VERTEX_PROJECT: "test-project",
+      VERTEX_LOCATION: "global",
+    },
+  });
+  assert.equal(provider.status().location, "us-central1");
+  assert.equal(
+    provider.status().endpoint,
+    "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+  );
+  assert.equal(
+    provider.setupMessage({}).model,
+    "projects/test-project/locations/us-central1/publishers/google/models/gemini-live-2.5-flash-native-audio",
+  );
+
+  const overrideProvider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "vertex-live",
+      VERTEX_PROJECT: "test-project",
+      VERTEX_LOCATION: "global",
+      VERTEX_LIVE_LOCATION: "europe-west4",
+    },
+  });
+  assert.equal(overrideProvider.status().location, "europe-west4");
+  assert.equal(
+    overrideProvider.status().endpoint,
+    "wss://europe-west4-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+  );
 }
 
 function once(emitter, event) {

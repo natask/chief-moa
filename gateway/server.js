@@ -6089,6 +6089,12 @@ function liveToolLaunchAgentRun(call, args) {
   if (!prompt) {
     return { ok: false, error: "prompt is required" };
   }
+  if (!liveToolAllowsAgentRun(call)) {
+    return liveToolBlocked(
+      "launch_agent_run",
+      "blocked live tool launch because the current transcript did not independently route as an agent request",
+    );
+  }
   const sessionId = call.conversation_id || call.session_id || "";
   const run = startAgentRun({
     conversation_id: sessionId,
@@ -6248,6 +6254,12 @@ function liveToolLaunchBrowserAgent(call, args) {
   const instruction = truncate(String(args.instruction || args.prompt || args.task || "").trim(), 20000);
   if (!instruction) {
     return { ok: false, error: "instruction is required" };
+  }
+  if (!liveToolAllowsAgentRun(call)) {
+    return liveToolBlocked(
+      "launch_browser_agent",
+      "blocked live browser tool launch because the current transcript did not independently route as an agent request",
+    );
   }
   const url = String(args.url || "").trim();
   const prompt = [
