@@ -13,6 +13,11 @@ const { canonicalVoice } = require("./profile-options");
 
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
+// Leading audio frames can race session_start processing on the same socket.
+// They are buffered per connection (bounded by size and age) and flushed into
+// the turn once it is ready, so the start of the utterance is never dropped.
+const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
+const EARLY_AUDIO_MAX_AGE_MS = 3000;
 
 function createVoiceSessionServer(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
@@ -80,6 +85,8 @@ class VoiceSessionConnection {
     this.onTurnCompleted = options.onTurnCompleted || null;
     this.turn = null;
     this.responding = false;
+    this.earlyAudio = [];
+    this.earlyAudioBytes = 0;
   }
 
   start() {
@@ -152,14 +159,6 @@ class VoiceSessionConnection {
   }
 
   handleAudio(data) {
-    if (!this.turn || this.turn.status !== "recording") {
-      // Mobile/browser capture can deliver a final buffered PCM chunk after the
-      // client has committed the turn or after a live reply has completed. That
-      // frame is stale input, not a session failure; sending an error here makes
-      // clients tear down continuous voice after one response.
-      return;
-    }
-
     const chunk = toBuffer(data);
     if (chunk.length === 0) {
       return;
@@ -169,12 +168,53 @@ class VoiceSessionConnection {
       return;
     }
 
-    this.turn.audioBytes += chunk.length;
-    this.turn.audioChunks += 1;
-    this.turn.lastAudioAt = nowIso();
-    this.turn.audioStream.write(chunk);
-    if (this.turn.liveSession) {
-      this.turn.liveSession.sendAudio(chunk);
+    if (!this.turn) {
+      // A leading frame can race session_start processing on this socket.
+      // Buffer it (bounded) so the start of the utterance survives; the next
+      // turn flushes it. Frames older than the age bound are stale capture
+      // tails, not utterance starts, and get dropped on flush.
+      this.bufferEarlyAudio(chunk);
+      return;
+    }
+    if (this.turn.status !== "recording") {
+      // Mobile/browser capture can deliver a final buffered PCM chunk after the
+      // client has committed the turn or after a live reply has completed. That
+      // frame is stale input, not a session failure; sending an error here makes
+      // clients tear down continuous voice after one response.
+      return;
+    }
+
+    this.writeTurnAudio(this.turn, chunk);
+  }
+
+  writeTurnAudio(turn, chunk) {
+    turn.audioBytes += chunk.length;
+    turn.audioChunks += 1;
+    turn.lastAudioAt = nowIso();
+    turn.audioStream.write(chunk);
+    if (turn.liveSession) {
+      turn.liveSession.sendAudio(chunk);
+    }
+  }
+
+  bufferEarlyAudio(chunk) {
+    this.earlyAudio.push({ at: Date.now(), chunk });
+    this.earlyAudioBytes += chunk.length;
+    while (this.earlyAudioBytes > EARLY_AUDIO_MAX_BYTES && this.earlyAudio.length > 0) {
+      const dropped = this.earlyAudio.shift();
+      this.earlyAudioBytes -= dropped.chunk.length;
+    }
+  }
+
+  flushEarlyAudio(turn) {
+    const buffered = this.earlyAudio;
+    this.earlyAudio = [];
+    this.earlyAudioBytes = 0;
+    const oldestAllowed = Date.now() - EARLY_AUDIO_MAX_AGE_MS;
+    for (const entry of buffered) {
+      if (entry.at < oldestAllowed) continue;
+      if (turn.status !== "recording") return;
+      this.writeTurnAudio(turn, entry.chunk);
     }
   }
 
@@ -280,6 +320,7 @@ class VoiceSessionConnection {
         .then((providerResult) => this.completeLiveTurn(turn, providerResult))
         .catch((error) => this.failLiveTurn(turn, error));
     }
+    this.flushEarlyAudio(turn);
     writeTurnMetadata(turn, { status: "recording" });
     await this.sendEvent({
       type: "session_ready",
@@ -602,17 +643,48 @@ class VoiceSessionConnection {
 
   async completeTurnWithProviderResult(turn, providerEvents, providerResult) {
     // Merge streaming partials into the final transcript: if the provider result
-    // is missing or the "Voice captured." synthetic placeholder but a real
-    // transcript_partial/transcript_final arrived over the stream, prefer that so
-    // the stored turn holds what was actually heard, not the fallback.
-    const resultTranscript = String(providerResult?.transcript || "").trim();
+    // is missing a transcript (or, from an older provider, carries the legacy
+    // "Voice captured." placeholder) but a real transcript_partial /
+    // transcript_final arrived over the stream, prefer that so the stored turn
+    // holds what was actually heard, never a fabricated fallback.
+    const rawResultTranscript = String(providerResult?.transcript || "").trim();
+    const resultTranscript = rawResultTranscript === "Voice captured." ? "" : rawResultTranscript;
     const streamedTranscript = String(providerEvents.transcript || "").trim();
-    const resultIsSynthetic = !resultTranscript || resultTranscript === "Voice captured.";
-    const transcript = (resultIsSynthetic && streamedTranscript)
-      ? streamedTranscript
-      : (resultTranscript || streamedTranscript);
+    const transcript = resultTranscript || streamedTranscript;
     const assistantText = String(providerResult?.assistant_text || providerEvents.assistantText || "").trim();
     const assistantAudioFormat = providerResult?.audio_format || ASSISTANT_AUDIO_FORMAT;
+
+    // A turn with no transcript AND no assistant output is a failed capture,
+    // not a conversation turn. Tell the client explicitly instead of
+    // completing a fake turn, and store nothing in canonical history so the
+    // placeholder never reaches a future model prompt.
+    const hasAssistantOutput = Boolean(assistantText)
+      || providerEvents.assistantAudioStarted
+      || turn.assistantAudioBytes > 0;
+    if (!transcript && !hasAssistantOutput) {
+      await this.recordProviderEvent(turn, providerEvents, "turn_no_speech", {
+        reason: "stt_empty",
+        audio_bytes: turn.audioBytes,
+      });
+      writeTurnMetadata(turn, {
+        status: "no_speech",
+        completed_at: nowIso(),
+      });
+      turn.status = "no_speech";
+      await this.sendEvent({
+        type: "turn_done",
+        session_id: turn.sessionId,
+        branch_id: turn.branchId,
+        turn_id: turn.turnId,
+        status: "no_speech",
+        reason: "stt_empty",
+      });
+      if (this.turn === turn) {
+        this.turn = null;
+      }
+      return;
+    }
+
     writeTurnMetadata(turn, {
       status: "committed",
       committed_at: nowIso(),
@@ -634,8 +706,8 @@ class VoiceSessionConnection {
     }
 
     let transcriptSource = String(providerResult?.transcript_source || "").trim();
-    if (!transcriptSource || (transcriptSource === "synthetic" && streamedTranscript)) {
-      transcriptSource = (transcript && transcript !== "Voice captured.") ? "stt" : "synthetic";
+    if (!transcriptSource || (transcriptSource === "synthetic" && transcript)) {
+      transcriptSource = transcript ? "stt" : "synthetic";
     }
     const canonicalRecord = await this.recordCompletedTurn(turn, providerResult, {
       transcript,

@@ -173,3 +173,72 @@ create table if not exists event_sync_imports (
   imported_at     timestamptz not null default now(),
   primary key (origin_id, peer_id, stream_id)
 );
+
+-- account connections ----------------------------------------------------------
+-- User-connected provider accounts and their credential health. Contract:
+-- reference/openspec/changes/remote-hosted-gateway/account-connection-policy.md.
+-- The local JSON projection in lib/account-connections.js implements this model
+-- today; hosted/self-host modes move behind these tables with the same store
+-- interface. Raw credentials live ONLY in account_connection_credentials as
+-- AES-256-GCM ciphertext or an opaque broker handle; API serializers never
+-- select from that table.
+
+create table if not exists account_connections (
+  id                         text primary key,             -- acctconn_<hex>
+  user_id                    text not null,                -- better-auth user id (single-user token hash until then)
+  provider                   text not null,                -- stable catalog id, e.g. 'openai'
+  label                      text not null default '',
+  account_subject            jsonb not null default '{}'::jsonb,  -- {display, provider_account_id, subscription_id, organization_id}
+  credential_kind            text not null
+                               check (credential_kind in ('oauth2_authorization_code','oauth2_device_code','api_key','personal_access_token','service_account','external_handle','none')),
+  status                     text not null default 'pending_user_auth'
+                               check (status in ('pending_user_auth','connected','refreshing','action_required','expired','invalid','disabled','revoked','error')),
+  status_reason              text not null default '',
+  expires_at                 timestamptz,
+  scopes_granted             jsonb not null default '[]'::jsonb,
+  refresh                    jsonb not null default '{}'::jsonb,  -- {supported,state,last_attempt_at,last_success_at,next_attempt_at,failure_code,failure_message,attempt_count}
+  needs_user_action          boolean not null default false,
+  user_action                jsonb,                               -- non-secret {reason,message,since,reauth_endpoint,action_type,expires_at}
+  device_notification_target jsonb,                               -- {device_id,surface_type,channel,enabled}
+  created_at                 timestamptz not null default now(),
+  updated_at                 timestamptz not null default now(),
+  status_changed_at          timestamptz not null default now(),
+  last_health_check_at       timestamptz,
+  last_used_at               timestamptz
+);
+create index if not exists account_connections_user_idx
+  on account_connections(user_id, provider, created_at desc);
+-- Multiple connections per provider are allowed; duplicate provider subjects
+-- are not when the provider gives a stable account id.
+create unique index if not exists account_connections_subject_uniq
+  on account_connections(user_id, provider, (account_subject->>'provider_account_id'), coalesce(account_subject->>'subscription_id',''))
+  where (account_subject->>'provider_account_id') is not null
+    and (account_subject->>'provider_account_id') <> ''
+    and status not in ('revoked','disabled');
+
+-- The credential boundary. Never joined into list/detail serializers.
+create table if not exists account_connection_credentials (
+  connection_id       text primary key references account_connections(id) on delete cascade,
+  credential_ref_kind text not null default 'encrypted_server_secret'
+                        check (credential_ref_kind in ('encrypted_server_secret','opaque_broker_handle','provider_managed_session','none')),
+  enc_iv              text,          -- base64, aes-256-gcm
+  enc_tag             text,
+  enc_data            text,
+  broker_handle       text,          -- opaque handle when a broker owns the secret
+  retired             boolean not null default false,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
+);
+
+-- Optimized audit projection; canonical stream id is
+-- 'account-connection:{connection_id}'. Payloads are non-secret by contract.
+create table if not exists account_connection_events (
+  id            bigint generated always as identity primary key,
+  connection_id text not null references account_connections(id) on delete cascade,
+  type          text not null,
+  actor         jsonb not null default '{}'::jsonb,
+  payload       jsonb not null default '{}'::jsonb,
+  ts            timestamptz not null default now()
+);
+create index if not exists account_connection_events_conn_idx
+  on account_connection_events(connection_id, ts desc);

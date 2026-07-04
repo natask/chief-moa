@@ -640,6 +640,14 @@ class GeminiLiveVoiceProvider {
     this.temperature = numberFrom(env.GEMINI_LIVE_TEMPERATURE || env.MODEL_TEMPERATURE, 0.4);
     this.timeoutMs = Math.max(5000, numberFrom(env.VOICE_PROVIDER_TIMEOUT_MS, 60000));
     this.audioIdleCompleteMs = Math.max(500, numberFrom(env.GEMINI_LIVE_AUDIO_IDLE_COMPLETE_MS, 2500));
+    // Gemini can deliver trailing inputTranscription fragments AFTER the model
+    // turn completes. Resolving the turn at turnComplete closes the socket and
+    // loses them, which produced turns with no transcript at all. When the
+    // transcript is still empty at completion, hold the socket open up to
+    // graceMs; each late fragment restarts the shorter settle timer so a
+    // fragment burst is captured whole before the turn resolves.
+    this.transcriptGraceMs = Math.max(0, numberFrom(env.GEMINI_LIVE_TRANSCRIPT_GRACE_MS, 1500));
+    this.transcriptSettleMs = Math.max(50, numberFrom(env.GEMINI_LIVE_TRANSCRIPT_SETTLE_MS, 350));
     // Push-to-talk option: manual activity detection. The client marks turn
     // start and end explicitly, so the model never interrupts its own reply on
     // stray or echoed audio (server VAD caused "generation was interrupted" /
@@ -800,9 +808,6 @@ class GeminiLiveVoiceProvider {
     await this.runWebSocketTurn(turn, hooks, state);
 
     const hadRealTranscript = Boolean(state.inputTranscript.trim());
-    if (!hadRealTranscript) {
-      state.inputTranscript = "Voice captured.";
-    }
     if (!state.assistantTextSent && state.outputTranscript.trim()) {
       await hooks.onAssistantText(state.outputTranscript.trim());
       state.assistantTextSent = true;
@@ -815,10 +820,11 @@ class GeminiLiveVoiceProvider {
     return {
       provider: this.provider,
       model: this.model,
+      // When STT produced nothing even after the transcript grace window, the
+      // transcript stays EMPTY with source "synthetic" — never fabricate
+      // placeholder words that downstream would store, display, or prompt the
+      // model with.
       transcript: state.inputTranscript.trim(),
-      // "stt" when the provider returned a real input transcript; "synthetic"
-      // when we fell back to a placeholder because STT produced nothing. Lets
-      // the client tell a real echo-back from "Voice captured."
       transcript_source: hadRealTranscript ? "stt" : "synthetic",
       assistant_text: state.outputTranscript.trim(),
       audio_format: CLIENT_AUDIO_FORMAT,
@@ -866,7 +872,7 @@ class GeminiLiveVoiceProvider {
       clearIdleTimer();
       idleTimer = setTimeout(() => {
         if (state.assistantAudioStarted && !state.resolved && !state.rejected) {
-          resolveOnce();
+          transcriptGate.request();
         }
       }, this.audioIdleCompleteMs);
       idleTimer.unref();
@@ -875,14 +881,15 @@ class GeminiLiveVoiceProvider {
     const result = () => {
       const sttTranscript = state.inputTranscript.trim();
       const textTurnText = String(turn.syntheticText || "").trim();
-      // Real STT wins; a text_turn's typed text is "text"; otherwise the
-      // placeholder is "synthetic". Lets the client and echo-back tell what was
-      // actually heard from a fallback.
+      // Real STT wins; a text_turn's typed text is "text". When neither exists
+      // the transcript stays EMPTY with source "synthetic" — never fabricate
+      // placeholder words that downstream would store, display, or prompt the
+      // model with.
       const transcriptSource = sttTranscript ? "stt" : (textTurnText ? "text" : "synthetic");
       return {
         provider: this.provider,
         model: this.model,
-        transcript: sttTranscript || textTurnText || "Voice captured.",
+        transcript: sttTranscript || textTurnText,
         transcript_source: transcriptSource,
         assistant_text: state.outputTranscript.trim(),
         audio_format: CLIENT_AUDIO_FORMAT,
@@ -898,6 +905,7 @@ class GeminiLiveVoiceProvider {
 
     const cleanup = () => {
       clearIdleTimer();
+      transcriptGate.cancel();
       if (timeout) {
         clearTimeout(timeout);
         timeout = null;
@@ -921,6 +929,17 @@ class GeminiLiveVoiceProvider {
       rejectReady(error);
       rejectDone(error);
     };
+
+    // Turn completion goes through the settle gate, not straight to
+    // resolveOnce, so a turn that completes before its inputTranscription
+    // arrives waits (bounded) for the trailing fragments instead of losing
+    // them to the socket close.
+    const transcriptGate = createTranscriptSettleGate({
+      graceMs: this.transcriptGraceMs,
+      settleMs: this.transcriptSettleMs,
+      hasTranscript: () => Boolean(state.inputTranscript.trim()),
+      resolve: resolveOnce,
+    });
 
     const sendAudioChunk = async (chunk) => {
       const rate = Number(turn.format?.sample_rate || 16000);
@@ -995,7 +1014,11 @@ class GeminiLiveVoiceProvider {
         }
 
         queueProviderTask(async () => {
-          await this.handleServerMessage(message, hooks, state, resolveOnce, rejectOnce);
+          const transcriptBefore = state.inputTranscript;
+          await this.handleServerMessage(message, hooks, state, transcriptGate.request, rejectOnce);
+          if (state.inputTranscript !== transcriptBefore) {
+            transcriptGate.noteTranscript();
+          }
           if (state.assistantAudioStarted && !state.generationComplete) {
             scheduleIdleComplete();
           }
@@ -1005,9 +1028,17 @@ class GeminiLiveVoiceProvider {
       websocket.on("error", rejectOnce);
       websocket.on("close", (code, reason) => {
         closed = true;
-        if (!state.completed && !state.rejected) {
-          rejectOnce(new Error(`gemini-live websocket closed before turn completion: ${code} ${Buffer.from(reason || "").toString("utf8")}`));
+        if (state.completed || state.rejected) {
+          return;
         }
+        if (transcriptGate.pending()) {
+          // The turn already completed and was only holding for a late
+          // transcript; a provider-side close ends the wait, it does not fail
+          // the turn.
+          resolveOnce();
+          return;
+        }
+        rejectOnce(new Error(`gemini-live websocket closed before turn completion: ${code} ${Buffer.from(reason || "").toString("utf8")}`));
       });
     };
 
@@ -1115,7 +1146,7 @@ class GeminiLiveVoiceProvider {
         clearIdleTimer();
         idleTimer = setTimeout(() => {
           if (state.assistantAudioStarted && !state.resolved && !state.rejected) {
-            resolveOnce();
+            transcriptGate.request();
           }
         }, this.audioIdleCompleteMs);
         idleTimer.unref();
@@ -1126,6 +1157,7 @@ class GeminiLiveVoiceProvider {
         state.resolved = true;
         state.completed = true;
         clearIdleTimer();
+        transcriptGate.cancel();
         clearTimeout(timeout);
         websocket.close(1000, "turn completed");
         resolve();
@@ -1134,9 +1166,19 @@ class GeminiLiveVoiceProvider {
         if (state.resolved || state.rejected) return;
         state.rejected = true;
         clearIdleTimer();
+        transcriptGate.cancel();
         clearTimeout(timeout);
         reject(error);
       };
+
+      // Same settle gate as createLiveTurnSession: hold the socket open for a
+      // bounded window when the turn completes before its transcript arrives.
+      const transcriptGate = createTranscriptSettleGate({
+        graceMs: this.transcriptGraceMs,
+        settleMs: this.transcriptSettleMs,
+        hasTranscript: () => Boolean(state.inputTranscript.trim()),
+        resolve: resolveOnce,
+      });
 
       websocket.on("open", () => {
         websocket.send(JSON.stringify({ setup: this.setupMessage(turn) }), (error) => {
@@ -1144,42 +1186,47 @@ class GeminiLiveVoiceProvider {
         });
       });
 
+      const handleParsedMessage = async (message) => {
+        if (message.setupComplete) {
+          await sendAudioFile(websocket, turn, this.sendChunkBytes);
+          return;
+        }
+        const transcriptBefore = state.inputTranscript;
+        await this.handleServerMessage(message, hooks, state, transcriptGate.request, rejectOnce);
+        if (state.inputTranscript !== transcriptBefore) {
+          transcriptGate.noteTranscript();
+        }
+        if (state.assistantAudioStarted && !state.generationComplete) {
+          scheduleIdleComplete();
+        }
+      };
+
       websocket.on("message", (data, isBinary) => {
         chain = chain.then(async () => {
           if (isBinary) {
             const message = parsePossibleJsonMessage(data);
             if (message) {
-              if (message.setupComplete) {
-                await sendAudioFile(websocket, turn, this.sendChunkBytes);
-                return;
-              }
-              await this.handleServerMessage(message, hooks, state, resolveOnce, rejectOnce);
-              if (state.assistantAudioStarted && !state.generationComplete) {
-                scheduleIdleComplete();
-              }
+              await handleParsedMessage(message);
               return;
             }
             await this.handleBinaryAudio(data, hooks, state);
             scheduleIdleComplete();
             return;
           }
-          const message = parseJsonMessage(data);
-          if (message.setupComplete) {
-            await sendAudioFile(websocket, turn, this.sendChunkBytes);
-            return;
-          }
-          await this.handleServerMessage(message, hooks, state, resolveOnce, rejectOnce);
-          if (state.assistantAudioStarted && !state.generationComplete) {
-            scheduleIdleComplete();
-          }
+          await handleParsedMessage(parseJsonMessage(data));
         }).catch(rejectOnce);
       });
 
       websocket.on("error", rejectOnce);
       websocket.on("close", (code, reason) => {
-        if (!state.completed && !state.rejected) {
-          rejectOnce(new Error(`gemini-live websocket closed before turn completion: ${code} ${Buffer.from(reason || "").toString("utf8")}`));
+        if (state.completed || state.rejected) {
+          return;
         }
+        if (transcriptGate.pending()) {
+          resolveOnce();
+          return;
+        }
+        rejectOnce(new Error(`gemini-live websocket closed before turn completion: ${code} ${Buffer.from(reason || "").toString("utf8")}`));
       });
     });
   }
@@ -1685,6 +1732,70 @@ function closeQuietly(websocket) {
   }
 }
 
+// Defers a turn's resolve while its input transcript is still missing. Gemini
+// can deliver trailing inputTranscription fragments after turnComplete, and
+// resolving immediately closes the socket and loses them — which is how turns
+// ended up stored with no transcript at all. request() resolves at once when a
+// transcript already exists; otherwise it waits up to graceMs (hard cap).
+// Every noteTranscript() while waiting restarts the shorter settleMs timer so
+// a fragment burst is captured whole before the resolve fires.
+function createTranscriptSettleGate(options) {
+  const graceMs = Math.max(0, numberFrom(options?.graceMs, 0));
+  const settleMs = Math.max(50, numberFrom(options?.settleMs, 250));
+  const hasTranscript = typeof options?.hasTranscript === "function" ? options.hasTranscript : () => false;
+  const resolve = typeof options?.resolve === "function" ? options.resolve : () => {};
+  let requested = false;
+  let done = false;
+  let graceTimer = null;
+  let settleTimer = null;
+
+  const clearTimers = () => {
+    if (graceTimer) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+    if (settleTimer) {
+      clearTimeout(settleTimer);
+      settleTimer = null;
+    }
+  };
+
+  const finish = () => {
+    if (done) return;
+    done = true;
+    clearTimers();
+    resolve();
+  };
+
+  return {
+    request() {
+      if (done || requested) return;
+      requested = true;
+      if (graceMs === 0 || hasTranscript()) {
+        finish();
+        return;
+      }
+      graceTimer = setTimeout(finish, graceMs);
+      graceTimer.unref?.();
+    },
+    noteTranscript() {
+      if (done || !requested) return;
+      if (settleTimer) {
+        clearTimeout(settleTimer);
+      }
+      settleTimer = setTimeout(finish, settleMs);
+      settleTimer.unref?.();
+    },
+    pending() {
+      return requested && !done;
+    },
+    cancel() {
+      done = true;
+      clearTimers();
+    },
+  };
+}
+
 async function streamTestTone(sendAudio) {
   const tone = generatePcm16Tone({
     durationMs: 1800,
@@ -2145,6 +2256,7 @@ function cleanError(error) {
 
 module.exports = {
   CLIENT_AUDIO_FORMAT,
+  createTranscriptSettleGate,
   createVoiceProviderRegistry,
   createVoiceProvider,
   generatePcm16Tone,

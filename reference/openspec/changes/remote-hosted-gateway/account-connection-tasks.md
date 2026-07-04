@@ -4,6 +4,40 @@ These tickets turn `account-connection-policy.md` into later gateway API and
 store work. They are scoped to the remote-hosted gateway change and should land
 after the better-auth user/device-token base exists.
 
+## Implementation Status (2026-07-03)
+
+Implemented in `gateway/lib/account-providers.js`,
+`gateway/lib/account-connections.js`, `gateway/server.js`, `gateway/schema.sql`,
+and verified by `gateway/scripts/smoke-account-connections.js`
+(`npm run smoke:account-connections`, also part of `npm run check`).
+
+- [x] Ticket 1: provider catalog + `GET /v1/account-providers`
+- [x] Ticket 2: store, encrypted credential boundary, serializers (local JSON
+      projection; Postgres tables added to `schema.sql`, pg-backed store module
+      is a follow-up)
+- [x] Ticket 3: list/detail/PATCH + secret-field rejection + notification target
+- [x] Ticket 4: `POST /v1/account-connections`, OAuth start/callback, gateway
+      secret form (`oauth2_device_code` and `external_handle` kinds return 400;
+      not yet implemented)
+- [x] Ticket 5: health checks, interval scheduler, `POST .../refresh`,
+      `POST /v1/account-connections/health/run` (before-use health hook lands
+      with the first gateway feature that consumes these credentials)
+- [x] Ticket 6: `POST .../reauth` + queued device notifications with receipts
+      (gateway-owned queue at `GET /v1/account-connections/notifications` and
+      `POST .../notifications/{id}/receipt`; wiring through `/v1/tool/requests`
+      is deferred until the device-client tool-request hub exists in this repo)
+- [x] Ticket 7: disable/disconnect/revocation audit (provider-side revoke is
+      best-effort; the generic OAuth adapter has no per-provider revoke
+      endpoints yet)
+- [x] Ticket 8: policy + tasks artifacts in repo (fabro workflow validation not
+      available in this checkout)
+
+Deferred, in one list: better-auth per-user identity (single-user id derived
+from the gateway token until then), Postgres-backed store module,
+`oauth2_device_code` flow, per-provider revoke/userinfo endpoints, and
+`/v1/tool/requests` notification wiring. Out of scope by policy: any automated
+account creation or signup automation.
+
 ## Ticket 1: Provider Catalog
 
 Track: backend

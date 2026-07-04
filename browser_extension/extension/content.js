@@ -1366,6 +1366,11 @@
       return;
     }
     if (msg.type === "turn_done") {
+      if (msg.status === "no_speech" && !state.assistantText) {
+        // Explicit failed-capture turn from the gateway: no transcript and no
+        // assistant output. Say so instead of pretending the turn completed.
+        state.assistantText = "I didn't catch that. Please try again.";
+      }
       finishLiveVoiceDone(state);
       return;
     }
@@ -1683,7 +1688,10 @@
     if (!isLiveVoiceStateActive(state)) return;
     const wasCurrentTurn = liveVoice === state;
     liveVoiceRecoveries = 0;
-    const summary = state.assistantText || "Done.";
+    // Native-audio models reply with audio only (assistant_text stays empty).
+    // When a spoken reply played, say that plainly instead of the misleading
+    // "Done." the user reads as the assistant's whole answer.
+    const summary = state.assistantText || (state.playbackTime ? "Replied out loud." : "Done.");
     ensureVoiceCueCard(state, state.transcript || "Voice", summary);
     updateCue(state.cueId, summary, "done");
     reactLauncher("done");

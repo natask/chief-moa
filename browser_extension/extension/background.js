@@ -1879,10 +1879,7 @@ async function autoCommitVoiceSession(id, reason) {
     scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS - silenceMs);
     return;
   }
-  session.committed = true;
-  clearVoiceAutoCommit(session);
-  await stopOffscreenVoiceCapture(id);
-  sendVoiceSessionJson(session, {
+  await sendVoiceSessionControl(id, {
     type: "commit_turn",
     turn_id: session.turnId,
     reason: `browser_auto_commit:${reason}`,
