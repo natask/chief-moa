@@ -274,6 +274,9 @@ const voiceSessionServer = createVoiceSessionServer({
   contextProvider: voiceLiveContextPrompt,
   toolHandler: handleLiveVoiceToolCall,
   onTurnCompleted: recordStreamingVoiceTurn,
+  // Cascaded pipeline: after Chirp STT, run the gateway's durable LLM turn so
+  // the Cloud TTS leg can speak the reply. Only used by the cascaded provider.
+  reasoner: runCascadedVoiceReasoning,
 });
 
 const server = http.createServer(async (request, response) => {
@@ -7093,6 +7096,60 @@ function writeVoiceTurnRecord(record) {
   }
 }
 
+// Cascaded voice reasoning: STT already produced `transcript`; run the gateway's
+// durable, model-agnostic reply turn and return the spoken reply plus the reply
+// language so the Cloud TTS leg can synthesize it. Reply language and voice come
+// from the effective agent profile (OUTPUT policy); the STT leg already handled
+// the restricted INPUT languages. Control/agent-run turns return empty speak so
+// the cascaded provider skips TTS.
+async function runCascadedVoiceReasoning(input) {
+  const transcript = String(input?.transcript || "").trim();
+  const profile = agentProfile.effective();
+  const replyLanguage = profile.language_primary || profile.language || "en-US";
+  if (!transcript) {
+    return { speak: "", display: "", language: replyLanguage, model: profile.model || MODEL_ID, classification: "empty" };
+  }
+
+  // Reuse the same classifier as the HTTP path. Only chat turns produce a spoken
+  // reply here; control and agent-run turns are recorded by the caller and must
+  // not be spoken as a chat answer.
+  const classification = classifyVoiceTurn({}, transcript);
+  if (classification !== "chat") {
+    return { speak: "", display: transcript, language: replyLanguage, model: profile.model || MODEL_ID, classification };
+  }
+
+  const messages = [{ role: "user", content: transcript }];
+  const memoryContext = recallMemoryContext(transcript);
+  const languageDirective = replyLanguageDirective(profile);
+  const systemBlocks = [memoryContext, languageDirective].filter(Boolean);
+  const modelMessages = systemBlocks.length
+    ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
+    : messages;
+  const text = await callModelOrFallback(modelMessages, profile);
+  const speak = capSpeakText(text, profile.voice_max_chars);
+  return {
+    speak,
+    display: text,
+    language: replyLanguage,
+    model: profile.model || MODEL_ID,
+    classification: "chat",
+  };
+}
+
+// A bounded system directive so the reasoning model replies in the profile's
+// output language. Only added when the profile pins a reply language.
+function replyLanguageDirective(profile) {
+  const output = String(profile?.language_output || "primary_only");
+  if (output === "same_as_input") {
+    return "";
+  }
+  const language = String(profile?.language_primary || profile?.language || "").trim();
+  if (!language) {
+    return "";
+  }
+  return `Reply in ${language}. Keep the spoken answer short, direct, and TTS-safe.`;
+}
+
 async function recordStreamingVoiceTurn(turn) {
   const sessionId = sanitizeOptionalId(turn.session_id || turn.conversation_id, "default");
   const conversationId = sanitizeOptionalId(turn.conversation_id || sessionId, sessionId);
@@ -7145,6 +7202,12 @@ async function recordStreamingVoiceTurn(turn) {
     voice_session: {
       provider: turn.provider || "",
       model: turn.model || "",
+      // Language pair recorded on the canonical turn so audio-analysis agents
+      // can fetch the stored PCM and know the input/output languages. Input
+      // languages come from the STT restriction; reply_language is the OUTPUT.
+      input_languages: Array.isArray(turn.input_languages) ? turn.input_languages : [],
+      reply_language: turn.reply_language || "",
+      tts_spoke: turn.tts_spoke === true,
       audio: turn.audio || null,
       assistant_audio: turn.assistant_audio || null,
       playback_policy: turn.playback_policy || {},
@@ -7313,7 +7376,7 @@ async function recordStreamingVoiceTurn(turn) {
   }
 
   const payload = voiceTurnPayload(baseRecord, {
-    speak,
+    speak: speak || (turn.transcription_only === true ? "" : assistantText),
     display,
     actions: [],
     follow_up_expected: false,

@@ -92,6 +92,54 @@ async function main() {
     assert.equal(result.transcript, "hello from chirp");
     assert.equal(result.assistant_text, "");
     assert.equal(result.transcription_only, true);
+
+    // Language restriction: status must report restricted recognition and the
+    // chirp_3 requirement for am-ET.
+    assert.equal(status.language_recognition, "restricted", "en-US,am-ET must be a restricted language list, not auto");
+    assert.equal(status.requires_chirp_3, true, "am-ET must require chirp_3");
+    assert.deepEqual(status.chirp_3_only_languages, ["am-ET"]);
+
+    // More than two codes is demoted to primary + one alternate so the request
+    // truly restricts recognition instead of hinting it.
+    const capped = createVoiceProvider({
+      env: {
+        VOICE_PROVIDER: "chirp",
+        GCP_PROJECT_ID: "test-project",
+        CHIRP_ACCESS_TOKEN: "test-chirp-token",
+        CHIRP_MODEL: "chirp_3",
+        CHIRP_LANGUAGE_CODES: "en-US,am-ET,es-ES,fr-FR",
+      },
+    });
+    assert.deepEqual(capped.status().language_codes, ["en-US", "am-ET"], "language codes must cap at primary + one alternate");
+
+    // auto stays language-agnostic.
+    const auto = createVoiceProvider({
+      env: {
+        VOICE_PROVIDER: "chirp",
+        GCP_PROJECT_ID: "test-project",
+        CHIRP_ACCESS_TOKEN: "test-chirp-token",
+        CHIRP_MODEL: "chirp_3",
+        CHIRP_LANGUAGE_CODES: "auto",
+      },
+    });
+    assert.equal(auto.status().language_recognition, "auto", "CHIRP_LANGUAGE_CODES=auto must stay language-agnostic");
+
+    // am-ET on a non-chirp_3 model must refuse rather than degrade silently.
+    const wrongModel = createVoiceProvider({
+      env: {
+        VOICE_PROVIDER: "chirp",
+        GCP_PROJECT_ID: "test-project",
+        CHIRP_ACCESS_TOKEN: "test-chirp-token",
+        CHIRP_MODEL: "chirp_2",
+        CHIRP_LANGUAGE_CODES: "en-US,am-ET",
+      },
+    });
+    await assert.rejects(
+      () => wrongModel.processTurn({ pcmPath, audioBytes: 10, format: { sample_rate: 16000, channels: 1 } }, {}),
+      /require model=chirp_3/,
+      "am-ET with model=chirp_2 must be rejected",
+    );
+
     console.log("smoke-chirp-provider: ok");
   } finally {
     global.fetch = previousFetch;

@@ -175,10 +175,50 @@ match.
 
 Streaming voice providers are gateway-only. Android sends microphone audio to
 Moa Gateway, but raw model/API keys stay on the gateway machine. The provider
-package boundary is STT, LLM, and TTS; the current gateway supports loopback
-transport QA, Gemini Live as the realtime bundled STT + LLM + TTS path, and
-Chirp 3 as an STT-only modular path that routes the transcript back through the
-durable voice-turn router.
+package boundary is STT, LLM, and TTS. Two switchable pipelines drive the same
+`processTurn(turn, hooks)` contract, so both write identical turn records and
+PCM files:
+
+- `native_live`: one bundled STT + LLM + TTS provider. Gemini Live (Gemini
+  Developer) or Vertex Live. It auto-detects the INPUT language and cannot be
+  constrained, which mistranscribes English.
+- `cascaded`: Chirp 3 streaming STT, restricted to the configured input
+  languages, then the gateway's model-agnostic LLM turn, then Google Cloud
+  Text-to-Speech reply audio. The reasoning model is swappable
+  (`MODEL_PROVIDER`/`MODEL_ID`), so this is not tied to any one LLM.
+
+loopback stays for transport QA. The legacy Chirp STT-only path (transcript
+routed back to the durable voice-turn router, device speaks the reply) is
+preserved: it is the same provider without the hosted-TTS leg.
+
+### Cascaded voice pipeline and the switch
+
+```text
+Chirp 3 STT (input restricted to CHIRP_LANGUAGE_CODES, e.g. en-US + am-ET)
+  -> gateway LLM turn (model-agnostic; reply language/voice from the agent
+     profile as OUTPUT policy)
+  -> Cloud TTS reply audio when the reply language has a hosted voice,
+     otherwise reply text + device-side TTS
+```
+
+The active pipeline is selected per deployment/session by provider names,
+falling back to env:
+
+- Cascaded `{en-US, am-ET}`: `VOICE_PROVIDER=chirp`,
+  `VOICE_TTS_PROVIDER=cloud-tts`, `CHIRP_MODEL=chirp_3`,
+  `CHIRP_LANGUAGE_CODES=en-US,am-ET`. The reasoning stage is the gateway
+  (`VOICE_REASONING_PROVIDER=gateway`).
+- Legacy Gemini Live: `VOICE_PROVIDER=gemini-live` (all three stages), with
+  `GEMINI_API_KEY` and `GEMINI_LIVE_*`.
+
+On Chirp, a language-restricted request is a primary code plus at most one
+alternate; more codes (or pairing auto-decoding with `languageCodes`) demote
+the codes to hints and auto-detection still runs. The provider caps the list to
+two codes and uses explicit LINEAR16 decoding so recognition is truly
+restricted. am-ET (Amharic) exists only on `chirp_3`; the provider asserts the
+model before a recognize call. Google Cloud TTS has no Amharic voice under any
+type, so an Amharic reply is returned as text and spoken by the device
+(android-tts); a hosted en-US Chirp 3 HD voice is used for English.
 
 ### Browser Extension Thin Client
 

@@ -17,6 +17,15 @@ const DEFAULT_GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 const DEFAULT_VERTEX_LIVE_MODEL = "gemini-live-2.5-flash-native-audio";
 const DEFAULT_VERTEX_LIVE_LOCATION = "us-central1";
 const DEFAULT_CHIRP_MODEL = "chirp_3";
+// On Chirp, true language-restricted recognition is a primary code plus AT MOST
+// one alternate. Passing more codes (or combining codes with auto-decoding)
+// demotes them to hints and auto-detection still runs. We cap to two so the
+// STT request restricts recognition instead of hinting it.
+const CHIRP_MAX_RESTRICTED_LANGUAGE_CODES = 2;
+// Languages that only exist on Chirp 3 (Preview). If one of these is configured
+// but the model is an older Chirp, recognition would silently fall back. am-ET
+// (Amharic) is the concrete case for the {en-US, am-ET} pipeline.
+const CHIRP_3_ONLY_LANGUAGE_CODES = ["am-ET"];
 const GEMINI_LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const VERTEX_LIVE_EXPRESS_ENDPOINT = "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent";
 const PROVIDER_TYPES = ["native_live", "stt", "reasoning", "tts"];
@@ -107,6 +116,14 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
       },
       configured: () => true,
     }),
+    "cloud-tts": providerRegistryEntry({
+      id: "cloud-tts",
+      label: "Google Cloud Text-to-Speech (Chirp 3 HD where available)",
+      capabilities: {
+        voice_output: true,
+      },
+      configured: chirpConfigured,
+    }),
     none: providerRegistryEntry({
       id: "none",
       label: "No hosted TTS",
@@ -114,6 +131,22 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
       configured: () => true,
     }),
   }),
+});
+
+// Cloud TTS has no Amharic (am-ET) voice under any type; it does have en-US HD
+// voices. The cascaded pipeline synthesizes hosted audio for languages that
+// have a voice and falls back to device-side (android-tts) playback otherwise.
+const CLOUD_TTS_DEFAULT_VOICES = Object.freeze({
+  "en-us": "en-US-Chirp3-HD-Aoede",
+});
+// Languages Cloud TTS cannot speak today, so the cascaded path returns the
+// reply as text and lets the device speak it (android-tts).
+const CLOUD_TTS_UNSUPPORTED_LANGUAGES = Object.freeze(new Set(["am-et", "am"]));
+const CLOUD_TTS_SAMPLE_RATE = 24000;
+const PROVIDER_ALIASES_TTS = Object.freeze({
+  "chirp-tts": "cloud-tts",
+  "cloud-text-to-speech": "cloud-tts",
+  "google-tts": "cloud-tts",
 });
 
 function createVoiceProvider(options) {
@@ -344,7 +377,7 @@ function providerEntryConfigured(entry, env) {
 
 function registryProviderId(value) {
   const normalized = providerName(value);
-  return PROVIDER_ALIASES[normalized] || normalized;
+  return PROVIDER_ALIASES[normalized] || PROVIDER_ALIASES_TTS[normalized] || normalized;
 }
 
 function capabilities(overrides) {
@@ -459,16 +492,43 @@ class ChirpSttVoiceProvider {
     this.location = String(env.CHIRP_LOCATION || env.GCP_LOCATION || env.GOOGLE_CLOUD_LOCATION || "us").trim() || "us";
     this.model = String(env.CHIRP_MODEL || env.VOICE_STT_MODEL || DEFAULT_CHIRP_MODEL).trim() || DEFAULT_CHIRP_MODEL;
     this.languageCodes = languageCodes(env.CHIRP_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODE || env.GEMINI_LIVE_LANGUAGE_CODE || env.MODEL_LANGUAGE || "en-US");
+    // Codes that require chirp_3 (e.g. am-ET). If any are configured with an
+    // older model, recognition degrades silently, so we surface it and refuse.
+    this.chirp3OnlyLanguages = chirp3OnlyLanguages(this.languageCodes);
     this.timeoutMs = Math.max(5000, numberFrom(env.CHIRP_TIMEOUT_MS || env.VOICE_PROVIDER_TIMEOUT_MS, 30000));
     this.gcloudBin = env.GCLOUD_BIN || "gcloud";
     this.staticAccessToken = env.CHIRP_ACCESS_TOKEN || env.GCP_ACCESS_TOKEN || "";
     this.serviceAccountKeyJson = env.CHIRP_SERVICE_ACCOUNT_KEY || env.GCP_SERVICE_ACCOUNT_KEY || "";
     this.serviceAccountKeyFile = env.CHIRP_SERVICE_ACCOUNT_KEY_FILE || env.GOOGLE_APPLICATION_CREDENTIALS || "";
     this.tokenCache = { value: "", expiresAt: 0 };
+    // Cascaded pipeline wiring. `reasoner` is injected by the gateway; when set,
+    // the provider runs STT -> reasoner (the gateway's durable LLM turn) -> TTS
+    // in one turn instead of STT-only. When unset, it stays STT-only so the
+    // legacy transcript-then-android-TTS path and the STT smoke keep working.
+    this.reasoner = typeof options?.reasoner === "function" ? options.reasoner : null;
+    this.agentProfile = options?.agentProfile || null;
+    this.ttsProviderId = registryProviderId(this.names.tts);
+    this.ttsVoice = String(env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim();
+    this.ttsModel = String(env.CHIRP_TTS_MODEL || "").trim();
+  }
+
+  // The cascaded pipeline is active when a reasoner is wired AND a hosted TTS
+  // provider is selected. Otherwise the provider is STT-only (transcript back to
+  // the gateway, device speaks the reply).
+  cascaded() {
+    return Boolean(this.reasoner) && this.ttsProviderId === "cloud-tts";
   }
 
   configured() {
     return chirpConfigured(this.env);
+  }
+
+  // am-ET and other Chirp-3-only languages require model=chirp_3. Fail loudly
+  // rather than let recognition silently fall back to an unrestricted result.
+  assertModelSupportsLanguages() {
+    if (this.chirp3OnlyLanguages.length > 0 && !isChirp3Model(this.model)) {
+      throw new Error(`chirp language codes ${this.chirp3OnlyLanguages.join(", ")} require model=chirp_3, but CHIRP_MODEL is ${this.model || "unset"}`);
+    }
   }
 
   endpoint() {
@@ -492,9 +552,19 @@ class ChirpSttVoiceProvider {
       endpoint: redactEndpoint(this.endpoint()),
       auth: this.authStatus(),
       language_codes: this.languageCodes,
+      // "restricted": the request truly limits recognition to language_codes.
+      // "auto": language-agnostic (auto-detect) because CHIRP_LANGUAGE_CODES=auto.
+      language_recognition: this.languageCodes[0] === "auto" ? "auto" : "restricted",
+      requires_chirp_3: this.chirp3OnlyLanguages.length > 0,
+      chirp_3_only_languages: this.chirp3OnlyLanguages,
+      // "cascaded": STT -> gateway LLM turn -> hosted Cloud TTS reply audio.
+      // "stt_only": transcript only; the device speaks the reply.
+      pipeline: this.cascaded() ? "cascaded" : "stt_only",
+      tts_provider_id: this.ttsProviderId,
       input_audio_format: CLIENT_AUDIO_FORMAT,
       assistant_audio_format: CLIENT_AUDIO_FORMAT,
-      transcription_only: true,
+      // STT-only unless the cascaded pipeline is wired (reasoner + hosted TTS).
+      transcription_only: !this.cascaded(),
       ...runtime,
     };
   }
@@ -510,22 +580,128 @@ class ChirpSttVoiceProvider {
     if (!this.configured()) {
       throw new Error("chirp STT provider requires GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT plus GCP_SERVICE_ACCOUNT_KEY, GOOGLE_APPLICATION_CREDENTIALS, CHIRP_ACCESS_TOKEN, or gcloud ADC on the gateway machine");
     }
+    this.assertModelSupportsLanguages();
     if (!turn.audioBytes || turn.audioBytes <= 0) {
       throw new Error("cannot send an empty audio turn to chirp");
     }
 
+    // Leg 1 — streaming Chirp 3 STT, restricted to the configured languages.
     const transcript = await this.transcribePcmFile(turn);
     if (transcript) {
       await hooks.onTranscriptFinal(transcript);
     }
+
+    // STT-only path: hand the transcript back; the gateway records it and the
+    // device speaks the reply. Preserves the legacy switchable setup.
+    if (!this.cascaded()) {
+      return {
+        provider: "chirp",
+        model: this.model,
+        transcript,
+        assistant_text: "",
+        audio_format: CLIENT_AUDIO_FORMAT,
+        transcription_only: true,
+      };
+    }
+
+    // Leg 2 — the gateway's durable, model-agnostic LLM turn. The reasoner reads
+    // the effective agent profile (reply language/voice as OUTPUT policy) and
+    // returns the spoken reply text plus the reply language. A control/agent-run
+    // turn returns no speak text; we then skip TTS.
+    let reasoning = { speak: "", display: transcript, language: this.replyLanguage(), model: this.model, classification: "chat" };
+    if (!transcript) {
+      return this.cascadedResult(transcript, reasoning, false);
+    }
+    try {
+      const result = await this.reasoner({
+        transcript,
+        session_id: turn.sessionId || turn.session_id || "",
+        conversation_id: turn.conversationId || turn.conversation_id || "",
+        branch_id: turn.branchId || turn.branch_id || "",
+        turn_id: turn.turnId || turn.turn_id || "",
+        source: turn.source || "voice-cascaded",
+      });
+      reasoning = { ...reasoning, ...(result && typeof result === "object" ? result : {}) };
+    } catch (error) {
+      throw new Error(`cascaded reasoning failed: ${cleanError(error)}`);
+    }
+
+    const speak = String(reasoning.speak || "").trim();
+    if (speak) {
+      await hooks.onAssistantText(speak);
+    }
+
+    // Leg 3 — Cloud TTS reply audio. Synthesize only when the reply language has
+    // a hosted voice (e.g. en-US). For a language with no hosted voice (am-ET),
+    // skip synthesis and let the device speak the reply text (android fallback).
+    let spoke = false;
+    if (speak && this.canSynthesize(reasoning.language)) {
+      try {
+        const pcm = await this.synthesizeSpeech(speak, reasoning.language);
+        if (pcm && pcm.length) {
+          await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
+          await hooks.sendAudio(pcm);
+          await hooks.onAssistantAudioDone();
+          spoke = true;
+        }
+      } catch (error) {
+        // TTS is best-effort: a synthesis failure must not drop the reply text.
+        // The device can still speak `assistant_text`.
+        spoke = false;
+      }
+    }
+
+    return this.cascadedResult(transcript, reasoning, spoke);
+  }
+
+  cascadedResult(transcript, reasoning, spoke) {
     return {
-      provider: "chirp",
-      model: this.model,
+      provider: "chirp-cascaded",
+      model: reasoning.model || this.model,
       transcript,
-      assistant_text: "",
+      assistant_text: String(reasoning.speak || "").trim(),
       audio_format: CLIENT_AUDIO_FORMAT,
-      transcription_only: true,
+      // Not transcription-only: the gateway produced a reply. `tts_spoke` tells
+      // the client whether hosted reply audio was streamed or it must speak the
+      // text locally (e.g. Amharic, which Cloud TTS cannot synthesize).
+      transcription_only: false,
+      tts_spoke: spoke,
+      reply_language: reasoning.language || "",
+      classification: reasoning.classification || "chat",
     };
+  }
+
+  // The reply (OUTPUT) language from the effective agent profile, falling back to
+  // the primary STT language. This is output policy, distinct from the restricted
+  // INPUT languages the STT leg recognizes.
+  replyLanguage() {
+    const profile = this.agentProfile && typeof this.agentProfile.effective === "function"
+      ? this.agentProfile.effective()
+      : null;
+    const fromProfile = String(profile?.language || profile?.language_primary || "").trim();
+    return fromProfile || this.languageCodes[0] || "en-US";
+  }
+
+  canSynthesize(language) {
+    const code = String(language || this.replyLanguage() || "").trim().toLowerCase();
+    if (!code || CLOUD_TTS_UNSUPPORTED_LANGUAGES.has(code)) {
+      return false;
+    }
+    return Boolean(this.ttsVoice) || Boolean(cloudTtsVoiceFor(code));
+  }
+
+  async synthesizeSpeech(text, language) {
+    const token = await this.accessToken();
+    return synthesizeCloudTts({
+      text,
+      language: language || this.replyLanguage(),
+      voice: this.ttsVoice,
+      token,
+      location: this.location,
+      projectId: this.projectId,
+      timeoutMs: this.timeoutMs,
+      targetSampleRate: CLIENT_AUDIO_FORMAT.sample_rate,
+    });
   }
 
   async transcribePcmFile(turn) {
@@ -541,6 +717,12 @@ class ChirpSttVoiceProvider {
       },
       body: JSON.stringify({
         config: {
+          // explicitDecodingConfig fixes the audio ENCODING (LINEAR16 PCM). It
+          // is deliberately used instead of autoDecodingConfig: pairing
+          // auto-decoding with languageCodes demotes the codes to hints and
+          // Chirp keeps auto-detecting the language. With explicit decoding plus
+          // a capped languageCodes list (primary + at most one alternate),
+          // recognition is RESTRICTED to the configured languages.
           explicitDecodingConfig: {
             encoding: "LINEAR16",
             sampleRateHertz: sampleRate,
@@ -1869,12 +2051,122 @@ function vertexLiveLocation(env) {
   return candidate.toLowerCase() === "global" ? DEFAULT_VERTEX_LIVE_LOCATION : candidate;
 }
 
+// Map a BCP-47 reply language to a default Cloud TTS voice, or "" when Cloud TTS
+// has no voice for it (e.g. am-ET). Callers fall back to device-side TTS on "".
+function cloudTtsVoiceFor(language) {
+  const code = String(language || "").trim().toLowerCase();
+  if (!code || CLOUD_TTS_UNSUPPORTED_LANGUAGES.has(code)) {
+    return "";
+  }
+  if (CLOUD_TTS_DEFAULT_VOICES[code]) {
+    return CLOUD_TTS_DEFAULT_VOICES[code];
+  }
+  // Match by language prefix (e.g. "en-gb" -> en-US default) as a last resort.
+  const prefix = code.split("-")[0];
+  const match = Object.keys(CLOUD_TTS_DEFAULT_VOICES).find((key) => key.split("-")[0] === prefix);
+  return match ? CLOUD_TTS_DEFAULT_VOICES[match] : "";
+}
+
+function cloudTtsLanguageCode(language) {
+  const value = String(language || "en-US").trim();
+  const parts = value.split("-");
+  if (parts.length >= 2) {
+    return `${parts[0].toLowerCase()}-${parts[1].toUpperCase()}`;
+  }
+  return value;
+}
+
+// Synthesize reply audio with Google Cloud Text-to-Speech and return PCM16 mono
+// at the client's sample rate. Uses LINEAR16 output so no decoding is needed;
+// resamples from the TTS rate to the client rate when they differ.
+async function synthesizeCloudTts(options) {
+  const language = cloudTtsLanguageCode(options.language);
+  const voiceName = String(options.voice || "").trim() || cloudTtsVoiceFor(options.language);
+  if (!voiceName) {
+    throw new Error(`no Cloud TTS voice for language ${language}`);
+  }
+  const endpoint = "https://texttospeech.googleapis.com/v1/text:synthesize";
+  const response = await fetchWithTimeout(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      input: { text: String(options.text || "").slice(0, 5000) },
+      voice: { languageCode: language, name: voiceName },
+      audioConfig: {
+        audioEncoding: "LINEAR16",
+        sampleRateHertz: CLOUD_TTS_SAMPLE_RATE,
+      },
+    }),
+  }, Math.max(5000, Number(options.timeoutMs) || 30000));
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`cloud TTS failed (${response.status}): ${cleanError(text)}`);
+  }
+  const json = await response.json();
+  const base64 = String(json?.audioContent || "");
+  if (!base64) {
+    throw new Error("cloud TTS returned no audioContent");
+  }
+  const wav = Buffer.from(base64, "base64");
+  const pcm = pcmFromWav(wav);
+  const targetRate = Math.max(1, Number(options.targetSampleRate) || CLIENT_AUDIO_FORMAT.sample_rate);
+  return CLOUD_TTS_SAMPLE_RATE === targetRate
+    ? pcm
+    : resamplePcm16Mono(pcm, CLOUD_TTS_SAMPLE_RATE, targetRate);
+}
+
+// Extract the PCM16 payload from a LINEAR16 WAV container. Cloud TTS returns a
+// 44-byte canonical WAV header for LINEAR16; scan for the "data" chunk to be safe.
+function pcmFromWav(buffer) {
+  if (buffer.length < 44 || buffer.toString("ascii", 0, 4) !== "RIFF") {
+    return buffer;
+  }
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const chunkId = buffer.toString("ascii", offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const dataStart = offset + 8;
+    if (chunkId === "data") {
+      return buffer.subarray(dataStart, Math.min(buffer.length, dataStart + chunkSize));
+    }
+    offset = dataStart + chunkSize + (chunkSize % 2);
+  }
+  return buffer.subarray(44);
+}
+
+// Parse configured language codes into a Chirp language-RESTRICTED list: primary
+// code plus at most one alternate. This is the difference between "restrict" and
+// "hint" on Chirp — more than two codes turns restriction into auto-detection.
+// The literal value "auto" (language-agnostic) is passed through untouched.
 function languageCodes(value) {
   const codes = String(value || "")
     .split(/[,\s]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
-  return codes.length ? Array.from(new Set(codes)).slice(0, 10) : ["en-US"];
+  if (codes.length === 1 && codes[0].toLowerCase() === "auto") {
+    return ["auto"];
+  }
+  const restricted = Array.from(new Set(codes.filter((code) => code.toLowerCase() !== "auto")));
+  if (!restricted.length) {
+    return ["en-US"];
+  }
+  return restricted.slice(0, CHIRP_MAX_RESTRICTED_LANGUAGE_CODES);
+}
+
+// Chirp-3-only languages (e.g. am-ET) require the chirp_3 model. Returns the
+// list of configured codes that would silently degrade on an older model, so
+// the provider can assert chirp_3 before it issues a recognize call.
+function chirp3OnlyLanguages(codes) {
+  const only = new Set(CHIRP_3_ONLY_LANGUAGE_CODES.map((code) => code.toLowerCase()));
+  return (Array.isArray(codes) ? codes : []).filter((code) => only.has(String(code).toLowerCase()));
+}
+
+function isChirp3Model(model) {
+  return String(model || "").trim().toLowerCase() === "chirp_3";
 }
 
 function profileIdentityInstruction(profile) {
@@ -2264,4 +2556,6 @@ module.exports = {
   generatePcm16Tone,
   resamplePcm16Mono,
   voiceProviderNames,
+  cloudTtsVoiceFor,
+  pcmFromWav,
 };

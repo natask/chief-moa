@@ -32,6 +32,9 @@ function createVoiceSessionServer(options) {
     // Pass the runtime agent profile so the provider reads the effective `voice`
     // per session — the agent can change its own spoken voice by talking.
     agentProfile: options?.agentProfile,
+    // The cascaded voice provider (Chirp STT -> gateway LLM -> Cloud TTS) calls
+    // this to run the gateway's durable, model-agnostic reply turn after STT.
+    reasoner: typeof options?.reasoner === "function" ? options.reasoner : null,
   });
   fs.mkdirSync(sessionsDir, { recursive: true });
 
@@ -804,6 +807,9 @@ class VoiceSessionConnection {
         incomplete: true,
         status,
         error: errorMessage,
+        // Input languages the STT leg restricted to, so an interrupted turn's
+        // stored PCM still carries its language for later audio analysis.
+        input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
         provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
       });
     } catch (error) {
@@ -849,6 +855,15 @@ class VoiceSessionConnection {
         },
         playback_policy: turn.playbackPolicy || {},
         transcription_only: providerResult?.transcription_only === true,
+        // Cascaded pipeline: reply (OUTPUT) language and whether hosted TTS
+        // actually spoke, so history records both and the client knows if it
+        // must speak the reply text locally (e.g. Amharic).
+        reply_language: providerResult?.reply_language || "",
+        tts_spoke: providerResult?.tts_spoke === true,
+        // The restricted INPUT languages the STT leg recognized, captured at
+        // session start. Recorded on the canonical turn so a later audio-analysis
+        // agent can fetch the stored PCM and know both input and output languages.
+        input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
         provider_events: Array.isArray(turn.providerEvents?.events) ? turn.providerEvents.events : [],
       });
     } catch (error) {
@@ -1240,4 +1255,7 @@ module.exports = {
   VOICE_SESSION_ENDPOINT,
   createVoiceSessionServer,
   generatePcm16Tone: generateProviderTone,
+  // Exported for in-process smoke tests that drive the connection without a real
+  // HTTP upgrade. Not part of the runtime API surface.
+  VoiceSessionConnection,
 };
