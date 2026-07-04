@@ -26,6 +26,7 @@ const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "live-interrupt-smoke-token";
 const PARTIAL_TRANSCRIPT = "my favorite color is teal";
 const PARTIAL_ANSWER = "Your favorite color is being noted as te";
+const TOOL_TRANSCRIPT = "fix the browser continuity context";
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -229,6 +230,7 @@ async function startFakeLive() {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(wss, "listening");
   wss.on("connection", (ws) => {
+    let marker = 0;
     ws.on("message", (data) => {
       let message;
       try {
@@ -267,6 +269,15 @@ async function startFakeLive() {
         return;
       }
       if (message.realtimeInput?.audio) {
+        marker = Buffer.from(String(message.realtimeInput.audio.data || ""), "base64")[0] || 0;
+        if (marker === 2) {
+          ws.send(JSON.stringify({
+            serverContent: {
+              inputTranscription: { text: TOOL_TRANSCRIPT },
+            },
+          }));
+          return;
+        }
         // Emit a partial transcript + partial answer, but never turnComplete:
         // the turn stays open so the client-side interruption is what ends it.
         ws.send(JSON.stringify({

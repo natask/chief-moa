@@ -5810,6 +5810,33 @@ function agentRunStartedDisplay(runs, transcript) {
   return `${started}\n\n${operationalStatusSummary()}`;
 }
 
+function liveToolAgentRunSummaries(providerEvents) {
+  const seen = new Set();
+  const runs = [];
+  const events = Array.isArray(providerEvents) ? providerEvents : [];
+  for (const event of events) {
+    if (String(event?.type || "") !== "tool_result") continue;
+    const result = event.result && typeof event.result === "object" ? event.result : null;
+    const run = result?.run && typeof result.run === "object" ? result.run : null;
+    if (!run?.id || seen.has(run.id)) continue;
+    seen.add(run.id);
+    runs.push(run);
+  }
+  return runs;
+}
+
+function liveVoiceAgentDispatches(transcript, classification, options = {}) {
+  const body = options.body || {};
+  return (classification === "multi_agent"
+    ? voiceMultiAgentHarnesses(body, transcript)
+    : [sanitizeHarness(body.harness || body.client?.harness || DEFAULT_HARNESS)]
+  ).map((harness) => ({ harness }));
+}
+
+function voiceAgentRunActions(runs) {
+  return runs.map((run) => ({ type: "open_agent_run", run_id: run.id, harness: run.harness }));
+}
+
 function shouldAttachOperationalStatus(transcript) {
   const lower = normalizeSpeech(transcript);
   if (!lower) return false;
@@ -5942,10 +5969,70 @@ function agentPromptWithSessionContext(prompt, options = {}) {
   return [intro, boundedContext].filter(Boolean).join("\n\n") + separator + currentPrompt;
 }
 
+function liveToolTranscript(call) {
+  return String(call?.transcript || call?.text || "").trim();
+}
+
+function liveToolBlocked(name, reason) {
+  return {
+    ok: false,
+    type: "live_tool_blocked",
+    tool: String(name || ""),
+    error: reason,
+  };
+}
+
+function liveToolAllowsAgentRun(call) {
+  const transcript = liveToolTranscript(call);
+  if (!transcript) {
+    return false;
+  }
+  return Boolean(
+    explicitAgentPromptFrom(transcript)
+      || shouldRunAgentFromVoice(transcript)
+      || wantsMultipleAgents(transcript),
+  );
+}
+
+function liveToolProfilePatch(args) {
+  const input = args.profile && typeof args.profile === "object" && !Array.isArray(args.profile)
+    ? args.profile
+    : args;
+  const supported = new Set(agentProfile.fields());
+  const patch = {};
+  for (const [key, value] of Object.entries(input || {})) {
+    if (supported.has(key)) {
+      patch[key] = value;
+    }
+  }
+  return patch;
+}
+
+function liveToolAllowsProfileUpdate(call, patch) {
+  const transcript = liveToolTranscript(call);
+  if (!transcript) {
+    return false;
+  }
+  const intent = parseProfileControlIntent(transcript);
+  if (!intent || intent.action !== "update" || !intent.patch || typeof intent.patch !== "object") {
+    return false;
+  }
+  const allowedFields = new Set(Object.keys(intent.patch));
+  const requestedFields = Object.keys(patch || {});
+  return requestedFields.length > 0 && requestedFields.every((field) => allowedFields.has(field));
+}
+
+function liveToolMemoryMatch(call) {
+  return matchMemoryStatement(liveToolTranscript(call));
+}
+
 async function handleLiveVoiceToolCall(call) {
   const name = String(call?.name || "").trim();
   const args = call?.args && typeof call.args === "object" && !Array.isArray(call.args) ? call.args : {};
   if (name === "launch_agent_run") {
+    if (!liveToolAllowsAgentRun(call)) {
+      return liveToolBlocked(name, "transcript did not request an agent run");
+    }
     return liveToolLaunchAgentRun(call, args);
   }
   if (name === "cancel_agent_run") {
@@ -5955,6 +6042,9 @@ async function handleLiveVoiceToolCall(call) {
     return liveToolListAgentRuns(call, args);
   }
   if (name === "launch_browser_agent") {
+    if (!liveToolAllowsAgentRun(call)) {
+      return liveToolBlocked(name, "transcript did not request browser or agent work");
+    }
     return liveToolLaunchBrowserAgent(call, args);
   }
   if (name === "update_agent_profile") {
@@ -5980,7 +6070,10 @@ async function handleLiveVoiceToolCall(call) {
     return liveToolGetSessionContext(call, args);
   }
   if (name === "remember_user_fact") {
-    return liveToolRememberUserFact(args);
+    if (!liveToolMemoryMatch(call)) {
+      return liveToolBlocked(name, "transcript did not contain an explicit memory request");
+    }
+    return liveToolRememberUserFact(call, args);
   }
   if (name === "query_memory") {
     return liveToolQueryMemory(args);
@@ -6212,22 +6305,16 @@ function liveToolLaunchBrowserAgent(call, args) {
 }
 
 function liveToolUpdateAgentProfile(call, args) {
-  const input = args.profile && typeof args.profile === "object" && !Array.isArray(args.profile)
-    ? args.profile
-    : args;
-  const supported = new Set(agentProfile.fields());
-  const patch = {};
-  for (const [key, value] of Object.entries(input || {})) {
-    if (supported.has(key)) {
-      patch[key] = value;
-    }
-  }
+  const patch = liveToolProfilePatch(args);
   if (Object.keys(patch).length === 0) {
     return {
       ok: false,
       error: "no supported profile fields provided",
       supported_fields: agentProfile.fields(),
     };
+  }
+  if (!liveToolAllowsProfileUpdate(call, patch)) {
+    return liveToolBlocked("update_agent_profile", "transcript did not request this profile update");
   }
   const requestedScope = String(args.scope || args.profile_scope || "global").toLowerCase() === "device" ? "device" : "global";
   const deviceId = normalizeDeviceId(args.device_id || call.device_id || "");
@@ -6473,12 +6560,13 @@ function liveToolGetSessionContext(call, args) {
   };
 }
 
-function liveToolRememberUserFact(args) {
-  const fact = truncate(String(args.fact || args.memory || args.text || "").trim(), 4000);
+function liveToolRememberUserFact(call, args) {
+  const matched = liveToolMemoryMatch(call);
+  const fact = truncate(String(matched?.fact || args.fact || args.memory || args.text || "").trim(), 4000);
   if (!fact) {
     return { ok: false, error: "fact is required" };
   }
-  const kind = String(args.kind || "standing").trim().slice(0, 40) || "standing";
+  const kind = String(matched?.kind || args.kind || "standing").trim().slice(0, 40) || "standing";
   const remembered = brain.remember(fact, {
     kind,
     tags: ["memory", "standing", kind, "live-tool"],
@@ -6920,9 +7008,11 @@ async function recordStreamingVoiceTurn(turn) {
   // classified separately so the context pack can show it was not finished.
   const incomplete = turn.incomplete === true;
   const turnStatus = String(turn.status || (incomplete ? "interrupted" : "completed"));
-  const liveClassification = !incomplete && transcript
+  const hasRealTranscript = Boolean(transcript && transcriptSource !== "synthetic");
+  const liveClassification = !incomplete && hasRealTranscript
     ? classifyVoiceTurn({ source: turn.source || "voice-live" }, transcript)
     : "";
+  const classification = incomplete ? "interrupted" : (liveClassification || "chat");
   const baseRecord = {
     id: turnId,
     session_id: sessionId,
@@ -6933,9 +7023,7 @@ async function recordStreamingVoiceTurn(turn) {
     source: String(turn.source || "android-overlay").slice(0, 80),
     transcript,
     transcript_source: transcriptSource,
-    classification: liveClassification === "profile_control"
-      ? "profile_control"
-      : (incomplete ? "interrupted" : "chat"),
+    classification,
     screen: null,
     created_at: turn.started_at || now,
     updated_at: now,
@@ -6953,10 +7041,27 @@ async function recordStreamingVoiceTurn(turn) {
       transcription_only: turn.transcription_only === true,
       incomplete,
       status: turnStatus,
+      error: String(turn.error || ""),
     },
   };
   await recordVoiceTurnAcceptedProductEvent(baseRecord);
-  if (!incomplete && liveClassification === "profile_control") {
+  if (!incomplete && classification === "control") {
+    const payload = voiceTurnPayload(baseRecord, {
+      speak: "",
+      display: "",
+      actions: [{ type: "control", name: "stop" }],
+      follow_up_expected: false,
+    });
+    const canonicalRecord = {
+      ...baseRecord,
+      response: payload,
+      references: voiceSessionReferences,
+    };
+    await writeCompletedVoiceTurnRecord(canonicalRecord);
+    return canonicalRecord;
+  }
+
+  if (!incomplete && classification === "profile_control") {
     const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
     const payload = await handleVoiceProfileControl(baseRecord, transcript, profileOptions);
     const canonicalRecord = {
@@ -6973,16 +7078,143 @@ async function recordStreamingVoiceTurn(turn) {
     return canonicalRecord;
   }
 
+  if (!incomplete && hasRealTranscript) {
+    const utilityReply = localUtilityReply(transcript);
+    if (utilityReply) {
+      const profile = agentProfile.effective({ scope: deviceId ? "device" : "global", deviceId });
+      const payload = voiceTurnPayload(baseRecord, {
+        speak: capSpeakText(utilityReply, profile.voice_max_chars),
+        display: utilityReply,
+        actions: [],
+        follow_up_expected: false,
+      });
+      const canonicalRecord = {
+        ...baseRecord,
+        response: payload,
+        references: voiceSessionReferences,
+      };
+      await writeCompletedVoiceTurnRecord(canonicalRecord);
+      return canonicalRecord;
+    }
+  }
+
+  if (!incomplete && (classification === "agent_run" || classification === "multi_agent")) {
+    let runs = liveToolAgentRunSummaries(voiceSessionReferences.voice_session.provider_events);
+    if (runs.length === 0) {
+      const dispatches = liveVoiceAgentDispatches(transcript, classification);
+      runs = dispatches.map((dispatch) => {
+        const prompt = voiceAgentPrompt(transcript, null, {
+          sessionId,
+          branchId,
+          excludeTurnId: turnId,
+          allBranches: turn.all_branches_context === true || turn.allBranchesContext === true,
+        });
+        const run = startAgentRun({
+          conversation_id: conversationId,
+          profile_version: profileVersion,
+          source: "voice-live-router",
+          harness: dispatch.harness,
+          prompt,
+        });
+        return summarizeAgentRun(run);
+      });
+    }
+    const display = agentRunStartedDisplay(runs, transcript);
+    const payload = voiceTurnPayload(baseRecord, {
+      speak: "",
+      display,
+      actions: voiceAgentRunActions(runs),
+      agent_run: runs.length === 1 ? runs[0] : null,
+      agent_runs: runs,
+      follow_up_expected: false,
+    });
+    const canonicalRecord = {
+      ...baseRecord,
+      response: payload,
+      references: {
+        ...voiceSessionReferences,
+        agent_run_ids: runs.map((run) => run.id),
+      },
+    };
+    await writeCompletedVoiceTurnRecord(canonicalRecord);
+    return canonicalRecord;
+  }
+
+  let display = assistantText;
+  let speak = "";
+  let generatedError = "";
+  const assistantAudio = turn.assistant_audio && typeof turn.assistant_audio === "object" ? turn.assistant_audio : {};
+  const hasAssistantAudio = Number(assistantAudio.bytes || 0) > 0 || Number(assistantAudio.chunks || 0) > 0;
+  if (!incomplete && hasRealTranscript && !display && !hasAssistantAudio) {
+    const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
+    const profile = agentProfile.effective(profileOptions);
+    const messages = voiceMessages({}, transcript);
+    const memoryContext = recallMemoryContext(transcript);
+    const sessionContext = durableSessionContextBlock({
+      sessionId,
+      branchId,
+      excludeTurnId: turnId,
+      allBranches: turn.all_branches_context === true || turn.allBranchesContext === true,
+    });
+    const systemBlocks = [memoryContext, sessionContext].filter(Boolean);
+    const modelMessages = systemBlocks.length
+      ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
+      : messages;
+    try {
+      display = await callModelOrFallback(modelMessages, profile);
+    } catch (error) {
+      generatedError = cleanError(error);
+      display = gatewayFallbackReply(transcript);
+    }
+    speak = capSpeakText(display, profile.voice_max_chars);
+    const savedMessages = messages.concat([{ role: "assistant", content: display }]);
+    fs.writeFileSync(conversationPath(conversationId), JSON.stringify({
+      id: conversationId,
+      session_id: sessionId,
+      branch_id: branchId,
+      source: baseRecord.source,
+      model: profile.model,
+      profile_version: profileVersion,
+      updated_at: now,
+      screen: null,
+      messages: savedMessages,
+    }, null, 2));
+    fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify({
+      ts: now,
+      conversation_id: conversationId,
+      session_id: sessionId,
+      branch_id: branchId,
+      source: baseRecord.source,
+      model: profile.model,
+      profile_version: profileVersion,
+      request_messages: modelMessages,
+      screen: null,
+      response_text: display,
+      voice_turn_id: turnId,
+      generated_from_live_transcript: true,
+      error: generatedError,
+    }) + "\n");
+  }
+  if (!display && transcriptSource === "synthetic" && turnStatus === "error") {
+    display = "I heard audio, but the voice provider failed before it returned a reliable transcript.";
+  } else if (!display && transcriptSource === "synthetic" && !hasAssistantAudio) {
+    display = "I heard audio, but I did not get a reliable transcript. Please try again.";
+  }
+
   const payload = voiceTurnPayload(baseRecord, {
-    speak: "",
-    display: assistantText,
+    speak,
+    display,
     actions: [],
     follow_up_expected: false,
   });
   const canonicalRecord = {
     ...baseRecord,
     response: payload,
-    references: voiceSessionReferences,
+    references: {
+      ...voiceSessionReferences,
+      ...(display && display !== assistantText && hasRealTranscript ? { conversation_id: conversationId } : {}),
+      ...(generatedError ? { generated_error: generatedError } : {}),
+    },
   };
   await writeCompletedVoiceTurnRecord(canonicalRecord);
   return canonicalRecord;
@@ -7174,7 +7406,7 @@ function listVoiceTurnRecordsForSession(sessionId, branchId) {
 // Skips the current turn and any synthetic "Voice captured." placeholder so the
 // echo reflects what was actually heard.
 function previousUserTranscript(sessionId, branchId, currentTurnId) {
-  const records = listVoiceTurnRecordsForSession(sessionId, "");
+  const records = listVoiceTurnRecordsForSession(sessionId, branchId || "default");
   const currentId = String(currentTurnId || "");
   for (let i = records.length - 1; i >= 0; i -= 1) {
     const record = records[i];

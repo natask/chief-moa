@@ -208,6 +208,11 @@ async function startFakeLive() {
       }
 
       if (message.realtimeInput?.audioStreamEnd || message.realtimeInput?.activityEnd) {
+        ws.send(JSON.stringify({
+          serverContent: {
+            inputTranscription: { text: transcriptForScenario(scenario) },
+          },
+        }));
         if (scenario === "list") {
           ws.send(JSON.stringify({
             toolCall: {
@@ -245,6 +250,16 @@ async function startFakeLive() {
     calls,
     close: () => new Promise((resolve) => wss.close(() => resolve())),
   };
+}
+
+function transcriptForScenario(scenario) {
+  if (scenario === "list") {
+    return "list agent runs";
+  }
+  if (scenario === "launch-and-cancel") {
+    return "fix the bug and then cancel the run";
+  }
+  return "fix the bug";
 }
 
 function waitForListening(server) {

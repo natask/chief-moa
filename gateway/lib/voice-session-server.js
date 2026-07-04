@@ -575,6 +575,7 @@ class VoiceSessionConnection {
       const result = await this.toolHandler({
         name,
         args,
+        transcript: providerEvents.transcript || turn.syntheticText || "",
         session_id: turn.sessionId,
         conversation_id: turn.conversationId || turn.sessionId,
         branch_id: turn.branchId || "default",
@@ -756,7 +757,7 @@ class VoiceSessionConnection {
   // forward to the next turn and to the other device. Without this, an
   // interrupted Gemini Live turn only lands in observability logs and is lost
   // from the Moa-owned context pack.
-  async recordIncompleteTurn(turn, status) {
+  async recordIncompleteTurn(turn, status, errorMessage = "") {
     if (!turn || turn.recordedCanonical || !this.onTurnCompleted) {
       return;
     }
@@ -766,7 +767,7 @@ class VoiceSessionConnection {
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     const transcript = String(providerEvents.transcript || "").trim();
     const assistantText = String(providerEvents.assistantText || "").trim();
-    if (!transcript && !assistantText) {
+    if (!transcript && !assistantText && turn.audioBytes <= 0 && turn.assistantAudioBytes <= 0) {
       return;
     }
     turn.recordedCanonical = true;
@@ -781,8 +782,8 @@ class VoiceSessionConnection {
         source: turn.source,
         started_at: turn.startedAt,
         completed_at: nowIso(),
-        transcript,
-        transcript_source: transcript ? "stt" : "",
+        transcript: transcript || (turn.audioBytes > 0 ? "Voice captured." : ""),
+        transcript_source: transcript ? "stt" : (turn.audioBytes > 0 ? "synthetic" : ""),
         assistant_text: assistantText,
         provider: turn.providerStatus?.provider || this.voiceProvider.status().provider,
         model: turn.providerStatus?.model || this.voiceProvider.status().model,
@@ -801,6 +802,7 @@ class VoiceSessionConnection {
         playback_policy: turn.playbackPolicy || {},
         incomplete: true,
         status,
+        error: errorMessage,
         provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
       });
     } catch (error) {
@@ -866,6 +868,7 @@ class VoiceSessionConnection {
     await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), "turn_error", {
       error: cleanError(error),
     });
+    await this.recordIncompleteTurn(turn, "error", cleanError(error));
     writeTurnMetadata(turn, {
       status: "error",
       error: cleanError(error),
