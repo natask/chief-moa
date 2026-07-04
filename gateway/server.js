@@ -44,6 +44,7 @@ const {
   routeVoiceTurn,
   classificationFromActions,
 } = require("./lib/voice-router");
+const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
 
 // Deployment mode. One image, env-driven modes (see
 // reference/openspec/changes/remote-hosted-gateway):
@@ -1480,8 +1481,15 @@ async function recordBrokerProductEvent(event) {
         action: decision.action,
         confidence: decision.confidence,
         reason: decision.reason,
+        launch: decision.launch ? {
+          status: decision.launch.status || "",
+          agent_run_id: decision.launch.agent_run_id || "",
+          context_pack_id: decision.launch.context_pack_id || "",
+          launcher_profile_id: decision.launch.launcher_profile_id || "",
+        } : null,
       })),
       context_pack_refs: event.context_pack_refs || [],
+      launch_refs: event.launch_refs || [],
     },
   });
 }
@@ -1583,6 +1591,7 @@ async function handleBrokerMessage(request, response) {
   const event = buildBrokerEvent(body, text);
   const decisions = brokerRouteDecisions(event, body);
   const contextPacks = brokerContextPacksForDecisions(event, decisions, body);
+  const launches = launchBrokerRunsIfRequested(event, decisions, contextPacks, body);
   writeBrokerContextPacks(contextPacks);
   const stored = {
     ...event,
@@ -1593,6 +1602,13 @@ async function handleBrokerMessage(request, response) {
       launcher_profile_id: pack.launcher_profile_id,
       path: `broker-context-packs/${pack.id}.json`,
     })),
+    launch_refs: launches.map((launch) => ({
+      agent_run_id: launch.agent_run_id || "",
+      route_decision_id: launch.route_decision_id,
+      context_pack_id: launch.context_pack_id,
+      launcher_profile_id: launch.launcher_profile_id,
+      status: launch.status,
+    })),
     updated_at: new Date().toISOString(),
   };
   writeBrokerEvent(stored);
@@ -1602,6 +1618,7 @@ async function handleBrokerMessage(request, response) {
     event: stored,
     decisions,
     context_packs: contextPacks,
+    launches,
   });
 }
 
@@ -1837,6 +1854,101 @@ function brokerContextPacksForDecisions(event, decisions, body = {}) {
     decision.instruction_file = pack.instruction_file;
     return pack;
   });
+}
+
+function launchBrokerRunsIfRequested(event, decisions, contextPacks, body = {}) {
+  if (!brokerLaunchRequested(body)) {
+    return [];
+  }
+
+  const launchable = decisions.filter((decision) =>
+    decision.action === "invoke_workflow" || decision.action === "create_new_fork");
+  if (launchable.length === 0) {
+    return [];
+  }
+
+  const decision = launchable[0];
+  const pack = contextPacks.find((candidate) => candidate.route_decision_id === decision.id);
+  const resultBase = {
+    route_decision_id: decision.id,
+    context_pack_id: decision.context_pack_id || pack?.id || "",
+    launcher_profile_id: decision.launcher_profile_id || pack?.launcher_profile_id || "",
+    target_type: decision.target_type,
+    target_id: decision.target_id,
+    action: decision.action,
+    wait: false,
+    requested_at: new Date().toISOString(),
+  };
+
+  if (!pack?.launcher?.prompt) {
+    const blocked = {
+      ...resultBase,
+      status: "blocked",
+      error: "selected route has no launchable context pack",
+    };
+    decision.launch = blocked;
+    if (pack) pack.launch_result = blocked;
+    return [blocked];
+  }
+
+  try {
+    const run = startAgentRun({
+      prompt: pack.launcher.prompt,
+      harness: pack.launcher.harness,
+      source: pack.launcher.source || "broker-workflow-router",
+      conversation_id: event.conversation_id || event.session_id || "",
+      session_id: event.session_id || event.conversation_id || "",
+      profile_version: event.profile_version || "",
+      project_id: event.project_id || "",
+      working_dir: body.working_dir || body.cwd || "",
+    });
+    const launched = {
+      ...resultBase,
+      status: "launched",
+      agent_run_id: run.id,
+      harness: run.harness,
+      run_status: run.status,
+      workflow_directory: pack.workflow_directory,
+      instruction_file: pack.instruction_file,
+      source: run.source,
+      created_at: run.created_at,
+    };
+    decision.launch = launched;
+    pack.launch_result = launched;
+    appendAgentEvent(run.id, "broker_activated", {
+      broker_event_id: event.id,
+      route_decision_id: decision.id,
+      context_pack_id: pack.id,
+      launcher_profile_id: pack.launcher_profile_id,
+      workflow_directory: pack.workflow_directory,
+      instruction_file: pack.instruction_file,
+      action: decision.action,
+      reason: decision.reason,
+    });
+    return [launched];
+  } catch (error) {
+    const failed = {
+      ...resultBase,
+      status: "failed",
+      error: cleanError(error),
+    };
+    decision.launch = failed;
+    pack.launch_result = failed;
+    return [failed];
+  }
+}
+
+function brokerLaunchRequested(body = {}) {
+  const raw = body.launch_agent_run
+    ?? body.launch_agent
+    ?? body.launch
+    ?? body.activate
+    ?? body.auto_launch
+    ?? body.router?.launch;
+  if (raw === true) return true;
+  if (raw === false || raw == null) return false;
+  const normalized = String(raw).trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "agent" || normalized === "run";
 }
 
 function brokerLauncherProfiles() {
@@ -3312,8 +3424,12 @@ async function handleVoiceTurn(request, response) {
     const modelMessages = systemBlocks.length
       ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
       : messages;
-    const text = await callModelOrFallback(modelMessages, profile);
+    // Browser-sourced turns get one bounded tool round so "hide the sidebar" or
+    // "make the text bigger" can propose a page_tweak action; every other source
+    // (and Vertex/unconfigured providers) gets a plain chat reply.
+    const { text, action: pageTweakAction } = await chatTurnWithPageTweakTool(modelMessages, profile, source);
     const speak = capSpeakText(text, profile.voice_max_chars);
+    const turnActions = pageTweakAction ? [pageTweakAction] : [];
     const savedMessages = messages.concat([{ role: "assistant", content: text }]);
     const now = new Date().toISOString();
     fs.writeFileSync(conversationPath(conversationId), JSON.stringify({
@@ -3344,7 +3460,7 @@ async function handleVoiceTurn(request, response) {
     const payload = voiceTurnPayload(baseRecord, {
       speak,
       display: text,
-      actions: [],
+      actions: turnActions,
       follow_up_expected: false,
     });
     await writeCompletedVoiceTurnRecord({
@@ -3501,6 +3617,10 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     };
   }
 
+  if (intent.action === "revert") {
+    return handleVoiceProfileRevert(record, intent, profileOptions);
+  }
+
   if (intent.action === "clarify") {
     const message = profileClarificationText(intent.subject, profileOptions);
     return {
@@ -3562,6 +3682,136 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     device_id: profileOptions.deviceId || "",
     application,
     persona: intent.persona || "",
+    profile: agentProfileRuntimeStatus(profileOptions),
+  };
+}
+
+// HTTP-path counterpart of the revert_agent_profile live tool. mode "reset"
+// restores gateway defaults; mode "previous" undoes the last change. Both append
+// a new version so the profile can never land broken, and both report the
+// spoken confirmation plus a structured action for the client.
+function handleVoiceProfileRevert(record, intent, profileOptions) {
+  const mode = intent.mode === "reset" ? "reset" : "previous";
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
+  const application = profileApplicationSemantics();
+  const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
+
+  if (mode === "reset") {
+    agentProfile.reset({
+      source: "voice",
+      reason: "voice_profile_reset",
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+    const after = agentProfile.effective(profileOptions);
+    const afterVersion = agentProfile.currentVersion(profileOptions);
+    const changed = agentProfile.fields().filter((field) => before?.[field] !== after?.[field]);
+    recordProfileHistory(before, after, "voice", {
+      beforeVersion,
+      afterVersion,
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+    const message = changed.length > 0
+      ? `Reset ${scopeText} to the default settings. Applies ${application.applies.replace(/_/g, " ")}.`
+      : `Your settings were already the defaults ${scopeText}, so nothing changed.`;
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak: message,
+        display: message,
+        actions: [{
+          type: "profile_reverted",
+          mode: "reset",
+          reverted: changed.length > 0,
+          changed,
+          profile_version: afterVersion,
+          from_profile_version: beforeVersion,
+          scope: profileOptions.scope,
+          device_id: profileOptions.deviceId || "",
+          application,
+        }],
+        follow_up_expected: false,
+      }),
+      profile_version: afterVersion,
+      from_profile_version: beforeVersion,
+      scope: profileOptions.scope,
+      device_id: profileOptions.deviceId || "",
+      application,
+      profile: agentProfileRuntimeStatus(profileOptions),
+    };
+  }
+
+  const result = agentProfile.revertLast({
+    source: "voice",
+    reason: "voice_profile_revert",
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const afterVersion = agentProfile.currentVersion(profileOptions);
+  if (!result.ok) {
+    const message = result.reason === "already_at_previous"
+      ? `There is nothing newer to undo ${scopeText}; your settings are already at the previous state.`
+      : `There is no earlier change to undo ${scopeText}.`;
+    return {
+      ...voiceTurnPayload(record, {
+        classification: "profile_control",
+        speak: message,
+        display: message,
+        actions: [{
+          type: "profile_reverted",
+          mode: "previous",
+          reverted: false,
+          reason: result.reason || "",
+          profile_version: afterVersion,
+          from_profile_version: beforeVersion,
+          scope: profileOptions.scope,
+          device_id: profileOptions.deviceId || "",
+          application,
+        }],
+        follow_up_expected: false,
+      }),
+      profile_version: afterVersion,
+      from_profile_version: beforeVersion,
+      scope: profileOptions.scope,
+      device_id: profileOptions.deviceId || "",
+      application,
+      profile: agentProfileRuntimeStatus(profileOptions),
+    };
+  }
+  const after = agentProfile.effective(profileOptions);
+  recordProfileHistory(before, after, "voice", {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const message = `Undid the last change ${scopeText}. Applies ${application.applies.replace(/_/g, " ")}.`;
+  return {
+    ...voiceTurnPayload(record, {
+      classification: "profile_control",
+      speak: message,
+      display: message,
+      actions: [{
+        type: "profile_reverted",
+        mode: "previous",
+        reverted: true,
+        changed: result.changed || [],
+        reverted_to_version: result.reverted_to_version || "",
+        profile_version: afterVersion,
+        from_profile_version: beforeVersion,
+        scope: profileOptions.scope,
+        device_id: profileOptions.deviceId || "",
+        application,
+      }],
+      follow_up_expected: false,
+    }),
+    profile_version: afterVersion,
+    from_profile_version: beforeVersion,
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId || "",
+    application,
     profile: agentProfileRuntimeStatus(profileOptions),
   };
 }
@@ -3765,6 +4015,104 @@ async function callModelOrFallback(messages, profile) {
   }
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   return gatewayFallbackReply(lastUser?.content || "");
+}
+
+// The OpenAI-compatible tool schema for propose_page_tweak, mirroring the Gemini
+// Live declaration so a browser-sourced HTTP turn can offer the same tool to a
+// chat-completions model.
+const PAGE_TWEAK_TOOL_SCHEMA = {
+  type: "function",
+  function: {
+    name: "propose_page_tweak",
+    description: "Propose a reversible visual change to the browser page the user is on (hide an element, dark or black background, bigger/smaller font, or a readable width). You do NOT write CSS: you pass a bounded record and the browser compiles and applies it locally, and the user can undo it. kind must be one of: hide, css-selector-hide, font-scale, font-size, dark, black, width. Call this when the user asks to hide, remove, darken, resize, or reformat something on the current page.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          description: "One of: hide (params.selectors: array of CSS selectors), css-selector-hide (params.selector: one CSS selector), font-scale (params.factor: 0.5-4), font-size (params.px: 8-72), dark (no params), black (no params), width (params.maxWidth: 320-1600).",
+        },
+        params: {
+          type: "object",
+          description: "The parameters for the chosen kind. Plain CSS selectors and numbers only; no CSS or code strings.",
+        },
+        name: {
+          type: "string",
+          description: "Optional short human-readable label for the change, such as 'Hide sidebar'.",
+        },
+      },
+      required: ["kind"],
+    },
+  },
+};
+
+// Browser-sourced HTTP turns that reach the chat path get one bounded tool round
+// so the model can propose a page tweak the same way the live socket does. The
+// round is capped at a single model call: if the model calls propose_page_tweak
+// the validated action is returned for actions[]; otherwise the plain reply text
+// stands. Only the OpenAI-compatible provider path is offered the tool; other
+// providers (Vertex text) fall through to a plain chat reply. Never fails the
+// turn: any tool error degrades to text.
+async function chatTurnWithPageTweakTool(messages, profile, source) {
+  const wantsTool = isBrowserSourcedCall({ source });
+  if (!wantsTool || MODEL_PROVIDER === "vertex" || !providerConfigured()) {
+    const text = await callModelOrFallback(messages, profile);
+    return { text, action: null };
+  }
+  const effective = profile || agentProfile.effective();
+  let json;
+  try {
+    const upstreamResponse = await fetch(`${MODEL_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: modelHeaders(),
+      body: JSON.stringify({
+        model: effective.model || MODEL_ID,
+        messages: [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages),
+        temperature: effective.temperature,
+        tools: [PAGE_TWEAK_TOOL_SCHEMA],
+        tool_choice: "auto",
+        stream: false,
+      }),
+    });
+    const responseText = await upstreamResponse.text();
+    if (!upstreamResponse.ok) {
+      throw new Error(`model HTTP ${upstreamResponse.status}: ${truncate(responseText, 400)}`);
+    }
+    json = JSON.parse(responseText);
+  } catch (error) {
+    // Tool round failed to reach or parse the model; fall back to a plain reply
+    // so a page-change request still gets an answer instead of an error turn.
+    const text = await callModelOrFallback(messages, profile);
+    return { text, action: null, tool_error: cleanError(error) };
+  }
+
+  const message = json.choices?.[0]?.message || {};
+  const toolCall = Array.isArray(message.tool_calls)
+    ? message.tool_calls.find((c) => c?.function?.name === "propose_page_tweak")
+    : null;
+  if (!toolCall) {
+    const text = String(message.content || json.output_text || "").trim();
+    return { text, action: null };
+  }
+
+  let args = {};
+  try {
+    args = JSON.parse(toolCall.function?.arguments || "{}");
+  } catch {
+    args = {};
+  }
+  // Reuse the exact same validation and browser-source gate as the live tool.
+  const result = liveToolProposePageTweak({ source }, args);
+  if (!result.ok || !result.action) {
+    // The model called the tool with an invalid/unknown record. Give a plain
+    // spoken reply rather than surfacing raw tool JSON.
+    const fallbackText = String(message.content || "").trim()
+      || "I could not turn that into a change I can safely apply to this page.";
+    return { text: fallbackText, action: null };
+  }
+  const confirm = String(message.content || "").trim()
+    || `Done — ${result.record.name || result.record.kind} on this page.`;
+  return { text: confirm, action: result.action };
 }
 
 function localUtilityReply(prompt) {
@@ -4527,6 +4875,12 @@ async function handleLiveVoiceToolCall(call) {
   if (name === "update_agent_profile") {
     return liveToolUpdateAgentProfile(call, args);
   }
+  if (name === "revert_agent_profile") {
+    return liveToolRevertAgentProfile(call, args);
+  }
+  if (name === "propose_page_tweak") {
+    return liveToolProposePageTweak(call, args);
+  }
   if (name === "get_profile_options") {
     return {
       ok: true,
@@ -4842,6 +5196,157 @@ function liveToolUpdateAgentProfile(call, args) {
     };
   }
   return result;
+}
+
+// Reversibility by voice: "undo that" / "reset your settings". mode "previous"
+// (default) restores the version before the last change; mode "reset" restores
+// the gateway defaults. Both append a new version so the app never lands in a
+// broken state, and both honor global/device scope like other profile changes.
+function liveToolRevertAgentProfile(call, args) {
+  const mode = String(args.mode || args.target || "previous").trim().toLowerCase() === "reset"
+    ? "reset"
+    : "previous";
+  const requestedScope = String(args.scope || args.profile_scope || "global").toLowerCase() === "device" ? "device" : "global";
+  const deviceId = normalizeDeviceId(args.device_id || call.device_id || "");
+  if (requestedScope === "device" && !deviceId) {
+    return {
+      ok: false,
+      error: "Hey, I would like to do that, but I need you to give me access to this device's Moa device id.",
+    };
+  }
+  const profileOptions = { scope: requestedScope === "device" ? "device" : "global", deviceId };
+  const before = agentProfile.effective(profileOptions);
+  const beforeVersion = agentProfile.currentVersion(profileOptions);
+
+  if (mode === "reset") {
+    agentProfile.reset({
+      source: "gemini-live-tool",
+      reason: String(args.reason || "live_profile_reset").slice(0, 80),
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+    const after = agentProfile.effective(profileOptions);
+    const afterVersion = agentProfile.currentVersion(profileOptions);
+    const changed = agentProfile.fields().filter((field) => before?.[field] !== after?.[field]);
+    recordProfileHistory(before, after, "gemini-live-tool", {
+      beforeVersion,
+      afterVersion,
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+    const application = profileApplicationSemantics();
+    const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
+    const message = changed.length > 0
+      ? `Reset ${scopeText} to the default settings. It applies ${application.applies.replace(/_/g, " ")}.`
+      : `Your settings were already the defaults ${scopeText}, so nothing changed.`;
+    return {
+      ok: true,
+      type: "agent_profile_reverted",
+      mode: "reset",
+      reverted: changed.length > 0,
+      changed,
+      from_profile_version: beforeVersion,
+      profile_version: afterVersion,
+      scope: profileOptions.scope,
+      device_id: profileOptions.deviceId,
+      message,
+      profile: agentProfileRuntimeStatus(profileOptions),
+      application,
+    };
+  }
+
+  const result = agentProfile.revertLast({
+    source: "gemini-live-tool",
+    reason: String(args.reason || "live_profile_revert").slice(0, 80),
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const afterVersion = agentProfile.currentVersion(profileOptions);
+  const application = profileApplicationSemantics();
+  const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
+  if (!result.ok) {
+    const message = result.reason === "already_at_previous"
+      ? `There is nothing newer to undo ${scopeText}; your settings are already at the previous state.`
+      : `There is no earlier change to undo ${scopeText}.`;
+    return {
+      ok: true,
+      type: "agent_profile_reverted",
+      mode: "previous",
+      reverted: false,
+      reason: result.reason,
+      from_profile_version: beforeVersion,
+      profile_version: afterVersion,
+      scope: profileOptions.scope,
+      device_id: profileOptions.deviceId,
+      message,
+      profile: agentProfileRuntimeStatus(profileOptions),
+      application,
+    };
+  }
+  const after = agentProfile.effective(profileOptions);
+  recordProfileHistory(before, after, "gemini-live-tool", {
+    beforeVersion,
+    afterVersion,
+    scope: profileOptions.scope,
+    deviceId: profileOptions.deviceId,
+  });
+  const message = `Undid the last change ${scopeText}. It applies ${application.applies.replace(/_/g, " ")}.`;
+  return {
+    ok: true,
+    type: "agent_profile_reverted",
+    mode: "previous",
+    reverted: true,
+    changed: result.changed || [],
+    reverted_to_version: result.reverted_to_version || "",
+    from_profile_version: beforeVersion,
+    profile_version: afterVersion,
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId,
+    message,
+    profile: agentProfileRuntimeStatus(profileOptions),
+    application,
+  };
+}
+
+// Browser-sourced turns come from the agee extension. Only those may propose a
+// page tweak, since the tweak targets the browser page the user is looking at.
+function isBrowserSourcedCall(call) {
+  const source = String(call?.source || "").toLowerCase();
+  return source.includes("agee-extension") || source.includes("browser");
+}
+
+// The contract with the browser extension lane: the model proposes a page tweak
+// as a bounded { kind, params, name? } record; the gateway validates the kind
+// against the extension's allowlist and the params shape, then returns it as a
+// structured action { type: "page_tweak", record } in the turn result. The
+// gateway never executes the tweak and never emits CSS — the extension compiles
+// the CSS locally from kind+params, keeping the no-eval boundary. An invalid or
+// unknown kind is reported back to the model, not turned into a failed turn.
+function liveToolProposePageTweak(call, args) {
+  if (!isBrowserSourcedCall(call)) {
+    return {
+      ok: false,
+      error: "page tweaks are only available on browser turns from the agee extension",
+    };
+  }
+  const proposal = args && typeof args.tweak === "object" && !Array.isArray(args.tweak) ? args.tweak : args;
+  const validated = validatePageTweak(proposal);
+  if (!validated.ok) {
+    return {
+      ok: false,
+      type: "page_tweak_rejected",
+      error: validated.error,
+      supported_kinds: validated.supported_kinds || TWEAK_KINDS.slice(),
+    };
+  }
+  const record = validated.record;
+  return {
+    ok: true,
+    type: "page_tweak",
+    action: { type: "page_tweak", record },
+    record,
+    message: `Proposed a ${record.kind} change to this page; the browser will apply it and you can undo it there.`,
+  };
 }
 
 function liveToolStartVoiceSampler(args) {

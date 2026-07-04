@@ -1,0 +1,39 @@
+digraph BrokerIntentRunLaunch {
+    graph [goal="Explicit broker launch turns one intent into an observable async agent run"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read the intent, critique, OpenSpec, and broker-session-router change. Produce a concise plan and name the files to change."
+    ]
+
+    implement [
+        label="Implement",
+        prompt="Add explicit broker launch of one create_new_fork route as a wait=false agent run. Preserve non-interrupting active-run evidence behavior."
+    ]
+
+    broker_smoke [
+        label="Broker Smoke",
+        shape=parallelogram,
+        script="cd gateway && npm run smoke:message-broker 2>&1",
+        retry_target="implement",
+        goal_gate=true
+    ]
+
+    gateway_check [
+        label="Gateway Check",
+        shape=parallelogram,
+        script="cd gateway && npm run check 2>&1",
+        retry_target="implement",
+        goal_gate=true
+    ]
+
+    deploy_gate [shape=hexagon, label="Approve Deploy/Promotion"]
+
+    start -> plan -> implement -> broker_smoke -> gateway_check -> deploy_gate
+    deploy_gate -> exit      [label="[A] Accept"]
+    deploy_gate -> implement [label="[R] Revise"]
+}

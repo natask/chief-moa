@@ -4,6 +4,7 @@
 // Smoke for the gateway message broker. It proves the broker stores messages,
 // routes explicit continuation to an existing session, recommends research
 // and QA workflow packages when requested, creates focused launcher context packs,
+// launches an explicitly activated broker fork as a non-blocking agent run,
 // attaches evidence to active runs without cancellation, and persists
 // inspectable route decisions.
 
@@ -42,6 +43,8 @@ async function main() {
       assertResearchRoute(baseUrl, dataDir));
     await step("QA message selects validation workflow", () =>
       assertQaRoute(baseUrl, dataDir));
+    await step("explicit broker launch creates async run", () =>
+      assertExplicitBrokerLaunch(baseUrl, dataDir));
     await step("broker attaches evidence to active run", () =>
       assertActiveRunAttachment(baseUrl, dataDir, activeRunId));
     await step("broker follow-up does not cancel active run", () =>
@@ -61,6 +64,7 @@ async function main() {
         "broker decisions create launcher context packs",
         "research/report message returns a landscape-research workflow decision",
         "test/verify message returns a QA workflow decision",
+        "explicit broker launch creates a linked wait=false agent run",
         "active run messages append broker_evidence_attached without cancellation",
         "a second user turn while an agent run is active leaves the run active",
         "new work message can recommend create_new_fork without cancellation",
@@ -207,6 +211,60 @@ async function assertQaRoute(baseUrl, dataDir) {
   assert.equal(pack.workflow_directory, "gateway/agent-workflows/qa");
   assert.equal(pack.instruction_file, "gateway/agent-workflows/qa/WORKFLOW.md");
   assert.ok(pack.verification.some((item) => item.includes("npm run check")), "QA pack must carry verification commands");
+}
+
+async function assertExplicitBrokerLaunch(baseUrl, dataDir) {
+  const response = await postJson(`${baseUrl}/v1/broker/messages`, {
+    source: "message-broker-smoke",
+    launch_agent: true,
+    harness: "gemini",
+    text: "start another broker launcher wiring task with the proper context",
+  });
+  assert.equal(response.status, 202, JSON.stringify(response.json));
+  assert.equal(response.json.launches.length, 1, JSON.stringify(response.json.launches));
+  const launch = response.json.launches[0];
+  assert.equal(launch.status, "launched", JSON.stringify(launch));
+  assert.ok(launch.agent_run_id, "launch result must include agent_run_id");
+  assert.equal(launch.wait, false);
+
+  const route = response.json.decisions.find((decision) =>
+    decision.id === launch.route_decision_id &&
+    decision.action === "create_new_fork");
+  assert.ok(route, `expected launched create_new_fork route, got ${JSON.stringify(response.json.decisions)}`);
+  assert.equal(route.launch.status, "launched");
+  assert.equal(route.launch.agent_run_id, launch.agent_run_id);
+  assert.equal(route.launch.context_pack_id, route.context_pack_id);
+  assert.equal(route.launch.launcher_profile_id, "coding");
+
+  const pack = readContextPack(dataDir, route.context_pack_id);
+  assert.equal(pack.launcher.wait, false);
+  assert.equal(pack.launcher.harness, "gemini");
+  assert.equal(pack.launch_result.agent_run_id, launch.agent_run_id);
+  assert.equal(pack.launch_result.route_decision_id, route.id);
+  assert.match(pack.launcher.prompt, /Broker-selected Moa workflow context pack/);
+  assert.match(pack.launcher.prompt, /broker launcher wiring/);
+
+  const eventPath = path.join(dataDir, "broker-events", `${response.json.event.id}.json`);
+  const stored = JSON.parse(fs.readFileSync(eventPath, "utf8"));
+  assert.ok(stored.launch_refs.some((ref) =>
+    ref.agent_run_id === launch.agent_run_id &&
+    ref.route_decision_id === route.id &&
+    ref.status === "launched"), "stored broker event must include launch ref");
+  const storedRoute = stored.decisions.find((decision) => decision.id === route.id);
+  assert.equal(storedRoute.launch.agent_run_id, launch.agent_run_id);
+
+  const detail = await getJson(`${baseUrl}/v1/agent/runs/${launch.agent_run_id}`);
+  assert.equal(detail.run.source, "broker-workflow-router");
+  assert.equal(detail.run.harness, "gemini");
+  assert.match(detail.run.prompt, /Broker-selected Moa workflow context pack/);
+  const activated = detail.events.find((event) =>
+    event.type === "broker_activated" &&
+    event.broker_event_id === response.json.event.id &&
+    event.route_decision_id === route.id);
+  assert.ok(activated, "launched run must record broker_activated event");
+
+  const terminal = await waitForRunTerminal(baseUrl, launch.agent_run_id);
+  assert.equal(terminal.run.status, "completed");
 }
 
 async function assertActiveRunAttachment(baseUrl, dataDir, activeRunId) {

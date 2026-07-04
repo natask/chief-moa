@@ -281,6 +281,58 @@
     return applied;
   }
 
+  // The kinds the compiler understands. Any record from outside must name one of
+  // these; nothing else is accepted, so the model cannot smuggle a new effect.
+  const ALLOWED_KINDS = new Set([
+    "hide",
+    "css-selector-hide",
+    "font-scale",
+    "font-size",
+    "dark",
+    "black",
+    "width",
+  ]);
+
+  // Validate a pre-planned record's params for its kind. Returns { params } with
+  // clamped/escaped values, or { error } when the shape is wrong. This is the
+  // gate for the agent-driven path: the model proposes { kind, params }, and we
+  // only ever compile CSS from values that pass here — no free text, no CSS or JS
+  // accepted from outside.
+  function validateRecordParams(kind, rawParams) {
+    const params = rawParams && typeof rawParams === "object" ? rawParams : {};
+    switch (kind) {
+      case "hide": {
+        const selectors = Array.isArray(params.selectors)
+          ? params.selectors.map((s) => cssEscapeText(s)).filter(Boolean)
+          : [];
+        if (selectors.length === 0) return { error: "hide needs a non-empty selectors array" };
+        return { params: { selectors } };
+      }
+      case "css-selector-hide": {
+        const selector = cssEscapeText(params.selector || "").trim();
+        if (!selector) return { error: "css-selector-hide needs a selector" };
+        return { params: { selector } };
+      }
+      case "font-scale": {
+        const factor = clampNum(params.factor, 0.5, 4);
+        return { params: { factor } };
+      }
+      case "font-size": {
+        const px = clampNum(params.px, 8, 72);
+        return { params: { px } };
+      }
+      case "width": {
+        const maxWidth = clampNum(params.maxWidth, 320, 1600);
+        return { params: { maxWidth } };
+      }
+      case "dark":
+      case "black":
+        return { params: {} };
+      default:
+        return { error: `unknown tweak kind: ${kind}` };
+    }
+  }
+
   // ---- public ops (used by overlay UI and smoke) -----------------------
   async function applyInstruction(instruction) {
     const rec = planTweak(instruction);
@@ -292,6 +344,47 @@
     await saveTweaks(list);
     applyRecord(rec);
     return { ok: true, tweak: publicView(rec) };
+  }
+
+  // Agent-driven apply: take a pre-planned record { kind, params, name? } (from a
+  // gateway model tool call, forwarded by the background worker), validate the
+  // kind and params, compile CSS locally, then store and apply it exactly like a
+  // planTweak-produced record. Unknown kinds and bad params are rejected with a
+  // clear error. Nothing opaque is ever stored or executed.
+  async function applyRecordFromAgent(record) {
+    const kind = String(record?.kind || "").trim();
+    if (!ALLOWED_KINDS.has(kind)) {
+      return { ok: false, error: `unknown tweak kind: ${kind || "(none)"}` };
+    }
+    const validated = validateRecordParams(kind, record?.params);
+    if (validated.error) {
+      return { ok: false, error: validated.error };
+    }
+    const name = typeof record?.name === "string" && record.name.trim()
+      ? record.name.trim().slice(0, 80)
+      : defaultNameFor(kind, validated.params);
+    const rec = makeRecord({ name, kind, params: validated.params });
+    if (!rec.css) {
+      return { ok: false, error: `tweak ${kind} produced no CSS` };
+    }
+    const list = await loadTweaks();
+    list.push(rec);
+    await saveTweaks(list);
+    applyRecord(rec);
+    return { ok: true, tweak: publicView(rec) };
+  }
+
+  function defaultNameFor(kind, params) {
+    switch (kind) {
+      case "hide": return "Hide elements";
+      case "css-selector-hide": return `Hide ${params.selector}`;
+      case "font-scale": return `Font ${params.factor}x`;
+      case "font-size": return `Font ${params.px}px`;
+      case "width": return "Readable width";
+      case "dark": return "Dark mode";
+      case "black": return "Black page";
+      default: return "Page tweak";
+    }
   }
 
   async function listTweaks() {
@@ -344,6 +437,9 @@
       case "tweak:apply":
         applyInstruction(msg.instruction).then(reply);
         return true;
+      case "tweak:applyRecord":
+        applyRecordFromAgent(msg.record).then(reply);
+        return true;
       case "tweak:list":
         listTweaks().then(reply);
         return true;
@@ -370,5 +466,5 @@
 
   // Expose a tiny inspectable handle for in-page debugging (no behavior beyond
   // the message API). Functions are deterministic and reference the same store.
-  window.__ageeTweaks = { applyInstruction, listTweaks, removeTweak, clearTweaks, applySaved, planTweak };
+  window.__ageeTweaks = { applyInstruction, applyRecordFromAgent, listTweaks, removeTweak, clearTweaks, applySaved, planTweak };
 })();

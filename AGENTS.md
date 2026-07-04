@@ -54,6 +54,40 @@ For Android-first product work, the active change is usually
 - Runtime behavior: verify with gateway smoke checks or phone QA, whichever is
   closest to the changed behavior.
 
+## Self-Serve Maintenance Skills
+
+Recurring maintenance loops have agent-runnable skills. Prefer them over
+re-deriving the commands. Each is a thin wrapper over the repo's real
+`npm`/`bash` commands and respects the live-gateway freeze.
+
+- `moa-voice-qa` - verify a spoken turn flows phone/browser -> gateway ->
+  reply, and audit why a voice turn failed. Primary path is the cascaded Chirp 3
+  pipeline (STT en-US + am-ET -> LLM -> Chirp 3 TTS); Gemini/Vertex Live is a
+  switchable `legacy-live` mode. Detects the active pipeline from `/health`
+  `voice_stream.provider` at runtime. Runs `gateway npm run check` +
+  `npm run eval:voice` (deterministic by default; `live` arg hits real provider
+  sockets and costs money). Reads `/health` and stored voice turns read-only.
+  Reports a missing hosted TTS leg as a known migration gap. Use for "voice
+  doesn't respond" reports.
+- `moa-extension-refresh` - verify + smoke + auto-bump the manifest patch
+  version as a tracked edit + package + reload the unpacked browser extension
+  via `scripts/deploy.sh extension`, then VERIFY the loaded extension actually
+  reloaded (the poke is a fire-and-forget 12s window). Reports the reload as
+  confirmed, blocked, or unverified -- never claims success when only the poke
+  fired. Records a blocker with the package path when the reload is blocked or
+  unverified. For deep fuzzing use `chrome-extension-qa-ralph` instead.
+- `moa-gateway-refresh` - audit-first gateway health, drift, and change review.
+  Audit mode is read-only and never restarts the live service. Promotion
+  (`scripts/deploy.sh gateway`) requires the user to explicitly say
+  promote/apply/deploy in the current turn, plus a read-only backup/restore
+  check first. Background/cron invocations stop at audit and must not
+  self-promote.
+
+The gateway on the main machine is a live app with user data. Diagnosis is
+read-only; restart/redeploy is a promotion gated on explicit user approval in
+the same turn. Fix work happens in an isolated branch or worktree, never against
+the running service. See the `main-machine` skill for connection facts.
+
 ## Finish Order
 
 For every completed implementation unit, finish in this order:

@@ -654,6 +654,32 @@ async function getGatewayProfileHistory(cfg, signal) {
   return callGateway(cfg, "/v1/agent/profile/history?system_prompt_only=1&limit=50", { method: "GET", signal });
 }
 
+// Profile fields the gateway owns end to end. The local settings matcher is no
+// longer allowed to write these; the gateway profile classifier is the single
+// writer (it sanitizes and can reject with a spoken reply). Everything else in a
+// patch stays local for now.
+const SERVER_OWNED_PROFILE_FIELDS = new Set([
+  "system_prompt",
+  "language",
+  "language_mode",
+  "language_primary",
+  "language_output",
+  "language_auto_switch",
+  "input_languages",
+  "input_language_primary",
+  "voice",
+]);
+
+function withoutServerOwnedProfileFields(patch) {
+  if (!patch || typeof patch !== "object") return patch;
+  const out = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (SERVER_OWNED_PROFILE_FIELDS.has(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 // "Change settings by talking to the agent": if the instruction is a settings
 // request, turn it into a concrete profile patch and apply it through the
 // gateway profile endpoints, then render a confirmation. Returns true when the
@@ -679,11 +705,24 @@ async function maybeApplySettingsChange(tabId, instruction, cfg, signal, cueId) 
   const intent = parseSettingsIntent(instruction, current);
   if (!intent) return false;
 
+  // Demote the local writer for fields the gateway owns end to end. Language,
+  // voice, and system-prompt requests already route to the gateway profile
+  // classifier (looksLikeGatewayProfileControlIntent) earlier in the chain, and
+  // the gateway is the single writer for them: it sanitizes, rejects, and replies.
+  // Strip those fields here so this local path never double-writes them. The
+  // fields with no gateway equivalent yet — temperature, voice_max_chars
+  // (terser/verbose), model — stay local for now (follow-up: move them too).
+  const patch = withoutServerOwnedProfileFields(intent.patch);
+  if (!patch || Object.keys(patch).length === 0) {
+    // Everything in this intent is gateway-owned; let the gateway path handle it.
+    return false;
+  }
+
   await saveTaskState(cueId, { status: "running", instruction, step: 0, lastResult: "applying settings change", tabId });
   send(tabId, { cmd: "progress", cueId, text: "updating settings…" });
   throwIfAborted(signal);
 
-  await putGatewayProfile(cfg, intent.patch, signal, "agee-extension", { scope: intent.scope || "global" });
+  await putGatewayProfile(cfg, patch, signal, "agee-extension", { scope: intent.scope || "global" });
   const summary = `Settings updated — ${intent.summary}. It takes effect on the next turn.`;
   send(tabId, { cmd: "done", cueId, summary });
   await saveTaskState(cueId, { status: "done", instruction, step: 1, lastResult: summary.slice(0, 400), tabId });
@@ -745,58 +784,12 @@ async function maybeRouteGatewayProfileControl(tabId, instruction, cfg, signal, 
   return true;
 }
 
-// Page tweaks are local-first page customizations, handled by tweaks.js in the
-// content world. This is deliberately before the model turn: bounded CSS tweaks
-// such as "hide the sidebar" should happen immediately, stay inspectable, and
-// persist for this origin without asking a remote model to generate page code.
-async function maybeApplyPageTweak(tabId, instruction, signal, cueId) {
-  const raw = String(instruction || "").trim();
-  if (!looksLikePageTweak(raw)) return false;
-
-  send(tabId, { cmd: "progress", cueId, text: "changing this page…" });
-  await saveTaskState(cueId, { status: "running", instruction, step: 0, lastResult: "applying page tweak", tabId });
-  throwIfAborted(signal);
-
-  let result;
-  try {
-    result = await ask(tabId, { cmd: "tweak:apply", instruction: raw });
-  } catch (error) {
-    send(tabId, { cmd: "error", cueId, text: `Page tweak failed: ${String(error?.message || error)}` });
-    await saveTaskState(cueId, { status: "error", instruction, step: 1, lastResult: String(error?.message || error), tabId });
-    return true;
-  }
-
-  if (!result?.ok) {
-    const message = result?.error || "I can only apply bounded page tweaks right now: hide selectors, hide common page parts, dark mode, readable width, or text size.";
-    send(tabId, { cmd: "done", cueId, summary: message, speak: message });
-    await saveTaskState(cueId, { status: "done", instruction, step: 1, lastResult: message, tabId });
-    return true;
-  }
-
-  const tweak = result.tweak || {};
-  const summary = `Changed this page — ${tweak.name || tweak.label || "page tweak"} is now saved for ${result.origin || "this site"}.`;
-  send(tabId, { cmd: "done", cueId, summary, speak: summary });
-  await saveTaskState(cueId, {
-    status: "done",
-    instruction,
-    step: 1,
-    tabId,
-    lastResult: summary.slice(0, 400),
-    tweakId: tweak.id,
-    tweakKind: tweak.kind,
-  });
-  return true;
-}
-
-function looksLikePageTweak(raw) {
-  if (!raw) return false;
-  return (
-    /\b(hide|remove|get rid of|dismiss|kill)\b/i.test(raw) ||
-    /\b(dark mode|readable|narrow width|make (?:the )?(?:text|font) (?:bigger|larger|smaller))\b/i.test(raw) ||
-    /\b(?:make|turn|set)\b.*\b(?:it|this|page|site|background|screen)\b.*\bblack\b/i.test(raw) ||
-    /\ball black\b|\bblack (?:page|background|mode|theme)\b/i.test(raw)
-  );
-}
+// Page tweaks are handled by tweaks.js in the content world. The trigger used to
+// be a local keyword regex (looksLikePageTweak) that fired before any model turn.
+// That baked-in detector is removed: the gateway model now decides when a page
+// change is warranted (propose_page_tweak) and returns a page_tweak action, which
+// runViaGateway applies via tweak:applyRecord. The tweak:apply/tweak:applyRecord
+// message API in tweaks.js stays intact for the smoke and options paths.
 
 function truncate(text, max) {
   const t = String(text || "");
@@ -986,6 +979,15 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
     },
   });
 
+  // The gateway model can now decide a page change is warranted and return it as
+  // a structured action on the turn result instead of relying on a baked-in
+  // keyword detector. Handle known action types here; ignore unknown ones so a
+  // future gateway envelope never breaks this client.
+  const tweakActionHandled = await maybeApplyTurnActions(tabId, data, signal, cueId);
+  if (tweakActionHandled) {
+    return data;
+  }
+
   const reply = String(data.display || data.text || data.speak || "").trim();
   // The gateway returns a separate TTS-safe `speak` string (short, markdown-
   // stripped). Forward it so the overlay can speak the reply aloud; the gateway
@@ -1002,6 +1004,62 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
     lastResult: `[${data.classification || "chat"}] ${summary.slice(0, 400)}`,
   });
   return data;
+}
+
+// Collect structured actions off a gateway turn result. The gateway may attach a
+// single `action` or an `actions` array; we accept either shape.
+function turnActions(data) {
+  const out = [];
+  if (data && typeof data.action === "object" && data.action) out.push(data.action);
+  if (data && Array.isArray(data.actions)) out.push(...data.actions.filter((a) => a && typeof a === "object"));
+  return out;
+}
+
+// Execute known gateway-proposed actions from a turn. Only `page_tweak` is
+// handled today: forward the pre-planned record to the content world's tweaks
+// module as tweak:applyRecord, which validates and compiles it locally. Unknown
+// action types are ignored silently. Returns true when a page_tweak action was
+// applied and a done summary was already sent.
+async function maybeApplyTurnActions(tabId, data, signal, cueId) {
+  const actions = turnActions(data);
+  const tweakAction = actions.find((a) => a.type === "page_tweak" && a.record && typeof a.record === "object");
+  if (!tweakAction) return false;
+
+  send(tabId, { cmd: "progress", cueId, text: "changing this page…" });
+  await saveTaskState(cueId, { status: "running", instruction: "", step: 0, lastResult: "applying page tweak", tabId });
+  throwIfAborted(signal);
+
+  let result;
+  try {
+    result = await ask(tabId, { cmd: "tweak:applyRecord", record: tweakAction.record });
+  } catch (error) {
+    send(tabId, { cmd: "error", cueId, text: `Page tweak failed: ${String(error?.message || error)}` });
+    await saveTaskState(cueId, { status: "error", instruction: "", step: 1, lastResult: String(error?.message || error), tabId });
+    return true;
+  }
+
+  if (!result?.ok) {
+    const message = result?.error || "That page change was not a bounded tweak I can apply.";
+    send(tabId, { cmd: "done", cueId, summary: message, speak: message });
+    await saveTaskState(cueId, { status: "done", instruction: "", step: 1, lastResult: message, tabId });
+    return true;
+  }
+
+  const tweak = result.tweak || {};
+  const summary = `Changed this page — ${tweak.name || "page tweak"} is saved for ${result.origin || "this site"}.`;
+  // pageTweak flag tells the overlay to offer the "Changes on this page" review
+  // affordance next to this done cue.
+  send(tabId, { cmd: "done", cueId, summary, speak: summary, pageTweak: true });
+  await saveTaskState(cueId, {
+    status: "done",
+    instruction: "",
+    step: 1,
+    tabId,
+    lastResult: summary.slice(0, 400),
+    tweakId: tweak.id,
+    tweakKind: tweak.kind,
+  });
+  return true;
 }
 
 function send(tabId, msg) {
@@ -1739,9 +1797,10 @@ async function runAgent(tabId, instruction, controller, cueId) {
     if (await maybeRequestAndroidSpeak(tabId, instruction, cfg, signal, cueId)) {
       return;
     }
-    if (await maybeApplyPageTweak(tabId, instruction, signal, cueId)) {
-      return;
-    }
+    // Page-change requests are no longer gated by a local keyword regex. They flow
+    // to the gateway model turn, which can call propose_page_tweak and return a
+    // page_tweak action; runViaGateway applies it through tweak:applyRecord. The
+    // tweak:* message API stays intact for the smoke and options paths.
     const browserTask = parseBrowserTaskIntent(instruction);
     if (browserTask) {
       await runBranchTaskAgent(tabId, browserTask.instruction, browserTask.url, controller, cueId);
@@ -2328,6 +2387,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "ambientStop") {
     stopAmbientCapture();
     sendResponse({ ok: true });
+    return true;
+  }
+  // Overlay review surface -> tweaks module. content.js and tweaks.js are separate
+  // content scripts in the same tab and cannot message each other directly, so the
+  // overlay routes list/remove through the background, which forwards to the
+  // tweaks module in the same tab via the existing tweak:* API.
+  if (msg.cmd === "tweakList" && sender.tab) {
+    ask(sender.tab.id, { cmd: "tweak:list" })
+      .then((res) => sendResponse(res || { ok: false, tweaks: [] }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error), tweaks: [] }));
+    return true;
+  }
+  if (msg.cmd === "tweakRemove" && sender.tab) {
+    ask(sender.tab.id, { cmd: "tweak:remove", id: msg.id })
+      .then((res) => sendResponse(res || { ok: false }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  // A page_tweak action that arrived over the live voice socket is routed here by
+  // the overlay content script (content.js cannot message tweaks.js directly).
+  // Forward the record to the tweaks module in the same tab via the same
+  // tweak:applyRecord message the HTTP turn path uses.
+  if (msg.cmd === "tweakApplyRecord" && sender.tab) {
+    ask(sender.tab.id, { cmd: "tweak:applyRecord", record: msg.record })
+      .then((res) => sendResponse(res || { ok: false, error: "no tweak result" }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 });

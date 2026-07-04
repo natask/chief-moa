@@ -1,0 +1,36 @@
+digraph SubscriptionAgentControlPlane {
+    graph [goal="Research-backed Chief Moa control-plane plan for subscriptions, credentials, chat history, and agent work"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    inventory [
+        label="Inventory CH",
+        shape=parallelogram,
+        script="ch tools && ch projects && ch search --help 2>&1"
+    ]
+
+    research [
+        label="Research Passes",
+        prompt="Read the landscape research artifacts and verify the four tracks: credential control, account/session provisioning, chat history search, and agent orchestration."
+    ]
+
+    synthesize [
+        label="Synthesize",
+        prompt="Produce a Chief Moa architecture map. Preserve the Android/browser trust boundary and name the first implementation slice."
+    ]
+
+    verify [
+        label="Verify Artifacts",
+        shape=parallelogram,
+        script="test -s scratch/landscape-research/subscription-agent-control-plane-20260703-013126/report.md && test -s scratch/landscape-research/subscription-agent-control-plane-20260703-013126/projects.md && test -s scratch/landscape-research/subscription-agent-control-plane-20260703-013126/sources.md",
+        goal_gate=true
+    ]
+
+    approve [shape=hexagon, label="Approve Implementation"]
+
+    start -> inventory -> research -> synthesize -> verify -> approve
+    approve -> exit      [label="[A] Accept"]
+    approve -> synthesize [label="[R] Revise"]
+}

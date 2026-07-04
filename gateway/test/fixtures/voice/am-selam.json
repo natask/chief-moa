@@ -1,0 +1,11 @@
+{
+  "id": "am-selam",
+  "language": "am-ET",
+  "format": {
+    "encoding": "pcm16",
+    "sample_rate": 16000,
+    "channels": 1
+  },
+  "expected_transcript": "ሰላም እንዴት ነህ",
+  "note": "PCM is a deterministic tone for fixtures mode; transcript matching uses expected_transcript. Replace with a real speech recording for VOICE_EVAL_LIVE re-STT."
+}

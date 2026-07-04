@@ -1283,7 +1283,7 @@ class GeminiLiveVoiceProvider {
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak. Currently valid language codes are en-US and am-ET only. The gateway derives primary language from the first code, so do not expose primary language as a user-facing setting. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak. Currently valid language codes are en-US and am-ET only. The gateway derives primary language from the first code, so do not expose primary language as a user-facing setting. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice_max_chars (max characters spoken per reply, a positive integer), voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
                 },
                 scope: {
                   type: "STRING",
@@ -1299,6 +1299,53 @@ class GeminiLiveVoiceProvider {
                 },
               },
               required: ["profile"],
+            },
+          },
+          {
+            name: "revert_agent_profile",
+            description: "Undo your own durable settings by voice. Call this when the user says undo, undo that, undo the last change, revert, or go back — use mode='previous' to restore the settings from before your last change. Call it with mode='reset' when the user says reset your settings, start over, or go back to default. Honors scope='device' vs scope='global' the same way as update_agent_profile. After calling, confirm briefly what you undid; the change applies to the next interaction.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                mode: {
+                  type: "STRING",
+                  description: "previous restores the state before the last change (undo); reset restores the gateway defaults. Defaults to previous.",
+                },
+                scope: {
+                  type: "STRING",
+                  description: "global for all devices, or device for only the current device.",
+                },
+                device_id: {
+                  type: "STRING",
+                  description: "Optional explicit current device id. Usually omit; Moa supplies the current turn's device id.",
+                },
+                reason: {
+                  type: "STRING",
+                  description: "Short reason for the revert.",
+                },
+              },
+            },
+          },
+          {
+            name: "propose_page_tweak",
+            description: "Propose a reversible visual change to the browser page the user is on (hide an element, dark or black background, bigger/smaller font, or a readable width). Only available on browser turns. Call this when the user asks to hide, remove, darken, resize, or reformat something on the current page. You do NOT write CSS: you pass a bounded record and the browser compiles and applies it locally, and the user can undo it in the browser. kind must be one of: hide, css-selector-hide, font-scale, font-size, dark, black, width. After calling, confirm briefly what you changed.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                kind: {
+                  type: "STRING",
+                  description: "One of: hide (params.selectors: array of CSS selectors), css-selector-hide (params.selector: one CSS selector), font-scale (params.factor: 0.5-4), font-size (params.px: 8-72), dark (no params), black (no params), width (params.maxWidth: 320-1600).",
+                },
+                params: {
+                  type: "OBJECT",
+                  description: "The parameters for the chosen kind. Plain CSS selectors and numbers only; no CSS or code strings.",
+                },
+                name: {
+                  type: "STRING",
+                  description: "Optional short human-readable label for the change, such as 'Hide sidebar'.",
+                },
+              },
+              required: ["kind"],
             },
           },
           {

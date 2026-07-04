@@ -638,6 +638,119 @@
     setTimeout(finalize, 400); // fallback if the animation never fires
   }
 
+  // ---- Tweak review (fast overlay) --------------------------------------
+  // After the agent changes this page, offer a tiny "Changes on this page"
+  // affordance on the done cue. It lists this origin's tweaks by name, each with a
+  // remove control wired to tweak:remove (undo). Deep management stays in options;
+  // this is only enough to see and undo what just changed, in overlay style.
+  function attachTweakReview(cueId) {
+    const entry = cues.get(cueId);
+    const card = entry?.cardEl || log?.querySelector(`.agee-cue[data-cue="${cueId}"]`);
+    if (!card) return;
+    if (card.querySelector(".agee-tweak-review")) return; // already attached
+
+    const review = document.createElement("div");
+    review.className = "agee-tweak-review";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "agee-tweak-toggle";
+    toggle.textContent = "Changes on this page";
+    const list = document.createElement("div");
+    list.className = "agee-tweak-list";
+    list.hidden = true;
+    review.appendChild(toggle);
+    review.appendChild(list);
+    card.appendChild(review);
+
+    // Opening the panel holds the card open so it does not fade mid-review.
+    toggle.addEventListener("click", () => {
+      const opening = list.hidden;
+      list.hidden = !opening;
+      if (opening) {
+        holdCueOpen(cueId);
+        renderTweakList(list);
+      }
+    });
+  }
+
+  // Apply a page_tweak action that arrived over the live voice socket. content.js
+  // and tweaks.js are separate content scripts in the same tab and cannot message
+  // each other directly, so the record is routed through the background, which
+  // forwards it to the tweaks module as tweak:applyRecord — the same apply core the
+  // HTTP turn path uses. After apply, the live cue shows the done summary and the
+  // "Changes on this page" review affordance, matching the typed path.
+  function applyLiveVoicePageTweak(state, action) {
+    const record = action && action.type === "page_tweak" ? action.record : null;
+    if (!record || typeof record !== "object") return;
+    const cueId = state.cueId;
+    updateCue(cueId, "changing this page…", "running");
+    safeRuntimeSendMessage({ cmd: "tweakApplyRecord", record }).then((res) => {
+      if (!res && extensionContextInvalidated) return;
+      if (!res?.ok) {
+        const message = res?.error || "That page change was not a bounded tweak I can apply.";
+        state.assistantText = message;
+        updateCue(cueId, message, "done");
+        return;
+      }
+      const tweak = res.tweak || {};
+      const summary = `Changed this page — ${tweak.name || record.name || "page tweak"} is saved for ${res.origin || "this site"}.`;
+      state.assistantText = summary;
+      ensureVoiceCueCard(state, state.transcript || "Voice", summary);
+      updateCue(cueId, summary, "done");
+      holdCueOpen(cueId);
+      attachTweakReview(cueId);
+    }).catch((error) => {
+      const message = `Page tweak failed: ${String(error?.message || error)}`;
+      state.assistantText = message;
+      updateCue(cueId, message, "done");
+    });
+  }
+
+  function holdCueOpen(cueId) {
+    const entry = cues.get(cueId);
+    if (entry?.dismissTimer) {
+      clearTimeout(entry.dismissTimer);
+      entry.dismissTimer = null;
+    }
+  }
+
+  function renderTweakList(listEl) {
+    listEl.textContent = "loading…";
+    safeRuntimeSendMessage({ cmd: "tweakList" }).then((res) => {
+      const tweaks = Array.isArray(res?.tweaks) ? res.tweaks : [];
+      listEl.textContent = "";
+      if (tweaks.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "agee-tweak-empty";
+        empty.textContent = "No changes saved for this site.";
+        listEl.appendChild(empty);
+        return;
+      }
+      for (const tweak of tweaks) {
+        const rowEl = document.createElement("div");
+        rowEl.className = "agee-tweak-row";
+        const nameEl = document.createElement("span");
+        nameEl.className = "agee-tweak-name";
+        nameEl.textContent = tweak.name || tweak.kind || "page change";
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "agee-tweak-remove";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => {
+          removeBtn.disabled = true;
+          safeRuntimeSendMessage({ cmd: "tweakRemove", id: tweak.id }).then((out) => {
+            if (out?.ok) rowEl.remove();
+            else removeBtn.disabled = false;
+            if (!listEl.querySelector(".agee-tweak-row")) renderTweakList(listEl);
+          });
+        });
+        rowEl.appendChild(nameEl);
+        rowEl.appendChild(removeBtn);
+        listEl.appendChild(rowEl);
+      }
+    });
+  }
+
   // Remove a card right now, no fade. Used by prune and when a new turn arrives.
   function removeCueCard(cueId) {
     const entry = cues.get(cueId);
@@ -1062,6 +1175,13 @@
       return;
     }
     if (msg.type === "profile_applied") {
+      return;
+    }
+    if (msg.type === "page_tweak") {
+      // The live model proposed a bounded page change on this browser turn. The
+      // native-audio model goes silent after a tool call, so the applied change
+      // plus this cue is the primary confirmation; do not wait for spoken audio.
+      applyLiveVoicePageTweak(state, msg.action || (msg.record ? { type: "page_tweak", record: msg.record } : null));
       return;
     }
     if (msg.type === "revoked") {
@@ -2007,6 +2127,9 @@
         return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");
+        // A page_tweak apply carries pageTweak: the done cue gets a small
+        // "Changes on this page" review affordance (list + undo).
+        if (msg.pageTweak) attachTweakReview(msg.cueId);
         setSurfacePhase("editing");
         reactLauncher("done"); // hop + ring + happy chime
         // Replies live in the cue/result surface. The composer stays free for

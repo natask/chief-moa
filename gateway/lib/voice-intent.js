@@ -122,6 +122,12 @@ function parseProfileControlIntent(text) {
   if (wantsTranscriptEcho(lower)) {
     return { action: "echo_transcript", subject: "transcript", scope };
   }
+  // Reversibility by voice. Checked before persona/name/prompt matching so
+  // "reset your settings" is an undo, not a persona named "your settings".
+  const revert = parseProfileRevertIntent(lower);
+  if (revert) {
+    return { ...revert, scope };
+  }
   const voiceSampleText = voiceSampleTextFrom(raw);
   if (wantsVoiceSampling(lower)) {
     return {
@@ -240,6 +246,35 @@ function parseProfileControlIntent(text) {
     };
   }
 
+  return null;
+}
+
+// "undo that" / "undo the last change" / "revert" -> restore the version before
+// the last change. "reset your settings" / "start over" / "back to default" ->
+// restore the gateway defaults. Returns { action: "revert", mode } or null.
+// Kept narrow so ordinary speech ("go back to the previous page") is not swept
+// in: an undo verb must sit next to a change/settings word.
+function parseProfileRevertIntent(lower) {
+  const mentionsSettings = /\b(?:settings?|profile|configuration|config|preferences?|customi[sz]ations?|voice|persona|language)\b/.test(lower);
+  const mentionsDefault = /\b(?:default|defaults|factory)\b/.test(lower);
+  const isReset = /\b(?:reset|restore|start over|start again)\b/.test(lower) || mentionsDefault;
+  if (isReset && (mentionsSettings || mentionsDefault || /\b(?:everything|all of it|yourself)\b/.test(lower))) {
+    return { action: "revert", mode: "reset", summary: "reset to defaults" };
+  }
+  // Strong undo signals: an explicit undo/revert verb, or "take/change it back".
+  // These do not need a settings word — "undo that" after a setting change is
+  // unambiguous.
+  const strongUndo = /\b(?:undo|revert|roll\s*back)\b/.test(lower)
+    || /\b(?:take|change|put|set|switch)\s+(?:that|it)\s+back\b/.test(lower);
+  if (strongUndo) {
+    return { action: "revert", mode: "previous", summary: "undo last change" };
+  }
+  // Weak undo signals ("go back", "previous"): require a settings word so page
+  // navigation ("go back to the previous page") is not swept in.
+  const weakUndo = /\b(?:go|switch)\s+back\b/.test(lower) || /\bprevious\b/.test(lower);
+  if (weakUndo && mentionsSettings) {
+    return { action: "revert", mode: "previous", summary: "undo last change" };
+  }
   return null;
 }
 
@@ -721,6 +756,7 @@ module.exports = {
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
+  parseProfileRevertIntent,
   parsePersonaIntent,
   classifyVoiceTurn,
 };

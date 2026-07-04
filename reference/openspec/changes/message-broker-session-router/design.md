@@ -66,6 +66,19 @@ Alternative considered: make the main model silently decide all tool use.
 Rejected because the user wants inspectable, reliable workflow selection and
 optimal-path behavior, not hidden prompt magic.
 
+### Decision: Broker Launch Is Explicit
+
+Broker routing stores decisions and context packs by default. A caller must
+explicitly request launch before the broker starts an execution-machine agent
+run. When launch is requested, the broker activates the strongest launchable
+route (`invoke_workflow` or `create_new_fork`, ordered by the existing route
+confidence) as a `wait=false` agent run, records the run id on the route
+decision and broker event, and appends a `broker_activated` event to the run.
+
+Alternative considered: auto-launch every workflow-looking message. Rejected
+because direct answers and evidence-only follow-ups also flow through the
+broker, and launching hidden work would violate the user-control boundary.
+
 ## First Slice
 
 1. Add OpenSpec capability and task map.
@@ -73,4 +86,6 @@ optimal-path behavior, not hidden prompt magic.
    route candidates/reasons from existing sessions and active runs.
 3. Add a smoke proving a message can be routed to an existing session and can
    produce a "new fork" recommendation without canceling active work.
-4. Later: connect workflow package invocation and multi-model research fanout.
+4. Add explicit broker launch for one selected workflow or new-fork route.
+5. Later: connect workflow package output storage and multi-model research
+   fanout.

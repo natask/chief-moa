@@ -144,6 +144,86 @@ function createAgentProfileStore(options) {
     return effective();
   }
 
+  // Undo the last change by re-applying the immediately prior version as a new
+  // version (history stays append-only, so the undo is itself undoable). Global
+  // scope walks the global version stack; device scope walks that device's patch
+  // stack. Returns a descriptor of what happened so callers can speak it, and
+  // never leaves a broken profile: with no prior state it reports no_previous.
+  function revertLast(metadata = {}) {
+    const deviceId = normalizeDeviceId(metadata.deviceId || metadata.device_id);
+    if (metadata.scope === "device" && deviceId) {
+      return revertLastDevice(deviceId, metadata);
+    }
+    const before = currentVersionRecord();
+    const previous = previousGlobalVersion(before);
+    if (!previous) {
+      return { ok: false, reason: "no_previous", scope: "global", profile: effective(), from_version: before.version, to_version: before.version };
+    }
+    if (profilesEqual(before.profile, previous.profile)) {
+      return { ok: false, reason: "already_at_previous", scope: "global", profile: effective(), from_version: before.version, to_version: previous.version };
+    }
+    const entry = appendVersion(previous.profile, {
+      source: metadata.source || "api",
+      reason: metadata.reason || "revert_last",
+      parent_version: before.version,
+      rollback_from_version: previous.version,
+      changed: changedFields(before.profile, previous.profile),
+    });
+    return {
+      ok: true,
+      scope: "global",
+      reverted_to_version: previous.version,
+      from_version: before.version,
+      to_version: entry.version,
+      changed: entry.changed,
+      profile: effective(),
+    };
+  }
+
+  // The version whose profile we should restore when undoing the last change:
+  // the current record's parent when present, else the second-most-recent entry.
+  function previousGlobalVersion(currentRecord) {
+    const parent = currentRecord?.parent_version ? findVersion(currentRecord.parent_version) : null;
+    if (parent) {
+      return parent;
+    }
+    if (state.versions.length >= 2) {
+      return state.versions[state.versions.length - 2];
+    }
+    return null;
+  }
+
+  function revertLastDevice(deviceId, metadata) {
+    const id = normalizeDeviceId(deviceId);
+    const entry = deviceState.devices[id];
+    const versions = Array.isArray(entry?.versions) ? entry.versions : [];
+    if (versions.length === 0) {
+      return { ok: false, reason: "no_previous", scope: "device", device_id: id, profile: effective({ deviceId: id }) };
+    }
+    const beforePatch = currentDevicePatch(id);
+    // The patch to restore is the one before the current device version (or the
+    // empty patch when only one device version exists, i.e. back to the global
+    // effective profile for this device).
+    const priorPatch = versions.length >= 2 ? { ...(versions[versions.length - 2].patch || {}) } : {};
+    if (patchesEqual(beforePatch, priorPatch)) {
+      return { ok: false, reason: "already_at_previous", scope: "device", device_id: id, profile: effective({ deviceId: id }) };
+    }
+    const versionEntry = appendDeviceVersion(id, priorPatch, {
+      source: metadata.source || "api",
+      reason: metadata.reason || "device_revert_last",
+      parent_version: entry.current_version || "",
+      changed: changedPatchFields(beforePatch, priorPatch),
+    });
+    return {
+      ok: true,
+      scope: "device",
+      device_id: id,
+      to_version: versionEntry.version,
+      changed: versionEntry.changed,
+      profile: effective({ deviceId: id }),
+    };
+  }
+
   function currentVersion(options = {}) {
     const globalVersion = currentVersionRecord().version;
     const deviceId = normalizeDeviceId(options?.deviceId || options?.device_id);
@@ -302,6 +382,7 @@ function createAgentProfileStore(options) {
     patch,
     reset,
     rollback,
+    revertLast,
     currentVersion,
     versions: listVersions,
     fields: () => PROFILE_FIELDS.slice(),
