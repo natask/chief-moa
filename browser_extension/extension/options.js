@@ -160,7 +160,7 @@ document.getElementById("testGateway").addEventListener("click", async () => {
   }
 
   // /health needs no token. The endpoints the agent actually uses
-  // (/v1/voice/turns, /v1/chat) require the gateway token, so probe an
+  // (/v1/voice/turns, /v1/browser/turns) require the gateway token, so probe an
   // authenticated endpoint to confirm the token before reporting success —
   // otherwise a missing/wrong token shows green here but 401s in use.
   const tag = `${data.provider || "provider"} · ${data.model || "model"}`;

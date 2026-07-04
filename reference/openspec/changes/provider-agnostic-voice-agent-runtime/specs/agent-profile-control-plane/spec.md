@@ -43,6 +43,18 @@ next turn, or after provider session restart.
 - **THEN** the gateway records that the change will apply on next turn or after
   session restart
 
+### Requirement: Persona Settings Preserve Safety Boundaries
+Presentation profile settings SHALL NOT relax safety boundaries. Assistant name,
+voice, tone, and language settings SHALL NOT relax tool policy, action
+allowlists, approval requirements, local validation, or receipt requirements.
+
+#### Scenario: User changes presentation settings
+- **WHEN** the user changes assistant name, voice, tone, heard language, or reply
+  language
+- **THEN** the profile version may change how Moa sounds or speaks
+- **AND** the effective tool policy, action approvals, local checks, and receipt
+  requirements remain at least as strict as before the presentation change
+
 ### Requirement: Safe Mode And Rollback
 The control plane SHALL provide a safe mode that can disable tools, cancel active
 non-essential runs, restore a known-good profile, switch providers, and fall

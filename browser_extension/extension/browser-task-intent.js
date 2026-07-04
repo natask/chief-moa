@@ -7,6 +7,10 @@ const REPORT_RE = /\b(report|summari[sz]e|describe|check|find|look up|read|tell 
 const FULL_HTTP_RE = /\bhttps?:\/\/[^\s<>"']+/i;
 const LOCALHOST_RE = /\b(?:localhost|127(?:\.\d{1,3}){3})(?::\d+)?(?:\/[^\s<>"']*)?/i;
 const DOMAIN_RE = /\b(?:www\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?:\/[^\s<>"']*)?/i;
+const PAGE_CONTEXT_TARGET_RE = /\b(?:this|current|visible|open|active)\s+(?:web\s*)?(?:page|site|tab|screen|view|button|form|field|link)\b/i;
+const PAGE_CONTEXT_VERB_RE = /\b(?:summari[sz]e|read|describe|check|inspect|analy[sz]e|explain|review|scan)\b/i;
+const PAGE_CONTEXT_QUESTION_RE = /\b(?:what|where|which|who|why|how|can|does|is|are|should)\b/i;
+const PAGE_LOOKING_RE = /\bwhat\s+(?:am i|are we)\s+(?:looking at|seeing|viewing)\b|\bwhat(?:'s| is)\s+on\s+(?:my|this|the)\s+screen\b/i;
 
 function parseBrowserTaskIntent(text) {
   const raw = String(text || "").trim();
@@ -42,6 +46,14 @@ function extractHttpUrl(text) {
   return null;
 }
 
+function looksLikePageContextQuestion(text) {
+  const raw = String(text || "").trim();
+  if (!raw || raw.length > 260 || raw.split(/\r?\n/).length > 3) return false;
+  if (PAGE_LOOKING_RE.test(raw)) return true;
+  if (!PAGE_CONTEXT_TARGET_RE.test(raw)) return false;
+  return PAGE_CONTEXT_VERB_RE.test(raw) || PAGE_CONTEXT_QUESTION_RE.test(raw) || /\?$/.test(raw);
+}
+
 function normalizeHttpUrl(value) {
   const token = String(value || "")
     .trim()
@@ -56,4 +68,4 @@ function normalizeHttpUrl(value) {
   }
 }
 
-export { parseBrowserTaskIntent, parseOpenTabIntent, extractHttpUrl };
+export { parseBrowserTaskIntent, parseOpenTabIntent, extractHttpUrl, looksLikePageContextQuestion };

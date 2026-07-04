@@ -20,6 +20,7 @@
     "smoke:live-voice-main": "node scripts/smoke-live-voice-main.mjs",
     "smoke:history": "node scripts/smoke-history.mjs",
     "smoke:self-extension": "node scripts/smoke-self-extension.mjs",
+    "smoke:unified-browser-agent": "node scripts/smoke-unified-browser-agent.mjs",
     "verify": "node scripts/verify-extension.mjs",
     "package": "node scripts/package-extension.mjs",
     "deploy:browser": "node scripts/poke-dev-reload.mjs"

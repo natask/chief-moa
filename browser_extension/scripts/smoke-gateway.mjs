@@ -2,7 +2,7 @@
 //
 // Proves the on-page overlay actually talks to the configured gateway end to
 // end: a command round-trips through POST /v1/voice/turns, "describe page"
-// through POST /v1/chat, and an unreachable/unauthorized gateway renders a
+// through POST /v1/browser/turns, and an unreachable/unauthorized gateway renders a
 // CLEAR, non-silent error in the overlay.
 //
 // Same quiet rules as scripts/smoke-extension.mjs: --headless=new, throwaway
@@ -494,7 +494,7 @@ async function main() {
     if (!HAS_TOKEN) {
       console.log("Legs 1.2 / 1.3 — authenticated command + describe round-trips");
       skip("1.2 command via /v1/voice/turns", "implemented; awaiting AGEE_GATEWAY_TOKEN to confirm live");
-      skip("1.3 describe via /v1/chat", "implemented; awaiting AGEE_GATEWAY_TOKEN to confirm live");
+      skip("1.3 describe via /v1/browser/turns", "implemented; awaiting AGEE_GATEWAY_TOKEN to confirm live");
       console.log("         Operator: re-run with the token to verify both legs live, e.g.:");
       console.log("           AGEE_GATEWAY_TOKEN=*** npm run smoke:gateway");
     } else {
@@ -522,21 +522,21 @@ async function main() {
       }
 
       console.log("");
-      console.log("Leg 1.3 — describe round-trips through POST /v1/chat");
+      console.log("Leg 1.3 — describe round-trips through POST /v1/browser/turns");
       {
         await evaluate(pageCdp, triggerExpr("describe"), { contextId: contentCtx });
         const reply = await waitForEval(pageCdp, renderedReplyExpr(), 60000, { contextId: contentCtx });
-        const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/chat"));
-        const ok = reply.kind === "done" && reply.text === reply.expectedDraft && reply.logVisible === true && call && call.ok === true && call.status === 200;
+        const call = await evaluate(workerCdp, lastGatewayCallExpr("/v1/browser/turns"));
+        const ok = reply.kind === "done" && reply.text === reply.expectedDraft && reply.logVisible === true && call && call.ok === true && (call.status === 200 || call.status === 202);
         if (ok) {
           pass(
-            "describe reply originated from /v1/chat",
-            `gateway POST /v1/chat -> HTTP 200; result card rendered; draft preserved`,
+            "describe reply originated from /v1/browser/turns",
+            `gateway POST /v1/browser/turns -> HTTP ${call.status}; result card rendered; draft preserved`,
           );
           console.log(`         overlay description: "${reply.ledgerText.trim().slice(0, 200)}"`);
         } else {
           failures++;
-          console.log(`  [FAIL] describe did not round-trip cleanly through /v1/chat.`);
+          console.log(`  [FAIL] describe did not round-trip cleanly through /v1/browser/turns.`);
           console.log(`         rendered: ${JSON.stringify(reply)}`);
           console.log(`         recorded gateway call: ${JSON.stringify(call)}`);
         }

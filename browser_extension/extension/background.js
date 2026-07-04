@@ -5,7 +5,7 @@
 
 import { gatewayUrlDiagnostic, getEffectiveGatewayConfig, seedGatewayConfig } from "./config.js";
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
-import { parseBrowserTaskIntent, parseOpenTabIntent } from "./browser-task-intent.js";
+import { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
@@ -29,6 +29,19 @@ const voiceSessions = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
 const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
+const BROWSER_AGENT_PROGRESS_TEXT = {
+  collecting_page_context: "collecting page context",
+  capturing_screenshot: "capturing screenshot",
+  sending_to_gateway: "sending to gateway",
+  waiting_for_answer: "waiting for answer",
+  done: "done",
+  error: "error",
+};
+const BROWSER_TURN_STATUS_TIMEOUT_MS = 30000;
+const BROWSER_TURN_STATUS_POLL_MS = 400;
+// Keep evidence requests well below the gateway's 1 MiB JSON body cap. Text,
+// element summaries, and envelope metadata still need room in the same request.
+const MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS = 420 * 1024;
 const VOICE_AUTO_COMMIT_ENABLED = true;
 const VOICE_AUTO_COMMIT_SILENCE_MS = 900;
 const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
@@ -89,7 +102,7 @@ function formatVoiceSocketNetworkError(cfg, ticket, reason) {
 }
 
 // Pipe a request into the user's own agent gateway instead of the model vendor.
-// Returns the parsed JSON body for the given path (e.g. "/v1/chat", "/health").
+// Returns the parsed JSON body for the given path (e.g. "/v1/browser/turns", "/health").
 async function callGateway(cfg, path, { method = "POST", body, signal } = {}) {
   if (!cfg.gatewayUrl) {
     throw new Error("No gateway URL set. Open A.G. Options and set the Agent gateway URL.");
@@ -1919,11 +1932,56 @@ async function saveTaskState(id, patch) {
 async function captureScreenshot(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 55 });
-    return dataUrl.split(",")[1]; // strip data: prefix
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 45 });
+    const base64 = dataUrl.split(",")[1]; // strip data: prefix
+    if (base64) return base64;
+  } catch {
+    // Headless Chrome and some tab states reject captureVisibleTab. Fall back to
+    // a short-lived CDP attach so page-agent evidence can still include pixels.
+  }
+  return captureScreenshotViaDebugger(tabId);
+}
+
+async function captureScreenshotViaDebugger(tabId) {
+  const target = { tabId };
+  let attached = false;
+  try {
+    await debuggerAttach(target);
+    attached = true;
+    await debuggerSend(target, "Page.enable");
+    const shot = await debuggerSend(target, "Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 45,
+      fromSurface: true,
+    });
+    return shot?.data || null;
   } catch {
     return null;
+  } finally {
+    if (attached) await debuggerDetach(target);
   }
+}
+
+function browserScreenshotEvidence(base64) {
+  const data = String(base64 || "");
+  if (!data) return null;
+  const bytes = Math.ceil((data.length * 3) / 4);
+  if (data.length > MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS) {
+    return {
+      media_type: "image/jpeg",
+      encoding: "omitted",
+      omitted: true,
+      bytes,
+      max_base64_chars: MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS,
+      reason: "screenshot too large for gateway evidence payload",
+    };
+  }
+  return {
+    media_type: "image/jpeg",
+    encoding: "base64",
+    data,
+    bytes,
+  };
 }
 
 function elementsText(snap) {
@@ -2033,38 +2091,282 @@ function snapToScreen(snap) {
   };
 }
 
-async function describePageViaGateway(tabId, cfg, signal, cueId) {
-  await saveTaskState(cueId, { status: "running", instruction: "Describe this page", step: 0, lastResult: "reading page (gateway)", tabId });
-  send(tabId, { cmd: "progress", cueId, text: "reading the page…" });
+function sendBrowserAgentProgress(tabId, cueId, state, text) {
+  const label = text || BROWSER_AGENT_PROGRESS_TEXT[state] || String(state || "working");
+  send(tabId, { cmd: "browserAgentProgress", cueId, state, text: label });
+}
+
+async function noteBrowserAgentProgress(tabId, cueId, instruction, step, state, text) {
+  const label = text || BROWSER_AGENT_PROGRESS_TEXT[state] || String(state || "working");
+  sendBrowserAgentProgress(tabId, cueId, state, label);
+  await saveTaskState(cueId, {
+    status: state === "error" ? "error" : state === "done" ? "done" : "running",
+    instruction,
+    step,
+    tabId,
+    lastResult: label,
+  });
+}
+
+async function collectBrowserSnapshot(tabId) {
+  try {
+    return normalizeBrowserSnapshot(await ask(tabId, { cmd: "snapshot" }));
+  } catch {
+    let tab = null;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {}
+    return normalizeBrowserSnapshot({
+      url: tab?.url || "",
+      title: tab?.title || "",
+      pageText: "",
+      elements: [],
+    });
+  }
+}
+
+function normalizeBrowserSnapshot(snap) {
+  const raw = snap && typeof snap === "object" ? snap : {};
+  const elements = Array.isArray(raw.elements) ? raw.elements : [];
+  const elementSummaries = Array.isArray(raw.elementSummaries) && raw.elementSummaries.length
+    ? raw.elementSummaries.map((item) => String(item || ""))
+    : elements.slice(0, MAX_ELEMENTS).map((element) => {
+      const type = element.type ? ` ${element.type}` : "";
+      const label = element.label ? ` ${element.label}` : "";
+      return `[${element.i}] <${element.tag}${type}>${label}`;
+    });
+  return {
+    ...raw,
+    url: String(raw.url || ""),
+    title: String(raw.title || ""),
+    pageText: String(raw.pageText || raw.page_text || ""),
+    elements,
+    snapshotId: raw.snapshotId || raw.snapshot_id || `snap_${crypto.randomUUID?.() || Date.now().toString(36)}`,
+    viewport: raw.viewport && typeof raw.viewport === "object" ? raw.viewport : null,
+    capturedAt: raw.capturedAt || raw.captured_at || new Date().toISOString(),
+    elementSummaries,
+  };
+}
+
+function browserTurnClient(deviceId, input) {
+  return {
+    platform: "browser",
+    source: "agee-extension",
+    device_id: deviceId,
+    input,
+  };
+}
+
+function browserEvidencePage(snapshot) {
+  return {
+    url: snapshot.url || "",
+    title: snapshot.title || "",
+    snapshot_id: snapshot.snapshotId || "",
+    captured_at: snapshot.capturedAt || "",
+    viewport: snapshot.viewport || null,
+  };
+}
+
+async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, options = {}) {
+  const text = String(instruction || "").trim() || "Describe this page";
+  const inputKind = options.input || "text";
+  claimActiveAgentTab(tabId, "browser agent turn started", {
+    cue_id: cueId,
+    status: "collecting_page_context",
+  });
+
+  await noteBrowserAgentProgress(tabId, cueId, text, 0, "collecting_page_context");
   throwIfAborted(signal);
-  const snap = await ask(tabId, { cmd: "snapshot" });
+  const snapshot = await collectBrowserSnapshot(tabId);
+
+  await noteBrowserAgentProgress(tabId, cueId, text, 1, "capturing_screenshot");
   throwIfAborted(signal);
+  const screenshot = await captureScreenshot(tabId);
+  const screenshotEvidence = browserScreenshotEvidence(screenshot);
+
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
-  const data = await callGateway(cfg, "/v1/chat", {
+  const client = browserTurnClient(deviceId, inputKind);
+  const common = {
+    source: "agee-extension",
+    device_id: deviceId,
+    session_id: sessionId,
+    conversation_id: sessionId,
+    branch_id: cueId || "browser-agent",
+    all_branches_context: true,
+    client,
+  };
+
+  await noteBrowserAgentProgress(tabId, cueId, text, 2, "sending_to_gateway");
+  throwIfAborted(signal);
+  let started = await callGateway(cfg, "/v1/browser/turns", {
     signal,
     body: {
-      source: "agee-extension",
-      device_id: deviceId,
-      session_id: sessionId,
-      conversation_id: sessionId,
-      branch_id: cueId || "describe",
-      all_branches_context: true,
-      screen: snapToScreen(snap),
-      client: {
-        platform: "browser",
-        source: "agee-extension",
-        device_id: deviceId,
-        input: "text",
-      },
-      messages: [
-        { role: "user", content: "Describe this page in 3-5 compact bullets. Include what it is and what the user can do here. Do not claim you took any action." },
-      ],
+      ...common,
+      instruction: text,
+      transcript: text,
+      modality: inputKind,
+      input: { type: inputKind, text },
+      page: browserEvidencePage(snapshot),
+      intent_hint: "browser_page_question",
     },
   });
-  const text = String(data.text || "").trim() || "The gateway returned an empty description.";
-  send(tabId, { cmd: "done", cueId, summary: text });
-  await saveTaskState(cueId, { status: "done", instruction: "Describe this page", step: 1, lastResult: text.slice(0, 500), tabId });
+
+  await noteBrowserAgentProgress(tabId, cueId, text, 3, "waiting_for_answer");
+  throwIfAborted(signal);
+  let evidenceId = "";
+  if (browserTurnNeedsEvidence(started)) {
+    const evidenceRequestId = browserTurnEvidenceRequestId(started);
+    const evidence = await callGateway(cfg, "/v1/browser/evidence", {
+      signal,
+      body: {
+        ...common,
+        turn_id: browserTurnId(started),
+        evidence_request_id: evidenceRequestId,
+        instruction: text,
+        page: browserEvidencePage(snapshot),
+        snapshot: {
+          snapshot_id: snapshot.snapshotId,
+          url: snapshot.url,
+          title: snapshot.title,
+          page_text: snapshot.pageText,
+          elements: snapshot.elements.slice(0, MAX_ELEMENTS),
+          element_summaries: snapshot.elementSummaries.slice(0, MAX_ELEMENTS),
+          viewport: snapshot.viewport,
+          captured_at: snapshot.capturedAt,
+        },
+        screenshot: screenshotEvidence,
+        screen: snapToScreen(snapshot),
+      },
+    });
+    evidenceId = evidence?.evidence?.id || evidence?.evidence_id || evidence?.id || evidence?.ref || snapshot.snapshotId;
+    started = evidence;
+  }
+
+  const data = await waitForBrowserTurnAnswer(cfg, started, signal);
+  const summary = browserTurnSummary(data);
+  const speak = String(data?.speak || data?.result?.speak || "").trim();
+  sendBrowserAgentProgress(tabId, cueId, "done");
+  send(tabId, { cmd: "done", cueId, summary, speak });
+  await saveTaskState(cueId, {
+    status: "done",
+    instruction: text,
+    step: 4,
+    tabId,
+    browserTurnId: browserTurnId(data) || browserTurnId(started) || null,
+    evidenceId: evidenceId || null,
+    lastResult: summary.slice(0, 500),
+  });
+  return data;
+}
+
+function browserTurnId(data) {
+  return data?.id || data?.turn_id || data?.browser_turn_id || data?.turn?.id || data?.turn?.turn_id || null;
+}
+
+function browserTurnStatusPath(data) {
+  const raw = data?.status_url || data?.statusUrl || data?.turn?.status_url || data?.turn?.statusUrl || "";
+  if (raw) {
+    try {
+      const url = new URL(raw);
+      return `${url.pathname}${url.search || ""}`;
+    } catch {
+      return String(raw);
+    }
+  }
+  const id = browserTurnId(data);
+  return id ? `/v1/browser/turns/${encodeURIComponent(id)}/status` : "";
+}
+
+function browserTurnNeedsEvidence(data) {
+  const status = String(data?.status || data?.state || data?.turn?.status || "").toLowerCase();
+  return status === "needs_evidence";
+}
+
+function browserTurnEvidenceRequestId(data) {
+  const requests = [
+    ...(Array.isArray(data?.evidence_request_ids) ? data.evidence_request_ids : []),
+    ...(Array.isArray(data?.turn?.evidence_request_ids) ? data.turn.evidence_request_ids : []),
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  return requests[0] || "";
+}
+
+function browserTurnReplyText(data) {
+  const result = data?.result && typeof data.result === "object" ? data.result : {};
+  const turn = data?.turn && typeof data.turn === "object" ? data.turn : {};
+  for (const value of [
+    data?.display,
+    data?.text,
+    data?.answer,
+    data?.summary,
+    result.display,
+    result.text,
+    result.answer,
+    result.summary,
+    turn.display,
+    turn.text,
+    turn.answer,
+    turn.summary,
+  ]) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function browserTurnActions(data) {
+  const result = data?.result && typeof data.result === "object" ? data.result : {};
+  return [
+    ...(Array.isArray(data?.actions) ? data.actions : []),
+    ...(Array.isArray(data?.proposals) ? data.proposals : []),
+    ...(Array.isArray(data?.action_proposals) ? data.action_proposals : []),
+    ...(Array.isArray(result.actions) ? result.actions : []),
+    ...(Array.isArray(result.proposals) ? result.proposals : []),
+    ...(Array.isArray(result.action_proposals) ? result.action_proposals : []),
+  ];
+}
+
+function browserTurnSummary(data) {
+  const reply = browserTurnReplyText(data);
+  const actions = browserTurnActions(data);
+  const actionNotice = actions.length
+    ? `Gateway proposed ${actions.length} browser action${actions.length === 1 ? "" : "s"}; not executed in this slice.`
+    : "";
+  if (reply && actionNotice) return `${reply}\n\n${actionNotice}`;
+  if (reply) return reply;
+  if (actionNotice) return actionNotice;
+  return "The gateway returned an empty browser-agent response.";
+}
+
+function browserTurnHasAnswer(data) {
+  return Boolean(browserTurnReplyText(data) || browserTurnActions(data).length);
+}
+
+function browserTurnIsPending(data) {
+  const status = String(data?.status || data?.state || data?.turn?.status || "").toLowerCase();
+  return ["", "queued", "pending", "accepted", "created", "running", "working", "started", "processing", "in_progress"].includes(status) && !browserTurnHasAnswer(data);
+}
+
+function browserTurnFailed(data) {
+  const status = String(data?.status || data?.state || data?.turn?.status || "").toLowerCase();
+  return ["error", "failed", "cancelled", "canceled"].includes(status);
+}
+
+async function waitForBrowserTurnAnswer(cfg, initial, signal) {
+  if (!browserTurnIsPending(initial) || !browserTurnStatusPath(initial)) return initial || {};
+  const statusPath = browserTurnStatusPath(initial);
+  const deadline = Date.now() + BROWSER_TURN_STATUS_TIMEOUT_MS;
+  let last = initial;
+  while (Date.now() < deadline) {
+    throwIfAborted(signal);
+    await new Promise((resolve) => setTimeout(resolve, BROWSER_TURN_STATUS_POLL_MS));
+    last = await callGateway(cfg, statusPath, { method: "GET", signal });
+    if (browserTurnFailed(last)) {
+      throw new Error(browserTurnReplyText(last) || last?.error || "browser turn failed");
+    }
+    if (!browserTurnIsPending(last)) return last || {};
+  }
+  throw new Error(`browser turn ${browserTurnId(initial) || ""} did not finish in time`.trim());
 }
 
 async function describePage(tabId, controller, cueId) {
@@ -2079,7 +2381,14 @@ async function describePage(tabId, controller, cueId) {
       send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the A.G. toolbar icon → Options and set the Agent gateway URL." });
       return;
     }
-    await describePageViaGateway(tabId, cfg, signal, cueId);
+    await runBrowserAgentTurn(
+      tabId,
+      "Describe this page in 3-5 compact bullets. Include what it is and what the user can do here. Do not claim you took any action.",
+      cfg,
+      signal,
+      cueId,
+      { input: "text" },
+    );
   } catch (err) {
     const message = signal.aborted ? "Task cancelled." : String(err.message || err);
     send(tabId, { cmd: signal.aborted ? "done" : "error", cueId, summary: message, text: message });
@@ -2137,6 +2446,10 @@ async function runAgent(tabId, instruction, controller, cueId) {
       return;
     }
     if (await maybeOpenRequestedTab(tabId, instruction, signal, cueId)) {
+      return;
+    }
+    if (looksLikePageContextQuestion(instruction)) {
+      await runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, { input: "text" });
       return;
     }
     await runViaGateway(tabId, instruction, cfg, signal, cueId);

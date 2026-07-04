@@ -220,12 +220,20 @@ function lastGatewayCallExpr(suffix, method) {
 function configureStorageExpr(url, token) {
   return `
     (async () => {
-      await chrome.storage.local.set({
+      const desired = {
         ageeGatewayUrl: ${JSON.stringify(url)},
         ageeGatewayToken: ${JSON.stringify(token)},
         ageeApiKey: "",
-      });
-      const got = await chrome.storage.local.get(["ageeGatewayUrl", "ageeGatewayToken"]);
+      };
+      let got = {};
+      for (let i = 0; i < 8; i += 1) {
+        await chrome.storage.local.set(desired);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        got = await chrome.storage.local.get(["ageeGatewayUrl", "ageeGatewayToken"]);
+        if (got.ageeGatewayUrl === desired.ageeGatewayUrl && got.ageeGatewayToken === desired.ageeGatewayToken) {
+          break;
+        }
+      }
       return { url: got.ageeGatewayUrl, tokenSet: Boolean(got.ageeGatewayToken) };
     })()
   `;
