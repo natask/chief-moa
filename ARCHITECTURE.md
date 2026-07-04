@@ -510,6 +510,11 @@ audit event on the `account-connection:{id}` stream. Contract:
   responses report the scope and device id they applied to. The current
   language catalog is intentionally limited to English (`en-US`) and Amharic
   (`am-ET`) until the product scope explicitly expands.
+- `companion`: a gateway-owned manifest for a selectable or user-created helper.
+  It bundles assistant identity, role instructions, voice, appearance hints,
+  starter prompts, smoke prompts, and discovery tags. Applying a companion
+  patches `agent_profile` with active companion metadata and behavior fields; it
+  does not grant phone, browser, or execution-machine authority.
 - `browser_agent_owner`: the single active browser tab/page/run that may listen,
   speak, and show browser-local task cues for a browser session; non-owner tabs
   can show passive status but must not capture voice or claim local cues.

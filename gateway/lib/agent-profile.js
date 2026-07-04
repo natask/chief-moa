@@ -43,6 +43,10 @@ const PROFILE_FIELDS = [
   "autonomy_level",
   "memory_policy",
   "recovery_mode",
+  "active_companion_id",
+  "active_companion_name",
+  "active_companion_source",
+  "active_companion_version",
 ];
 
 // Canonicalize a requested voice to its proper-case core-voice name, including
@@ -657,6 +661,17 @@ function pickProfileFields(input) {
       out[field] = input[field].trim().toLowerCase().replace(/\s+/g, "_").slice(0, 80);
     }
   }
+  for (const field of ["active_companion_id", "active_companion_source", "active_companion_version"]) {
+    if (typeof input[field] === "string" && input[field].trim()) {
+      out[field] = input[field].trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_").slice(0, 120);
+    }
+  }
+  if (typeof input.active_companion_name === "string" && input.active_companion_name.trim()) {
+    const name = normalizeAssistantName(input.active_companion_name);
+    if (name) {
+      out.active_companion_name = name;
+    }
+  }
   if (input.voice !== undefined && input.voice !== null && input.voice !== "") {
     const voice = normalizeVoice(input.voice);
     // Unknown voices are dropped (not persisted) so a bad value leaves the
@@ -701,6 +716,10 @@ function normalizeProfile(defaults) {
     autonomy_level: picked.autonomy_level || "confirm_actions",
     memory_policy: picked.memory_policy || "recall_and_write",
     recovery_mode: picked.recovery_mode || "normal",
+    active_companion_id: picked.active_companion_id || "",
+    active_companion_name: picked.active_companion_name || "",
+    active_companion_source: picked.active_companion_source || "",
+    active_companion_version: picked.active_companion_version || "",
   };
 }
 

@@ -225,6 +225,18 @@ function parseProfileControlIntent(text) {
     return knownPersona;
   }
 
+  const companionRequest = companionRequestFrom(raw);
+  if (companionRequest) {
+    return {
+      action: "companion_create_apply",
+      subject: "companion",
+      summary: `companion ${companionRequest.role}`,
+      companion_request: companionRequest.text,
+      companion_role: companionRequest.role,
+      scope,
+    };
+  }
+
   const assistantName = assistantNameUpdateFrom(raw);
   if (assistantName) {
     return {
@@ -514,6 +526,43 @@ function promptUpdateFrom(text) {
     }
   }
   return "";
+}
+
+function companionRequestFrom(text) {
+  const raw = String(text || "").trim();
+  const patterns = [
+    /\b(?:i\s+want|i'd\s+like|i\s+would\s+like)\s+you\s+to\s+(?:be|become|act\s+as)\s+(.+)$/i,
+    /\b(?:make|turn)\s+(?:yourself|you)\s+(?:into\s+)?(?:my\s+|a\s+|an\s+)?(.+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    const role = normalizeCompanionRole(match?.[1] || "");
+    if (role) {
+      return { text: raw, role };
+    }
+  }
+  return null;
+}
+
+function normalizeCompanionRole(value) {
+  const role = String(value || "")
+    .trim()
+    .replace(/^["'`]+|["'`.!,?;:]+$/g, "")
+    .replace(/\s+(?:for me|from now on|going forward|please)$/i, "")
+    .replace(/\s+(?:who|that|because|so)\s+.+$/i, "")
+    .replace(/^(?:a|an|my)\s+/i, "")
+    .replace(/\s+/g, " ");
+  if (!role || role.length > 120 || role.split(/\s+/).length > 8) {
+    return "";
+  }
+  const lower = normalizeSpeech(role);
+  if (!lower || /^(?:you|yourself|me|it|that|this|called|named)$/.test(lower)) {
+    return "";
+  }
+  if (!/[a-z0-9]/i.test(role)) {
+    return "";
+  }
+  return role;
 }
 
 // Find every known language named in a phrase, in spoken order. `lower` is the

@@ -28,6 +28,11 @@ const heardLanguageSearchEl = document.getElementById("heardLanguageSearch");
 const heardLanguageOptionsEl = document.getElementById("heardLanguageOptions");
 const profileCatalogStateEl = document.getElementById("profileCatalogState");
 const profileStatusEl = document.getElementById("profileStatus");
+const companionSearchEl = document.getElementById("companionSearch");
+const companionListEl = document.getElementById("companionList");
+const companionDetailsEl = document.getElementById("companionDetails");
+const companionPromptEl = document.getElementById("companionPrompt");
+const companionStatusEl = document.getElementById("companionStatus");
 
 // Cache key written by both this page and background.js after a successful PUT,
 // so a profile change applied from the overlay refreshes this page live.
@@ -58,6 +63,12 @@ function flashProfile(text, ok = true) {
 function flashMic(text, ok = true) {
   micStatusEl.textContent = text;
   micStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
+}
+
+function flashCompanion(text, ok = true) {
+  if (!companionStatusEl) return;
+  companionStatusEl.textContent = text;
+  companionStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
 }
 
 function gatewayConfig() {
@@ -226,6 +237,7 @@ document.getElementById("checkMic").addEventListener("click", async () => {
 let currentProfile = null; // last effective profile we rendered
 let currentProfileOptions = null;
 let languageCatalog = [];
+let currentCompanions = [];
 
 function splitLanguageCodes(value) {
   const seen = new Set();
@@ -441,6 +453,7 @@ async function loadProfile() {
     const payload = await resp.json();
     renderProfile(payload);
     await chrome.storage.local.set({ [PROFILE_CACHE_KEY]: payload });
+    await loadCompanions(url, token);
     flashProfile("Loaded ✓");
     setTimeout(() => (profileStatusEl.textContent = ""), 1200);
   } catch (err) {
@@ -471,6 +484,130 @@ async function loadProfileOptions(url, token) {
         : "Gateway options catalog unavailable.";
     }
   }
+}
+
+async function loadCompanions(url, token, query = companionSearchEl?.value || "") {
+  if (!url || !companionListEl) return;
+  try {
+    const q = String(query || "").trim();
+    const resp = await fetch(`${url}/v1/agent/companions${q ? `?q=${encodeURIComponent(q)}` : ""}`, {
+      headers: gatewayHeaders(token, false),
+    });
+    if (!resp.ok) {
+      flashCompanion(`Catalog ${resp.status}`, false);
+      return;
+    }
+    const payload = await resp.json();
+    renderCompanions(payload);
+    flashCompanion(`Loaded ${currentCompanions.length} companions ✓`);
+    setTimeout(() => (companionStatusEl.textContent = ""), 1400);
+  } catch (err) {
+    flashCompanion(`Catalog unavailable: ${String(err.message || err)}`, false);
+  }
+}
+
+function renderCompanions(payload) {
+  currentCompanions = Array.isArray(payload?.companions) ? payload.companions : [];
+  companionListEl.textContent = "";
+  for (const item of currentCompanions) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = `${item.name} — ${item.summary || item.voice || ""}`.slice(0, 180);
+    companionListEl.append(option);
+  }
+  const activeId = currentProfile?.active_companion_id || payload?.active_companion_id || "";
+  if (activeId && currentCompanions.some((item) => item.id === activeId)) {
+    companionListEl.value = activeId;
+  }
+  renderSelectedCompanion();
+}
+
+function selectedCompanion() {
+  const id = companionListEl?.value || "";
+  return currentCompanions.find((item) => item.id === id) || null;
+}
+
+function renderSelectedCompanion(extra = "") {
+  if (!companionDetailsEl) return;
+  const item = selectedCompanion();
+  if (!item) {
+    companionDetailsEl.textContent = currentCompanions.length ? "Select a companion." : "No companions loaded.";
+    return;
+  }
+  const tags = Array.isArray(item.tags) && item.tags.length ? ` · ${item.tags.join(", ")}` : "";
+  const active = currentProfile?.active_companion_id === item.id ? "Active · " : "";
+  companionDetailsEl.innerHTML =
+    `<strong>${active}${escapeHtml(item.name)}</strong>` +
+    `${escapeHtml(item.summary || "")}<br>` +
+    `Voice: ${escapeHtml(item.voice || "default")}${escapeHtml(tags)}${extra ? `<br>${escapeHtml(extra)}` : ""}`;
+}
+
+async function createCompanionFromPrompt() {
+  const { url, token } = gatewayConfig();
+  const text = companionPromptEl?.value.trim();
+  if (!url) throw new Error("Set the gateway URL first.");
+  if (!text) throw new Error("Describe the companion first.");
+  const resp = await fetch(`${url}/v1/agent/companions`, {
+    method: "POST",
+    headers: gatewayHeaders(token, true),
+    body: JSON.stringify({ text, source: "agee-options" }),
+  });
+  if (resp.status === 401) throw new Error("Gateway rejected the token (401).");
+  if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
+  const payload = await resp.json();
+  companionPromptEl.value = "";
+  await loadCompanions(url, token);
+  if (payload?.companion?.id && currentCompanions.some((item) => item.id === payload.companion.id)) {
+    companionListEl.value = payload.companion.id;
+  }
+  renderSelectedCompanion("Draft created. Preview or apply it when ready.");
+  return payload;
+}
+
+async function previewSelectedCompanion() {
+  const { url, token } = gatewayConfig();
+  const item = selectedCompanion();
+  if (!url) throw new Error("Set the gateway URL first.");
+  if (!item) throw new Error("Select a companion first.");
+  const resp = await fetch(`${url}/v1/agent/companions/preview`, {
+    method: "POST",
+    headers: gatewayHeaders(token, true),
+    body: JSON.stringify({
+      companion_id: item.id,
+      scope: profileScopeEl?.value === "device" ? "device" : "global",
+      device_id: await getStableDeviceId(),
+    }),
+  });
+  if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
+  const payload = await resp.json();
+  const changed = payload?.profile_preview?.changed || {};
+  const changedFields = Object.keys(changed);
+  renderSelectedCompanion(changedFields.length ? `Preview changes: ${changedFields.join(", ")}.` : "Preview has no profile changes.");
+  return payload;
+}
+
+async function applySelectedCompanion() {
+  const { url, token } = gatewayConfig();
+  const item = selectedCompanion();
+  if (!url) throw new Error("Set the gateway URL first.");
+  if (!item) throw new Error("Select a companion first.");
+  const resp = await fetch(`${url}/v1/agent/companions/apply`, {
+    method: "POST",
+    headers: gatewayHeaders(token, true),
+    body: JSON.stringify({
+      companion_id: item.id,
+      scope: profileScopeEl?.value === "device" ? "device" : "global",
+      device_id: await getStableDeviceId(),
+      source: "agee-options",
+    }),
+  });
+  if (resp.status === 401) throw new Error("Gateway rejected the token (401).");
+  if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
+  const payload = await resp.json();
+  renderProfile(payload);
+  await chrome.storage.local.set({ [PROFILE_CACHE_KEY]: payload });
+  renderSelectedCompanion("Applied to the runtime profile.");
+  return payload;
 }
 
 // Patch + persist a profile change through the gateway, then re-render from the
@@ -533,6 +670,47 @@ profileScopeEl?.addEventListener("change", loadProfile);
 for (const config of languagePickerConfigs()) {
   config.search.addEventListener("input", () => renderLanguagePicker(config));
 }
+companionListEl?.addEventListener("change", () => renderSelectedCompanion());
+document.getElementById("searchCompanions")?.addEventListener("click", async () => {
+  const { url, token } = gatewayConfig();
+  flashCompanion("Searching…");
+  await loadCompanions(url, token, companionSearchEl?.value || "");
+});
+companionSearchEl?.addEventListener("keydown", async (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    const { url, token } = gatewayConfig();
+    flashCompanion("Searching…");
+    await loadCompanions(url, token, companionSearchEl.value);
+  }
+});
+document.getElementById("createCompanion")?.addEventListener("click", async () => {
+  flashCompanion("Creating…");
+  try {
+    await createCompanionFromPrompt();
+    flashCompanion("Draft created ✓");
+  } catch (err) {
+    flashCompanion(String(err.message || err), false);
+  }
+});
+document.getElementById("previewCompanion")?.addEventListener("click", async () => {
+  flashCompanion("Previewing…");
+  try {
+    await previewSelectedCompanion();
+    flashCompanion("Preview ready ✓");
+  } catch (err) {
+    flashCompanion(String(err.message || err), false);
+  }
+});
+document.getElementById("applyCompanion")?.addEventListener("click", async () => {
+  flashCompanion("Applying…");
+  try {
+    await applySelectedCompanion();
+    flashCompanion("Companion applied ✓");
+  } catch (err) {
+    flashCompanion(String(err.message || err), false);
+  }
+});
 
 document.getElementById("resetProfile").addEventListener("click", async () => {
   const { url, token } = gatewayConfig();
@@ -602,9 +780,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
   const next = changes[PROFILE_CACHE_KEY].newValue;
   if (next && next.profile) {
     renderProfile(next);
+    renderSelectedCompanion();
     flashProfile("Updated live ✓");
     setTimeout(() => (profileStatusEl.textContent = ""), 1500);
   }
 });
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
 export { PROFILE_FIELDS };

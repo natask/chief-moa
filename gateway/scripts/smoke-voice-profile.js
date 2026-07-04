@@ -71,6 +71,7 @@ async function main() {
     await step("provider session-config carries the profile voice and language", () => assertProviderSessionConfig(dataDir));
     await step("live transcript profile-control is applied by the gateway", () => assertLiveTranscriptProfileControl(baseUrl, wsUrl, dataDir));
     await step("text-only voice sample sessions use per-session voice override", () => assertTextOnlyVoiceSampleSession(wsUrl, fakeLive));
+    await step("companion catalog drafts previews and applies through profile", () => assertCompanionCatalog(baseUrl));
 
     console.log(JSON.stringify({
       ok: true,
@@ -91,6 +92,7 @@ async function main() {
         "provider session-config preserves requested honorific/style prompt instructions and adds the address-preference rule",
         "a completed Gemini Live transcript 'use the Charon voice' is stored as profile_control, persists voice=Charon, and corrects a provider refusal",
         "a text_turn sample session sends Gemini clientContent with a session-only voice override",
+        "companion manifest list/create/preview/apply works and spoken 'I want you to be ...' applies a custom companion",
       ],
     }, null, 2));
   } finally {
@@ -327,6 +329,57 @@ async function assertTranscriptEcho(baseUrl) {
 
   const missing = await requestJson(`${baseUrl}/v1/voice/turns/does-not-exist`);
   assert.equal(missing.status, 404, "GET for an unknown turn must 404");
+}
+
+async function assertCompanionCatalog(baseUrl) {
+  const list = await getJson(`${baseUrl}/v1/agent/companions`);
+  assert.equal(list.version, "companion-catalog/v1");
+  assert.ok(Array.isArray(list.companions), "companion list must include companions");
+  assert.ok(list.companions.some((item) => item.id === "shigmi-scout"), "built-in Shigmi Scout must be listed");
+
+  const draft = await postJson(`${baseUrl}/v1/agent/companions`, {
+    text: "I want you to be a research scout",
+    source: "voice-profile-smoke",
+  });
+  assert.equal(draft.status, 201, `companion draft must succeed: ${JSON.stringify(draft.json)}`);
+  assert.equal(draft.json.active_profile_mutated, false, "drafting must not mutate the active profile");
+  assert.ok(draft.json.companion.id.startsWith("custom-"), "draft must create a custom companion id");
+  assert.equal(draft.json.companion.profile_patch.tool_policy, "propose_only", "companion must not grant tool authority");
+
+  const before = await getJson(`${baseUrl}/v1/agent/profile`);
+  const preview = await postJson(`${baseUrl}/v1/agent/companions/preview`, {
+    companion_id: draft.json.companion.id,
+  });
+  assert.equal(preview.status, 200, `companion preview must succeed: ${JSON.stringify(preview.json)}`);
+  assert.equal(preview.json.mutates_profile, false, "preview must be non-mutating");
+  assert.equal(preview.json.profile_version, before.profile_version, "preview must not advance the profile version");
+  assert.equal(preview.json.profile_overrides.active_companion_id, draft.json.companion.id);
+
+  const apply = await postJson(`${baseUrl}/v1/agent/companions/apply`, {
+    companion_id: draft.json.companion.id,
+    scope: "global",
+    source: "voice-profile-smoke",
+  });
+  assert.equal(apply.status, 200, `companion apply must succeed: ${JSON.stringify(apply.json)}`);
+  assert.equal(apply.json.profile.active_companion_id, draft.json.companion.id);
+  assert.equal(apply.json.profile.active_companion_name, draft.json.companion.name);
+  assert.equal(apply.json.profile.tool_policy, "propose_only");
+
+  const after = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(after.profile.active_companion_id, draft.json.companion.id, "GET profile must reflect active companion id");
+  assert.equal(after.profile.active_companion_name, draft.json.companion.name, "GET profile must reflect active companion name");
+
+  const turn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    session_id: "voice-profile-smoke",
+    turn_id: "voice-companion-creation",
+    transcript: "I want you to be a calm writing coach",
+    source: "voice-profile-smoke",
+  });
+  assert.equal(turn.status, 200, `voice companion turn must succeed: ${JSON.stringify(turn.json)}`);
+  assert.equal(turn.json.classification, "profile_control");
+  assert.equal(turn.json.actions?.[0]?.type, "companion_applied");
+  assert.ok(turn.json.profile?.active_companion?.id, "voice response must expose active companion status");
+  assert.match(turn.json.display, /Created and switched to/);
 }
 
 async function assertHealthVoice(baseUrl) {

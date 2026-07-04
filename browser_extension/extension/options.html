@@ -40,6 +40,11 @@
       .catalog-option input { width: auto; }
       .catalog-option small { color: #777; }
       .catalog-empty { padding: 8px 4px; color: #777; font-size: 13px; }
+      .companion-grid { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+      .companion-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .companion-actions button { margin-top: 0; }
+      #companionDetails { margin-top: 10px; padding: 10px 12px; border: 1px solid #e2e2e2; border-radius: 8px; font-size: 13px; color: #333; background: #fafafa; min-height: 36px; }
+      #companionDetails strong { display: block; margin-bottom: 4px; }
       hr { margin: 28px 0; border: 0; border-top: 1px solid #eee; }
     </style>
   </head>
@@ -85,11 +90,35 @@
 
     <label for="changeBox">Change a setting by talking to the agent</label>
     <div class="talk-box">
-      <input id="changeBox" type="text" placeholder='e.g. "be terser", "set the system prompt to …", "use model gpt-4o-mini"' autocomplete="off" />
+      <input id="changeBox" type="text" placeholder='e.g. "be terser", "I want you to be a research scout", "use model gpt-4o-mini"' autocomplete="off" />
       <button id="applyChange">Apply</button>
     </div>
     <div class="hint">Plain language. The agent turns it into a concrete profile change and applies it through the gateway.</div>
     <div id="talkResult"></div>
+
+    <h2>Companions</h2>
+    <p class="sub">Choose a Shigmi-line companion or draft one from a request. Preview does not change the active profile.</p>
+
+    <label for="companionSearch">Find companions</label>
+    <div class="companion-grid">
+      <input id="companionSearch" type="text" placeholder="research, writing, browser, calm…" autocomplete="off" />
+      <button id="searchCompanions" style="background:#2563eb">Search</button>
+    </div>
+
+    <label for="companionList">Companion catalog</label>
+    <select id="companionList"></select>
+    <div id="companionDetails">Companion catalog loads from the gateway.</div>
+
+    <label for="companionPrompt">Create a companion by describing it</label>
+    <div class="talk-box">
+      <input id="companionPrompt" type="text" placeholder='e.g. "I want you to be a calm writing coach"' autocomplete="off" />
+      <button id="createCompanion">Create</button>
+    </div>
+    <div class="companion-actions">
+      <button id="previewCompanion" style="background:#777">Preview</button>
+      <button id="applyCompanion">Apply companion</button>
+      <span id="companionStatus"></span>
+    </div>
 
     <label for="systemPrompt">System prompt</label>
     <textarea id="systemPrompt" placeholder="(gateway default)"></textarea>
