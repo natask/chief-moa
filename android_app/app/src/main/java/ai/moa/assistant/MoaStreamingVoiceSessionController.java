@@ -406,6 +406,7 @@ final class MoaStreamingVoiceSessionController {
     }
 
     private void reportError(String message, Throwable error) {
+        mainHandler.removeCallbacks(pendingCommitTimeout);
         post(() -> callback.onError(message, error));
     }
 
@@ -652,8 +653,8 @@ final class MoaStreamingVoiceSessionController {
                 pendingCommitAfterSessionReady = false;
                 hasAudio = capturedAudioBytes > 0;
             }
-            Log.i(TAG, "sessionReady");
             mainHandler.removeCallbacks(pendingCommitTimeout);
+            Log.i(TAG, "sessionReady");
             if (shouldFinishCommit) {
                 finishCommittedTurn(socket, currentTurnId, hasAudio);
             } else {

@@ -231,6 +231,7 @@ public final class OverlayService extends Service {
         removePanel();
         removeOrb();
         agentRunPolling = false;
+        cancelStreamingTurnWatchdog();
         if (voiceController != null) {
             voiceController.destroy();
             voiceController = null;
@@ -2227,7 +2228,8 @@ public final class OverlayService extends Service {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript);
                     return;
                 }
-                setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+                setVoiceRuntimeState(VoiceRuntimeState.SENDING);
+                armStreamingTurnWatchdog(generation);
                 updateMicState();
             }
 
@@ -2289,7 +2291,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                cancelStreamingTurnWatchdog();
+                markStreamingTurnProgressing();
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -2397,6 +2399,7 @@ public final class OverlayService extends Service {
 
     private void recoverStreamingVoiceTurn(int generation) {
         Log.i(TAG, "recovering from interrupted streaming voice turn");
+        cancelStreamingTurnWatchdog();
         if (!currentStreamingTurnRouted) {
             recordCurrentStreamingAssistant();
         }
@@ -2464,6 +2467,7 @@ public final class OverlayService extends Service {
         }
         currentStreamingTurnRouted = true;
         currentStreamingTurnCommitRequested = false;
+        cancelStreamingTurnWatchdog();
         nextStreamingTurnFollowsActiveRun = false;
         if (addUserMessage) {
             addMessage(false, transcript);
@@ -2479,6 +2483,7 @@ public final class OverlayService extends Service {
     }
 
     private void showReadyForNextVoiceTurn(int generation) {
+        cancelStreamingTurnWatchdog();
         setVoiceRuntimeState(VoiceRuntimeState.READY);
         updateMicState();
         if (continuousVoiceLoop && generation == streamingVoiceGeneration) {
