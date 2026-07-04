@@ -90,6 +90,10 @@ const VOICE_PROVIDER_EVENTS_FILE = path.join(DATA_DIR, "voice-provider-events.js
 const BROKER_EVENTS_DIR = path.join(DATA_DIR, "broker-events");
 const BROKER_CONTEXT_PACKS_DIR = path.join(DATA_DIR, "broker-context-packs");
 const AGENT_LAUNCHER_PROFILES_PATH = path.join(GATEWAY_DIR, "agent-launcher-profiles.json");
+// Per-session typed-chat turn records (mirrors the voice-turns/<session_id>/
+// pattern). Each chat turn is a small JSON file under chat-turns/<session_id>/.
+// The global turns.jsonl ledger is still appended for backwards compatibility.
+const CHAT_TURNS_DIR = path.join(DATA_DIR, "chat-turns");
 // Ambient screen frames for the continuous (rung-3) interaction mode: the client
 // samples the screen on an interval and posts each frame here. Intake only — it
 // stores frames per session so a later merge/feedback step can read the stream.
@@ -138,7 +142,10 @@ const ROUTER_DEFAULT_HARNESS = process.env.ROUTER_DEFAULT_HARNESS || "echo";
 const BRAIN_RECALL_LIMIT = Number(process.env.BRAIN_RECALL_LIMIT || 5);
 const BRAIN_CONTEXT_MAX_CHARS = Number(process.env.BRAIN_CONTEXT_MAX_CHARS || 1200);
 const SESSION_CONTEXT_MAX_CHARS = Number(process.env.SESSION_CONTEXT_MAX_CHARS || 5000);
-const SESSION_CONTEXT_TURN_LIMIT = Number(process.env.SESSION_CONTEXT_TURN_LIMIT || 8);
+// How many prior turns to pack into the context window when building model
+// messages. The env var caps the global default; individual requests can pass
+// a smaller (never larger) limit via the `context_turn_limit` body/query param.
+const SESSION_CONTEXT_TURN_LIMIT = Math.max(1, Number(process.env.SESSION_CONTEXT_TURN_LIMIT || 40));
 const ALLOW_HARNESS_WORKDIR_OUTSIDE_ROOT = process.env.ALLOW_HARNESS_WORKDIR_OUTSIDE_ROOT === "1";
 const activeRuns = new Map();
 const voiceSessionTickets = new Map();
@@ -162,6 +169,7 @@ fs.mkdirSync(BROKER_EVENTS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
+fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 
 // Runtime-editable agent profile layered over the env defaults. On boot it loads
 // the persisted profile if present; otherwise the env default is used with no
@@ -1001,6 +1009,7 @@ const server = http.createServer(async (request, response) => {
         sessionId,
         branchId: url.searchParams.get("branch_id") || "default",
         allBranches: url.searchParams.get("all_branches") === "1" || url.searchParams.get("all_branches") === "true",
+        turnLimit: url.searchParams.get("turn_limit"),
       }));
       return;
     }
@@ -1037,6 +1046,44 @@ const server = http.createServer(async (request, response) => {
         q: url.searchParams.get("q") || url.searchParams.get("query") || "",
         limit: Number(url.searchParams.get("limit") || 50),
       }));
+      return;
+    }
+
+    // Typed chat history for a session — the read path for the console / coded
+    // chat surface. Parallel in shape to the voice /turns endpoint above but
+    // reads from the per-session chat-turns store (falling back to the global
+    // turns.jsonl ledger for sessions that pre-date the per-session store).
+    if (
+      request.method === "GET" &&
+      url.pathname.startsWith("/v1/sessions/") &&
+      url.pathname.endsWith("/chat-turns")
+    ) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const sessionId = decodeURIComponent(
+        url.pathname.slice("/v1/sessions/".length, -"/chat-turns".length)
+      );
+      const safeId = sanitizeOptionalId(sessionId, "default");
+      const limit = resolveContextTurnLimit(url.searchParams.get("limit"));
+      const all = listChatTurnRecordsForSession(safeId);
+      const page = all.slice(-limit);
+      sendJson(response, 200, {
+        session_id: safeId,
+        total: all.length,
+        limit,
+        turns: page.map((record) => ({
+          turn_id: String(record.turn_id || ""),
+          conversation_id: String(record.conversation_id || safeId),
+          session_id: String(record.session_id || safeId),
+          source: String(record.source || ""),
+          model: String(record.model || ""),
+          profile_version: String(record.profile_version || ""),
+          created_at: String(record.created_at || record.ts || ""),
+          response_text: String(record.response_text || ""),
+        })),
+      });
       return;
     }
 
@@ -1544,7 +1591,7 @@ async function handleChat(request, response) {
   const turnId = sanitizeOptionalId(body.turn_id, randomId("chat"));
   const deviceId = profileDeviceIdFromBody(body);
   const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
-  const messages = normalizeMessages(body.messages);
+  const messages = normalizeMessages(body.messages, body.context_turn_limit);
   if (messages.length === 0) {
     sendJson(response, 400, { error: "messages must contain at least one user message" });
     return;
@@ -1586,7 +1633,7 @@ async function handleChat(request, response) {
   };
 
   fs.writeFileSync(conversationPath(conversationId), JSON.stringify(saved, null, 2));
-  fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify({
+  const ledgerEntry = {
     ts: saved.updated_at,
     conversation_id: conversationId,
     session_id: sessionId,
@@ -1600,7 +1647,26 @@ async function handleChat(request, response) {
     request_messages: modelMessages,
     screen: saved.screen,
     response_text: text,
-  }) + "\n");
+  };
+  fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify(ledgerEntry) + "\n");
+  // Per-session record for fast, O(1) session-scoped reads. Parallel to how
+  // voice turns are stored under voice-turns/<session_id>/<turn_id>.json.
+  writeChatTurnRecord({
+    turn_id: turnId,
+    conversation_id: conversationId,
+    session_id: sessionId,
+    branch_id: branchId,
+    source: saved.source,
+    device_id: deviceId,
+    model: profile.model,
+    profile_version: profileVersion,
+    created_at: saved.updated_at,
+    updated_at: saved.updated_at,
+    user_text: lastUser?.content || "",
+    screen: saved.screen,
+    request_messages: modelMessages,
+    response_text: text,
+  });
   await recordChatTurnProductEvent(saved, lastUser?.content || "", text);
 
   sendJson(response, 200, {
@@ -4429,7 +4495,7 @@ async function handleVoiceTurn(request, response) {
   }
 
   try {
-    const messages = voiceMessages(body, transcript);
+    const messages = voiceMessages(body, transcript, body.context_turn_limit);
     const screenContext = formatScreenContext(body.screen || body.context?.screen);
     // Recall the user's facts/persona from the Brain (keyed off this turn's
     // transcript) and inject it as a bounded system block so the spoken answer
@@ -5723,12 +5789,12 @@ function harnessDefinition(name) {
   return definition;
 }
 
-function normalizeMessages(messages) {
+function normalizeMessages(messages, limit) {
   if (!Array.isArray(messages)) {
     throw new Error("messages must be an array");
   }
-
-  return messages.slice(-40).map((message) => {
+  const safeLimit = resolveContextTurnLimit(limit);
+  return messages.slice(-safeLimit).map((message) => {
     const role = message.role === "assistant" || message.role === "system" ? message.role : "user";
     const content = String(message.content || "").trim();
     return { role, content };
@@ -5771,13 +5837,28 @@ function contextUserTranscript(transcript, source) {
   return text;
 }
 
-function voiceMessages(body, transcript) {
-  const messages = Array.isArray(body.messages) ? normalizeMessages(body.messages) : [];
+function voiceMessages(body, transcript, limit) {
+  const safeLimit = resolveContextTurnLimit(limit);
+  const messages = Array.isArray(body.messages) ? normalizeMessages(body.messages, safeLimit) : [];
   const last = messages[messages.length - 1];
   if (!last || last.role !== "user" || last.content !== transcript) {
     messages.push({ role: "user", content: transcript });
   }
-  return messages.slice(-40);
+  return messages.slice(-safeLimit);
+}
+
+// Resolve the per-request context turn limit. Accepts an optional requested
+// value (from body or query param) and clamps it to [1, SESSION_CONTEXT_TURN_LIMIT].
+// When no override is given, the global default applies.
+function resolveContextTurnLimit(requested) {
+  if (requested == null || requested === "") {
+    return SESSION_CONTEXT_TURN_LIMIT;
+  }
+  const n = Number(requested);
+  if (!Number.isFinite(n) || n < 1) {
+    return SESSION_CONTEXT_TURN_LIMIT;
+  }
+  return Math.min(Math.floor(n), SESSION_CONTEXT_TURN_LIMIT);
 }
 
 function voiceAgentPrompt(transcript, screen, options = {}) {
@@ -6551,6 +6632,7 @@ function liveToolGetSessionContext(call, args) {
     sessionId,
     branchId,
     allBranches: args.all_branches !== false,
+    turnLimit: limit,
   });
   return {
     ok: true,
@@ -6903,6 +6985,23 @@ function voiceMultiAgentHarnesses(body, transcript) {
 
 function voiceTurnPath(sessionId, turnId) {
   return path.join(VOICE_TURNS_DIR, sanitizeOptionalId(sessionId, "default"), `${sanitizeOptionalId(turnId, randomId("turn"))}.json`);
+}
+
+// Per-session typed-chat turn record helpers. Mirrors the voice-turns pattern:
+// one JSON file per turn under chat-turns/<session_id>/<turn_id>.json for fast
+// session-scoped reads. The global turns.jsonl ledger is still appended for
+// backwards compatibility and cross-session queries.
+function chatTurnPath(sessionId, turnId) {
+  return path.join(CHAT_TURNS_DIR, sanitizeOptionalId(sessionId, "default"), `${sanitizeOptionalId(turnId, randomId("cturn"))}.json`);
+}
+
+function writeChatTurnRecord(record) {
+  const dir = path.join(CHAT_TURNS_DIR, sanitizeOptionalId(record.session_id || record.conversation_id, "default"));
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${sanitizeOptionalId(record.turn_id, randomId("cturn"))}.json`);
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(record, null, 2));
+  fs.renameSync(tmpPath, filePath);
 }
 
 function readVoiceTurnRecord(sessionId, turnId) {
@@ -7518,24 +7617,27 @@ function sendVoiceAudio(request, response, url) {
   fs.createReadStream(filePath).pipe(response);
 }
 
-function sessionContextPayload({ sessionId, branchId = "default", allBranches = false }) {
+function sessionContextPayload({ sessionId, branchId = "default", allBranches = false, turnLimit } = {}) {
   const safeSessionId = sanitizeOptionalId(sessionId, "default");
   const safeBranchId = sanitizeOptionalId(branchId, "default");
   const branchFilter = allBranches ? "" : safeBranchId;
-  const turns = listVoiceTurnRecordsForSession(safeSessionId, branchFilter);
+  const allTurns = listVoiceTurnRecordsForSession(safeSessionId, branchFilter);
+  const safeLimit = resolveContextTurnLimit(turnLimit);
+  const turns = allTurns.slice(-safeLimit);
   const turnIds = new Set(turns.map((turn) => String(turn.id || "")));
   const providerEvents = readProviderEventLedger({ sessionId: safeSessionId, branchId: branchFilter, limit: 500 });
   const chatTurns = listChatTurnRecordsForSession(safeSessionId, branchFilter, 50);
   const browserTasks = browserTasksForSession(safeSessionId, branchFilter, 50);
-  const runs = runsForSession(safeSessionId, turns);
+  const runs = runsForSession(safeSessionId, allTurns);
   return {
     generated_at: new Date().toISOString(),
     session: {
       session_id: safeSessionId,
       branch_id: safeBranchId,
       all_branches: Boolean(allBranches),
-      latest_turn_id: turns.length ? String(turns[turns.length - 1].id || "") : "",
-      turn_count: turns.length,
+      latest_turn_id: allTurns.length ? String(allTurns[allTurns.length - 1].id || "") : "",
+      turn_count: allTurns.length,
+      context_turn_limit: safeLimit,
       chat_turn_count: chatTurns.length,
       browser_task_count: browserTasks.length,
     },
@@ -7566,7 +7668,20 @@ function sessionContextPayload({ sessionId, branchId = "default", allBranches = 
 function listChatTurnRecordsForSession(sessionId, branchId = "", limit = 50) {
   const safeSessionId = sanitizeOptionalId(sessionId, "default");
   const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
-  return readChatTurnLedger()
+  const dir = path.join(CHAT_TURNS_DIR, safeSessionId);
+  const sourceRecords = fs.existsSync(dir)
+    ? fs.readdirSync(dir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => {
+          try {
+            return JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean)
+    : readChatTurnLedger();
+  return sourceRecords
     .filter((record) => {
       const recordSessionId = String(record.session_id || record.conversation_id || "");
       if (recordSessionId !== safeSessionId) return false;
