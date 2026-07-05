@@ -12,13 +12,13 @@ Every ticket has one observable acceptance check.
 
 ## Phase 0. User decisions and consolidation gate
 
-- [ ] 0.1 `[decision: 1-5]` Record the five USER DECISIONS as resolved at the top
+- [x] 0.1 `[decision: 1-5]` Record the five USER DECISIONS as resolved at the top
   of proposal.md (one image vs microservices, auth engine, BYOK backend, billing
   model, multi-tenant timing).
   Acceptance: proposal.md's USER DECISIONS section shows a confirmed choice, not a
   recommendation, for each of the five.
 
-- [ ] 0.2 `[blocked: consolidation]` Land `codex/vps-agent-control-plane` and
+- [x] 0.2 `[blocked: consolidation]` Land `codex/vps-agent-control-plane` and
   `worktree-agent-af6a296e02865afd2` to master so the MOA_MODE server changes, the
   Docker/compose stack, the worker-pull control plane, the account-connection
   store, and the VPS scripts are on the mainline this change builds on.
