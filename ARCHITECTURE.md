@@ -685,6 +685,10 @@ queues.
 - `gateway/scripts/smoke-work-history.js`: end-to-end control-plane smoke
   (voice create, worker evidence, status, feedback, cancel receipt, deployment
   links, ui.open claim/receipt), run via `npm run smoke:work-history`.
+- `gateway/lib/audio-notes.js`: record-mode audio-note store (raw bytes +
+  JSON sidecars under `DATA_DIR/audio-notes/`), served by the
+  `/v1/audio-notes` routes; deterministic smoke in
+  `scripts/smoke-audio-notes.js` (`npm run smoke:audio-notes`).
 - `gateway/lib/voice-session-server.js`: WebSocket PCM voice
   transport, turn storage, transcript events, and assistant audio events.
 - `gateway/lib/voice-providers.js`: Swappable streaming voice
