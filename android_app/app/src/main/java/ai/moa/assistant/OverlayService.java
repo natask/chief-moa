@@ -2108,6 +2108,7 @@ public final class OverlayService extends Service {
     // but remove large overlay surfaces so settings and operational status are
     // usable without the overlay stealing focus.
     private void collapseInteractiveSurfaces() {
+        cancelAudioNoteCapture();
         cancelVoiceSampler();
         removeTranscriptOverlay();
         hideKeyboard();
