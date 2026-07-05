@@ -1,0 +1,66 @@
+digraph RecordModeAudioNotes {
+    graph [goal="Record mode stores raw spoken audio as durable gateway audio notes with no STT/LLM/TTS, capturable from the browser extension and Android, verified by deterministic smokes"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    plan [
+        label="Plan",
+        prompt="Read reference/openspec/changes/record-mode-audio-notes/proposal.md and tasks.md plus scratch/agent-loop/runs/20260704-205810-record-mode-audio-notes/. Produce a concise per-lane file-change list."
+    ]
+
+    gateway_impl [
+        label="Gateway lane",
+        prompt="Implement tasks 1.1-1.4: gateway/lib/audio-notes.js store, /v1/audio-notes routes, product-event mirror, smoke-audio-notes.js wired into npm run check. No STT/LLM/TTS on the notes path."
+    ]
+
+    extension_impl [
+        label="Extension lane",
+        prompt="Implement tasks 2.1-2.4: record control, background record session buffering offscreen PCM16, POST /v1/audio-notes upload, receipts, verify-extension invariants."
+    ]
+
+    android_impl [
+        label="Android lane",
+        prompt="Implement tasks 3.1-3.4: record toggle, audio-note capture path reusing MoaAudioCaptureController, uploadAudioNote client call, OrbView recording visual."
+    ]
+
+    gateway_verify [
+        label="Gateway check",
+        shape=parallelogram,
+        script="cd gateway && npm run check 2>&1",
+        goal_gate=true
+    ]
+
+    extension_verify [
+        label="Extension verify+smoke",
+        shape=parallelogram,
+        script="cd browser_extension && npm run verify && npm run smoke 2>&1",
+        goal_gate=true
+    ]
+
+    android_verify [
+        label="Android assembleDebug",
+        shape=parallelogram,
+        script="cd android_app && ANDROID_HOME=\"$HOME/Library/Android/sdk\" ./gradlew assembleDebug 2>&1",
+        goal_gate=true
+    ]
+
+    review [
+        label="Codex review",
+        prompt="Run an adversarial codex review over the gateway and extension diffs; fix confirmed findings and re-run the lane verifications."
+    ]
+
+    approve [shape=hexagon, label="Approve + gated promotion"]
+
+    start -> plan
+    plan -> gateway_impl -> gateway_verify
+    plan -> extension_impl -> extension_verify
+    plan -> android_impl -> android_verify
+    gateway_verify -> review
+    extension_verify -> review
+    android_verify -> review
+    review -> approve
+    approve -> exit         [label="[A] Accept"]
+    approve -> review       [label="[R] Revise"]
+}
