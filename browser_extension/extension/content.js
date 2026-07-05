@@ -25,6 +25,7 @@
     panel,
     input,
     voiceButton,
+    recordButton,
     stopButton,
     log,
     pendingConfirm = null,
@@ -212,6 +213,7 @@
           <span id="agee-dot"></span>
           <textarea id="agee-input" rows="1" placeholder="Ask A.G." autocomplete="off" spellcheck="true"></textarea>
           <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice"></button>
+          <button id="agee-record" type="button" title="Record note" aria-label="Record note"></button>
           <button id="agee-stop" type="button" title="Stop current task" aria-label="Stop current task">Stop</button>
         </div>
       </div>`;
@@ -220,6 +222,7 @@
     panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
     voiceButton = root.querySelector("#agee-voice");
+    recordButton = root.querySelector("#agee-record");
     stopButton = root.querySelector("#agee-stop");
     log = root.querySelector("#agee-log");
     voiceState = root.querySelector("#agee-voice-state");
@@ -267,6 +270,12 @@
       openTextSurface({ fresh: false });
       primeAudio();
       toggleVoice();
+    });
+
+    recordButton.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleRecordMode();
     });
 
     stopButton.addEventListener("click", (e) => {
@@ -1766,6 +1775,80 @@
   function toggleManualVoiceSession() {
     beginManualVoiceGesture();
   }
+
+  // ---- Record mode: raw audio notes -------------------------------------
+  // Record mode is an audio_note capture, not a voice turn. The content script
+  // only sends runtime messages; the background owns the offscreen microphone
+  // capture, the PCM buffer, and the /v1/audio-notes upload. No voice session,
+  // no STT, no LLM, no TTS can run on this path by construction.
+  let recordActive = false;
+  let recordPending = false;
+  let recordStartedAt = 0;
+
+  function setRecordState(active) {
+    recordActive = active;
+    if (root) root.classList.toggle("agee-recording", active);
+    if (recordButton) {
+      recordButton.classList.toggle("recording", active);
+      recordButton.title = active ? "Stop recording" : "Record note";
+      recordButton.setAttribute("aria-label", active ? "Stop recording" : "Record note");
+    }
+  }
+
+  function toggleRecordMode() {
+    if (recordPending) return;
+    openTextSurface({ fresh: false });
+    if (recordActive) stopRecordMode();
+    else startRecordMode();
+  }
+
+  function startRecordMode() {
+    recordPending = true;
+    safeRuntimeSendMessage({ cmd: "recordSessionStart" }).then((res) => {
+      recordPending = false;
+      if (!res && extensionContextInvalidated) return;
+      if (!res?.ok) {
+        const cueId = newCueId();
+        materializeCue(cueId, "Audio note", "");
+        updateCue(cueId, res?.error || "Could not start recording.", "error");
+        return;
+      }
+      recordStartedAt = Date.now();
+      setRecordState(true);
+    }).catch((error) => {
+      recordPending = false;
+      const cueId = newCueId();
+      materializeCue(cueId, "Audio note", "");
+      updateCue(cueId, String(error?.message || error), "error");
+    });
+  }
+
+  function stopRecordMode() {
+    recordPending = true;
+    const startedAt = recordStartedAt;
+    setRecordState(false);
+    const cueId = newCueId();
+    materializeCue(cueId, "Audio note", "storing...");
+    safeRuntimeSendMessage({ cmd: "recordSessionStop" }).then((res) => {
+      recordPending = false;
+      if (!res && extensionContextInvalidated) return;
+      if (res?.stored) {
+        const durationMs = Number(res.note?.duration_ms ?? res.durationMs) ||
+          (startedAt ? Date.now() - startedAt : 0);
+        const seconds = Math.max(1, Math.round(durationMs / 1000));
+        updateCue(cueId, `note stored (${seconds}s)`, "done");
+        reactLauncher("done");
+        return;
+      }
+      updateCue(cueId, res?.error || "Audio note upload failed.", "error");
+      reactLauncher("error");
+    }).catch((error) => {
+      recordPending = false;
+      updateCue(cueId, String(error?.message || error), "error");
+      reactLauncher("error");
+    });
+  }
+  // ---- End record mode ---------------------------------------------------
 
   function clearVoiceHotkeyHoldTimer() {
     if (!voiceHotkeyHoldTimer) return;

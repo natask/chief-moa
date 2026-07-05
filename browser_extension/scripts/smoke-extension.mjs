@@ -827,6 +827,31 @@ async function main() {
       throw new Error(`non-stop instruction was wrongly swallowed by the stop path: ${JSON.stringify(typedStop)}`);
     }
 
+    // Record mode: the #agee-record control must exist, and stopping with no
+    // active recording must return a structured failure from the background
+    // record handler. Deterministic: no capture starts, no microphone is
+    // touched, and no gateway is contacted.
+    const recordIdle = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: async () => {
+            const record = document.querySelector("#agee-record");
+            const stop = await chrome.runtime.sendMessage({ cmd: "recordSessionStop" });
+            return { hasRecordButton: !!record, recordingClass: record?.classList.contains("recording") || false, stop };
+          },
+        });
+        return result?.result;
+      })()
+    `);
+    if (!recordIdle?.hasRecordButton || recordIdle?.recordingClass) {
+      throw new Error(`record control missing or wrongly active while idle: ${JSON.stringify(recordIdle)}`);
+    }
+    if (recordIdle?.stop?.stored !== false || !recordIdle?.stop?.error) {
+      throw new Error(`idle record stop must return a structured {stored:false} error: ${JSON.stringify(recordIdle)}`);
+    }
+
     const workerResult = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};

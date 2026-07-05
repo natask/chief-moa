@@ -466,6 +466,70 @@ if (!/function ensureVoiceCueCard/.test(contentSource)) {
   throw new Error("browser voice must promote live transcript/assistant text into the result surface above the input");
 }
 
+// ---- Record mode: raw audio notes ----------------------------------------
+// Record mode is an audio_note capture, not a voice turn. The background must
+// buffer offscreen PCM under a record-scoped id and post the raw bytes to
+// /v1/audio-notes; the record path must never open /v1/voice/sessions and must
+// never send a session_start event.
+if (
+  !/cmd === "recordSessionStart"/.test(backgroundSource) ||
+  !/cmd === "recordSessionStop"/.test(backgroundSource) ||
+  !/RECORD_MAX_AUDIO_BYTES/.test(backgroundSource) ||
+  !/function appendRecordSessionAudio/.test(backgroundSource) ||
+  !/isRecordSessionId\(msg\.voiceSessionId\)/.test(backgroundSource) ||
+  !/\/v1\/audio-notes/.test(backgroundSource)
+) {
+  throw new Error("background.js must expose recordSessionStart/Stop handlers that buffer capped PCM and post to /v1/audio-notes");
+}
+const recordModeBody = sourceBetween(
+  backgroundSource,
+  /\/\/ ---- Record mode: raw audio notes/,
+  /\/\/ ---- End record mode/,
+  "background record mode block"
+);
+if (/\/v1\/voice\/sessions|session_start|startVoiceSessionProxy|createVoiceSessionTicket|new\s+WebSocket/.test(recordModeBody)) {
+  throw new Error("record mode must not open voice sessions, voice sockets, or send session_start");
+}
+if (
+  !/audio\/L16; rate=16000; channels=1/.test(recordModeBody) ||
+  !/x-moa-surface/.test(recordModeBody) ||
+  !/x-moa-session-id/.test(recordModeBody) ||
+  !/x-moa-duration-ms/.test(recordModeBody) ||
+  !/getStableSessionId\(\)/.test(recordModeBody)
+) {
+  throw new Error("audio-note upload must carry L16 content type plus surface/session/duration metadata headers");
+}
+if (
+  !/voiceSessions\.size > 0/.test(recordModeBody) ||
+  !/if \(activeRecordSession\(\)\) \{[\s\S]{0,320}Stop recording before starting voice/.test(backgroundSource)
+) {
+  throw new Error("record and voice sessions must be mutually exclusive: record start refuses while voice is live, and voice start refuses while recording");
+}
+if (
+  !/querySelector\("#agee-record"\)/.test(contentSource) ||
+  !/cmd:\s*"recordSessionStart"/.test(contentSource) ||
+  !/cmd:\s*"recordSessionStop"/.test(contentSource) ||
+  !/agee-recording/.test(contentSource) ||
+  !/note stored \(/.test(contentSource)
+) {
+  throw new Error("content.js must expose the #agee-record toggle backed by background record handlers and a stored/failed receipt");
+}
+if (
+  !/#agee-record\.recording/.test(overlayCssSource) ||
+  !/#agee-root\.agee-recording #agee-launcher/.test(overlayCssSource)
+) {
+  throw new Error("overlay.css must carry distinct recording visuals for the record control and the mark");
+}
+const recordContentBody = sourceBetween(
+  contentSource,
+  /\/\/ ---- Record mode: raw audio notes/,
+  /\/\/ ---- End record mode/,
+  "content record mode block"
+);
+if (/getUserMedia|new\s+WebSocket|fetch\(|\/v1\/voice\/sessions|session_start/.test(recordContentBody)) {
+  throw new Error("content record mode must only send runtime messages; no mic, sockets, or gateway fetches in the page");
+}
+
 function sourceBetween(source, startPattern, endPattern, label) {
   const start = source.search(startPattern);
   if (start < 0) throw new Error(`could not find ${label} start`);

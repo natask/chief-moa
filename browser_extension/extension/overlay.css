@@ -307,7 +307,7 @@
 }
 #agee-bar {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) 34px 34px;
+  grid-template-columns: 10px minmax(0, 1fr) 34px 34px 34px;
   align-items: start;
   gap: 9px;
   min-height: 54px;
@@ -379,6 +379,7 @@
   color: #ff918a;
 }
 #agee-voice,
+#agee-record,
 #agee-stop {
   appearance: none;
   position: relative;
@@ -433,15 +434,18 @@
   background: currentColor;
 }
 #agee-voice:hover,
+#agee-record:hover,
 #agee-stop:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.16);
 }
 #agee-voice:active,
+#agee-record:active,
 #agee-stop:active {
   transform: translateY(1px);
 }
 #agee-voice:focus-visible,
+#agee-record:focus-visible,
 #agee-stop:focus-visible {
   outline: 0;
   border-color: rgba(74, 155, 255, 0.58);
@@ -451,6 +455,35 @@
   border-color: rgba(53, 199, 89, 0.62);
   color: #a9efba;
   background: rgba(53, 199, 89, 0.12);
+}
+/* Record note control: a plain dot that turns into a pulsing red dot while an
+   audio note is being captured. Record mode is not a voice turn. */
+#agee-record::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  box-sizing: border-box;
+}
+#agee-record.recording {
+  border-color: rgba(255, 69, 58, 0.62);
+  color: #ff9b92;
+  background: rgba(255, 69, 58, 0.12);
+}
+#agee-record.recording::before {
+  background: currentColor;
+  border: 0;
+  animation: agee-pulse 1.2s infinite;
+}
+/* While recording, the mark carries a red glow so the state reads with the
+   panel open or closed. */
+#agee-root.agee-recording #agee-launcher {
+  box-shadow: 0 0 26px 6px rgba(255, 69, 58, 0.5);
+}
+#agee-root.agee-recording #agee-dot {
+  background: var(--agee-red);
+  animation: agee-pulse 1.2s infinite;
 }
 #agee-stop {
   display: none;
@@ -679,7 +712,7 @@
     width: calc(100vw - 16px);
   }
   #agee-bar {
-    grid-template-columns: 9px minmax(0, 1fr) 32px 32px;
+    grid-template-columns: 9px minmax(0, 1fr) 32px 32px 32px;
     gap: 7px;
     padding: 8px;
   }
@@ -689,6 +722,7 @@
     margin-top: 3px;
   }
   #agee-voice,
+  #agee-record,
   #agee-stop {
     width: 32px;
     height: 32px;

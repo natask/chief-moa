@@ -28,6 +28,10 @@ const tasks = new Map();
 const voiceSessions = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
 const MAX_QUEUED_VOICE_AUDIO_BYTES = 16000 * 2 * 20;
+// Record mode buffers raw PCM16 in the worker until the user stops; cap the
+// buffer at ~5 minutes of 16 kHz mono PCM16 and stop capture at the cap.
+const recordSessions = new Map();
+const RECORD_MAX_AUDIO_BYTES = 16000 * 2 * 300;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
 const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
 const BROWSER_AGENT_PROGRESS_TEXT = {
@@ -1927,6 +1931,156 @@ function closeTabVoiceSessions(tabId) {
   }
 }
 
+// ---- Record mode: raw audio notes -----------------------------------------
+// Record mode is an audio_note capture, not a voice turn. It reuses the
+// offscreen PCM16 microphone capture with a record-scoped id, buffers the raw
+// bytes in memory, and posts them to /v1/audio-notes on stop. This path never
+// opens a gateway voice socket, so no STT, LLM, or TTS can run by construction.
+function recordSessionKey() {
+  return `record:${crypto.randomUUID()}`;
+}
+
+function isRecordSessionId(id) {
+  return typeof id === "string" && id.startsWith("record:");
+}
+
+function activeRecordSession() {
+  for (const session of recordSessions.values()) {
+    if (!session.closed) return session;
+  }
+  return null;
+}
+
+function appendRecordSessionAudio(id, audio) {
+  const session = recordSessions.get(id);
+  if (!session || session.closed) return { ok: false, error: "record session is not open" };
+  if (session.capped) return { ok: true, capped: true, totalBytes: session.totalBytes };
+  const buffer = base64ToBuffer(audio);
+  if (!buffer.byteLength) return { ok: true, totalBytes: session.totalBytes };
+  session.chunks.push(new Uint8Array(buffer));
+  session.totalBytes += buffer.byteLength;
+  if (session.totalBytes >= RECORD_MAX_AUDIO_BYTES) {
+    // Hit the ~5 minute cap: keep what we have and stop pulling microphone
+    // audio. The note is stored when the user presses stop.
+    session.capped = true;
+    stopOffscreenVoiceCapture(id).catch(() => {});
+  }
+  return { ok: true, totalBytes: session.totalBytes, capped: session.capped === true };
+}
+
+function discardRecordSession(id, _reason = "discarded") {
+  const session = recordSessions.get(id);
+  if (!session) return;
+  session.closed = true;
+  recordSessions.delete(id);
+  session.chunks = [];
+  stopOffscreenVoiceCapture(id).catch(() => {});
+}
+
+function closeTabRecordSessions(tabId) {
+  for (const session of [...recordSessions.values()]) {
+    if (session.tabId === tabId) discardRecordSession(session.id, "tab closed");
+  }
+}
+
+async function startRecordSession(tabId) {
+  // The offscreen document has a single capture slot, so a record session and
+  // a voice session must never run at once. Refuse instead of tearing down the
+  // live voice turn under the user.
+  if (voiceSessions.size > 0) {
+    return { ok: false, error: "A voice session is active. Stop voice before recording a note." };
+  }
+  if (activeRecordSession()) {
+    return { ok: false, error: "A recording is already in progress." };
+  }
+  const id = recordSessionKey();
+  const session = {
+    id,
+    tabId: tabId ?? null,
+    chunks: [],
+    totalBytes: 0,
+    capped: false,
+    closed: false,
+    startedAt: Date.now(),
+  };
+  recordSessions.set(id, session);
+  try {
+    await startOffscreenVoiceCapture(id);
+  } catch (error) {
+    recordSessions.delete(id);
+    return { ok: false, error: extensionMicApprovalMessage(error) };
+  }
+  return { ok: true, recordSessionId: id };
+}
+
+async function stopRecordSession() {
+  const session = activeRecordSession();
+  if (!session) {
+    return { stored: false, error: "No recording is in progress." };
+  }
+  session.closed = true;
+  recordSessions.delete(session.id);
+  await stopOffscreenVoiceCapture(session.id).catch(() => {});
+  const pcm = concatRecordSessionAudio(session);
+  if (!pcm.byteLength) {
+    return { stored: false, error: "No audio was captured." };
+  }
+  const durationMs = Math.round((pcm.byteLength / 2 / 16000) * 1000);
+  try {
+    const cfg = await getConfig();
+    const payload = await uploadAudioNote(cfg, pcm, durationMs);
+    return { stored: true, note: payload?.note || payload || null, durationMs };
+  } catch (error) {
+    return { stored: false, error: String(error?.message || error), durationMs };
+  }
+}
+
+function concatRecordSessionAudio(session) {
+  const out = new Uint8Array(session.totalBytes);
+  let offset = 0;
+  for (const chunk of session.chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  session.chunks = [];
+  return out;
+}
+
+// Raw-body upload. callGateway always JSON-encodes its body, so audio notes
+// post through their own fetch with the same auth and error shaping.
+async function uploadAudioNote(cfg, pcmBytes, durationMs) {
+  if (!cfg.gatewayUrl) {
+    throw new Error("No gateway URL set. Open A.G. Options and set the Agent gateway URL.");
+  }
+  const path = "/v1/audio-notes";
+  const sessionId = await getStableSessionId();
+  const headers = {
+    "content-type": "audio/L16; rate=16000; channels=1",
+    "x-moa-surface": "agee-extension",
+    "x-moa-session-id": sessionId,
+    "x-moa-duration-ms": String(durationMs),
+  };
+  if (cfg.gatewayToken) headers.authorization = `Bearer ${cfg.gatewayToken}`;
+  let resp;
+  try {
+    resp = await fetch(`${cfg.gatewayUrl}${path}`, { method: "POST", headers, body: pcmBytes });
+  } catch (error) {
+    throw new Error(formatGatewayNetworkError(cfg.gatewayUrl, path, error));
+  }
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(formatGatewayHttpError(cfg, path, resp, text));
+  }
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Any 2xx counts as stored even if the gateway envelope is not JSON.
+    return null;
+  }
+}
+// ---- End record mode -------------------------------------------------------
+
 // Persist per-cue state (keyed by cueId) so concurrent cues don't clobber each
 // other. Falls back to a synthetic key when no id is given.
 async function saveTaskState(id, patch) {
@@ -2892,15 +3046,44 @@ async function captureAmbientFrame() {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "offscreenVoiceAudio") {
+    // Record-scoped capture ids buffer locally for /v1/audio-notes; everything
+    // else is live voice audio for the gateway socket.
+    if (isRecordSessionId(msg.voiceSessionId)) {
+      sendResponse(appendRecordSessionAudio(msg.voiceSessionId, msg.audio));
+      return true;
+    }
     sendResponse(sendVoiceSessionAudio(msg.voiceSessionId, msg.audio));
     return true;
   }
   if (msg.cmd === "offscreenVoiceError") {
+    if (isRecordSessionId(msg.voiceSessionId)) {
+      discardRecordSession(msg.voiceSessionId, "microphone capture failed");
+      sendResponse({ ok: true });
+      return true;
+    }
     handleOffscreenVoiceError(msg.voiceSessionId, msg.error);
     sendResponse({ ok: true });
     return true;
   }
+  if (msg.cmd === "recordSessionStart" && sender.tab) {
+    startRecordSession(sender.tab.id)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "recordSessionStop") {
+    stopRecordSession()
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ stored: false, error: String(error?.message || error) }));
+    return true;
+  }
   if (msg.cmd === "voiceSessionStart" && sender.tab) {
+    if (activeRecordSession()) {
+      // The offscreen document has one capture slot; starting voice would
+      // silently steal the microphone from the in-flight audio note.
+      sendResponse({ ok: false, error: "An audio note recording is in progress. Stop recording before starting voice." });
+      return true;
+    }
     const tabId = sender.tab.id;
     claimActiveAgentTab(tabId, "another page voice session started", {
       cue_id: msg.cueId || null,
@@ -3088,6 +3271,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     clearActiveBrowserAgentOwner(tabId, "owner tab closed").catch(() => {});
   }
   closeTabVoiceSessions(tabId);
+  closeTabRecordSessions(tabId);
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
