@@ -23,7 +23,7 @@ Do not print `.env` while testing. Check only whether required keys are set.
 Run these from the repo root.
 
 ```bash
-cd software/moa_gateway
+cd gateway
 npm run check
 curl -s http://10.147.17.6:8787/health
 ```
@@ -40,7 +40,7 @@ Pass criteria:
 This verifies gateway-to-provider streaming without the phone.
 
 ```bash
-node software/moa_gateway/deploy/main-machine/smoke-voice-session.js \
+node gateway/deploy/main-machine/smoke-voice-session.js \
   ws://10.147.17.6:8787/v1/voice/sessions
 ```
 
@@ -89,7 +89,7 @@ For each provider, record:
 Install and launch:
 
 ```bash
-cd software/android_app
+cd android_app
 ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n ai.moa.assistant/.MainActivity

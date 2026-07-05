@@ -35,7 +35,7 @@ prompt and behavior) is one of the settings this surface reads and writes.
 
 ## Impact
 
-- `software/browser_extension/extension/options.*` (or a dedicated settings
+- `browser_extension/extension/options.*` (or a dedicated settings
   surface), `background.js` (settings-intent routing into the gateway profile
   endpoints). Depends on `gateway-runtime-agent-profile`,
   `extension-gateway-roundtrip`, and the thin-client decision. The deeper

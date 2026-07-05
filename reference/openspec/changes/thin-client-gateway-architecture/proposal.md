@@ -62,8 +62,8 @@ the deferred extension changes around it.
 - Reframes `extension-gateway-roundtrip`, `extension-settings-voice-control`,
   `extension-ui-self-extension`; builds on `gateway-runtime-agent-profile` (the
   engine already persists a per-request profile under `data/`).
-- `software/browser_extension/extension/` (background.js routing, options/settings
-  surface, a renderer) and `software/moa_gateway` (secret custody, customization
+- `browser_extension/extension/` (background.js routing, options/settings
+  surface, a renderer) and `gateway` (secret custody, customization
   store + serving). Hosted vs self-hosted both point the client at an engine URL.
 - Open question deferred to `design.md`: key/subscription custody for the hosted
   (non-self-host) tier.

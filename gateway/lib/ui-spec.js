@@ -6,7 +6,7 @@
 // and never ships UI as extension code. The engine stores a per-user spec; the
 // extension fetches it and re-renders on change (the storage.onChanged live-
 // refresh pattern). A "deployment" is a spec change here, not a new extension
-// package. See openspec/changes/thin-client-gateway-architecture/design.md.
+// package. See reference/openspec/changes/thin-client-gateway-architecture/design.md.
 //
 // The spec is a whole document (replace-not-merge), validated so a bad PUT can
 // never blank the surface: an invalid spec is rejected and the prior/default

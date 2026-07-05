@@ -27,7 +27,7 @@ The Android app already has enough working pieces to become the first real Moa s
 
 ## Impact
 
-- Android app: `software/android_app/app/src/main/java/ai/moa/assistant/*`, especially `OverlayService`, `MainActivity`, `MoaGatewayClient`, `MoaActionBroker`, and accessibility service code.
-- Gateway: `software/moa_gateway/server.js` for voice turns, agent runs, session state, run status, cancellation, and action proposals.
+- Android app: `android_app/app/src/main/java/ai/moa/assistant/*`, especially `OverlayService`, `MainActivity`, `MoaGatewayClient`, `MoaActionBroker`, and accessibility service code.
+- Gateway: `gateway/server.js` for voice turns, agent runs, session state, run status, cancellation, and action proposals.
 - Docs: Android README/index/boundary docs should align to this map after implementation starts.
 - Verification: Android debug build, gateway smoke checks, and manual phone QA for overlay/voice/run behavior, including AirPods/headset assistant gesture launch where available.

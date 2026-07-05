@@ -23,13 +23,13 @@ adapter when `DATABASE_URL` is configured.
 
 ## Impact
 
-- `software/moa_gateway/lib/work-graph.js`: storage adapter boundary and JSON
+- `gateway/lib/work-graph.js`: storage adapter boundary and JSON
   fallback parity for events/artifacts.
-- `software/moa_gateway/lib/work-graph-postgres.js`: Postgres adapter.
-- `software/moa_gateway/server.js`: async work-graph route boundary plus event,
+- `gateway/lib/work-graph-postgres.js`: Postgres adapter.
+- `gateway/server.js`: async work-graph route boundary plus event,
   artifact, and reducer routes.
-- `software/moa_gateway/schema.sql`: canonical Postgres schema used at startup.
-- `software/moa_gateway/scripts/smoke-supervisor.js`: coverage for event,
+- `gateway/schema.sql`: canonical Postgres schema used at startup.
+- `gateway/scripts/smoke-supervisor.js`: coverage for event,
   artifact, and reducer APIs.
 - `ARCHITECTURE.md`: Postgres-backed work graph/artifact store becomes a gateway
   store primitive.

@@ -25,7 +25,7 @@ extension, the gateway must first expose a runtime-editable agent profile.
 
 ## Impact
 
-- `software/moa_gateway/server.js` and `lib/` (profile store under `data/`,
+- `gateway/server.js` and `lib/` (profile store under `data/`,
   endpoints, per-request merge). Builds toward `agent-profile-control-plane` from
   `provider-agnostic-voice-agent-runtime`; keep field names aligned for later
   reconciliation. No dependency on the extension changes.

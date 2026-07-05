@@ -37,7 +37,7 @@ The core boundary is now set by `thin-client-gateway-architecture`:
 
 ## Impact
 
-- `software/browser_extension/extension/` UI surfaces and `software/moa_gateway`
+- `browser_extension/extension/` UI surfaces and `gateway`
   customization serving/storage. Implementation tasks should target the engine
   spec -> renderer path first; do not introduce a promote-gate or end-user
   package reload path.

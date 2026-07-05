@@ -776,7 +776,7 @@ if (!/\/__agee-dev\/bump/.test(pokeDevReloadSource) || !/bumpExistingServer/.tes
 }
 
 const setupParagraph =
-  'Open chrome://extensions, find agee, click reload. If it was loaded from elsewhere, remove it and Load unpacked from software/browser_extension/extension/.\n' +
+  'Open chrome://extensions, find agee, click reload. If it was loaded from elsewhere, remove it and Load unpacked from browser_extension/extension/.\n' +
   'On any page, press Cmd+, to open it, and type a request, for example "summarize this page" or "what can you do." You get a response from the gateway. Tell it "use the Kore voice" and it changes its own voice. Ask it to open a page and report something, and it launches a browser agent.';
 const voiceIntent = parseSettingsIntent("use the Kore voice", null);
 if (voiceIntent?.patch?.voice !== "Kore") {

@@ -39,7 +39,7 @@ with no visible window.
 
 ## Impact
 
-- `software/browser_extension/scripts/smoke-extension.mjs` (target Chrome for
+- `browser_extension/scripts/smoke-extension.mjs` (target Chrome for
   Testing, headless, temp profile), `scripts/dev-extension.mjs` (no `open`,
   background by default), `README.md`. Uses the `local-background-qa` posture and
   `.gstack/background-qa/` artifacts.

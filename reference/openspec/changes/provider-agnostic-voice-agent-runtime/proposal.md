@@ -63,10 +63,10 @@ the user can inspect and change by voice.
 
 - Android app: overlay state machine, orb visualization, transcript rendering,
   settings/control-center surfaces, and voice command routing in
-  `software/android_app/app/src/main/java/ai/moa/assistant/*`.
+  `android_app/app/src/main/java/ai/moa/assistant/*`.
 - Gateway: voice session protocol, provider selection/configuration, canonical
   session storage, profile APIs, provider event logging, and recovery endpoints
-  in `software/moa_gateway/server.js` and `software/moa_gateway/lib/*`.
+  in `gateway/server.js` and `gateway/lib/*`.
 - Data model: session, branch, turn, audio artifact, provider event, profile
   version, voice evidence fixture, tool policy, run, fork linkage, approval, and
   receipt records must be queryable by the gateway and agent harnesses.

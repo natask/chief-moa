@@ -25,7 +25,7 @@
 
 ### Verification notes
 
-- `npm run smoke:settings` boots a LOCAL `software/moa_gateway` instance (its working tree has the
+- `npm run smoke:settings` boots a LOCAL `gateway` instance (its working tree has the
   runtime agent-profile endpoints; the live gateway returns 404 for them) on a throwaway port with a
   throwaway `MOA_GATEWAY_TOKEN` and a throwaway `DATA_DIR`, running `node server.js` directly (not
   `npm start`) so the gateway's real `.env` is never loaded. No real secret is read or printed, and

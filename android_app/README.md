@@ -41,7 +41,7 @@ grant overlay or Accessibility access.
 
 ## Gateway
 
-The Android app talks to `software/moa_gateway` instead of putting provider keys on the phone. The gateway saves conversations in its `DATA_DIR` and forwards model calls to OpenAI, LiteLLM, or Ollama.
+The Android app talks to `gateway` instead of putting provider keys on the phone. The gateway saves conversations in its `DATA_DIR` and forwards model calls to OpenAI, LiteLLM, or Ollama.
 
 ```sh
 cd ../moa_gateway
