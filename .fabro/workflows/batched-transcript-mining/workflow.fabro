@@ -1,0 +1,16 @@
+digraph BatchedTranscriptMining {
+  graph [goal="Mine local AI-history shards into a deduped candidate-work index without mutating histories, app data, code, credentials, or live services"]
+  rankdir=LR
+
+  start [shape=Mdiamond, label="Start"]
+  inventory [shape=parallelogram, label="Inventory", script="ch tools && ch projects | sed -n '1,80p'"]
+  shard_agents [label="Run Batch Agents", prompt="Run disjoint read-only transcript-mining shards and write compact candidate outputs."]
+  integrate [label="Integrate", prompt="Merge shard outputs into candidate-index.md with dedupe groups and promotion candidates."]
+  verify [shape=parallelogram, label="Verify", script="test -s scratch/agent-loop/runs/20260703-025004-batched-transcript-mining/candidate-index.md && fabro validate .fabro/workflows/batched-transcript-mining/workflow.fabro", goal_gate=true]
+  approve [shape=hexagon, label="Approve Promotion"]
+  exit [shape=Msquare, label="Exit"]
+
+  start -> inventory -> shard_agents -> integrate -> verify -> approve
+  approve -> exit [label="[A] Accept"]
+  approve -> integrate [label="[R] Revise"]
+}
