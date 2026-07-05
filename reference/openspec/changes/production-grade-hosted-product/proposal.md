@@ -12,6 +12,20 @@ progression, worker-pull, account connections), `self-hostable-event-substrate`
 
 These are load-bearing. Each downstream ticket names the decision it waits on.
 
+**STATUS 2026-07-04: all five decided.** The user accepted the written
+recommendations in conversation (session on branch
+`codex/live-voice-browser-continuity`). One scope decision was added on top:
+
+- **Hosted-first, self-host deferred.** The product ships hosted. Self-hosting
+  stays possible for a motivated operator driving an agent against this repo
+  (the one-image decision keeps that true for free), but no further time goes
+  into self-host polish, agent-driven VPS provisioning flows, or external vault
+  integrations until a real user asks. Tickets that serve only the self-host
+  path are parked, not deleted.
+
+Do not re-ask these decisions. To change one, the user edits this file or says
+so explicitly; agents must not re-litigate them per session.
+
 1. **One image vs microservices.** RECOMMENDATION: one deployable image with
    internal service boundaries (modules), not separate deployed services. The
    agent-driven self-host flow provisions one VPS and runs one container; a
@@ -20,14 +34,15 @@ These are load-bearing. Each downstream ticket names the decision it waits on.
    decision. Keep auth, key-management, billing, and event-store as internal
    modules with narrow interfaces so any one can be extracted to a worker later
    without changing Android or extension protocols. See design.md "Decision:
-   one image, internal service boundaries." **User must confirm or override.**
+   one image, internal service boundaries."
+   **DECIDED 2026-07-04: one image with internal module boundaries.**
 
 2. **Auth engine.** RECOMMENDATION: better-auth (already chosen in
    `remote-hosted-gateway`, Postgres-native, runs in-process, self-hostable, has
    email + passkey + anonymous plugins). The anonymous-trial to account
    requirement maps directly onto better-auth's anonymous plugin plus account
-   linking. **User must confirm better-auth vs an alternative (e.g. Ory
-   Kratos/Hydra, SuperTokens, Zitadel).**
+   linking.
+   **DECIDED 2026-07-04: better-auth.**
 
 3. **BYOK key storage backend.** The five-wants research picked Infisical for raw
    keys and Nango for OAuth. For the in-product BYOK path RECOMMENDATION: store
@@ -35,23 +50,33 @@ These are load-bearing. Each downstream ticket names the decision it waits on.
    (envelope encryption), and treat Nango/Infisical as an optional external
    vault the self-host operator can point at. Reason: a self-hoster should not be
    forced to run Nango + Infisical to use BYOK; the built-in encrypted store must
-   work with zero extra services, with external vaults as an upgrade. **User must
-   confirm built-in encrypted store as the default vs mandating Nango/Infisical.**
+   work with zero extra services, with external vaults as an upgrade.
+   **DECIDED 2026-07-04: built-in envelope-encrypted store in gateway Postgres
+   is the default; Nango/Infisical are optional and deferred with the rest of
+   the self-host polish.**
 
 4. **Subscription/metering model.** RECOMMENDATION: adopt LiteLLM's virtual-key +
    per-key budget/spend model conceptually (a `virtual_key` maps a user to an
    allowed model set, a spend counter, and a budget), metered by the gateway's
    own event log, with a pluggable billing provider (Stripe) behind a seam.
-   Design-only in this change. **User must confirm Stripe as the first billing
-   provider and whether metering is per-token, per-request, or seat-based.**
+   Design-only in this change.
+   **DECIDED 2026-07-04: Stripe as the first billing provider behind the seam;
+   metering is per-token spend in dollars (a spend counter against a per-key
+   budget, computed from provider usage already recorded in the event log).
+   Chosen as the default because it matches the LiteLLM virtual-key model this
+   recommendation adopts; still design-only in this change and cheap to revisit
+   before billing ships.**
 
 5. **Multi-tenant now or later.** RECOMMENDATION: build per-user scoping into the
    data model now (every event, connection, key, and run carries a `user_id`)
    but keep hosted deployment single-tenant-per-owner until real multi-tenant
    hosting is funded. `remote-hosted-gateway` left this as an open question; this
    change resolves the *data model* (scope now) but defers *tenant isolation
-   hardening* (row-level security, per-tenant rate limits). **User must confirm
-   scope-now-isolate-later vs full multi-tenant now.**
+   hardening* (row-level security, per-tenant rate limits).
+   **DECIDED 2026-07-04: scope now, isolate later. Every record carries
+   `user_id` from the first migration. Isolation hardening is pulled forward
+   only when the hosted URL is handed to people the owner does not personally
+   trust.**
 
 ## Why
 
