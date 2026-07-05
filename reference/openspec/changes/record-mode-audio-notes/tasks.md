@@ -32,6 +32,6 @@
 ## 4. Architecture And Review
 
 - [x] 4.1 Update `ARCHITECTURE.md` with the record-mode flow and source map.
-- [ ] 4.2 Run adversarial review over the gateway and client diffs.
+- [x] 4.2 Run adversarial review over the gateway and client diffs.
 - [x] 4.3 Record deploy blockers; do not promote the live gateway, extension, or
   Android OTA without explicit approval.
