@@ -26,6 +26,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -59,6 +63,11 @@ public final class OverlayService extends Service {
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
     private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
+    // Record mode: raw PCM16 mono at 16 kHz, capped at ~5 minutes per note.
+    private static final int AUDIO_NOTE_BYTES_PER_SECOND =
+            MoaAudioCaptureController.SAMPLE_RATE_HZ * 2 * MoaAudioCaptureController.CHANNEL_COUNT;
+    private static final int AUDIO_NOTE_MAX_BYTES = AUDIO_NOTE_BYTES_PER_SECOND * 300;
+    private static final String AUDIO_NOTE_CONTENT_TYPE = "audio/L16; rate=16000; channels=1";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<ChatMessage> messages = new ArrayList<>();
@@ -115,6 +124,13 @@ public final class OverlayService extends Service {
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
     private boolean pushToTalkVoiceTurn;
+    // Record mode: while enabled, double-click-and-hold captures a raw audio
+    // note locally and uploads it on release. Never a voice turn.
+    private boolean recordModeEnabled;
+    private boolean audioNoteActive;
+    private MoaAudioCaptureController audioNoteCapture;
+    private ByteArrayOutputStream audioNoteBuffer;
+    private TextView recordModePill;
     private boolean pendingContinuousVoiceRestartAfterAudio;
     private boolean streamingAssistantAudioPlaying;
     private boolean deviceClientLoopRunning;
@@ -226,6 +242,7 @@ public final class OverlayService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        cancelAudioNoteCapture();
         cancelStreamingTurnWatchdog();
         removeTranscriptOverlay();
         removePanel();
@@ -509,6 +526,7 @@ public final class OverlayService extends Service {
         messageScroll = null;
         composer = null;
         runStatusView = null;
+        recordModePill = null;
         dying.animate()
                 .alpha(0f)
                 .translationY(dp(14))
@@ -1027,6 +1045,11 @@ public final class OverlayService extends Service {
         copy.addView(runStatusView);
         header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        recordModePill = pill("Record", 0x16FFFFFF, MoaColors.MUTED);
+        recordModePill.setOnClickListener(v -> toggleRecordMode());
+        refreshRecordModePill();
+        header.addView(recordModePill);
+
         TextView close = pill("Done", 0x16FFFFFF, MoaColors.MUTED);
         close.setOnClickListener(v -> dismissOverlayUi());
         header.addView(close);
@@ -1083,7 +1106,9 @@ public final class OverlayService extends Service {
 
         messageColumn.removeAllViews();
         if (messages.isEmpty()) {
-            TextView empty = text("Tap for chat. Double-click and hold to talk.", MoaColors.MUTED, 13, false);
+            TextView empty = text(recordModeEnabled
+                    ? "Record mode: double-click and hold to record a note."
+                    : "Tap for chat. Double-click and hold to talk.", MoaColors.MUTED, 13, false);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(28), dp(8), dp(28));
             messageColumn.addView(empty);
@@ -1943,6 +1968,10 @@ public final class OverlayService extends Service {
     }
 
     private void handleOrbVoicePressRelease() {
+        if (audioNoteActive) {
+            finishAudioNoteCapture(false);
+            return;
+        }
         if (!pushToTalkVoiceTurn) {
             return;
         }
@@ -2056,6 +2085,7 @@ public final class OverlayService extends Service {
     // Close every overlay surface except the orb: the chat panel, the voice
     // transcript card, and any live voice turn. Hide the keyboard too.
     private void dismissOverlayUi() {
+        cancelAudioNoteCapture();
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
         nextManualVoiceFollowsActiveRun = false;
@@ -2090,8 +2120,214 @@ public final class OverlayService extends Service {
 
     // DOUBLE-CLICK-AND-HOLD the orb = manual voice. Capture starts once the
     // second press is held briefly, and release commits without provider VAD.
+    // While record mode is on, the same gesture records a raw audio note
+    // instead: no voice session, no SpeechRecognizer, no STT/LLM/TTS.
     private void handleOrbDoublePressStart() {
+        if (recordModeEnabled) {
+            startAudioNoteCapture();
+            return;
+        }
         startPushToTalkVoiceTurn();
+    }
+
+    // RECORD MODE. Capture raw PCM locally while the orb is held, upload the
+    // finished bytes to the gateway as an audio note on release. By
+    // construction this path never opens a streaming voice session, never
+    // starts SpeechRecognizer, and never plays TTS.
+    private void toggleRecordMode() {
+        recordModeEnabled = !recordModeEnabled;
+        if (!recordModeEnabled && audioNoteActive) {
+            cancelAudioNoteCapture();
+        }
+        refreshRecordModePill();
+        renderMessages();
+    }
+
+    private void refreshRecordModePill() {
+        if (recordModePill == null) {
+            return;
+        }
+        boolean on = recordModeEnabled;
+        recordModePill.setText(on ? "Record on" : "Record");
+        recordModePill.setTextColor(on ? MoaColors.INK : MoaColors.MUTED);
+        recordModePill.setBackground(MoaDrawables.rounded(
+                on ? MoaColors.GOLD : 0x16FFFFFF,
+                dp(999),
+                on ? 0x33FFFFFF : 0x10FFFFFF,
+                dp(1)
+        ));
+    }
+
+    private void startAudioNoteCapture() {
+        if (audioNoteActive) {
+            return;
+        }
+        // Never record on top of a live voice surface.
+        if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null
+                || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
+            dismissOverlayUi();
+        }
+        loadSettings();
+        if (!streamingVoiceAvailable()) {
+            showAudioNoteResult("Audio notes need the gateway URL and token in settings.", true);
+            return;
+        }
+        audioNoteBuffer = new ByteArrayOutputStream();
+        audioNoteActive = true;
+        audioNoteCapture = new MoaAudioCaptureController(new MoaAudioCaptureController.Callback() {
+            @Override
+            public void onPcmChunk(byte[] pcm) {
+                appendAudioNoteChunk(pcm);
+            }
+
+            @Override
+            public void onCaptureStarted() {
+            }
+
+            @Override
+            public void onCaptureStopped() {
+            }
+
+            @Override
+            public void onCaptureError(String message, Throwable error) {
+                mainHandler.post(() -> failAudioNoteCapture(message));
+            }
+        });
+        if (orbView != null) {
+            orbView.setRecordingNote(true);
+        }
+        audioNoteCapture.start();
+    }
+
+    // Called on the capture thread for every 40 ms PCM chunk.
+    private void appendAudioNoteChunk(byte[] pcm) {
+        ByteArrayOutputStream buffer = audioNoteBuffer;
+        if (!audioNoteActive || buffer == null || pcm == null || pcm.length == 0) {
+            return;
+        }
+        boolean capReached;
+        synchronized (buffer) {
+            int room = AUDIO_NOTE_MAX_BYTES - buffer.size();
+            if (room > 0) {
+                buffer.write(pcm, 0, Math.min(room, pcm.length));
+            }
+            capReached = buffer.size() >= AUDIO_NOTE_MAX_BYTES;
+        }
+        if (capReached) {
+            mainHandler.post(() -> finishAudioNoteCapture(true));
+        }
+    }
+
+    private void finishAudioNoteCapture(boolean capReached) {
+        if (!audioNoteActive) {
+            return;
+        }
+        audioNoteActive = false;
+        MoaAudioCaptureController capture = audioNoteCapture;
+        audioNoteCapture = null;
+        if (capture != null) {
+            capture.stop();
+        }
+        if (orbView != null) {
+            orbView.setRecordingNote(false);
+        }
+        ByteArrayOutputStream buffer = audioNoteBuffer;
+        audioNoteBuffer = null;
+        byte[] audio;
+        if (buffer == null) {
+            audio = new byte[0];
+        } else {
+            synchronized (buffer) {
+                audio = buffer.toByteArray();
+            }
+        }
+        if (audio.length == 0) {
+            showAudioNoteResult("No audio captured.", true);
+            return;
+        }
+        uploadAudioNote(audio, capReached);
+    }
+
+    private void failAudioNoteCapture(String message) {
+        if (!audioNoteActive) {
+            return;
+        }
+        cancelAudioNoteCapture();
+        showAudioNoteResult(safe(message).isEmpty() ? "Audio note capture failed." : safe(message), true);
+    }
+
+    // Abort a capture in flight without uploading. Used when the surfaces are
+    // dismissed, record mode is switched off mid-hold, or the service dies.
+    private void cancelAudioNoteCapture() {
+        if (!audioNoteActive && audioNoteCapture == null) {
+            return;
+        }
+        audioNoteActive = false;
+        MoaAudioCaptureController capture = audioNoteCapture;
+        audioNoteCapture = null;
+        if (capture != null) {
+            capture.stop();
+        }
+        audioNoteBuffer = null;
+        if (orbView != null) {
+            orbView.setRecordingNote(false);
+        }
+    }
+
+    private void uploadAudioNote(byte[] audio, boolean capReached) {
+        long durationMs = (long) audio.length * 1000L / AUDIO_NOTE_BYTES_PER_SECOND;
+        long seconds = Math.max(1L, Math.round(durationMs / 1000.0));
+        String sessionId = conversationId.isEmpty() ? MoaPrefs.conversationId(this) : conversationId;
+        Map<String, String> metadata = new HashMap<>();
+        metadata.put("x-moa-surface", "android-overlay");
+        metadata.put("x-moa-session-id", sessionId);
+        metadata.put("x-moa-duration-ms", Long.toString(durationMs));
+
+        String storedMessage = "Note stored (" + seconds + "s)"
+                + (capReached ? " - hit the 5 minute cap." : "");
+        new Thread(() -> {
+            try {
+                gatewayClient().uploadAudioNote(audio, AUDIO_NOTE_CONTENT_TYPE, metadata);
+                mainHandler.post(() -> showAudioNoteResult(storedMessage, false));
+            } catch (Exception error) {
+                Log.w(TAG, "audio note upload failed: " + cleanError(error));
+                String keptPath = keepAudioNoteLocally(audio);
+                mainHandler.post(() -> showAudioNoteResult(
+                        keptPath.isEmpty()
+                                ? "Note upload failed, and keeping it locally also failed."
+                                : "Note upload failed, kept locally.",
+                        true
+                ));
+            }
+        }, "moa-audio-note-upload").start();
+    }
+
+    // Failed uploads keep the raw bytes under files/audio-notes/ so nothing
+    // spoken is lost. Returns the file path, or "" when the write failed too.
+    private String keepAudioNoteLocally(byte[] audio) {
+        try {
+            File directory = new File(getFilesDir(), "audio-notes");
+            if (!directory.exists() && !directory.mkdirs()) {
+                return "";
+            }
+            File file = new File(directory, System.currentTimeMillis() + ".pcm");
+            try (FileOutputStream output = new FileOutputStream(file)) {
+                output.write(audio);
+            }
+            return file.getAbsolutePath();
+        } catch (Exception error) {
+            Log.w(TAG, "failed to keep audio note locally: " + cleanError(error));
+            return "";
+        }
+    }
+
+    private void showAudioNoteResult(String message, boolean failed) {
+        resetVoiceTurnTranscript();
+        showTranscriptOverlay("");
+        updateVoiceAssistantTranscript(message);
+        setVoiceRuntimeState(failed ? VoiceRuntimeState.ERROR : VoiceRuntimeState.READY);
+        updateMicState();
+        scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS * 2);
     }
 
     private void startLocalVoiceTurn(boolean manualCommitOnly) {

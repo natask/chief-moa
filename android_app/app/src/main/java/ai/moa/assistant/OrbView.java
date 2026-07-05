@@ -25,6 +25,7 @@ final class OrbView extends View {
     private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private boolean listening;
     private boolean held;
+    private boolean recordingNote;
 
     OrbView(Context context) {
         super(context);
@@ -46,6 +47,13 @@ final class OrbView extends View {
         invalidate();
     }
 
+    // Recording note = record mode capture in flight. Tints the halo and glow
+    // red so a raw audio-note capture never looks like a live voice turn.
+    void setRecordingNote(boolean recordingNote) {
+        this.recordingNote = recordingNote;
+        invalidate();
+    }
+
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
@@ -58,10 +66,10 @@ final class OrbView extends View {
         float cx = w / 2f;
         float cy = h / 2f;
 
-        boolean lit = held || listening;
+        boolean lit = held || listening || recordingNote;
         // Bird fills most of the window now that the disc is gone. It grows a
-        // little while listening, and a touch more while held.
-        float size = Math.min(w, h) * (held ? 1.0f : (listening ? 0.98f : 0.92f));
+        // little while listening, and a touch more while held or recording.
+        float size = Math.min(w, h) * (held || recordingNote ? 1.0f : (listening ? 0.98f : 0.92f));
 
         if (lit) {
             drawGlow(canvas, cx, cy, Math.min(w, h));
@@ -77,8 +85,8 @@ final class OrbView extends View {
     // listening, so a live voice turn gets an unmistakable lit state without a disc.
     private void drawGlow(Canvas canvas, float cx, float cy, float box) {
         float radius = box * 0.62f;
-        int core = held ? 0x66F4D35E : 0x55F4D35E;
-        int edge = 0x00F4D35E;
+        int core = recordingNote ? 0x66FF4D4D : (held ? 0x66F4D35E : 0x55F4D35E);
+        int edge = recordingNote ? 0x00FF4D4D : 0x00F4D35E;
         glowPaint.setShader(new RadialGradient(cx, cy, radius, core, edge, Shader.TileMode.CLAMP));
         canvas.drawCircle(cx, cy, radius, glowPaint);
         glowPaint.setShader(null);
@@ -91,11 +99,11 @@ final class OrbView extends View {
         if (halo == null) {
             return;
         }
-        int tint = listening ? MoaColors.GOLD : 0xFFF7FFF1;
+        int tint = recordingNote ? 0xFFFF4D4D : (listening ? MoaColors.GOLD : 0xFFF7FFF1);
         halo.setColorFilter(tint, PorterDuff.Mode.SRC_IN);
 
         float[] scales = {1.18f, 1.10f, 1.05f};
-        int[] alphas = listening ? new int[]{70, 120, 200} : new int[]{45, 80, 150};
+        int[] alphas = listening || recordingNote ? new int[]{70, 120, 200} : new int[]{45, 80, 150};
         for (int i = 0; i < scales.length; i++) {
             setGlyphBounds(halo, cx, cy, size * scales[i]);
             halo.setAlpha(alphas[i]);

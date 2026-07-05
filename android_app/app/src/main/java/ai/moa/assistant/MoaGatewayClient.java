@@ -12,6 +12,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 final class MoaGatewayClient {
     private final String baseUrl;
@@ -35,6 +36,29 @@ final class MoaGatewayClient {
     JSONObject voiceTurn(JSONObject body) throws Exception {
         String responseText = postJson(apiEndpoint("/v1/voice/turns"), body.toString(), 90000);
         return new JSONObject(responseText);
+    }
+
+    // Record mode: upload a finished raw-audio note. This is a plain HTTP POST
+    // of the captured bytes; it never opens a voice session, so no STT, LLM,
+    // or TTS can run on this path by construction.
+    JSONObject uploadAudioNote(byte[] audio, String contentType, Map<String, String> metadataHeaders) throws Exception {
+        if (audio == null || audio.length == 0) {
+            throw new IllegalArgumentException("audio note bytes are required");
+        }
+        String type = safe(contentType);
+        if (type.isEmpty()) {
+            type = "audio/L16; rate=16000; channels=1";
+        }
+        String responseText = postBytes(apiEndpoint("/v1/audio-notes"), audio, type, metadataHeaders, 60000);
+        if (responseText.trim().isEmpty()) {
+            return new JSONObject();
+        }
+        try {
+            return new JSONObject(responseText);
+        } catch (Exception ignored) {
+            // Any 2xx means the note is stored; a non-JSON body is not a failure.
+            return new JSONObject();
+        }
     }
 
     JSONObject agentRuns(int limit) throws Exception {
@@ -140,6 +164,48 @@ final class MoaGatewayClient {
         }
 
         byte[] payload = requestBody.getBytes(StandardCharsets.UTF_8);
+        connection.setFixedLengthStreamingMode(payload.length);
+        try (OutputStream output = connection.getOutputStream()) {
+            output.write(payload);
+        }
+
+        int status = connection.getResponseCode();
+        InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        String responseText = readStream(stream);
+        connection.disconnect();
+
+        if (status < 200 || status >= 300) {
+            throw new IllegalStateException("HTTP " + status + " " + responseText);
+        }
+        return responseText;
+    }
+
+    private String postBytes(
+            String endpoint,
+            byte[] payload,
+            String contentType,
+            Map<String, String> extraHeaders,
+            int readTimeoutMs
+    ) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
+        connection.setRequestMethod("POST");
+        connection.setConnectTimeout(3500);
+        connection.setReadTimeout(readTimeoutMs);
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", contentType);
+        if (!token.isEmpty()) {
+            connection.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        if (extraHeaders != null) {
+            for (Map.Entry<String, String> header : extraHeaders.entrySet()) {
+                String name = safe(header.getKey());
+                String value = safe(header.getValue());
+                if (!name.isEmpty() && !value.isEmpty()) {
+                    connection.setRequestProperty(name, value);
+                }
+            }
+        }
+
         connection.setFixedLengthStreamingMode(payload.length);
         try (OutputStream output = connection.getOutputStream()) {
             output.write(payload);
