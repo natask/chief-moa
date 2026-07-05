@@ -53,6 +53,7 @@ async function main() {
     await step("empty body returns 400", () => assertEmptyBody(handlers));
     await step("creation is mirrored as product event", () => assertProductEventMirrored(dataDir));
     await step("record mode did not invoke voice providers", () => assertNoVoiceProviderSideEffects(dataDir));
+    await step("quota refuses new notes without pruning old ones", () => assertQuotaRefusal(path.join(tempDir, "quota")));
 
     console.log("smoke-audio-notes: ok");
   } finally {
@@ -158,6 +159,24 @@ async function assertProductEventMirrored(dataDir) {
     const events = readJsonLines(eventsPath);
     return events.some((event) => event.event_type === "audio_note.created");
   }, 1000, "audio_note.created event was not mirrored");
+}
+
+async function assertQuotaRefusal(dataDir) {
+  const store = createAudioNotesStore({ dataDir, maxTotalBytes: 10 });
+  const first = store.create({ bytes: Buffer.alloc(8, 1), surface: "quota-smoke" });
+  const handlers = createAudioNoteHandlers({ store });
+  const refused = await requestRaw(handlers, "/v1/audio-notes", {
+    method: "POST",
+    headers: { ...authHeaders(), "content-type": "audio/L16; rate=16000; channels=1" },
+    body: Buffer.alloc(8, 2),
+  });
+  assert.equal(refused.status, 507, `over-quota POST must return 507: ${refused.text}`);
+  assert.equal(store.list({ limit: 10 }).length, 1, "quota refusal must not prune stored notes");
+  assert.deepEqual(
+    fs.readFileSync(store.audioPath(first.id)),
+    Buffer.alloc(8, 1),
+    "existing note bytes must survive a quota refusal",
+  );
 }
 
 function assertNoVoiceProviderSideEffects(dataDir) {

@@ -6,16 +6,29 @@ const path = require("node:path");
 
 const DEFAULT_CONTENT_TYPE = "audio/L16; rate=16000; channels=1";
 const MAX_LIMIT = 500;
+const DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 
 function createAudioNotesStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || "./data");
   const notesDir = path.join(dataDir, "audio-notes");
   fs.mkdirSync(notesDir, { recursive: true });
+  const maxTotalBytes = normalizeMaxTotalBytes(options.maxTotalBytes);
+  // Quota refuses new notes instead of pruning old ones: stored notes are
+  // user speech and must never be silently deleted.
+  let totalBytes = listNoteFiles(notesDir)
+    .map((filePath) => readNoteFile(filePath))
+    .filter(Boolean)
+    .reduce((sum, note) => sum + (Number(note.bytes) || 0), 0);
 
   function create(input = {}) {
     const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes || []);
     if (bytes.length <= 0) {
       throw new Error("audio note body is empty");
+    }
+    if (totalBytes + bytes.length > maxTotalBytes) {
+      const error = new Error("audio notes storage quota exceeded; no existing notes were removed");
+      error.statusCode = 507;
+      throw error;
     }
     const contentType = normalizeContentType(input.content_type || input.contentType);
     const id = createNoteId();
@@ -43,6 +56,7 @@ function createAudioNotesStore(options = {}) {
     fs.writeFileSync(bytesTmp, bytes);
     fs.renameSync(bytesTmp, bytesPath);
     writeNote(notesDir, note);
+    totalBytes += bytes.length;
     return clone(note);
   }
 
@@ -80,6 +94,8 @@ function createAudioNotesStore(options = {}) {
     return {
       notes_dir: notesDir,
       count: listNoteFiles(notesDir).length,
+      total_bytes: totalBytes,
+      max_total_bytes: maxTotalBytes,
       endpoint: "/v1/audio-notes",
     };
   }
@@ -113,14 +129,20 @@ function createAudioNoteHandlers(options = {}) {
       return;
     }
 
-    const note = store.create({
-      bytes,
-      content_type: request.headers["content-type"] || "",
-      surface: request.headers["x-moa-surface"] || "",
-      session_id: request.headers["x-moa-session-id"] || "",
-      duration_ms: request.headers["x-moa-duration-ms"] || "",
-      label: request.headers["x-moa-label"] || "",
-    });
+    let note;
+    try {
+      note = store.create({
+        bytes,
+        content_type: request.headers["content-type"] || "",
+        surface: request.headers["x-moa-surface"] || "",
+        session_id: request.headers["x-moa-session-id"] || "",
+        duration_ms: request.headers["x-moa-duration-ms"] || "",
+        label: request.headers["x-moa-label"] || "",
+      });
+    } catch (error) {
+      sendJson(response, Number(error?.statusCode) || 500, { error: cleanError(error) });
+      return;
+    }
     try {
       recordCreated(note);
     } catch {
@@ -231,6 +253,12 @@ function encodingForContentType(contentType) {
   if (lower.startsWith("audio/l16")) return "pcm16";
   if (lower.startsWith("audio/webm")) return "webm";
   return "binary";
+}
+
+function normalizeMaxTotalBytes(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return DEFAULT_MAX_TOTAL_BYTES;
+  return Math.floor(number);
 }
 
 function normalizeDurationMs(value) {

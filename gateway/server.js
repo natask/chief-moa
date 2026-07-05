@@ -177,7 +177,10 @@ fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
 fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
-const audioNotes = createAudioNotesStore({ dataDir: DATA_DIR });
+const audioNotes = createAudioNotesStore({
+  dataDir: DATA_DIR,
+  maxTotalBytes: process.env.AUDIO_NOTES_MAX_TOTAL_BYTES,
+});
 const audioNoteHandlers = createAudioNoteHandlers({
   store: audioNotes,
   maxBytes: AUDIO_NOTE_MAX_BODY_BYTES,
