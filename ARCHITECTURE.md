@@ -228,6 +228,28 @@ model before a recognize call. Google Cloud TTS has no Amharic voice under any
 type, so an Amharic reply is returned as text and spoken by the device
 (android-tts); a hosted en-US Chirp 3 HD voice is used for English.
 
+### Record Mode (raw audio notes)
+
+```text
+user enters record mode and speaks (extension record control or Android
+record toggle + double-click-and-hold)
+  -> client captures PCM16 locally and buffers it (no voice session opened)
+  -> on stop/release the client POSTs the finished audio to /v1/audio-notes
+  -> gateway stores bytes under DATA_DIR/audio-notes plus a JSON record and
+     mirrors an audio_note.created product event
+  -> client shows a stored/failed receipt; a failed Android upload keeps the
+     local capture file
+```
+
+Record mode is note-taking, not conversation. It stores exactly what was said
+as playable audio and runs no STT, LLM, or TTS by construction: the capture
+path is a plain HTTP upload and never opens `/v1/voice/sessions`. Notes are
+listable (`GET /v1/audio-notes`) and playable
+(`GET /v1/audio-notes/{id}/audio`) behind the same gateway token as other
+`/v1` routes. Evaluating or improving notes is a later change; this slice
+only captures and stores. Contract:
+`reference/openspec/changes/record-mode-audio-notes/proposal.md`.
+
 ### Browser Extension Thin Client
 
 ```text
@@ -553,6 +575,9 @@ audit event on the `account-connection:{id}` stream. Contract:
   user turns create or update other forks.
 - `voice_evidence`: replayable user/assistant audio and transcript artifacts
   attached to a turn, profile version, provider version, and test criteria.
+- `audio_note`: a record-mode capture stored directly as playable audio bytes
+  plus a queryable record (surface, session, content type, size, duration
+  hint, label). Deliberately not a voice turn: no transcript, no reply.
 - `agent_profile`: a versioned gateway-owned runtime profile for hard settings
   such as assistant voice, input languages, reply languages, response modality,
   persona (vetted catalog or sanitized free-form system prompt), model behavior,
