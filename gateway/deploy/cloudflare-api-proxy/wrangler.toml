@@ -1,0 +1,8 @@
+name = "agee-api-proxy"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+workers_dev = false
+
+routes = [
+  { pattern = "api.agee.app", custom_domain = true },
+]
