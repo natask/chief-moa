@@ -17,7 +17,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="${REMOTE:-reclaim@10.147.17.10}"
-REMOTE_GW_DIR="${REMOTE_GW_DIR:-/home/reclaim-ethiopia/moa-assistant/software/moa_gateway}"
+REMOTE_GW_DIR="${REMOTE_GW_DIR:-/home/reclaim-ethiopia/moa-assistant/gateway}"
 GATEWAY_URL="${GATEWAY_URL:-http://10.147.17.10:8787}"
 log() { printf '[deploy] %s\n' "$*"; }
 VERSION_STATUS_SCRIPT="$ROOT_DIR/scripts/deploy-version-status.mjs"
