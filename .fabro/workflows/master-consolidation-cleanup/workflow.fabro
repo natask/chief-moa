@@ -1,0 +1,16 @@
+digraph MasterConsolidationCleanup {
+  graph [goal="Consolidate chief-moa branch/worktree sprawl into verified master with no hidden local work"]
+  rankdir=LR
+
+  start [shape=Mdiamond, label="Start"]
+  inventory [shape=parallelogram, label="Inventory", script="git worktree list --porcelain && git branch -vv --all --sort=-committerdate"]
+  preserve [label="Preserve Loose Work", prompt="Inspect dirty worktrees and preserve useful work on master before cleanup."]
+  verify [shape=parallelogram, label="Verify Master", script="git status --short --branch && cd gateway && npm run check && fabro validate .fabro/workflows/master-consolidation-cleanup/workflow.fabro", goal_gate=true]
+  cleanup [label="Clean Stale Sprawl", prompt="Remove local worktrees and branches only after proving they are merged or patch-equivalent to master."]
+  approve [shape=hexagon, label="Review Cleanup"]
+  exit [shape=Msquare, label="Exit"]
+
+  start -> inventory -> preserve -> verify -> cleanup -> approve
+  approve -> exit [label="[A] Accept"]
+  approve -> preserve [label="[R] Revise"]
+}
