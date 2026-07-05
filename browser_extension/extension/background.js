@@ -57,6 +57,11 @@ const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
+// Capture mutex: counts voice session starts that are still in their async
+// setup window (ticket fetch -> voiceSessions registration). Record mode must
+// refuse while this is non-zero, or a delayed voice start would steal the
+// single offscreen capture slot from an in-flight audio note.
+let voiceStartPending = 0;
 
 async function getConfig() {
   return getEffectiveGatewayConfig();
@@ -1476,8 +1481,27 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
 }
 
 async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit } = {}) {
+  // Hold the capture mutex across the async setup window. recordSessionStart
+  // refuses while voiceStartPending > 0; by the time the mutex releases the
+  // session is registered in voiceSessions (or this start has failed), so the
+  // record path can never race the single offscreen capture slot.
+  voiceStartPending += 1;
+  try {
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit });
+  } finally {
+    voiceStartPending = Math.max(0, voiceStartPending - 1);
+  }
+}
+
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit } = {}) {
   const cfg = await getConfig();
   const ticket = await createVoiceSessionTicket(cfg);
+  // Re-check after the awaits above: a record session that slipped in before
+  // the mutex was visible must win. Abort this voice start cleanly instead of
+  // stealing the microphone from the in-flight audio note.
+  if (activeRecordSession()) {
+    throw new Error("An audio note recording is in progress. Stop recording before starting voice.");
+  }
   if (!ticket?.ws_url) {
     throw new Error(`Gateway reachable at ${cfg.gatewayUrl || "(unset)"}, but it did not return a voice session WebSocket URL.`);
   }
@@ -1957,11 +1981,19 @@ function appendRecordSessionAudio(id, audio) {
   if (session.capped) return { ok: true, capped: true, totalBytes: session.totalBytes };
   const buffer = base64ToBuffer(audio);
   if (!buffer.byteLength) return { ok: true, totalBytes: session.totalBytes };
-  session.chunks.push(new Uint8Array(buffer));
-  session.totalBytes += buffer.byteLength;
+  // Cap-aware append: take only the room left, so the ~5 minute cap is exact
+  // instead of overshooting by up to one chunk. room stays PCM16-aligned
+  // because the cap and every chunk length are even byte counts.
+  const room = RECORD_MAX_AUDIO_BYTES - session.totalBytes;
+  const bytes = new Uint8Array(buffer);
+  const take = bytes.byteLength <= room ? bytes : bytes.subarray(0, room);
+  if (take.byteLength > 0) {
+    session.chunks.push(take);
+    session.totalBytes += take.byteLength;
+  }
   if (session.totalBytes >= RECORD_MAX_AUDIO_BYTES) {
-    // Hit the ~5 minute cap: keep what we have and stop pulling microphone
-    // audio. The note is stored when the user presses stop.
+    // Hit the cap: keep what we have and stop pulling microphone audio. The
+    // note is stored when the user presses stop.
     session.capped = true;
     stopOffscreenVoiceCapture(id).catch(() => {});
   }
@@ -1986,8 +2018,9 @@ function closeTabRecordSessions(tabId) {
 async function startRecordSession(tabId) {
   // The offscreen document has a single capture slot, so a record session and
   // a voice session must never run at once. Refuse instead of tearing down the
-  // live voice turn under the user.
-  if (voiceSessions.size > 0) {
+  // live voice turn under the user. voiceStartPending covers the async setup
+  // window before a starting voice session appears in voiceSessions.
+  if (voiceStartPending > 0 || voiceSessions.size > 0) {
     return { ok: false, error: "A voice session is active. Stop voice before recording a note." };
   }
   if (activeRecordSession()) {

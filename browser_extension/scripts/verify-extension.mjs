@@ -505,6 +505,30 @@ if (
 ) {
   throw new Error("record and voice sessions must be mutually exclusive: record start refuses while voice is live, and voice start refuses while recording");
 }
+// Capture mutex: the async voice-start window (ticket fetch -> voiceSessions
+// registration) must be closed on both sides. voiceStartPending is held across
+// the awaits, record start refuses while it is set, and the voice start
+// re-checks record state after its awaits before touching the socket or mic.
+if (
+  !/let voiceStartPending = 0;/.test(backgroundSource) ||
+  !/voiceStartPending \+= 1;/.test(backgroundSource) ||
+  !/voiceStartPending = Math\.max\(0, voiceStartPending - 1\);/.test(backgroundSource) ||
+  !/voiceStartPending > 0 \|\| voiceSessions\.size > 0/.test(recordModeBody) ||
+  !/createVoiceSessionTicket\(cfg\);[\s\S]{0,340}if \(activeRecordSession\(\)\)/.test(backgroundSource)
+) {
+  throw new Error("voice-start capture mutex missing: record start must refuse during a pending voice start and the voice start must re-check record state after its awaits");
+}
+// The ~5 minute record cap must be exact: append only the room left in the
+// buffer, never a whole overshooting chunk.
+if (
+  !/RECORD_MAX_AUDIO_BYTES - session\.totalBytes/.test(recordModeBody) ||
+  !/subarray\(0, room\)/.test(recordModeBody)
+) {
+  throw new Error("record cap must be exact: append only the remaining room before stopping capture");
+}
+if (!/function toggleRecordMode\(\)[\s\S]{0,800}liveVoice \|\| listening/.test(contentSource)) {
+  throw new Error("content record toggle must refuse while a voice turn is live or starting in this tab");
+}
 if (
   !/querySelector\("#agee-record"\)/.test(contentSource) ||
   !/cmd:\s*"recordSessionStart"/.test(contentSource) ||

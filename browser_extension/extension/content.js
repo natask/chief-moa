@@ -1798,8 +1798,21 @@
   function toggleRecordMode() {
     if (recordPending) return;
     openTextSurface({ fresh: false });
-    if (recordActive) stopRecordMode();
-    else startRecordMode();
+    if (recordActive) {
+      stopRecordMode();
+      return;
+    }
+    // Refuse while a voice turn is live or starting in this tab. The overlay
+    // knows about a starting voice turn before the background has registered
+    // its session, so this local guard closes the client half of the race;
+    // the background's voiceStartPending mutex closes the other half.
+    if (liveVoice || listening) {
+      const cueId = newCueId();
+      materializeCue(cueId, "Audio note", "");
+      updateCue(cueId, "Voice is active. Stop voice before recording a note.", "error");
+      return;
+    }
+    startRecordMode();
   }
 
   function startRecordMode() {
