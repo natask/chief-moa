@@ -44,12 +44,13 @@ Scaling is deferred.
   runbooks, and product packaging into the main OpenSpec plan.
 
 Committed artifacts now include the gateway Docker/Compose scaffold, backup and
-restore scripts, the Cloudflare/DigitalOcean/Railway runbooks, Android/browser
-onboarding notes, the account-connection and worker-pull contracts, the voice
-work-history control-plane contract, and the first self-host/product packaging
-journey. These are preview/spec/scaffold outputs. They do not mean an active
-deployment was applied, an active URL was switched, a live service was restarted,
-an OTA was published, or a browser extension was reloaded.
+restore scripts, unattended backup timer and off-host mirror installers, the
+Cloudflare/DigitalOcean/Railway runbooks, Android/browser onboarding notes, the
+account-connection and worker-pull contracts, the voice work-history
+control-plane contract, and the first self-host/product packaging journey. These
+are preview/spec/scaffold outputs. They do not mean an active deployment was
+applied, an active URL was switched, a live service was restarted, a backup
+timer was installed, an OTA was published, or a browser extension was reloaded.
 
 ## Non-Goals
 

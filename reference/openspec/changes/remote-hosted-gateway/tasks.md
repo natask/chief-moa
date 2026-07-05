@@ -250,6 +250,11 @@ Verification:
 - [ ] 8.5 Run restore-check dry-run and execute against scratch Postgres and
   scratch `DATA_DIR`, then record backup directory, restore scratch directory,
   health URL, and blockers in promotion notes.
+- [x] 8.6 Add unattended backup automation scaffolding: atomic complete-only VPS
+  backup directories, a latest-backup restore-check wrapper, VPS systemd timers
+  for recurring backup/restore verification, and a macOS LaunchAgent plus rsync
+  pull script for off-host backup copies. This does not mean the active timers
+  were installed or an active backup was run.
 
 Acceptance: before any active URL change, active-service restart, Master Orch
 apply, or client cutover, a Postgres dump and `DATA_DIR` snapshot exist and a
@@ -261,6 +266,10 @@ Verification:
 - `scripts/vps-backup.sh --execute`
 - `scripts/vps-restore-check.sh --dry-run`
 - `scripts/vps-restore-check.sh --execute`
+- `bash -n scripts/vps/backup.sh scripts/vps/restore-latest-backup.sh scripts/vps/pull-backups.sh scripts/vps/install-backup-timers.sh scripts/vps/install-backup-pull-launchagent.sh`
+- `scripts/vps/install-backup-timers.sh --dry-run`
+- `scripts/vps/install-backup-pull-launchagent.sh --dry-run --host root@example.com --dest /tmp/chief-moa-vps-backups`
+- `scripts/vps/pull-backups.sh --dry-run --host root@example.com --dest /tmp/chief-moa-vps-backups`
 
 ## 9. Operations Runbooks And Product Packaging
 
@@ -302,7 +311,9 @@ managed operations.
 
 Current blocker: active promotion remains blocked. This integration task does
 not deploy, restart, apply, switch active URLs, publish OTA artifacts, or reload
-browser packages.
+browser packages. Active backup execution also remains blocked until an
+approved maintenance window or operator-controlled backup context; the
+unattended timer and off-host mirror installers are committed but not installed.
 
 ## 11. Incoming Shipped VPS Stack Ledger
 

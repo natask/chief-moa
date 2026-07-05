@@ -164,6 +164,34 @@ backup under its own compose project and port, verifies `/health` and a
 Postgres-backed read, then removes itself. Copy backups off the droplet on a
 schedule; they are plain files.
 
+Install unattended backup timers on the VPS:
+
+```sh
+sudo /opt/chief-moa/app/scripts/vps/install-backup-timers.sh --install
+systemctl list-timers 'chief-moa-*'
+```
+
+Defaults:
+
+- daily backup at 03:15 UTC plus up to 30 minutes randomized delay;
+- weekly scratch restore check of the latest complete backup on Sunday at
+  04:15 UTC plus up to 1 hour randomized delay;
+- no active gateway update, restart, DNS change, or promotion.
+
+From the operator Mac, mirror completed backup directories off the droplet with
+the LaunchAgent installer:
+
+```sh
+scripts/vps/install-backup-pull-launchagent.sh \
+  --install \
+  --host root@api.example.com \
+  --dest "$HOME/Backups/chief-moa-vps"
+```
+
+The pull agent runs `scripts/vps/pull-backups.sh --execute`, excludes `.tmp`
+backup directories, and does not delete local backups when remote retention
+changes.
+
 ## Modes And Required Env
 
 | Env | local | self-host | hosted |

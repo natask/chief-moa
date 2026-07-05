@@ -69,6 +69,11 @@ Artifacts:
 - `SHA256SUMS`: checksums for the dump and snapshot.
 - `manifest.txt`: non-secret metadata only.
 
+The canonical Compose/VPS script, `scripts/vps/backup.sh`, writes into a
+timestamped `.tmp` directory and renames it only after the Postgres dump,
+`DATA_DIR` snapshot, checksums, and manifest complete. Off-host backup mirrors
+must exclude `*.tmp/` so they never copy half-written backup directories.
+
 ## Restore Check Script
 
 Script: `scripts/vps-restore-check.sh`
@@ -134,6 +139,33 @@ The script does not call `npm start`, so it does not use Node's
 for the health run so gateway status checks do not inspect user credential
 files.
 
+## Unattended Backup Schedule
+
+On the VPS, install the backup and restore-check timers:
+
+```sh
+sudo /opt/chief-moa/app/scripts/vps/install-backup-timers.sh --install
+systemctl list-timers 'chief-moa-*'
+```
+
+The default timers run a daily backup and a weekly scratch restore check of the
+latest complete backup. They do not update, restart, apply, promote, or repoint
+any active gateway.
+
+On the operator Mac, mirror completed backup directories off the VPS:
+
+```sh
+scripts/vps/install-backup-pull-launchagent.sh \
+  --install \
+  --host root@api.example.com \
+  --dest "$HOME/Backups/chief-moa-vps"
+```
+
+The LaunchAgent runs `scripts/vps/pull-backups.sh --execute` on a calendar
+interval and excludes `*.tmp/` directories. This gives the backup story three
+separate checks: the VPS creates backups, the VPS proves restore periodically,
+and an operator-controlled machine has an off-host copy.
+
 ## Promotion Gate Sequence
 
 Use this exact sequence before any active VPS promotion:
@@ -171,6 +203,8 @@ Promotion is blocked when any of these are true:
 - The restore target is not visibly scratch-only.
 - The scratch database is not empty.
 - The scratch gateway cannot answer `/health`.
+- The scheduled backup timer, scheduled restore-check timer, or off-host mirror
+  is not installed for a production VPS.
 - The backup or restore command prints or requires pasting secrets into logs.
 - The candidate has not been verified in an isolated preview path.
 
