@@ -29,6 +29,7 @@ const { resolveRemoteMode } = require("./lib/remote-mode");
 const { createWorkHistoryStore } = require("./lib/work-history");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
+const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const {
   buildEvaluatorMessages,
@@ -128,6 +129,7 @@ const MODEL_TEMPERATURE = Number(process.env.MODEL_TEMPERATURE || 0.4);
 const VOICE_TTS_MAX_CHARS = Number(process.env.VOICE_TTS_MAX_CHARS || 280);
 const MODEL_LANGUAGE = String(process.env.MODEL_LANGUAGE || "").trim();
 const MAX_BODY_BYTES = 1024 * 1024;
+const AUDIO_NOTE_MAX_BODY_BYTES = 32 * 1024 * 1024;
 const VOICE_SESSION_TICKET_TTL_MS = Number(process.env.VOICE_SESSION_TICKET_TTL_MS || 60 * 1000);
 const DEFAULT_HARNESS = process.env.DEFAULT_AGENT_HARNESS || "gemini";
 const HARNESS_WORKDIR = path.resolve(process.env.HARNESS_WORKDIR || REPO_ROOT);
@@ -175,6 +177,12 @@ fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
 fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
+const audioNotes = createAudioNotesStore({ dataDir: DATA_DIR });
+const audioNoteHandlers = createAudioNoteHandlers({
+  store: audioNotes,
+  maxBytes: AUDIO_NOTE_MAX_BODY_BYTES,
+  recordCreated: recordAudioNoteProductEventBestEffort,
+});
 
 // Runtime-editable agent profile layered over the env defaults. On boot it loads
 // the persisted profile if present; otherwise the env default is used with no
@@ -333,6 +341,7 @@ const server = http.createServer(async (request, response) => {
           classification: "heuristic",
           transport: "transcript_http",
         },
+        audio_notes: audioNotes.status(),
         voice_stream: {
           sessions_dir: voiceSessionServer.sessionsDir,
           endpoint: voiceSessionServer.endpoint,
@@ -1181,6 +1190,42 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/audio-notes") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await audioNoteHandlers.create(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/audio-notes") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      audioNoteHandlers.list(response, url);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/v1/audio-notes/") && url.pathname.endsWith("/audio")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      audioNoteHandlers.sendAudio(response, url);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/v1/audio-notes/")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      audioNoteHandlers.get(response, url);
+      return;
+    }
+
     if (request.method === "GET" && url.pathname.startsWith("/v1/voice/turns/")) {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -1768,6 +1813,28 @@ async function recordChatTurnProductEvent(saved, userText, responseText) {
       user_text: truncate(String(userText || ""), 4000),
       response_text: truncate(String(responseText || ""), 4000),
     },
+  });
+}
+
+function recordAudioNoteProductEventBestEffort(note) {
+  recordProductEventBestEffort({
+    event_type: "audio_note.created",
+    stream_id: note.session_id ? productSessionStreamId(note.session_id) : `audio-note:${note.id}`,
+    idempotency_key: `audio-note:${note.id}:created`,
+    occurred_at: note.created_at,
+    actor: { kind: "user", id: note.surface || "audio-note" },
+    correlation_id: note.id,
+    payload: {
+      id: note.id,
+      surface: note.surface || "",
+      session_id: note.session_id || "",
+      content_type: note.content_type || "",
+      bytes: note.bytes || 0,
+      duration_ms: note.duration_ms,
+      label: note.label || "",
+      audio: note.audio || null,
+    },
+    blob_refs: note.audio ? [note.audio] : [],
   });
 }
 
@@ -10381,7 +10448,7 @@ function sendStaticHtml(response, filePath) {
 function setCors(response) {
   response.setHeader("access-control-allow-origin", "*");
   response.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,OPTIONS");
-  response.setHeader("access-control-allow-headers", "content-type,authorization");
+  response.setHeader("access-control-allow-headers", "content-type,authorization,x-moa-surface,x-moa-session-id,x-moa-duration-ms,x-moa-label");
 }
 
 function rejectUpgrade(socket, status, reason) {

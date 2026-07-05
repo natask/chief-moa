@@ -2,13 +2,13 @@
 
 ## 1. Gateway Audio Notes
 
-- [ ] 1.1 Add a gateway audio-note store that writes note metadata and raw audio
+- [x] 1.1 Add a gateway audio-note store that writes note metadata and raw audio
   bytes under `DATA_DIR/audio-notes/`.
-- [ ] 1.2 Add `POST /v1/audio-notes`, `GET /v1/audio-notes`, and
+- [x] 1.2 Add `POST /v1/audio-notes`, `GET /v1/audio-notes`, and
   `GET /v1/audio-notes/:id/audio` behind existing gateway token auth.
-- [ ] 1.3 Mirror creation into the product-event stream as
+- [x] 1.3 Mirror creation into the product-event stream as
   `audio_note.created`.
-- [ ] 1.4 Add a deterministic smoke that stores synthetic bytes, reads them back
+- [x] 1.4 Add a deterministic smoke that stores synthetic bytes, reads them back
   byte-identical, verifies list metadata, and proves no STT/LLM/TTS provider is
   invoked.
 
