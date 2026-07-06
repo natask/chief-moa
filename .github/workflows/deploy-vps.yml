@@ -56,13 +56,23 @@ jobs:
           printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           host="${VPS_HOST#*@}"
-          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "Probing SSH reachability of the VPS..."
+          for i in 1 2 3; do
+            if ssh-keyscan -T 15 -H "$host" >> ~/.ssh/known_hosts 2>&1; then
+              echo "Host key collected on attempt $i."
+              exit 0
+            fi
+            echo "ssh-keyscan attempt $i failed; retrying."
+            sleep 5
+          done
+          echo "Port 22 on the VPS is not reachable from GitHub runners." >&2
+          exit 1
 
       - name: Promote gateway on VPS
         shell: bash
         run: |
           set -euo pipefail
-          ssh "$VPS_HOST" \
+          ssh -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new "$VPS_HOST" \
             "bash /opt/chief-moa/app/scripts/vps/update.sh --ref master"
 
       - name: Smoke public gateway
