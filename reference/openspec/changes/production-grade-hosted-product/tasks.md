@@ -26,23 +26,59 @@ Every ticket has one observable acceptance check.
   `MOA_MODE` block in `server.js`, `gateway/lib/account-connections.js`, and
   `scripts/vps/*`, and `cd gateway && npm run check` passes on master.
 
+## Phase R. Gateway restructure (ADDED 2026-07-04, mechanical, precedes Phase 1)
+
+Per design.md "codebase structure and runtime toolkit". Zero behavior change;
+each ticket keeps all existing smokes green.
+
+- [ ] R.1 `[blocked: consolidation]` Convert the gateway to ESM
+  (`"type": "module"`, require -> import, `__dirname` shims where needed).
+  Acceptance: `npm run check` equivalent passes; gateway boots and serves
+  `/health` identically.
+
+- [ ] R.2 `[blocked: consolidation]` Split `server.js` into `src/routes/*` (one
+  file per surface) + `src/http/` (router, middleware, WS upgrade) + `src/app.js`,
+  moving `lib/` modules under `src/modules/` unchanged. Adopt Hono's Node
+  adapter for routing (fallback: thin hand-rolled router if it fights `ws`).
+  Acceptance: byte-equal responses on the smoke suite; no route lost (route
+  inventory diff before/after).
+
+- [ ] R.3 `[ready]` Adopt `node --test`: wrap the existing smoke scripts as test
+  files under `test/`, split unit (no DB) vs integration (Postgres), replace the
+  flat `npm run check` command chain.
+  Acceptance: `npm test` runs the same assertions the old chain ran, in under
+  the old wall-clock time.
+
 ## Phase 1. Postgres as source of truth
 
-- [ ] 1.1 `[ready]` Add projection builders over `product_events` for each read
-  surface (sessions, voice turns, agent runs, browser tasks, tool requests,
-  profile history) as new modules under `gateway/lib/projections/`.
-  Acceptance: given a seeded event log, each projection returns the same records
-  the current file read returns for the same inputs, verified by a projection
-  unit smoke.
+(AMENDED 2026-07-04 per design.md "relational truth + audit event log":
+relational tables are the truth, `product_events` is the audit/outbox stream.
+Projection builders over the event log are no longer the read path.)
+
+- [ ] 1.0 `[ready]` Adopt node-pg-migrate; convert `schema.sql` into migration
+  0001 and add relational schema v1: per-primitive tables (sessions, branches,
+  turns, voice_turns, agent_runs, browser_tasks, tool_requests, agent_profiles
+  + versions), every row with `user_id`, RLS scaffolding (FORCE RLS, non-owner
+  app role), blob_ref columns instead of inline audio.
+  Acceptance: `npm run migrate` applies cleanly to an empty database twice
+  (idempotent no-op the second time); RLS policies verified as the app role.
+
+- [ ] 1.1 `[ready]` Dual-write each store: business row + `product_events`
+  append in one transaction, replacing the current fire-and-forget event
+  mirror for migrated stores.
+  Acceptance: a written voice turn produces exactly one row and one event, and
+  a forced row-write failure rolls back the event append.
 
 - [ ] 1.2 `[ready]` Add a one-time importer script that replays existing
-  `DATA_DIR` files into `product_events` with idempotency keys.
+  `DATA_DIR` files into the relational tables + `product_events` with
+  idempotency keys.
   Acceptance: running the importer twice against a sample `DATA_DIR` yields the
-  same event count the first run produced (no duplicates) and the projections read
-  back every imported record.
+  same row and event counts the first run produced (no duplicates) and the table
+  reads return every imported record.
 
 - [ ] 1.3 `[blocked: voice-worktrees]` Switch `server.js` read paths to the
-  projections in remote modes, keeping file reads as the `local`-only fallback.
+  relational tables in remote modes, keeping file reads as the `local`-only
+  fallback.
   Acceptance: with `MOA_MODE=self-host` and `DATABASE_URL` set, a sessions read, a
   voice-turn read, and an agent-run read return from Postgres with the flat-file
   store removed from the container, and the same reads in `local` mode still work
