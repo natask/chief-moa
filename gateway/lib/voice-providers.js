@@ -124,6 +124,15 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
       },
       configured: chirpConfigured,
     }),
+    "gemini-tts": providerRegistryEntry({
+      id: "gemini-tts",
+      label: "Gemini 3.1 Flash TTS (Cloud TTS modelName)",
+      capabilities: {
+        voice_output: true,
+        language_hints: true,
+      },
+      configured: chirpConfigured,
+    }),
     none: providerRegistryEntry({
       id: "none",
       label: "No hosted TTS",
@@ -143,10 +152,22 @@ const CLOUD_TTS_DEFAULT_VOICES = Object.freeze({
 // reply as text and lets the device speak it (android-tts).
 const CLOUD_TTS_UNSUPPORTED_LANGUAGES = Object.freeze(new Set(["am-et", "am"]));
 const CLOUD_TTS_SAMPLE_RATE = 24000;
+// Gemini TTS rides the same Cloud TTS text:synthesize endpoint, selected by
+// voice.modelName. Unlike classic Cloud TTS voices it follows the pinned
+// languageCode for any language the model speaks (including am-ET), so the
+// cascaded pipeline can synthesize hosted audio instead of falling back to
+// text-only replies. Gemini 3.x TTS models may only exist on v1beta1.
+const GEMINI_TTS_DEFAULT_MODEL = "gemini-3.1-flash-tts-preview";
+const GEMINI_TTS_DEFAULT_VOICE = "Kore";
+const CLOUD_TTS_ENDPOINT = "https://texttospeech.googleapis.com/v1/text:synthesize";
+const CLOUD_TTS_V1BETA1_ENDPOINT = "https://texttospeech.googleapis.com/v1beta1/text:synthesize";
 const PROVIDER_ALIASES_TTS = Object.freeze({
   "chirp-tts": "cloud-tts",
   "cloud-text-to-speech": "cloud-tts",
   "google-tts": "cloud-tts",
+  "gemini-flash-tts": "gemini-tts",
+  "gemini-3.1-flash-tts": "gemini-tts",
+  "gemini-tts-preview": "gemini-tts",
 });
 
 function createVoiceProvider(options) {
@@ -508,15 +529,20 @@ class ChirpSttVoiceProvider {
     this.reasoner = typeof options?.reasoner === "function" ? options.reasoner : null;
     this.agentProfile = options?.agentProfile || null;
     this.ttsProviderId = registryProviderId(this.names.tts);
-    this.ttsVoice = String(env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim();
-    this.ttsModel = String(env.CHIRP_TTS_MODEL || "").trim();
+    if (this.ttsProviderId === "gemini-tts") {
+      this.ttsVoice = String(env.GEMINI_TTS_VOICE || env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim() || GEMINI_TTS_DEFAULT_VOICE;
+      this.ttsModel = String(env.GEMINI_TTS_MODEL || env.CHIRP_TTS_MODEL || "").trim() || GEMINI_TTS_DEFAULT_MODEL;
+    } else {
+      this.ttsVoice = String(env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim();
+      this.ttsModel = String(env.CHIRP_TTS_MODEL || "").trim();
+    }
   }
 
   // The cascaded pipeline is active when a reasoner is wired AND a hosted TTS
   // provider is selected. Otherwise the provider is STT-only (transcript back to
   // the gateway, device speaks the reply).
   cascaded() {
-    return Boolean(this.reasoner) && this.ttsProviderId === "cloud-tts";
+    return Boolean(this.reasoner) && (this.ttsProviderId === "cloud-tts" || this.ttsProviderId === "gemini-tts");
   }
 
   configured() {
@@ -573,6 +599,8 @@ class ChirpSttVoiceProvider {
       // "stt_only": transcript only; the device speaks the reply.
       pipeline: this.cascaded() ? "cascaded" : "stt_only",
       tts_provider_id: this.ttsProviderId,
+      tts_model: this.ttsModel || null,
+      tts_voice: this.ttsVoice || null,
       input_audio_format: CLIENT_AUDIO_FORMAT,
       assistant_audio_format: CLIENT_AUDIO_FORMAT,
       // STT-only unless the cascaded pipeline is wired (reasoner + hosted TTS).
@@ -703,7 +731,16 @@ class ChirpSttVoiceProvider {
 
   canSynthesize(language) {
     const code = String(language || this.replyLanguage() || "").trim().toLowerCase();
-    if (!code || CLOUD_TTS_UNSUPPORTED_LANGUAGES.has(code)) {
+    if (!code) {
+      return false;
+    }
+    // Gemini TTS follows the pinned languageCode for every language the model
+    // speaks (including am-ET), so the classic Cloud TTS voice table does not
+    // gate it.
+    if (this.ttsProviderId === "gemini-tts") {
+      return true;
+    }
+    if (CLOUD_TTS_UNSUPPORTED_LANGUAGES.has(code)) {
       return false;
     }
     return Boolean(this.ttsVoice) || Boolean(cloudTtsVoiceFor(code));
@@ -715,6 +752,7 @@ class ChirpSttVoiceProvider {
       text,
       language: language || this.replyLanguage(),
       voice: this.ttsVoice,
+      modelName: this.ttsProviderId === "gemini-tts" ? this.ttsModel : "",
       token,
       location: this.location,
       projectId: this.projectId,
@@ -1528,7 +1566,7 @@ class GeminiLiveVoiceProvider {
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak. Currently valid language codes are en-US and am-ET only. The gateway derives primary language from the first code, so do not expose primary language as a user-facing setting. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice_max_chars (max characters spoken per reply, a positive integer), voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". Set `user_name` when the user tells you their name (\"my name is X\", \"I am X\"). Set `user_nickname` when the user asks to be called something specific (\"call me X\"). Set `user_address` when the user sets the honorific or form of address you must use for them (\"address me as X\", \"call me sir/master/boss\"). These four identity fields are injected into every session automatically - persist them instead of remembering them ad hoc. LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak. Currently valid language codes are en-US and am-ET only. The gateway derives primary language from the first code, so do not expose primary language as a user-facing setting. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice_max_chars (max characters spoken per reply, a positive integer), voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
                 },
                 scope: {
                   type: "STRING",
@@ -2102,30 +2140,52 @@ function cloudTtsLanguageCode(language) {
 // resamples from the TTS rate to the client rate when they differ.
 async function synthesizeCloudTts(options) {
   const language = cloudTtsLanguageCode(options.language);
-  const voiceName = String(options.voice || "").trim() || cloudTtsVoiceFor(options.language);
+  const modelName = String(options.modelName || "").trim();
+  const voiceName = String(options.voice || "").trim()
+    || (modelName ? GEMINI_TTS_DEFAULT_VOICE : cloudTtsVoiceFor(options.language));
   if (!voiceName) {
     throw new Error(`no Cloud TTS voice for language ${language}`);
   }
-  const endpoint = String(options.endpoint || "").trim() || "https://texttospeech.googleapis.com/v1/text:synthesize";
-  const response = await fetchWithTimeout(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${options.token}`,
-      "Content-Type": "application/json",
+  const voice = { languageCode: language, name: voiceName };
+  if (modelName) {
+    voice.modelName = modelName;
+  }
+  const explicitEndpoint = String(options.endpoint || "").trim();
+  // Gemini TTS models may only exist on v1beta1, so retry there when v1
+  // rejects the request. An explicit (test) endpoint is never retried.
+  const endpoints = explicitEndpoint
+    ? [explicitEndpoint]
+    : (modelName ? [CLOUD_TTS_ENDPOINT, CLOUD_TTS_V1BETA1_ENDPOINT] : [CLOUD_TTS_ENDPOINT]);
+  const timeoutMs = Math.max(1, Number(options.timeoutMs) || 20000);
+  const body = JSON.stringify({
+    input: { text: String(options.text || "").slice(0, 5000) },
+    voice,
+    audioConfig: {
+      audioEncoding: "LINEAR16",
+      sampleRateHertz: CLOUD_TTS_SAMPLE_RATE,
     },
-    body: JSON.stringify({
-      input: { text: String(options.text || "").slice(0, 5000) },
-      voice: { languageCode: language, name: voiceName },
-      audioConfig: {
-        audioEncoding: "LINEAR16",
-        sampleRateHertz: CLOUD_TTS_SAMPLE_RATE,
-      },
-    }),
-  }, Math.max(1, Number(options.timeoutMs) || 20000));
+  });
 
-  if (!response.ok) {
+  let response = null;
+  let lastFailure = "";
+  for (const endpoint of endpoints) {
+    response = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        "Content-Type": "application/json",
+      },
+      body,
+    }, timeoutMs);
+    if (response.ok) {
+      break;
+    }
     const text = await response.text();
-    throw new Error(`cloud TTS failed (${response.status}): ${cleanError(text)}`);
+    lastFailure = `cloud TTS failed (${response.status}): ${cleanError(text)}`;
+    response = null;
+  }
+  if (!response) {
+    throw new Error(lastFailure || "cloud TTS failed");
   }
   const json = await response.json();
   const base64 = String(json?.audioContent || "");

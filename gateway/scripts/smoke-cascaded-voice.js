@@ -40,6 +40,7 @@ async function main() {
   try {
     await enUsCascade(tempDir);
     await amEtFallback(tempDir);
+    await geminiTtsAmEtCascade(tempDir);
     await sttOnlyUnchanged(tempDir);
     await profileDerivedSttLanguages(tempDir);
     await turnDoneCarriesCascadedMetadata(tempDir);
@@ -304,6 +305,59 @@ async function amEtFallback(tempDir) {
   const kinds = events.map((e) => e.type);
   assert.deepEqual(kinds, ["transcript_final", "assistant_text"], `Amharic must not emit audio events: ${kinds.join(",")}`);
   assert.ok(!calls.some((c) => c.kind === "tts"), "Cloud TTS must not be called for a language it cannot speak");
+}
+
+// Gemini 3.1 Flash TTS speaks Amharic, so the same am-ET turn that falls back
+// to text-only on cloud-tts streams hosted reply audio on gemini-tts. The
+// synthesize request must select the Gemini model via voice.modelName and pin
+// the reply language.
+async function geminiTtsAmEtCascade(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "selam", calls });
+
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      VOICE_TTS_PROVIDER: "gemini-flash-tts", // alias must resolve to gemini-tts
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "am-ET,en-US",
+    },
+    reasoner: async () => ({
+      speak: "ሰላም",
+      display: "ሰላም",
+      language: "am-ET",
+      model: "test-model",
+      classification: "chat",
+    }),
+  });
+
+  const status = provider.status();
+  assert.equal(status.pipeline, "cascaded", "gemini-tts must activate the cascaded pipeline");
+  assert.equal(status.tts_provider_id, "gemini-tts", "gemini-flash-tts alias must resolve to gemini-tts");
+  assert.equal(status.tts_model, "gemini-3.1-flash-tts-preview", "gemini-tts must default to the Gemini 3.1 Flash TTS model");
+
+  const events = [];
+  const result = await provider.processTurn(makeTurn(tempDir, "gemini-am"), recordingHooks(events));
+
+  assert.equal(result.transcription_only, false);
+  assert.equal(result.tts_spoke, true, "Gemini TTS speaks Amharic; hosted audio must stream");
+  assert.equal(result.reply_language, "am-ET");
+  assert.equal(result.assistant_text, "ሰላም");
+
+  const kinds = events.map((e) => e.type);
+  assert.deepEqual(
+    kinds,
+    ["transcript_final", "assistant_text", "assistant_audio_start", "audio", "assistant_audio_done"],
+    `gemini-tts am-ET must stream hosted audio: ${kinds.join(",")}`,
+  );
+
+  const ttsCall = calls.find((c) => c.kind === "tts");
+  assert.ok(ttsCall, "synthesize must be called");
+  assert.equal(ttsCall.body.voice.modelName, "gemini-3.1-flash-tts-preview", "synthesize must select the Gemini TTS model via voice.modelName");
+  assert.equal(ttsCall.body.voice.languageCode, "am-ET", "reply language must be pinned in the synthesize request");
+  assert.equal(ttsCall.body.voice.name, "Kore", "gemini-tts must default to the Kore voice");
 }
 
 async function sttOnlyUnchanged(tempDir) {
