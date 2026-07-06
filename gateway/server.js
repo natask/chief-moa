@@ -22,6 +22,7 @@ const { createCompanionCatalogStore } = require("./lib/companion-catalog");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createBrain } = require("./lib/brain");
+const { createThreadStore, isIncognitoBranch, newBranchId } = require("./lib/thread-store");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
 const { createEventSubstrateStore } = require("./lib/event-substrate");
@@ -229,6 +230,12 @@ const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_
 // it always knows the user, and writes memory-worthy statements + what tasks
 // accomplished back to it. Memory ONLY -- it is not the operational store.
 const brain = createBrain({ recallLimit: BRAIN_RECALL_LIMIT });
+// Thread store: durable per-session branch metadata, the active-thread pointer,
+// and rolling per-thread summaries. Threads are branches inside the one shared
+// session; this layer adds the lifecycle (new/fork/incognito), labels, fork
+// lineage, and cross-device active-thread resolution the turn ledgers do not
+// carry.
+const threadStore = createThreadStore({ dataDir: DATA_DIR });
 const workGraph = createWorkGraphStore({
   dataDir: DATA_DIR,
   databaseUrl: process.env.DATABASE_URL,
@@ -1187,6 +1194,52 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, { session_id: defaultSessionId() });
+      return;
+    }
+
+    // Thread control plane. A thread is a branch inside the one shared session.
+    // GET /v1/threads lists every branch (chat + voice + browser) with its
+    // lifecycle metadata and rolling summary. POST /v1/threads/switch records
+    // the active thread so every device resolves the same one, and GET
+    // /v1/threads/active returns it. Backward-compatible: callers that never
+    // touch these keep continuing on their caller-provided or default branch.
+    if (request.method === "GET" && url.pathname === "/v1/threads") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const sessionId = url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || defaultSessionId();
+      sendJson(response, 200, threadListPayload(sessionId, Number(url.searchParams.get("limit") || 50)));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/threads/active") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const sessionId = sanitizeOptionalId(url.searchParams.get("session_id") || url.searchParams.get("conversation_id"), defaultSessionId());
+      const surface = String(url.searchParams.get("surface") || "").slice(0, 60);
+      const active = threadStore.getActive(sessionId, surface);
+      const meta = threadStore.getThread(sessionId, active.branch_id);
+      sendJson(response, 200, {
+        session_id: sessionId,
+        surface,
+        active: {
+          ...active,
+          kind: meta?.kind || (active.branch_id === "default" ? "default" : "new"),
+          label: meta?.label || (active.branch_id === "default" ? "Main thread" : active.branch_id),
+        },
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/threads/switch") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleThreadSwitch(request, response);
       return;
     }
 
@@ -3291,7 +3344,9 @@ function brokerRouteDecisions(event, body = {}) {
   const explicitProjectId = event.project_id;
   const explicitRunId = body.agent_run_id ? sanitizeOptionalId(body.agent_run_id, "") : "";
 
-  const sessions = sessionSummaryPayload(50).sessions;
+  // Voice-only source keeps the broker's continuation routing stable; the merged
+  // chat/browser summaries are a read model for /v1/sessions and /v1/threads.
+  const sessions = sessionSummaryPayload(50, { sources: ["voice"] }).sessions;
   for (const session of sessions) {
     const score = explicitSessionId && session.session_id === explicitSessionId
       ? 0.98
@@ -10763,18 +10818,72 @@ function sanitizeToolJson(value, depth = 0) {
   return String(value).slice(0, 200);
 }
 
-function sessionSummaryPayload(limit) {
+// Aggregate durable turns into per-(session,branch) summaries. `sources` selects
+// which stores feed the aggregation: "voice" is the historical behavior; the
+// merged default also folds in chat and browser turns so a chat-only or
+// browser-only thread is visible (previously it was not -- chat-only sessions
+// were invisible in /v1/sessions). The broker keeps the voice-only source so its
+// continuation routing is unchanged.
+function sessionSummaryPayload(limit, options = {}) {
   const safeLimit = Math.max(1, Math.min(limit || 25, 100));
-  const turns = readVoiceTurnLedger();
+  const sources = Array.isArray(options.sources) && options.sources.length
+    ? options.sources
+    : ["voice", "chat", "browser"];
+  const rows = [];
+  if (sources.includes("voice")) {
+    for (const turn of readVoiceTurnLedger()) {
+      rows.push({
+        session_id: String(turn.session_id || turn.conversation_id || "default"),
+        conversation_id: String(turn.conversation_id || turn.session_id || "default"),
+        branch_id: String(turn.branch_id || "default"),
+        turn_id: String(turn.turn_id || ""),
+        profile_version: String(turn.profile_version || ""),
+        classification: String(turn.classification || ""),
+        transcript: String(turn.transcript || ""),
+        at: String(turn.ts || ""),
+        agent_run_ids: Array.isArray(turn.references?.agent_run_ids) ? turn.references.agent_run_ids : [],
+      });
+    }
+  }
+  if (sources.includes("chat")) {
+    for (const record of readChatTurnLedger().map(summarizeChatTurnRecord)) {
+      rows.push({
+        session_id: String(record.session_id || record.conversation_id || "default"),
+        conversation_id: String(record.conversation_id || record.session_id || "default"),
+        branch_id: String(record.branch_id || "default"),
+        turn_id: String(record.turn_id || ""),
+        profile_version: String(record.profile_version || ""),
+        classification: "chat",
+        transcript: String(record.user_text || ""),
+        at: String(record.created_at || ""),
+        agent_run_ids: [],
+      });
+    }
+  }
+  if (sources.includes("browser")) {
+    for (const turn of listAllBrowserTurns()) {
+      rows.push({
+        session_id: String(turn.session_id || turn.conversation_id || "default"),
+        conversation_id: String(turn.conversation_id || turn.session_id || "default"),
+        branch_id: String(turn.branch_id || "default"),
+        turn_id: String(turn.id || turn.turn_id || ""),
+        profile_version: String(turn.profile_version || ""),
+        classification: "browser",
+        transcript: String(turn.text || turn.transcript || ""),
+        at: String(turn.updated_at || turn.created_at || ""),
+        agent_run_ids: [],
+      });
+    }
+  }
+  rows.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+
   const sessions = new Map();
-  for (const turn of turns) {
-    const sessionId = String(turn.session_id || turn.conversation_id || "default");
-    const branchId = String(turn.branch_id || "default");
-    const key = `${sessionId}:${branchId}`;
+  for (const row of rows) {
+    const key = `${row.session_id}:${row.branch_id}`;
     const previous = sessions.get(key) || {
-      session_id: sessionId,
-      conversation_id: String(turn.conversation_id || sessionId),
-      branch_id: branchId,
+      session_id: row.session_id,
+      conversation_id: row.conversation_id,
+      branch_id: row.branch_id,
       latest_turn_id: "",
       latest_profile_version: "",
       latest_classification: "",
@@ -10784,17 +10893,14 @@ function sessionSummaryPayload(limit) {
       agent_run_ids: [],
     };
     previous.turn_count += 1;
-    previous.latest_turn_id = String(turn.turn_id || "");
-    previous.latest_profile_version = String(turn.profile_version || "");
-    previous.latest_classification = String(turn.classification || "");
-    previous.latest_transcript = truncate(String(turn.transcript || ""), 240);
-    previous.latest_at = String(turn.ts || "");
-    const refs = turn.references?.agent_run_ids;
-    if (Array.isArray(refs)) {
-      for (const id of refs) {
-        if (!previous.agent_run_ids.includes(id)) {
-          previous.agent_run_ids.push(id);
-        }
+    previous.latest_turn_id = row.turn_id;
+    previous.latest_profile_version = row.profile_version;
+    previous.latest_classification = row.classification;
+    previous.latest_transcript = truncate(String(row.transcript || ""), 240);
+    previous.latest_at = row.at;
+    for (const id of row.agent_run_ids) {
+      if (!previous.agent_run_ids.includes(id)) {
+        previous.agent_run_ids.push(id);
       }
     }
     sessions.set(key, previous);
@@ -10805,6 +10911,150 @@ function sessionSummaryPayload(limit) {
       .sort((a, b) => String(b.latest_at).localeCompare(String(a.latest_at)))
       .slice(0, safeLimit),
   };
+}
+
+// The thread list for one session: every branch merged from the chat, voice, and
+// browser stores, joined with thread lifecycle metadata (kind, label, fork
+// lineage) and the rolling summary. This is the read model behind GET /v1/threads.
+function threadListPayload(sessionId, limit = 50) {
+  const safeSessionId = sanitizeOptionalId(sessionId, defaultSessionId());
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const summaries = sessionSummaryPayload(200).sessions
+    .filter((session) => session.session_id === safeSessionId || session.conversation_id === safeSessionId);
+  const byBranch = new Map();
+  for (const session of summaries) {
+    byBranch.set(String(session.branch_id || "default"), session);
+  }
+  // Fold in threads that have metadata but no turns yet (e.g. a just-switched
+  // branch) so the list reflects lifecycle state even before the first turn.
+  for (const meta of threadStore.listThreads(safeSessionId)) {
+    if (!byBranch.has(meta.branch_id)) {
+      byBranch.set(meta.branch_id, {
+        session_id: safeSessionId,
+        branch_id: meta.branch_id,
+        latest_turn_id: "",
+        latest_classification: "",
+        latest_transcript: "",
+        latest_at: meta.updated_at || meta.created_at || "",
+        turn_count: 0,
+        agent_run_ids: [],
+      });
+    }
+  }
+  const active = threadStore.getActive(safeSessionId);
+  const threads = Array.from(byBranch.values()).map((session) => {
+    const meta = threadStore.getThread(safeSessionId, session.branch_id);
+    const summary = threadStore.readSummary(safeSessionId, session.branch_id);
+    return {
+      session_id: safeSessionId,
+      branch_id: session.branch_id,
+      kind: meta?.kind || (session.branch_id === "default" ? "default" : "new"),
+      label: meta?.label || (session.branch_id === "default" ? "Main thread" : session.branch_id),
+      parent_branch_id: meta?.parent_branch_id || "",
+      fork_point: meta?.fork_point || null,
+      turn_count: session.turn_count || 0,
+      latest_turn_id: session.latest_turn_id || "",
+      latest_classification: session.latest_classification || "",
+      latest_transcript: session.latest_transcript || "",
+      last_activity_at: session.latest_at || meta?.updated_at || "",
+      summary: summary?.summary || "",
+      summary_updated_at: summary?.updated_at || "",
+      is_active: String(active.branch_id || "default") === String(session.branch_id),
+    };
+  });
+  threads.sort((a, b) => String(b.last_activity_at).localeCompare(String(a.last_activity_at)));
+  return {
+    session_id: safeSessionId,
+    active_branch_id: String(active.branch_id || "default"),
+    threads: threads.slice(0, safeLimit),
+  };
+}
+
+// The latest turn on a branch (merged across stores), used to seed a fork point.
+function branchLatestTurn(sessionId, branchId) {
+  const safeSessionId = sanitizeOptionalId(sessionId, defaultSessionId());
+  const safeBranchId = sanitizeOptionalId(branchId, "default");
+  const session = sessionSummaryPayload(200).sessions.find(
+    (candidate) => candidate.session_id === safeSessionId && candidate.branch_id === safeBranchId
+  );
+  if (!session) {
+    return { turn_id: "", created_at: "" };
+  }
+  return { turn_id: String(session.latest_turn_id || ""), created_at: String(session.latest_at || "") };
+}
+
+// POST /v1/threads/switch — set the active thread for a session (and optionally a
+// surface). Accepts an explicit branch_id (switch/continue), or an `action` of
+// new/fork/incognito to mint a fresh branch. A fork records its parent branch and
+// the parent's latest turn as the fork point so recency inherits parent history
+// up to that point with no data copy. The active pointer is durable and shared,
+// so every device resolves the same thread.
+async function handleThreadSwitch(request, response) {
+  const body = await readJsonBody(request);
+  const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id, defaultSessionId());
+  const surface = String(body.surface || body.source || "").slice(0, 60);
+  const deviceId = profileDeviceIdFromBody(body);
+  const requestedAction = String(body.action || "").toLowerCase();
+  const label = String(body.thread_label || body.label || "").slice(0, 120);
+
+  let branchId = sanitizeOptionalBlankId(body.branch_id || body.branchId);
+  let kind = "continue";
+  let parentBranchId = "";
+  let forkPoint = null;
+
+  if (!branchId && (requestedAction === "new" || requestedAction === "fork" || requestedAction === "incognito")) {
+    kind = requestedAction;
+    branchId = newBranchId(requestedAction);
+    if (requestedAction === "fork") {
+      parentBranchId = sanitizeOptionalId(body.parent_branch_id || threadStore.getActive(sessionId, surface).branch_id, "default");
+      forkPoint = branchLatestTurn(sessionId, parentBranchId);
+    }
+  }
+  if (!branchId) {
+    branchId = "default";
+  }
+
+  let meta = null;
+  if (!isIncognitoBranch(branchId)) {
+    meta = threadStore.ensureThread(sessionId, branchId, {
+      kind: kind === "continue" ? undefined : kind,
+      label: label || undefined,
+      parent_branch_id: parentBranchId || undefined,
+      fork_point: forkPoint || undefined,
+    });
+    // Seed a fork's summary from its parent so it starts with inherited context.
+    if (kind === "fork" && parentBranchId) {
+      const parentSummary = threadStore.readSummary(sessionId, parentBranchId);
+      if (parentSummary?.summary && !threadStore.readSummary(sessionId, branchId)) {
+        threadStore.writeSummary(sessionId, branchId, parentSummary.summary, {
+          turn_count: 0,
+          source: "fork-seed",
+        });
+      }
+    }
+  }
+
+  const state = threadStore.recordSwitch(sessionId, {
+    branch_id: branchId,
+    surface,
+    device_id: deviceId,
+    at: new Date().toISOString(),
+  });
+
+  sendJson(response, 200, {
+    session_id: sessionId,
+    surface,
+    active: state.active,
+    thread: meta || {
+      session_id: sessionId,
+      branch_id: branchId,
+      kind: isIncognitoBranch(branchId) ? "incognito" : "default",
+      label: isIncognitoBranch(branchId) ? "Incognito" : "",
+      parent_branch_id: parentBranchId,
+      fork_point: forkPoint,
+    },
+    threads: threadListPayload(sessionId).threads,
+  });
 }
 
 function latestContextPayload() {
