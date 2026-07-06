@@ -30,7 +30,9 @@ services:
       MOA_DOMAIN: ${MOA_DOMAIN:?set MOA_DOMAIN in the compose env file}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in the compose env file}
     volumes:
-      - ./gateway/deploy/vps/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mount the directory, not the file: git pull replaces the file with a
+      # new inode, and a single-file bind mount stays pinned to the old one.
+      - ./gateway/deploy/vps:/etc/caddy:ro
       - moa-caddy-data:/data
       - moa-caddy-config:/config
 

@@ -60,6 +60,23 @@ port="$(env_value GATEWAY_PORT)"
 port="${port:-8787}"
 wait_for_gateway_health "http://127.0.0.1:$port/health" 45
 
+# 4. If the Caddyfile changed in this update, apply it with a validated
+# graceful reload. Requires the directory mount (docker-compose.vps.yml);
+# reload keeps the old config on validation failure, so the front never
+# drops. Non-fatal: a reload failure leaves the previous routes serving.
+if ! git -C "$APP_DIR" diff --quiet "$old_sha" "$new_sha" -- gateway/deploy/vps/Caddyfile; then
+  caddy_container="$(compose ps -q caddy)"
+  if [ -n "$caddy_container" ]; then
+    if docker exec "$caddy_container" caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+      docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile \
+        && echo "Caddyfile changed: reloaded caddy." \
+        || echo "WARNING: caddy reload failed; previous routes still serving." >&2
+    else
+      echo "WARNING: new Caddyfile failed validation; caddy keeps the old config." >&2
+    fi
+  fi
+fi
+
 domain="$(env_value MOA_DOMAIN)"
 echo "Updated gateway $old_sha -> $new_sha"
 echo "Health: https://$domain/health"
