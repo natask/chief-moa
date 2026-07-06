@@ -3342,14 +3342,21 @@ async function executeWorkHistoryIntent(intent, context) {
   }
 
   if (intent.kind === "status_query") {
+    // "What are my agents doing" must reflect BOTH stores: the work-history
+    // control-plane runs AND the worker-pull agent runs (the queue workers pull
+    // from). We merge the agent-runs projection into the work-history summary so
+    // queued/active/completed/failed answers include runs waiting for a worker.
     const summary = await workHistory.statusSummary();
+    const agentRuns = agentRunStatusSummary();
+    const merged = mergeRunStatusSummaries(summary, agentRuns);
     return {
-      speak: workHistoryStatusSpeech(intent, summary, await workHistoryChangedDetail(intent, summary)),
+      speak: workHistoryStatusSpeech(intent, merged, await workHistoryChangedDetail(intent, summary)),
       refs: {
-        queued_run_ids: summary.queued.map((run) => run.run_id),
-        active_run_ids: summary.active.map((run) => run.run_id),
-        blocked_run_ids: summary.blocked.map((run) => run.run_id),
-        failed_run_ids: summary.failed.map((run) => run.run_id),
+        queued_run_ids: merged.queued.map((run) => run.run_id),
+        active_run_ids: merged.active.map((run) => run.run_id),
+        blocked_run_ids: merged.blocked.map((run) => run.run_id),
+        failed_run_ids: merged.failed.map((run) => run.run_id),
+        agent_run_ids: agentRuns.runs.map((run) => run.run_id),
       },
     };
   }
@@ -3484,6 +3491,45 @@ function workHistoryDeploymentTarget(transcript) {
 
 // Speakable status built ONLY from projections. Names ids, states, blocking
 // reasons, and the latest meaningful event; it never launches new work.
+// Project the worker-pull agent-runs store into the same bucket shape the
+// work-history status speech uses, so a status turn reflects runs waiting for a
+// worker to pull them. Read-only; this never launches, claims, or mutates a run.
+function agentRunStatusSummary() {
+  const runs = listAllAgentRuns()
+    .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+  const norm = (run) => ({
+    run_id: run.id,
+    status: run.status,
+    worker_id: run.claimed_by_worker_id || "",
+    objective: run.prompt_preview || "",
+    latest_summary: run.output_preview || "",
+    blocking_reason: "",
+    source: "agent-runs",
+  });
+  const bucket = (statuses, limit) => runs.filter((run) => statuses.includes(run.status)).slice(0, limit).map(norm);
+  return {
+    runs: runs.slice(0, 50).map(norm),
+    queued: bucket(["queued"], 25),
+    active: bucket(["claimed", "running"], 25),
+    completed: bucket(["completed"], 5),
+    failed: bucket(["failed", "canceled", "timed-out"], 5),
+  };
+}
+
+// Merge the work-history projection with the agent-runs projection. The two
+// stores hold distinct ids, so this is a concat per bucket; work-history-only
+// buckets (blocked, waiting_on_user, tasks) pass through unchanged.
+function mergeRunStatusSummaries(summary, agentRuns) {
+  return {
+    ...summary,
+    queued: [...summary.queued, ...agentRuns.queued],
+    active: [...summary.active, ...agentRuns.active],
+    completed: [...summary.completed, ...agentRuns.completed],
+    failed: [...summary.failed, ...agentRuns.failed],
+    runs: [...summary.runs, ...agentRuns.runs],
+  };
+}
+
 function workHistoryStatusSpeech(intent, summary, changedDetail) {
   if (intent.scope === "changed" && changedDetail) {
     return changedDetail;

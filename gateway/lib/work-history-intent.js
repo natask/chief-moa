@@ -96,7 +96,11 @@ function parseStatusQuery(lower, raw) {
   if (/\bwhat(?:'s| is)?\s+(?:still\s+)?running\b/.test(lower)
     || /\bwhich\s+(?:runs?|tasks?|agents?)\s+(?:are|is)\s+(?:still\s+)?(?:running|active|going)\b/.test(lower)
     || /\bwhat\s+work\s+is\s+(?:queued|active|running|open)\b/.test(lower)
-    || /\bwhat(?:'s| is)?\s+(?:queued|in\s+the\s+queue)\b/.test(lower)) {
+    || /\bwhat(?:'s| is)?\s+(?:queued|in\s+the\s+queue)\b/.test(lower)
+    // "what are my agents doing", "what's my agent up to", "how are the agents doing"
+    || /\bwhat(?:'s| is| are)?\s+(?:my |the |our )?agents?\s+(?:doing|working on|up to|running)\b/.test(lower)
+    || /\bhow\s+are\s+(?:my |the |our )?agents?\s+doing\b/.test(lower)
+    || /\bwhat\s+are\s+(?:my |the |our )?(?:runs?|agents?)\s+(?:doing|up to)\b/.test(lower)) {
     return { kind: "status_query", scope: "running", target: extractTargetRef(raw) };
   }
   if (/\bwhat\s+(?:did|has)\s+(?:.{1,60}?)\s*change(?:d)?\b/.test(lower) || /\bwhat\s+changed\b/.test(lower)) {
