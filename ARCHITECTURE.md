@@ -127,12 +127,20 @@ session per sample with a session-only voice override, so samples do not mutate
 the saved profile voice.
 
 The model performs customization through gateway tool calls, not client-side
-keyword detection. On the Live path the model calls `update_agent_profile` to
-change any vetted setting (reply language, heard language, voice including
-masculine/feminine aliases, `response_modality`, `voice_max_chars`, assistant
-name, persona, providers), `revert_agent_profile` to undo its last change
-(`mode=previous`) or restore the gateway defaults (`mode=reset`), and
-`propose_page_tweak` on browser turns. Every write passes through the same
+keyword detection. On the Live path and on the cascaded reasoning path the
+model calls `update_agent_profile` to change any vetted setting (reply
+language, heard/input languages, voice including masculine/feminine aliases,
+`response_modality`, `voice_max_chars`, assistant name, persona, and the
+reasoning `model`/`reasoning_provider`), `revert_agent_profile` to undo its
+last change (`mode=previous`) or restore the gateway defaults (`mode=reset`),
+and `propose_page_tweak` on browser turns. On cascaded turns the tools run
+through a bounded gateway tool loop that works on both the Vertex and
+OpenAI-compatible providers and degrades to a plain reply when the model or
+provider cannot call tools. Language switching is therefore reasoned about by
+the model; the deterministic phrase parser remains only as a fast path for
+exact control phrases. STT input languages stay explicitly user-specified
+(profile `input_languages`) — the gateway never auto-detects what the user
+speaks. Every write passes through the same
 sanitizer as the HTTP path (persona-prompt override stripping, the language
 allowlist, per-field coercion), so no tool value can blank a field or break the
 app; a rejected value keeps the previous setting and returns a structured
@@ -198,23 +206,33 @@ PCM files:
   Developer) or Vertex Live. It auto-detects the INPUT language and cannot be
   constrained, which mistranscribes English.
 - `cascaded`: Chirp 3 streaming STT, restricted to the configured input
-  languages, then the gateway's model-agnostic LLM turn, then Google Cloud
-  Text-to-Speech reply audio. The reasoning model is swappable
-  (`MODEL_PROVIDER`/`MODEL_ID`), so this is not tied to any one LLM.
+  languages, then the gateway's model-agnostic LLM turn, then hosted TTS reply
+  audio (gemini-tts or classic Cloud TTS). The reasoning model is swappable at
+  boot (`MODEL_PROVIDER`/`MODEL_ID`) and at runtime per profile
+  (`model`, `reasoning_provider` — settable by voice through
+  `update_agent_profile`), so the middle model can be A/B tested without a
+  restart and is not tied to any one LLM.
 
 loopback stays for transport QA. The legacy Chirp STT-only path (transcript
-routed back to the durable voice-turn router, device speaks the reply) is
-preserved: it is the same provider without the hosted-TTS leg.
+routed back to the durable voice-turn router) is preserved: it is the same
+provider without the hosted-TTS leg.
 
 ### Cascaded voice pipeline and the switch
 
 ```text
 Chirp 3 STT (input restricted per turn to the agent profile's input_languages;
              CHIRP_LANGUAGE_CODES is only the boot fallback)
-  -> gateway LLM turn (model-agnostic; reply language/voice from the agent
-     profile as OUTPUT policy)
-  -> Cloud TTS reply audio when the reply language has a hosted voice,
-     otherwise reply text + device-side TTS
+  -> gateway LLM turn (model-agnostic; swappable per profile via `model` +
+     `reasoning_provider`; reply language/voice from the agent profile as
+     OUTPUT policy; injects durable session context, gbrain recall, a
+     modality/TTS-delivery hint, and — on gemini-tts — an expressive-speech
+     directive; profile tools available through the bounded tool loop)
+  -> hosted TTS reply audio (gemini-tts synthesizes any reply language,
+     including am-ET; classic cloud-tts only languages with a hosted voice).
+     `response_modality:"text"` deliberately skips TTS; a synthesis failure
+     is logged and carried as `tts_error` — either way the reply text still
+     reaches the client, which shows it with a "(not spoken)" cue. The device
+     never speaks with local TTS.
 ```
 
 The active pipeline is selected per deployment/session by provider names,
@@ -232,9 +250,14 @@ alternate; more codes (or pairing auto-decoding with `languageCodes`) demote
 the codes to hints and auto-detection still runs. The provider caps the list to
 two codes and uses explicit LINEAR16 decoding so recognition is truly
 restricted. am-ET (Amharic) exists only on `chirp_3`; the provider asserts the
-model before a recognize call. Google Cloud TTS has no Amharic voice under any
-type, so an Amharic reply is returned as text and spoken by the device
-(android-tts); a hosted en-US Chirp 3 HD voice is used for English.
+model before a recognize call. Classic Google Cloud TTS has no Amharic voice,
+but the gemini-tts leg (`gemini-3.1-flash-tts`) synthesizes any language the
+model speaks, including am-ET, so hosted reply audio covers both catalog
+languages. On gemini-tts the reasoning model is prompted to direct the
+delivery: a leading `[style: ...]` line becomes the synthesis style prompt
+(`input.prompt`) and whitelisted inline tags such as `[sigh]` or
+`[short pause]` stay in the spoken text (`input.text`), while the displayed
+and stored transcript is stripped clean of both.
 
 The restricted input set is read from the agent profile per turn (mirroring how
 the reply language already works), so a spoken or typed language change applies
@@ -242,15 +265,21 @@ without a gateway restart. Recognize results whose language falls outside the
 active restricted set are dropped and flagged on the turn record instead of
 leaking a foreign-language transcript.
 
-A voice turn can never end silently. Model and Cloud TTS calls run under
-bounded timeouts, every commit/text turn error also emits
+A voice turn can never end silently, and it must end honestly. Model and TTS
+calls run under bounded timeouts, every commit/text turn error also emits
 `turn_done{status:"error"}` (not just an `error` event), and completed
-cascaded turns carry `tts_spoke` and `reply_language` on `turn_done`. Clients
-act on those: when no hosted reply audio arrives (`tts_spoke=false`, e.g. an
-Amharic reply) the phone speaks the assistant text with device TTS, `no_speech`
+cascaded turns carry `tts_spoke`, `reply_language`, `modality`, and (on a real
+synthesis fault) `tts_error` on `turn_done`. `modality:"text"` marks a
+deliberate text-only delivery, never a failure. Profile-control confirmations
+are synthesized and spoken like any other reply. Clients act on those fields:
+when no hosted reply audio arrives (`tts_spoke=false`) the phone keeps the
+reply visible longer with a "(not spoken)" cue — never local TTS — `no_speech`
 turns are surfaced ("didn't catch that"), a mid-turn socket drop shows a
 visible retry message, and the Android watchdog re-arms on every streaming
-event so a stalled turn times out audibly instead of hanging forever.
+event so a stalled turn times out audibly instead of hanging forever. The
+reasoner sees the delivery state (modality, TTS availability, the previous
+turn's `tts_error`) as a hint block, so "why did you answer in text?" gets a
+truthful answer and the model can change `response_modality` by tool call.
 
 ### Record Mode (raw audio notes)
 
