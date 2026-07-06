@@ -203,10 +203,6 @@
     root.id = "agee-root";
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <div id="agee-aura" aria-hidden="true">
-        <span class="agee-aura-ring"></span>
-        <span class="agee-aura-glow"></span>
-      </div>
       <button id="agee-launcher" type="button" data-agee-tip="Click to type, drag to move, hold to talk" aria-label="A.G.">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
@@ -240,7 +236,6 @@
     tipEl = root.querySelector("#agee-tip");
 
     setupOverlayTooltips();
-    updateAuraGutter();
     restoreLauncherPosition();
     restoreUiChimePreference();
     loadAvatarBehaviorRuntime();
@@ -371,15 +366,6 @@
     }
   }
 
-  // The right-edge aura must not sit under a native scrollbar gutter, which can
-  // paint above fixed content. Measure the gutter and offset the aura's right.
-  function updateAuraGutter() {
-    const aura = root && root.querySelector("#agee-aura");
-    if (!aura) return;
-    const gutter = Math.max(0, window.innerWidth - (document.documentElement?.clientWidth || window.innerWidth));
-    aura.style.setProperty("--agee-aura-gutter", `${gutter}px`);
-  }
-
   // Re-clamp the launcher into the viewport and re-anchor the panel on resize
   // and orientation change so neither can end up off-screen. Batched to a frame.
   function handleViewportResize() {
@@ -387,7 +373,6 @@
     resizeRaf = requestAnimationFrame(() => {
       resizeRaf = null;
       reclampLauncher();
-      updateAuraGutter();
       if (open) positionPanel();
     });
   }

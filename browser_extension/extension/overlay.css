@@ -63,77 +63,6 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* ---- Screen-edge aura ---------------------------------------------------- */
-/* A full-viewport, pointer-events-none edge glow while the assistant is
-   listening / thinking / speaking / recording. A pre-painted conic gradient
-   is rotated by transform (compositor-only) and masked to a thin edge band;
-   intensity is opacity alone. Idle: hidden and paused, so it costs nothing. */
-#agee-aura {
-  position: absolute;
-  inset: 0;
-  right: var(--agee-aura-gutter, 0px);
-  overflow: hidden;
-  pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.3s ease, visibility 0s linear 0.3s;
-}
-.agee-aura-ring,
-.agee-aura-glow {
-  position: absolute;
-  inset: -25vmax;
-  background: conic-gradient(
-    from 0deg,
-    var(--agee-amber),
-    var(--agee-gold),
-    var(--agee-ember),
-    var(--agee-amber)
-  );
-  -webkit-mask-image: radial-gradient(ellipse 70% 70% at center, transparent 55%, #000 100%);
-  mask-image: radial-gradient(ellipse 70% 70% at center, transparent 55%, #000 100%);
-  animation: agee-aura-spin 20s linear infinite;
-  animation-play-state: paused;
-  will-change: transform;
-}
-.agee-aura-glow {
-  filter: blur(46px);
-  opacity: 0.5;
-}
-#agee-root.agee-voicing #agee-aura,
-#agee-root.agee-recording #agee-aura {
-  opacity: 0.82;
-  visibility: visible;
-  transition: opacity 0.3s ease;
-}
-#agee-root.agee-voicing #agee-aura .agee-aura-ring,
-#agee-root.agee-voicing #agee-aura .agee-aura-glow,
-#agee-root.agee-recording #agee-aura .agee-aura-ring,
-#agee-root.agee-recording #agee-aura .agee-aura-glow {
-  animation-play-state: running;
-}
-/* Per-state tint. First and last stop match to hide the 0/360 seam. */
-#agee-root.agee-state-thinking #agee-aura .agee-aura-ring,
-#agee-root.agee-state-thinking #agee-aura .agee-aura-glow {
-  background: conic-gradient(from 0deg, var(--agee-gold), #fff0c2, var(--agee-amber), var(--agee-gold));
-}
-#agee-root.agee-state-speaking #agee-aura .agee-aura-ring,
-#agee-root.agee-state-speaking #agee-aura .agee-aura-glow {
-  background: conic-gradient(from 0deg, var(--agee-blue), #8cc4ff, #3a7fd0, var(--agee-blue));
-}
-#agee-root.agee-recording #agee-aura .agee-aura-ring,
-#agee-root.agee-recording #agee-aura .agee-aura-glow {
-  background: conic-gradient(from 0deg, var(--agee-red), var(--agee-ember), #d63a30, var(--agee-red));
-}
-#agee-root.agee-state-listening #agee-aura {
-  animation: agee-aura-breathe 2.6s ease-in-out infinite;
-}
-@keyframes agee-aura-spin {
-  to { transform: rotate(360deg); }
-}
-@keyframes agee-aura-breathe {
-  50% { opacity: 0.62; }
-}
-
 /* ---- Launcher: the mascot on its lit plate ------------------------------- */
 #agee-launcher {
   appearance: none;
@@ -189,7 +118,7 @@
   animation: agee-busy-glow 1.6s ease-in-out infinite;
 }
 /* Live-state ember glows: listening amber, thinking gold, speaking blue. They
-   layer over the plate shadow so the mark and the aura read as one lit object. */
+   layer over the plate shadow so the mark reads as one lit object. */
 #agee-root.agee-state-listening #agee-launcher {
   box-shadow: var(--agee-plate-shadow), 0 0 26px 6px rgba(245, 166, 35, 0.5);
   border-color: rgba(245, 166, 35, 0.6);
@@ -910,17 +839,6 @@
   }
   #agee-launcher.agee-gliding {
     transition: none;
-  }
-  .agee-aura-ring,
-  .agee-aura-glow {
-    animation: none !important;
-  }
-  #agee-root.agee-state-listening #agee-aura {
-    animation: none;
-  }
-  #agee-root.agee-voicing #agee-aura,
-  #agee-root.agee-recording #agee-aura {
-    opacity: 0.6;
   }
   .agee-skeleton-line::after {
     animation: none;
