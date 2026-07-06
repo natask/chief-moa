@@ -336,6 +336,49 @@ async function assertCompanionCatalog(baseUrl) {
   assert.equal(list.version, "companion-catalog/v1");
   assert.ok(Array.isArray(list.companions), "companion list must include companions");
   assert.ok(list.companions.some((item) => item.id === "shigmi-scout"), "built-in Shigmi Scout must be listed");
+  assert.ok(list.companions.every((item) => item.pet?.renderer === "shimeji-web"), "companions must expose pet manifests");
+
+  const pets = await getJson(`${baseUrl}/v1/agent/pets`);
+  assert.equal(pets.version, "companion-pets/v1");
+  assert.ok(Array.isArray(pets.pets), "pet list must include pets");
+  const scoutPet = pets.pets.find((item) => item.companion_id === "shigmi-scout");
+  assert.equal(scoutPet?.pet?.renderer, "shimeji-web", "built-in Shigmi Scout pet must use the web renderer");
+  assert.ok(scoutPet.pet.behaviors.some((behavior) => behavior.id === "drag"), "pet behavior list must include drag");
+
+  const petDraft = await postJson(`${baseUrl}/v1/agent/pets`, {
+    text: "Make a small amber build helper that taps when it is thinking",
+    name: "Shigmi Tapper",
+    pet: { palette: "amber", motion: "tap", scale: 1.1 },
+  });
+  assert.equal(petDraft.status, 201, `pet draft must succeed: ${JSON.stringify(petDraft.json)}`);
+  assert.equal(petDraft.json.active_profile_mutated, false, "pet drafting must not mutate the active profile");
+  assert.equal(petDraft.json.pet.pet.palette, "amber");
+  assert.equal(petDraft.json.pet.pet.motion, "tap");
+
+  const petPreview = await postJson(`${baseUrl}/v1/agent/pets/preview`, {
+    companion_id: petDraft.json.companion.id,
+  });
+  assert.equal(petPreview.status, 200, `pet preview must succeed: ${JSON.stringify(petPreview.json)}`);
+  assert.equal(petPreview.json.mutates_profile, false, "pet preview must be non-mutating");
+  assert.equal(petPreview.json.pet.companion_id, petDraft.json.companion.id);
+
+  const petGenerate = await postJson(`${baseUrl}/v1/agent/pets/generate`, {
+    name: "Shigmi Tapper",
+    text: "small amber build helper",
+    palette: "amber",
+    motion: "tap",
+  });
+  assert.equal(petGenerate.status, 200, `pet generate plan must succeed: ${JSON.stringify(petGenerate.json)}`);
+  assert.equal(petGenerate.json.status, "not_configured", "pet generation must be off unless explicitly enabled");
+  assert.equal(petGenerate.json.mutates_profile, false, "pet generation plan must not mutate profile");
+
+  const petApply = await postJson(`${baseUrl}/v1/agent/pets/apply`, {
+    companion_id: petDraft.json.companion.id,
+    scope: "global",
+    source: "voice-profile-smoke",
+  });
+  assert.equal(petApply.status, 200, `pet apply must succeed: ${JSON.stringify(petApply.json)}`);
+  assert.equal(petApply.json.profile.active_companion_id, petDraft.json.companion.id);
 
   const draft = await postJson(`${baseUrl}/v1/agent/companions`, {
     text: "I want you to be a research scout",

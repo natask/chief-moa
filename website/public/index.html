@@ -48,9 +48,12 @@
 
   .wrap{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:46px 28px 80px}
 
-  .top{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:13px;
+  .top{display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:var(--mono);font-size:13px;
     letter-spacing:.26em;text-transform:uppercase;color:var(--graphite)}
+  .top-brand{display:flex;align-items:center;gap:12px}
   .top img{height:34px;width:auto;display:block}
+  .top a{letter-spacing:.14em;color:var(--graphite);text-decoration:none}
+  .top a:hover{color:var(--signal)}
 
   .hero{display:flex;align-items:center;gap:56px;margin-top:7vh;flex-wrap:wrap}
   .hero-text{flex:1;min-width:320px}
@@ -167,7 +170,10 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><img src="assets/moa-mark.png" alt="" /> A.G.</div>
+  <div class="top">
+    <span class="top-brand"><img src="assets/moa-mark.png" alt="" /> A.G.</span>
+    <a href="pets/">Pet Studio</a>
+  </div>
 
   <div class="hero">
     <div class="hero-text">

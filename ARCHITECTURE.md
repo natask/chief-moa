@@ -32,11 +32,18 @@ Browser extension
   subscriptions, and it is not the deployment target for user-specific
   customizations.
 
+Website
+  Owns: the public marketing surface and static account/customization tools
+  such as the companion pet studio. It may call same-origin Pages Functions that
+  proxy to token-guarded gateway endpoints, but it must not hold provider API
+  keys, raw gateway tokens, or local execution authority in browser JavaScript.
+
 Moa Gateway
   Owns: gateway auth, model/provider calls, voice routing, conversation storage,
   session/event storage, agent-run records, tool catalog routing, agent harness
   launch, run status, the gateway-served browser control surface,
-  engine-served browser customizations, and signed Android APK update artifacts.
+  companion manifests, pet manifests, engine-served browser customizations, and
+  signed Android APK update artifacts.
 
   The same gateway binary runs in `local`, `self-host`, or `hosted` mode.
   Remote modes bind to `0.0.0.0`, require `MOA_GATEWAY_TOKEN` and
@@ -617,6 +624,12 @@ audit event on the `account-connection:{id}` stream. Contract:
   starter prompts, smoke prompts, and discovery tags. Applying a companion
   patches `agent_profile` with active companion metadata and behavior fields; it
   does not grant phone, browser, or execution-machine authority.
+- `companion_pet`: a gateway-owned visual manifest attached to a companion. It
+  describes the Shimeji-style web renderer, sprite source, palette, motion,
+  frame actions, weighted behaviors, drag/walk/climb/fall affordances, and
+  gateway-side image/animation generation metadata. Applying a pet applies the
+  underlying companion through the same versioned `agent_profile` path; it does
+  not add any executable client code or provider credentials.
 - `browser_agent_owner`: the single active browser tab/page/run that may listen,
   speak, and show browser-local task cues for a browser session; non-owner tabs
   can show passive status but must not capture voice or claim local cues.

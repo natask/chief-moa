@@ -9,3 +9,8 @@ RESEND_FROM=Moa <hello@yourdomain.com>
 
 # Optional reply-to address
 RESEND_REPLY_TO=hello@yourdomain.com
+
+# Pet studio proxy. The browser calls /api/pets/*; the Pages function forwards
+# to the token-guarded gateway endpoints.
+MOA_GATEWAY_URL=http://127.0.0.1:8787
+MOA_GATEWAY_TOKEN=change-me

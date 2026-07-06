@@ -1,0 +1,32 @@
+digraph Fable5Orchestrator {
+    graph [goal="Implement a website-hosted Shimeji-style companion pet studio for Chief Moa: research-informed pet manifests, animated web preview, create/preview/apply endpoints that reuse the gateway companion profile boundary, and verification without mutating the active deployment."]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    doctor [
+        shape=parallelogram,
+        label="Doctor",
+        script="/Users/natnaelkahssay/projs/natstack/skills/fable-5-orchestrator/scripts/fable-5-orchestrator doctor 2>&1"
+    ]
+
+    plan [
+        label="Plan",
+        prompt="Read the task from the graph goal. Produce a one-screen plan: scoped tickets, delegate per ticket (codex exec, claude --model sonnet|opus, gemini --prompt, opencode run), and a verification command per ticket. Do not edit files in this node."
+    ]
+
+    run [
+        label="Launch or Smoke",
+        prompt="Execute the plan. For a smoke-only run, run: /Users/natnaelkahssay/projs/natstack/skills/fable-5-orchestrator/scripts/fable-5-orchestrator smoke. Otherwise delegate tickets per the plan and collect results. Live-app freeze applies: no service restarts, no migrations, no deploys, no secrets."
+    ]
+
+    verify [
+        shape=parallelogram,
+        label="Verify",
+        script="/Users/natnaelkahssay/projs/natstack/skills/fable-5-orchestrator/scripts/fable-5-orchestrator doctor 2>&1",
+        goal_gate=true
+    ]
+
+    start -> doctor -> plan -> run -> verify -> exit
+}
