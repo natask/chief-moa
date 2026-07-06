@@ -414,13 +414,17 @@ manage child agents directly. Agents update the gateway-owned intent/run/event
 stores as they work, and user-facing clients read those stores to show what is
 active, finished, blocked, or waiting for input.
 
-No spoken intent may be treated as ephemeral. Streaming voice stores the raw
-user PCM under the gateway voice-session archive while the provider processes
-it, stores the canonical turn transcript and assistant output, and exposes
-token-protected history/search and playback references so the user can inspect
-or replay what they sent. Local clients may keep their own capture spool while
-uploading, but the trusted gateway archive is the cross-device source of truth
-once the turn reaches the server.
+No spoken intent may be treated as ephemeral, with one deliberate, explicit
+exception: an incognito turn (see Context And Threads). Streaming voice stores
+the raw user PCM under the gateway voice-session archive while the provider
+processes it, stores the canonical turn transcript and assistant output, and
+exposes token-protected history/search and playback references so the user can
+inspect or replay what they sent. Local clients may keep their own capture spool
+while uploading, but the trusted gateway archive is the cross-device source of
+truth once the turn reaches the server. An incognito turn is the carve-out: it is
+answered normally but the gateway persists nothing for it, and it requires either
+an explicit client choice or an explicit spoken/typed warrant, so the default
+"nothing is ephemeral" guarantee still holds for every ordinary turn.
 
 gbrain is the semantic recall layer for this intent store, not the store itself.
 After a broker event is durably written, the gateway may index a concise intent
@@ -451,6 +455,53 @@ gateway owns the agent-manager decision: route the turn to an existing run,
 launch a new fork, attach it to several active runs, or dismiss it as irrelevant.
 The user must be able to inspect which runs are active and what each is trying
 to accomplish.
+
+### Context And Threads
+
+```text
+user turn (chat or cascaded voice)
+  -> deterministic prior: explicit client context_action wins; else continue,
+     lifted to new/fork by phrasing, to incognito only on an explicit warrant
+  -> the model may call context_management (one tool call) to refine the choice,
+     and returns a retrieval_query for recall
+  -> double gate: the model may override the prior EXCEPT it may only choose
+     incognito with the same explicit warrant
+  -> the turn is filed on the resolved branch and the decision is stored as a
+     record + product event
+```
+
+A thread is a `branch` inside the one shared session. The thread store adds the
+lifecycle the turn ledgers do not carry: kind (default/new/fork/incognito), a
+label, fork lineage, the active-thread pointer per surface, and a rolling
+summary. `GET /v1/threads` lists every branch merged from the chat, voice, and
+browser stores; `POST /v1/threads/switch` sets the active thread (or mints a
+new/fork/incognito branch); `GET /v1/threads/active` returns it so every device
+resolves the same thread.
+
+The four actions:
+
+- continue: same thread (the caller or active branch).
+- new: an unrelated fresh `thr-` branch, cold start (standing facts still load).
+- fork: a `fork-` child branch carrying `parent_branch_id` + `fork_point` (the
+  parent's latest turn at fork time). Its recency is the parent's turns up to the
+  fork point plus its own, with no data copy. The child summary is seeded from
+  the parent.
+- incognito: an ephemeral `inc-` branch. The turn is answered normally but the
+  gateway skips ALL persistence: no chat/voice turn file or ledger line, no
+  product event, no gbrain write, no PCM voice archive, no rolling summary, and
+  no broker event. The reply carries `context: { action: "incognito", persisted:
+  false }`. This is the explicit carve-out to "no spoken intent is ephemeral".
+
+Every non-incognito turn gets per-query enrichment, assembled LLM-free at read
+time within the existing char budgets, in priority order: (1) standing facts,
+(2) thread recency scoped to the active branch with fork-point inheritance, and
+(3) a bounded semantic recall block from `brain.recall` over rolling thread
+summaries (`moa/memory/thread/*`) and intent memories, deduped against the
+recency block. Rolling per-thread summaries are regenerated asynchronously after
+the response is sent (never adding turn latency) on a turn-count cadence and when
+the user moves off the thread, and indexed into gbrain for later recall. The
+context decision, the thread store, and the enrichment blocks never fail a turn:
+any error falls back to continue on the caller branch with standing-facts recall.
 
 ### Voice Work-History Control Plane
 
@@ -589,7 +640,21 @@ audit event on the `account-connection:{id}` stream. Contract:
   browser extension adopt it on startup so every surface continues the same
   stored conversation. Threads inside the shared session stay separated by
   `branch`.
-- `branch`: a thread of work inside a session, initially `default`.
+- `branch`: a thread of work inside a session, initially `default`. A branch
+  carries lifecycle metadata in the thread store: kind (default/new/fork/
+  incognito), a label, and, for a fork, `parent_branch_id` + `fork_point`. New
+  branches are minted as `thr-`, forks as `fork-`, and incognito branches as
+  `inc-` (ephemeral, never persisted).
+- `thread_summary`: a rolling per-branch summary regenerated asynchronously on a
+  turn cadence and on switch-away, seeded from the parent on fork, indexed into
+  gbrain under `moa/memory/thread/<branch>` for semantic recall. Never generated
+  for an incognito branch.
+- `context_decision`: the inspectable record of where a turn was filed (action,
+  prior, prior source, model action, model override, incognito warrant, thread
+  label, retrieval_query, reason), stored on the turn and mirrored as a
+  `context.decision.recorded` product event.
+- `active_thread`: the durable pointer to the branch a session (and optionally a
+  surface) is currently on, so every device resolves the same thread.
 - `turn`: one voice or chat input with optional screen context.
 - `broker_event`: one inbound user message stored before routing to sessions,
   workflow packages, chat, voice, or agent runs.
@@ -715,6 +780,14 @@ queues.
 - `gateway/lib/voice-intent.js`: pure voice-turn classifier
   (chat / agent_run / multi_agent / control), unit-tested in
   `scripts/smoke-voice-intent.js`.
+- `gateway/lib/thread-store.js`: durable per-session branch metadata, the
+  active-thread pointer, and rolling per-thread summaries; behind the
+  `/v1/threads` endpoints. Smoke: `scripts/smoke-threads.js`.
+- `gateway/lib/context-decision.js`: pure deterministic prior + double-gate
+  resolver for the `context_management` decision (continue/new/fork/incognito),
+  plus the tool schema. Smoke: `scripts/smoke-context-decision.js`
+  (`scripts/smoke-thread-enrichment.js` covers enrichment,
+  `scripts/smoke-incognito.js` covers the incognito persistence invariants).
 - `gateway/lib/work-history-intent.js`: deterministic parser for the spoken
   work-history operations (create/status/feedback/deployment/ui-open),
   unit-tested in `scripts/smoke-work-history-intent.js`.
@@ -748,6 +821,8 @@ queues.
   capability specs, staged tasks, and acceptance criteria.
 - `reference/openspec/changes/thin-client-gateway-architecture`: browser extension
   thin-client / persistent-engine decision record.
+- `reference/openspec/changes/context-thread-management`: thread/fork/incognito
+  semantics, the `context_management` decision, and per-query enrichment.
 
 ## Deployment Topology
 
