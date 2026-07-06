@@ -38,7 +38,18 @@ echo "Dumping Postgres..."
 compose exec -T postgres pg_dump -U moa -d moa_gateway > "$tmp_dir/postgres-dump.sql"
 
 echo "Snapshotting DATA_DIR..."
-compose exec -T gateway tar -czf - -C /data . > "$tmp_dir/data-dir.tar.gz"
+# GNU tar exits 1 (warning) when a file changes while being read, which is
+# routine against a live gateway that appends to /data. The archive is still
+# written and restore-check.sh validates it. Tolerate exit 1; fail on >= 2.
+tar_status=0
+compose exec -T gateway tar -czf - -C /data . > "$tmp_dir/data-dir.tar.gz" || tar_status=$?
+if [ "$tar_status" -gt 1 ]; then
+  echo "DATA_DIR snapshot failed (tar exit $tar_status)." >&2
+  exit "$tar_status"
+fi
+if [ "$tar_status" -eq 1 ]; then
+  echo "WARNING: files changed during the DATA_DIR snapshot (tar exit 1); restore-check validates the archive."
+fi
 
 (
   cd "$tmp_dir"
