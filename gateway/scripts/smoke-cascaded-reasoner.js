@@ -13,6 +13,9 @@
 //   2. Modality hint: the reasoner tells the model how the reply is delivered
 //      (response_modality, hosted-TTS availability, previous tts_error) so it can
 //      answer "why did you reply in text?" truthfully.
+//   3. Model tool loop: a chat turn where the model calls update_agent_profile
+//      patches the profile through the shared sanitizer, and a second round
+//      returns the spoken confirmation text.
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -43,11 +46,33 @@ process.env.GEMINI_API_KEY = "";
 
 const previousFetch = global.fetch;
 const fetchCalls = [];
+// When set, the model returns this tool call on the first round of a tools
+// request (no prior tool result), then plain confirmation text on the next round.
+let pendingToolCall = null;
 global.fetch = async (url, options = {}) => {
   const u = String(url);
   if (u.includes("/chat/completions")) {
-    fetchCalls.push({ kind: "openai", url: u, body: JSON.parse(String(options.body || "{}")) });
-    return jsonResponse({ choices: [{ message: { content: "Understood, master." } }] });
+    const body = JSON.parse(String(options.body || "{}"));
+    fetchCalls.push({ kind: "openai", url: u, body });
+    const hasToolResult = Array.isArray(body.messages) && body.messages.some((m) => m.role === "tool");
+    if (pendingToolCall && !hasToolResult) {
+      return jsonResponse({
+        choices: [{
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [{
+              id: "call_1",
+              type: "function",
+              function: { name: pendingToolCall.name, arguments: JSON.stringify(pendingToolCall.arguments || {}) },
+            }],
+          },
+        }],
+      });
+    }
+    return jsonResponse({
+      choices: [{ message: { role: "assistant", content: pendingToolCall ? "Done, master — switched to the Charon voice." : "Understood, master." } }],
+    });
   }
   throw new Error(`unexpected fetch to ${u}`);
 };
@@ -55,6 +80,7 @@ global.fetch = async (url, options = {}) => {
 const {
   server,
   runCascadedVoiceReasoning,
+  agentProfile,
 } = require(path.join(GATEWAY_DIR, "server"));
 
 main().catch((error) => {
@@ -69,12 +95,14 @@ main().catch((error) => {
 async function main() {
   await historyReachesTheModel();
   await modalityHintIsInjected();
+  await modelToolCallUpdatesProfile();
 
   console.log(JSON.stringify({
     ok: true,
     checks: [
       "a prior voice turn's transcript reaches the cascaded reasoning model messages",
       "the reasoner injects a modality/TTS delivery hint (modality, availability, previous error)",
+      "a model update_agent_profile tool call patches the profile through the sanitizer and the confirmation is spoken",
     ],
   }, null, 2));
 }
@@ -133,6 +161,37 @@ async function modalityHintIsInjected() {
   // Restore the default modality so later cases are unaffected.
   const reset = await requestJson("PUT", "/v1/agent/profile", { profile: { response_modality: "auto" } });
   assert.equal(reset.status, 200, `profile reset must succeed: ${JSON.stringify(reset.json)}`);
+}
+
+async function modelToolCallUpdatesProfile() {
+  assert.notEqual(agentProfile.effective().voice, "Charon", "precondition: voice must not already be Charon");
+  // The model calls update_agent_profile with a lower-case voice; the shared
+  // sanitizer must canonicalize it to the valid "Charon" voice id.
+  pendingToolCall = { name: "update_agent_profile", arguments: { profile: { voice: "charon" } } };
+  fetchCalls.length = 0;
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "good evening",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-tool-turn",
+    });
+
+    const openaiCalls = fetchCalls.filter((c) => c.kind === "openai");
+    assert.equal(openaiCalls.length, 2, "the tool loop must run a tool round then a final text round");
+    const firstBody = openaiCalls[0].body;
+    assert.ok(Array.isArray(firstBody.tools), "the first request must offer tools");
+    assert.ok(firstBody.tools.some((t) => t.function && t.function.name === "update_agent_profile"), "update_agent_profile must be offered");
+    const secondBody = openaiCalls[1].body;
+    assert.ok(Array.isArray(secondBody.messages) && secondBody.messages.some((m) => m.role === "tool"), "the second round must carry the tool result");
+
+    assert.equal(agentProfile.effective().voice, "Charon", "the sanitizer must canonicalize the tool's voice value and persist it");
+    assert.match(String(reasoning.speak || ""), /Charon/, "the spoken confirmation must reflect the applied change");
+  } finally {
+    pendingToolCall = null;
+    // Restore the default voice so the run leaves no residue.
+    await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  }
 }
 
 function requestJson(method, url, body = null) {
