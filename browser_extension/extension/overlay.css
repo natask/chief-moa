@@ -74,7 +74,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(245, 166, 35, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 50%;
   background: radial-gradient(circle at 35% 28%, var(--agee-surface-3), var(--agee-surface-1));
   box-shadow: var(--agee-plate-shadow);
@@ -100,11 +100,11 @@
 }
 #agee-launcher:hover {
   transform: scale(1.06);
-  border-color: rgba(245, 166, 35, 0.5);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 #agee-launcher:focus-visible {
   outline: 0;
-  box-shadow: var(--agee-plate-shadow), 0 0 0 4px rgba(245, 166, 35, 0.35);
+  box-shadow: var(--agee-plate-shadow), 0 0 0 4px rgba(255, 255, 255, 0.25);
 }
 #agee-launcher:active {
   cursor: grabbing;
@@ -113,44 +113,10 @@
 #agee-launcher .agee-shadow {
   display: none;
 }
-/* Busy: a breathing amber halo while a turn is running, panel open or closed. */
-#agee-launcher.agee-busy {
-  animation: agee-busy-glow 1.6s ease-in-out infinite;
-}
-/* Live-state ember glows: listening amber, thinking gold, speaking blue. They
-   layer over the plate shadow so the mark reads as one lit object. */
-#agee-root.agee-state-listening #agee-launcher {
-  box-shadow: var(--agee-plate-shadow), 0 0 26px 6px rgba(245, 166, 35, 0.5);
-  border-color: rgba(245, 166, 35, 0.6);
-}
-#agee-root.agee-state-thinking #agee-launcher {
-  box-shadow: var(--agee-plate-shadow), 0 0 26px 6px rgba(255, 215, 106, 0.5);
-  border-color: rgba(255, 215, 106, 0.6);
-}
-#agee-root.agee-state-speaking #agee-launcher {
-  box-shadow: var(--agee-plate-shadow), 0 0 26px 6px rgba(74, 155, 255, 0.5);
-  border-color: rgba(74, 155, 255, 0.6);
-}
-/* The ring that fires when something lands. Colour carries the kind. */
+/* No halo or state glow on the mark: busy/listening/thinking/speaking keep the
+   plain plate. State reads from the panel text, not from light. */
 #agee-launcher .agee-ring {
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  opacity: 0;
-  pointer-events: none;
-}
-#agee-launcher .agee-ring.agee-ring-go {
-  animation: agee-ring 0.7s ease-out;
-}
-#agee-launcher .agee-ring[data-kind="done"] {
-  border-color: var(--agee-green);
-}
-#agee-launcher .agee-ring[data-kind="error"] {
-  border-color: var(--agee-red);
-}
-#agee-launcher .agee-ring[data-kind="attention"] {
-  border-color: var(--agee-amber);
+  display: none;
 }
 #agee-launcher.agee-hop {
   animation: agee-hop 0.5s ease;
@@ -195,14 +161,6 @@
   75% { transform: translateY(-1px) scale(1.006); }
   100% { transform: translateY(0) scale(1); }
 }
-@keyframes agee-busy-glow {
-  0%, 100% { box-shadow: var(--agee-plate-shadow), 0 0 16px 3px rgba(245, 166, 35, 0.3); }
-  50% { box-shadow: var(--agee-plate-shadow), 0 0 30px 7px rgba(245, 166, 35, 0.55); }
-}
-@keyframes agee-ring {
-  0% { opacity: 0.9; transform: scale(0.8); }
-  100% { opacity: 0; transform: scale(2.1); }
-}
 @keyframes agee-hop {
   0%, 100% { transform: translateY(0) scale(1); }
   35% { transform: translateY(-12px) scale(1.08, 0.94); }
@@ -223,8 +181,8 @@
   75% { transform: scale(1.08); }
 }
 @keyframes agee-avatar-pulse {
-  0%, 100% { transform: scale(1); filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
-  50% { transform: scale(1.1); filter: drop-shadow(0 0 9px rgba(245, 166, 35, 0.7)); }
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
 }
 @keyframes agee-avatar-hop {
   0%, 100% { transform: translateY(0); }
@@ -251,8 +209,8 @@
   80% { transform: translateX(2px) rotate(3deg); }
 }
 @keyframes agee-avatar-glow {
-  0%, 100% { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); transform: scale(1); }
-  50% { filter: drop-shadow(0 0 12px rgba(74, 155, 255, 0.85)); transform: scale(1.04); }
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
 }
 
 /* ---- Panel: the glass command surface ------------------------------------ */
@@ -295,13 +253,9 @@
 #agee-root.agee-voicing #agee-voice-state {
   display: none;
 }
+/* Status lights are gone: no orb, no glowing dots anywhere in the surface. */
 #agee-orb {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #555;
-  box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.5);
+  display: none;
 }
 #agee-transcript {
   flex: 1;
@@ -316,57 +270,19 @@
 #agee-transcript.agee-interim {
   color: #8b8b93;
 }
-#agee-root.agee-state-listening #agee-orb {
-  background: var(--agee-amber);
-  animation: agee-orb-breathe 1.6s ease-in-out infinite;
-}
-#agee-root.agee-state-thinking #agee-orb {
-  background: var(--agee-gold);
-  animation: agee-pulse 0.9s infinite;
-}
-#agee-root.agee-state-speaking #agee-orb {
-  background: var(--agee-blue);
-  animation: agee-orb-breathe 1.1s ease-in-out infinite;
-}
-@keyframes agee-orb-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(74, 155, 255, 0.45); }
-  50% { box-shadow: 0 0 0 7px rgba(74, 155, 255, 0); }
-}
-
-/* ---- Composer: pill bar + status dot + ghost icon buttons ---------------- */
+/* ---- Composer: pill bar + ghost icon buttons ------------------------------ */
 #agee-bar {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) 34px 34px 34px;
+  grid-template-columns: minmax(0, 1fr) 34px 34px 34px;
   align-items: start;
   gap: 9px;
   min-height: 54px;
   box-sizing: border-box;
-  padding: 11px 12px;
+  padding: 11px 14px 11px 16px;
 }
+/* The composer status dot is gone; run state reads from the cue-card text. */
 #agee-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #5a5a62;
-  margin-top: 13px;
-  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.035);
-  transition: background 0.2s ease, box-shadow 0.2s ease;
-}
-#agee-dot.running {
-  background: var(--agee-amber);
-  box-shadow: 0 0 8px rgba(245, 166, 35, 0.6);
-  animation: agee-pulse 1s infinite;
-}
-#agee-dot.done {
-  background: var(--agee-green);
-  box-shadow: 0 0 8px rgba(53, 199, 89, 0.55);
-}
-#agee-dot.error {
-  background: var(--agee-red);
-  box-shadow: 0 0 8px rgba(255, 69, 58, 0.55);
-}
-@keyframes agee-pulse {
-  50% { opacity: 0.35; }
+  display: none;
 }
 #agee-input {
   width: 100%;
@@ -473,32 +389,21 @@
   outline: 2px solid var(--agee-amber);
   outline-offset: 2px;
 }
-/* Voice listening: amber ember ring on the mic. */
+/* Voice listening: tinted mic button, no glow. */
 #agee-voice.listening {
   border-color: rgba(245, 166, 35, 0.62);
   color: var(--agee-gold);
   background: rgba(245, 166, 35, 0.14);
-  box-shadow: 0 0 0 1px rgba(245, 166, 35, 0.4), 0 0 18px rgba(245, 166, 35, 0.35);
 }
-/* Record note control: a dot that turns red and pulses while capturing. */
+/* Record note control: a steady red tint while capturing, no pulse, no glow. */
 #agee-record.recording {
   border-color: rgba(255, 69, 58, 0.62);
   color: #ff9b92;
   background: rgba(255, 69, 58, 0.14);
-  box-shadow: 0 0 0 1px rgba(255, 69, 58, 0.4), 0 0 16px rgba(255, 69, 58, 0.3);
 }
-#agee-record.recording::before {
-  animation: agee-pulse 1.2s infinite;
-}
-/* While recording, the mark carries a red glow, panel open or closed. */
+/* While recording, the mark's border turns red — a state tint, not a halo. */
 #agee-root.agee-recording #agee-launcher {
-  box-shadow: var(--agee-plate-shadow), 0 0 26px 6px rgba(255, 69, 58, 0.5);
-  border-color: rgba(255, 69, 58, 0.6);
-}
-#agee-root.agee-recording #agee-dot {
-  background: var(--agee-red);
-  box-shadow: 0 0 8px rgba(255, 69, 58, 0.6);
-  animation: agee-pulse 1.2s infinite;
+  border-color: rgba(255, 69, 58, 0.65);
 }
 #agee-stop {
   display: none;
@@ -581,13 +486,10 @@
   gap: 6px;
   margin-bottom: 6px;
 }
+/* Cue-card status dot removed: the "· thinking / · done / · error" text after
+   the assistant name carries the state on its own. */
 .agee-cue-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  background: var(--agee-muted);
-  transition: background 0.2s ease, box-shadow 0.2s ease;
+  display: none;
 }
 .agee-cue-name {
   font-size: 12px;
@@ -653,17 +555,8 @@
   from { opacity: 0; transform: translateY(2px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.agee-cue-running .agee-cue-dot {
-  background: var(--agee-amber);
-  box-shadow: 0 0 8px rgba(245, 166, 35, 0.8);
-  animation: agee-dot-pulse 1.4s ease-in-out infinite;
-}
 .agee-cue-running .agee-cue-name::after {
   content: " · thinking";
-}
-.agee-cue-done .agee-cue-dot {
-  background: var(--agee-green);
-  box-shadow: 0 0 8px rgba(53, 199, 89, 0.7);
 }
 .agee-cue-done .agee-cue-name {
   color: #b7c7bd;
@@ -675,20 +568,12 @@
 .agee-cue-done .agee-cue-status {
   color: #e7e7ea;
 }
-.agee-cue-error .agee-cue-dot {
-  background: var(--agee-red);
-  box-shadow: 0 0 8px rgba(255, 69, 58, 0.7);
-}
 .agee-cue-error .agee-cue-name::after {
   content: " · error";
   color: var(--agee-red);
 }
 .agee-cue-error .agee-cue-status {
   color: #ff8278;
-}
-@keyframes agee-dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.82); }
 }
 /* A finished card is not kept. After its linger it fades up and out, then the
    node is removed — the surface holds the current turn, not a transcript. */
@@ -833,7 +718,6 @@
 /* ---- Reduced motion ------------------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {
   #agee-launcher .agee-bird,
-  #agee-launcher.agee-busy,
   #agee-root.agee-avatar-runtime-active #agee-launcher .agee-bird {
     animation: none;
   }
@@ -844,9 +728,6 @@
     animation: none;
   }
   .agee-cue {
-    animation: none;
-  }
-  .agee-cue-running .agee-cue-dot {
     animation: none;
   }
   .agee-cue-streaming .agee-cue-status,
@@ -867,9 +748,9 @@
 }
 @media (max-width: 380px) {
   #agee-bar {
-    grid-template-columns: 9px minmax(0, 1fr) 32px 32px 32px;
+    grid-template-columns: minmax(0, 1fr) 32px 32px 32px;
     gap: 7px;
-    padding: 9px;
+    padding: 9px 9px 9px 12px;
   }
   #agee-voice,
   #agee-record,
