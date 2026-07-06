@@ -157,14 +157,18 @@ async function startFakeLive() {
           },
         }));
         if (marker === 4) {
+          // A non-language field: language fields are model-owned now (no
+          // transcript parser to confirm them), so only a patch like voice —
+          // which still requires the deterministic parser's confirmation —
+          // exercises the blocked path.
           ws.send(JSON.stringify({
             toolCall: {
               functionCalls: [{
                 id: "tool_bad_profile",
                 name: "update_agent_profile",
                 args: {
-                  profile: { language: "am-ET", language_primary: "am-ET" },
-                  reason: "model_inferred_language_change",
+                  profile: { voice: "Kore" },
+                  reason: "model_inferred_voice_change",
                 },
               }],
             },

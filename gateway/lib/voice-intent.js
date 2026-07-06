@@ -9,9 +9,9 @@
 // "control" | "profile_control" | "multi_agent" | "agent_run" | "chat".
 
 const {
-  LANGUAGE_OPTIONS: LANGUAGE_DEFINITIONS,
   canonicalVoice,
   canonicalPersona,
+  mentionsSupportedLanguage,
 } = require("./profile-options");
 
 // Lowercase, strip punctuation, collapse whitespace. The matchers below assume
@@ -248,16 +248,14 @@ function parseProfileControlIntent(text) {
     };
   }
 
-  const languageIntent = parseLanguageIntent(raw);
-  if (languageIntent) {
-    return { action: "update", patch: languageIntent.patch, summary: languageIntent.summary, scope };
-  }
-  // A clear language-change request that named no supported language: reject it
-  // and keep the current setting rather than falling through to a chat turn or
-  // silently ignoring it. Keeps the app reversible; the user hears why.
-  if (wantsUnsupportedLanguageChange(lower, raw)) {
-    return { action: "reject", subject: "language", scope };
-  }
+  // Language switching is model-owned, not keyword-matched. A spoken/typed request
+  // to change which languages are understood or replied in falls through to a chat
+  // turn, where the model reasons about it and calls update_agent_profile /
+  // set_languages (same sanitizer). There is deliberately no transcript-level
+  // language matcher here: the previous parseLanguageIntent / matchedLanguages /
+  // wantsUnsupportedLanguageChange heuristic was removed. Read-only language
+  // QUERIES ("what language is active", "what languages can you speak") are still
+  // answered above as summaries; only the mutation heuristic is gone.
 
   const modality = modalityUpdateFrom(lower);
   if (modality) {
@@ -565,157 +563,14 @@ function normalizeCompanionRole(value) {
   return role;
 }
 
-// Find every known language named in a phrase, in spoken order. `lower` is the
-// ASCII-normalized form; `raw` is the original utterance, needed to match
-// native-script names (e.g. "አማርኛ") that normalizeSpeech strips to nothing.
-function matchedLanguages(lower, raw = "") {
-  const rawLower = String(raw || "").toLowerCase();
-  const out = [];
-  for (const language of LANGUAGE_DEFINITIONS) {
-    const indexes = language.keys
-      .map((key) => lower.indexOf(key))
-      .filter((index) => index >= 0);
-    for (const native of language.native_names || []) {
-      const idx = rawLower.indexOf(String(native).toLowerCase());
-      if (idx >= 0) indexes.push(idx);
-    }
-    if (indexes.length > 0 && !out.some((item) => item.code === language.code)) {
-      out.push({ ...language, index: Math.min(...indexes) });
-    }
-  }
-  return out.sort((a, b) => a.index - b.index).map(({ index, ...language }) => language);
-}
-
-// Which side of the conversation a clause is about:
-//   "input"  -> the language the USER speaks (drives speech recognition)
-//   "output" -> the language the AGENT replies in (drives the reply)
-// The subject decides it: "I/my" + a speaking verb is the user (input); "you" or
-// a bare command verb ("speak X", "respond in X", "switch to X") is the agent
-// (output). "talk to me in X" is output — "me" is the object, not the subject.
-function languageSideOf(clause) {
-  const isInput = /\b(?:i|i'm|im|i am)\b[^.]*\b(?:speak|talk|understand|know|say|use)\b/.test(clause)
-    || /\bmy\s+(?:language|languages|native\s+language|mother\s+tongue)\b/.test(clause)
-    || /^\s*(?:can you\s+|please\s+|only\s+|just\s+)*(?:process|understand|listen|recognize)\b/.test(clause)
-    || /\b(?:input|process|understand|listen|recognize)\s+(?:only\s+)?(?:these\s+)?languages?\b/.test(clause);
-  if (isInput) return "input";
-  const isOutput = /\b(?:you|your)\b/.test(clause)
-    || /^\s*(?:can you\s+|please\s+|only\s+|just\s+)*(?:speak|talk|respond|reply|answer|say)\b/.test(clause)
-    || /\b(?:respond|reply|answer|talk|speak)\s+(?:to me\s+)?in\b/.test(clause)
-    || /\bswitch\s+to\b/.test(clause);
-  return isOutput ? "output" : null;
-}
-
-// Parse a language request into input (user) and/or output (agent) sides. One
-// utterance can set both: "I only speak Amharic and you only speak English".
-// Returns { patch, summary } or null when no language is requested.
-function parseLanguageIntent(text) {
-  const raw = String(text || "");
-  const lower = normalizeSpeech(raw);
-  if (!lower) return null;
-  if (!/\blanguages?\b/.test(lower) && matchedLanguages(lower, raw).length === 0) {
-    return null;
-  }
-
-  const input = [];
-  const output = [];
-  let lastSide = null;
-  // Split the raw text on ASCII delimiters so native-script names survive into
-  // each clause; normalize per clause for side detection.
-  for (const rawClause of raw.split(/\s*(?:\band\b|,|;|\bbut\b|\bwhile\b)\s*/i)) {
-    const clause = normalizeSpeech(rawClause);
-    if (!clause.trim() && !rawClause.trim()) continue;
-    const langs = matchedLanguages(clause, rawClause);
-    let side = languageSideOf(clause) || lastSide || (langs.length ? "output" : null);
-    if (!side) continue;
-    (side === "input" ? input : output).push(...langs);
-    if (langs.length || languageSideOf(clause)) lastSide = side;
-  }
-
-  const dedupe = (list) => {
-    const seen = new Set();
-    return list.filter((l) => (seen.has(l.code) ? false : seen.add(l.code)));
-  };
-  const inLangs = dedupe(input);
-  const outLangs = dedupe(output);
-  if (inLangs.length === 0 && outLangs.length === 0) return null;
-
-  // "only"/"just"/"don't switch" locks the set; switching is off unless the user
-  // explicitly allows it ("you can switch between ...").
-  const canSwitch = /\b(?:can|may|feel free to|allowed to)\s+switch\b/.test(lower);
-  const locked = /\bonly\b|\bjust\b|don'?t\s+switch|do not switch|these languages|these two languages/.test(lower);
-
-  const patch = {};
-  const parts = [];
-  if (outLangs.length) {
-    patch.language = outLangs.map((l) => l.code).join(",");
-    patch.language_primary = outLangs[0].code;
-    patch.language_mode = "explicit";
-    patch.language_output = "primary_only";
-    patch.language_auto_switch = canSwitch && !locked;
-    parts.push(`reply in ${outLangs.map((l) => l.label).join(" + ")}`);
-  }
-  if (inLangs.length) {
-    patch.input_languages = inLangs.map((l) => l.code).join(",");
-    patch.input_language_primary = inLangs[0].code;
-    parts.push(`understand ${inLangs.map((l) => l.label).join(" + ")}`);
-  }
-  return { patch, summary: parts.join("; ") };
-}
-
-// Common human languages the pipeline does not support. Used only to recognize
-// a clear "speak <language>" request so it can be rejected with a spoken reason
-// instead of silently falling through. Not exhaustive, and deliberately excludes
-// words like "code" or "json" so "reply in code" is never treated as a language.
-const UNSUPPORTED_LANGUAGE_NAMES = new Set([
-  "spanish", "french", "german", "italian", "portuguese", "dutch", "russian",
-  "arabic", "hebrew", "hindi", "urdu", "bengali", "punjabi", "turkish",
-  "japanese", "chinese", "mandarin", "cantonese", "korean", "vietnamese",
-  "thai", "indonesian", "malay", "tagalog", "filipino", "swahili", "somali",
-  "yoruba", "igbo", "hausa", "oromo", "tigrinya", "swedish", "norwegian",
-  "danish", "finnish", "polish", "czech", "greek", "romanian", "hungarian",
-  "ukrainian", "persian", "farsi", "pashto", "tamil", "telugu", "gujarati",
-  "marathi", "kannada", "malayalam",
-]);
-
-// True when the utterance is clearly a request to change the input or reply
-// language but names no supported language. parseLanguageIntent returns null in
-// that case (no supported language matched), so without this the request would
-// silently fall through. Requires an explicit language cue so ordinary speech is
-// not swept up; the presence of a supported language is already handled by
-// parseLanguageIntent before this runs.
-function wantsUnsupportedLanguageChange(lower, raw = "") {
-  if (matchedLanguages(lower, raw).length > 0) {
-    return false;
-  }
-  // A named unsupported language paired with a language-change verb, e.g.
-  // "speak French", "reply in Spanish", "switch to German".
-  if (/\b(?:speak|talk|respond|reply|answer|switch|change|set|say it)\b/.test(lower)) {
-    for (const name of UNSUPPORTED_LANGUAGE_NAMES) {
-      if (new RegExp(`\\b${name}\\b`).test(lower)) {
-        return true;
-      }
-    }
-  }
-  const changeVerb = /\b(?:speak|talk|respond|reply|answer|switch|change|set|use)\b/.test(lower);
-  if (!changeVerb) return false;
-  // "speak/reply/switch ... in/to <language>" or an explicit "language" mention
-  // tied to a change verb.
-  if (/\b(?:speak|talk|respond|reply|answer|switch|change|set)\b[^.]*\b(?:in|to|into)\b/.test(lower)
-    && /\blanguages?\b/.test(lower)) {
-    return true;
-  }
-  if (/\b(?:speak|reply|respond|answer)\s+(?:to me\s+)?in\s+[a-z]+/.test(lower)
-    && /\blanguage\b/.test(lower)) {
-    return true;
-  }
-  if (/\b(?:change|set|switch)\s+(?:the\s+|your\s+|my\s+)?language\b/.test(lower)) {
-    return true;
-  }
-  if (/\b(?:i|you)\b[^.]*\b(?:only\s+)?(?:speak|understand)\b[^.]*\blanguage\b/.test(lower)) {
-    return true;
-  }
-  return false;
-}
+// Language switching is model-owned. The deterministic transcript matchers that
+// used to live here (matchedLanguages, languageSideOf, parseLanguageIntent, and
+// the unsupported-language rejector) were removed: they sniffed the raw utterance
+// for language names and mutated language state without a tool call. The model now
+// decides language changes and calls update_agent_profile / set_languages, whose
+// arguments are still normalized by profile-options (normalizeLanguageList,
+// native-script keys). Read-only language QUERIES stay in parseProfileControlIntent
+// as summaries.
 
 // Change the agent's OWN spoken voice. Three shapes, in priority order:
 //   - explicit core-voice name: "set voice to Aoede", "use the Charon voice".
@@ -811,6 +666,27 @@ function needsVoiceChoice(lower) {
     || /\bvoice\b[^.]*\b(?:different|another|new)\b/.test(lower);
 }
 
+// ROUTING-ONLY language guard. Language switching is model-owned, so a spoken
+// request to change which languages are understood or replied in must reach the
+// model as a chat turn (where it calls update_agent_profile / set_languages),
+// never a harness launch. Without this, phrasings like "change your language to
+// Amharic" trip the agent-work heuristic ("change ...") and would launch an agent.
+// This does NOT decide or change any language — it only keeps a language request
+// on the conversational path. It requires a config/speaking verb next to a
+// language cue (the word "language" or a supported language name) so ordinary
+// speech is not swept in.
+function looksLikeLanguageControl(transcript) {
+  const lower = normalizeSpeech(transcript);
+  if (!lower) {
+    return false;
+  }
+  const verb = /\b(?:speak|speaking|talk|understand|understands|understood|reply|respond|answer|say|switch|change|set|use|make|adjust)\b/.test(lower);
+  if (!verb) {
+    return false;
+  }
+  return /\blanguages?\b/.test(lower) || mentionsSupportedLanguage(transcript);
+}
+
 // Route a voice turn. `body` may carry forced_action / intent_hint to override.
 function classifyVoiceTurn(body, transcript) {
   const b = body || {};
@@ -826,6 +702,11 @@ function classifyVoiceTurn(body, transcript) {
   }
   if (forced === "agent_run") {
     return "agent_run";
+  }
+  // A language-control request stays conversational (model owns the change),
+  // never a harness launch.
+  if (!forced && looksLikeLanguageControl(transcript)) {
+    return "chat";
   }
   if (explicitAgentPromptFrom(transcript)) {
     return "agent_run";
@@ -844,5 +725,6 @@ module.exports = {
   parseProfileControlIntent,
   parseProfileRevertIntent,
   parsePersonaIntent,
+  looksLikeLanguageControl,
   classifyVoiceTurn,
 };

@@ -58,33 +58,39 @@ async function main() {
     });
     assert.equal(activeProfile.profile.voice, "Aoede", "profile voice must persist after reapplying");
 
-    const languageTurn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    // Language control is model-owned: the model changes reply/understood
+    // languages by calling update_agent_profile, which the gateway applies through
+    // the same profile store the PUT endpoint uses. (The deterministic spoken
+    // language parser was removed, so a bare "only speak X" no longer keyword-
+    // matches into a write.) Drive the tool's effect here and assert it persists
+    // and stays visible across surfaces.
+    const languageUpdate = await putJson(`${baseUrl}/v1/agent/profile`, {
       source: "live-browser-continuity-smoke",
-      session_id: sessionId,
-      conversation_id: sessionId,
-      branch_id: "profile",
-      turn_id: "voice_profile_language_1",
-      transcript: "Only speak English and Amharic, don't switch up.",
+      scope: "global",
+      profile: {
+        language: "en-US,am-ET",
+        language_primary: "en-US",
+        language_auto_switch: false,
+      },
     });
-    assert.equal(languageTurn.classification, "profile_control", "spoken language lock must route as profile_control");
-    assert.equal(languageTurn.profile.language.allowed, "en-US,am-ET", "spoken language lock must persist allowed languages");
-    assert.equal(languageTurn.profile.language.primary, "en-US", "spoken language lock must keep first-mentioned language as primary");
-    assert.equal(languageTurn.profile.language.auto_switch, false, "spoken language lock must disable auto-switch");
+    assert.equal(languageUpdate.profile.language, "en-US,am-ET", "reply-language change must persist allowed languages");
+    assert.equal(languageUpdate.profile.language_primary, "en-US", "reply-language change must keep the primary language");
+    assert.equal(languageUpdate.profile.language_auto_switch, false, "reply-language lock must disable auto-switch");
     let liveProfile = await getJson(`${baseUrl}/v1/agent/profile`);
-    assert.equal(liveProfile.profile_version, languageTurn.profile_version, "profile endpoint must reflect the spoken language update version");
+    assert.equal(liveProfile.profile_version, languageUpdate.profile_version, "profile endpoint must reflect the language update version");
 
-    const inputLanguageTurn = await postJson(`${baseUrl}/v1/voice/turns`, {
+    const inputLanguageUpdate = await putJson(`${baseUrl}/v1/agent/profile`, {
       source: "live-browser-continuity-smoke",
-      session_id: sessionId,
-      conversation_id: sessionId,
-      branch_id: "profile",
-      turn_id: "voice_profile_input_language_1",
-      transcript: "Only process English and Amharic.",
+      scope: "global",
+      profile: {
+        input_languages: "en-US,am-ET",
+        input_language_primary: "en-US",
+      },
     });
-    assert.equal(inputLanguageTurn.classification, "profile_control", "spoken input-language lock must route as profile_control");
+    assert.equal(inputLanguageUpdate.profile.input_languages, "en-US,am-ET", "understood-language change must persist input languages");
     const inputLanguageProfile = await getJson(`${baseUrl}/v1/agent/profile`);
-    assert.equal(inputLanguageProfile.profile.input_languages, "en-US,am-ET", "spoken process-language lock must persist input languages");
-    assert.equal(inputLanguageProfile.profile.input_language_primary, "en-US", "spoken process-language lock must persist first input language as primary");
+    assert.equal(inputLanguageProfile.profile.input_languages, "en-US,am-ET", "understood-language change must persist input languages");
+    assert.equal(inputLanguageProfile.profile.input_language_primary, "en-US", "understood-language change must persist first input language as primary");
     liveProfile = inputLanguageProfile;
 
     const chat = await postJson(`${baseUrl}/v1/chat`, {

@@ -65,7 +65,7 @@ async function main() {
     await step("live tool-launched run carries all-branch browser context", () =>
       assertLiveToolLaunchContext(baseUrl, wsUrl, dataDir, sessionId));
 
-    await step("noisy live tool calls are blocked", () =>
+    await step("noisy live tool calls: language applies (model-owned), the rest are blocked", () =>
       assertNoisyLiveToolCallsBlocked(baseUrl, wsUrl, sessionId));
 
     console.log(JSON.stringify({
@@ -78,7 +78,7 @@ async function main() {
         "GET /v1/sessions/:id/turns lists it; context marks incomplete=true",
         "the next live session's setup context pack includes the interrupted partial",
         "a live tool-launched run from a later browser cue includes prior cue context",
-        "Live tool calls from noisy transcripts are rejected before launching runs or mutating profile",
+        "Live tool calls from noisy transcripts: model-owned language fields apply; voice changes and agent launches are rejected",
       ],
     }, null, 2));
   } finally {
@@ -251,17 +251,39 @@ async function assertNoisyLiveToolCallsBlocked(baseUrl, wsUrl, sessionId) {
     await waitForEvent(ws, (msg) => msg.type === "turn_done" && msg.turn_id === turnId);
 
     const responses = toolResponse.responses || [];
-    assert.equal(responses.length, 2, `expected two blocked tool responses, got ${JSON.stringify(toolResponse)}`);
-    for (const entry of responses) {
-      assert.equal(entry.response?.ok, false, `tool response should be blocked: ${JSON.stringify(entry)}`);
-      assert.equal(entry.response?.type, "live_tool_blocked", `tool response should name live_tool_blocked: ${JSON.stringify(entry)}`);
+    assert.equal(responses.length, 3, `expected three tool responses, got ${JSON.stringify(toolResponse)}`);
+    const byId = new Map(responses.map((entry) => [entry.id, entry]));
+
+    // Language fields are model-owned: the deterministic transcript parser was
+    // removed, so a language change applies on the model's word (a garbled
+    // transcript is exactly the case where the user spoke a language STT could
+    // not transcribe). The sanitizer still validates the codes.
+    const languageCall = byId.get("tool_call_noisy_profile");
+    assert.equal(languageCall?.response?.ok, true, `model-owned language change must apply: ${JSON.stringify(languageCall)}`);
+    assert.ok(
+      (languageCall.response.changed || []).includes("language"),
+      `language change must be recorded in changed fields: ${JSON.stringify(languageCall.response.changed)}`,
+    );
+
+    // Every other profile field still requires the deterministic parser to
+    // confirm the user asked; a noisy transcript confirms nothing, so the voice
+    // change and the agent launch stay blocked.
+    for (const id of ["tool_call_noisy_voice", "tool_call_noisy_agent"]) {
+      const entry = byId.get(id);
+      assert.equal(entry?.response?.ok, false, `tool response ${id} should be blocked: ${JSON.stringify(entry)}`);
+      assert.equal(entry?.response?.type, "live_tool_blocked", `tool response ${id} should name live_tool_blocked: ${JSON.stringify(entry)}`);
     }
 
     const afterProfile = await getJson(`${baseUrl}/v1/agent/profile`);
-    assert.equal(
+    assert.notEqual(
       afterProfile.profile_version,
       beforeProfile.profile_version,
-      "blocked profile tool call must not create a new profile version",
+      "the model-owned language change must create a new profile version",
+    );
+    assert.equal(
+      afterProfile.profile.voice,
+      beforeProfile.profile.voice,
+      "the blocked voice tool call must not change the voice",
     );
     const afterRuns = await getJson(`${baseUrl}/v1/agent/runs?limit=50`);
     assert.equal(
@@ -323,6 +345,14 @@ async function startFakeLive() {
                     args: {
                       profile: { language: "am-ET" },
                       reason: "User requested to switch to Amharic.",
+                    },
+                  },
+                  {
+                    id: "tool_call_noisy_voice",
+                    name: "update_agent_profile",
+                    args: {
+                      profile: { voice: "Kore" },
+                      reason: "User asked for the Kore voice.",
                     },
                   },
                   {

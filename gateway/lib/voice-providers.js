@@ -23,9 +23,23 @@ const DEFAULT_CHIRP_MODEL = "chirp_3";
 // STT request restricts recognition instead of hinting it.
 const CHIRP_MAX_RESTRICTED_LANGUAGE_CODES = 2;
 // Languages that only exist on Chirp 3 (Preview). If one of these is configured
-// but the model is an older Chirp, recognition would silently fall back. am-ET
-// (Amharic) is the concrete case for the {en-US, am-ET} pipeline.
-const CHIRP_3_ONLY_LANGUAGE_CODES = ["am-ET"];
+// but the model is an older Chirp, recognition would silently fall back, so the
+// provider asserts model=chirp_3 before a recognize call. This is the full Chirp 3
+// preview set (am-ET / Amharic is one of them); the GA languages work on both
+// chirp and chirp_3.
+const CHIRP_3_ONLY_LANGUAGE_CODES = [
+  "af-ZA", "sq-AL", "am-ET", "ar-DZ", "ar-BH", "ar-EG", "ar-IL", "ar-JO",
+  "ar-KW", "ar-LB", "ar-MR", "ar-MA", "ar-OM", "ar-QA", "ar-SA", "ar-PS",
+  "ar-SY", "ar-TN", "ar-AE", "ar-YE", "ar-XA", "ar-IQ", "hy-AM", "as-IN",
+  "ast-ES", "az-AZ", "eu-ES", "bn-BD", "bn-IN", "bg-BG", "my-MM", "yue-Hant-HK",
+  "cmn-Hant-TW", "cs-CZ", "en-PH", "et-EE", "fil-PH", "gl-ES", "ka-GE", "gu-IN",
+  "ha-NG", "iw-IL", "hu-HU", "is-IS", "id-ID", "jv-ID", "kn-IN", "kk-KZ",
+  "km-KH", "ky-KG", "lo-LA", "lv-LV", "lt-LT", "lb-LU", "mk-MK", "ms-MY",
+  "ml-IN", "mt-MT", "mi-NZ", "mr-IN", "mn-MN", "ne-NP", "nso-ZA", "no-NO",
+  "or-IN", "fa-IR", "pa-Guru-IN", "sr-RS", "sk-SK", "sl-SI", "es-MX", "sw-KE",
+  "sw", "ta-IN", "te-IN", "th-TH", "uz-UZ", "cy-GB", "wo-SN", "xh-ZA", "yo-NG",
+  "zu-ZA",
+];
 const GEMINI_LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const VERTEX_LIVE_EXPRESS_ENDPOINT = "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent";
 const PROVIDER_TYPES = ["native_live", "stt", "reasoning", "tts"];
@@ -553,13 +567,30 @@ class ChirpSttVoiceProvider {
     return chirpConfigured(this.env);
   }
 
-  // am-ET and other Chirp-3-only languages require model=chirp_3. Fail loudly
-  // rather than let recognition silently fall back to an unrestricted result.
+  // The recognizer is constrained to EXACTLY the profile's `input_languages` set
+  // (the languages the user says they speak), nothing hardcoded. `input_language_primary`
+  // reorders that set so the primary code goes first — this is the "right now I
+  // want to speak X" switch: the model sets input_language_primary to a code
+  // already inside the understood set and the next turn's STT leads with it. The
+  // env CHIRP_LANGUAGE_CODES is only the boot fallback used when no runtime
+  // profile is wired. am-ET and other Chirp-3-only languages require model=chirp_3,
+  // asserted before the recognize call.
   sttLanguageCodes() {
     if (this.agentProfile && typeof this.agentProfile.effective === "function") {
       const profile = this.agentProfile.effective();
-      const input = String(profile?.input_languages || profile?.input_language_primary || "").trim();
-      return languageCodes(input);
+      const set = String(profile?.input_languages || profile?.input_language_primary || "").trim();
+      const codes = languageCodes(set);
+      const primary = String(profile?.input_language_primary || "").trim().toLowerCase();
+      if (primary && codes.length > 1) {
+        const index = codes.findIndex((code) => String(code).toLowerCase() === primary);
+        if (index > 0) {
+          const reordered = codes.slice();
+          const [lead] = reordered.splice(index, 1);
+          reordered.unshift(lead);
+          return reordered;
+        }
+      }
+      return codes;
     }
     return this.envLanguageCodes;
   }
@@ -1685,13 +1716,13 @@ class GeminiLiveVoiceProvider {
           },
           {
             name: "update_agent_profile",
-            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a clear preference about your voice or language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. Supported languages are currently English and Amharic only. If the user says what language THEY speak ('I only speak Amharic', 'I can speak English and Amharic'), set input_languages. If they ask what language YOU reply in ('speak Amharic', 'answer in English'), set language. Do not infer unrelated languages. Do not set response_modality='text' for goodbye, bye, stop, hush, or silence requests; those are current-turn controls, not durable profile changes. After calling, confirm briefly in your reply.",
+            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a clear preference about your voice or language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. You understand any language in the supported catalog (every Google Chirp 3 language); call get_profile_options for the exact BCP-47 codes. `input_languages` is the SET of languages you understand — set it when the user says what THEY speak ('I only speak Amharic', 'I can speak English and Amharic'); recognition is constrained to exactly that set (at most two codes). To switch which of the understood languages leads right now ('right now I want to speak Amharic'), set `input_language_primary` to a code already in that set. `language` is what YOU reply in ('speak Amharic', 'answer in English'). Reply language and understood languages are separate settings; do not collapse them. Do not set response_modality='text' for goodbye, bye, stop, hush, or silence requests; those are current-turn controls, not durable profile changes. After calling, confirm briefly in your reply.",
             parameters: {
               type: "OBJECT",
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". Set `user_name` when the user tells you their name (\"my name is X\", \"I am X\"). Set `user_nickname` when the user asks to be called something specific (\"call me X\"). Set `user_address` when the user sets the honorific or form of address you must use for them (\"address me as X\", \"call me sir/master/boss\"). These four identity fields are injected into every session automatically - persist them instead of remembering them ad hoc. LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak. Currently valid language codes are en-US and am-ET only. The gateway derives primary language from the first code, so do not expose primary language as a user-facing setting. Set `language_auto_switch` false to lock. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice_max_chars (max characters spoken per reply, a positive integer), voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". Set `user_name` when the user tells you their name (\"my name is X\", \"I am X\"). Set `user_nickname` when the user asks to be called something specific (\"call me X\"). Set `user_address` when the user sets the honorific or form of address you must use for them (\"address me as X\", \"call me sir/master/boss\"). These four identity fields are injected into every session automatically - persist them instead of remembering them ad hoc. LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak (the STT recognizer is constrained to exactly this set, at most two codes). Valid codes are any in the supported catalog (get_profile_options lists them; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP); an unsupported code is dropped and the prior value kept. Set `input_language_primary` to a code already in `input_languages` to make that language lead recognition right now. Set `language_auto_switch` false to lock the reply language. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice_max_chars (max characters spoken per reply, a positive integer), voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
                 },
                 scope: {
                   type: "STRING",

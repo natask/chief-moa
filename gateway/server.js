@@ -17,6 +17,7 @@ const {
   voiceOptionsPayload,
   rejectedLanguageFields,
   supportedLanguagesSentence,
+  languageControlPatch,
 } = require("./lib/profile-options");
 const { createCompanionCatalogStore } = require("./lib/companion-catalog");
 const { createUiSpecStore } = require("./lib/ui-spec");
@@ -4933,7 +4934,7 @@ async function handleAgentProfilePut(request, response) {
     extra.language_rejection = {
       fields: rejectedLanguages,
       supported: supportedLanguagesSentence(),
-      message: `Only ${supportedLanguagesSentence()} are supported for now, so I kept the previous language.`,
+      message: `That language is not in the supported set (${supportedLanguagesSentence()}), so I kept the previous language.`,
     };
   }
   sendJson(response, 200, agentProfilePayload(extra, profileOptions));
@@ -7856,18 +7857,34 @@ function liveToolProfilePatch(args) {
   return patch;
 }
 
+// Language control is model-owned: the model reasons about which languages are
+// understood (the STT constrained set) and replied in, and changes them by tool
+// call — there is no deterministic transcript matcher for language anymore. So
+// these fields pass the Live safety gate on the model's word (still validated by
+// the sanitizer). Every OTHER field (voice, name, persona, providers, modality)
+// still requires the deterministic parser to confirm the user asked, so the
+// native-audio model cannot silently persist an unrequested change.
+const MODEL_OWNED_LANGUAGE_FIELDS = new Set([
+  "language",
+  "language_primary",
+  "language_output",
+  "language_auto_switch",
+  "language_mode",
+  "input_languages",
+  "input_language_primary",
+]);
+
 function liveToolAllowsProfileUpdate(call, patch) {
-  const transcript = liveToolTranscript(call);
-  if (!transcript) {
-    return false;
-  }
-  const intent = parseProfileControlIntent(transcript);
-  if (!intent || intent.action !== "update" || !intent.patch || typeof intent.patch !== "object") {
-    return false;
-  }
-  const allowedFields = new Set(Object.keys(intent.patch));
   const requestedFields = Object.keys(patch || {});
-  return requestedFields.length > 0 && requestedFields.every((field) => allowedFields.has(field));
+  if (requestedFields.length === 0) {
+    return false;
+  }
+  const transcript = liveToolTranscript(call);
+  const intent = transcript ? parseProfileControlIntent(transcript) : null;
+  const parserFields = intent && intent.action === "update" && intent.patch && typeof intent.patch === "object"
+    ? new Set(Object.keys(intent.patch))
+    : new Set();
+  return requestedFields.every((field) => MODEL_OWNED_LANGUAGE_FIELDS.has(field) || parserFields.has(field));
 }
 
 function liveToolMemoryMatch(call) {
@@ -8239,7 +8256,7 @@ function applyAgentProfilePatch(call, args, patch, sourceLabel = "agent-tool") {
     result.language_rejection = {
       fields: rejectedLanguages,
       supported: supportedLanguagesSentence(),
-      message: `Only ${supportedLanguagesSentence()} are supported for now; the previous language was kept.`,
+      message: `That language is not in the supported set (${supportedLanguagesSentence()}); the previous language was kept.`,
     };
   }
   return result;
@@ -8935,10 +8952,11 @@ async function runCascadedVoiceReasoningInner(input) {
   // Per-query semantic recall over rolling thread summaries + intent memories.
   const recallContext = threadRecallContext(transcript, sessionContext);
   const languageDirective = replyLanguageDirective(profile);
+  const languageControl = languageControlDirective(profile);
   const modalityHint = voiceModalityHintBlock(profile, input);
   const expressiveDirective = voiceExpressiveDirective(input);
   const messages = [{ role: "user", content: transcript }];
-  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, languageDirective].filter(Boolean);
+  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, languageControl, languageDirective].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -9041,6 +9059,16 @@ function cascadedExecuteCapabilities(call) {
       description: "Undo durable settings. Args: { mode?: \"previous\"|\"reset\", scope?: \"global\"|\"device\", reason?: string }.",
       run: (args) => liveToolRevertAgentProfile(call, args || {}),
     },
+    set_languages: {
+      description: "Set which languages you understand and reply in, in one call, from the supported catalog (call profile_options for codes). Args: { understand?: string|string[] (the FULL set of languages you understand — the STT recognizer is constrained to exactly this set, at most two), understand_primary?: string (a code already in `understand` to lead recognition right now, e.g. \"right now I want to speak Amharic\"), reply?: string|string[] (the language(s) you reply in), reply_primary?: string, lock?: boolean (true = do not auto-switch reply language), scope?: \"global\"|\"device\", reason?: string }. Persists through the same sanitizer as update_agent_profile; an unsupported code is dropped and the prior value kept.",
+      run: (args) => {
+        const patch = languageControlPatch(args || {});
+        if (Object.keys(patch).length === 0) {
+          return { ok: false, error: "no languages provided; set understand and/or reply", supported: supportedLanguagesSentence() };
+        }
+        return applyAgentProfilePatch(call, args || {}, patch, "voice-execute-languages");
+      },
+    },
   };
 }
 
@@ -9076,13 +9104,13 @@ function cascadedVoiceProfileTools(call) {
   return [
     {
       name: "update_agent_profile",
-      description: "Change your own durable settings when the user asks to. Set `language` to the comma-separated BCP-47 codes YOU reply in, and `input_languages` to the codes the USER speaks (en-US and am-ET only). Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in your reply after calling.",
+      description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks (recognition is constrained to exactly this set, at most two). Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language leads right now (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in your reply after calling.",
       parameters: {
         type: "object",
         properties: {
           profile: {
             type: "object",
-            description: "Profile fields to persist: language, input_languages, response_modality, voice, voice_max_chars, assistant_name, user_name, user_nickname, user_address, model, reasoning_provider, temperature, persona/system_prompt.",
+            description: "Profile fields to persist: language, input_languages, input_language_primary, response_modality, voice, voice_max_chars, assistant_name, user_name, user_nickname, user_address, model, reasoning_provider, temperature, persona/system_prompt.",
           },
           scope: { type: "string", description: "global for all devices, or device for only this device." },
           reason: { type: "string", description: "Short reason for the change." },
@@ -9153,6 +9181,24 @@ function replyLanguageDirective(profile) {
     return "";
   }
   return `Reply in ${language}. Keep the spoken answer short, direct, and TTS-safe.`;
+}
+
+// Tell the reasoner it OWNS language control by tool call. There is no keyword
+// matcher for language anymore, so when the user asks to change which languages
+// are understood or replied in, the model must call update_agent_profile (or the
+// set_languages code-mode skill) — the gateway does not sniff the transcript.
+function languageControlDirective(profile) {
+  const understand = String(profile?.input_languages || profile?.input_language_primary || "").trim();
+  const reply = String(profile?.language || profile?.language_primary || "").trim();
+  return [
+    "Language control (you own this; the gateway does not guess from your words):",
+    understand ? `- You currently understand: ${understand}. Speech recognition is constrained to exactly this set.` : "",
+    reply ? `- You currently reply in: ${reply}.` : "",
+    "- If the user says which languages THEY speak (\"I only speak English and Amharic\", \"I speak only these two\"), call update_agent_profile with input_languages set to exactly that set.",
+    "- If the user says to lead with one of those right now (\"right now I want to speak Amharic\"), set input_language_primary to that code.",
+    "- If the user asks which language YOU reply in (\"answer in English\"), set language. Understood languages and reply language are separate settings.",
+    "- Understood and reply languages may be any code in the supported catalog; call get_profile_options if unsure. Confirm briefly after changing.",
+  ].filter(Boolean).join("\n");
 }
 
 async function recordStreamingVoiceTurn(turn) {

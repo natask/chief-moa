@@ -7,6 +7,7 @@ const {
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
+  looksLikeLanguageControl,
 } = require("./voice-intent");
 
 const ACTION_TYPES = Object.freeze({
@@ -125,6 +126,11 @@ function heuristicActions(transcript) {
   }
   if (wantsMultipleAgents(transcript)) {
     return dispatchAgentActions(transcript, 2);
+  }
+  // A language-control request is model-owned: keep it conversational so the
+  // model changes languages by tool call instead of launching a harness.
+  if (looksLikeLanguageControl(transcript)) {
+    return [{ type: ACTION_TYPES.CHAT }];
   }
   const explicitPrompt = explicitAgentPromptFrom(transcript);
   if (explicitPrompt || shouldRunAgentFromVoice(transcript)) {
