@@ -6,6 +6,8 @@ const { normalizeVoiceChoice } = require("./profile-options");
 
 const CATALOG_FILENAME = "companion-catalog.json";
 const CATALOG_VERSION = "companion-catalog/v1";
+const PET_SPEC_VERSION = "companion-pet/v1";
+const MAX_IMAGE_DATA_URL_CHARS = 700_000;
 
 const BUILTIN_COMPANIONS = Object.freeze([
   companion({
@@ -137,6 +139,7 @@ function createCompanionCatalogStore(options = {}) {
     const role = roleFromText(text || input.name || "custom companion");
     const name = normalizeName(input.name) || nameFromRole(role);
     const voice = normalizeVoiceChoice(input.voice) || voiceForRole(`${role} ${text}`);
+    const appearance = appearanceForRole(`${role} ${text}`);
     const now = new Date().toISOString();
     const record = companion({
       id: uniqueCustomId(slugify(name || "custom-companion")),
@@ -146,7 +149,14 @@ function createCompanionCatalogStore(options = {}) {
       summary: summaryFromText(text, role),
       tags: tagsForRole(`${role} ${text}`),
       voice,
-      appearance: appearanceForRole(`${role} ${text}`),
+      appearance,
+      pet: petForRole(`${role} ${text}`, {
+        name,
+        role,
+        appearance,
+        pet: input.pet,
+        sourceImage: input.image_data_url || input.imageDataUrl || input.source_image || input.sourceImage,
+      }),
       starters: startersForRole(role),
       smoke_prompts: smokePromptsForRole(role),
       profile_patch: {
@@ -274,6 +284,11 @@ function companion(input) {
     starters: cleanList(input.starters, 6, 160),
     smoke_prompts: cleanList(input.smoke_prompts || input.smokePrompts, 6, 160),
     profile_patch: cleanProfilePatch(input.profile_patch || input.profilePatch || {}, { name, voice }),
+    pet: cleanPetSpec(input.pet || input.companion_pet || input.companionPet, {
+      name,
+      role: input.summary || input.description || name,
+      appearance: cleanAppearance(input.appearance),
+    }),
     created_at: typeof input.created_at === "string" ? input.created_at : "",
     updated_at: typeof input.updated_at === "string" ? input.updated_at : "",
   });
@@ -290,6 +305,7 @@ function publicCompanion(input) {
     tags: Array.isArray(input.tags) ? input.tags.slice() : [],
     voice: input.voice,
     appearance: { ...(input.appearance || {}) },
+    pet: publicPetSpec(input.pet),
     starters: Array.isArray(input.starters) ? input.starters.slice() : [],
     smoke_prompts: Array.isArray(input.smoke_prompts) ? input.smoke_prompts.slice() : [],
     profile_patch: { ...(input.profile_patch || {}) },
@@ -417,6 +433,255 @@ function appearanceForRole(value) {
     motion: tags.includes("calm") ? "float" : "peek",
     palette: tags.includes("research") ? "green" : tags.includes("writing") ? "violet" : "blue",
   };
+}
+
+function petForRole(value, options = {}) {
+  const appearance = options.appearance || appearanceForRole(value);
+  return cleanPetSpec(options.pet, {
+    name: options.name,
+    role: options.role || value,
+    appearance,
+    sourceImage: options.sourceImage,
+  });
+}
+
+function cleanPetSpec(input, fallback = {}) {
+  const src = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const appearance = fallback.appearance || {};
+  const role = cleanText(fallback.role || src.role || src.description || "", 180);
+  const name = normalizeName(src.name || fallback.name) || "";
+  const skin = cleanMachineValue(src.skin || src.mascot || appearance.mascot || "companion") || "companion";
+  const palette = cleanPalette(src.palette || appearance.palette || paletteForRole(role));
+  const motion = cleanMotion(src.motion || appearance.motion || motionForRole(role));
+  const scale = cleanScale(src.scale);
+  const sourceImage = cleanImageDataUrl(
+    src.source_image
+      || src.sourceImage
+      || src.image_data_url
+      || src.imageDataUrl
+      || fallback.sourceImage,
+  );
+  const assetUrl = cleanAssetUrl(src.asset_url || src.assetUrl || src.sprite_url || src.spriteUrl);
+  const spriteType = sourceImage ? "image-data-url" : assetUrl ? "image-url" : "css-shigmi";
+  return {
+    version: PET_SPEC_VERSION,
+    renderer: "shimeji-web",
+    family: cleanMachineValue(src.family || appearance.family || "shigmi") || "shigmi",
+    skin,
+    name,
+    palette,
+    scale,
+    motion,
+    sprite: {
+      type: spriteType,
+      asset_url: assetUrl,
+      image_data_url: sourceImage,
+      frame_width: cleanFrameNumber(src.frame_width || src.frameWidth, 96),
+      frame_height: cleanFrameNumber(src.frame_height || src.frameHeight, 96),
+      frame_count: cleanFrameNumber(src.frame_count || src.frameCount, spriteType === "css-shigmi" ? 1 : 4, 1, 48),
+      transparent: src.transparent !== false,
+    },
+    behaviors: cleanBehaviorList(src.behaviors, motion),
+    actions: cleanPetActions(src.actions, motion),
+    generation: cleanPetGeneration(src.generation, {
+      name,
+      role,
+      skin,
+      palette,
+      motion,
+      sourceImage: Boolean(sourceImage),
+    }),
+  };
+}
+
+function publicPetSpec(input) {
+  const pet = cleanPetSpec(input);
+  return {
+    ...pet,
+    behaviors: pet.behaviors.map((item) => ({ ...item })),
+    actions: pet.actions.map((item) => ({ ...item })),
+    sprite: { ...pet.sprite },
+    generation: { ...pet.generation },
+  };
+}
+
+function cleanPalette(value) {
+  const cleaned = cleanMachineValue(value);
+  const allowed = new Set(["graphite", "green", "blue", "violet", "red", "amber", "teal", "mono"]);
+  return allowed.has(cleaned) ? cleaned : "blue";
+}
+
+function cleanMotion(value) {
+  const cleaned = cleanMachineValue(value);
+  const allowed = new Set(["hover", "peek", "tap", "trail", "float", "walk", "climb", "spark"]);
+  return allowed.has(cleaned) ? cleaned : "walk";
+}
+
+function cleanScale(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 1;
+  return Math.round(Math.min(Math.max(number, 0.65), 1.6) * 100) / 100;
+}
+
+function cleanFrameNumber(value, fallback, min = 1, max = 512) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(Math.round(number), max));
+}
+
+function cleanAssetUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 500) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function cleanImageDataUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > MAX_IMAGE_DATA_URL_CHARS) return "";
+  const match = raw.match(/^data:image\/(png|webp|jpeg);base64,([a-z0-9+/=]+)$/i);
+  return match ? raw : "";
+}
+
+function cleanBehaviorList(input, motion) {
+  const defaults = defaultPetBehaviors(motion);
+  const list = Array.isArray(input) ? input : defaults;
+  const cleaned = list.map((item) => {
+    const source = item && typeof item === "object" ? item : { id: item };
+    const id = cleanMachineValue(source.id || source.name);
+    if (!id) return null;
+    return {
+      id,
+      label: cleanText(source.label || titleFromMachineValue(id), 40),
+      weight: cleanFrameNumber(source.weight, 1, 1, 20),
+      interruptible: source.interruptible !== false,
+    };
+  }).filter(Boolean).slice(0, 12);
+  return cleaned.length > 0 ? cleaned : defaults;
+}
+
+function cleanPetActions(input, motion) {
+  const defaults = defaultPetActions(motion);
+  const list = Array.isArray(input) ? input : defaults;
+  const cleaned = list.map((item) => {
+    const source = item && typeof item === "object" ? item : { id: item };
+    const id = cleanMachineValue(source.id || source.name);
+    if (!id) return null;
+    return {
+      id,
+      kind: cleanActionKind(source.kind || id),
+      frames: cleanFrameNumber(source.frames, id === "idle" ? 1 : 4, 1, 48),
+      frame_ms: cleanFrameNumber(source.frame_ms || source.frameMs, 140, 40, 2000),
+      vx: cleanVelocity(source.vx),
+      vy: cleanVelocity(source.vy),
+      loop: source.loop !== false,
+    };
+  }).filter(Boolean).slice(0, 16);
+  return cleaned.length > 0 ? cleaned : defaults;
+}
+
+function cleanActionKind(value) {
+  const cleaned = cleanMachineValue(value);
+  const allowed = new Set(["idle", "walk", "run", "climb", "fall", "drag", "drop", "sleep", "wave", "spark", "hover"]);
+  return allowed.has(cleaned) ? cleaned : "idle";
+}
+
+function cleanVelocity(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.round(Math.min(Math.max(number, -600), 600));
+}
+
+function cleanPetGeneration(input, fallback = {}) {
+  const src = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const prompt = cleanText(src.prompt || defaultPetPrompt(fallback), 1000);
+  return {
+    provider: "vertex",
+    image_model: cleanModelName(src.image_model || src.imageModel || "gemini-3.1-flash-image"),
+    animation_model: cleanModelName(src.animation_model || src.animationModel || "veo-3.1-generate-001"),
+    prompt,
+    source_image: fallback.sourceImage === true,
+    status: "draft",
+  };
+}
+
+function cleanModelName(value) {
+  const cleaned = String(value || "").trim().replace(/[^A-Za-z0-9._@:-]+/g, "").slice(0, 120);
+  return cleaned || "gemini-3.1-flash-image";
+}
+
+function defaultPetBehaviors(motion) {
+  const core = [
+    { id: "idle", label: "Idle", weight: 4, interruptible: true },
+    { id: "walk", label: "Walk", weight: 5, interruptible: true },
+    { id: "drag", label: "Drag", weight: 1, interruptible: false },
+    { id: "fall", label: "Fall", weight: 1, interruptible: false },
+  ];
+  if (motion === "climb" || motion === "peek") {
+    core.splice(2, 0, { id: "climb", label: "Climb", weight: 2, interruptible: true });
+  }
+  if (motion === "spark" || motion === "tap") {
+    core.push({ id: "wave", label: "Wave", weight: 2, interruptible: true });
+  }
+  return core;
+}
+
+function defaultPetActions(motion) {
+  const actions = [
+    { id: "idle", kind: "idle", frames: 1, frame_ms: 320, vx: 0, vy: 0, loop: true },
+    { id: "walk", kind: "walk", frames: 4, frame_ms: 120, vx: 48, vy: 0, loop: true },
+    { id: "drag", kind: "drag", frames: 1, frame_ms: 120, vx: 0, vy: 0, loop: true },
+    { id: "fall", kind: "fall", frames: 2, frame_ms: 90, vx: 0, vy: 220, loop: false },
+  ];
+  if (motion === "climb" || motion === "peek") {
+    actions.splice(2, 0, { id: "climb", kind: "climb", frames: 4, frame_ms: 130, vx: 0, vy: -42, loop: true });
+  }
+  if (motion === "spark" || motion === "tap") {
+    actions.push({ id: "wave", kind: "wave", frames: 4, frame_ms: 110, vx: 0, vy: 0, loop: false });
+  }
+  return actions;
+}
+
+function defaultPetPrompt(fallback) {
+  const role = fallback.role || "helpful companion";
+  const name = fallback.name ? `${fallback.name}, ` : "";
+  return [
+    `Create a small transparent-background Shimeji-style web companion for ${name}${role}.`,
+    `Use a ${fallback.palette || "blue"} palette and ${fallback.motion || "walk"} motion.`,
+    "Return a clean mascot sprite concept that can be split into idle, walk, climb, fall, drag, and wave actions.",
+    "Keep it original; do not copy copyrighted character sprites.",
+  ].join(" ");
+}
+
+function paletteForRole(value) {
+  const tags = tagsForRole(value);
+  if (tags.includes("research")) return "green";
+  if (tags.includes("coding")) return "blue";
+  if (tags.includes("writing")) return "violet";
+  if (tags.includes("playful")) return "amber";
+  return "graphite";
+}
+
+function motionForRole(value) {
+  const lower = String(value || "").toLowerCase();
+  if (/\b(research|scout|peek|watch)\b/.test(lower)) return "peek";
+  if (/\b(code|build|tap|ship)\b/.test(lower)) return "tap";
+  if (/\b(write|scribe|trail|note)\b/.test(lower)) return "trail";
+  if (/\b(calm|soft|float)\b/.test(lower)) return "float";
+  return "walk";
+}
+
+function titleFromMachineValue(value) {
+  return String(value || "")
+    .split(/[_-]+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function startersForRole(role) {

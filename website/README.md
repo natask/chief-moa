@@ -15,8 +15,12 @@ confirmation email via Resend.
 ## Layout
 
 - `public/index.html` — the landing page and waitlist form (one file, no build step)
+- `public/pets/index.html` — companion pet studio with catalog, preview,
+  upload, draft, apply, and generation controls
 - `public/assets/` — deck images and logos
 - `functions/api/waitlist.js` — `POST /api/waitlist`: validate, store, email
+- `functions/api/pets/[[path]].js` — `/api/pets/*`: proxy to token-guarded
+  gateway pet endpoints without exposing `MOA_GATEWAY_TOKEN` to the browser
 - `schema.sql` — D1 table
 - `wrangler.toml` — Pages config and D1 binding
 
@@ -58,3 +62,14 @@ npx wrangler d1 execute chief-moa-waitlist --remote \
 cp .dev.vars.example .dev.vars   # add a real Resend key to test email locally
 npx wrangler pages dev public
 ```
+
+For the pet studio, set these in `.dev.vars` locally or as Pages secrets:
+
+```sh
+MOA_GATEWAY_URL=https://api.example.com
+MOA_GATEWAY_TOKEN=<gateway-token>
+```
+
+The studio falls back to local built-in pets when the proxy is not configured.
+Live image generation still happens on the gateway and requires
+`MOA_PET_ENABLE_VERTEX_GENERATION=1` plus Vertex credentials there.

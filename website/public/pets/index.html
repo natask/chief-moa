@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A.G. Pet Studio</title>
+<meta name="description" content="Customize A.G. companion pets." />
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,650&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --paper:#fbfaf7;
+    --panel:#ffffff;
+    --ink:#17191d;
+    --muted:#6d7179;
+    --line:#d9d5ca;
+    --signal:#e5482b;
+    --blue:#2f67d8;
+    --green:#208553;
+    --violet:#7651c7;
+    --amber:#c57a1b;
+    --teal:#0e7d85;
+    --mono:"IBM Plex Mono",ui-monospace,monospace;
+    --serif:"Fraunces",Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:var(--paper);color:var(--ink)}
+  body{font-family:var(--serif);letter-spacing:0;-webkit-font-smoothing:antialiased}
+  button,input,textarea{font:inherit}
+  button{cursor:pointer}
+  .shell{min-height:100vh;display:grid;grid-template-rows:auto minmax(0,1fr)}
+  .topbar{height:64px;display:flex;align-items:center;justify-content:space-between;gap:20px;
+    padding:0 22px;border-bottom:1px solid var(--line);background:rgba(251,250,247,.92)}
+  .brand{display:flex;align-items:center;gap:11px;font-family:var(--mono);font-size:12px;
+    letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
+  .brand img{width:30px;height:30px;object-fit:contain}
+  .topbar a{font-family:var(--mono);font-size:12px;color:var(--muted);text-decoration:none}
+  .topbar a:hover{color:var(--signal)}
+
+  .workspace{display:grid;grid-template-columns:280px minmax(360px,1fr) 330px;min-height:0}
+  .rail,.inspector{background:var(--panel);border-right:1px solid var(--line);min-height:calc(100vh - 64px);overflow:auto}
+  .inspector{border-right:0;border-left:1px solid var(--line)}
+  .pane-head{height:54px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid var(--line)}
+  .pane-head h1,.pane-head h2{margin:0;font-size:21px;line-height:1;font-weight:500}
+  .pane-head h2{font-size:18px}
+  .status{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.35}
+  .search{padding:14px 14px 10px;border-bottom:1px solid var(--line)}
+  .search input,.field input,.field textarea{width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);
+    border-radius:6px;padding:10px 11px;outline:none;font-family:var(--mono);font-size:13px;line-height:1.4}
+  .search input:focus,.field input:focus,.field textarea:focus{border-color:rgba(229,72,43,.68)}
+  .catalog{padding:10px;display:grid;gap:8px}
+  .pet-row{display:grid;grid-template-columns:42px minmax(0,1fr);gap:11px;align-items:center;width:100%;
+    border:1px solid transparent;border-radius:8px;background:transparent;color:inherit;padding:8px;text-align:left}
+  .pet-row:hover{border-color:var(--line);background:#fbfaf7}
+  .pet-row.active{border-color:rgba(229,72,43,.55);background:#fff6f2}
+  .mini{width:42px;height:42px;border-radius:7px;display:grid;place-items:center;background:#f2f0ea;overflow:hidden}
+  .mini .mini-dot{width:26px;height:30px;border:1px solid rgba(0,0,0,.22);border-radius:13px 13px 10px 10px;background:var(--blue);position:relative}
+  .mini .mini-dot:before,.mini .mini-dot:after{content:"";position:absolute;top:8px;width:4px;height:4px;border-radius:50%;background:#fff}
+  .mini .mini-dot:before{left:7px}.mini .mini-dot:after{right:7px}
+  .pet-row strong{display:block;font-size:15px;font-weight:500;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pet-row span{display:block;margin-top:5px;font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .stage-wrap{min-height:0;display:grid;grid-template-rows:54px minmax(0,1fr) 118px}
+  .stage-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid var(--line)}
+  .selected-title{min-width:0}
+  .selected-title strong{display:block;font-size:22px;font-weight:500;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .selected-title span{display:block;margin-top:4px;font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stage-actions{display:flex;gap:8px;align-items:center}
+  .icon-btn,.cmd{height:34px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);
+    font-family:var(--mono);font-size:12px;padding:0 12px}
+  .cmd.primary{background:var(--signal);border-color:var(--signal);color:#fff}
+  .cmd:disabled{opacity:.5;cursor:default}
+  .stage{position:relative;overflow:hidden;background:
+    linear-gradient(#f5f2eb 1px,transparent 1px),
+    linear-gradient(90deg,#f5f2eb 1px,transparent 1px),#fbfaf7;
+    background-size:44px 44px;touch-action:none}
+  .floor{position:absolute;left:0;right:0;bottom:64px;height:1px;background:#c9c3b7}
+  .edge{position:absolute;background:rgba(23,25,29,.08)}
+  .edge.top{left:0;right:0;top:0;height:1px}.edge.left{left:0;top:0;bottom:0;width:1px}.edge.right{right:0;top:0;bottom:0;width:1px}
+  .pet{position:absolute;left:0;top:0;width:96px;height:96px;touch-action:none;user-select:none;will-change:transform;--pet:#2f67d8;--pet-dark:#173778}
+  .pet.dragging{filter:drop-shadow(0 16px 18px rgba(0,0,0,.16))}
+  .pet-shadow{position:absolute;left:23px;bottom:5px;width:50px;height:9px;border-radius:50%;background:rgba(0,0,0,.2);filter:blur(2px)}
+  .pet-core{position:absolute;left:16px;top:16px;width:64px;height:70px}
+  .pet-body{position:absolute;left:12px;top:10px;width:40px;height:48px;border-radius:20px 20px 15px 15px;
+    border:2px solid rgba(0,0,0,.32);background:var(--pet);box-shadow:inset -8px -10px 0 rgba(0,0,0,.12)}
+  .pet-face{position:absolute;left:20px;top:25px;width:24px;height:10px}
+  .pet-eye{position:absolute;top:0;width:5px;height:5px;border-radius:50%;background:#fff}
+  .pet-eye.left{left:0}.pet-eye.right{right:0}
+  .pet-mouth{position:absolute;left:8px;top:7px;width:8px;height:2px;background:rgba(0,0,0,.52)}
+  .pet-ear{position:absolute;top:0;width:17px;height:20px;background:var(--pet-dark);border:2px solid rgba(0,0,0,.32)}
+  .pet-ear.left{left:8px;border-radius:14px 4px 12px 6px;transform:rotate(-14deg)}
+  .pet-ear.right{right:8px;border-radius:4px 14px 6px 12px;transform:rotate(14deg)}
+  .pet-arm{position:absolute;top:36px;width:12px;height:24px;border-radius:10px;background:var(--pet-dark)}
+  .pet-arm.left{left:2px;transform-origin:top center}.pet-arm.right{right:2px;transform-origin:top center}
+  .pet-foot{position:absolute;bottom:2px;width:20px;height:8px;border-radius:12px;background:var(--pet-dark)}
+  .pet-foot.left{left:12px}.pet-foot.right{right:12px}
+  .pet-image{position:absolute;inset:0;width:96px;height:96px;object-fit:contain;display:none;pointer-events:none}
+  .pet.has-image .pet-core{display:none}.pet.has-image .pet-image{display:block}
+  .pet.palette-graphite{--pet:#555a62;--pet-dark:#262a30}
+  .pet.palette-green{--pet:#208553;--pet-dark:#0f5534}
+  .pet.palette-blue{--pet:#2f67d8;--pet-dark:#173778}
+  .pet.palette-violet{--pet:#7651c7;--pet-dark:#452284}
+  .pet.palette-red{--pet:#d84a39;--pet-dark:#84281f}
+  .pet.palette-amber{--pet:#c57a1b;--pet-dark:#77450e}
+  .pet.palette-teal{--pet:#0e7d85;--pet-dark:#06484e}
+  .pet.palette-mono{--pet:#f6f3ea;--pet-dark:#17191d}
+  .pet.mode-walk .pet-foot.left{animation:stepA .32s infinite}.pet.mode-walk .pet-foot.right{animation:stepB .32s infinite}
+  .pet.mode-climb .pet-core{animation:climb .46s infinite}
+  .pet.mode-wave .pet-arm.right{animation:wave .62s ease-in-out infinite}
+  .pet.mode-float .pet-core{animation:floaty 1.4s ease-in-out infinite}
+  .pet.mode-tap .pet-core{animation:tap .38s ease-in-out infinite}
+  @keyframes stepA{50%{transform:translateX(6px)}}@keyframes stepB{50%{transform:translateX(-6px)}}
+  @keyframes climb{50%{transform:translateY(-5px) rotate(-2deg)}}@keyframes wave{50%{transform:rotate(-48deg)}}
+  @keyframes floaty{50%{transform:translateY(-8px)}}@keyframes tap{50%{transform:translateY(4px) scaleY(.96)}}
+
+  .console{border-top:1px solid var(--line);background:#fff;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:14px 18px}
+  .console-text{min-width:0}
+  .console-text strong{display:block;font-size:17px;font-weight:500;line-height:1.15}
+  .console-text span{display:block;margin-top:6px;font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .behavior{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+  .chip{height:28px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:0 10px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .chip.active{color:#fff;background:var(--ink);border-color:var(--ink)}
+
+  .form{padding:16px;display:grid;gap:16px}
+  .field{display:grid;gap:7px}
+  .field label{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .field textarea{min-height:104px;resize:vertical}
+  .swatches,.segments{display:flex;gap:8px;flex-wrap:wrap}
+  .swatch{width:30px;height:30px;border-radius:6px;border:1px solid rgba(0,0,0,.22);background:var(--swatch);position:relative}
+  .swatch.active:after{content:"";position:absolute;inset:6px;border:2px solid #fff;border-radius:4px;box-shadow:0 0 0 1px rgba(0,0,0,.4)}
+  .seg{height:32px;border:1px solid var(--line);border-radius:7px;background:#fff;font-family:var(--mono);font-size:12px;padding:0 11px;color:var(--muted)}
+  .seg.active{color:#fff;background:var(--ink);border-color:var(--ink)}
+  .file{position:relative;display:flex;align-items:center;gap:10px}
+  .file input{position:absolute;inset:0;opacity:0;cursor:pointer}
+  .file .cmd{display:inline-flex;align-items:center}
+  .file span{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .range-row{display:grid;grid-template-columns:1fr 42px;gap:10px;align-items:center}
+  .range-row input{width:100%;accent-color:var(--signal)}
+  .range-row output{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right}
+  .stack{display:grid;gap:9px}
+  .hint{min-height:18px;font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.45}
+  .hint.err{color:#a43a2a}.hint.ok{color:#26724d}
+
+  @media (max-width:980px){
+    .workspace{grid-template-columns:1fr}
+    .rail,.inspector{min-height:auto;border:0;border-bottom:1px solid var(--line)}
+    .stage-wrap{min-height:560px}
+    .catalog{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+  @media (max-width:620px){
+    .topbar{padding:0 14px}.workspace{display:block}.stage-head{align-items:flex-start;height:auto;padding:12px 14px;flex-direction:column}
+    .stage-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}
+    .stage-actions .cmd{width:100%}.console{grid-template-columns:1fr}.behavior{justify-content:flex-start}.catalog{grid-template-columns:1fr}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .pet *{animation:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand"><img src="../assets/moa-mark.png" alt="" /> A.G. Pet Studio</div>
+    <a href="../">Home</a>
+  </header>
+
+  <main class="workspace">
+    <aside class="rail">
+      <div class="pane-head">
+        <h1>Catalog</h1>
+        <span class="status" id="catalogStatus">Loading</span>
+      </div>
+      <div class="search">
+        <input id="searchInput" type="search" placeholder="Search pets" autocomplete="off" />
+      </div>
+      <div class="catalog" id="catalog"></div>
+    </aside>
+
+    <section class="stage-wrap">
+      <div class="stage-head">
+        <div class="selected-title">
+          <strong id="selectedName">Shigmi Steward</strong>
+          <span id="selectedMeta">shimeji-web / walk</span>
+        </div>
+        <div class="stage-actions">
+          <button class="cmd" id="previewBtn" type="button">Preview</button>
+          <button class="cmd primary" id="applyBtn" type="button">Apply</button>
+        </div>
+      </div>
+      <div class="stage" id="stage">
+        <div class="edge top"></div><div class="edge left"></div><div class="edge right"></div><div class="floor"></div>
+        <div class="pet palette-blue mode-walk" id="pet" aria-label="Animated pet preview" role="img">
+          <div class="pet-shadow"></div>
+          <img class="pet-image" id="petImage" alt="" />
+          <div class="pet-core">
+            <div class="pet-ear left"></div><div class="pet-ear right"></div>
+            <div class="pet-arm left"></div><div class="pet-arm right"></div>
+            <div class="pet-body"></div>
+            <div class="pet-face"><i class="pet-eye left"></i><i class="pet-eye right"></i><i class="pet-mouth"></i></div>
+            <div class="pet-foot left"></div><div class="pet-foot right"></div>
+          </div>
+        </div>
+      </div>
+      <div class="console">
+        <div class="console-text">
+          <strong id="consoleTitle">Ready</strong>
+          <span id="consoleLine">Local preview</span>
+        </div>
+        <div class="behavior" id="behaviorBar"></div>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <div class="pane-head">
+        <h2>Create</h2>
+        <span class="status" id="apiStatus">Gateway</span>
+      </div>
+      <form class="form" id="petForm">
+        <div class="field">
+          <label for="petName">Name</label>
+          <input id="petName" type="text" maxlength="80" value="Shigmi Scout" />
+        </div>
+        <div class="field">
+          <label for="petPrompt">Prompt</label>
+          <textarea id="petPrompt">A research scout that peeks around the edge of the page and helps compare options.</textarea>
+        </div>
+        <div class="field">
+          <label>Palette</label>
+          <div class="swatches" id="paletteControls"></div>
+        </div>
+        <div class="field">
+          <label>Motion</label>
+          <div class="segments" id="motionControls"></div>
+        </div>
+        <div class="field">
+          <label for="scaleInput">Scale</label>
+          <div class="range-row">
+            <input id="scaleInput" type="range" min="0.7" max="1.5" step="0.05" value="1" />
+            <output id="scaleOutput">1.00</output>
+          </div>
+        </div>
+        <div class="field">
+          <label>Image</label>
+          <div class="file">
+            <button class="cmd" type="button">Upload</button>
+            <span id="fileName">No image</span>
+            <input id="imageInput" type="file" accept="image/png,image/webp,image/jpeg" />
+          </div>
+        </div>
+        <div class="stack">
+          <button class="cmd primary" id="draftBtn" type="submit">Create pet</button>
+          <button class="cmd" id="generateBtn" type="button">Generate image</button>
+        </div>
+        <div class="hint" id="formHint" role="status" aria-live="polite"></div>
+      </form>
+    </aside>
+  </main>
+</div>
+
+<script>
+(function(){
+  var palettes={
+    graphite:"#555a62",green:"#208553",blue:"#2f67d8",violet:"#7651c7",
+    red:"#d84a39",amber:"#c57a1b",teal:"#0e7d85",mono:"#f6f3ea"
+  };
+  var motions=["walk","peek","climb","tap","trail","float","spark"];
+  var fallbackPets=[
+    petRecord("shigmi-steward","Shigmi Steward","Default operator","graphite","hover","steward"),
+    petRecord("shigmi-scout","Shigmi Scout","Research and discovery","green","peek","scout"),
+    petRecord("shigmi-builder","Shigmi Builder","Implementation companion","blue","tap","builder"),
+    petRecord("shigmi-scribe","Shigmi Scribe","Writing companion","violet","trail","scribe")
+  ];
+  var state={
+    pets:[],selected:null,query:"",palette:"green",motion:"peek",scale:1,
+    imageDataUrl:"",x:120,y:120,vx:42,vy:0,dir:1,mode:"walk",drag:false,last:0,nextModeAt:0
+  };
+
+  var els={
+    catalog:document.getElementById("catalog"),
+    catalogStatus:document.getElementById("catalogStatus"),
+    apiStatus:document.getElementById("apiStatus"),
+    search:document.getElementById("searchInput"),
+    selectedName:document.getElementById("selectedName"),
+    selectedMeta:document.getElementById("selectedMeta"),
+    consoleTitle:document.getElementById("consoleTitle"),
+    consoleLine:document.getElementById("consoleLine"),
+    behaviorBar:document.getElementById("behaviorBar"),
+    stage:document.getElementById("stage"),
+    pet:document.getElementById("pet"),
+    petImage:document.getElementById("petImage"),
+    petName:document.getElementById("petName"),
+    petPrompt:document.getElementById("petPrompt"),
+    paletteControls:document.getElementById("paletteControls"),
+    motionControls:document.getElementById("motionControls"),
+    scaleInput:document.getElementById("scaleInput"),
+    scaleOutput:document.getElementById("scaleOutput"),
+    imageInput:document.getElementById("imageInput"),
+    fileName:document.getElementById("fileName"),
+    form:document.getElementById("petForm"),
+    hint:document.getElementById("formHint"),
+    previewBtn:document.getElementById("previewBtn"),
+    applyBtn:document.getElementById("applyBtn"),
+    generateBtn:document.getElementById("generateBtn")
+  };
+
+  initControls();
+  bindEvents();
+  loadPets();
+  requestAnimationFrame(tick);
+
+  function petRecord(id,name,summary,palette,motion,skin){
+    return {
+      id:id,companion_id:id,companion_name:name,companion_summary:summary,source:"builtin",
+      tags:["shigmi"],voice:"Kore",
+      pet:{
+        renderer:"shimeji-web",family:"shigmi",skin:skin,palette:palette,motion:motion,scale:1,
+        sprite:{type:"css-shigmi",frame_width:96,frame_height:96,frame_count:1},
+        behaviors:[
+          {id:"idle",label:"Idle"},{id:"walk",label:"Walk"},{id:"climb",label:"Climb"},
+          {id:"drag",label:"Drag"},{id:"fall",label:"Fall"}
+        ]
+      },
+      starters:[]
+    };
+  }
+
+  function initControls(){
+    Object.keys(palettes).forEach(function(key){
+      var button=document.createElement("button");
+      button.type="button";button.className="swatch";button.style.setProperty("--swatch",palettes[key]);
+      button.setAttribute("aria-label",key);button.dataset.palette=key;
+      els.paletteControls.appendChild(button);
+    });
+    motions.forEach(function(key){
+      var button=document.createElement("button");
+      button.type="button";button.className="seg";button.textContent=key;button.dataset.motion=key;
+      els.motionControls.appendChild(button);
+    });
+    refreshControlState();
+  }
+
+  function bindEvents(){
+    els.search.addEventListener("input",function(){state.query=els.search.value.trim().toLowerCase();renderCatalog();});
+    els.paletteControls.addEventListener("click",function(event){
+      var button=event.target.closest("[data-palette]");if(!button)return;
+      state.palette=button.dataset.palette;applyControlsToPreview();refreshControlState();
+    });
+    els.motionControls.addEventListener("click",function(event){
+      var button=event.target.closest("[data-motion]");if(!button)return;
+      state.motion=button.dataset.motion;state.mode=motionMode(state.motion);applyControlsToPreview();refreshControlState();
+    });
+    els.scaleInput.addEventListener("input",function(){
+      state.scale=Number(els.scaleInput.value)||1;applyPetVisual();refreshControlState();
+    });
+    els.imageInput.addEventListener("change",handleImageUpload);
+    els.form.addEventListener("submit",createPet);
+    els.previewBtn.addEventListener("click",previewSelected);
+    els.applyBtn.addEventListener("click",applySelected);
+    els.generateBtn.addEventListener("click",generateImage);
+    els.pet.addEventListener("pointerdown",startDrag);
+    window.addEventListener("pointermove",dragMove);
+    window.addEventListener("pointerup",endDrag);
+  }
+
+  async function loadPets(){
+    try{
+      var res=await fetch("/api/pets",{headers:{"accept":"application/json"}});
+      if(!res.ok)throw new Error("HTTP "+res.status);
+      var data=await res.json();
+      state.pets=(data.pets||[]).map(normalizePet);
+      els.catalogStatus.textContent=String(state.pets.length);
+      els.apiStatus.textContent=data.generation&&data.generation.configured?"Vertex":"Gateway";
+    }catch(err){
+      state.pets=fallbackPets;
+      els.catalogStatus.textContent="Local";
+      els.apiStatus.textContent="Local";
+    }
+    selectPet(state.pets[0]);
+    renderCatalog();
+  }
+
+  function normalizePet(item){
+    var companion=item.companion||item;
+    var pet=item.pet||companion.pet||{};
+    return {
+      id:item.id||item.companion_id||companion.id,
+      companion_id:item.companion_id||companion.id||item.id,
+      companion_name:item.companion_name||companion.name||"Custom pet",
+      companion_summary:item.companion_summary||companion.summary||"",
+      source:item.source||companion.source||"custom",
+      tags:item.tags||companion.tags||[],
+      voice:item.voice||companion.voice||"",
+      pet:{
+        renderer:pet.renderer||"shimeji-web",
+        family:pet.family||"shigmi",
+        skin:pet.skin||"companion",
+        palette:pet.palette||"blue",
+        motion:pet.motion||"walk",
+        scale:Number(pet.scale)||1,
+        sprite:pet.sprite||{type:"css-shigmi"},
+        behaviors:pet.behaviors||[]
+      },
+      starters:item.starters||companion.starters||[]
+    };
+  }
+
+  function renderCatalog(){
+    var list=state.pets.filter(function(item){
+      if(!state.query)return true;
+      return [item.companion_name,item.companion_summary,item.id,(item.tags||[]).join(" ")].join(" ").toLowerCase().indexOf(state.query)>=0;
+    });
+    els.catalog.innerHTML="";
+    list.forEach(function(item){
+      var button=document.createElement("button");
+      button.type="button";
+      button.className="pet-row"+(state.selected&&state.selected.id===item.id?" active":"");
+      button.innerHTML='<span class="mini"><span class="mini-dot"></span></span><span class="pet-copy"><strong></strong><span class="pet-meta"></span></span>';
+      button.querySelector("strong").textContent=item.companion_name;
+      button.querySelector(".pet-meta").textContent=(item.pet.motion||"walk")+" / "+(item.source||"custom");
+      button.querySelector(".mini-dot").style.background=palettes[item.pet.palette]||palettes.blue;
+      button.addEventListener("click",function(){selectPet(item);});
+      els.catalog.appendChild(button);
+    });
+  }
+
+  function selectPet(item){
+    if(!item)return;
+    state.selected=item;
+    state.palette=item.pet.palette||"blue";
+    state.motion=item.pet.motion||"walk";
+    state.scale=Number(item.pet.scale)||1;
+    state.mode=motionMode(state.motion);
+    state.imageDataUrl=item.pet.sprite&&item.pet.sprite.image_data_url||"";
+    els.petName.value=item.companion_name||"";
+    els.petPrompt.value=item.companion_summary||els.petPrompt.value;
+    renderCatalog();
+    applyPetVisual();
+    refreshControlState();
+  }
+
+  function applyControlsToPreview(){
+    if(state.selected){
+      state.selected.pet.palette=state.palette;
+      state.selected.pet.motion=state.motion;
+      state.selected.pet.scale=state.scale;
+    }
+    applyPetVisual();
+  }
+
+  function applyPetVisual(){
+    var selected=state.selected||fallbackPets[0];
+    var pet=selected.pet||{};
+    var palette=state.palette||pet.palette||"blue";
+    var motion=state.motion||pet.motion||"walk";
+    state.scale=Number(state.scale||pet.scale||1);
+    els.selectedName.textContent=selected.companion_name||"Custom pet";
+    els.selectedMeta.textContent=(pet.renderer||"shimeji-web")+" / "+motion+" / "+palette;
+    els.scaleInput.value=String(state.scale);
+    els.scaleOutput.textContent=state.scale.toFixed(2);
+    els.pet.className="pet palette-"+palette+" mode-"+state.mode+(state.imageDataUrl?" has-image":"");
+    els.petImage.src=state.imageDataUrl||"";
+    renderBehaviors(pet.behaviors||[]);
+  }
+
+  function renderBehaviors(behaviors){
+    var list=behaviors.length?behaviors:[{id:"idle"},{id:"walk"},{id:"drag"},{id:"fall"}];
+    els.behaviorBar.innerHTML="";
+    list.slice(0,7).forEach(function(item){
+      var button=document.createElement("button");
+      button.type="button";button.className="chip"+(state.mode===item.id?" active":"");
+      button.textContent=item.label||item.id;
+      button.addEventListener("click",function(){state.mode=item.id;applyPetVisual();});
+      els.behaviorBar.appendChild(button);
+    });
+  }
+
+  function refreshControlState(){
+    Array.prototype.forEach.call(els.paletteControls.children,function(button){
+      button.classList.toggle("active",button.dataset.palette===state.palette);
+    });
+    Array.prototype.forEach.call(els.motionControls.children,function(button){
+      button.classList.toggle("active",button.dataset.motion===state.motion);
+    });
+    els.scaleOutput.textContent=(Number(els.scaleInput.value)||1).toFixed(2);
+  }
+
+  async function createPet(event){
+    event.preventDefault();
+    setHint("Creating", "");
+    var body=formBody();
+    try{
+      var res=await fetch("/api/pets",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Create failed");
+      var pet=normalizePet(data.pet||data.companion);
+      state.pets.unshift(pet);selectPet(pet);setHint("Created", "ok");
+    }catch(err){
+      var local=petRecord("local-"+Date.now().toString(36),body.name,body.text,body.pet.palette,body.pet.motion,"custom");
+      local.pet.scale=body.pet.scale;local.pet.sprite.image_data_url=state.imageDataUrl;
+      state.pets.unshift(local);selectPet(local);setHint("Created locally", "ok");
+    }
+  }
+
+  async function previewSelected(){
+    if(!state.selected)return;
+    setConsole("Previewing", state.selected.companion_name);
+    try{
+      var res=await fetch("/api/pets/preview",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({companion_id:state.selected.companion_id})});
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Preview failed");
+      setConsole("Preview", data.sample_text||state.selected.companion_name);
+    }catch(err){
+      setConsole("Preview", state.selected.companion_summary||state.selected.companion_name);
+    }
+  }
+
+  async function applySelected(){
+    if(!state.selected)return;
+    setConsole("Applying", state.selected.companion_name);
+    try{
+      var res=await fetch("/api/pets/apply",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({companion_id:state.selected.companion_id,scope:"global",source:"website-pet-studio"})});
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Apply failed");
+      setConsole("Applied", data.profile&&data.profile.active_companion_name||state.selected.companion_name);
+    }catch(err){
+      setConsole("Apply blocked", err.message||"Gateway unavailable");
+    }
+  }
+
+  async function generateImage(){
+    setHint("Generating", "");
+    var body=formBody();
+    body.image_data_url=state.imageDataUrl;
+    try{
+      var res=await fetch("/api/pets/generate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Generate failed");
+      if(data.images&&data.images[0]&&data.images[0].data_url){
+        state.imageDataUrl=data.images[0].data_url;els.fileName.textContent="Generated image";applyPetVisual();setHint("Generated", "ok");
+      }else{
+        setHint(data.status==="not_configured"?"Generation not configured":"Generation planned", "");
+      }
+    }catch(err){
+      setHint(err.message||"Generate failed", "err");
+    }
+  }
+
+  function formBody(){
+    state.scale=Number(els.scaleInput.value)||1;
+    return {
+      name:els.petName.value.trim()||"Shigmi Companion",
+      text:els.petPrompt.value.trim(),
+      palette:state.palette,
+      motion:state.motion,
+      image_data_url:state.imageDataUrl,
+      pet:{palette:state.palette,motion:state.motion,scale:state.scale,source_image:state.imageDataUrl}
+    };
+  }
+
+  function handleImageUpload(){
+    var file=els.imageInput.files&&els.imageInput.files[0];
+    if(!file)return;
+    if(file.size>520000){setHint("Image is too large", "err");return;}
+    var reader=new FileReader();
+    reader.onload=function(){
+      state.imageDataUrl=String(reader.result||"");
+      els.fileName.textContent=file.name;
+      applyPetVisual();
+      setHint("Image loaded", "ok");
+    };
+    reader.onerror=function(){setHint("Image failed", "err");};
+    reader.readAsDataURL(file);
+  }
+
+  function startDrag(event){
+    state.drag=true;els.pet.classList.add("dragging");els.pet.setPointerCapture(event.pointerId);
+    moveToPointer(event);
+  }
+  function dragMove(event){if(!state.drag)return;moveToPointer(event);}
+  function endDrag(){if(!state.drag)return;state.drag=false;els.pet.classList.remove("dragging");state.mode=motionMode(state.motion);applyPetVisual();}
+  function moveToPointer(event){
+    var rect=els.stage.getBoundingClientRect();
+    state.x=event.clientX-rect.left-48;state.y=event.clientY-rect.top-48;
+    clampPosition();positionPet();
+  }
+
+  function tick(time){
+    var rect=els.stage.getBoundingClientRect();
+    if(!state.last)state.last=time;
+    var dt=Math.min((time-state.last)/1000,.04);state.last=time;
+    if(!state.drag&&rect.width>0&&rect.height>0){
+      if(time>state.nextModeAt){
+        state.mode=randomMode();
+        state.nextModeAt=time+1800+Math.random()*2600;
+        applyPetVisual();
+      }
+      var floorY=Math.max(40,rect.height-154);
+      if(state.mode==="walk"){
+        state.x+=state.vx*state.dir*dt;
+        state.y+=(floorY-state.y)*Math.min(1,dt*8);
+      }else if(state.mode==="climb"){
+        state.y-=38*dt;
+        if(state.y<18){state.mode="fall";applyPetVisual();}
+      }else if(state.mode==="fall"){
+        state.y+=220*dt;
+        if(state.y>floorY){state.y=floorY;state.mode="walk";applyPetVisual();}
+      }else if(state.mode==="float"||state.mode==="idle"||state.mode==="wave"){
+        state.y+=(floorY-state.y)*Math.min(1,dt*2);
+      }
+      if(state.x<10){state.x=10;state.dir=1}
+      if(state.x>rect.width-106){state.x=rect.width-106;state.dir=-1}
+      clampPosition();positionPet();
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function randomMode(){
+    if(state.motion==="climb"||state.motion==="peek")return Math.random()<.38?"climb":"walk";
+    if(state.motion==="float"||state.motion==="trail")return Math.random()<.5?"float":"walk";
+    if(state.motion==="spark"||state.motion==="tap")return Math.random()<.42?"wave":"tap";
+    return Math.random()<.22?"idle":"walk";
+  }
+  function motionMode(motion){
+    if(motion==="float"||motion==="trail")return "float";
+    if(motion==="tap"||motion==="spark")return "tap";
+    if(motion==="climb"||motion==="peek")return "climb";
+    return "walk";
+  }
+  function clampPosition(){
+    var rect=els.stage.getBoundingClientRect();
+    state.x=Math.max(8,Math.min(state.x,Math.max(8,rect.width-104)));
+    state.y=Math.max(8,Math.min(state.y,Math.max(8,rect.height-104)));
+  }
+  function positionPet(){
+    els.pet.style.transform="translate("+state.x+"px,"+state.y+"px) scaleX("+state.dir+") scale("+state.scale+")";
+  }
+  function setHint(text,kind){els.hint.textContent=text;els.hint.className="hint "+(kind||"");}
+  function setConsole(title,line){els.consoleTitle.textContent=title;els.consoleLine.textContent=line||"";}
+})();
+</script>
+</body>
+</html>
