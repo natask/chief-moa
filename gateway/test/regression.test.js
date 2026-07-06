@@ -22,9 +22,13 @@ test(
     const dataDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "moa-gateway-smoke-regression-")
     );
+    // Deterministic e2e over the file/jsonl stores; an inherited DATABASE_URL
+    // would flip the gateway into postgres mode and change profile defaults.
+    const env = { ...process.env, DATA_DIR: dataDir };
+    delete env.DATABASE_URL;
     const result = spawnSync(process.execPath, ["scripts/smoke-regression.js"], {
       cwd: gatewayRoot,
-      env: { ...process.env, DATA_DIR: dataDir },
+      env,
       encoding: "utf8",
       maxBuffer: 32 * 1024 * 1024,
       timeout: 300000,

@@ -374,7 +374,10 @@ async function assertAgentProfileRuntimeCycle(baseUrl, dataDir) {
     session_id: "profile_runtime_session",
     branch_id: "default",
     turn_id: "turn_after_reset",
-    transcript: "voice check after reset",
+    // Plain chat phrasing on purpose: mentioning "reset" alongside a profile
+    // word would be parsed as a profile-control revert and skip the
+    // conversation write this step asserts on.
+    transcript: "voice check once more",
     source: "smoke-regression",
   });
   assert.equal(resetTurn.status, 200);

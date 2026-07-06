@@ -30,9 +30,13 @@ function makeDataDir(scriptPath) {
 function runSmoke(scriptPath) {
   return new Promise((resolve) => {
     const dataDir = makeDataDir(scriptPath);
+    // The smokes are deterministic file/jsonl-mode checks; an inherited
+    // DATABASE_URL would flip the gateway into postgres mode mid-suite.
+    const env = { ...process.env, DATA_DIR: dataDir };
+    delete env.DATABASE_URL;
     const child = spawn(process.execPath, [scriptPath], {
       cwd: gatewayRoot,
-      env: { ...process.env, DATA_DIR: dataDir },
+      env,
     });
     let stdout = "";
     let stderr = "";

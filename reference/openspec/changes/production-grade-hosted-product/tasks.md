@@ -54,9 +54,16 @@ each ticket keeps all existing smokes green.
   tests (skip when no `DATABASE_URL`). `npm run check` = 14.3s vs 57s old chain,
   129 pass / 1 skip / 0 fail with no DB. Old chain preserved as `check:legacy`
   for rollback. Note: the `smoke-regression.js` e2e that `npm test` now runs
-  fails on master (pre-existing, uncaught because CI's `check` never ran it) at
-  `assertAgentProfileRuntimeCycle` — a gateway model-recording bug, not an R.3
-  wrapper defect.
+  failed on master (pre-existing, uncaught because CI's `check` never ran it) at
+  `assertAgentProfileRuntimeCycle`. Root cause found 2026-07-06: the smoke
+  phrase "voice check after reset" contains a profile word plus "reset", so
+  `parseProfileControlIntent` hijacked the turn as a profile-control revert and
+  the conversation write the assertion reads was never made. Fixed by changing
+  the smoke phrase; the wrappers also now strip `DATABASE_URL` from child env so
+  deterministic jsonl-mode smokes cannot flip into postgres mode. FOLLOW-UP
+  (separate unit): `parseProfileControlIntent` precision — a sentence that
+  merely mentions "reset" near a profile word executes a settings revert; it
+  should require imperative phrasing.
 
 ## Phase 1. Postgres as source of truth
 
@@ -64,13 +71,22 @@ each ticket keeps all existing smokes green.
 relational tables are the truth, `product_events` is the audit/outbox stream.
 Projection builders over the event log are no longer the read path.)
 
-- [ ] 1.0 `[ready]` Adopt node-pg-migrate; convert `schema.sql` into migration
+- [x] 1.0 `[ready]` Adopt node-pg-migrate; convert `schema.sql` into migration
   0001 and add relational schema v1: per-primitive tables (sessions, branches,
   turns, voice_turns, agent_runs, browser_tasks, tool_requests, agent_profiles
   + versions), every row with `user_id`, RLS scaffolding (FORCE RLS, non-owner
   app role), blob_ref columns instead of inline audio.
   Acceptance: `npm run migrate` applies cleanly to an empty database twice
   (idempotent no-op the second time); RLS policies verified as the app role.
+  DONE 2026-07-06: `gateway/migrations/1783296000000_initial-schema.js` (reads
+  `schema.sql` so the event-substrate schema stays single-source) +
+  `1783296000001_relational-v1.js` (relational tables, owner seed, `moa_app`
+  role, FORCE RLS with `moa.user_id` policies), `npm run migrate*` scripts,
+  `gateway/MIGRATIONS.md` (file names need the 13-digit epoch-ms prefix
+  node-pg-migrate orders by), and `test/integration/migrations.integration.test.js`
+  (skips without `DATABASE_URL`). Verified against a disposable Postgres 16
+  container: migrate up idempotent on second run, relational tables present,
+  `moa_app` isolation enforced — full `npm test` 133 pass / 0 fail.
 
 - [ ] 1.1 `[ready]` Dual-write each store: business row + `product_events`
   append in one transaction, replacing the current fire-and-forget event
