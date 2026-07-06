@@ -9038,15 +9038,25 @@ function profileIdentityInstruction(profile) {
 
 function userAddressInstruction(profile) {
   const address = String(profile?.user_address || "master").trim();
-  if (!address) {
+  const userName = String(profile?.user_name || "").trim();
+  const nickname = String(profile?.user_nickname || "").trim();
+  if (!address && !userName && !nickname) {
     return "";
   }
-  return [
-    "User address profile:",
-    `- Always address the user as "${address}".`,
-    "- Use that form of address naturally in your replies.",
-    "- This rule outranks any older wording in the base prompt.",
-  ].join("\n");
+  const lines = ["User identity profile:"];
+  if (userName) {
+    lines.push(`- The user's name is ${userName}.`);
+  }
+  if (nickname) {
+    lines.push(`- The user prefers to be called "${nickname}".`);
+  }
+  if (address) {
+    lines.push(`- Always address the user as "${address}".`);
+    lines.push("- Use that form of address naturally in your replies.");
+  }
+  lines.push("- These facts come from the stored profile; do not ask for them again unless the user wants to change them.");
+  lines.push("- This rule outranks any older wording in the base prompt.");
+  return lines.join("\n");
 }
 
 function profileLanguageInstruction(profile) {

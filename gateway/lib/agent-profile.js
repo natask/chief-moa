@@ -24,6 +24,8 @@ const PROFILE_FIELDS = [
   "system_prompt",
   "assistant_name",
   "user_address",
+  "user_name",
+  "user_nickname",
   "model",
   "temperature",
   "voice_max_chars",
@@ -587,6 +589,18 @@ function pickProfileFields(input) {
       out.user_address = address;
     }
   }
+  if (typeof input.user_name === "string" && input.user_name.trim()) {
+    const userName = normalizeUserAddress(input.user_name);
+    if (userName) {
+      out.user_name = userName;
+    }
+  }
+  if (typeof input.user_nickname === "string" && input.user_nickname.trim()) {
+    const nickname = normalizeUserAddress(input.user_nickname);
+    if (nickname) {
+      out.user_nickname = nickname;
+    }
+  }
   if (typeof input.model === "string" && input.model.trim()) {
     out.model = input.model.trim();
   }
@@ -700,6 +714,8 @@ function normalizeProfile(defaults) {
     system_prompt: picked.system_prompt || "",
     assistant_name: picked.assistant_name || "A.G.",
     user_address: picked.user_address || normalizeUserAddress(process.env.MOA_USER_ADDRESS) || "master",
+    user_name: picked.user_name || normalizeUserAddress(process.env.MOA_USER_NAME) || "",
+    user_nickname: picked.user_nickname || normalizeUserAddress(process.env.MOA_USER_NICKNAME) || "",
     model: picked.model || "",
     temperature: picked.temperature !== undefined ? picked.temperature : 0.4,
     voice_max_chars: picked.voice_max_chars !== undefined ? picked.voice_max_chars : 280,
