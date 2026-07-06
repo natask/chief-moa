@@ -767,12 +767,18 @@ class ChirpSttVoiceProvider {
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
     const token = await this.accessToken();
+    const sttHeaders = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+    if (this.projectId) {
+      // authorized_user ADC has no home project; Google APIs reject it without
+      // an explicit quota project. Harmless with service-account auth.
+      sttHeaders["x-goog-user-project"] = this.projectId;
+    }
     const response = await fetchWithTimeout(this.endpoint(), {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
+      headers: sttHeaders,
       body: JSON.stringify({
         config: {
           // explicitDecodingConfig fixes the audio ENCODING (LINEAR16 PCM). It
@@ -2176,15 +2182,21 @@ async function synthesizeCloudTts(options) {
     },
   });
 
+  const ttsHeaders = {
+    Authorization: `Bearer ${options.token}`,
+    "Content-Type": "application/json",
+  };
+  if (options.projectId) {
+    // authorized_user ADC has no home project; Google APIs reject it without
+    // an explicit quota project. Harmless with service-account auth.
+    ttsHeaders["x-goog-user-project"] = options.projectId;
+  }
   let response = null;
   let lastFailure = "";
   for (const endpoint of endpoints) {
     response = await fetchWithTimeout(endpoint, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${options.token}`,
-        "Content-Type": "application/json",
-      },
+      headers: ttsHeaders,
       body,
     }, timeoutMs);
     if (response.ok) {
