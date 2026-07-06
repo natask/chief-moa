@@ -19,6 +19,13 @@ const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
 const EARLY_AUDIO_MAX_AGE_MS = 3000;
 const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "closed", "interrupted", "replaced", "no_speech"]);
+// A committed turn can spend seconds between transcript_final and turn_done while
+// the reasoner (LLM/tool turn) and TTS run with no stream events. Clients run
+// inactivity watchdogs and tear those slow-but-healthy turns down as false
+// timeouts, discarding the real answer. The session server emits an additive
+// turn_progress keepalive on this cadence while a committed turn has no other
+// events flowing, so a client watchdog sees the turn is alive.
+const DEFAULT_TURN_PROGRESS_INTERVAL_MS = 5000;
 
 function createVoiceSessionServer(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
@@ -53,6 +60,7 @@ function createVoiceSessionServer(options) {
       agentProfile,
       contextProvider,
       toolHandler,
+      turnProgressIntervalMs: options?.turnProgressIntervalMs,
       onTurnCompleted: typeof options?.onTurnCompleted === "function" ? options.onTurnCompleted : null,
     });
     connection.start();
@@ -91,6 +99,63 @@ class VoiceSessionConnection {
     this.responding = false;
     this.earlyAudio = [];
     this.earlyAudioBytes = 0;
+    // The session server is the SOLE owner of the turn_progress keepalive: one
+    // interval per connection, started for the active committed turn and cleared
+    // on every terminal path (turn_done, error, cancel, socket close, teardown)
+    // so a progress tick can never fire after the turn ends.
+    this.turnProgressTimer = null;
+    this.turnProgressStage = "";
+    this.turnProgressIntervalMs = normalizeTurnProgressIntervalMs(options.turnProgressIntervalMs);
+  }
+
+  // Start (or re-stage) the keepalive for the active committed turn. Called via
+  // the onTurnProgress provider hook (cascaded reasoner/TTS legs) and directly at
+  // commit for the Live/native path. Idempotent: a running interval only updates
+  // the stage; it never starts a second timer.
+  startTurnProgress(turn, stage) {
+    const nextStage = normalizeProgressStage(stage);
+    if (nextStage) {
+      this.turnProgressStage = nextStage;
+    } else if (!this.turnProgressStage) {
+      this.turnProgressStage = "reasoning";
+    }
+    if (this.turnProgressTimer || !turn) {
+      return;
+    }
+    const intervalMs = this.turnProgressIntervalMs;
+    if (!(intervalMs > 0)) {
+      return;
+    }
+    this.turnProgressTimer = setInterval(() => {
+      // Respect the socket-write guard, never write after close, and stop the
+      // moment the active turn changes or reaches a terminal status.
+      if (this.ws.readyState !== WebSocket.OPEN
+          || this.turn !== turn
+          || TERMINAL_TURN_STATUSES.has(turn.status)) {
+        this.stopTurnProgress();
+        return;
+      }
+      try {
+        this.ws.send(JSON.stringify({
+          type: "turn_progress",
+          session_id: turn.sessionId,
+          branch_id: turn.branchId,
+          turn_id: turn.turnId,
+          stage: this.turnProgressStage || "reasoning",
+        }));
+      } catch {
+        this.stopTurnProgress();
+      }
+    }, intervalMs);
+    this.turnProgressTimer.unref?.();
+  }
+
+  stopTurnProgress() {
+    if (this.turnProgressTimer) {
+      clearInterval(this.turnProgressTimer);
+      this.turnProgressTimer = null;
+    }
+    this.turnProgressStage = "";
   }
 
   start() {
@@ -396,6 +461,14 @@ class VoiceSessionConnection {
 
     try {
       turn.status = "committed";
+      if (turn.liveSession) {
+        // Live/native path: the provider streams through the session-start hooks
+        // and never calls onTurnProgress, so the session server keepalives from
+        // commit until the first assistant-audio event (which stops it) or a
+        // terminal path. Cascaded turns start progress via the onTurnProgress
+        // hook when the reasoner begins.
+        this.startTurnProgress(turn, "reasoning");
+      }
       await closeAudioStream(turn);
       const providerResult = turn.liveSession
         ? await commitLiveSession(turn)
@@ -444,6 +517,9 @@ class VoiceSessionConnection {
     try {
       turn.status = "committed";
       turn.syntheticText = text;
+      if (turn.liveSession) {
+        this.startTurnProgress(turn, "reasoning");
+      }
       await closeAudioStream(turn);
       const providerResult = await commitLiveTextSession(turn, text);
       if (this.turn !== turn || turn.completing) {
@@ -472,6 +548,13 @@ class VoiceSessionConnection {
 
   providerHooks(turn, providerEvents) {
     return {
+      // Additive keepalive control: the cascaded provider calls this when it
+      // begins the reasoner ("reasoning") and the TTS leg ("tts"). The session
+      // server owns the interval + socket write; the provider only reports which
+      // stage is running.
+      onTurnProgress: async (stage) => {
+        this.startTurnProgress(turn, stage);
+      },
       onTranscriptPartial: async (text) => {
         const value = String(text || "").trim();
         if (!value) return;
@@ -515,6 +598,10 @@ class VoiceSessionConnection {
       },
       onAssistantAudioStart: async (format) => {
         providerEvents.assistantAudioStarted = true;
+        // Real assistant audio now streams (Live model audio or hosted TTS), so
+        // the keepalive is no longer needed: audio frames reset the client
+        // watchdog on their own. Stop it here rather than waiting for turn_done.
+        this.stopTurnProgress();
         await this.recordProviderEvent(turn, providerEvents, "assistant_audio_start", { format: format || ASSISTANT_AUDIO_FORMAT });
         await this.sendEvent({
           type: "assistant_audio_start",
@@ -669,6 +756,7 @@ class VoiceSessionConnection {
         transcript_language_rejected: providerResult?.transcript_language_rejected === true,
       });
       turn.status = "no_speech";
+      this.stopTurnProgress();
       await this.sendEvent({
         type: "turn_done",
         session_id: turn.sessionId,
@@ -751,6 +839,10 @@ class VoiceSessionConnection {
     const doneTtsSpoke = confirmationTts && confirmationTts.spoke === true
       ? true
       : (typeof providerResult?.tts_spoke === "boolean" ? providerResult.tts_spoke : undefined);
+    // Terminal path: clear the keepalive before turn_done so no progress tick can
+    // fire after the turn is done. Cleared synchronously (clearInterval) before
+    // the awaited send, so the interval cannot slip a tick in on the yield.
+    this.stopTurnProgress();
     await this.sendEvent({
       type: "turn_done",
       session_id: turn.sessionId,
@@ -915,6 +1007,7 @@ class VoiceSessionConnection {
     }
     const message = cleanError(error);
     turn.status = "error";
+    this.stopTurnProgress();
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
     if (turn.liveSession) {
@@ -962,6 +1055,7 @@ class VoiceSessionConnection {
     }
 
     turn.status = "canceled";
+    this.stopTurnProgress();
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
     if (turn.liveSession) {
@@ -1007,6 +1101,9 @@ class VoiceSessionConnection {
   }
 
   async closeCurrentTurn(status) {
+    // Socket close / interrupt / replace / teardown: stop the keepalive first so
+    // no tick outlives the turn, even when there is no active turn to close.
+    this.stopTurnProgress();
     if (!this.turn) {
       return;
     }
@@ -1319,6 +1416,25 @@ function turnErrorReason(error) {
     return "stt_empty";
   }
   return "processing_error";
+}
+
+function normalizeTurnProgressIntervalMs(value) {
+  const explicit = Number(value);
+  if (Number.isFinite(explicit) && explicit >= 0) {
+    return Math.round(explicit);
+  }
+  const fromEnv = Number(process.env.MOA_VOICE_TURN_PROGRESS_MS);
+  if (Number.isFinite(fromEnv) && fromEnv >= 0) {
+    return Math.round(fromEnv);
+  }
+  return DEFAULT_TURN_PROGRESS_INTERVAL_MS;
+}
+
+// Only the two turn_progress stages the clients understand are accepted; an
+// unknown stage is ignored so the running stage is left unchanged.
+function normalizeProgressStage(stage) {
+  const value = String(stage || "").trim().toLowerCase();
+  return value === "reasoning" || value === "tts" ? value : "";
 }
 
 function nowIso() {
