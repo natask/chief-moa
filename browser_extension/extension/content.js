@@ -222,6 +222,70 @@
   const cues = new Map();
   const activeCues = new Set();
   const revokedCueIds = new Set();
+
+  // Client thread controls. "/new [label]" arms a one-shot fresh thread for the
+  // next turn; "/incognito" toggles a persistent no-persistence mode. The
+  // explicit client control always wins over the model's own context choice.
+  let incognitoMode = false;
+  let newThreadArmed = false;
+  let newThreadLabel = "";
+
+  // Parse a typed context slash command. Returns true when the input was a mode
+  // command (and was handled + shown in the result stack) so the caller skips
+  // the normal gateway turn.
+  function maybeHandleContextSlashCommand(instruction) {
+    const raw = String(instruction || "").trim();
+    if (!raw.startsWith("/")) return false;
+    const match = raw.match(/^\/(\w+)\s*(.*)$/);
+    if (!match) return false;
+    const command = match[1].toLowerCase();
+    const rest = String(match[2] || "").trim();
+    if (command === "incognito") {
+      const arg = rest.toLowerCase();
+      if (arg === "on") incognitoMode = true;
+      else if (arg === "off") incognitoMode = false;
+      else incognitoMode = !incognitoMode;
+      showContextModeCue(
+        "/incognito",
+        incognitoMode
+          ? "Incognito on. Turns are answered but not saved."
+          : "Incognito off. Turns are saved again."
+      );
+      return true;
+    }
+    if (command === "new") {
+      newThreadArmed = true;
+      newThreadLabel = rest.slice(0, 120);
+      showContextModeCue(
+        raw,
+        newThreadLabel
+          ? `New thread armed ("${newThreadLabel}"). The next turn starts fresh.`
+          : "New thread armed. The next turn starts fresh."
+      );
+      return true;
+    }
+    return false;
+  }
+
+  // Resolve and consume the context control for the turn about to be sent.
+  // Incognito is persistent; the new-thread arm is one-shot.
+  function consumeContextControls() {
+    if (incognitoMode) return { action: "incognito", label: "" };
+    if (newThreadArmed) {
+      const label = newThreadLabel;
+      newThreadArmed = false;
+      newThreadLabel = "";
+      return { action: "new", label };
+    }
+    return { action: "", label: "" };
+  }
+
+  function showContextModeCue(label, statusText) {
+    const cueId = newCueId();
+    openTextSurface({ fresh: false });
+    createCue(cueId, label, { presentation: "card" });
+    updateCue(cueId, statusText, "done");
+  }
   function build() {
     root = document.createElement("div");
     root.id = "agee-root";
@@ -1426,6 +1490,13 @@
   // keeps talking, each utterance becomes its own concurrent lane.
   function submitInstruction(instruction, displayText = instruction) {
     if (!instruction) return;
+    // Client thread controls ("/new", "/incognito") are handled locally: they set
+    // the mode, show it in the result stack, and never run a gateway turn.
+    if (maybeHandleContextSlashCommand(instruction)) {
+      setSurfacePhase("editing");
+      input.focus();
+      return;
+    }
     // Fast local stop path for typed input: a whole-utterance "stop / shut up /
     // be quiet" halts playback and live turns immediately and silently. It never
     // sends the instruction to the gateway and never produces an assistant reply;
@@ -1455,7 +1526,14 @@
       setAgentState("thinking");
     }
     input.focus();
-    safeRuntimeSendMessage({ cmd: "run", instruction, cueId }).then(() => {
+    const context = consumeContextControls();
+    safeRuntimeSendMessage({
+      cmd: "run",
+      instruction,
+      cueId,
+      contextAction: context.action,
+      threadLabel: context.label,
+    }).then(() => {
       if (extensionContextInvalidated) removeCueCard(cueId);
     }).catch((error) => {
       showCueError(cueId, error?.message || error, { react: false });
@@ -1543,6 +1621,12 @@
     setAgentState("listening");
     setTranscript("");
 
+    // Fix the thread for this streaming voice turn. The WS branch is set at
+    // session start, so background switches to the resolved branch before minting
+    // the ticket. Incognito is persistent (re-armed each turn); the new-thread
+    // arm is one-shot and consumed here.
+    const context = consumeContextControls();
+
     const state = {
       cueId,
       turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -1554,6 +1638,7 @@
       assistantText: "",
       transcript: "",
       gatewayRouted: false,
+      incognito: context.action === "incognito",
       assistantSpeechOverlap: preserveAssistantPlayback,
     };
     trackLiveVoiceState(state);
@@ -1570,6 +1655,8 @@
         assistantOverlap: assistantSpeechOverlap === true,
         capture: "extension-offscreen",
         autoCommit: options.autoCommit !== false,
+        contextAction: context.action,
+        threadLabel: context.label,
       });
       if (extensionContextInvalidated) {
         stopLiveVoiceState(state, "context invalidated");
@@ -1777,7 +1864,12 @@
     sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
     closeLiveVoiceSession(state, pageContextTurn ? "page context routed to browser agent" : "profile control routed to gateway");
     untrackLiveVoiceState(state);
-    safeRuntimeSendMessage({ cmd: "run", instruction: transcript, cueId: state.cueId }).then(() => {
+    safeRuntimeSendMessage({
+      cmd: "run",
+      instruction: transcript,
+      cueId: state.cueId,
+      contextAction: state.incognito ? "incognito" : "",
+    }).then(() => {
       if (extensionContextInvalidated) removeCueCard(state.cueId);
     }).catch((error) => {
       showCueError(state.cueId, error?.message || error);
@@ -2052,6 +2144,11 @@
     if (!summary) {
       const spoke = Boolean(state.playbackTime) || state.ttsSpoke === true;
       summary = spoke ? "Replied out loud (no transcript available)." : "Done.";
+    }
+    // An incognito voice turn ran on an inc- branch the gateway never persists;
+    // mark the visible reply so the user knows nothing was saved.
+    if (state.incognito && summary && !summary.endsWith("(not saved)")) {
+      summary = `${summary}\n\n(not saved)`;
     }
 
     if (!isLiveVoiceStateActive(state)) return;
