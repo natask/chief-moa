@@ -35,8 +35,12 @@ export async function onRequest({ request, env, params }) {
   const base = stripTrailingSlash(env.MOA_GATEWAY_URL || env.AG_GATEWAY_URL || "");
   const token = env.MOA_GATEWAY_TOKEN || env.AG_GATEWAY_TOKEN || "";
   if (!base || !token) {
+    const missing = [];
+    if (!base) missing.push("MOA_GATEWAY_URL");
+    if (!token) missing.push("MOA_GATEWAY_TOKEN");
     return json(503, {
       error: "Pet studio gateway is not configured.",
+      missing,
       requirement: "Set MOA_GATEWAY_URL and MOA_GATEWAY_TOKEN as Pages secrets.",
     });
   }
