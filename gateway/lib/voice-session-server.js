@@ -192,6 +192,14 @@ class VoiceSessionConnection {
   }
 
   writeTurnAudio(turn, chunk) {
+    if (!turn.audioStream) {
+      // completeLiveTurn nulls the stream before the turn reaches a terminal
+      // status, so a continuously-captured frame can land in that window while
+      // status still reads "recording". It is stale input; dropping it must not
+      // throw, or the whole gateway process dies mid-turn and every open voice
+      // session hangs with no terminating event.
+      return;
+    }
     turn.audioBytes += chunk.length;
     turn.audioChunks += 1;
     turn.lastAudioAt = nowIso();
