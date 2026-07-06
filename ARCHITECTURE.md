@@ -658,6 +658,23 @@ multiple labeled connections for one provider. Every status change appends an
 audit event on the `account-connection:{id}` stream. Contract:
 `reference/openspec/changes/remote-hosted-gateway/account-connection-policy.md`.
 
+When a connection enters `needs_user_action`, the gateway writes a durable
+internal notification and bridges it onto the cross-device tool hub: it creates
+a `/v1/tool/requests` entry with the `notification.account_connection` tool
+targeting the connection's `device_notification_target`, carrying only the
+non-secret fields (connection id, provider label, connection label, reason,
+`reauth_endpoint`), and links the two by `tool_request_id`. A registered device
+claims and receipts it like any other tool request, so the phone or browser
+actually learns it must reauthorize. A connection with no enabled device target
+records a skipped notification and stays visible in the list instead of queuing
+untargeted device work. The gateway also serves a read-and-fix credential panel
+at `/credentials` (`GET`, gateway token entered in-page): it lists connections
+with provider, status, expiry, last refresh, and needs-action state, shows
+pending device notifications, and exposes refresh, reauthorize, and run-health
+actions. The panel reads only the `/v1/account-connections` endpoints and never
+receives raw credential material. The account-provisioning pipeline (creating
+new accounts, emails, or subscriptions) is deliberately out of scope.
+
 ## Product Primitives
 
 - `device`: a registered Android device with local permissions and settings.
@@ -799,6 +816,20 @@ queues.
   cross-device tool-request queue.
 - `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
+- `gateway/public/credential-panel.html`: gateway-served credential-autopilot
+  panel at `/credentials`; lists account connections, credential health,
+  expiry, and pending device notifications, and drives refresh/reauth/run-health
+  over the `/v1/account-connections` endpoints. No raw credential ever reaches
+  it.
+- `gateway/lib/account-connections.js`: account-connection store (encrypted
+  credential boundary, refresh/health loop, internal notification queue). Its
+  `onUserActionNotification` hook bridges a needs-action notification onto the
+  device-hub tool-request queue; `gateway/server.js`
+  (`bridgeCredentialNotificationToDeviceHub`) supplies that hook. Smoke:
+  `scripts/smoke-account-connections.js` (lifecycle) and
+  `scripts/smoke-credential-device-notification.js`
+  (`npm run smoke:credential-notify`, the transition -> device notification ->
+  claim -> receipt bridge, plus the panel route).
 - `gateway/lib/event-substrate.js`: product event substrate adapter for
   Postgres `product_events` or local `product-events.jsonl`.
 - `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
