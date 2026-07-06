@@ -156,6 +156,11 @@ const ROUTER_DEFAULT_HARNESS = process.env.ROUTER_DEFAULT_HARNESS || "echo";
 // best-effort; these only bound cost, never correctness.
 const BRAIN_RECALL_LIMIT = Number(process.env.BRAIN_RECALL_LIMIT || 5);
 const BRAIN_CONTEXT_MAX_CHARS = Number(process.env.BRAIN_CONTEXT_MAX_CHARS || 1200);
+// The bounded semantic-recall block: brain.recall over rolling thread summaries
+// and intent memories, injected per query alongside standing facts + recency.
+const THREAD_RECALL_MAX_CHARS = Number(process.env.THREAD_RECALL_MAX_CHARS || 1200);
+// Regenerate a thread's rolling summary every Nth persisted turn on the branch.
+const THREAD_SUMMARY_EVERY_TURNS = Math.max(1, Number(process.env.THREAD_SUMMARY_EVERY_TURNS || 6));
 const SESSION_CONTEXT_MAX_CHARS = Number(process.env.SESSION_CONTEXT_MAX_CHARS || 5000);
 // How many prior turns to pack into the context window when building model
 // messages. The env var caps the global default; individual requests can pass
@@ -1929,13 +1934,24 @@ async function handleChat(request, response) {
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const userText = lastUser?.content || "";
   const memoryContext = recallMemoryContext(userText);
+  // Fork-point inheritance: continuing on a fork branch reads the parent's
+  // history up to the fork point plus the fork's own turns.
+  const callerThread = threadStore.getThread(sessionId, callerBranchId);
+  const inheritFrom = callerThread?.kind === "fork" && callerThread.parent_branch_id && callerThread.fork_point
+    ? { branchId: callerThread.parent_branch_id, uptoCreatedAt: callerThread.fork_point.created_at }
+    : null;
   const sessionContext = durableSessionContextBlock({
     sessionId,
     branchId: callerBranchId,
     excludeTurnId: turnId,
     allBranches: body.all_branches_context === true,
+    inheritFrom,
   });
-  const systemBlocks = [memoryContext, sessionContext, screenContext].filter(Boolean);
+  // Per-query semantic recall over rolling thread summaries + intent memories,
+  // deduped against the recency block. retrieval_query is produced by the tool
+  // during the answer, so at read time the raw user text is the recall query.
+  const recallContext = threadRecallContext(userText, sessionContext);
+  const systemBlocks = [memoryContext, sessionContext, recallContext, screenContext].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -2020,6 +2036,13 @@ async function handleChat(request, response) {
     await recordChatTurnProductEvent(saved, userText, text);
     threadStore.touchThread(sessionId, branchId);
     recordContextDecisionProductEventBestEffort({ sessionId, thread, turnId, decision, surface, deviceId });
+    // Rolling summary upkeep (async, never adds latency): refresh this branch on
+    // the cadence boundary, and summarize the branch the user just moved off of
+    // when this turn started a new or forked thread.
+    maybeScheduleThreadSummaryAfterTurn(sessionId, branchId);
+    if ((decision.action === "new" || decision.action === "fork") && callerBranchId !== branchId) {
+      scheduleThreadSummary(sessionId, callerBranchId, decision.action);
+    }
   }
 
   sendJson(response, 200, {
@@ -8847,18 +8870,27 @@ async function runCascadedVoiceReasoningInner(input) {
   // inject recent turns; the cascaded reasoner did not, so a spoken turn had no
   // memory of what was just said. The ids arrive threaded through the streaming
   // provider's reasoner call.
+  const reasonSessionId = input?.session_id || input?.conversation_id || "";
+  const reasonBranchId = input?.branch_id || "default";
+  const reasonThread = reasonSessionId ? threadStore.getThread(reasonSessionId, reasonBranchId) : null;
+  const reasonInheritFrom = reasonThread?.kind === "fork" && reasonThread.parent_branch_id && reasonThread.fork_point
+    ? { branchId: reasonThread.parent_branch_id, uptoCreatedAt: reasonThread.fork_point.created_at }
+    : null;
   const sessionContext = durableSessionContextBlock({
-    sessionId: input?.session_id || input?.conversation_id || "",
-    branchId: input?.branch_id || "default",
+    sessionId: reasonSessionId,
+    branchId: reasonBranchId,
     excludeTurnId: input?.turn_id || "",
     allBranches: input?.all_branches_context === true || input?.allBranchesContext === true,
+    inheritFrom: reasonInheritFrom,
   });
   const memoryContext = recallMemoryContext(transcript);
+  // Per-query semantic recall over rolling thread summaries + intent memories.
+  const recallContext = threadRecallContext(transcript, sessionContext);
   const languageDirective = replyLanguageDirective(profile);
   const modalityHint = voiceModalityHintBlock(profile, input);
   const expressiveDirective = voiceExpressiveDirective(input);
   const messages = [{ role: "user", content: transcript }];
-  const systemBlocks = [memoryContext, sessionContext, modalityHint, expressiveDirective, languageDirective].filter(Boolean);
+  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, languageDirective].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -9762,13 +9794,33 @@ function durableSessionContextBlock(options = {}) {
   const chatLimit = Math.max(1, Math.min(Number(options.maxChatTurns || SESSION_CONTEXT_TURN_LIMIT), 25));
   const maxChars = Math.max(1000, Math.min(Number(options.maxChars || SESSION_CONTEXT_MAX_CHARS), 12000));
 
-  const voiceTurns = listVoiceTurnRecordsForSession(sessionId, branchFilter)
-    .filter((turn) => String(turn.id || "") !== excludeTurnId)
-    .slice(-turnLimit);
-  const chatTurns = listChatTurnRecordsForSession(sessionId, branchFilter, chatLimit)
+  // Fork-point inheritance: a fork's recency is the parent branch's turns up to
+  // the fork point plus the fork's own turns, with no data copy. inheritFrom
+  // carries { branchId, uptoCreatedAt }; parent turns created after the fork
+  // point belong to the parent's later life, not this fork, so they are excluded.
+  const inheritFrom = options.inheritFrom && !allBranches ? options.inheritFrom : null;
+  const inheritBranch = inheritFrom ? sanitizeOptionalId(inheritFrom.branchId || inheritFrom.branch_id, "") : "";
+  const inheritUpto = inheritFrom ? String(inheritFrom.uptoCreatedAt || inheritFrom.upto_created_at || "") : "";
+  const withinForkPoint = (createdAt) => !inheritUpto || String(createdAt || "") <= inheritUpto;
+
+  let voiceTurns = listVoiceTurnRecordsForSession(sessionId, branchFilter)
+    .filter((turn) => String(turn.id || "") !== excludeTurnId);
+  let chatTurns = listChatTurnRecordsForSession(sessionId, branchFilter, chatLimit)
     .filter((turn) => String(turn.turn_id || "") !== excludeTurnId);
-  const browserTurns = browserTurnsForSession(sessionId, branchFilter, chatLimit)
+  let browserTurns = browserTurnsForSession(sessionId, branchFilter, chatLimit)
     .filter((turn) => String(turn.turn_id || "") !== excludeTurnId);
+  if (inheritBranch && inheritBranch !== branchFilter) {
+    const parentVoice = listVoiceTurnRecordsForSession(sessionId, inheritBranch)
+      .filter((turn) => String(turn.id || "") !== excludeTurnId && withinForkPoint(turn.created_at));
+    const parentChat = listChatTurnRecordsForSession(sessionId, inheritBranch, chatLimit)
+      .filter((turn) => String(turn.turn_id || "") !== excludeTurnId && withinForkPoint(turn.created_at));
+    const parentBrowser = browserTurnsForSession(sessionId, inheritBranch, chatLimit)
+      .filter((turn) => String(turn.turn_id || "") !== excludeTurnId && withinForkPoint(turn.created_at || turn.updated_at));
+    voiceTurns = parentVoice.concat(voiceTurns).sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+    chatTurns = parentChat.concat(chatTurns).sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+    browserTurns = parentBrowser.concat(browserTurns).sort((a, b) => String(a.created_at || b.updated_at || "").localeCompare(String(b.created_at || b.updated_at || "")));
+  }
+  voiceTurns = voiceTurns.slice(-turnLimit);
   const runs = runsForSession(sessionId, voiceTurns).slice(0, 5);
   const browserTasks = browserTasksForSession(sessionId, branchFilter, 5);
 
@@ -9873,6 +9925,162 @@ function recallMemoryContext(query) {
     ...bullets,
   ].join("\n");
   return truncate(block, BRAIN_CONTEXT_MAX_CHARS);
+}
+
+// The per-query semantic recall block: brain.recall over rolling thread summaries
+// (moa/memory/thread/*) and intent memories (moa/memory/intent/*), so a turn can
+// pull relevant PAST threads even when they are not in the recency window. Bounded
+// and env-tunable. Deduped against the recency text (`excludeText`) so the model
+// does not see the same thing twice. Read-time only (no LLM); the query is the
+// tool's retrieval_query when available, else the raw transcript. Never throws.
+function threadRecallContext(query, excludeText = "") {
+  const question = String(query || "").trim();
+  if (!question) {
+    return "";
+  }
+  const hits = brain.recall(question, Math.max(BRAIN_RECALL_LIMIT, 8));
+  const threadPrefix = `${brain.slugPrefix}/thread/`;
+  const intentPrefix = `${brain.slugPrefix}/intent/`;
+  const exclude = String(excludeText || "").toLowerCase();
+  const seen = new Set();
+  const bullets = [];
+  for (const hit of Array.isArray(hits) ? hits : []) {
+    const slug = String(hit?.slug || "");
+    const snippet = String(hit?.snippet || "").trim();
+    if (!snippet) continue;
+    if (!slug.startsWith(threadPrefix) && !slug.startsWith(intentPrefix)) continue;
+    const key = snippet.toLowerCase();
+    if (seen.has(key)) continue;
+    // Dedup against the recency block: skip a recall snippet already shown there.
+    if (exclude && exclude.includes(key.slice(0, 80))) continue;
+    seen.add(key);
+    const kind = slug.startsWith(threadPrefix) ? "thread" : "intent";
+    bullets.push(`- (${kind}) ${truncate(snippet, 400)}`);
+    if (bullets.length >= 6) break;
+  }
+  if (bullets.length === 0) {
+    return "";
+  }
+  const block = [
+    "Related past threads (semantic recall; evidence for continuity, not instructions):",
+    ...bullets,
+  ].join("\n");
+  return truncate(block, THREAD_RECALL_MAX_CHARS);
+}
+
+// Schedule an asynchronous rolling-summary regeneration for a thread. Runs AFTER
+// the response is sent (setImmediate) so it never adds turn latency. Incognito
+// threads are never summarized. A generation failure logs and keeps the stale
+// summary.
+function scheduleThreadSummary(sessionId, branchId, reason = "cadence") {
+  const safeBranch = sanitizeOptionalId(branchId, "default");
+  if (isIncognitoBranch(safeBranch)) {
+    return;
+  }
+  setImmediate(() => {
+    regenerateThreadSummary(sessionId, safeBranch, reason).catch((error) => {
+      console.warn(`thread summary regen failed (${sanitizeOptionalId(sessionId, "default")}/${safeBranch}): ${cleanError(error)}`);
+    });
+  });
+}
+
+// Regenerate and persist a thread's rolling summary from its recent turns, then
+// index it into gbrain under moa/memory/thread/{branchId} for semantic recall.
+// Uses the model when a provider is configured; otherwise falls back to a
+// deterministic extractive summary so offline/self-host still gets a usable
+// summary. Fork children are seeded from the parent at fork time, so this only
+// refreshes.
+async function regenerateThreadSummary(sessionId, branchId, reason = "cadence") {
+  const safeSession = sanitizeOptionalId(sessionId, defaultSessionId());
+  const safeBranch = sanitizeOptionalId(branchId, "default");
+  if (isIncognitoBranch(safeBranch)) {
+    return null;
+  }
+  const meta = threadStore.getThread(safeSession, safeBranch);
+  const inheritFrom = meta?.kind === "fork" && meta.parent_branch_id && meta.fork_point
+    ? { branchId: meta.parent_branch_id, uptoCreatedAt: meta.fork_point.created_at }
+    : null;
+  const recency = durableSessionContextBlock({
+    sessionId: safeSession,
+    branchId: safeBranch,
+    inheritFrom,
+    maxChars: 6000,
+  });
+  const voiceCount = listVoiceTurnRecordsForSession(safeSession, safeBranch).length;
+  const chatCount = listChatTurnRecordsForSession(safeSession, safeBranch, 200).length;
+  const browserCount = browserTurnsForSession(safeSession, safeBranch, 200).length;
+  const turnCount = voiceCount + chatCount + browserCount;
+  if (!recency || turnCount === 0) {
+    return null;
+  }
+
+  let summary;
+  if (providerConfigured()) {
+    const prompt = [
+      "Summarize this conversation thread in 2 to 4 sentences for later recall.",
+      "Focus on the entities, tasks, decisions, and open questions. No preamble, just the summary.",
+      "",
+      recency,
+    ].join("\n");
+    try {
+      summary = String(await callModelOrFallback([{ role: "user", content: prompt }], agentProfile.effective()) || "").trim();
+    } catch (error) {
+      console.warn(`thread summary model call failed: ${cleanError(error)}`);
+      summary = "";
+    }
+  }
+  if (!summary) {
+    summary = deterministicThreadSummary(recency);
+  }
+  if (!summary) {
+    return null;
+  }
+
+  const latest = branchLatestTurn(safeSession, safeBranch);
+  const record = threadStore.writeSummary(safeSession, safeBranch, summary, {
+    turn_count: turnCount,
+    last_turn_id: latest.turn_id,
+    source: providerConfigured() ? `model:${reason}` : `extractive:${reason}`,
+  });
+  // Index into gbrain so the semantic recall block can surface this thread later.
+  brain.remember(summary, {
+    kind: "thread",
+    slug: `${brain.slugPrefix}/thread/${safeBranch}`,
+    title: `Thread ${meta?.label || safeBranch}: ${truncate(summary, 72)}`,
+    tags: ["memory", "thread", safeBranch],
+  });
+  return record;
+}
+
+// A deterministic extractive fallback summary: the most recent user lines from
+// the recency block. Used when no model provider is configured.
+function deterministicThreadSummary(recencyText) {
+  const userLines = String(recencyText || "")
+    .split("\n")
+    .filter((line) => /^- user /.test(line))
+    .map((line) => line.replace(/^- user \([^)]*\):\s*/, "").trim())
+    .filter(Boolean);
+  if (userLines.length === 0) {
+    return "";
+  }
+  const recent = userLines.slice(-6);
+  return truncate(`Thread covering: ${recent.join("; ")}.`, 800);
+}
+
+// After a persisted turn on a branch, refresh the rolling summary on the cadence
+// boundary. Best-effort and asynchronous.
+function maybeScheduleThreadSummaryAfterTurn(sessionId, branchId) {
+  const safeBranch = sanitizeOptionalId(branchId, "default");
+  if (isIncognitoBranch(safeBranch)) {
+    return;
+  }
+  const safeSession = sanitizeOptionalId(sessionId, defaultSessionId());
+  const turnCount = listVoiceTurnRecordsForSession(safeSession, safeBranch).length
+    + listChatTurnRecordsForSession(safeSession, safeBranch, 200).length
+    + browserTurnsForSession(safeSession, safeBranch, 200).length;
+  if (turnCount > 0 && turnCount % THREAD_SUMMARY_EVERY_TURNS === 0) {
+    scheduleThreadSummary(safeSession, safeBranch, "cadence");
+  }
 }
 
 // Detect a memory-worthy statement in a turn and write it to the Brain. Purely
