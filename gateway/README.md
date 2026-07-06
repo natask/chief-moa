@@ -124,6 +124,51 @@ GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
 
 `/v1/agent/*` endpoints require `MOA_GATEWAY_TOKEN` by default. Set `ALLOW_AGENT_WITHOUT_TOKEN=1` only for private throwaway testing.
 
+## Worker-Pull Execution Machine
+
+The hosted gateway (`https://api.agee.app`) has no harness credentials and its
+inbound ports are closed, so it does not run agents itself. In worker-pull mode
+(`MOA_WORKER_PULL=1`, the default for remote modes) `POST /v1/agent/runs` only
+**queues** a run. A worker on your own Mac connects **outbound**, claims the run
+under a lease, runs a locally available harness, heartbeats, and posts the
+result. The gateway never sends a command, args, shell, env, or path to the
+worker; the worker builds the command itself from its own env.
+
+Start a worker on a Mac against the hosted gateway:
+
+```sh
+# 1. The gateway owner mints a one-use setup code (needs MOA_GATEWAY_TOKEN):
+curl -s -X POST https://api.agee.app/v1/agent/workers/registrations \
+  -H "authorization: Bearer $MOA_GATEWAY_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"harness_allowlist":["echo","codex","claude","gemini"],"project_allowlist":["proj_chief_moa"]}'
+#    -> returns { "registration_id": "wreg_...", "setup_code": "MOA-WORKER-XXXX-XXXX" }
+
+# 2. On the Mac, put the worker vars in a SEPARATE env file (see .env.example
+#    "Execution-machine worker" section for every shape) and run:
+cd gateway
+node --env-file=~/.moa/worker.env scripts/worker-runtime.js
+#    or pass flags directly for the first (registration) run:
+node scripts/worker-runtime.js \
+  --gateway-url https://api.agee.app \
+  --registration-id wreg_... --setup-code MOA-WORKER-XXXX-XXXX \
+  --state-file ~/.moa/worker-state.json \
+  --harness codex,claude,gemini \
+  --project proj_chief_moa:chief-moa:/Users/me/projs/chief-moa
+```
+
+The first run exchanges the setup code for a worker token cached (0600) in the
+state file; later runs reuse it and need no code. Only harnesses whose command
+resolves on the Mac's PATH are advertised and accepted; `echo` is always
+available for a deterministic smoke. To drain a backlog of queued runs and stop,
+add `--once` in a loop, or leave the worker running to long-poll continuously.
+
+Verify the whole loop locally with no network providers:
+
+```sh
+npm run smoke:worker-runtime      # gateway queues -> worker claims echo -> result
+```
+
 ## Endpoints
 
 - `GET /` and `GET /ui` serve the browser control surface for gateway health,

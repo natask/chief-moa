@@ -6,11 +6,20 @@
 // No inbound listener is opened. Configuration comes from flags or
 // MOA_WORKER_* env vars; the worker token is never printed.
 //
-// First registration:
+// First registration (echo only — deterministic, no model key):
 //   node scripts/worker-runtime.js \
 //     --gateway-url https://api.example.com \
 //     --registration-id wreg_... --setup-code MOA-WORKER-XXXX-XXXX \
 //     --state-file ~/.moa/worker-state.json --project proj_chief_moa:chief-moa
+//
+// With real harnesses (only those whose command resolves on this PATH run):
+//   node scripts/worker-runtime.js \
+//     --gateway-url https://api.example.com \
+//     --state-file ~/.moa/worker-state.json \
+//     --harness codex,claude,gemini \
+//     --project proj_chief_moa:chief-moa:/Users/me/projs/chief-moa
+//   (omit --harness to auto-detect every available harness; --harness-workdir
+//    sets the default run directory when a project has no path)
 //
 // Later runs reuse the state file (or MOA_WORKER_TOKEN + MOA_WORKER_ID).
 
@@ -35,6 +44,12 @@ async function main() {
     machineLabel: args["machine-label"] || env.MOA_WORKER_MACHINE_LABEL || "",
     projects: parseProjects(args.project || env.MOA_WORKER_PROJECTS || ""),
     projectAliases: args["project-alias"] || env.MOA_WORKER_PROJECT_ALIASES || "",
+    // Real harnesses to offer beyond the built-in echo. Empty = auto-detect
+    // every harness whose command resolves on this machine's PATH.
+    harnesses: args.harness || env.MOA_WORKER_HARNESSES || "",
+    // Where real harnesses run. Default is the current directory; a per-project
+    // path can be given as the 3rd ":" segment of --project.
+    harnessWorkdir: args["harness-workdir"] || env.MOA_WORKER_HARNESS_WORKDIR || "",
     once: args.once === true || env.MOA_WORKER_ONCE === "1",
     maxIdleMs: args["max-idle-ms"] || env.MOA_WORKER_MAX_IDLE_MS || 0,
     idleDelayMs: args["idle-delay-ms"] || env.MOA_WORKER_IDLE_DELAY_MS,
@@ -47,13 +62,15 @@ async function main() {
 }
 
 function parseProjects(value) {
+  // Each entry is "id", "id:alias", or "id:alias:/abs/local/path". The path is
+  // worker-local and is never sent to the gateway.
   return String(value || "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean)
     .map((item) => {
-      const [id, alias] = item.split(":");
-      return { id, local_alias: alias || id };
+      const [id, alias, ...rest] = item.split(":");
+      return { id, local_alias: alias || id, path: rest.join(":") || "" };
     });
 }
 
@@ -67,7 +84,8 @@ function parseArgs(argv) {
     if (key === "once") {
       args.once = true;
     } else if (next != null && !next.startsWith("--")) {
-      args[key] = key === "project-alias" && args[key] ? `${args[key]},${next}` : next;
+      const accumulate = (key === "project-alias" || key === "harness" || key === "project") && args[key];
+      args[key] = accumulate ? `${args[key]},${next}` : next;
       i += 1;
     } else {
       args[key] = true;

@@ -846,6 +846,19 @@ queues.
   sub-queries -> pass per sub-query -> refine pass -> report); pure and
   deterministic by default. Behind `POST /v1/broker/research`. Smoke:
   `scripts/smoke-research-workflow.js` (`npm run smoke:research-workflow`).
+- `gateway/lib/worker-pull.js`: gateway-side worker-pull contract — worker
+  registration/setup-code, scoped bearer tokens, lease-based `claim` of queued
+  agent runs, heartbeat/events/result, and lease-expiry requeue. The claim
+  payload never carries command/args/shell/env or absolute paths. Smoke:
+  `scripts/smoke-worker-pull.js`.
+- `gateway/lib/worker-runtime.js` + `gateway/scripts/worker-runtime.js`: the
+  local execution-machine worker. It connects outbound to a gateway, claims
+  scoped runs under lease, executes a locally allowlisted harness (echo built-in;
+  codex/claude/gemini/hermes resolved from the worker's own env when their
+  command is on PATH), heartbeats, and posts results. It opens no listener and
+  never takes a command, args, shell, env, or path from the gateway. Run docs in
+  `gateway/README.md`; env shapes in `gateway/.env.example`. Smoke:
+  `scripts/smoke-worker-runtime.js` (`npm run smoke:worker-runtime`).
 - `gateway/lib/audio-notes.js`: record-mode audio-note store (raw bytes +
   JSON sidecars under `DATA_DIR/audio-notes/`), served by the
   `/v1/audio-notes` routes; deterministic smoke in

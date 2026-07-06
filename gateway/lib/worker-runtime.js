@@ -8,6 +8,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 
 class WorkerRuntimeError extends Error {
   constructor(code, message, { status = 0, retryable = false } = {}) {
@@ -18,8 +19,9 @@ class WorkerRuntimeError extends Error {
   }
 }
 
-// The only harness enabled in this slice. It is deterministic and touches no
-// filesystem path, process, or shell: the run prompt is echoed back as output.
+// The deterministic built-in harness. It touches no filesystem path, process,
+// or shell: the run prompt is echoed back as output. It is always available, so
+// the worker-pull loop and its smoke run with no model key or external CLI.
 async function echoHarness(run) {
   const prompt = String(run.prompt || "");
   return {
@@ -30,20 +32,246 @@ async function echoHarness(run) {
   };
 }
 
-const DEFAULT_HARNESSES = { echo: echoHarness };
+// Real CLI harness profiles. The worker resolves the command from its OWN env
+// (never from the gateway claim) and builds the args itself; the claim only
+// supplies a prompt and a project alias. Dangerous flags are opt-in through the
+// worker's env, mirroring the gateway's local-mode defaults (claude plan mode,
+// codex sandbox) so a worker is not reckless by default. These execute only
+// when the command resolves on the worker's PATH.
+const REAL_HARNESS_PROFILES = {
+  gemini: {
+    bin: (env) => env.GEMINI_BIN || "gemini",
+    args: (run, env) => [
+      "--prompt",
+      run.prompt,
+      "--skip-trust",
+      "--approval-mode",
+      env.GEMINI_APPROVAL_MODE || "yolo",
+      "--output-format",
+      "text",
+    ],
+  },
+  codex: {
+    bin: (env) => env.CODEX_BIN || "codex",
+    args: (run, env, workdir) => {
+      const args = ["exec", "--cd", workdir, "--skip-git-repo-check"];
+      if (env.CODEX_BYPASS_APPROVALS === "1") {
+        args.push("--dangerously-bypass-approvals-and-sandbox");
+      } else {
+        args.push("--sandbox", env.CODEX_SANDBOX || "workspace-write");
+      }
+      args.push(run.prompt);
+      return args;
+    },
+  },
+  claude: {
+    bin: (env) => env.CLAUDE_BIN || "claude",
+    args: (run, env, workdir) => {
+      const args = [
+        "--print",
+        "--output-format",
+        "json",
+        "--model",
+        env.CLAUDE_AGENT_MODEL || env.CLAUDE_MODEL || "sonnet",
+        "--add-dir",
+        workdir,
+      ];
+      if (run.resume_session_id) args.push("--resume", run.resume_session_id);
+      if (env.CLAUDE_DANGEROUS_SKIP_PERMISSIONS === "1") {
+        args.push("--dangerously-skip-permissions");
+      } else {
+        args.push("--permission-mode", env.CLAUDE_PERMISSION_MODE || "plan");
+      }
+      args.push(run.prompt);
+      return args;
+    },
+    parse: (stdout) => {
+      try {
+        const json = JSON.parse(stdout);
+        return { output: String(json.result || json.output || "").trim(), session_id: json.session_id || "" };
+      } catch {
+        return null;
+      }
+    },
+  },
+  hermes: {
+    bin: (env) => env.HERMES_BIN || "hermes",
+    args: (run, env) => {
+      const args = [];
+      if (env.HERMES_PROVIDER) args.push("--provider", env.HERMES_PROVIDER);
+      if (env.HERMES_MODEL) args.push("--model", env.HERMES_MODEL);
+      if (run.resume_session_id) args.push("--resume", run.resume_session_id);
+      if (env.HERMES_YOLO === "1") args.push("--yolo");
+      args.push("--oneshot", run.prompt);
+      return args;
+    },
+  },
+};
+
 const FORBIDDEN_CLAIM_KEYS = new Set(["command", "args", "shell", "env", "credentials", "credential"]);
+
+// Resolve a command to an executable path on the worker's PATH without running
+// it. Absolute/relative paths are checked directly. Returns "" when not found.
+function commandOnPath(command, env = process.env) {
+  const raw = String(command || "").trim();
+  if (!raw) return "";
+  if (raw.includes("/")) {
+    try {
+      fs.accessSync(raw, fs.constants.X_OK);
+      return raw;
+    } catch {
+      return "";
+    }
+  }
+  const dirs = String(env.PATH || "").split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, raw);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // keep looking
+    }
+  }
+  return "";
+}
+
+// Build the worker's harness runner map. echo is always present. Each real
+// harness is included only when its command resolves on PATH (unless the
+// selection list explicitly narrows the set). `selection` may restrict which
+// real harnesses to offer; empty selection means "auto-detect all available".
+function buildHarnessRunners({ env = process.env, selection = [], resolveWorkdir, requestTimeoutMs = 30_000 } = {}) {
+  const harnesses = { echo: echoHarness };
+  const wanted = selection.length ? new Set(selection) : null;
+  for (const [id, profile] of Object.entries(REAL_HARNESS_PROFILES)) {
+    if (wanted && !wanted.has(id)) continue;
+    const resolved = commandOnPath(profile.bin(env), env);
+    if (!resolved) continue;
+    harnesses[id] = (run, hooks = {}) => runLocalHarness({
+      id,
+      command: resolved,
+      profile,
+      run,
+      env,
+      workdir: resolveWorkdir ? resolveWorkdir(run) : process.cwd(),
+      timeoutMs: clamp(run.timeout_ms, 1000, 24 * 3600_000, requestTimeoutMs),
+      isCanceled: typeof hooks.isCanceled === "function" ? hooks.isCanceled : () => false,
+    });
+  }
+  return harnesses;
+}
+
+// Spawn a real CLI harness the worker owns. Prompt in via args, output/receipt
+// out. No shell. Bounded by a timeout. The gateway never supplied the command
+// or args; the worker built both from its own profile + env.
+function runLocalHarness({ id, command, profile, run, env, workdir, timeoutMs, isCanceled }) {
+  const args = profile.args(run, env, workdir);
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    let child;
+
+    const finish = (patch) => {
+      if (settled) return;
+      settled = true;
+      const parsed = typeof profile.parse === "function" ? profile.parse(stdout) : null;
+      const output = parsed && parsed.output ? parsed.output : (stdout.trim() || stderr.trim());
+      resolve({
+        exit_code: Number.isFinite(patch.exit_code) ? patch.exit_code : null,
+        output: truncate(output, 120_000),
+        stdout_tail: truncate(stdout, 16_000),
+        stderr_tail: truncate(stderr, 16_000),
+        error: patch.error || "",
+        session_id: parsed?.session_id || run.resume_session_id || "",
+      });
+    };
+
+    try {
+      child = spawn(command, args, {
+        cwd: workdir,
+        env,
+        detached: process.platform !== "win32",
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      finish({ exit_code: null, error: `failed to start ${id}: ${truncate(error?.message || String(error), 300)}` });
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killChild(child, "SIGTERM");
+      setTimeout(() => { if (!settled) killChild(child, "SIGKILL"); }, 2500).unref();
+    }, timeoutMs);
+    timer.unref();
+
+    const cancelPoll = setInterval(() => {
+      if (isCanceled()) {
+        killChild(child, "SIGTERM");
+      }
+    }, 1000);
+    cancelPoll.unref();
+
+    child.stdout.on("data", (chunk) => { stdout = appendBounded(stdout, chunk.toString("utf8"), 160_000); });
+    child.stderr.on("data", (chunk) => { stderr = appendBounded(stderr, chunk.toString("utf8"), 160_000); });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      clearInterval(cancelPoll);
+      finish({ exit_code: null, error: truncate(error?.message || String(error), 300) });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      clearInterval(cancelPoll);
+      const failed = !timedOut && code !== 0;
+      finish({
+        exit_code: code,
+        error: timedOut ? `timed out after ${timeoutMs}ms` : failed ? `harness ${id} exited with code ${code}` : "",
+      });
+    });
+  });
+}
+
+function killChild(child, signal) {
+  if (!child) return;
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // fall through to direct kill
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // already gone
+  }
+}
+
+function appendBounded(current, addition, max) {
+  const next = String(current || "") + String(addition || "");
+  return next.length > max ? next.slice(next.length - max) : next;
+}
 
 function createWorkerRuntime(options = {}) {
   const gatewayUrl = normalizeGatewayUrl(options.gatewayUrl);
   if (!gatewayUrl) throw new WorkerRuntimeError("invalid_config", "gatewayUrl is required (http or https)");
-  const harnesses = DEFAULT_HARNESSES;
   const projectAliases = [...new Set(listOf(options.projectAliases).map(sanitizeAlias).filter(Boolean))];
   const configuredProjects = Array.isArray(options.projects)
-    ? options.projects.map((item) => ({ id: sanitizeId(item?.id || ""), local_alias: sanitizeAlias(item?.local_alias || item?.localAlias || item?.id || "") })).filter((item) => item.id)
+    ? options.projects.map((item) => ({
+        id: sanitizeId(item?.id || ""),
+        local_alias: sanitizeAlias(item?.local_alias || item?.localAlias || item?.id || ""),
+        path: item?.path ? String(item.path) : "",
+      })).filter((item) => item.id)
     : [];
-  const projects = configuredProjects.length
+  // Capabilities sent to the gateway carry only id + alias, never a local path.
+  const projects = (configuredProjects.length
     ? configuredProjects
-    : projectAliases.map((aliasValue) => ({ id: aliasValue, local_alias: aliasValue }));
+    : projectAliases.map((aliasValue) => ({ id: aliasValue, local_alias: aliasValue })))
+    .map((item) => ({ id: item.id, local_alias: item.local_alias }));
   const stateFile = options.stateFile ? path.resolve(String(options.stateFile)) : "";
   const name = truncate(options.name || "Moa worker", 120);
   const machineLabel = truncate(options.machineLabel || "", 120);
@@ -55,6 +283,26 @@ function createWorkerRuntime(options = {}) {
   const maxRequestRetries = clamp(options.maxRequestRetries, 0, 10, 3);
   const log = typeof options.log === "function" ? options.log : (line) => process.stdout.write(`${line}\n`);
   const fetchFn = typeof options.fetch === "function" ? options.fetch : fetch;
+
+  // Harness workdir: real harnesses run here (or in a per-project path). The
+  // gateway never supplies this; the worker owns it. A run's local_alias only
+  // selects among worker-configured paths.
+  const harnessWorkdir = options.harnessWorkdir ? path.resolve(String(options.harnessWorkdir)) : process.cwd();
+  const projectPaths = new Map();
+  for (const project of configuredProjects) {
+    if (project.path) projectPaths.set(project.local_alias, path.resolve(project.path));
+  }
+  const resolveWorkdir = (run) => {
+    const alias = sanitizeAlias(run?.working_dir?.local_alias || "");
+    return projectPaths.get(alias) || harnessWorkdir;
+  };
+  // Which real harnesses to offer: an explicit list, or auto-detect all whose
+  // command resolves on PATH. echo is always available.
+  const harnessSelection = [...new Set(listOf(options.harnesses).map((item) => String(item).toLowerCase().trim()).filter(Boolean))];
+  const env = options.env && typeof options.env === "object" ? options.env : process.env;
+  const harnesses = typeof options.harnessRunners === "object" && options.harnessRunners
+    ? options.harnessRunners
+    : buildHarnessRunners({ env, selection: harnessSelection, resolveWorkdir, requestTimeoutMs });
 
   let credentials = {
     worker_id: sanitizeId(options.workerId || ""),
@@ -214,15 +462,19 @@ function createWorkerRuntime(options = {}) {
       log(`[worker] run ${runId} failed locally`);
       return { run_id: runId, status: "failed", reason: harnessError };
     }
+    const exitCode = Number.isFinite(Number(outcome.exit_code)) ? Number(outcome.exit_code) : null;
+    const harnessFailed = Boolean(outcome.error) || (exitCode != null && exitCode !== 0);
     await reportResult(runId, ids, {
-      status: "completed",
-      exit_code: Number.isFinite(Number(outcome.exit_code)) ? Number(outcome.exit_code) : 0,
+      status: harnessFailed ? "failed" : "completed",
+      exit_code: exitCode == null ? 0 : exitCode,
+      error: outcome.error || "",
       output: truncate(outcome.output || "", 120_000),
       stdout_tail: truncate(outcome.stdout_tail || "", 16_000),
       stderr_tail: truncate(outcome.stderr_tail || "", 16_000),
+      session_id: outcome.session_id || "",
     });
-    log(`[worker] run ${runId} completed`);
-    return { run_id: runId, status: "completed" };
+    log(`[worker] run ${runId} ${harnessFailed ? "failed" : "completed"}`);
+    return { run_id: runId, status: harnessFailed ? "failed" : "completed", reason: outcome.error || "" };
   }
 
   function startHeartbeat(runId, ids, observeCancel) {
@@ -385,4 +637,4 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = { WorkerRuntimeError, createWorkerRuntime, echoHarness };
+module.exports = { WorkerRuntimeError, createWorkerRuntime, echoHarness, buildHarnessRunners, commandOnPath, REAL_HARNESS_PROFILES };

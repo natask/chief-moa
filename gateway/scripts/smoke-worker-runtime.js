@@ -8,6 +8,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
+const { buildHarnessRunners, commandOnPath } = require("../lib/worker-runtime");
+
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const OWNER_TOKEN = "worker-runtime-smoke-owner-token";
 
@@ -23,6 +25,7 @@ async function main() {
   const baseUrl = `http://127.0.0.1:${port}`;
   let server;
   try {
+    await step("harness availability gate + real harness execution", () => assertHarnessGate(tempDir));
     server = await startGateway({ port, dataDir });
     const registration = await step("create worker setup code", () => createRegistration(baseUrl));
     const worker = await step("register worker with setup code", () => registerWorker(baseUrl, registration));
@@ -37,6 +40,8 @@ async function main() {
       worker_id: worker.worker_id,
       lifecycle: detail.events.map((event) => event.type),
       checks: [
+        "unavailable harness is not offered; an available one is detected on PATH",
+        "a real harness executes locally with prompt in and output out",
         "gateway used an ephemeral non-8787 localhost port",
         "worker registered through one-use setup code",
         "runtime authenticated with scoped worker bearer token",
@@ -52,6 +57,47 @@ async function main() {
     }
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+// Real harnesses are offered only when the command resolves on PATH, and the
+// worker builds the command/args itself from a fake CLI on a temp PATH. This
+// exercises the codex profile end to end without needing a real codex install.
+async function assertHarnessGate(tempDir) {
+  const binDir = path.join(tempDir, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  // A fake `codex` that ignores its exec flags and echoes its args (which
+  // include the prompt). Absolute /bin/sh shebang so it runs even though the
+  // worker's env PATH is narrowed to this bin dir.
+  const fakeCodex = path.join(binDir, "codex");
+  fs.writeFileSync(fakeCodex, [
+    "#!/bin/sh",
+    'if [ "$1" = "--version" ]; then echo "fake-codex 0.0.0"; exit 0; fi',
+    'echo "codex output: $*"',
+    "exit 0",
+  ].join("\n"));
+  fs.chmodSync(fakeCodex, 0o755);
+
+  const env = { PATH: binDir };
+  assert.equal(commandOnPath("codex", env), fakeCodex, "codex must resolve on the fake PATH");
+  assert.equal(commandOnPath("claude", env), "", "claude must not resolve when absent");
+
+  const harnesses = buildHarnessRunners({
+    env,
+    selection: [],
+    resolveWorkdir: () => tempDir,
+    requestTimeoutMs: 5000,
+  });
+  assert.ok(typeof harnesses.echo === "function", "echo must always be available");
+  assert.ok(typeof harnesses.codex === "function", "codex must be offered when present");
+  assert.ok(!("claude" in harnesses), "claude must not be offered when absent");
+
+  const outcome = await harnesses.codex({
+    prompt: "reconcile the worker pull queue",
+    working_dir: { local_alias: "chief-moa" },
+    timeout_ms: 5000,
+  }, { isCanceled: () => false });
+  assert.equal(outcome.exit_code, 0, JSON.stringify(outcome));
+  assert.match(outcome.output, /reconcile the worker pull queue/);
 }
 
 async function createRegistration(baseUrl) {
