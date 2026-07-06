@@ -3596,3 +3596,121 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
     // Restricted browser pages cannot receive content scripts.
   }
 });
+
+// ---- System-wide overlay summon (global command) --------------------------
+// `open-agee-global` is a global command (manifest "global": true, suggested
+// Command+Shift+9). Chrome fires it even when Chrome is not the focused app, so
+// a macOS helper — double-tap of the Command key via Karabiner-Elements, see
+// scripts/macos-summon/ — can raise the overlay from any application. Unlike the
+// per-tab toggle commands, the tab Chrome hands us may be a page the overlay
+// cannot inject into (chrome://, the Web Store, a PDF viewer). This path resolves
+// an injectable tab in the last-focused window, focuses it, and creates a fresh
+// tab only when the browser has no eligible tab at all.
+const OVERLAY_FALLBACK_URL = "https://agee.app/";
+
+function isInjectableOverlayUrl(url) {
+  if (typeof url !== "string" || !url) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  // The Chrome Web Store blocks content scripts even over https.
+  if (parsed.hostname === "chromewebstore.google.com") return false;
+  if (parsed.hostname === "chrome.google.com" && parsed.pathname.startsWith("/webstore")) return false;
+  return true;
+}
+
+function mostRecentlyAccessedTab(tabs) {
+  return (tabs || [])
+    .filter((tab) => tab?.id != null && isInjectableOverlayUrl(tab.url))
+    .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0] || null;
+}
+
+async function waitForTabComplete(tabId, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let tab;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {
+      return null;
+    }
+    if (tab.status === "complete") return tab;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  try {
+    return await chrome.tabs.get(tabId);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveOverlayTargetTab(firedTab) {
+  // 1. The tab Chrome handed us, if it can host the overlay.
+  if (firedTab?.id != null && isInjectableOverlayUrl(firedTab.url)) return firedTab;
+
+  // 2/3. The last-focused normal window: its active tab, else its best tab.
+  let lastWindow = null;
+  try {
+    lastWindow = await chrome.windows.getLastFocused({ populate: true, windowTypes: ["normal"] });
+  } catch {
+    lastWindow = null;
+  }
+  const windowActive = lastWindow?.tabs?.find((tab) => tab.active);
+  if (windowActive?.id != null && isInjectableOverlayUrl(windowActive.url)) return windowActive;
+  const windowBest = mostRecentlyAccessedTab(lastWindow?.tabs);
+  if (windowBest) return windowBest;
+
+  // 4. Any injectable tab across all normal windows.
+  const anyBest = mostRecentlyAccessedTab(
+    await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] })
+  );
+  if (anyBest) return anyBest;
+
+  // 5. Nothing eligible is open: create a fresh injectable tab and wait for it.
+  const { ageeOverlayFallbackUrl } = await chrome.storage.local.get({
+    ageeOverlayFallbackUrl: OVERLAY_FALLBACK_URL,
+  });
+  const fallbackUrl = isInjectableOverlayUrl(ageeOverlayFallbackUrl) ? ageeOverlayFallbackUrl : OVERLAY_FALLBACK_URL;
+  const created = await chrome.tabs.create({ url: fallbackUrl, active: true });
+  return created?.id != null ? await waitForTabComplete(created.id) : null;
+}
+
+async function summonOverlayFromAnywhere(firedTab) {
+  const target = await resolveOverlayTargetTab(firedTab);
+  if (!target?.id) return;
+  // Bring Chrome's window and the target tab forward so the overlay is visible
+  // even when the command fired while another application was focused.
+  try {
+    await chrome.tabs.update(target.id, { active: true });
+  } catch {}
+  if (target.windowId != null) {
+    try {
+      await chrome.windows.update(target.windowId, { focused: true, drawAttention: true });
+    } catch {}
+  }
+  try {
+    await ensureContent(target.id);
+    await chrome.tabs.sendMessage(target.id, { cmd: "open", source: "command" });
+  } catch {
+    // Restricted browser pages cannot receive content scripts.
+  }
+}
+
+// A second summon while the first is still resolving (e.g. waiting on a created
+// fallback tab to load) would create a duplicate tab, because a still-loading
+// tab has no committed url for the query in step 4 to rematch.
+let summonInFlight = false;
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command !== "open-agee-global") return;
+  if (summonInFlight) return;
+  summonInFlight = true;
+  summonOverlayFromAnywhere(tab)
+    .catch(() => {})
+    .finally(() => {
+      summonInFlight = false;
+    });
+});
