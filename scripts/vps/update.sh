@@ -42,11 +42,14 @@ else
   "$SCRIPT_DIR/restore-check.sh" "${latest_backup%/}"
 fi
 
-# 2. Move the checkout to the requested ref.
+# 2. Move the checkout to the requested ref. This checkout is a deploy
+# artifact, never a workspace (fix work happens in branches elsewhere), so
+# --force discarding stray local files is the wanted behavior: without it a
+# single untracked file that the new ref tracks wedges every update.
 old_sha="$(git -C "$APP_DIR" rev-parse --short HEAD)"
 git -C "$APP_DIR" fetch origin
-git -C "$APP_DIR" checkout --detach "origin/$REF" 2>/dev/null \
-  || git -C "$APP_DIR" checkout --detach "$REF"
+git -C "$APP_DIR" checkout --force --detach "origin/$REF" 2>/dev/null \
+  || git -C "$APP_DIR" checkout --force --detach "$REF"
 new_sha="$(git -C "$APP_DIR" rev-parse --short HEAD)"
 
 # 3. Rebuild and recreate only the gateway. Volumes and other services stay.
