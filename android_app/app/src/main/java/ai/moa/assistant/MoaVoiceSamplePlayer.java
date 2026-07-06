@@ -249,6 +249,11 @@ final class MoaVoiceSamplePlayer {
         }
 
         @Override
+        public void onTurnProgress(String turnId) {
+            // The sampler plays fixed short clips; keepalives are not tracked.
+        }
+
+        @Override
         public void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
             finishCurrent();
         }

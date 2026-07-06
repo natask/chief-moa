@@ -67,11 +67,16 @@ public final class OverlayService extends Service {
     private static final String NOT_SAVED_SUFFIX = "\n\n(not saved)";
     // Inactivity watchdog for a committed streaming turn. It is armed on commit
     // and RESET by every streaming event (partial/final transcript, assistant
-    // text, assistant audio start/done). If no event arrives for this long while
-    // a turn is in flight, the turn is torn down with a visible + spoken timeout
-    // notice so the user is never left in unexplained silence. It is suspended
-    // while assistant audio is actively playing and cleared on turn_done.
-    private static final long STREAMING_TURN_WATCHDOG_MS = 15000;
+    // text, assistant audio start + each audio frame, turn_progress keepalives).
+    // If no event arrives for this long while a turn is in flight, the turn is
+    // torn down with a visible + spoken timeout notice so the user is never left
+    // in unexplained silence. Cleared on turn_done.
+    //
+    // 30s is the no-keepalive fallback: the gateway's reasoning budget is ~45s,
+    // but it now emits turn_progress every ~5s during the reasoning and TTS legs,
+    // so a healthy long answer re-arms well within 30s. An old gateway (no
+    // keepalive) still gets a generous 30s before a false timeout.
+    private static final long STREAMING_TURN_WATCHDOG_MS = 30000;
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
     private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
@@ -147,6 +152,12 @@ public final class OverlayService extends Service {
     private boolean audioNoteActive;
     private MoaAudioCaptureController audioNoteCapture;
     private ByteArrayOutputStream audioNoteBuffer;
+    // One shared warm microphone. The gesture warms it at the second-tap press so
+    // the head of an utterance is buffered before the ~120ms hold confirms, then
+    // hands it to whichever capture path the hold resolves to (streaming voice or
+    // a record-mode note). Also pre-warmed during the continuous re-arm gap so a
+    // hands-free turn does not pay a fresh AudioRecord cold-start. Null when idle.
+    private MoaAudioCaptureController warmMic;
     private TextView recordModePill;
     // Context/thread controls (client-affordances lane). "New thread" arms a
     // one-shot so the NEXT sent turn (chat or voice) starts a fresh thread;
@@ -312,6 +323,7 @@ public final class OverlayService extends Service {
     public void onDestroy() {
         running = false;
         cancelAudioNoteCapture();
+        discardWarmMic();
         cancelStreamingTurnWatchdog();
         removeTranscriptOverlay();
         removePanel();
@@ -510,7 +522,9 @@ public final class OverlayService extends Service {
                 ORB_EDGE_MARGIN_DP,
                 this::handleOrbSingleTap,
                 this::handleOrbDoublePressStart,
-                this::handleOrbVoicePressRelease
+                this::handleOrbVoicePressRelease,
+                this::beginWarmMic,
+                this::discardWarmMic
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -894,6 +908,27 @@ public final class OverlayService extends Service {
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
         voiceRuntimeState = state == null ? VoiceRuntimeState.READY : state;
         updateVoiceHeaderState();
+        // Single choke point for the orb's response state so the lion visibly
+        // reflects thinking / responding / error without touching other call
+        // sites. The watchdog + error paths become visible here for free.
+        if (orbView != null) {
+            orbView.setResponseState(orbResponseStateFor(voiceRuntimeState));
+        }
+    }
+
+    private OrbView.ResponseState orbResponseStateFor(VoiceRuntimeState state) {
+        switch (state) {
+            case SENDING:
+            case THINKING:
+                return OrbView.ResponseState.THINKING;
+            case SPEAKING:
+                return OrbView.ResponseState.RESPONDING;
+            case ERROR:
+            case RECOVERING:
+                return OrbView.ResponseState.ERROR;
+            default:
+                return OrbView.ResponseState.NONE;
+        }
     }
 
     private void updateVoiceHeaderState() {
@@ -1046,6 +1081,11 @@ public final class OverlayService extends Service {
     private void scheduleContinuousVoiceRestart(int generation) {
         cancelAutoDismiss();
         cancelContinuousVoiceRestart();
+        // Warm the mic through the re-arm gap so the next hands-free turn opens on
+        // an already-hot AudioRecord instead of paying a fresh cold-start. The
+        // silence-VAD path drops the pre-roll on go-live, so this only removes
+        // latency and never feeds stale gap audio into voice-activity detection.
+        beginWarmMic();
         pendingContinuousVoiceRestart = () -> {
             pendingContinuousVoiceRestart = null;
             if (!continuousVoiceLoop || generation != streamingVoiceGeneration) {
@@ -1480,6 +1520,16 @@ public final class OverlayService extends Service {
         String speakText = response.optString("speak", "").trim();
         String text = display.isEmpty() ? response.optString("text", speakText).trim() : display;
         if (text.isEmpty()) {
+            // The gateway answered with no display, speak, or text. On the voice
+            // path the overlay was left in THINKING forever; reset it to READY
+            // with a visible notice instead of a silent hang.
+            if (fromVoice) {
+                String notice = "I didn't get a reply. Tap to try again.";
+                updateVoiceAssistantTranscript(notice);
+                setVoiceRuntimeState(VoiceRuntimeState.READY);
+                updateMicState();
+                holdVoiceReplyThenContinueOrDismiss();
+            }
             return;
         }
         // An incognito voice turn is answered but never stored; mark the visible
@@ -2316,6 +2366,7 @@ public final class OverlayService extends Service {
     // transcript card, and any live voice turn. Hide the keyboard too.
     private void dismissOverlayUi() {
         cancelAudioNoteCapture();
+        discardWarmMic();
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
         nextManualVoiceFollowsActiveRun = false;
@@ -2340,6 +2391,7 @@ public final class OverlayService extends Service {
     // usable without the overlay stealing focus.
     private void collapseInteractiveSurfaces() {
         cancelAudioNoteCapture();
+        discardWarmMic();
         cancelVoiceSampler();
         removeTranscriptOverlay();
         hideKeyboard();
@@ -2401,12 +2453,14 @@ public final class OverlayService extends Service {
         }
         loadSettings();
         if (!streamingVoiceAvailable()) {
+            // No capture path will run; drop any mic warmed by the gesture.
+            discardWarmMic();
             showAudioNoteResult("Audio notes need the gateway URL and token in settings.", true);
             return;
         }
         audioNoteBuffer = new ByteArrayOutputStream();
         audioNoteActive = true;
-        audioNoteCapture = new MoaAudioCaptureController(new MoaAudioCaptureController.Callback() {
+        MoaAudioCaptureController.Callback noteCallback = new MoaAudioCaptureController.Callback() {
             @Override
             public void onPcmChunk(byte[] pcm) {
                 appendAudioNoteChunk(pcm);
@@ -2424,11 +2478,19 @@ public final class OverlayService extends Service {
             public void onCaptureError(String message, Throwable error) {
                 mainHandler.post(() -> failAudioNoteCapture(message));
             }
-        });
+        };
+        // Record mode shares the same double-press gesture, so a mic may already
+        // be warm. Adopt it (draining its pre-roll into the note so the start of
+        // the recording is not lost); otherwise cold-start a fresh controller.
+        MoaAudioCaptureController capture = adoptWarmMic();
+        if (capture == null) {
+            capture = new MoaAudioCaptureController();
+        }
+        audioNoteCapture = capture;
         if (orbView != null) {
             orbView.setRecordingNote(true);
         }
-        audioNoteCapture.start();
+        audioNoteCapture.start(noteCallback, true);
     }
 
     // Called on the capture thread for every 40 ms PCM chunk.
@@ -2563,6 +2625,9 @@ public final class OverlayService extends Service {
     }
 
     private void startLocalVoiceTurn(boolean manualCommitOnly) {
+        // The local SpeechRecognizer path does not use our AudioRecord, so a mic
+        // warmed by the gesture would leak (indicator stuck on). Drop it here.
+        discardWarmMic();
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
@@ -2856,7 +2921,11 @@ public final class OverlayService extends Service {
                     return;
                 }
                 if (!safe(text).isEmpty()) {
+                    // Streamed assistant text is the reply arriving: show the agent
+                    // responding on the orb even for a text-only turn (no audio),
+                    // rather than leaving it stuck on THINKING.
                     updateVoiceAssistantTranscript(text);
+                    setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
                 }
             }
 
@@ -2865,9 +2934,11 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                // Audio is actively playing: suspend the inactivity watchdog so a
-                // long reply is not mistaken for a stall.
-                cancelStreamingTurnWatchdog();
+                // Audio started: re-arm (do NOT cancel) the watchdog. Each audio
+                // frame re-arms it again, so a mid-stream stall surfaces the
+                // visible timeout in ~30s instead of hanging on the gateway's own
+                // 60s backstop.
+                resetStreamingTurnWatchdog();
                 currentStreamingTurnAudioReceived = true;
                 if (currentStreamingTurnRouted) {
                     return;
@@ -2875,6 +2946,30 @@ public final class OverlayService extends Service {
                 streamingAssistantAudioPlaying = true;
                 setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
                 updateMicState();
+            }
+
+            @Override
+            public void onAssistantAudioChunk(String turnId) {
+                if (!isCurrentStreamingGeneration(generation)) {
+                    return;
+                }
+                // Keep the watchdog pushed out while audio keeps flowing; the gap
+                // between frames is ~40ms, so 30s of silence is a genuine stall.
+                // Guarded on active playback so a stray late frame never re-arms a
+                // watchdog after the turn has already finished.
+                if (streamingAssistantAudioPlaying) {
+                    resetStreamingTurnWatchdog();
+                }
+            }
+
+            @Override
+            public void onTurnProgress(String turnId) {
+                if (!isCurrentStreamingGeneration(generation)) {
+                    return;
+                }
+                // Gateway keepalive during a long reasoning / TTS leg: re-arm the
+                // watchdog and promote the visible state past "sending".
+                markStreamingTurnProgressing();
             }
 
             @Override
@@ -3031,6 +3126,10 @@ public final class OverlayService extends Service {
                 }, 900);
             }
         });
+        // Hand over the gesture-warmed mic (or the mic pre-warmed during the
+        // continuous re-arm gap) so the session goes live instantly and, for
+        // push-to-talk, drains the pre-roll. Null here means a cold start.
+        streamingVoiceController.setPrewarmedCapture(adoptWarmMic());
         streamingVoiceController.startSession();
         if (streamingCommitPendingOpen) {
             // The user released while the branch was still resolving. Commit the
@@ -3241,6 +3340,42 @@ public final class OverlayService extends Service {
 
     private boolean streamingVoiceActive() {
         return streamingVoiceController != null && streamingVoiceController.isActive();
+    }
+
+    // Warm the shared mic on the second-tap press so the ~500ms pre-roll captures
+    // the head of the utterance before the hold confirms. Only when a gateway-
+    // backed capture path could consume it: the local SpeechRecognizer fallback
+    // does not use our AudioRecord, so warming there would light the mic
+    // indicator for nothing. Idempotent: a no-op while already warm.
+    private void beginWarmMic() {
+        if (!streamingVoiceAvailable()) {
+            return;
+        }
+        if (warmMic == null) {
+            warmMic = new MoaAudioCaptureController();
+        }
+        if (!warmMic.isRecording()) {
+            warmMic.warmUp();
+        }
+    }
+
+    // The gesture resolved to a drag or an early release before the hold
+    // confirmed: stop the warm mic and drop its pre-roll so the indicator turns
+    // off and nothing is captured. Safe to call when no mic is warm.
+    private void discardWarmMic() {
+        if (warmMic != null) {
+            warmMic.stop();
+            warmMic = null;
+        }
+    }
+
+    // Hand the already-running warm mic to the capture path the hold resolved to.
+    // Ownership transfers to the caller (session or audio note), which stops it.
+    // Returns null when nothing was warmed, in which case the caller cold-starts.
+    private MoaAudioCaptureController adoptWarmMic() {
+        MoaAudioCaptureController mic = warmMic;
+        warmMic = null;
+        return mic;
     }
 
     private void updateMicState() {

@@ -45,7 +45,15 @@ final class MoaStreamingVoiceSessionController {
 
         void onAssistantAudioStarted(String turnId);
 
+        // A single assistant audio frame arrived. Lets the client re-arm its
+        // inactivity watchdog so a mid-stream audio stall is caught, not held
+        // open until the gateway's own backstop.
+        void onAssistantAudioChunk(String turnId);
+
         void onAssistantAudioDone(String turnId);
+
+        // Keepalive during a long reasoning / TTS leg. Re-arms the watchdog.
+        void onTurnProgress(String turnId);
 
         void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
 
@@ -67,6 +75,11 @@ final class MoaStreamingVoiceSessionController {
     private final Object lock = new Object();
 
     private MoaAudioCaptureController captureController;
+    // A microphone already warmed by the gesture. When present, startSession
+    // adopts it instead of constructing a cold AudioRecord, so the pre-roll ring
+    // (the head of the utterance captured before the hold confirmed) flows into
+    // this turn. Set once before startSession(); consumed there.
+    private MoaAudioCaptureController prewarmedCapture;
     private MoaAudioPlaybackController playbackController;
     private MoaVoiceGatewaySocket gatewaySocket;
     private String sessionId = "";
@@ -128,6 +141,15 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
+    // Hand this session a mic the gesture already warmed. Must be called before
+    // startSession(); a null clears any prior hand-off and falls back to a cold
+    // start. The warm mic's ~500ms pre-roll drains into this turn on go-live.
+    void setPrewarmedCapture(MoaAudioCaptureController capture) {
+        synchronized (lock) {
+            prewarmedCapture = capture;
+        }
+    }
+
     void startSession() {
         synchronized (lock) {
             if (active) {
@@ -147,7 +169,11 @@ final class MoaStreamingVoiceSessionController {
             sessionId = requestedSessionId.isEmpty() ? "mobile-" + UUID.randomUUID().toString() : requestedSessionId;
             turnId = "turn_" + UUID.randomUUID().toString();
             playbackController = new MoaAudioPlaybackController(new PlaybackCallback());
-            captureController = new MoaAudioCaptureController(new CaptureCallback());
+            // Adopt a gesture-warmed mic when one was handed over; otherwise a
+            // fresh controller cold-starts on the first startCaptureIfNeeded. The
+            // CaptureCallback is attached at start()/go-live time, not here.
+            captureController = prewarmedCapture != null ? prewarmedCapture : new MoaAudioCaptureController();
+            prewarmedCapture = null;
             gatewaySocket = new MoaVoiceGatewaySocket(gatewayUrl, gatewayToken, new SocketCallback());
             gatewaySocket.connect();
         }
@@ -319,9 +345,13 @@ final class MoaStreamingVoiceSessionController {
             }
             capture = captureController;
         }
-        if (capture != null && !capture.isRecording()) {
+        // isLive() (not isRecording()) is the guard: a warmed mic is already
+        // "recording" into its ring but not yet delivering, so it must still be
+        // taken live here. Push-to-talk drains the pre-roll to catch the head of
+        // speech; the silence-VAD path drops it so stale gap audio never trips VAD.
+        if (capture != null && !capture.isLive()) {
             Log.i(TAG, "startCapture autoCommit=" + autoCommitOnSilence);
-            capture.start();
+            capture.start(new CaptureCallback(), !autoCommitOnSilence);
         }
     }
 
@@ -739,12 +769,16 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onAssistantAudio(byte[] pcm) {
             MoaAudioPlaybackController playback;
+            String currentTurnId;
             synchronized (lock) {
                 playback = playbackController;
+                currentTurnId = turnId;
             }
             if (playbackEnabled && playback != null && !playback.write(pcm)) {
                 reportError("Could not write assistant audio frame to playback.", null);
             }
+            // Prove liveness on every frame so a mid-stream stall is caught.
+            post(() -> callback.onAssistantAudioChunk(currentTurnId));
         }
 
         @Override
@@ -765,6 +799,11 @@ final class MoaStreamingVoiceSessionController {
                 }
             }, 800);
             post(() -> callback.onAssistantAudioDone(audioTurnId));
+        }
+
+        @Override
+        public void onTurnProgress(String progressTurnId) {
+            post(() -> callback.onTurnProgress(progressTurnId));
         }
 
         @Override

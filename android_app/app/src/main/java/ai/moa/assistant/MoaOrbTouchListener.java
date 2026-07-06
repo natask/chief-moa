@@ -30,6 +30,11 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final Runnable onSingleTap;
     private final Runnable onDoublePressStart;
     private final Runnable onPressToTalkRelease;
+    // Fired the instant a second-tap press lands (before the hold confirms) so the
+    // mic can warm and buffer a pre-roll. Its mate fires if that press resolves to
+    // a drag or an early release, so the warm mic is dropped and never leaks.
+    private final Runnable onDoublePressArmed;
+    private final Runnable onDoublePressAbort;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final int touchSlop;
     private final int doubleTapSlop;
@@ -58,7 +63,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             int edgeMarginDp,
             Runnable onSingleTap,
             Runnable onDoublePressStart,
-            Runnable onPressToTalkRelease
+            Runnable onPressToTalkRelease,
+            Runnable onDoublePressArmed,
+            Runnable onDoublePressAbort
     ) {
         this.context = context;
         this.windowManager = windowManager;
@@ -69,6 +76,8 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.onSingleTap = onSingleTap;
         this.onDoublePressStart = onDoublePressStart;
         this.onPressToTalkRelease = onPressToTalkRelease;
+        this.onDoublePressArmed = onDoublePressArmed;
+        this.onDoublePressAbort = onDoublePressAbort;
         ViewConfiguration viewConfiguration = ViewConfiguration.get(context);
         this.touchSlop = viewConfiguration.getScaledTouchSlop();
         this.doubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
@@ -88,6 +97,11 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             if (isSecondTap(event)) {
                 cancelPendingSingleTap();
                 beginPendingDoublePress();
+                // Warm the mic now, at the second-tap press, so the head of the
+                // utterance is buffered while the ~120ms hold confirms. Single
+                // taps and drags never reach this branch, so the mic indicator
+                // only lights on a genuine double-press gesture.
+                onDoublePressArmed.run();
             } else {
                 cancelPendingSingleTap();
                 lastTapCandidate = false;
@@ -113,8 +127,13 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     // returns without firing any callback, silently swallowing the
                     // whole gesture. Cleared, the release falls through to the
                     // normal moved/single-tap logic below.
+                    boolean wasArmed = doublePressPending;
                     doublePressPending = false;
                     cancelPendingDoublePress();
+                    if (wasArmed) {
+                        // The warmed mic will never be handed to a session; drop it.
+                        onDoublePressAbort.run();
+                    }
                 }
                 orbParams.x = clampOrbX(startX + dx);
                 orbParams.y = clampOrbY(startY + dy);
@@ -130,8 +149,11 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     return true;
                 }
                 if (doublePressPending) {
+                    // Released before the hold confirmed: the mic warmed but no
+                    // session will take it. Drop the warm mic and its pre-roll.
                     doublePressPending = false;
                     lastTapCandidate = false;
+                    onDoublePressAbort.run();
                     return true;
                 }
                 if (moved || action == MotionEvent.ACTION_CANCEL || event.getEventTime() - downTimeMs > SINGLE_TAP_MAX_MS) {
