@@ -58,13 +58,20 @@ by Karabiner's virtual keyboard, not by a scripting bridge.
 
 ## How the double tap stays safe
 
-The rule has two manipulators. The first fires only while a short-lived variable
-is set (the second tap). The second passes Command through normally and, on a
-solo tap, sets the variable, then clears it after 300 ms. Because the trigger
-only arms on a solo Command tap, held combinations like Cmd+C, Cmd+Tab, and
-Cmd+Shift+anything are untouched. Tune the window by editing
+The rule has two manipulators. The second passes Command through unchanged and
+arms a short-lived variable on every Command key-down. The variable clears
+after 300 ms, or as soon as any other key is pressed. The first manipulator
+fires the summon only when Command is pressed while the variable is armed,
+which means a second tap within 300 ms of the first. Any key pressed between
+the taps disarms it, so held combinations like Cmd+C, Cmd+Tab, and
+Cmd+Shift+anything are untouched. Command is emitted immediately (not lazily),
+so Cmd+click and Cmd+drag also keep working. Tune the window by editing
 `basic.to_delayed_action_delay_milliseconds` in `ag-double-command.json` and
 re-running `install.sh`.
+
+One inherent tradeoff of any double-tap trigger: a solo Command tap followed
+within 300 ms by a Command shortcut reads as a double tap. Shrink the window if
+that ever bites.
 
 ## Manual QA (the hotkey cannot be verified headlessly)
 
@@ -84,8 +91,11 @@ re-running `install.sh`.
    `chrome://settings`). From another app, double-tap Command again. A.G. should
    open on another web tab, or open a new tab, instead of failing on the
    non-injectable page.
-7. Confirm normal Command usage still works: Cmd+C, Cmd+V, Cmd+Tab, and holding
-   Command for menu shortcuts all behave as before.
+7. Confirm normal Command usage still works: Cmd+C, Cmd+V, Cmd+Tab, holding
+   Command for menu shortcuts, Cmd+click on a link, and Cmd+drag all behave as
+   before.
+8. Latch regression check: hold Command alone for about half a second, release
+   it, then press Cmd+C. It must copy, not open the overlay.
 
 ## Uninstall
 

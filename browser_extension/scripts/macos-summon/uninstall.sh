@@ -18,7 +18,7 @@ fi
 
 if [ -f "$KARABINER_JSON" ]; then
   jq empty "$KARABINER_JSON" || { echo "error: $KARABINER_JSON is not valid JSON; aborting."; exit 1; }
-  BACKUP="$KARABINER_JSON.agbak.$(date +%Y%m%d%H%M%S)"
+  BACKUP="$KARABINER_JSON.agbak.$(date +%Y%m%d%H%M%S).$$"
   cp "$KARABINER_JSON" "$BACKUP"
   echo "backed up config: $BACKUP"
 

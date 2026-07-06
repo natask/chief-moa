@@ -3700,7 +3700,17 @@ async function summonOverlayFromAnywhere(firedTab) {
   }
 }
 
+// A second summon while the first is still resolving (e.g. waiting on a created
+// fallback tab to load) would create a duplicate tab, because a still-loading
+// tab has no committed url for the query in step 4 to rematch.
+let summonInFlight = false;
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== "open-agee-global") return;
-  summonOverlayFromAnywhere(tab).catch(() => {});
+  if (summonInFlight) return;
+  summonInFlight = true;
+  summonOverlayFromAnywhere(tab)
+    .catch(() => {})
+    .finally(() => {
+      summonInFlight = false;
+    });
 });
