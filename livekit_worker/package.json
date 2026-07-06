@@ -1,0 +1,26 @@
+{
+  "name": "moa-livekit-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Flag-gated LiveKit agents-js worker for the Moa voice-transport spike (Option A). Joins gateway-minted rooms and drives Chirp STT -> gateway reasoning -> gateway TTS.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/agent.js start",
+    "dev": "node dist/agent.js dev",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@livekit/agents": "^1.4.0",
+    "@livekit/agents-plugin-silero": "^1.4.0",
+    "@livekit/rtc-node": "^0.13.0",
+    "livekit-server-sdk": "^2.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
