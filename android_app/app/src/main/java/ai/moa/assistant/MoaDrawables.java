@@ -1,9 +1,19 @@
 package ai.moa.assistant;
 
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 
 final class MoaDrawables {
     private MoaDrawables() {
+    }
+
+    // A circular button that darkens on press. Used for the gold send button so
+    // a tap reads as a real press instead of a flat glyph.
+    static StateListDrawable circlePressable(int normal, int pressed, int strokeColor, int strokeWidth) {
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, circle(pressed, strokeColor, strokeWidth));
+        states.addState(new int[]{}, circle(normal, strokeColor, strokeWidth));
+        return states;
     }
 
     static GradientDrawable rounded(int color, int radius, int strokeColor, int strokeWidth) {

@@ -31,8 +31,25 @@ final class MoaPrefs {
     private static final String KEY_SPOKEN_REPLIES_ENABLED = "spoken_replies_enabled";
     private static final String KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED = "spoken_replies_quiet_default_applied";
     private static final String KEY_AGENT_PROFILE_JSON = "agent_profile_json";
+    private static final String KEY_ORB_SCALE_PERCENT = "orb_scale_percent";
+
+    // Orb scale contract shared by the overlay (applies it) and the main app
+    // (exposes the slider). Percent of the 96dp base window; clamped 50-150.
+    static final int ORB_SCALE_MIN = 50;
+    static final int ORB_SCALE_MAX = 150;
+    static final int ORB_SCALE_DEFAULT = 70;
 
     private MoaPrefs() {
+    }
+
+    static int orbScalePercent(Context context) {
+        int stored = prefs(context).getInt(KEY_ORB_SCALE_PERCENT, ORB_SCALE_DEFAULT);
+        return Math.max(ORB_SCALE_MIN, Math.min(ORB_SCALE_MAX, stored));
+    }
+
+    static void setOrbScalePercent(Context context, int percent) {
+        int clamped = Math.max(ORB_SCALE_MIN, Math.min(ORB_SCALE_MAX, percent));
+        prefs(context).edit().putInt(KEY_ORB_SCALE_PERCENT, clamped).apply();
     }
 
     static String gatewayUrl(Context context) {

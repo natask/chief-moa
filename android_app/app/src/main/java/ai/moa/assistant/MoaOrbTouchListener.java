@@ -23,7 +23,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final WindowManager windowManager;
     private final OrbView orbView;
     private final WindowManager.LayoutParams orbParams;
-    private final int orbWindowDp;
+    // The live orb window size in pixels. It changes with the user's scale
+    // pref, so it is stored as already-resolved pixels, not a dp base.
+    private final int orbWindowPx;
     private final int edgeMarginDp;
     private final Runnable onSingleTap;
     private final Runnable onDoublePressStart;
@@ -52,7 +54,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             WindowManager windowManager,
             OrbView orbView,
             WindowManager.LayoutParams orbParams,
-            int orbWindowDp,
+            int orbWindowPx,
             int edgeMarginDp,
             Runnable onSingleTap,
             Runnable onDoublePressStart,
@@ -62,7 +64,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.windowManager = windowManager;
         this.orbView = orbView;
         this.orbParams = orbParams;
-        this.orbWindowDp = orbWindowDp;
+        this.orbWindowPx = orbWindowPx;
         this.edgeMarginDp = edgeMarginDp;
         this.onSingleTap = onSingleTap;
         this.onDoublePressStart = onDoublePressStart;
@@ -199,13 +201,13 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
 
     private int clampOrbX(int value) {
         int margin = dp(edgeMarginDp);
-        int max = context.getResources().getDisplayMetrics().widthPixels - dp(orbWindowDp) - margin;
+        int max = context.getResources().getDisplayMetrics().widthPixels - orbWindowPx - margin;
         return Math.max(margin, Math.min(value, max));
     }
 
     private int clampOrbY(int value) {
         int margin = dp(edgeMarginDp);
-        int max = context.getResources().getDisplayMetrics().heightPixels - dp(orbWindowDp) - margin;
+        int max = context.getResources().getDisplayMetrics().heightPixels - orbWindowPx - margin;
         return Math.max(margin, Math.min(value, max));
     }
 
