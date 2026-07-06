@@ -1397,7 +1397,7 @@ async function createVoiceSessionTicket(cfg, signal) {
 // Conversational turn through the user's gateway (/v1/voice/turns).
 // The gateway classifies chat vs. home-machine agent runs and replies with
 // display text; we render it. Page-DOM actions are a later wave.
-async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
+async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextControls = {}) {
   await saveTaskState(cueId, { status: "running", instruction, step: 0, lastResult: "sending to gateway", tabId });
   send(tabId, { cmd: "progress", cueId, text: "thinking…" });
   throwIfAborted(signal);
@@ -1416,6 +1416,11 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
   // branch_id, preserving per-cue distinction without fragmenting the session.
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
+  // Explicit client thread control ("/new", "/incognito") always wins over the
+  // model's own context choice. The gateway resolves context_action and returns
+  // a context block; an incognito turn is answered but never persisted.
+  const contextAction = String(contextControls?.contextAction || "").trim();
+  const threadLabel = String(contextControls?.threadLabel || "").trim();
   const data = await callGateway(cfg, "/v1/voice/turns", {
     signal,
     body: {
@@ -1426,6 +1431,8 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
       branch_id: cueId,
       all_branches_context: true,
       transcript: instruction,
+      ...(contextAction ? { context_action: contextAction } : {}),
+      ...(threadLabel ? { thread_label: threadLabel } : {}),
       client: {
         platform: "browser",
         source: "agee-extension",
@@ -1451,7 +1458,12 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId) {
   // decides when to stay silent by sending an empty speak (e.g. control turns).
   const speak = String(data.speak || "").trim();
   const runs = Array.isArray(data.agent_runs) ? data.agent_runs : [];
-  const summary = reply || (runs.length ? `Started ${runs.length} agent run(s).` : "Done.");
+  let summary = reply || (runs.length ? `Started ${runs.length} agent run(s).` : "Done.");
+  // An incognito turn is answered but never stored (context.persisted === false);
+  // mark the visible reply. The spoken `speak` string is left clean.
+  if (data?.context && data.context.persisted === false && !summary.endsWith("(not saved)")) {
+    summary = `${summary}\n\n(not saved)`;
+  }
   send(tabId, { cmd: "done", cueId, summary, speak });
   refreshSelfExtensionRuntime("turn_complete").catch(() => {});
   await saveTaskState(cueId, {
@@ -1678,21 +1690,59 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
   return tabIds;
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel } = {}) {
   // Hold the capture mutex across the async setup window. recordSessionStart
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
   // record path can never race the single offscreen capture slot.
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
 }
 
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit } = {}) {
+// Set the active thread for the shared session, or mint a new/fork/incognito
+// branch, and return the resolved branch id. Streaming voice must do this before
+// opening the WS session because the socket branch is fixed at session start.
+async function switchThreadBranch(cfg, action, label) {
+  const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
+  const data = await callGateway(cfg, "/v1/threads/switch", {
+    body: {
+      session_id: sessionId,
+      action,
+      ...(label ? { thread_label: label } : {}),
+      surface: "agee-extension",
+      device_id: deviceId,
+    },
+  });
+  return String(data?.thread?.branch_id || data?.active?.branch_id || data?.branch_id || "").trim();
+}
+
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel } = {}) {
   const cfg = await getConfig();
+  // Resolve the thread branch for an incognito / new-thread voice turn before
+  // minting the ticket, so the WS session opens on the right branch. An incognito
+  // switch that fails must not fall back to a persisted branch — fail the start.
+  const action = String(contextAction || "").trim();
+  let branchForSession = cueId;
+  if (action === "incognito" || action === "new" || action === "fork") {
+    let resolvedBranch = "";
+    try {
+      resolvedBranch = await switchThreadBranch(cfg, action, String(threadLabel || "").trim());
+    } catch (error) {
+      if (action === "incognito") {
+        throw new Error(`Could not start a private voice turn: ${String(error?.message || error)}`);
+      }
+    }
+    if (resolvedBranch) {
+      branchForSession = resolvedBranch;
+    } else if (action === "incognito") {
+      throw new Error("Could not start a private voice turn: the gateway did not return an incognito branch.");
+    }
+  }
   const ticket = await createVoiceSessionTicket(cfg);
   // Re-check after the awaits above: a record session that slipped in before
   // the mutex was visible must win. Abort this voice start cleanly instead of
@@ -1777,7 +1827,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         device_id: ticket.device_id || "",
         session_id: ticket.session_id,
         conversation_id: ticket.conversation_id || ticket.session_id,
-        branch_id: cueId,
+        branch_id: branchForSession,
         turn_id: turnId,
         all_branches_context: true,
         client: {
@@ -2797,7 +2847,7 @@ async function describePage(tabId, controller, cueId) {
   }
 }
 
-async function runAgent(tabId, instruction, controller, cueId) {
+async function runAgent(tabId, instruction, controller, cueId, contextControls = {}) {
   const signal = controller.signal;
 
   try {
@@ -2851,7 +2901,7 @@ async function runAgent(tabId, instruction, controller, cueId) {
       await runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, { input: "text" });
       return;
     }
-    await runViaGateway(tabId, instruction, cfg, signal, cueId);
+    await runViaGateway(tabId, instruction, cfg, signal, cueId, contextControls);
   } catch (err) {
     const message = signal.aborted ? "Task cancelled." : String(err.message || err);
     send(tabId, { cmd: signal.aborted ? "done" : "error", cueId, summary: message, text: message });
@@ -3326,6 +3376,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       assistantOverlap: msg.assistantOverlap === true,
       capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
       autoCommit: msg.autoCommit !== false,
+      contextAction: msg.contextAction,
+      threadLabel: msg.threadLabel,
     })
       .then((session) => {
         if (session?.voiceSessionId) {
@@ -3413,7 +3465,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
-    runAgent(tabId, msg.instruction, controller, cueId);
+    runAgent(tabId, msg.instruction, controller, cueId, {
+      contextAction: msg.contextAction,
+      threadLabel: msg.threadLabel,
+    });
   }
   if (msg.cmd === "branch" && sender.tab) {
     // Router intent: launch a disposable task agent in its OWN background tab.
