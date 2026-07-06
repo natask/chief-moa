@@ -207,20 +207,44 @@ already exist on the stranded branches. The new work is exposing them as a
 claimable worker tool with a bounded input (target host handle, mode, customization
 pack ref) and a receipt, not writing the scripts from scratch.
 
-## Decision: read-path migration off flat files
+## Decision: relational truth + audit event log (AMENDED 2026-07-04)
 
-Today `server.js` reads `CONVERSATIONS_DIR`, `VOICE_TURNS_DIR`, `AGENT_RUNS_DIR`,
-`BROWSER_TASKS_DIR`, `TOOL_REQUESTS_DIR`, `BROKER_EVENTS_DIR`, `DEVICE_CLIENTS_FILE`,
-`PROJECTS_FILE`, and profile history from disk while dual-writing events. The
-migration makes Postgres the read source in remote modes:
+Research amendment (see
+`scratch/architecture-research/2026-07-04-production-grade-structure/TARGET-ARCHITECTURE.md`
+for sources): the earlier wording implied event-sourcing-as-truth with
+rebuildable projections as the read path. The 2023-2026 practitioner consensus
+says full event sourcing is the wrong fit for a solo maintainer with
+CRUD-shaped entities. The production-standard pattern for this shape is the
+transactional outbox: **plain relational tables are the source of truth;
+`product_events` stays permanently as the append-only audit/outbox stream,
+written in the same transaction as the business row.** Nothing on the hot path
+replays events to compute state.
+
+Specifics that supersede the old staged plan:
+
+- Real tables per primitive (`users`, `identities`, `devices`, `sessions`,
+  `branches`, `turns`, `voice_turns`, `agent_runs`, `browser_tasks`,
+  `tool_requests`, `agent_profiles`, `virtual_keys`, ...), every row carrying
+  `user_id`, RLS designed in now as defense-in-depth (FORCE RLS, non-owner app
+  role, indexed policy columns).
+- One narrow event-first carve-out: `agent_run` lifecycle appends the event as
+  the fact and updates the run row's status in the same transaction.
+- Spend/budget is an atomic counter
+  (`UPDATE virtual_keys SET spend = spend + $cost WHERE id = $1 AND
+  spend + $cost <= budget RETURNING spend`), each mutation also appending a
+  `usage_metered` audit event. Never projection-on-the-hot-path (this is the
+  LiteLLM drift-bug class).
+- Blobs (voice audio, APKs) never enter Postgres: disk or S3-compatible store
+  with `blob_ref` + hash columns.
+- Migrations via node-pg-migrate as an explicit deploy step, never on boot;
+  `schema.sql` becomes migration 0001.
 
 ```text
-stage A   projections built from the event log for each read surface
-          (sessions, voice turns, runs, browser tasks, tool requests, profile)
-stage B   read paths switch to the projection in remote modes; file reads stay
-          the fallback only in local mode
-stage C   a one-time importer replays existing DATA_DIR files into product_events
-          so a live file-backed deployment migrates without losing history
+stage A   node-pg-migrate + relational schema v1 (tables above, RLS scaffolding)
+stage B   dual-write row + product_event in one transaction; flip reads
+          table by table in remote modes; file reads stay local-mode fallback
+stage C   a one-time importer replays existing DATA_DIR files into rows +
+          product_events so a live file-backed deployment keeps history
 stage D   file writes become local-mode-only; remote modes are Postgres-only
 ```
 
@@ -233,6 +257,40 @@ voice worktrees right now. Stage B must land after those worktrees merge, or mus
 be done on the consolidated tree. Stages A and C (new projection builders and a
 standalone importer script) can be built first without touching the contested
 read lines.
+
+## Decision: codebase structure and runtime toolkit (ADDED 2026-07-04)
+
+The gateway restructure that carries all of the above (full rationale and
+reference-project evidence in
+`scratch/architecture-research/2026-07-04-production-grade-structure/TARGET-ARCHITECTURE.md`):
+
+- Decompose the 10.7k-line `server.js` into `src/` with `routes/` (one file per
+  surface), `modules/` (domain logic, current `lib/` regrouped), `db/`
+  (per-domain raw-SQL query modules over `pg`), `http/` (router, middleware,
+  WS upgrade auth), `jobs/`. Every reference monolith (Outline, Ghost, n8n,
+  Cal.com, Directus) splits routes per domain; none run one flat file.
+- ESM conversion first (better-auth is ESM-only). Stay JavaScript with
+  JSDoc + checkJs; TypeScript is not what blocks production grade and a 25k-line
+  conversion mid-migration compounds churn.
+- Router: Hono via its Node adapter (zero-dep, Web-standard Request/Response,
+  matches better-auth's handler model); Express is the fallback.
+- Queues: **pg-boss** for internal cron/cleanup/rollup jobs; the worker-pull
+  claim endpoints (`agent_runs`, `browser_tasks`, `tool_requests`) stay plain
+  rows claimed with `SELECT ... FOR UPDATE SKIP LOCKED` + claim timeout.
+  **DBOS is explicitly deferred**: its value is checkpointing in-process
+  workflows, and this architecture pushes execution out to external workers by
+  design; revisit only if real multi-step in-process orchestration appears.
+- Auth integration guards: app tables foreign-key our own stable
+  `identities.id`, never better-auth's `user.id` (anonymous->linked accounts
+  get a NEW user id — upstream issue #4180); device tokens use the `apiKey`
+  plugin, not `bearer`; WS voice auth verifies the device key in the `upgrade`
+  handler by hand.
+- Tests: `node --test` replaces the flat `npm run check` command chain; unit
+  (no DB) vs integration (real Postgres) split. Packaging: one image, compose
+  with Postgres sibling, explicit migrate step, backup + scripted restore
+  check in the deploy path.
+- Resulting dependency budget: pg, ws, hono, better-auth (+ bundled kysely),
+  pg-boss, node-pg-migrate — all MIT.
 
 ## Client boundary summary
 
