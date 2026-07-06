@@ -147,6 +147,12 @@ public final class OverlayService extends Service {
     private boolean audioNoteActive;
     private MoaAudioCaptureController audioNoteCapture;
     private ByteArrayOutputStream audioNoteBuffer;
+    // One shared warm microphone. The gesture warms it at the second-tap press so
+    // the head of an utterance is buffered before the ~120ms hold confirms, then
+    // hands it to whichever capture path the hold resolves to (streaming voice or
+    // a record-mode note). Also pre-warmed during the continuous re-arm gap so a
+    // hands-free turn does not pay a fresh AudioRecord cold-start. Null when idle.
+    private MoaAudioCaptureController warmMic;
     private TextView recordModePill;
     // Context/thread controls (client-affordances lane). "New thread" arms a
     // one-shot so the NEXT sent turn (chat or voice) starts a fresh thread;
@@ -312,6 +318,7 @@ public final class OverlayService extends Service {
     public void onDestroy() {
         running = false;
         cancelAudioNoteCapture();
+        discardWarmMic();
         cancelStreamingTurnWatchdog();
         removeTranscriptOverlay();
         removePanel();
@@ -510,7 +517,9 @@ public final class OverlayService extends Service {
                 ORB_EDGE_MARGIN_DP,
                 this::handleOrbSingleTap,
                 this::handleOrbDoublePressStart,
-                this::handleOrbVoicePressRelease
+                this::handleOrbVoicePressRelease,
+                this::beginWarmMic,
+                this::discardWarmMic
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -1046,6 +1055,11 @@ public final class OverlayService extends Service {
     private void scheduleContinuousVoiceRestart(int generation) {
         cancelAutoDismiss();
         cancelContinuousVoiceRestart();
+        // Warm the mic through the re-arm gap so the next hands-free turn opens on
+        // an already-hot AudioRecord instead of paying a fresh cold-start. The
+        // silence-VAD path drops the pre-roll on go-live, so this only removes
+        // latency and never feeds stale gap audio into voice-activity detection.
+        beginWarmMic();
         pendingContinuousVoiceRestart = () -> {
             pendingContinuousVoiceRestart = null;
             if (!continuousVoiceLoop || generation != streamingVoiceGeneration) {
@@ -2316,6 +2330,7 @@ public final class OverlayService extends Service {
     // transcript card, and any live voice turn. Hide the keyboard too.
     private void dismissOverlayUi() {
         cancelAudioNoteCapture();
+        discardWarmMic();
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
         nextManualVoiceFollowsActiveRun = false;
@@ -2340,6 +2355,7 @@ public final class OverlayService extends Service {
     // usable without the overlay stealing focus.
     private void collapseInteractiveSurfaces() {
         cancelAudioNoteCapture();
+        discardWarmMic();
         cancelVoiceSampler();
         removeTranscriptOverlay();
         hideKeyboard();
@@ -2401,12 +2417,14 @@ public final class OverlayService extends Service {
         }
         loadSettings();
         if (!streamingVoiceAvailable()) {
+            // No capture path will run; drop any mic warmed by the gesture.
+            discardWarmMic();
             showAudioNoteResult("Audio notes need the gateway URL and token in settings.", true);
             return;
         }
         audioNoteBuffer = new ByteArrayOutputStream();
         audioNoteActive = true;
-        audioNoteCapture = new MoaAudioCaptureController(new MoaAudioCaptureController.Callback() {
+        MoaAudioCaptureController.Callback noteCallback = new MoaAudioCaptureController.Callback() {
             @Override
             public void onPcmChunk(byte[] pcm) {
                 appendAudioNoteChunk(pcm);
@@ -2424,11 +2442,19 @@ public final class OverlayService extends Service {
             public void onCaptureError(String message, Throwable error) {
                 mainHandler.post(() -> failAudioNoteCapture(message));
             }
-        });
+        };
+        // Record mode shares the same double-press gesture, so a mic may already
+        // be warm. Adopt it (draining its pre-roll into the note so the start of
+        // the recording is not lost); otherwise cold-start a fresh controller.
+        MoaAudioCaptureController capture = adoptWarmMic();
+        if (capture == null) {
+            capture = new MoaAudioCaptureController();
+        }
+        audioNoteCapture = capture;
         if (orbView != null) {
             orbView.setRecordingNote(true);
         }
-        audioNoteCapture.start();
+        audioNoteCapture.start(noteCallback, true);
     }
 
     // Called on the capture thread for every 40 ms PCM chunk.
@@ -2563,6 +2589,9 @@ public final class OverlayService extends Service {
     }
 
     private void startLocalVoiceTurn(boolean manualCommitOnly) {
+        // The local SpeechRecognizer path does not use our AudioRecord, so a mic
+        // warmed by the gesture would leak (indicator stuck on). Drop it here.
+        discardWarmMic();
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
@@ -3031,6 +3060,10 @@ public final class OverlayService extends Service {
                 }, 900);
             }
         });
+        // Hand over the gesture-warmed mic (or the mic pre-warmed during the
+        // continuous re-arm gap) so the session goes live instantly and, for
+        // push-to-talk, drains the pre-roll. Null here means a cold start.
+        streamingVoiceController.setPrewarmedCapture(adoptWarmMic());
         streamingVoiceController.startSession();
         if (streamingCommitPendingOpen) {
             // The user released while the branch was still resolving. Commit the
@@ -3241,6 +3274,42 @@ public final class OverlayService extends Service {
 
     private boolean streamingVoiceActive() {
         return streamingVoiceController != null && streamingVoiceController.isActive();
+    }
+
+    // Warm the shared mic on the second-tap press so the ~500ms pre-roll captures
+    // the head of the utterance before the hold confirms. Only when a gateway-
+    // backed capture path could consume it: the local SpeechRecognizer fallback
+    // does not use our AudioRecord, so warming there would light the mic
+    // indicator for nothing. Idempotent: a no-op while already warm.
+    private void beginWarmMic() {
+        if (!streamingVoiceAvailable()) {
+            return;
+        }
+        if (warmMic == null) {
+            warmMic = new MoaAudioCaptureController();
+        }
+        if (!warmMic.isRecording()) {
+            warmMic.warmUp();
+        }
+    }
+
+    // The gesture resolved to a drag or an early release before the hold
+    // confirmed: stop the warm mic and drop its pre-roll so the indicator turns
+    // off and nothing is captured. Safe to call when no mic is warm.
+    private void discardWarmMic() {
+        if (warmMic != null) {
+            warmMic.stop();
+            warmMic = null;
+        }
+    }
+
+    // Hand the already-running warm mic to the capture path the hold resolved to.
+    // Ownership transfers to the caller (session or audio note), which stops it.
+    // Returns null when nothing was warmed, in which case the caller cold-starts.
+    private MoaAudioCaptureController adoptWarmMic() {
+        MoaAudioCaptureController mic = warmMic;
+        warmMic = null;
+        return mic;
     }
 
     private void updateMicState() {

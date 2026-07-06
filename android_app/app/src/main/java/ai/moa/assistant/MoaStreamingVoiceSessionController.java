@@ -67,6 +67,11 @@ final class MoaStreamingVoiceSessionController {
     private final Object lock = new Object();
 
     private MoaAudioCaptureController captureController;
+    // A microphone already warmed by the gesture. When present, startSession
+    // adopts it instead of constructing a cold AudioRecord, so the pre-roll ring
+    // (the head of the utterance captured before the hold confirmed) flows into
+    // this turn. Set once before startSession(); consumed there.
+    private MoaAudioCaptureController prewarmedCapture;
     private MoaAudioPlaybackController playbackController;
     private MoaVoiceGatewaySocket gatewaySocket;
     private String sessionId = "";
@@ -128,6 +133,15 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
+    // Hand this session a mic the gesture already warmed. Must be called before
+    // startSession(); a null clears any prior hand-off and falls back to a cold
+    // start. The warm mic's ~500ms pre-roll drains into this turn on go-live.
+    void setPrewarmedCapture(MoaAudioCaptureController capture) {
+        synchronized (lock) {
+            prewarmedCapture = capture;
+        }
+    }
+
     void startSession() {
         synchronized (lock) {
             if (active) {
@@ -147,7 +161,11 @@ final class MoaStreamingVoiceSessionController {
             sessionId = requestedSessionId.isEmpty() ? "mobile-" + UUID.randomUUID().toString() : requestedSessionId;
             turnId = "turn_" + UUID.randomUUID().toString();
             playbackController = new MoaAudioPlaybackController(new PlaybackCallback());
-            captureController = new MoaAudioCaptureController(new CaptureCallback());
+            // Adopt a gesture-warmed mic when one was handed over; otherwise a
+            // fresh controller cold-starts on the first startCaptureIfNeeded. The
+            // CaptureCallback is attached at start()/go-live time, not here.
+            captureController = prewarmedCapture != null ? prewarmedCapture : new MoaAudioCaptureController();
+            prewarmedCapture = null;
             gatewaySocket = new MoaVoiceGatewaySocket(gatewayUrl, gatewayToken, new SocketCallback());
             gatewaySocket.connect();
         }
@@ -319,9 +337,13 @@ final class MoaStreamingVoiceSessionController {
             }
             capture = captureController;
         }
-        if (capture != null && !capture.isRecording()) {
+        // isLive() (not isRecording()) is the guard: a warmed mic is already
+        // "recording" into its ring but not yet delivering, so it must still be
+        // taken live here. Push-to-talk drains the pre-roll to catch the head of
+        // speech; the silence-VAD path drops it so stale gap audio never trips VAD.
+        if (capture != null && !capture.isLive()) {
             Log.i(TAG, "startCapture autoCommit=" + autoCommitOnSilence);
-            capture.start();
+            capture.start(new CaptureCallback(), !autoCommitOnSilence);
         }
     }
 
