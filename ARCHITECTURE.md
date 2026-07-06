@@ -136,11 +136,16 @@ last change (`mode=previous`) or restore the gateway defaults (`mode=reset`),
 and `propose_page_tweak` on browser turns. On cascaded turns the tools run
 through a bounded gateway tool loop that works on both the Vertex and
 OpenAI-compatible providers and degrades to a plain reply when the model or
-provider cannot call tools. Language switching is therefore reasoned about by
-the model; the deterministic phrase parser remains only as a fast path for
-exact control phrases. STT input languages stay explicitly user-specified
-(profile `input_languages`) — the gateway never auto-detects what the user
-speaks. Every write passes through the same
+provider cannot call tools. Language switching is exclusively model-owned: the
+deterministic transcript matchers for language were removed, so understood and
+reply languages change only through `update_agent_profile` (or the
+`set_languages` code-mode skill on the execute path), and the Live safety gate
+accepts language fields on the model's word while every other profile field
+still requires the deterministic parser to confirm the user asked. STT input
+languages stay explicitly user-specified (profile `input_languages`) — the
+gateway never auto-detects what the user speaks; Chirp recognition is
+constrained to exactly that set, and `input_language_primary` reorders it so
+one understood language leads recognition. Every write passes through the same
 sanitizer as the HTTP path (persona-prompt override stripping, the language
 allowlist, per-field coercion), so no tool value can blank a field or break the
 app; a rejected value keeps the previous setting and returns a structured
@@ -183,11 +188,11 @@ transcription nor text parts; downstream treats empty `assistant_text` as "no
 assistant transcript" and does not depend on it, so the turn still returns audio
 and the stored user transcript.
 
-The English + Amharic language allowlist (see `agent_profile` below) is enforced
-in the same profile-control path: an unsupported language is dropped by the
-sanitizer with the previous setting kept, and a spoken or typed request for one
-returns a reply stating only English and Amharic are supported rather than
-silently failing.
+The language catalog covers the full Chirp 3 set (about 115 codes, GA plus
+preview; see `agent_profile` below) and is enforced in the same profile-control
+path: an out-of-catalog language is dropped by the sanitizer with the previous
+setting kept, and the reply states the language is not in the supported set
+rather than silently failing.
 
 Voice turns can also become replayable verification evidence. When retention is
 enabled, the gateway stores or references the user audio, transcript, assistant
