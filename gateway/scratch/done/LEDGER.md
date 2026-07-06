@@ -1,3 +1,4 @@
+- Promoted the cascaded voice pipeline live on api.agee.app (Chirp 3 STT -> gateway LLM -> Gemini 3.1 Flash TTS, speaks am-ET) with authorized_user ADC + quota-project auth fixes; verified with a real TTS->STT round trip on the droplet — agent: Claude Code/Fable 5 — 453bee6
 - Added the gemini-tts provider (Gemini 3.1 Flash TTS via Cloud TTS modelName, speaks am-ET) so the cascaded pipeline streams hosted reply audio for Amharic — agent: Claude Code/Fable 5 — 12e179c
 - Added durable user identity profile fields (user_name, user_nickname + existing assistant_name, user_address) injected into every session without tool calls — agent: Claude Code/Fable 5 — d75c2a2
 - Diagnosed the live gateway crash loop (24 restarts/24h on api.agee.app: stale mic frame hit a nulled turn.audioStream and killed the process) and added the smoke-voice-teardown-race regression wired into npm run check — agent: Claude Code/Fable 5 — 6bcba7a
