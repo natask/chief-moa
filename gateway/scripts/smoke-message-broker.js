@@ -49,6 +49,8 @@ async function main() {
       assertExplicitBrokerLaunch(baseUrl, dataDir));
     await step("broker attaches evidence to active run", () =>
       assertActiveRunAttachment(baseUrl, dataDir, activeRunId));
+    await step("broadcast dismisses irrelevant forks with a no-op reason", () =>
+      assertBroadcastDismissesIrrelevantForks(baseUrl, dataDir, activeRunId));
     await step("broker follow-up does not cancel active run", () =>
       assertRuntimeActiveRunFollowUp(baseUrl, dataDir, sessionId));
     await step("broker event persisted", () =>
@@ -72,6 +74,7 @@ async function main() {
         "test/verify message returns a QA workflow decision",
         "explicit broker launch creates a linked wait=false agent run",
         "active run messages append broker_evidence_attached without cancellation",
+        "broadcast dismisses irrelevant forks with broker_fork_dismissed (no-op, no cancel)",
         "a second user turn while an agent run is active leaves the run active",
         "new work message can recommend create_new_fork without cancellation",
         "broker ledger persists route reasons",
@@ -301,6 +304,95 @@ async function assertActiveRunAttachment(baseUrl, dataDir, activeRunId) {
     event.broker_event_id === response.json.event.id);
   assert.ok(attached, "target run must receive broker_evidence_attached event");
   assert.equal(attached.context_pack_id, route.context_pack_id);
+}
+
+function seedIrrelevantAgentRun(dataDir) {
+  const now = new Date().toISOString();
+  const runId = `run_broker_offtopic_${Date.now().toString(36)}`;
+  const runDir = path.join(dataDir, "agent-runs");
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, `${runId}.json`), JSON.stringify({
+    id: runId,
+    status: "running",
+    harness: "echo",
+    prompt: "reconcile the quarterly finance spreadsheet totals for accounting",
+    source: "message-broker-smoke",
+    conversation_id: "",
+    profile_version: "profile_smoke",
+    parent_run_id: "",
+    project_id: "",
+    working_dir: GATEWAY_DIR,
+    timeout_ms: 600000,
+    created_at: now,
+    updated_at: now,
+    started_at: now,
+    finished_at: null,
+    exit_code: null,
+    signal: null,
+    stdout: "",
+    stderr: "",
+    output: "",
+    error: "",
+  }, null, 2));
+  fs.writeFileSync(path.join(runDir, `${runId}.events.jsonl`), JSON.stringify({
+    id: "evt_seed",
+    ts: now,
+    type: "started",
+    command: "seed",
+    args: [],
+    cwd: GATEWAY_DIR,
+  }) + "\n");
+  return runId;
+}
+
+// Task 3.3: a broadcast to active agents attaches to runs it pertains to and
+// leaves the irrelevant forks self-dismissed with a stored no-op reason. The
+// dismissal must never cancel, pause, or restart the run.
+async function assertBroadcastDismissesIrrelevantForks(baseUrl, dataDir, relevantRunId) {
+  const offTopicRunId = seedIrrelevantAgentRun(dataDir);
+  const response = await postJson(`${baseUrl}/v1/broker/messages`, {
+    source: "message-broker-smoke",
+    text: "update all active agents on the browser extension broker routing status",
+  });
+  assert.equal(response.status, 202, JSON.stringify(response.json));
+
+  const attach = response.json.decisions.find((decision) =>
+    decision.target_type === "agent_run" &&
+    decision.target_id === relevantRunId &&
+    decision.action === "attach_as_evidence");
+  assert.ok(attach, `broadcast must attach to the relevant run, got ${JSON.stringify(response.json.decisions)}`);
+
+  const dismiss = response.json.decisions.find((decision) =>
+    decision.target_type === "agent_run" &&
+    decision.target_id === offTopicRunId &&
+    decision.action === "dismiss_irrelevant");
+  assert.ok(dismiss, `broadcast must dismiss the irrelevant fork, got ${JSON.stringify(response.json.decisions)}`);
+  assert.equal(dismiss.cancellation_behavior, "none");
+  assert.match(dismiss.reason, /no-op|did not match/);
+  assert.ok(!dismiss.context_pack_id, "dismissal must not create a launchable context pack");
+
+  // The dismissal is a no-op event on the run; the run stays running and is
+  // never canceled.
+  const detail = await getJson(`${baseUrl}/v1/agent/runs/${offTopicRunId}`);
+  assert.equal(detail.run.status, "running", "dismissed fork must keep running");
+  const types = detail.events.map((event) => event.type);
+  assert.ok(types.includes("broker_fork_dismissed"), "dismissed fork must record broker_fork_dismissed");
+  assert.ok(!types.includes("canceled") && !types.includes("cancel_requested"), "dismissal must not cancel the run");
+  const dismissedEvent = detail.events.find((event) => event.type === "broker_fork_dismissed");
+  assert.equal(dismissedEvent.no_op, true);
+  assert.equal(dismissedEvent.broker_event_id, response.json.event.id);
+
+  // The relevant run receives the broadcast as evidence, still without cancellation.
+  const relevant = await getJson(`${baseUrl}/v1/agent/runs/${relevantRunId}`);
+  const relevantTypes = relevant.events.map((event) => event.type);
+  assert.ok(relevantTypes.includes("broker_evidence_attached"), "relevant run must receive broker_evidence_attached");
+  assert.ok(!relevantTypes.includes("canceled"), "broadcast must not cancel the relevant run");
+
+  // The stored broker event persists the dismissal decision for inspection.
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "broker-events", `${response.json.event.id}.json`), "utf8"));
+  assert.ok(stored.decisions.some((decision) =>
+    decision.action === "dismiss_irrelevant" && decision.target_id === offTopicRunId),
+    "broker event must persist the dismissal decision");
 }
 
 async function assertRuntimeActiveRunFollowUp(baseUrl, dataDir, sessionId) {

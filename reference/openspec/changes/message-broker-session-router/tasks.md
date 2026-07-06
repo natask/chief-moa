@@ -18,7 +18,12 @@
 
 - [x] 3.1 Attach a message to relevant active runs without canceling them. Implemented by appending `broker_evidence_attached` events to matched active runs.
 - [x] 3.2 Allow a message to create a new forked run with `wait=false`. Implemented for explicit broker launch requests by starting the selected `create_new_fork` or workflow route as a linked non-blocking `agent_run`.
-- [ ] 3.3 Let irrelevant forked runs self-dismiss with a stored no-op reason.
+- [x] 3.3 Let irrelevant forked runs self-dismiss with a stored no-op reason.
+      Implemented as a broker broadcast that attaches to relevant active runs and
+      records a `dismiss_irrelevant` route decision plus a no-op
+      `broker_fork_dismissed` run event for each unrelated fork. The dismissal
+      never cancels, pauses, or restarts the run. Verified 2026-07-06 with
+      `cd gateway && node scripts/smoke-message-broker.js`.
 
 ## 4. Workflow Package Invocation
 
