@@ -78,8 +78,10 @@ deploy_gateway() {
 
 deploy_android() {
   log "android: building + syncing OTA artifact"
+  # OTA hosting moved to the VPS gateway (api.agee.app); the main machine is
+  # decommissioned. sync-vps.sh refuses to run without an explicit host.
   ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
-    bash "$ROOT_DIR/android_app/deploy/ota/sync-main-machine.sh"
+    bash "$ROOT_DIR/android_app/deploy/ota/sync-vps.sh"
   direct_install_android
   if curl -fsS "$GATEWAY_URL/health" >/dev/null 2>&1; then
     log "android: gateway health smoke passed at $GATEWAY_URL"
