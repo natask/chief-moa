@@ -694,6 +694,13 @@ class ChirpSttVoiceProvider {
       return this.cascadedResult(transcript, reasoning, false, transcription);
     }
     const modality = this.replyModality();
+    // The reasoner (gateway LLM/tool turn) runs with no stream events until it
+    // returns. Tell the session server to keep the client alive with turn_progress
+    // ticks during the wait; the server owns the interval, this only reports the
+    // stage. Absent on non-streaming hook sets (loopback/eval), so guard the call.
+    if (typeof hooks.onTurnProgress === "function") {
+      await hooks.onTurnProgress("reasoning");
+    }
     try {
       const result = await this.reasoner({
         transcript,
@@ -737,6 +744,11 @@ class ChirpSttVoiceProvider {
     if (speak && modality === "text") {
       // Deliberate text-only delivery, not a failure — leave spoke=false, no error.
     } else if (speak && this.canSynthesize(reasoning.language)) {
+      // Hosted TTS synthesis is another silent wait before audio starts flowing;
+      // keep the keepalive going with the "tts" stage until the first audio frame.
+      if (typeof hooks.onTurnProgress === "function") {
+        await hooks.onTurnProgress("tts");
+      }
       try {
         const pcm = await this.synthesizeSpeech(ttsText, reasoning.language, ttsStyle);
         if (pcm && pcm.length) {
@@ -817,6 +829,11 @@ class ChirpSttVoiceProvider {
     const language = String(options.language || "").trim() || this.replyLanguage();
     if (!this.canSynthesize(language)) {
       return { spoke: false, tts_error: "" };
+    }
+    // The confirmation-TTS leg (profile-control confirmations) is a silent wait
+    // too; keep the "tts" keepalive going until the first audio frame.
+    if (typeof hooks.onTurnProgress === "function") {
+      await hooks.onTurnProgress("tts");
     }
     try {
       const pcm = await this.synthesizeSpeech(speak, language);

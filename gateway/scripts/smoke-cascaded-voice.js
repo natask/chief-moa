@@ -51,6 +51,9 @@ async function main() {
     await ttsErrorSurfacedOnResult(tempDir);
     await spokenProfileControlConfirmation(tempDir);
     await expressiveTtsRequestShape(tempDir);
+    await turnProgressDuringStalledReasoner(tempDir);
+    await turnProgressStopsAfterCancel(tempDir);
+    await turnProgressStopsAfterClose(tempDir);
     console.log("smoke-cascaded-voice: ok");
   } finally {
     global.fetch = previousFetch;
@@ -658,6 +661,183 @@ async function expressiveTtsRequestShape(tempDir) {
   assert.equal(ttsCall.body.input.prompt, "warm, amused", "the style prompt must ride input.prompt");
   assert.match(String(ttsCall.body.input.text || ""), /\[whispering\]/, "whitelisted inline tags must ride input.text");
   assert.equal(ttsCall.body.voice.modelName, "gemini-3.1-flash-tts-preview", "gemini-tts model must be selected");
+}
+
+// Keepalive contract: while a committed cascaded turn sits between
+// transcript_final and turn_done with the reasoner (here, a stalled stub) running
+// and no stream events, the session server must emit turn_progress ticks so a
+// client watchdog does not tear the slow-but-healthy turn down. Ticks must stop
+// at turn_done and never fire afterward.
+async function turnProgressDuringStalledReasoner(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "hello there", calls });
+
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      VOICE_TTS_PROVIDER: "cloud-tts",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US",
+    },
+    reasoner: async ({ transcript }) => {
+      // The reasoner stalls with no stream events — the exact window the client
+      // watchdog would misread as a dead turn.
+      await delayMs(120);
+      return { speak: `You said: ${transcript}.`, display: `You said: ${transcript}.`, language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+
+  const { events } = await driveCascadedSessionWithProgress(tempDir, "progress-stall", provider, 20);
+  const types = events.map((e) => e.type);
+  const doneIndex = types.indexOf("turn_done");
+  assert.ok(doneIndex >= 0, "a stalled cascaded turn must still finish with turn_done");
+  assert.equal(events[doneIndex].status, "completed", "the stalled cascaded turn must complete");
+
+  const progressIndexes = types.map((t, i) => (t === "turn_progress" ? i : -1)).filter((i) => i >= 0);
+  assert.ok(progressIndexes.length >= 1, "at least one turn_progress must fire while the reasoner stalls");
+  assert.ok(progressIndexes.every((i) => i < doneIndex), "every turn_progress must precede turn_done");
+  for (const i of progressIndexes) {
+    assert.equal(events[i].turn_id, "turn_progress-stall", "turn_progress must carry the turn id");
+    assert.ok(["reasoning", "tts"].includes(events[i].stage), `turn_progress stage must be reasoning|tts, got ${events[i].stage}`);
+  }
+  const transcriptFinalIndex = types.indexOf("transcript_final");
+  assert.ok(
+    transcriptFinalIndex >= 0 && transcriptFinalIndex < progressIndexes[0],
+    "turn_progress must only fill the gap AFTER transcript_final",
+  );
+
+  // Zero turn_progress after turn_done, even after a wait longer than the interval.
+  const progressBefore = progressIndexes.length;
+  await delayMs(80);
+  const progressAfter = events.filter((e) => e.type === "turn_progress").length;
+  assert.equal(progressAfter, progressBefore, "no turn_progress may fire after turn_done");
+}
+
+// A canceled turn must stop the keepalive. The Live path starts progress at commit;
+// the provider here never returns (its done stays pending), so the parked commit
+// never completes the turn and cancel_turn is the only terminal path. Ticks flow
+// until cancel and none after.
+async function turnProgressStopsAfterCancel(tempDir) {
+  const { connection, events } = await setupHungLiveConnection(tempDir, "progress-cancel", 20);
+  // Do NOT await: the committed Live turn parks forever on the hung provider done.
+  connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_progress-cancel" }).catch(() => {});
+  await delayMs(80);
+  assert.ok(
+    events.filter((e) => e.type === "turn_progress").length >= 1,
+    "a hung committed Live turn must emit turn_progress keepalives",
+  );
+
+  await connection.handleCancelTurn({ type: "cancel_turn", turn_id: "turn_progress-cancel" });
+
+  const types = events.map((e) => e.type);
+  const doneIndex = types.indexOf("turn_done");
+  assert.ok(doneIndex >= 0 && events[doneIndex].status === "canceled", "cancel must end the turn with turn_done canceled");
+  const progressIndexes = types.map((t, i) => (t === "turn_progress" ? i : -1)).filter((i) => i >= 0);
+  assert.ok(progressIndexes.every((i) => i < doneIndex), "every turn_progress must precede the cancel turn_done");
+
+  const progressAfterCancel = events.filter((e) => e.type === "turn_progress").length;
+  await delayMs(80);
+  assert.equal(
+    events.filter((e) => e.type === "turn_progress").length,
+    progressAfterCancel,
+    "no turn_progress may fire after cancel",
+  );
+}
+
+// A closed socket must stop the keepalive too. closeCurrentTurn is the same path
+// ws.on("close") drives; it records the incomplete turn and sends no turn_done, so
+// the assertion is only that ticks stop and the turn is cleared.
+async function turnProgressStopsAfterClose(tempDir) {
+  const { connection, events } = await setupHungLiveConnection(tempDir, "progress-close", 20);
+  connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_progress-close" }).catch(() => {});
+  await delayMs(80);
+  assert.ok(
+    events.filter((e) => e.type === "turn_progress").length >= 1,
+    "a hung committed Live turn must emit turn_progress before the socket closes",
+  );
+
+  await connection.closeCurrentTurn("closed");
+
+  assert.equal(connection.turn, null, "a closed turn must be cleared");
+  const progressAfterClose = events.filter((e) => e.type === "turn_progress").length;
+  await delayMs(80);
+  assert.equal(
+    events.filter((e) => e.type === "turn_progress").length,
+    progressAfterClose,
+    "no turn_progress may fire after the socket closes",
+  );
+}
+
+// Drive a cascaded turn through the real VoiceSessionConnection with a fast
+// turn_progress interval so the keepalive is observable in a short test.
+async function driveCascadedSessionWithProgress(tempDir, tag, provider, turnProgressIntervalMs) {
+  const { connection, events } = makeProgressConnection(tempDir, tag, provider, turnProgressIntervalMs);
+  const pcm = generatePcm16Tone({ durationMs: 80, frequencyHz: 240, sampleRate: 16000, volume: 0.2 });
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: `sess_${tag}`,
+    turn_id: `turn_${tag}`,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(pcm);
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: `turn_${tag}` });
+  return { connection, events };
+}
+
+// A Live provider whose turn never completes on its own: its done promise stays
+// pending even after cancel(), so the parked handleCommitTurn never completes the
+// turn and the session server's terminal path (cancel/close) is the only thing
+// that ends it. This isolates the keepalive-stop assertion from the separate
+// completion race.
+function makeHungLiveProvider() {
+  const done = new Promise(() => {});
+  const audioFormat = { encoding: "pcm16", sample_rate: 16000, channels: 1 };
+  return {
+    status: () => ({ provider: "gemini-live", model: "test-live", configured: true, assistant_audio_format: audioFormat }),
+    createLiveTurnSession() {
+      return {
+        done,
+        sendAudio() {},
+        commit() {},
+        cancel() {},
+      };
+    },
+  };
+}
+
+async function setupHungLiveConnection(tempDir, tag, turnProgressIntervalMs) {
+  const { connection, events } = makeProgressConnection(tempDir, tag, makeHungLiveProvider(), turnProgressIntervalMs);
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: `sess_${tag}`,
+    turn_id: `turn_${tag}`,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 40, frequencyHz: 260, sampleRate: 16000, volume: 0.2 }));
+  return { connection, events };
+}
+
+function makeProgressConnection(tempDir, tag, provider, turnProgressIntervalMs) {
+  const dataDir = path.join(tempDir, `session-${tag}`);
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const events = [];
+  const connection = new VoiceSessionConnection(fakeWs(events), {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    turnProgressIntervalMs,
+    onTurnCompleted: async (record) => record,
+  });
+  return { connection, events };
+}
+
+function delayMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function makeTurn(tempDir, tag) {
