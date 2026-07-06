@@ -51,7 +51,7 @@ final class MoaVoiceGatewaySocket {
 
         void onAssistantAudioDone(String turnId);
 
-        void onTurnDone(String turnId, String status, boolean transcriptionOnly);
+        void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
 
         void onGatewayError(String message);
     }
@@ -275,7 +275,12 @@ final class MoaVoiceGatewaySocket {
                     callback.onTurnDone(
                             event.optString("turn_id", ""),
                             event.optString("status", ""),
-                            event.optBoolean("transcription_only", false)
+                            event.optBoolean("transcription_only", false),
+                            // Optional on newer gateways. Absent = assume the
+                            // gateway spoke, so older gateways only trigger the
+                            // local fallback when no assistant audio arrived.
+                            event.optBoolean("tts_spoke", true),
+                            event.optString("reply_language", "")
                     );
                 }
                 break;

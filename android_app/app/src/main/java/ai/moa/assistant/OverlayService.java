@@ -56,10 +56,13 @@ public final class OverlayService extends Service {
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
     private static final long VOICE_USER_EXIT_MS = 150;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
-    // After a streaming commit, if no transcript/assistant/turn_done event
-    // arrives within this window the turn is torn down so the user can retry
-    // instead of waiting on a silently stalled turn.
-    private static final long STREAMING_TURN_WATCHDOG_MS = 12000;
+    // Inactivity watchdog for a committed streaming turn. It is armed on commit
+    // and RESET by every streaming event (partial/final transcript, assistant
+    // text, assistant audio start/done). If no event arrives for this long while
+    // a turn is in flight, the turn is torn down with a visible + spoken timeout
+    // notice so the user is never left in unexplained silence. It is suspended
+    // while assistant audio is actively playing and cleared on turn_done.
+    private static final long STREAMING_TURN_WATCHDOG_MS = 15000;
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
     private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
@@ -133,6 +136,10 @@ public final class OverlayService extends Service {
     private TextView recordModePill;
     private boolean pendingContinuousVoiceRestartAfterAudio;
     private boolean streamingAssistantAudioPlaying;
+    // Whether any assistant audio frame actually played during the current
+    // streaming turn. Drives the local TTS fallback when the gateway produced
+    // text but never spoke it (for example am-ET replies with no hosted voice).
+    private boolean currentStreamingTurnAudioReceived;
     private boolean deviceClientLoopRunning;
     private boolean deviceClientPollInFlight;
 
@@ -214,6 +221,35 @@ public final class OverlayService extends Service {
         promoteToForeground();
         showOrb();
         startDeviceClientLoop();
+        adoptSharedSessionId();
+    }
+
+    // Join the gateway's canonical shared session so every surface (phone,
+    // browser) writes into one conversation. Best-effort and off the main
+    // thread: an offline or older gateway leaves the local id untouched.
+    private void adoptSharedSessionId() {
+        if (gatewayUrl.isEmpty()) {
+            return;
+        }
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        new Thread(() -> {
+            try {
+                String sharedId = new MoaGatewayClient(url, token).defaultSessionId();
+                if (safe(sharedId).isEmpty()) {
+                    return;
+                }
+                mainHandler.post(() -> {
+                    if (!sharedId.equals(conversationId)) {
+                        conversationId = sharedId;
+                        MoaPrefs.setConversationId(this, sharedId);
+                    }
+                });
+            } catch (Exception ignored) {
+                // Offline or a gateway without the shared-session route: keep the
+                // existing local conversation id.
+            }
+        }, "moa-shared-session").start();
     }
 
     @Override
@@ -2015,22 +2051,31 @@ public final class OverlayService extends Service {
         controller.commitTurn();
     }
 
-    // If a committed streaming turn produces no transcript/assistant/turn_done
-    // event within the watchdog window, tear it down, show a short error, and
-    // reset the orb so the user can retry immediately.
+    // Arm the inactivity watchdog for a committed turn. Called on commit and
+    // re-armed by every later streaming event via markStreamingTurnProgressing.
     private void armStreamingTurnWatchdog(int generation) {
+        resetStreamingTurnWatchdog();
+    }
+
+    // Cancel and re-arm the inactivity timer. If no streaming event arrives for
+    // STREAMING_TURN_WATCHDOG_MS while a committed turn is in flight, the turn is
+    // torn down with a visible + spoken timeout notice instead of hanging in
+    // silence. Uses the current streaming generation so a stale timer is inert.
+    private void resetStreamingTurnWatchdog() {
         cancelStreamingTurnWatchdog();
+        final int generation = streamingVoiceGeneration;
         pendingStreamingTurnWatchdog = () -> {
             pendingStreamingTurnWatchdog = null;
             if (!isCurrentStreamingGeneration(generation)) {
                 return;
             }
-            Log.w(TAG, "streaming turn watchdog fired; tearing down stalled turn");
+            Log.w(TAG, "streaming turn inactivity watchdog fired; tearing down stalled turn");
             if (streamingVoiceActive()) {
                 cancelStreamingVoice();
             }
-            String failure = "No response from voice gateway. Tap to try again.";
+            String failure = "The voice turn timed out.";
             updateVoiceAssistantTranscript(failure);
+            speakOverlayNotice(failure);
             setVoiceRuntimeState(VoiceRuntimeState.ERROR);
             continuousVoiceLoop = false;
             updateMicState();
@@ -2046,13 +2091,30 @@ public final class OverlayService extends Service {
         }
     }
 
-    // The turn is making progress (commit acked or first event in). Stop the
-    // watchdog and move the visible state from "sending" to "thinking".
+    // A streaming event arrived. Re-arm the inactivity watchdog (only if it was
+    // already armed at commit; pre-commit listening does not start it) and move
+    // the visible state from "sending" to "thinking".
     private void markStreamingTurnProgressing() {
-        cancelStreamingTurnWatchdog();
+        if (pendingStreamingTurnWatchdog != null) {
+            resetStreamingTurnWatchdog();
+        }
         if (voiceRuntimeState == VoiceRuntimeState.SENDING) {
             setVoiceRuntimeState(VoiceRuntimeState.THINKING);
         }
+    }
+
+    // Short spoken feedback for overlay notices (timeouts, no-speech, errors,
+    // dropped connections). Mirrors the reply-speak gate: quiet mode and a busy
+    // TTS engine both suppress it, but the visible notice always shows.
+    private boolean speakOverlayNotice(String text) {
+        String value = safe(text);
+        if (value.isEmpty()) {
+            return false;
+        }
+        if (!MoaPrefs.spokenRepliesEnabled(this) || voiceController == null || !voiceController.isIdle()) {
+            return false;
+        }
+        return voiceController.speak(value);
     }
 
     private boolean routeCommittedStreamingTranscriptIfNeeded(String transcript) {
@@ -2415,6 +2477,7 @@ public final class OverlayService extends Service {
         currentStreamingTranscript = "";
         streamingTranscriptAccumulator.reset();
         streamingAssistantAudioPlaying = false;
+        currentStreamingTurnAudioReceived = false;
         resetVoiceTurnTranscript();
         final String stableSessionId = conversationId.isEmpty() ? MoaPrefs.conversationId(this) : conversationId;
         updateConversationId(stableSessionId);
@@ -2528,7 +2591,10 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                markStreamingTurnProgressing();
+                // Audio is actively playing: suspend the inactivity watchdog so a
+                // long reply is not mistaken for a stall.
+                cancelStreamingTurnWatchdog();
+                currentStreamingTurnAudioReceived = true;
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -2542,6 +2608,9 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                // Playback finished but turn_done has not arrived yet: re-arm the
+                // watchdog so a hang after audio still surfaces a notice.
+                resetStreamingTurnWatchdog();
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -2554,7 +2623,7 @@ public final class OverlayService extends Service {
             }
 
             @Override
-            public void onTurnDone(String turnId, String status, boolean transcriptionOnly) {
+            public void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
@@ -2567,8 +2636,17 @@ public final class OverlayService extends Service {
                     nextStreamingTurnFollowsActiveRun = false;
                     recordCurrentStreamingAssistant();
                 }
-                if ("completed".equals(safe(status))) {
+                String turnStatus = safe(status);
+                if ("completed".equals(turnStatus)) {
+                    // If the gateway produced text but never spoke it (tts_spoke
+                    // false, or no assistant audio arrived at all), speak it
+                    // locally so a completed turn is never silent.
+                    boolean fallbackSpeaking = maybeSpeakStreamingFallback(ttsSpoke, replyLanguage);
                     refreshVoiceProfile();
+                    if (fallbackSpeaking) {
+                        // Local TTS drives completion via onSpokenReplyFinished.
+                        return;
+                    }
                     if (streamingAssistantAudioPlaying) {
                         pendingContinuousVoiceRestartAfterAudio = true;
                         return;
@@ -2576,6 +2654,19 @@ public final class OverlayService extends Service {
                     showReadyForNextVoiceTurn(generation);
                     return;
                 }
+                if ("no_speech".equals(turnStatus)) {
+                    String notice = "I didn't catch that.";
+                    updateVoiceAssistantTranscript(notice);
+                    speakOverlayNotice(notice);
+                    setVoiceRuntimeState(VoiceRuntimeState.READY);
+                } else if ("error".equals(turnStatus)) {
+                    String notice = "The voice turn failed. Tap to try again.";
+                    updateVoiceAssistantTranscript(notice);
+                    speakOverlayNotice(notice);
+                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+                    continuousVoiceLoop = false;
+                }
+                updateMicState();
                 mainHandler.postDelayed(() -> {
                     if (isCurrentStreamingGeneration(generation)) {
                         showReadyForNextVoiceTurn(generation);
@@ -2590,6 +2681,24 @@ public final class OverlayService extends Service {
                 }
                 cancelStreamingTurnWatchdog();
                 if (currentStreamingTurnRouted) {
+                    return;
+                }
+                // The controller only reports a close for a still-active session,
+                // so reaching here means turn_done never arrived. If a turn was
+                // committed and in flight, say so instead of resetting silently.
+                if (currentStreamingTurnCommitRequested) {
+                    currentStreamingTurnCommitRequested = false;
+                    String notice = "Voice connection dropped — try again.";
+                    updateVoiceAssistantTranscript(notice);
+                    speakOverlayNotice(notice);
+                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+                    continuousVoiceLoop = false;
+                    updateMicState();
+                    mainHandler.postDelayed(() -> {
+                        if (isCurrentStreamingGeneration(generation)) {
+                            showReadyForNextVoiceTurn(generation);
+                        }
+                    }, 900);
                     return;
                 }
                 if (continuousVoiceLoop && currentStreamingTranscript.isEmpty() && voiceAssistantTranscript.isEmpty()) {
@@ -2616,6 +2725,9 @@ public final class OverlayService extends Service {
                 String failure = "Streaming voice failed: " + message;
                 addMessage(true, failure);
                 updateVoiceAssistantTranscript(failure);
+                // Keep the detailed banner visible but speak a short line so the
+                // failure is never silent (the full message may be a long URL).
+                speakOverlayNotice("The voice turn failed. Tap to try again.");
                 setVoiceRuntimeState(VoiceRuntimeState.ERROR);
                 continuousVoiceLoop = false;
                 mainHandler.postDelayed(() -> {
@@ -2675,6 +2787,41 @@ public final class OverlayService extends Service {
         }
         currentStreamingAssistantRecorded = true;
         addMessage(true, voiceAssistantTranscript);
+    }
+
+    // Local TTS fallback for the streaming path. When a completed turn produced
+    // assistant text but the gateway did not speak it (tts_spoke false or no
+    // assistant audio ever played), speak it with the on-device engine, mirroring
+    // the HTTP path's speak gate (quiet mode + idle engine). Returns true when
+    // local speech started, so the caller lets onSpokenReplyFinished drive the
+    // ready/restart flow.
+    private boolean maybeSpeakStreamingFallback(boolean ttsSpoke, String replyLanguage) {
+        if (currentStreamingTurnRouted) {
+            return false;
+        }
+        boolean gatewaySpoke = ttsSpoke && currentStreamingTurnAudioReceived;
+        if (gatewaySpoke || streamingAssistantAudioPlaying) {
+            return false;
+        }
+        String text = safe(voiceAssistantTranscript);
+        if (text.isEmpty()) {
+            return false;
+        }
+        if (!MoaPrefs.spokenRepliesEnabled(this) || voiceController == null || !voiceController.isIdle()) {
+            return false;
+        }
+        String reply = safe(replyLanguage);
+        if (!reply.isEmpty()) {
+            // Best-effort: bias the on-device voice toward the reply language so
+            // a non-English reply reads in the right locale where supported.
+            voiceController.setLanguageTags(MoaPrefs.inputLanguageTag(this), reply);
+        }
+        boolean speaking = voiceController.speak(text);
+        if (speaking) {
+            setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
+            updateMicState();
+        }
+        return speaking;
     }
 
     private boolean shouldRouteStreamingTranscriptThroughMoa(String text) {

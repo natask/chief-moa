@@ -61,6 +61,14 @@ final class MoaGatewayClient {
         }
     }
 
+    // The canonical shared session id every surface joins. Newer gateways expose
+    // this; callers must tolerate a 404/absence and keep their local id.
+    String defaultSessionId() throws Exception {
+        String responseText = getText(apiEndpoint("/v1/sessions/default"), 15000);
+        JSONObject response = new JSONObject(responseText);
+        return response.optString("session_id", "").trim();
+    }
+
     JSONObject agentRuns(int limit) throws Exception {
         int safeLimit = Math.max(1, Math.min(limit, 100));
         String responseText = getText(apiEndpoint("/v1/agent/runs?limit=" + safeLimit), 15000);

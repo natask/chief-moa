@@ -42,7 +42,7 @@ final class MoaStreamingVoiceSessionController {
 
         void onAssistantAudioDone(String turnId);
 
-        void onTurnDone(String turnId, String status, boolean transcriptionOnly);
+        void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
 
         void onSessionClosed();
 
@@ -376,7 +376,7 @@ final class MoaStreamingVoiceSessionController {
         reportError("Voice gateway did not become ready in time. Tap to try again.", null);
     }
 
-    private void handleTurnDone(String completedTurnId, String status, boolean transcriptionOnly) {
+    private void handleTurnDone(String completedTurnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
         mainHandler.removeCallbacks(pendingCommitTimeout);
         MoaAudioCaptureController capture;
         MoaAudioPlaybackController playback;
@@ -402,7 +402,7 @@ final class MoaStreamingVoiceSessionController {
         if (playback != null && shouldStopPlayback) {
             playback.stop();
         }
-        post(() -> callback.onTurnDone(completedTurnId, status, transcriptionOnly));
+        post(() -> callback.onTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage));
     }
 
     private void reportError(String message, Throwable error) {
@@ -729,9 +729,9 @@ final class MoaStreamingVoiceSessionController {
         }
 
         @Override
-        public void onTurnDone(String completedTurnId, String status, boolean transcriptionOnly) {
-            Log.i(TAG, "turnDone status=" + status + " transcriptionOnly=" + transcriptionOnly);
-            handleTurnDone(completedTurnId, status, transcriptionOnly);
+        public void onTurnDone(String completedTurnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
+            Log.i(TAG, "turnDone status=" + status + " transcriptionOnly=" + transcriptionOnly + " ttsSpoke=" + ttsSpoke);
+            handleTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage);
         }
 
         @Override
