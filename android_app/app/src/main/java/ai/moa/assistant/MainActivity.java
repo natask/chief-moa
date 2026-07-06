@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.PorterDuff;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
@@ -22,8 +23,10 @@ import android.view.Window;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 
 import org.json.JSONArray;
@@ -40,6 +43,11 @@ public final class MainActivity extends Activity {
     static final String EXTRA_GATEWAY_TOKEN = "ai.moa.assistant.extra.GATEWAY_TOKEN";
     static final String EXTRA_START_OVERLAY = "ai.moa.assistant.extra.START_OVERLAY";
 
+    // Overlay contract: the overlay agent handles this action to re-read the
+    // stored orb scale. Kept as a literal so the main app builds even before the
+    // overlay side lands its OverlayService.ACTION_REFRESH_ORB_SCALE constant.
+    private static final String ACTION_REFRESH_ORB_SCALE = "ai.moa.assistant.REFRESH_ORB_SCALE";
+
     private static final int REQUEST_AUDIO = 4101;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -53,6 +61,7 @@ public final class MainActivity extends Activity {
     private TextView runsStatus;
     private TextView receiptsStatus;
     private TextView settingsStatus;
+    private TextView orbScaleValue;
     private Button overlayButton;
     private Button accessibilityButton;
     private Button appInfoButton;
@@ -74,8 +83,8 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         Window window = getWindow();
-        window.setStatusBarColor(MoaColors.INK);
-        window.setNavigationBarColor(MoaColors.INK);
+        window.setStatusBarColor(MoaColors.SURFACE_0);
+        window.setNavigationBarColor(MoaColors.SURFACE_0);
 
         applyIntentConfiguration(getIntent());
         setContentView(createContent());
@@ -129,73 +138,91 @@ public final class MainActivity extends Activity {
     private View createContent() {
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
-        scrollView.setBackground(MoaDrawables.verticalGradient(MoaColors.INK, 0xFF10231B));
+        scrollView.setBackgroundColor(MoaColors.SURFACE_0);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(22), dp(34), dp(22), dp(26));
+        root.setPadding(dp(20), dp(30), dp(20), dp(26));
         scrollView.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         ));
 
-        TextView eyebrow = label("ANDROID ASSISTANT", MoaColors.GOLD, 12, true);
-        eyebrow.setLetterSpacing(0.14f);
-        root.addView(eyebrow);
-
-        TextView title = new TextView(this);
-        title.setText("A.G. lives above\nthe phone.");
-        title.setTextColor(MoaColors.PAPER);
-        title.setTextSize(36);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setLineSpacing(0, 0.92f);
-        title.setPadding(0, dp(8), 0, dp(10));
-        root.addView(title);
-
-        TextView body = new TextView(this);
-        body.setText("Enable draw-over-apps, start the assistant circle, then tap for chat or double-click and hold to talk.");
-        body.setTextColor(0xCCEEF8E8);
-        body.setTextSize(15);
-        body.setLineSpacing(dp(3), 1f);
-        root.addView(body);
+        root.addView(heroBrand());
 
         root.addView(statusCard());
         root.addView(gatewayCard());
         root.addView(controlCenterCard());
         root.addView(actionCard());
-        root.addView(scopeCard());
+        root.addView(orbSizeCard());
+        root.addView(gesturesCard());
 
         return scrollView;
     }
 
+    private View heroBrand() {
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.HORIZONTAL);
+        hero.setGravity(Gravity.CENTER_VERTICAL);
+
+        ImageView mark = new ImageView(this);
+        mark.setImageResource(R.drawable.moa_mark);
+        LinearLayout.LayoutParams markParams = new LinearLayout.LayoutParams(dp(46), dp(46));
+        markParams.rightMargin = dp(12);
+        mark.setLayoutParams(markParams);
+        hero.addView(mark);
+
+        LinearLayout text = new LinearLayout(this);
+        text.setOrientation(LinearLayout.VERTICAL);
+
+        TextView eyebrow = label("ANDROID ASSISTANT", MoaColors.GOLD, 11, true);
+        eyebrow.setLetterSpacing(0.14f);
+        text.addView(eyebrow);
+
+        TextView title = label("A.G.", MoaColors.PAPER, 30, true);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        text.addView(title);
+
+        hero.addView(text);
+
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.addView(hero);
+
+        TextView subtitle = label("Your assistant, above every app.", MoaColors.MUTED, 15, false);
+        subtitle.setPadding(0, dp(10), 0, dp(2));
+        wrap.addView(subtitle);
+        return wrap;
+    }
+
     private View statusCard() {
         LinearLayout card = card();
-        card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "Required access");
 
-        overlayStatus = statusLine(card, "Screen overlay", "Checking...");
-        accessibilityStatus = statusLine(card, "Screen access", "Checking...");
-        micStatus = statusLine(card, "Microphone", "Checking...");
-        gatewayStatus = statusLine(card, "Model gateway", "Checking...");
-        updateStatus = statusLine(card, "App update", "Checking...");
-        requirementsSummary = label("", 0xCDEEF8E8, 14, false);
+        overlayStatus = accessRow(card, "Screen overlay", "Checking...");
+        accessibilityStatus = accessRow(card, "Screen access", "Checking...");
+        micStatus = accessRow(card, "Microphone", "Checking...");
+        gatewayStatus = accessRow(card, "Model gateway", "Checking...");
+        updateStatus = accessRow(card, "App update", "Checking...");
+
+        requirementsSummary = label("", MoaColors.MUTED, 13, false);
         requirementsSummary.setLineSpacing(dp(2), 1f);
         requirementsSummary.setPadding(0, dp(12), 0, 0);
+        requirementsSummary.setVisibility(View.GONE);
         card.addView(requirementsSummary);
         return card;
     }
 
     private View controlCenterCard() {
         LinearLayout card = card();
-        card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "Control center");
 
-        sessionsStatus = statusLine(card, "Sessions", "Checking...");
-        runsStatus = statusLine(card, "Runs", "Checking...");
-        receiptsStatus = statusLine(card, "Receipts", "Checking...");
-        settingsStatus = statusLine(card, "Settings", settingsSummaryText());
+        sessionsStatus = statRow(card, "Sessions", "Checking...");
+        runsStatus = statRow(card, "Runs", "Checking...");
+        receiptsStatus = statRow(card, "Receipts", "Checking...");
+        settingsStatus = statRow(card, "Settings", settingsSummaryText());
 
-        Button refresh = secondaryButton("Refresh control center");
+        Button refresh = secondaryButton("Refresh");
         refresh.setOnClickListener(v -> refreshControlCenter());
         card.addView(refresh);
         return card;
@@ -203,13 +230,11 @@ public final class MainActivity extends Activity {
 
     private View gatewayCard() {
         LinearLayout card = card();
-        card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "Voice agent setup");
 
-        TextView hint = label("Run the A.G. gateway on your server, then point this app at it. Model keys stay on the server and chat turns are saved there.", 0xB8EEF8E8, 15, false);
-        hint.setLineSpacing(dp(2), 1f);
-        hint.setPadding(0, 0, 0, dp(10));
-        card.addView(hint);
+        TextView caption = label("Keys stay on your server.", MoaColors.MUTED, 12, false);
+        caption.setPadding(0, 0, 0, dp(10));
+        card.addView(caption);
 
         gatewayUrlInput = textInput("Gateway URL", MoaPrefs.gatewayUrl(this), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         card.addView(gatewayUrlInput);
@@ -225,7 +250,7 @@ public final class MainActivity extends Activity {
         spokenRepliesInput.setPadding(0, dp(8), 0, dp(4));
         card.addView(spokenRepliesInput);
 
-        Button saveButton = primaryButton("Save voice agent settings");
+        Button saveButton = primaryButton("Save settings");
         saveButton.setOnClickListener(v -> saveGatewaySettings());
         card.addView(saveButton);
 
@@ -243,18 +268,16 @@ public final class MainActivity extends Activity {
 
     private View actionCard() {
         LinearLayout card = card();
-        card.setPadding(dp(18), dp(18), dp(18), dp(18));
         addCardTitle(card, "Launch A.G.");
+        addHint(card, "Grant overlay and screen access, then start the orb.");
 
         overlayButton = primaryButton("Enable overlay permission");
         overlayButton.setOnClickListener(v -> openOverlaySettings());
         card.addView(overlayButton);
-        addHint(card, "Draw over other apps is required for the floating orb. This button opens A.G.'s overlay permission screen; Android still requires you to allow it.");
 
         accessibilityButton = primaryButton("Enable screen access");
         accessibilityButton.setOnClickListener(v -> openAccessibilitySettings());
         card.addView(accessibilityButton);
-        addHint(card, "Screen access is required for current-screen context and controlled screen actions. If Android blocks the toggle with restricted settings, open App info for A.G., tap the three-dot menu, Allow restricted settings, return, then enable Screen access.");
 
         appInfoButton = secondaryButton("Open A.G. app info");
         appInfoButton.setOnClickListener(v -> openAppInfoSettings());
@@ -263,7 +286,6 @@ public final class MainActivity extends Activity {
         micButton = secondaryButton("Enable microphone");
         micButton.setOnClickListener(v -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO));
         card.addView(micButton);
-        addHint(card, "Microphone is requested directly when Android allows it. Voice still starts only after an explicit orb or assistant gesture.");
 
         startButton = primaryButton("Start assistant circle");
         startButton.setOnClickListener(v -> startOverlay());
@@ -273,23 +295,126 @@ public final class MainActivity extends Activity {
         stopButton.setOnClickListener(v -> stopService(new Intent(this, OverlayService.class)));
         card.addView(stopButton);
 
+        addPermissionHelp(card);
         return card;
     }
 
-    private View scopeCard() {
+    // Collapsed by default: the permission troubleshooting prose lives behind a
+    // tappable caption instead of three always-on paragraphs.
+    private void addPermissionHelp(LinearLayout card) {
+        TextView toggle = label("Help with permissions", MoaColors.GOLD, 13, true);
+        toggle.setPadding(0, dp(14), 0, dp(4));
+        card.addView(toggle);
+
+        TextView detail = label(
+                "Overlay draws the floating orb. Screen access reads the current screen for context and controlled actions. "
+                        + "If Android blocks the toggle, open A.G. app info, tap the three-dot menu, allow restricted settings, then enable screen access. "
+                        + "Microphone is asked directly; voice starts only after an orb gesture.",
+                MoaColors.MUTED, 13, false);
+        detail.setLineSpacing(dp(2), 1f);
+        detail.setPadding(0, 0, 0, dp(4));
+        detail.setVisibility(View.GONE);
+        card.addView(detail);
+
+        toggle.setOnClickListener(v -> {
+            boolean show = detail.getVisibility() != View.VISIBLE;
+            detail.setVisibility(show ? View.VISIBLE : View.GONE);
+            toggle.setText(show ? "Hide help" : "Help with permissions");
+        });
+    }
+
+    private View orbSizeCard() {
         LinearLayout card = card();
-        card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        addCardTitle(card, "What this build does");
-        addBullet(card, "Floating animated circle over other apps.");
-        addBullet(card, "Tap the orb for chat; click and hold to move; double-click and hold starts voice capture.");
-        addBullet(card, "Release commits the spoken turn without waiting for silence detection.");
-        addBullet(card, "Gemini-style live transcript overlay while speaking.");
-        addBullet(card, "Manual orb voice sends the released transcript through the gateway voice-turn route.");
-        addBullet(card, "Screen access reads visible app text and passes it to gateway replies and home-machine agent runs.");
-        addBullet(card, "Assistant calls the self-hosted A.G. gateway when configured, with local fallback replies if the server is unavailable.");
-        addBullet(card, "Voice commands that ask A.G. to build, fix, change, or test something can run the Gemini harness on the home machine.");
-        addBullet(card, "Voice-originated replies speak back with Android TextToSpeech.");
+
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = label("Orb size", MoaColors.PAPER, 18, true);
+        titleRow.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        int current = MoaPrefs.orbScalePercent(this);
+        orbScaleValue = label(current + "%", MoaColors.GOLD, 15, true);
+        titleRow.addView(orbScaleValue);
+        card.addView(titleRow);
+
+        SeekBar seekBar = new SeekBar(this);
+        seekBar.setMax(MoaPrefs.ORB_SCALE_MAX - MoaPrefs.ORB_SCALE_MIN);
+        seekBar.setProgress(current - MoaPrefs.ORB_SCALE_MIN);
+        if (seekBar.getProgressDrawable() != null) {
+            seekBar.getProgressDrawable().setColorFilter(MoaColors.GOLD, PorterDuff.Mode.SRC_IN);
+        }
+        if (seekBar.getThumb() != null) {
+            seekBar.getThumb().setColorFilter(MoaColors.GOLD, PorterDuff.Mode.SRC_IN);
+        }
+        LinearLayout.LayoutParams seekParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        seekParams.topMargin = dp(8);
+        seekBar.setLayoutParams(seekParams);
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                if (orbScaleValue != null) {
+                    orbScaleValue.setText((MoaPrefs.ORB_SCALE_MIN + progress) + "%");
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar bar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar bar) {
+                int percent = MoaPrefs.ORB_SCALE_MIN + bar.getProgress();
+                MoaPrefs.setOrbScalePercent(MainActivity.this, percent);
+                if (orbScaleValue != null) {
+                    orbScaleValue.setText(percent + "%");
+                }
+                try {
+                    startService(new Intent(MainActivity.this, OverlayService.class)
+                            .setAction(ACTION_REFRESH_ORB_SCALE));
+                } catch (Exception ignored) {
+                }
+            }
+        });
+        card.addView(seekBar);
         return card;
+    }
+
+    private View gesturesCard() {
+        LinearLayout card = card();
+        addCardTitle(card, "Gestures");
+        gestureRow(card, "Tap", "Chat");
+        gestureRow(card, "Hold", "Move");
+        gestureRow(card, "Double-tap + hold", "Talk");
+        return card;
+    }
+
+    private void gestureRow(LinearLayout parent, String action, String meaning) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(6), 0, dp(6));
+
+        TextView dot = label("•", MoaColors.GOLD, 16, true);
+        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dotParams.rightMargin = dp(10);
+        dot.setLayoutParams(dotParams);
+        row.addView(dot);
+
+        TextView act = label(action, MoaColors.PAPER, 15, true);
+        row.addView(act);
+
+        TextView mean = label(meaning, MoaColors.MUTED, 15, false);
+        mean.setGravity(Gravity.END);
+        LinearLayout.LayoutParams meanParams = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        meanParams.leftMargin = dp(12);
+        mean.setLayoutParams(meanParams);
+        row.addView(mean);
+        parent.addView(row);
     }
 
     private void updatePermissionState() {
@@ -313,7 +438,9 @@ public final class MainActivity extends Activity {
         }
 
         if (requirementsSummary != null) {
-            requirementsSummary.setText(requirementsSummary(overlayGranted, accessibilityGranted, micGranted));
+            String summary = requirementsSummary(overlayGranted, accessibilityGranted, micGranted);
+            requirementsSummary.setText(summary);
+            requirementsSummary.setVisibility(summary.isEmpty() ? View.GONE : View.VISIBLE);
         }
 
         if (gatewayStatus != null) {
@@ -851,52 +978,74 @@ public final class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(MoaDrawables.rounded(0x14FFFFFF, dp(28), 0x18FFFFFF, dp(1)));
-        card.setElevation(dp(8));
+        card.setPadding(dp(18), dp(18), dp(18), dp(18));
+        card.setBackground(MoaDrawables.rounded(MoaColors.RAISED, dp(20), MoaColors.RAISED_BORDER, dp(1)));
+        card.setElevation(dp(6));
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        params.topMargin = dp(18);
+        params.topMargin = dp(14);
         card.setLayoutParams(params);
         return card;
     }
 
     private void addCardTitle(LinearLayout parent, String text) {
-        TextView title = label(text, MoaColors.PAPER, 20, true);
+        TextView title = label(text, MoaColors.PAPER, 18, true);
         title.setPadding(0, 0, 0, dp(12));
         parent.addView(title);
     }
 
-    private TextView statusLine(LinearLayout parent, String label, String value) {
+    // Required-access rows: short values shown as a colored chip on the right.
+    // The label keeps weight so the row fills the card; values here stay short.
+    private TextView accessRow(LinearLayout parent, String label, String value) {
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, dp(7), 0, dp(7));
+        row.setPadding(0, dp(6), 0, dp(6));
 
-        TextView left = label(label, 0xB8EEF8E8, 15, false);
+        TextView left = label(label, MoaColors.PAPER, 14, false);
         row.addView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView right = label(value, MoaColors.GOLD, 15, true);
+        TextView right = label(value, MoaColors.GOLD, 13, true);
+        right.setBackground(MoaDrawables.rounded(0x14FFFFFF, dp(10), MoaColors.RAISED_BORDER, dp(1)));
+        right.setPadding(dp(10), dp(4), dp(10), dp(4));
+        LinearLayout.LayoutParams rightParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rightParams.leftMargin = dp(10);
+        right.setLayoutParams(rightParams);
         row.addView(right);
         parent.addView(row);
         return right;
     }
 
-    private void addBullet(LinearLayout parent, String text) {
-        TextView bullet = new TextView(this);
-        bullet.setText("• " + text);
-        bullet.setTextColor(0xCDEEF8E8);
-        bullet.setTextSize(15);
-        bullet.setLineSpacing(dp(2), 1f);
-        bullet.setPadding(0, dp(5), 0, dp(5));
-        parent.addView(bullet);
+    // Control-center rows: values can be long. Label takes its natural width so
+    // it never wraps mid-word; the value takes the remaining width, right-aligns,
+    // and wraps cleanly on the value side.
+    private TextView statRow(LinearLayout parent, String label, String value) {
+        LinearLayout row = new LinearLayout(this);
+        row.setPadding(0, dp(6), 0, dp(6));
+
+        TextView left = label(label, MoaColors.PAPER, 14, false);
+        left.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        row.addView(left);
+
+        TextView right = label(value, MoaColors.GOLD, 14, true);
+        right.setGravity(Gravity.END);
+        LinearLayout.LayoutParams rightParams = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        rightParams.leftMargin = dp(12);
+        right.setLayoutParams(rightParams);
+        row.addView(right);
+        parent.addView(row);
+        return right;
     }
 
     private void addHint(LinearLayout parent, String text) {
-        TextView hint = label(text, 0xAEEEF8E8, 13, false);
+        TextView hint = label(text, MoaColors.MUTED, 13, false);
         hint.setLineSpacing(dp(2), 1f);
-        hint.setPadding(0, dp(6), 0, dp(8));
+        hint.setPadding(0, 0, 0, dp(8));
         parent.addView(hint);
     }
 
@@ -906,9 +1055,9 @@ public final class MainActivity extends Activity {
         appendMissing(missing, accessibilityGranted, "Screen access");
         appendMissing(missing, micGranted, "Microphone");
         if (missing.length() == 0) {
-            return "Required access is ready. Start the assistant circle when you want A.G. above other apps.";
+            return "";
         }
-        return "Missing: " + missing + ". A.G. can request microphone access, but Android requires you to approve overlay and Screen access in system settings.";
+        return "Missing: " + missing + ".";
     }
 
     private void appendMissing(StringBuilder builder, boolean granted, String label) {
@@ -931,7 +1080,7 @@ public final class MainActivity extends Activity {
         input.setSingleLine(true);
         input.setInputType(inputType);
         input.setSelectAllOnFocus(true);
-        input.setBackground(MoaDrawables.rounded(0x14FFFFFF, dp(16), 0x18FFFFFF, dp(1)));
+        input.setBackground(MoaDrawables.rounded(0x14FFFFFF, dp(14), MoaColors.RAISED_BORDER, dp(1)));
         input.setPadding(dp(12), 0, dp(12), 0);
         input.setMinHeight(dp(52));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -950,8 +1099,8 @@ public final class MainActivity extends Activity {
         button.setTextColor(MoaColors.INK);
         button.setTextSize(16);
         button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setBackground(MoaDrawables.horizontalGradient(MoaColors.GOLD, 0xFFFFF1A6, dp(18)));
-        button.setPadding(dp(12), dp(12), dp(12), dp(12));
+        button.setBackground(MoaDrawables.horizontalGradient(MoaColors.GOLD, 0xFFFFF1A6, dp(16)));
+        button.setPadding(dp(14), dp(12), dp(14), dp(12));
         button.setMinHeight(dp(52));
         button.setLayoutParams(buttonParams());
         return button;
@@ -964,8 +1113,8 @@ public final class MainActivity extends Activity {
         button.setTextColor(MoaColors.PAPER);
         button.setTextSize(16);
         button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setBackground(MoaDrawables.rounded(0x18FFFFFF, dp(18), 0x20FFFFFF, dp(1)));
-        button.setPadding(dp(12), dp(12), dp(12), dp(12));
+        button.setBackground(MoaDrawables.rounded(0x14FFFFFF, dp(16), MoaColors.RAISED_BORDER, dp(1)));
+        button.setPadding(dp(14), dp(12), dp(14), dp(12));
         button.setMinHeight(dp(52));
         button.setLayoutParams(buttonParams());
         return button;
@@ -976,7 +1125,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        params.topMargin = dp(10);
+        params.topMargin = dp(12);
         return params;
     }
 
