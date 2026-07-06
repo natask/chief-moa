@@ -672,6 +672,7 @@ startBrowserTaskPolling();
 startDevReloadPolling().catch(() => {});
 startDeviceClientHeartbeat().catch(() => {});
 startSelfExtensionRuntimeRefresh().catch(() => {});
+adoptSharedGatewaySession("startup").catch(() => {});
 reloadDevTabsAfterExtensionRestart().catch(() => {});
 
 // ---- Gateway device-client heartbeat --------------------------------------
@@ -839,6 +840,11 @@ async function reloadLocalhostTabs() {
 if (chrome?.storage?.onChanged) {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
+    // When the user points the extension at a different gateway (or pastes a new
+    // token), re-adopt that gateway's canonical shared session id.
+    if (changes.ageeGatewayUrl || changes.ageeGatewayToken) {
+      adoptSharedGatewaySession("gateway config changed").catch(() => {});
+    }
     if (!changes.ageeDevReloadEnabled && !changes.ageeDevReloadServer) return;
     const enabled = Boolean(changes.ageeDevReloadEnabled?.newValue);
     if (enabled) ensureDevReloadTimer();
@@ -1081,6 +1087,52 @@ async function getStableDeviceId() {
   const deviceId = `browser_${crypto.randomUUID().replace(/-/g, "")}`;
   await chrome.storage.local.set({ ageeDeviceId: deviceId });
   return deviceId;
+}
+
+// Adopt the gateway's canonical shared session id so browser conversational
+// turns land in the same session as the phone and other surfaces. The gateway
+// owns the id; GET /v1/sessions/default returns it. We overwrite any locally
+// minted ageeSessionId with it. On any failure (older gateway with no such
+// route, network error, no id) we keep whatever local id exists. This only
+// touches the conversational session id — sessionIdForCue tool-cue routing is
+// left alone.
+let sharedSessionAdoptInFlight = null;
+async function adoptSharedGatewaySession(reason = "startup") {
+  if (sharedSessionAdoptInFlight) return sharedSessionAdoptInFlight;
+  sharedSessionAdoptInFlight = (async () => {
+    try {
+      const cfg = await getConfig();
+      if (!cfg.gatewayUrl) return null;
+      const data = await callGateway(cfg, "/v1/sessions/default", { method: "GET" });
+      const sessionId = String(data?.session_id || "").trim();
+      if (!sessionId) return null;
+      const { ageeSessionId } = await chrome.storage.local.get("ageeSessionId");
+      if (ageeSessionId === sessionId) return sessionId;
+      await chrome.storage.local.set({ ageeSessionId: sessionId });
+      return sessionId;
+    } catch {
+      // Older gateway or unreachable: keep the existing local id.
+      return null;
+    } finally {
+      sharedSessionAdoptInFlight = null;
+    }
+  })();
+  return sharedSessionAdoptInFlight;
+}
+
+// Fetch the gateway's stored copy of a voice turn by id. Used by the overlay to
+// recover the assistant's real reply text when a native-audio Live turn finished
+// without ever streaming assistant_text. Returns null on any failure (older
+// gateway, unreachable, unknown turn) so the caller can fall back honestly.
+async function fetchStoredVoiceTurn(turnId) {
+  const id = String(turnId || "").trim();
+  if (!id) return null;
+  const cfg = await getConfig();
+  if (!cfg.gatewayUrl) return null;
+  const data = await callGateway(cfg, `/v1/voice/turns/${encodeURIComponent(id)}`, {
+    method: "GET",
+  });
+  return data?.turn && typeof data.turn === "object" ? data.turn : data;
 }
 
 async function getActiveBrowserAgentOwner() {
@@ -3184,6 +3236,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then((cfg) => createVoiceSessionTicket(cfg))
       .then((ticket) => sendResponse({ ok: true, ...ticket }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "voiceTurnFetch") {
+    // The overlay asks for the gateway's stored copy of a voice turn to recover
+    // the real assistant reply when a native-audio turn never streamed text.
+    fetchStoredVoiceTurn(msg.turnId)
+      .then((turn) => sendResponse({ ok: Boolean(turn), turn: turn || null }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error), turn: null }));
     return true;
   }
   if (msg.cmd === "selfExtensionRuntime") {

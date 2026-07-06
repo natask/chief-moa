@@ -1536,10 +1536,23 @@
       return;
     }
     if (msg.type === "turn_done") {
-      if (msg.status === "no_speech" && !state.assistantText) {
+      const status = String(msg.status || "completed").toLowerCase();
+      // Carry the gateway's own turn metadata so the done handler can render
+      // honestly and, when assistant_text never arrived, look the stored turn up
+      // by its canonical id.
+      state.turnStatus = status;
+      state.ttsSpoke = msg.tts_spoke === true;
+      if (msg.reply_language) state.replyLanguage = String(msg.reply_language);
+      if (msg.turn_id) state.gatewayTurnId = String(msg.turn_id);
+      if (status === "no_speech" && !state.assistantText) {
         // Explicit failed-capture turn from the gateway: no transcript and no
         // assistant output. Say so instead of pretending the turn completed.
-        state.assistantText = "I didn't catch that. Please try again.";
+        state.assistantText = "Didn't catch that.";
+      } else if (status === "error") {
+        // A terminal error turn must not read as a success. Surface the error
+        // text in the cue instead of the misleading "Done."/"Replied out loud."
+        finishLiveVoiceError(state, msg.message || msg.error || "Voice turn failed.");
+        return;
       }
       finishLiveVoiceDone(state);
       return;
@@ -1855,18 +1868,54 @@
     startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
   }
 
-  function finishLiveVoiceDone(state) {
+  // Ask the background worker for the gateway's stored copy of this turn and
+  // return the canonical assistant text. The content script never holds the
+  // gateway token; background.js owns the authenticated fetch. Returns "" when
+  // the gateway is older (no such route), unreachable, or the turn has no text.
+  async function fetchCanonicalVoiceTurnText(state) {
+    const turnId = state.gatewayTurnId || state.turnId;
+    if (!turnId) return "";
+    let res;
+    try {
+      res = await Promise.race([
+        safeRuntimeSendMessage({ cmd: "voiceTurnFetch", turnId }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+      ]);
+    } catch {
+      return "";
+    }
+    if (!res?.ok || !res.turn || typeof res.turn !== "object") return "";
+    const turn = res.turn;
+    return String(turn.display || turn.text || turn.speak || "").trim();
+  }
+
+  async function finishLiveVoiceDone(state) {
     if (!isLiveVoiceStateActive(state)) return;
     const wasCurrentTurn = liveVoice === state;
     liveVoiceRecoveries = 0;
-    // Native-audio models reply with audio only (assistant_text stays empty).
-    // When a spoken reply played, say that plainly instead of the misleading
-    // "Done." the user reads as the assistant's whole answer.
-    const summary = state.assistantText || (state.playbackTime ? "Replied out loud." : "Done.");
+    // The turn is over; release the mic now so the canonical-text lookup below
+    // never holds capture open.
+    stopLiveCapture(state);
+
+    // Native-audio Live models reply with audio only (assistant_text stays
+    // empty). When that happens, ask the gateway for the stored turn so the cue
+    // shows the real reply instead of the misleading "Done."/"Replied out loud."
+    // the user reads as the assistant's whole answer.
+    let summary = state.assistantText;
+    const replied =
+      state.turnStatus === "completed" || Boolean(state.playbackTime) || state.ttsSpoke === true;
+    if (!summary && replied) {
+      summary = await fetchCanonicalVoiceTurnText(state);
+    }
+    if (!summary) {
+      const spoke = Boolean(state.playbackTime) || state.ttsSpoke === true;
+      summary = spoke ? "Replied out loud (no transcript available)." : "Done.";
+    }
+
+    if (!isLiveVoiceStateActive(state)) return;
     ensureVoiceCueCard(state, state.transcript || "Voice", summary);
     updateCue(state.cueId, summary, "done");
     reactLauncher("done");
-    stopLiveCapture(state);
     closeLiveVoiceSession(state, "turn done");
     untrackLiveVoiceState(state);
     if (!wasCurrentTurn) return;
