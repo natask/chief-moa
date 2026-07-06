@@ -407,20 +407,39 @@ public final class OverlayService extends Service {
         final String token = gatewayToken;
         final String deviceId = androidDeviceId();
         new Thread(() -> {
+            String profileJson = "";
+            String companionJson = "";
             try {
-                JSONObject payload = new MoaGatewayClient(url, token).agentProfile("device", deviceId);
+                MoaGatewayClient client = new MoaGatewayClient(url, token);
+                JSONObject payload = client.agentProfile("device", deviceId);
                 JSONObject profile = payload.optJSONObject("profile");
-                if (profile == null) {
-                    return;
+                if (profile != null) {
+                    profileJson = profile.toString();
                 }
-                String profileJson = profile.toString();
-                mainHandler.post(() -> {
-                    MoaPrefs.setAgentProfileJson(this, profileJson);
-                    applyCachedVoiceProfile();
-                });
+                try {
+                    JSONObject companion = client.activeCompanionPet("device", deviceId);
+                    if (companion != null && companion.length() > 0) {
+                        companionJson = companion.toString();
+                    }
+                } catch (Exception ignored) {
+                }
             } catch (Exception ignored) {
                 // Profile refresh is best-effort; cached/default language still works.
             }
+            final String nextProfileJson = profileJson;
+            final String nextCompanionJson = companionJson;
+            mainHandler.post(() -> {
+                if (!nextProfileJson.isEmpty()) {
+                    MoaPrefs.setAgentProfileJson(this, nextProfileJson);
+                }
+                if (!nextCompanionJson.isEmpty()) {
+                    MoaPrefs.setActiveCompanionJson(this, nextCompanionJson);
+                }
+                if (!nextProfileJson.isEmpty() || !nextCompanionJson.isEmpty()) {
+                    applyCachedVoiceProfile();
+                    updateAgentRunStatus();
+                }
+            });
         }, "moa-voice-profile").start();
     }
 
@@ -889,7 +908,7 @@ public final class OverlayService extends Service {
                 state = "Ready";
                 break;
         }
-        return state + " / " + MoaPrefs.languageStatus(this);
+        return state + " / " + MoaPrefs.companionName(this) + " / " + MoaPrefs.languageStatus(this);
     }
 
     private int voiceStateColor() {
@@ -1088,7 +1107,7 @@ public final class OverlayService extends Service {
         TextView label = text("A.G.", MoaColors.PAPER, 17, true);
         label.setLetterSpacing(0.02f);
         copy.addView(label);
-        runStatusView = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
+        runStatusView = text(overlayHeaderStatusText(), MoaColors.MUTED, 11, false);
         copy.addView(runStatusView);
         header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
@@ -1891,9 +1910,14 @@ public final class OverlayService extends Service {
 
     private void updateAgentRunStatus() {
         if (runStatusView != null) {
-            runStatusView.setText(agentRunStatusText());
+            runStatusView.setText(overlayHeaderStatusText());
         }
         updateVoiceHeaderState();
+    }
+
+    private String overlayHeaderStatusText() {
+        String runStatus = agentRunStatusText();
+        return "Ready".equals(runStatus) ? MoaPrefs.companionCompactStatus(this) : runStatus;
     }
 
     private String activeFollowUpRunId() {

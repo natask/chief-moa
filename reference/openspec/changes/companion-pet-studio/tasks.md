@@ -4,6 +4,8 @@
 - [x] 1.2 Add token-guarded pet list/create/preview/apply endpoints.
 - [x] 1.3 Add a non-mutating pet generation endpoint with Vertex model config.
 - [x] 1.4 Keep pet apply routed through the existing versioned profile store.
+- [x] 1.5 Add saved builder-agent and bookmark endpoints for custom companion
+      pets with declarative rules.
 
 ## 2. Website Pet Studio
 

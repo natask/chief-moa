@@ -55,6 +55,7 @@ const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
 const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
 const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
+const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
 // Capture mutex: counts voice session starts that are still in their async
@@ -233,6 +234,151 @@ async function startSelfExtensionRuntimeRefresh() {
   await refreshSelfExtensionRuntime("startup");
   if (chrome?.alarms) {
     chrome.alarms.create(SELF_EXTENSION_RUNTIME_ALARM, { periodInMinutes: 0.5 });
+  }
+}
+
+const ACTIVE_COMPANION_PET_PALETTES = new Set(["graphite", "green", "blue", "violet", "red", "amber", "teal", "mono"]);
+const ACTIVE_COMPANION_PET_MOTIONS = new Set(["hover", "peek", "tap", "trail", "float", "walk", "climb", "spark"]);
+const ACTIVE_COMPANION_PET_SPRITES = new Set(["css-shigmi", "image-data-url", "image-url"]);
+
+function shortPetString(value, max = 120) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function safePetImageDataUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 350 * 1024) return "";
+  return /^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(raw) ? raw : "";
+}
+
+function safePetAssetUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 2048) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol === "https:") return url.href;
+    if (url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return url.href;
+  } catch {}
+  return "";
+}
+
+function sanitizeActiveCompanionPetRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  const pet = record.pet && typeof record.pet === "object" ? record.pet : {};
+  const sprite = pet.sprite && typeof pet.sprite === "object" ? pet.sprite : {};
+  const companionId = shortPetString(record.companion_id || record.id || record.active_companion_id, 100);
+  const name = shortPetString(record.companion_name || record.name || record.active_companion_name || pet.name, 80);
+  if (!companionId && !name) return null;
+  const palette = ACTIVE_COMPANION_PET_PALETTES.has(String(pet.palette || "")) ? String(pet.palette) : "";
+  const motion = ACTIVE_COMPANION_PET_MOTIONS.has(String(pet.motion || "")) ? String(pet.motion) : "";
+  const spriteType = ACTIVE_COMPANION_PET_SPRITES.has(String(sprite.type || "")) ? String(sprite.type) : "css-shigmi";
+  const imageDataUrl = safePetImageDataUrl(sprite.image_data_url);
+  const assetUrl = imageDataUrl ? "" : safePetAssetUrl(sprite.asset_url || pet.asset_url);
+  const scale = Number(pet.scale);
+  return {
+    id: companionId,
+    companion_id: companionId,
+    companion_name: name || "A.G. companion",
+    companion_summary: shortPetString(record.companion_summary || record.summary, 180),
+    source: shortPetString(record.source, 40),
+    pet: {
+      renderer: pet.renderer === "shimeji-web" ? "shimeji-web" : "",
+      family: shortPetString(pet.family, 40),
+      skin: shortPetString(pet.skin, 40),
+      palette: palette || "blue",
+      motion: motion || "walk",
+      scale: Number.isFinite(scale) ? Math.min(Math.max(scale, 0.65), 1.6) : 1,
+      sprite: {
+        type: imageDataUrl ? "image-data-url" : assetUrl ? "image-url" : spriteType,
+        image_data_url: imageDataUrl,
+        asset_url: assetUrl,
+      },
+    },
+  };
+}
+
+function activeCompanionFromPayload(payload) {
+  const direct = payload?.active_companion || payload?.activeCompanion || payload?.pet || payload?.companion;
+  return sanitizeActiveCompanionPetRecord(direct);
+}
+
+function profileActiveCompanionId(payload) {
+  return shortPetString(
+    payload?.profile?.active_companion_id ||
+      payload?.active_companion_id ||
+      payload?.profile?.active_companion?.id ||
+      payload?.active_companion?.id,
+    100
+  );
+}
+
+function minimalActiveCompanionFromProfile(payload) {
+  const profile = payload?.profile && typeof payload.profile === "object" ? payload.profile : payload || {};
+  return sanitizeActiveCompanionPetRecord({
+    companion_id: profile.active_companion_id || profile.active_companion?.id,
+    companion_name: profile.active_companion_name || profile.active_companion?.name,
+    source: profile.active_companion_source || profile.active_companion?.source,
+    pet: { renderer: "shimeji-web", palette: "blue", motion: "walk", sprite: { type: "css-shigmi" } },
+  });
+}
+
+async function cachedActiveCompanionPetRecord() {
+  if (!chrome?.storage?.local) return null;
+  const stored = await chrome.storage.local.get({ [ACTIVE_COMPANION_PET_CACHE_KEY]: null });
+  const record = stored[ACTIVE_COMPANION_PET_CACHE_KEY];
+  const activeCompanion = sanitizeActiveCompanionPetRecord(record?.active_companion || record);
+  if (!activeCompanion) return null;
+  return {
+    active_companion: activeCompanion,
+    reason: typeof record?.reason === "string" ? record.reason : "cache",
+    updated_at: typeof record?.updated_at === "string" ? record.updated_at : "",
+  };
+}
+
+async function storeActiveCompanionPet(activeCompanion, reason) {
+  if (!chrome?.storage?.local) return;
+  await chrome.storage.local.set({
+    [ACTIVE_COMPANION_PET_CACHE_KEY]: {
+      active_companion: activeCompanion,
+      reason,
+      updated_at: new Date().toISOString(),
+    },
+  });
+}
+
+async function fetchActiveCompanionPet(cfg) {
+  try {
+    const active = activeCompanionFromPayload(await callGateway(cfg, "/v1/agent/pets/active", { method: "GET" }));
+    if (active) return active;
+  } catch {
+    // Older gateways do not have the active-only route; fall back below.
+  }
+
+  const profilePayload = await getGatewayProfile(cfg);
+  const activeId = profileActiveCompanionId(profilePayload);
+  if (!activeId) return null;
+  try {
+    const catalog = await callGateway(cfg, "/v1/agent/pets?limit=100", { method: "GET" });
+    const pets = Array.isArray(catalog?.pets) ? catalog.pets : [];
+    const active = sanitizeActiveCompanionPetRecord(pets.find((item) => item?.companion_id === activeId || item?.id === activeId));
+    if (active) return active;
+  } catch {
+    // If the catalog route is missing/offline after profile resolved, still
+    // return a small visual fallback from the profile fields.
+  }
+  return minimalActiveCompanionFromProfile(profilePayload);
+}
+
+async function loadActiveCompanionPet() {
+  try {
+    const cfg = await getConfig();
+    const activeCompanion = await fetchActiveCompanionPet(cfg);
+    await storeActiveCompanionPet(activeCompanion, "gateway");
+    return { ok: true, active_companion: activeCompanion };
+  } catch (error) {
+    const cached = await cachedActiveCompanionPetRecord();
+    if (cached) return { ok: true, active_companion: cached.active_companion, stale: true };
+    return { ok: false, active_companion: null, error: String(error?.message || error) };
   }
 }
 
@@ -3250,6 +3396,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     refreshSelfExtensionRuntime("content_request")
       .then((runtime) => sendResponse({ ok: true, runtime }))
       .catch(() => sendResponse({ ok: true, runtime: SELF_EXTENSION_RUNTIME_FALLBACK }));
+    return true;
+  }
+  if (msg.cmd === "activeCompanionPet") {
+    loadActiveCompanionPet()
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, active_companion: null, error: String(error?.message || error) }));
     return true;
   }
   if (msg.cmd === "run" && sender.tab) {

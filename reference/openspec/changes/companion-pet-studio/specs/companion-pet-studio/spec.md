@@ -40,6 +40,44 @@ existing versioned profile store.
 - **THEN** the runtime profile active companion fields change on the next turn
 - **AND** profile history records the companion application
 
+### Requirement: Saved companion builder agents
+The gateway SHALL expose token-guarded endpoints under `/v1/agent/pets` for
+saved custom companion agents and token-free bookmark records. A saved agent
+SHALL include an id, companion id, companion manifest, pet visual spec, creation
+timestamp, and optional declarative rules. Rule trigger and action fields SHALL
+be sanitized text and SHALL NOT be treated as executable code or authorization
+for local actions.
+
+#### Scenario: Create and fetch saved agent
+- **WHEN** a client calls `POST /v1/agent/pets/agents` with text or prompt,
+  optional image data URL, pet options, and rules
+- **THEN** the gateway persists a custom companion and saved agent
+- **AND** the active runtime profile version is unchanged
+- **AND** `GET /v1/agent/pets/agents/:id` returns the saved agent for bookmark
+  loading
+- **AND** pet preview/apply accepts the saved `agent_id` and applies the
+  underlying companion through profile control
+
+#### Scenario: Bookmark saved agent
+- **WHEN** a client calls `POST /v1/agent/pets/bookmarks` with an `agent_id` or
+  `companion_id`
+- **THEN** the gateway returns a bookmark shaped as `{ id, url, companion_id,
+  created_at, pet, companion }`
+- **AND** the URL is relative, such as `/pets/?agent=<id>`, and does not embed
+  gateway tokens
+
+### Requirement: Active companion pet lookup
+The gateway SHALL expose the active companion pet manifest for the effective
+agent profile without requiring clients to guess from the catalog list.
+
+#### Scenario: Client reads active pet
+- **WHEN** a client calls `GET /v1/agent/pets/active`
+- **THEN** the response includes the active companion, companion manifest, and
+  pet manifest for the effective profile
+- **AND** it returns `null` active fields when no companion is active
+- **AND** profile and pet catalog payloads include an `active_companion` object
+  with companion and pet metadata
+
 ### Requirement: Pet generation stays gateway-side
 The website SHALL NOT call Gemini, Vertex, or animation providers directly. The
 gateway SHALL expose a non-mutating generation endpoint that returns a plan when

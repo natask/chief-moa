@@ -120,6 +120,10 @@
   .console-text{min-width:0}
   .console-text strong{display:block;font-size:17px;font-weight:500;line-height:1.15}
   .console-text span{display:block;margin-top:6px;font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .share-line{display:none;margin-top:8px}
+  .share-line.visible{display:block}
+  .share-line input{width:100%;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);
+    padding:7px 8px;font-family:var(--mono);font-size:12px;line-height:1.3}
   .behavior{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
   .chip{height:28px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:0 10px;font-family:var(--mono);font-size:11px;color:var(--muted)}
   .chip.active{color:#fff;background:var(--ink);border-color:var(--ink)}
@@ -140,6 +144,14 @@
   .range-row{display:grid;grid-template-columns:1fr 42px;gap:10px;align-items:center}
   .range-row input{width:100%;accent-color:var(--signal)}
   .range-row output{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right}
+  .rule-list{display:grid;gap:8px}
+  .rule-row{display:grid;grid-template-columns:48px minmax(0,1fr) minmax(0,1fr) 34px;gap:6px;align-items:center}
+  .rule-row input[type="text"]{min-width:0;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);
+    padding:8px 9px;font-family:var(--mono);font-size:12px;line-height:1.25}
+  .rule-enabled{height:34px;display:flex;align-items:center;justify-content:center;gap:5px;border:1px solid var(--line);
+    border-radius:6px;background:#fff;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .rule-enabled input{width:13px;height:13px;margin:0;accent-color:var(--signal)}
+  .rule-remove{width:34px;padding:0}
   .stack{display:grid;gap:9px}
   .hint{min-height:18px;font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.45}
   .hint.err{color:#a43a2a}.hint.ok{color:#26724d}
@@ -152,8 +164,10 @@
   }
   @media (max-width:620px){
     .topbar{padding:0 14px}.workspace{display:block}.stage-head{align-items:flex-start;height:auto;padding:12px 14px;flex-direction:column}
-    .stage-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}
+    .stage-actions{width:100%;display:grid;grid-template-columns:1fr 1fr 1fr}
     .stage-actions .cmd{width:100%}.console{grid-template-columns:1fr}.behavior{justify-content:flex-start}.catalog{grid-template-columns:1fr}
+    .rule-row{grid-template-columns:48px minmax(0,1fr) 34px}
+    .rule-row .rule-action{grid-column:2/4}
   }
   @media (prefers-reduced-motion:reduce){
     .pet *{animation:none!important}
@@ -187,6 +201,7 @@
         </div>
         <div class="stage-actions">
           <button class="cmd" id="previewBtn" type="button">Preview</button>
+          <button class="cmd" id="shareBtn" type="button">Share</button>
           <button class="cmd primary" id="applyBtn" type="button">Apply</button>
         </div>
       </div>
@@ -208,6 +223,9 @@
         <div class="console-text">
           <strong id="consoleTitle">Ready</strong>
           <span id="consoleLine">Local preview</span>
+          <div class="share-line" id="shareLine">
+            <input id="shareUrl" type="text" readonly aria-label="Share URL" />
+          </div>
         </div>
         <div class="behavior" id="behaviorBar"></div>
       </div>
@@ -250,8 +268,13 @@
             <input id="imageInput" type="file" accept="image/png,image/webp,image/jpeg" />
           </div>
         </div>
+        <div class="field">
+          <label>Rules</label>
+          <div class="rule-list" id="ruleList"></div>
+          <button class="cmd" id="addRuleBtn" type="button">Add rule</button>
+        </div>
         <div class="stack">
-          <button class="cmd primary" id="draftBtn" type="submit">Create pet</button>
+          <button class="cmd primary" id="draftBtn" type="submit">Create agent</button>
           <button class="cmd" id="generateBtn" type="button">Generate image</button>
         </div>
         <div class="hint" id="formHint" role="status" aria-live="polite"></div>
@@ -267,6 +290,7 @@
     red:"#d84a39",amber:"#c57a1b",teal:"#0e7d85",mono:"#f6f3ea"
   };
   var motions=["walk","peek","climb","tap","trail","float","spark"];
+  var localAgentsKey="moa.petStudio.agents.v1";
   var fallbackPets=[
     petRecord("shigmi-steward","Shigmi Steward","Default operator","graphite","hover","steward"),
     petRecord("shigmi-scout","Shigmi Scout","Research and discovery","green","peek","scout"),
@@ -275,7 +299,7 @@
   ];
   var state={
     pets:[],selected:null,query:"",palette:"green",motion:"peek",scale:1,
-    imageDataUrl:"",x:120,y:120,vx:42,vy:0,dir:1,mode:"walk",drag:false,last:0,nextModeAt:0
+    imageDataUrl:"",rules:[],x:120,y:120,vx:42,vy:0,dir:1,mode:"walk",drag:false,last:0,nextModeAt:0
   };
 
   var els={
@@ -287,6 +311,8 @@
     selectedMeta:document.getElementById("selectedMeta"),
     consoleTitle:document.getElementById("consoleTitle"),
     consoleLine:document.getElementById("consoleLine"),
+    shareLine:document.getElementById("shareLine"),
+    shareUrl:document.getElementById("shareUrl"),
     behaviorBar:document.getElementById("behaviorBar"),
     stage:document.getElementById("stage"),
     pet:document.getElementById("pet"),
@@ -299,9 +325,12 @@
     scaleOutput:document.getElementById("scaleOutput"),
     imageInput:document.getElementById("imageInput"),
     fileName:document.getElementById("fileName"),
+    ruleList:document.getElementById("ruleList"),
+    addRuleBtn:document.getElementById("addRuleBtn"),
     form:document.getElementById("petForm"),
     hint:document.getElementById("formHint"),
     previewBtn:document.getElementById("previewBtn"),
+    shareBtn:document.getElementById("shareBtn"),
     applyBtn:document.getElementById("applyBtn"),
     generateBtn:document.getElementById("generateBtn")
   };
@@ -323,6 +352,7 @@
           {id:"drag",label:"Drag"},{id:"fall",label:"Fall"}
         ]
       },
+      rules:[],
       starters:[]
     };
   }
@@ -356,8 +386,13 @@
       state.scale=Number(els.scaleInput.value)||1;applyPetVisual();refreshControlState();
     });
     els.imageInput.addEventListener("change",handleImageUpload);
+    els.ruleList.addEventListener("input",updateRulesFromDom);
+    els.ruleList.addEventListener("change",updateRulesFromDom);
+    els.ruleList.addEventListener("click",removeRule);
+    els.addRuleBtn.addEventListener("click",addRule);
     els.form.addEventListener("submit",createPet);
     els.previewBtn.addEventListener("click",previewSelected);
+    els.shareBtn.addEventListener("click",bookmarkSelected);
     els.applyBtn.addEventListener("click",applySelected);
     els.generateBtn.addEventListener("click",generateImage);
     els.pet.addEventListener("pointerdown",startDrag);
@@ -366,19 +401,26 @@
   }
 
   async function loadPets(){
+    var requestedAgent=new URLSearchParams(window.location.search).get("agent");
     try{
       var res=await fetch("/api/pets",{headers:{"accept":"application/json"}});
       if(!res.ok)throw new Error("HTTP "+res.status);
       var data=await res.json();
-      state.pets=(data.pets||[]).map(normalizePet);
+      state.pets=mergePets((data.pets||[]).map(normalizePet),getLocalAgents());
       els.catalogStatus.textContent=String(state.pets.length);
       els.apiStatus.textContent=data.generation&&data.generation.configured?"Vertex":"Gateway";
     }catch(err){
-      state.pets=fallbackPets;
+      state.pets=mergePets(fallbackPets,getLocalAgents());
       els.catalogStatus.textContent="Local";
       els.apiStatus.textContent="Local";
     }
-    selectPet(state.pets[0]);
+    if(requestedAgent){
+      var loaded=await loadAgent(requestedAgent);
+      if(loaded){selectPet(loaded);}
+      else{selectPet(findPet(requestedAgent)||state.pets[0]);}
+    }else{
+      selectPet(state.pets[0]);
+    }
     renderCatalog();
   }
 
@@ -403,8 +445,156 @@
         sprite:pet.sprite||{type:"css-shigmi"},
         behaviors:pet.behaviors||[]
       },
+      rules:sanitizeRules(item.rules||companion.rules||[]),
       starters:item.starters||companion.starters||[]
     };
+  }
+
+  async function loadAgent(id){
+    var existing=findPet(id);
+    try{
+      var res=await fetch("/api/pets/agents/"+encodeURIComponent(id),{headers:{"accept":"application/json"}});
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Load failed");
+      var agent=normalizePet(data.agent||data.pet||data.companion||data);
+      upsertPet(agent);
+      return agent;
+    }catch(err){
+      var local=findLocalAgent(id)||existing;
+      if(!local)setConsole("Load blocked", err.message||"Gateway unavailable");
+      return local||null;
+    }
+  }
+
+  function mergePets(primary,local){
+    var seen={};
+    return primary.concat(local).filter(function(item){
+      if(!item||!item.id||seen[item.id])return false;
+      seen[item.id]=true;
+      return true;
+    });
+  }
+
+  function upsertPet(item){
+    state.pets=state.pets.filter(function(existing){return existing.id!==item.id;});
+    state.pets.unshift(item);
+    renderCatalog();
+  }
+
+  function findPet(id){
+    return state.pets.filter(function(item){return item.id===id||item.companion_id===id;})[0]||null;
+  }
+
+  function getLocalAgents(){
+    try{
+      var parsed=JSON.parse(window.localStorage.getItem(localAgentsKey)||"[]");
+      return Array.isArray(parsed)?parsed.map(normalizePet):[];
+    }catch(err){
+      return [];
+    }
+  }
+
+  function findLocalAgent(id){
+    return getLocalAgents().filter(function(item){return item.id===id||item.companion_id===id;})[0]||null;
+  }
+
+  function saveLocalAgent(item){
+    try{
+      var list=getLocalAgents().filter(function(existing){return existing.id!==item.id;});
+      list.unshift(item);
+      window.localStorage.setItem(localAgentsKey,JSON.stringify(list.slice(0,20)));
+    }catch(err){}
+  }
+
+  function addRule(){
+    state.rules=collectRules(true);
+    state.rules.push({id:"rule-"+Date.now().toString(36),trigger:"",action:"",enabled:true,summary:""});
+    renderRules();
+  }
+
+  function removeRule(event){
+    var button=event.target.closest(".rule-remove");
+    if(!button)return;
+    var row=button.closest(".rule-row");
+    state.rules=collectRules(true).filter(function(rule){return rule.id!==(row&&row.dataset.ruleId);});
+    renderRules();
+  }
+
+  function updateRulesFromDom(){
+    state.rules=collectRules(true);
+  }
+
+  function renderRules(){
+    els.ruleList.innerHTML="";
+    state.rules.forEach(function(rule){
+      var row=document.createElement("div");
+      row.className="rule-row";
+      row.dataset.ruleId=rule.id;
+      row.innerHTML='<label class="rule-enabled"><input class="rule-on" type="checkbox" /><span>On</span></label><input class="rule-trigger" type="text" maxlength="120" placeholder="Trigger" /><input class="rule-action" type="text" maxlength="180" placeholder="Action" /><button class="icon-btn rule-remove" type="button" aria-label="Remove rule">x</button>';
+      row.querySelector(".rule-on").checked=rule.enabled!==false;
+      row.querySelector(".rule-trigger").value=rule.trigger||"";
+      row.querySelector(".rule-action").value=rule.action||"";
+      els.ruleList.appendChild(row);
+    });
+  }
+
+  function collectRules(keepBlank){
+    return Array.prototype.map.call(els.ruleList.querySelectorAll(".rule-row"),function(row,index){
+      var trigger=cleanText(row.querySelector(".rule-trigger").value,120);
+      var action=cleanText(row.querySelector(".rule-action").value,180);
+      return {
+        id:cleanText(row.dataset.ruleId,80)||"rule-"+index,
+        trigger:trigger,
+        action:action,
+        enabled:row.querySelector(".rule-on").checked,
+        summary:cleanText(trigger+" -> "+action,220)
+      };
+    }).filter(function(rule){return keepBlank||rule.trigger||rule.action;}).slice(0,12);
+  }
+
+  function readRules(){
+    state.rules=collectRules(false);
+    return state.rules;
+  }
+
+  function sanitizeRules(rules){
+    if(!Array.isArray(rules))return [];
+    return rules.map(function(rule,index){
+      var trigger=cleanText(rule&&rule.trigger,120);
+      var action=cleanText(rule&&rule.action,180);
+      return {
+        id:cleanText(rule&&rule.id,80)||"rule-"+index,
+        trigger:trigger,
+        action:action,
+        enabled:!rule||rule.enabled!==false,
+        summary:cleanText(rule&&rule.summary,220)||cleanText(trigger+" -> "+action,220)
+      };
+    }).filter(function(rule){return rule.trigger||rule.action;}).slice(0,12);
+  }
+
+  function cleanText(value,max){
+    return String(value||"").replace(/[\u0000-\u001f\u007f]/g," ").replace(/\s+/g," ").trim().slice(0,max);
+  }
+
+  function agentUrl(id){
+    return "/pets/?agent="+encodeURIComponent(id);
+  }
+
+  function cleanBookmarkUrl(value,id){
+    try{
+      var url=new URL(value,window.location.origin);
+      return agentUrl(url.searchParams.get("agent")||id);
+    }catch(err){
+      return agentUrl(id);
+    }
+  }
+
+  function showShareUrl(url){
+    els.shareUrl.value=url;
+    els.shareLine.classList.add("visible");
+    window.history.replaceState({}, "", url);
+    els.shareUrl.focus();
+    els.shareUrl.select();
   }
 
   function renderCatalog(){
@@ -434,9 +624,12 @@
     state.scale=Number(item.pet.scale)||1;
     state.mode=motionMode(state.motion);
     state.imageDataUrl=item.pet.sprite&&item.pet.sprite.image_data_url||"";
+    state.rules=sanitizeRules(item.rules||[]);
     els.petName.value=item.companion_name||"";
     els.petPrompt.value=item.companion_summary||els.petPrompt.value;
+    els.shareLine.classList.remove("visible");
     renderCatalog();
+    renderRules();
     applyPetVisual();
     refreshControlState();
   }
@@ -492,15 +685,16 @@
     setHint("Creating", "");
     var body=formBody();
     try{
-      var res=await fetch("/api/pets",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      var res=await fetch("/api/pets/agents",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
       var data=await res.json().catch(function(){return {};});
       if(!res.ok)throw new Error(data.error||"Create failed");
-      var pet=normalizePet(data.pet||data.companion);
-      state.pets.unshift(pet);selectPet(pet);setHint("Created", "ok");
+      var pet=normalizePet(data.agent||data.pet||data.companion||data);
+      upsertPet(pet);selectPet(pet);setHint("Created", "ok");
     }catch(err){
       var local=petRecord("local-"+Date.now().toString(36),body.name,body.text,body.pet.palette,body.pet.motion,"custom");
-      local.pet.scale=body.pet.scale;local.pet.sprite.image_data_url=state.imageDataUrl;
-      state.pets.unshift(local);selectPet(local);setHint("Created locally", "ok");
+      local.source="local";
+      local.pet.scale=body.pet.scale;local.pet.sprite.image_data_url=state.imageDataUrl;local.rules=body.rules;
+      saveLocalAgent(local);upsertPet(local);selectPet(local);setHint("Created locally", "ok");
     }
   }
 
@@ -508,7 +702,7 @@
     if(!state.selected)return;
     setConsole("Previewing", state.selected.companion_name);
     try{
-      var res=await fetch("/api/pets/preview",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({companion_id:state.selected.companion_id})});
+      var res=await fetch("/api/pets/preview",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agent_id:state.selected.id,companion_id:state.selected.companion_id,pet:state.selected.pet,rules:readRules()})});
       var data=await res.json().catch(function(){return {};});
       if(!res.ok)throw new Error(data.error||"Preview failed");
       setConsole("Preview", data.sample_text||state.selected.companion_name);
@@ -517,11 +711,38 @@
     }
   }
 
+  async function bookmarkSelected(){
+    if(!state.selected)return;
+    var fallbackUrl=agentUrl(state.selected.id);
+    setConsole("Sharing", state.selected.companion_name);
+    try{
+      var res=await fetch("/api/pets/bookmarks",{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({
+          agent_id:state.selected.id,
+          companion_id:state.selected.companion_id,
+          pet:state.selected.pet,
+          rules:readRules(),
+          companion:{id:state.selected.companion_id,name:state.selected.companion_name,summary:state.selected.companion_summary}
+        })
+      });
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Bookmark failed");
+      var url=cleanBookmarkUrl(data.url||fallbackUrl,state.selected.id);
+      showShareUrl(url);
+      setConsole("Bookmarked", url);
+    }catch(err){
+      showShareUrl(fallbackUrl);
+      setConsole("Bookmark blocked", err.message||"Gateway unavailable");
+    }
+  }
+
   async function applySelected(){
     if(!state.selected)return;
     setConsole("Applying", state.selected.companion_name);
     try{
-      var res=await fetch("/api/pets/apply",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({companion_id:state.selected.companion_id,scope:"global",source:"website-pet-studio"})});
+      var res=await fetch("/api/pets/apply",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agent_id:state.selected.id,companion_id:state.selected.companion_id,scope:"global",source:"website-pet-studio",rules:readRules()})});
       var data=await res.json().catch(function(){return {};});
       if(!res.ok)throw new Error(data.error||"Apply failed");
       setConsole("Applied", data.profile&&data.profile.active_companion_name||state.selected.companion_name);
@@ -550,12 +771,15 @@
 
   function formBody(){
     state.scale=Number(els.scaleInput.value)||1;
+    var rules=readRules();
     return {
       name:els.petName.value.trim()||"Shigmi Companion",
       text:els.petPrompt.value.trim(),
       palette:state.palette,
       motion:state.motion,
       image_data_url:state.imageDataUrl,
+      rules:rules,
+      companion:{name:els.petName.value.trim()||"Shigmi Companion",summary:els.petPrompt.value.trim()},
       pet:{palette:state.palette,motion:state.motion,scale:state.scale,source_image:state.imageDataUrl}
     };
   }

@@ -1,6 +1,7 @@
 package ai.moa.assistant;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -95,17 +96,37 @@ final class MoaGatewayClient {
     }
 
     JSONObject agentProfile(String scope, String deviceId) throws Exception {
-        String query = "";
-        String safeScope = safe(scope);
-        String safeDeviceId = safe(deviceId);
-        if (!safeScope.isEmpty()) {
-            query = "?scope=" + urlEncode(safeScope);
-            if (!safeDeviceId.isEmpty()) {
-                query += "&device_id=" + urlEncode(safeDeviceId);
-            }
-        }
+        String query = scopedQuery(scope, deviceId);
         String responseText = getText(apiEndpoint("/v1/agent/profile" + query), 15000);
         return new JSONObject(responseText);
+    }
+
+    JSONObject activeCompanionPet(String scope, String deviceId) throws Exception {
+        String query = scopedQuery(scope, deviceId);
+        try {
+            JSONObject activePayload = new JSONObject(getText(apiEndpoint("/v1/agent/pets/active" + query), 15000));
+            JSONObject active = activeCompanionFromPayload(activePayload);
+            if (hasCompanionIdentity(active)) {
+                return active;
+            }
+        } catch (Exception ignored) {
+            // Older gateways expose active companion state only through profile/catalog routes.
+        }
+
+        JSONObject profilePayload = agentProfile(scope, deviceId);
+        JSONObject profileCompanion = activeCompanionFromProfile(profilePayload);
+        String companionId = profileCompanion.optString("id", "");
+        if (!companionId.isEmpty()) {
+            try {
+                JSONObject catalogPayload = new JSONObject(getText(apiEndpoint("/v1/agent/pets" + query), 15000));
+                JSONObject catalogCompanion = activeCompanionFromPetCatalog(catalogPayload, companionId);
+                if (hasCompanionIdentity(catalogCompanion)) {
+                    return mergeCompanionMetadata(catalogCompanion, profileCompanion);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return profileCompanion;
     }
 
     JSONObject deviceHeartbeat(JSONObject body) throws Exception {
@@ -291,6 +312,165 @@ final class MoaGatewayClient {
             base = base.substring(0, base.length() - "/v1/chat".length());
         }
         return base + apiPath;
+    }
+
+    private String scopedQuery(String scope, String deviceId) throws Exception {
+        String query = "";
+        String safeScope = safe(scope);
+        String safeDeviceId = safe(deviceId);
+        if (!safeScope.isEmpty()) {
+            query = "?scope=" + urlEncode(safeScope);
+            if (!safeDeviceId.isEmpty()) {
+                query += "&device_id=" + urlEncode(safeDeviceId);
+            }
+        }
+        return query;
+    }
+
+    private static JSONObject activeCompanionFromPetCatalog(JSONObject payload, String companionId) {
+        JSONArray pets = payload == null ? null : payload.optJSONArray("pets");
+        if (pets == null) {
+            return new JSONObject();
+        }
+        for (int i = 0; i < pets.length(); i++) {
+            JSONObject item = pets.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            String id = firstNonEmpty(item.optString("companion_id", ""), item.optString("id", ""));
+            if (companionId.equals(id)) {
+                return activeCompanionFromPayload(item);
+            }
+        }
+        return new JSONObject();
+    }
+
+    private static JSONObject activeCompanionFromProfile(JSONObject payload) {
+        JSONObject profile = payload == null ? null : payload.optJSONObject("profile");
+        if (profile == null) {
+            profile = payload == null ? new JSONObject() : payload;
+        }
+        JSONObject active = profile.optJSONObject("active_companion");
+        JSONObject record = new JSONObject();
+        putSafe(record, "id", firstNonEmpty(
+                active == null ? "" : active.optString("id", ""),
+                profile.optString("active_companion_id", "")));
+        putSafe(record, "name", firstNonEmpty(
+                active == null ? "" : active.optString("name", ""),
+                profile.optString("active_companion_name", ""),
+                profile.optString("assistant_name", "")));
+        putSafe(record, "source", firstNonEmpty(
+                active == null ? "" : active.optString("source", ""),
+                profile.optString("active_companion_source", "")));
+        putSafe(record, "version", firstNonEmpty(
+                active == null ? "" : active.optString("version", ""),
+                profile.optString("active_companion_version", "")));
+        return record;
+    }
+
+    private static JSONObject activeCompanionFromPayload(JSONObject payload) {
+        if (payload == null) {
+            return new JSONObject();
+        }
+        JSONObject active = payload.optJSONObject("active_companion");
+        JSONObject companion = payload.optJSONObject("companion");
+        JSONObject petRecord = payload.optJSONObject("pet");
+        JSONObject petSpec = null;
+        if (petRecord != null) {
+            petSpec = petRecord.optJSONObject("pet");
+            if (petSpec == null) {
+                petSpec = petRecord;
+            }
+        }
+        JSONObject directPetSpec = payload.optJSONObject("pet_spec");
+        if (directPetSpec != null) {
+            petSpec = directPetSpec;
+        }
+
+        JSONObject record = new JSONObject();
+        putSafe(record, "id", firstNonEmpty(
+                payload.optString("companion_id", ""),
+                payload.optString("id", ""),
+                petRecord == null ? "" : petRecord.optString("companion_id", ""),
+                companion == null ? "" : companion.optString("id", ""),
+                active == null ? "" : active.optString("id", ""),
+                payload.optString("active_companion_id", "")));
+        putSafe(record, "name", firstNonEmpty(
+                payload.optString("companion_name", ""),
+                payload.optString("name", ""),
+                petRecord == null ? "" : petRecord.optString("companion_name", ""),
+                companion == null ? "" : companion.optString("name", ""),
+                active == null ? "" : active.optString("name", ""),
+                petSpec == null ? "" : petSpec.optString("name", "")));
+        putSafe(record, "summary", firstNonEmpty(
+                payload.optString("companion_summary", ""),
+                payload.optString("summary", ""),
+                petRecord == null ? "" : petRecord.optString("companion_summary", ""),
+                companion == null ? "" : companion.optString("summary", ""),
+                active == null ? "" : active.optString("summary", "")));
+        putSafe(record, "palette", firstNonEmpty(
+                payload.optString("palette", ""),
+                petRecord == null ? "" : petRecord.optString("palette", ""),
+                petSpec == null ? "" : petSpec.optString("palette", "")));
+        putSafe(record, "motion", firstNonEmpty(
+                payload.optString("motion", ""),
+                petRecord == null ? "" : petRecord.optString("motion", ""),
+                petSpec == null ? "" : petSpec.optString("motion", "")));
+        putSafe(record, "renderer", petSpec == null ? "" : petSpec.optString("renderer", ""));
+        putSafe(record, "source", firstNonEmpty(
+                payload.optString("source", ""),
+                petRecord == null ? "" : petRecord.optString("source", ""),
+                companion == null ? "" : companion.optString("source", ""),
+                active == null ? "" : active.optString("source", "")));
+        putSafe(record, "version", firstNonEmpty(
+                payload.optString("version", ""),
+                petRecord == null ? "" : petRecord.optString("version", ""),
+                companion == null ? "" : companion.optString("version", ""),
+                active == null ? "" : active.optString("version", "")));
+        return record;
+    }
+
+    private static JSONObject mergeCompanionMetadata(JSONObject primary, JSONObject fallback) {
+        JSONObject merged = new JSONObject();
+        putSafe(merged, "id", firstNonEmpty(primary.optString("id", ""), fallback.optString("id", "")));
+        putSafe(merged, "name", firstNonEmpty(primary.optString("name", ""), fallback.optString("name", "")));
+        putSafe(merged, "summary", firstNonEmpty(primary.optString("summary", ""), fallback.optString("summary", "")));
+        putSafe(merged, "palette", firstNonEmpty(primary.optString("palette", ""), fallback.optString("palette", "")));
+        putSafe(merged, "motion", firstNonEmpty(primary.optString("motion", ""), fallback.optString("motion", "")));
+        putSafe(merged, "renderer", firstNonEmpty(primary.optString("renderer", ""), fallback.optString("renderer", "")));
+        putSafe(merged, "source", firstNonEmpty(primary.optString("source", ""), fallback.optString("source", "")));
+        putSafe(merged, "version", firstNonEmpty(primary.optString("version", ""), fallback.optString("version", "")));
+        return merged;
+    }
+
+    private static boolean hasCompanionIdentity(JSONObject record) {
+        return record != null
+                && (!safe(record.optString("id", "")).isEmpty()
+                || !safe(record.optString("name", "")).isEmpty());
+    }
+
+    private static void putSafe(JSONObject target, String key, String value) {
+        String safeValue = safe(value);
+        if (safeValue.isEmpty()) {
+            return;
+        }
+        try {
+            target.put(key, safeValue);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static String firstNonEmpty(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            String item = safe(value);
+            if (!item.isEmpty()) {
+                return item;
+            }
+        }
+        return "";
     }
 
     private static String readStream(InputStream stream) throws Exception {

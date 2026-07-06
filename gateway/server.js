@@ -475,6 +475,85 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/v1/agent/pets/active" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, activePetPayload(profileOptionsFromUrl(url)));
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/pets/agents" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, petAgentsPayload(url));
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/pets/agents" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCreatePetAgent(request, response);
+      return;
+    }
+
+    {
+      const match = url.pathname.match(/^\/v1\/agent\/pets\/agents\/([^/]+)$/);
+      if (match && request.method === "GET") {
+        if (!authorizedAgent(request)) {
+          sendJson(response, 401, agentAuthError());
+          return;
+        }
+        const agent = companionCatalog.getAgent(decodeURIComponent(match[1]));
+        if (!agent) {
+          sendJson(response, 404, { error: "agent not found" });
+          return;
+        }
+        sendJson(response, 200, { version: PET_CATALOG_VERSION, agent });
+        return;
+      }
+    }
+
+    if (url.pathname === "/v1/agent/pets/bookmarks" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, petBookmarksPayload(url));
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/pets/bookmarks" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCreatePetBookmark(request, response);
+      return;
+    }
+
+    {
+      const match = url.pathname.match(/^\/v1\/agent\/pets\/bookmarks\/([^/]+)$/);
+      if (match && request.method === "GET") {
+        if (!authorizedAgent(request)) {
+          sendJson(response, 401, agentAuthError());
+          return;
+        }
+        const bookmark = companionCatalog.getBookmark(decodeURIComponent(match[1]));
+        if (!bookmark) {
+          sendJson(response, 404, { error: "bookmark not found" });
+          return;
+        }
+        sendJson(response, 200, { version: PET_CATALOG_VERSION, bookmark });
+        return;
+      }
+    }
+
     if (url.pathname === "/v1/agent/pets" && request.method === "POST") {
       if (!authorizedAgent(request)) {
         sendJson(response, 401, agentAuthError());
@@ -3914,8 +3993,10 @@ function agentProfilePayload(extra = {}, options = {}) {
     scope: options.scope === "device" && options.deviceId ? "device" : "global",
     deviceId: normalizeDeviceId(options.deviceId || options.device_id || ""),
   };
+  const profile = agentProfile.effective(profileOptions);
+  const activeCompanion = activeCompanionPayload(profile);
   return {
-    profile: agentProfile.effective(profileOptions),
+    profile,
     profile_version: agentProfile.currentVersion(profileOptions),
     current_version: agentProfile.currentVersion(profileOptions),
     global_version: agentProfile.currentVersion(),
@@ -3925,6 +4006,7 @@ function agentProfilePayload(extra = {}, options = {}) {
     is_overridden: agentProfile.isOverridden(profileOptions),
     fields: agentProfile.fields(),
     options_endpoint: "/v1/agent/profile/options",
+    active_companion: activeCompanion,
     ...extra,
   };
 }
@@ -3965,12 +4047,7 @@ function agentProfileRuntimeStatus(options = {}) {
     autonomy_level: profile.autonomy_level,
     memory_policy: profile.memory_policy,
     recovery_mode: profile.recovery_mode,
-    active_companion: profile.active_companion_id ? {
-      id: profile.active_companion_id,
-      name: profile.active_companion_name,
-      source: profile.active_companion_source,
-      version: profile.active_companion_version,
-    } : null,
+    active_companion: activeCompanionPayload(profile),
   };
 }
 
@@ -3997,11 +4074,13 @@ function companionCatalogPayload(url) {
   const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
   const limit = Number(url?.searchParams?.get("limit") || 100);
   const profile = agentProfile.effective();
+  const activeCompanion = activeCompanionPayload(profile);
   return {
     version: companionCatalog.version,
     generated_at: new Date().toISOString(),
     query,
     active_companion_id: profile.active_companion_id || "",
+    active_companion: activeCompanion,
     companions: companionCatalog.list({ query, limit }),
     endpoints: {
       list: "/v1/agent/companions",
@@ -4016,6 +4095,7 @@ function petCatalogPayload(url) {
   const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
   const limit = Number(url?.searchParams?.get("limit") || 100);
   const profile = agentProfile.effective();
+  const activeCompanion = activeCompanionPayload(profile);
   const companions = companionCatalog.list({ query, limit });
   return {
     version: PET_CATALOG_VERSION,
@@ -4023,16 +4103,89 @@ function petCatalogPayload(url) {
     generated_at: new Date().toISOString(),
     query,
     active_companion_id: profile.active_companion_id || "",
+    active_companion: activeCompanion,
     generation: petGenerationStatus(),
     pets: companions.map(companionPetRecord),
     companions,
     endpoints: {
       list: "/v1/agent/pets",
       create: "/v1/agent/pets",
+      active: "/v1/agent/pets/active",
+      agents: "/v1/agent/pets/agents",
+      bookmarks: "/v1/agent/pets/bookmarks",
       preview: "/v1/agent/pets/preview",
       apply: "/v1/agent/pets/apply",
       generate: "/v1/agent/pets/generate",
       companions: "/v1/agent/companions",
+    },
+  };
+}
+
+function activeCompanionPayload(profile) {
+  if (!profile?.active_companion_id) return null;
+  const companion = companionCatalog.get(profile.active_companion_id);
+  const metadata = {
+    id: profile.active_companion_id,
+    name: profile.active_companion_name || companion?.name || "",
+    source: profile.active_companion_source || companion?.source || "",
+    version: profile.active_companion_version || companion?.version || "",
+  };
+  return {
+    ...metadata,
+    companion: companion || null,
+    pet: companion ? companionPetRecord(companion) : null,
+  };
+}
+
+function activePetPayload(options = {}) {
+  const profileOptions = {
+    scope: options.scope === "device" && options.deviceId ? "device" : "global",
+    deviceId: normalizeDeviceId(options.deviceId || options.device_id || ""),
+  };
+  const profile = agentProfile.effective(profileOptions);
+  const activeCompanion = activeCompanionPayload(profile);
+  return {
+    version: PET_CATALOG_VERSION,
+    generated_at: new Date().toISOString(),
+    profile_version: agentProfile.currentVersion(profileOptions),
+    current_version: agentProfile.currentVersion(profileOptions),
+    global_version: agentProfile.currentVersion(),
+    scope: profileOptions.scope,
+    device_id: profileOptions.deviceId || "",
+    active_companion: activeCompanion,
+    companion: activeCompanion?.companion || null,
+    pet: activeCompanion?.pet || null,
+  };
+}
+
+function petAgentsPayload(url) {
+  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
+  const limit = Number(url?.searchParams?.get("limit") || 100);
+  return {
+    version: PET_CATALOG_VERSION,
+    generated_at: new Date().toISOString(),
+    query,
+    agents: companionCatalog.listAgents({ query, limit }),
+    endpoints: {
+      list: "/v1/agent/pets/agents",
+      create: "/v1/agent/pets/agents",
+      bookmarks: "/v1/agent/pets/bookmarks",
+    },
+  };
+}
+
+function petBookmarksPayload(url) {
+  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
+  const limit = Number(url?.searchParams?.get("limit") || 100);
+  return {
+    version: PET_CATALOG_VERSION,
+    generated_at: new Date().toISOString(),
+    query,
+    bookmarks: companionCatalog.listBookmarks({ query, limit }),
+    endpoints: {
+      list: "/v1/agent/pets/bookmarks",
+      create: "/v1/agent/pets/bookmarks",
+      agents: "/v1/agent/pets/agents",
     },
   };
 }
@@ -4044,6 +4197,7 @@ async function handleCreateCompanion(request, response) {
       text: body?.text || body?.request || body?.prompt || body?.description,
       name: body?.name,
       voice: body?.voice,
+      rules: body?.rules,
     });
     const preview = companionCatalog.preview({ companion_id: companion.id });
     sendJson(response, 201, {
@@ -4065,6 +4219,7 @@ async function handleCreatePet(request, response) {
       voice: body?.voice,
       pet: petInputFromBody(body),
       image_data_url: body?.image_data_url || body?.imageDataUrl || body?.source_image || body?.sourceImage,
+      rules: body?.rules,
     });
     const preview = companionCatalog.preview({ companion_id: companion.id });
     sendJson(response, 201, {
@@ -4076,6 +4231,42 @@ async function handleCreatePet(request, response) {
     });
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handleCreatePetAgent(request, response) {
+  const body = await readJsonBody(request);
+  try {
+    const agent = companionCatalog.createAgent({
+      text: body?.text || body?.request || body?.prompt || body?.description,
+      name: body?.name,
+      voice: body?.voice,
+      pet: petInputFromBody(body),
+      image_data_url: body?.image_data_url || body?.imageDataUrl || body?.source_image || body?.sourceImage,
+      rules: body?.rules,
+    });
+    const preview = companionCatalog.preview({ companion_id: agent.companion_id });
+    sendJson(response, 201, {
+      version: PET_CATALOG_VERSION,
+      agent,
+      preview: petPreviewPayload(preview),
+      active_profile_mutated: false,
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handleCreatePetBookmark(request, response) {
+  const body = await readJsonBody(request);
+  try {
+    const bookmark = companionCatalog.createBookmark(body || {});
+    sendJson(response, 201, {
+      version: PET_CATALOG_VERSION,
+      bookmark,
+    });
+  } catch (error) {
+    sendJson(response, 404, { error: cleanError(error) });
   }
 }
 
@@ -4114,7 +4305,8 @@ async function handleCompanionApply(request, response) {
 async function handlePetPreview(request, response) {
   const body = await readJsonBody(request);
   try {
-    const preview = companionCatalog.preview(body || {});
+    const companionInput = companionInputFromPetBody(body || {});
+    const preview = companionCatalog.preview(companionInput);
     const profileOptions = profileOptionsFromBody(body, "global");
     const base = agentProfile.effective(profileOptions);
     const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
@@ -4137,7 +4329,8 @@ async function handlePetApply(request, response) {
     return;
   }
   try {
-    const result = applyCompanionToProfile(body || {}, profileOptions, body?.source || "pet-studio");
+    const companionInput = companionInputFromPetBody(body || {});
+    const result = applyCompanionToProfile(companionInput, profileOptions, body?.source || "pet-studio");
     sendJson(response, 200, {
       version: PET_CATALOG_VERSION,
       pet: companionPetRecord(result.companion),
@@ -4146,6 +4339,19 @@ async function handlePetApply(request, response) {
   } catch (error) {
     sendJson(response, 404, { error: cleanError(error) });
   }
+}
+
+function companionInputFromPetBody(body = {}) {
+  const agentId = body?.agent_id || body?.agentId;
+  if (!agentId) return body || {};
+  const agent = companionCatalog.getAgent(agentId);
+  if (!agent) {
+    throw new Error("agent not found");
+  }
+  return {
+    ...body,
+    companion_id: agent.companion_id,
+  };
 }
 
 async function handlePetGenerate(request, response) {
