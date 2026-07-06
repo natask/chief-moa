@@ -1,10 +1,14 @@
 name: Deploy VPS gateway
 
-# Automatic promotion of the DigitalOcean gateway (api.agee.app).
-# Every push to master that touches the gateway deploy path is verified on a
-# GitHub-hosted runner, then promoted via scripts/vps/update.sh on the droplet.
-# update.sh keeps its own data gate: backup + restore-check run on the VPS and
-# abort the update before touching the active service if either fails.
+# Automatic promotion of the DigitalOcean gateway (api.agee.app), pull-based.
+#
+# GitHub runners cannot reach port 22 on the droplet (cloud firewall), so CI
+# never SSHes in. Instead: this workflow verifies the gateway, then
+# fast-forwards the `vps-deploy` ref to the verified SHA. A systemd timer on
+# the droplet (scripts/vps/auto-update.sh) polls origin/vps-deploy every two
+# minutes and promotes through scripts/vps/update.sh, whose backup +
+# restore-check data gate aborts before touching the active service if
+# either fails. Broken commits never move vps-deploy, so they never deploy.
 
 on:
   push:
@@ -22,14 +26,14 @@ concurrency:
   group: chief-moa-vps-deploy
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
   deploy:
-    name: Verify and promote gateway
+    name: Verify gateway and mark deployable
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      VPS_HOST: ${{ secrets.VPS_HOST }}
-      PUBLIC_HEALTH_URL: https://api.agee.app/health
 
     steps:
       - name: Check out repository
@@ -48,43 +52,10 @@ jobs:
           npm install --no-audit --no-fund
           npm run check
 
-      - name: Set up SSH
+      - name: Publish vps-deploy ref
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          host="${VPS_HOST#*@}"
-          echo "Probing SSH reachability of the VPS..."
-          for i in 1 2 3; do
-            if ssh-keyscan -T 15 -H "$host" >> ~/.ssh/known_hosts 2>&1; then
-              echo "Host key collected on attempt $i."
-              exit 0
-            fi
-            echo "ssh-keyscan attempt $i failed; retrying."
-            sleep 5
-          done
-          echo "Port 22 on the VPS is not reachable from GitHub runners." >&2
-          exit 1
-
-      - name: Promote gateway on VPS
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new "$VPS_HOST" \
-            "bash /opt/chief-moa/app/scripts/vps/update.sh --ref master"
-
-      - name: Smoke public gateway
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 10); do
-            if curl -fsS -m 10 "$PUBLIC_HEALTH_URL" | grep -q '"ok":true'; then
-              echo "Public gateway healthy."
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Public gateway did not report healthy." >&2
-          exit 1
+          git push origin "HEAD:refs/heads/vps-deploy" --force
+          echo "vps-deploy -> $(git rev-parse HEAD)"
+          echo "The droplet timer promotes this SHA within ~2 minutes."

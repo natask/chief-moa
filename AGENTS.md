@@ -88,10 +88,19 @@ re-deriving the commands. Each is a thin wrapper over the repo's real
   check first. Background/cron invocations stop at audit and must not
   self-promote.
 
-The gateway on the main machine is a live app with user data. Diagnosis is
-read-only; restart/redeploy is a promotion gated on explicit user approval in
-the same turn. Fix work happens in an isolated branch or worktree, never against
-the running service. See the `main-machine` skill for connection facts.
+The main machine (10.147.17.10) has been decommissioned. The production
+gateway is the DigitalOcean droplet behind https://api.agee.app. Fix work
+happens in an isolated branch or worktree, never against the running service.
+
+The VPS gateway auto-promotes (user-approved policy, 2026-07-06): every push
+to master that touches the gateway deploy path is verified by the
+`Deploy VPS gateway` workflow, which on success moves the `vps-deploy` ref;
+a systemd timer on the droplet (`scripts/vps/auto-update.sh`) promotes that
+ref within ~2 minutes through `scripts/vps/update.sh`, whose backup +
+restore-check gate still aborts before touching the service if either fails.
+Agents therefore deploy the gateway by merging verified work to master and
+pushing. Manual promotion (`scripts/vps/push.sh`) remains available and still
+requires an explicit user request in the current turn.
 
 ## Finish Order
 
