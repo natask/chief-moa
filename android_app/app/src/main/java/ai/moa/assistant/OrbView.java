@@ -2,11 +2,15 @@ package ai.moa.assistant;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 
-// The floating Moa lion mark: just the animal, no disc, no halo, no glow.
+// The floating Moa lion mark sits on a solid warm near-black disc, mirroring the
+// adaptive launcher icon (mark over ic_launcher_background). The opaque disc is
+// what lets the lion's dark eyes read over light content underneath; the window
+// itself stays translucent so the orb reads as a round coin, not a square.
 // State reads from the panel text, not from light (parity with the browser
 // extension). Listening and held turns grow the mark a touch. Recording a raw
 // audio note tints the mark red — steady, no pulse — so a capture never looks
@@ -19,6 +23,9 @@ final class OrbView extends View {
     private static final int RECORDING_TINT = 0x8CFF4D4D;
 
     private final Drawable mark;
+    private final Paint backingPaint;
+    private final Paint rimPaint;
+    private final float rimWidthPx;
     private boolean listening;
     private boolean held;
     private boolean recordingNote;
@@ -29,6 +36,17 @@ final class OrbView extends View {
         if (mark != null) {
             mark.mutate();
         }
+        // Opaque disc behind the mark. Anti-aliased so the circle edge is clean.
+        backingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        backingPaint.setStyle(Paint.Style.FILL);
+        backingPaint.setColor(MoaColors.MARK_BACKING);
+        // A minimal hairline rim so the disc reads as a deliberate coin, not a
+        // flat cutout. One physical pixel, the same faint white as card borders.
+        rimWidthPx = Math.max(1f, context.getResources().getDisplayMetrics().density);
+        rimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        rimPaint.setStyle(Paint.Style.STROKE);
+        rimPaint.setStrokeWidth(rimWidthPx);
+        rimPaint.setColor(MoaColors.RAISED_BORDER);
     }
 
     void setListening(boolean listening) {
@@ -61,6 +79,14 @@ final class OrbView extends View {
         float cx = w / 2f;
         float cy = h / 2f;
         float size = Math.min(w, h) * (held || recordingNote ? 1.0f : (listening ? 0.98f : 0.92f));
+
+        // Solid disc first, then the mark on top. The disc fills the round orb
+        // window so the lion always sits on an opaque field regardless of the
+        // state-driven mark scale. Inset the rim by half its width so the
+        // stroke stays inside the view and is not clipped at the edge.
+        float discRadius = Math.min(w, h) / 2f;
+        canvas.drawCircle(cx, cy, discRadius, backingPaint);
+        canvas.drawCircle(cx, cy, discRadius - rimWidthPx / 2f, rimPaint);
 
         if (recordingNote) {
             mark.setColorFilter(RECORDING_TINT, PorterDuff.Mode.SRC_ATOP);

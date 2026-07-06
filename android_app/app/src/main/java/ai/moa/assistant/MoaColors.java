@@ -32,6 +32,12 @@ final class MoaColors {
     static final int USER_BG = 0x267C5CFF;
     static final int USER_BORDER = 0x407C5CFF;
 
+    // Opaque warm near-black disc painted behind the lion mark. Mirrors the
+    // adaptive launcher icon's ic_launcher_background (#161310) so the mark's
+    // dark eyes read on light content instead of vanishing on a transparent
+    // window. Alpha is 1 on purpose; the window stays translucent for roundness.
+    static final int MARK_BACKING = 0xFF161310;
+
     private MoaColors() {
     }
 }

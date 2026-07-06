@@ -167,6 +167,10 @@ public final class MainActivity extends Activity {
 
         ImageView mark = new ImageView(this);
         mark.setImageResource(R.drawable.moa_mark);
+        // Same opaque disc as the floating orb so the lion's dark eyes read here
+        // too, instead of relying on the incidentally-dark root behind it.
+        mark.setBackground(MoaDrawables.circle(MoaColors.MARK_BACKING, MoaColors.RAISED_BORDER, dp(1)));
+        mark.setPadding(dp(6), dp(6), dp(6), dp(6));
         LinearLayout.LayoutParams markParams = new LinearLayout.LayoutParams(dp(46), dp(46));
         markParams.rightMargin = dp(12);
         mark.setLayoutParams(markParams);
