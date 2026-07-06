@@ -45,10 +45,18 @@ Keys never go in git. Two places, both gitignored:
   node, so run the testbed in a throwaway container from the gateway image:
 
   ```sh
-  docker run --rm --env-file /opt/chief-moa/gateway.env \
+  cd /opt/chief-moa
+  ADC_HOST=$(sed -n 's/^GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH=//p' gateway.env)
+  ADC_CONT=$(sed -n 's/^GOOGLE_APPLICATION_CREDENTIALS=//p' gateway.env)
+  docker run --rm --env-file gateway.env \
+    -v "$ADC_HOST:$ADC_CONT:ro" \
     -v /opt/chief-moa/app/gateway/tools/persona-testbed:/tb -w /tb \
     chief-moa-gateway:local node run.mjs
   ```
+
+  Gemini auth comes from the same mounted Google credentials the gateway
+  uses (no gcloud needed); the other slots read their keys from
+  `gateway.env`.
 
   This never touches the running gateway container. Results print to stdout
   (the container's copy of the results file is discarded with the container).

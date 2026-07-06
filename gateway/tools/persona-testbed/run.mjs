@@ -21,6 +21,7 @@
 // Model overrides: --model-gemini, --model-openai, --model-grok
 
 import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -119,16 +120,67 @@ const SAFETY_OFF = [
   "HARM_CATEGORY_DANGEROUS_CONTENT",
 ].map((category) => ({ category, threshold: "BLOCK_NONE" }));
 
-let cachedAdcToken = "";
-function adcToken() {
-  if (!cachedAdcToken) {
-    cachedAdcToken = execFileSync("gcloud", ["auth", "application-default", "print-access-token"], {
-      encoding: "utf8",
-      timeout: 15000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+// Google access token, in the order the gateway machines actually use:
+// 1. GOOGLE_APPLICATION_CREDENTIALS file (droplet: no gcloud in the image).
+//    Handles both service_account (signed JWT) and authorized_user (refresh
+//    token) credential shapes.
+// 2. gcloud ADC (local machine, same as tts.mjs).
+let cachedToken = "";
+async function googleToken() {
+  if (cachedToken) return cachedToken;
+  const credFile = process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
+  if (credFile && fs.existsSync(credFile)) {
+    const cred = JSON.parse(fs.readFileSync(credFile, "utf8"));
+    cachedToken = cred.type === "service_account"
+      ? await serviceAccountToken(cred)
+      : await authorizedUserToken(cred);
+    return cachedToken;
   }
-  return cachedAdcToken;
+  cachedToken = execFileSync("gcloud", ["auth", "application-default", "print-access-token"], {
+    encoding: "utf8",
+    timeout: 15000,
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+  return cachedToken;
+}
+
+async function serviceAccountToken(cred) {
+  const now = Math.floor(Date.now() / 1000);
+  const enc = (obj) => Buffer.from(JSON.stringify(obj)).toString("base64url");
+  const unsigned = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({
+    iss: cred.client_email,
+    scope: "https://www.googleapis.com/auth/cloud-platform",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  })}`;
+  const signature = crypto.createSign("RSA-SHA256").update(unsigned).sign(cred.private_key).toString("base64url");
+  return oauthToken({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion: `${unsigned}.${signature}`,
+  });
+}
+
+async function authorizedUserToken(cred) {
+  return oauthToken({
+    grant_type: "refresh_token",
+    client_id: cred.client_id,
+    client_secret: cred.client_secret,
+    refresh_token: cred.refresh_token,
+  });
+}
+
+async function oauthToken(params) {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!body.access_token) {
+    throw new Error(`google token exchange failed: ${JSON.stringify(body).slice(0, 200)}`);
+  }
+  return body.access_token;
 }
 
 function gcpProject() {
@@ -153,7 +205,12 @@ async function askGemini(question) {
     const project = gcpProject();
     if (!project) throw new Error("no GEMINI_API_KEY and no GCP project (set VERTEX_PROJECT or gcloud config)");
     url = `https://aiplatform.googleapis.com/v1beta1/projects/${project}/locations/global/publishers/google/models/${model}:generateContent`;
-    headers = { Authorization: `Bearer ${adcToken()}`, "Content-Type": "application/json" };
+    headers = {
+      Authorization: `Bearer ${await googleToken()}`,
+      "Content-Type": "application/json",
+      // authorized_user credentials need an explicit quota project.
+      "x-goog-user-project": project,
+    };
   }
   const res = await fetch(url, {
     method: "POST",
