@@ -16,6 +16,8 @@
 //   3. Model tool loop: a chat turn where the model calls update_agent_profile
 //      patches the profile through the shared sanitizer, and a second round
 //      returns the spoken confirmation text.
+//   4. Model routing: profile.model + profile.reasoning_provider route the next
+//      cascaded reasoning call to the selected provider/model (openai + vertex).
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -43,6 +45,12 @@ process.env.MODEL_API_KEY = "cascaded-reasoner-smoke-key";
 process.env.OPENAI_API_KEY = "";
 process.env.GOOGLE_API_KEY = "";
 process.env.GEMINI_API_KEY = "";
+// Vertex routing target for the model-routing case. VERTEX_ACCESS_TOKEN bypasses
+// the ADC/gcloud token exchange so the only network call is the stubbed model
+// generateContent request.
+process.env.VERTEX_PROJECT = "cascaded-reasoner-smoke-project";
+process.env.VERTEX_LOCATION = "us-central1";
+process.env.VERTEX_ACCESS_TOKEN = "cascaded-reasoner-smoke-vertex-token";
 
 const previousFetch = global.fetch;
 const fetchCalls = [];
@@ -74,6 +82,10 @@ global.fetch = async (url, options = {}) => {
       choices: [{ message: { role: "assistant", content: pendingToolCall ? "Done, master — switched to the Charon voice." : "Understood, master." } }],
     });
   }
+  if (u.includes(":generateContent")) {
+    fetchCalls.push({ kind: "vertex", url: u, body: JSON.parse(String(options.body || "{}")) });
+    return jsonResponse({ candidates: [{ content: { parts: [{ text: "Understood, master." }] } }] });
+  }
   throw new Error(`unexpected fetch to ${u}`);
 };
 
@@ -96,6 +108,7 @@ async function main() {
   await historyReachesTheModel();
   await modalityHintIsInjected();
   await modelToolCallUpdatesProfile();
+  await modelAndReasoningProviderRoute();
 
   console.log(JSON.stringify({
     ok: true,
@@ -103,6 +116,7 @@ async function main() {
       "a prior voice turn's transcript reaches the cascaded reasoning model messages",
       "the reasoner injects a modality/TTS delivery hint (modality, availability, previous error)",
       "a model update_agent_profile tool call patches the profile through the sanitizer and the confirmation is spoken",
+      "profile.model and profile.reasoning_provider route the next reasoning call to the selected provider/model",
     ],
   }, null, 2));
 }
@@ -192,6 +206,46 @@ async function modelToolCallUpdatesProfile() {
     // Restore the default voice so the run leaves no residue.
     await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
   }
+}
+
+async function modelAndReasoningProviderRoute() {
+  // Default (unset reasoning_provider) routes to the boot provider: openai-compatible.
+  fetchCalls.length = 0;
+  await runCascadedVoiceReasoning({
+    transcript: "good day",
+    session_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "reasoner-route-default",
+  });
+  assert.ok(fetchCalls.some((c) => c.kind === "openai"), "an unset reasoning_provider must route to the boot openai-compatible provider");
+  assert.ok(!fetchCalls.some((c) => c.kind === "vertex"), "the default turn must not call Vertex");
+
+  // Swap reasoning_provider to vertex and model to a custom id: the next reasoning
+  // call must route to Vertex generateContent for that model, no restart required.
+  const put = await requestJson("PUT", "/v1/agent/profile", {
+    profile: { reasoning_provider: "vertex", model: "gemini-smoke-custom" },
+  });
+  assert.equal(put.status, 200, `provider swap must succeed: ${JSON.stringify(put.json)}`);
+
+  fetchCalls.length = 0;
+  await runCascadedVoiceReasoning({
+    transcript: "good day again",
+    session_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "reasoner-route-vertex",
+  });
+  const vertexCall = fetchCalls.find((c) => c.kind === "vertex");
+  assert.ok(vertexCall, "reasoning_provider=vertex must route the next call to Vertex");
+  assert.match(vertexCall.url, /\/models\/gemini-smoke-custom:generateContent/, `profile.model must select the Vertex model in the URL: ${vertexCall.url}`);
+  assert.ok(!fetchCalls.some((c) => c.kind === "openai"), "a vertex-routed turn must not also call the openai-compatible endpoint");
+
+  // An invalid model id is dropped by the sanitizer, keeping the previous value.
+  const bad = await requestJson("PUT", "/v1/agent/profile", { profile: { model: "bad model!!" } });
+  assert.equal(bad.status, 200, `invalid model update must still return 200: ${JSON.stringify(bad.json)}`);
+  assert.equal(agentProfile.effective().model, "gemini-smoke-custom", "an invalid model id must be rejected and the previous model kept");
+
+  const reset = await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  assert.equal(reset.status, 200, `provider reset must succeed: ${JSON.stringify(reset.json)}`);
 }
 
 function requestJson(method, url, body = null) {

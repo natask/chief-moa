@@ -5795,7 +5795,7 @@ function profileSummaryText(subject, options = {}) {
     return `Profile ${version} ${scopeText}. My name is ${profile.assistant_name || "A.G."}.`;
   }
   if (subject === "providers") {
-    return `Profile ${version}. Providers: voice ${profile.voice_provider || "default"}, STT ${profile.stt_provider || "default"}, reasoning ${profile.reasoning_provider || "default"}, TTS ${profile.tts_provider || "default"}.`;
+    return `Profile ${version}. Providers: voice ${profile.voice_provider || "default"}, STT ${profile.stt_provider || "default"}, reasoning ${profile.reasoning_provider || "default"} (model ${profile.model || "default"}), TTS ${profile.tts_provider || "default"}.`;
   }
   if (subject === "tool_policy") {
     return `Profile ${version}. Tool policy is ${profile.tool_policy}; autonomy is ${profile.autonomy_level}.`;
@@ -5813,16 +5813,36 @@ function profileClarificationText(subject, options = {}) {
   return "Tell me which profile setting to change.";
 }
 
+// The reasoning provider for THIS turn: the profile's reasoning_provider when it
+// names a supported provider, otherwise the boot MODEL_PROVIDER. This makes the
+// middle (reasoning) model swappable per profile at runtime for A/B testing
+// without a gateway restart, matching how profile.model already swaps the id.
+function resolveReasoningProvider(profile) {
+  const requested = String(profile?.reasoning_provider || "").trim().toLowerCase().replace(/_/g, "-");
+  if (requested === "vertex" || requested === "openai-compatible") {
+    return requested;
+  }
+  return MODEL_PROVIDER;
+}
+
+function providerConfiguredFor(provider) {
+  if (provider === "vertex") {
+    return Boolean(VERTEX_PROJECT) && Boolean(vertexCredentialHint());
+  }
+  return MODEL_API_KEY.length > 0 || !MODEL_BASE_URL.includes("api.openai.com");
+}
+
 async function callModel(messages, profile) {
   const effective = profile || agentProfile.effective();
-  if (!providerConfigured()) {
-    if (MODEL_PROVIDER === "vertex") {
+  const provider = resolveReasoningProvider(effective);
+  if (!providerConfiguredFor(provider)) {
+    if (provider === "vertex") {
       throw new Error("Vertex provider requires VERTEX_PROJECT or GOOGLE_CLOUD_PROJECT plus Application Default Credentials.");
     }
     throw new Error("MODEL_API_KEY or OPENAI_API_KEY is required for api.openai.com. For local models, set MODEL_BASE_URL to an OpenAI-compatible server such as Ollama or LiteLLM.");
   }
 
-  if (MODEL_PROVIDER === "vertex") {
+  if (provider === "vertex") {
     return callVertexModel(messages, effective);
   }
 
@@ -5922,8 +5942,9 @@ async function callVertexModel(messages, profile) {
 }
 
 async function callModelOrFallback(messages, profile) {
-  if (providerConfigured()) {
-    return callModel(messages, profile);
+  const effective = profile || agentProfile.effective();
+  if (providerConfiguredFor(resolveReasoningProvider(effective))) {
+    return callModel(messages, effective);
   }
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   return gatewayFallbackReply(lastUser?.content || "");
@@ -6038,12 +6059,13 @@ async function chatTurnWithPageTweakTool(messages, profile, source) {
 async function callModelToolLoop(messages, profile, toolDefs, options = {}) {
   const effective = profile || agentProfile.effective();
   const maxRounds = Math.max(1, Math.min(Number(options.maxRounds || 2), 4));
-  if (!Array.isArray(toolDefs) || toolDefs.length === 0 || !providerConfigured()) {
+  const provider = resolveReasoningProvider(effective);
+  if (!Array.isArray(toolDefs) || toolDefs.length === 0 || !providerConfiguredFor(provider)) {
     const text = await callModelOrFallback(messages, effective);
     return { text, tool_results: [], rounds: 0 };
   }
   try {
-    if (MODEL_PROVIDER === "vertex") {
+    if (provider === "vertex") {
       return await vertexToolLoop(messages, effective, toolDefs, maxRounds);
     }
     return await openAiToolLoop(messages, effective, toolDefs, maxRounds);
@@ -9240,10 +9262,7 @@ function delay(ms) {
 }
 
 function providerConfigured() {
-  if (MODEL_PROVIDER === "vertex") {
-    return Boolean(VERTEX_PROJECT) && Boolean(vertexCredentialHint());
-  }
-  return MODEL_API_KEY.length > 0 || !MODEL_BASE_URL.includes("api.openai.com");
+  return providerConfiguredFor(MODEL_PROVIDER);
 }
 
 function vertexEndpoint(profile) {
