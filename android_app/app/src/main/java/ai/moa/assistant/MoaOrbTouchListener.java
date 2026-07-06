@@ -107,6 +107,13 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 int dy = Math.round(event.getRawY() - downY);
                 if (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop) {
                     moved = true;
+                    // Drift past the slop turns a not-yet-confirmed double press
+                    // into a drag. Clear doublePressPending as well as the timer:
+                    // otherwise ACTION_UP takes the `doublePressPending` branch and
+                    // returns without firing any callback, silently swallowing the
+                    // whole gesture. Cleared, the release falls through to the
+                    // normal moved/single-tap logic below.
+                    doublePressPending = false;
                     cancelPendingDoublePress();
                 }
                 orbParams.x = clampOrbX(startX + dx);

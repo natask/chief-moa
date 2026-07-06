@@ -19,7 +19,12 @@ final class MoaStreamingVoiceSessionController {
     private static final long AUTO_COMMIT_CHECK_MS = 100;
     // How long a commit will wait for session_ready before failing the turn.
     // Without this bound a deferred commit could wait forever on a hung socket.
-    private static final long PENDING_COMMIT_TIMEOUT_MS = 1800;
+    // Must comfortably exceed the socket connect + session_start round trip
+    // (MoaVoiceGatewaySocket.CONNECT_TIMEOUT_MS is 3500ms) so a slow-but-fine
+    // connect is not killed by the client's own impatience. The socket connect
+    // already starts at double-press-start (startSession), so it overlaps the
+    // hold; this only bounds the tail wait after an early release.
+    private static final long PENDING_COMMIT_TIMEOUT_MS = 6000;
     private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 450;
     private static final int MAX_PENDING_AUDIO_BYTES = MoaAudioCaptureController.SAMPLE_RATE_HZ * 2 * 5;
 
@@ -68,6 +73,11 @@ final class MoaStreamingVoiceSessionController {
     private String turnId = "";
     private boolean active;
     private boolean committed;
+    // Set the instant a commit is requested, before capture is stopped. It keeps
+    // commitTurn from running twice while capture.stop() joins the capture thread,
+    // but unlike `committed` it does NOT gate chunk accumulation, so PCM frames
+    // still in flight during the stop keep counting and buffering.
+    private boolean commitRequested;
     private boolean assistantAudioStarted;
     private boolean loggedVoiceActivity;
     private boolean sessionReady;
@@ -125,6 +135,7 @@ final class MoaStreamingVoiceSessionController {
             }
             active = true;
             committed = false;
+            commitRequested = false;
             assistantAudioStarted = false;
             loggedVoiceActivity = false;
             sessionReady = false;
@@ -151,25 +162,45 @@ final class MoaStreamingVoiceSessionController {
         boolean shouldFinishNow;
         boolean hasAudio;
         synchronized (lock) {
-            if (!active || committed) {
+            if (!active || committed || commitRequested) {
+                return;
+            }
+            // Mark the commit requested but do NOT flip `committed` yet. Chunks
+            // arriving from the capture thread must keep counting/buffering until
+            // capture.stop() has joined that thread, so a short utterance is not
+            // read as zero audio just because the release beat the last frame.
+            commitRequested = true;
+            Log.i(TAG, "commitTurn turn_id=" + turnId);
+            capture = captureController;
+        }
+        mainHandler.removeCallbacks(autoCommitCheck);
+
+        // Stop capture first. stop() joins the moa-audio-capture thread (up to
+        // 500ms), draining every already-read PCM chunk into onPcmChunk before we
+        // decide commit vs cancel below.
+        if (capture != null) {
+            capture.stop();
+        }
+
+        synchronized (lock) {
+            // A teardown (cancel/destroy/turn_done/socket close) may have raced in
+            // while capture was stopping. If the turn is no longer active or the
+            // commit was cleared, abandon it.
+            if (!active || !commitRequested) {
+                commitRequested = false;
                 return;
             }
             committed = true;
-            Log.i(TAG, "commitTurn turn_id=" + turnId);
+            commitRequested = false;
             pendingCommitAfterSessionReady = !sessionReady;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
-            capture = captureController;
             socket = gatewaySocket;
             currentTurnId = turnId;
             shouldFinishNow = sessionReady;
             hasAudio = capturedAudioBytes > 0;
         }
-        mainHandler.removeCallbacks(autoCommitCheck);
 
-        if (capture != null) {
-            capture.stop();
-        }
         if (shouldFinishNow) {
             finishCommittedTurn(socket, currentTurnId, hasAudio);
         } else {
@@ -280,7 +311,10 @@ final class MoaStreamingVoiceSessionController {
     private void startCaptureIfNeeded() {
         MoaAudioCaptureController capture;
         synchronized (lock) {
-            if (!active || committed) {
+            // Also bail when a commit is in flight: session_ready can arrive while
+            // commitTurn is joining the capture thread (committed not yet set), and
+            // we must not restart the mic we are in the middle of stopping.
+            if (!active || committed || commitRequested) {
                 return;
             }
             capture = captureController;
@@ -323,9 +357,14 @@ final class MoaStreamingVoiceSessionController {
             return;
         }
         if (!hasAudio) {
-            if (!socket.sendCancelTurn(currentTurnId)) {
-                reportError("Could not cancel empty voice turn.", null);
-            }
+            // Truly nothing captured. Cancel the empty turn on the gateway, but do
+            // not wait for it to answer: a cancelled turn gets no turn_done, so
+            // without a local notify the UI would hang until the 15s watchdog.
+            // Surface a no_speech turn_done so the overlay says "didn't catch that"
+            // and returns to ready immediately.
+            Log.i(TAG, "commit with zero captured audio; cancelling and reporting no_speech");
+            socket.sendCancelTurn(currentTurnId);
+            handleTurnDone(currentTurnId, "no_speech", false, false, "");
             return;
         }
         if (!socket.sendCommitTurn(currentTurnId)) {
