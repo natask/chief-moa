@@ -61,6 +61,7 @@ public final class MainActivity extends Activity {
     private TextView runsStatus;
     private TextView receiptsStatus;
     private TextView settingsStatus;
+    private TextView companionStatus;
     private TextView orbScaleValue;
     private Button overlayButton;
     private Button accessibilityButton;
@@ -225,6 +226,7 @@ public final class MainActivity extends Activity {
         runsStatus = statRow(card, "Runs", "Checking...");
         receiptsStatus = statRow(card, "Receipts", "Checking...");
         settingsStatus = statRow(card, "Settings", settingsSummaryText());
+        companionStatus = statRow(card, "Companion", MoaPrefs.companionStatus(this));
 
         Button refresh = secondaryButton("Refresh");
         refresh.setOnClickListener(v -> refreshControlCenter());
@@ -597,6 +599,10 @@ public final class MainActivity extends Activity {
         if (settingsStatus != null) {
             settingsStatus.setText(settingsSummaryText());
         }
+        if (companionStatus != null) {
+            companionStatus.setText(MoaPrefs.companionStatus(this));
+            companionStatus.setTextColor(MoaColors.OK);
+        }
 
         String gatewayUrl = MoaPrefs.gatewayUrl(this);
         if (gatewayUrl == null || gatewayUrl.trim().isEmpty()) {
@@ -608,13 +614,19 @@ public final class MainActivity extends Activity {
         runsStatus.setText("Checking...");
         sessionsStatus.setTextColor(MoaColors.GOLD);
         runsStatus.setTextColor(MoaColors.GOLD);
+        if (companionStatus != null) {
+            companionStatus.setText("Checking...");
+            companionStatus.setTextColor(MoaColors.GOLD);
+        }
 
         new Thread(() -> {
             String sessionsLabel = "Unavailable";
             String runsLabel = "Unavailable";
             String fetchedProfileJson = "";
+            String fetchedCompanionJson = "";
             int sessionsColor = MoaColors.GOLD;
             int runsColor = MoaColors.GOLD;
+            int companionColor = MoaColors.GOLD;
             try {
                 MoaGatewayClient client = new MoaGatewayClient(gatewayUrl, MoaPrefs.gatewayToken(this));
                 JSONObject context = client.latestContext();
@@ -643,17 +655,30 @@ public final class MainActivity extends Activity {
                     }
                 } catch (Exception ignored) {
                 }
+                try {
+                    JSONObject companion = client.activeCompanionPet("device", androidDeviceId());
+                    if (companion != null && companion.length() > 0) {
+                        fetchedCompanionJson = companion.toString();
+                        companionColor = MoaColors.OK;
+                    }
+                } catch (Exception ignored) {
+                }
             } catch (Exception ignored) {
             }
 
             final String nextSessions = sessionsLabel;
             final String nextRuns = runsLabel;
             final String nextProfileJson = fetchedProfileJson;
+            final String nextCompanionJson = fetchedCompanionJson;
             final int nextSessionsColor = sessionsColor;
             final int nextRunsColor = runsColor;
+            final int nextCompanionColor = companionColor;
             mainHandler.post(() -> {
                 if (!nextProfileJson.isEmpty()) {
                     MoaPrefs.setAgentProfileJson(this, nextProfileJson);
+                }
+                if (!nextCompanionJson.isEmpty()) {
+                    MoaPrefs.setActiveCompanionJson(this, nextCompanionJson);
                 }
                 if (sessionsStatus != null) {
                     sessionsStatus.setText(nextSessions);
@@ -665,6 +690,10 @@ public final class MainActivity extends Activity {
                 }
                 if (settingsStatus != null) {
                     settingsStatus.setText(settingsSummaryText());
+                }
+                if (companionStatus != null) {
+                    companionStatus.setText(MoaPrefs.companionStatus(this));
+                    companionStatus.setTextColor(nextCompanionJson.isEmpty() ? MoaColors.GOLD : nextCompanionColor);
                 }
             });
         }, "moa-control-center").start();
@@ -685,6 +714,10 @@ public final class MainActivity extends Activity {
         }
         if (settingsStatus != null) {
             settingsStatus.setText(settingsSummaryText());
+        }
+        if (companionStatus != null) {
+            companionStatus.setText(MoaPrefs.companionStatus(this));
+            companionStatus.setTextColor(MoaColors.GOLD);
         }
     }
 

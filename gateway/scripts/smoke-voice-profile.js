@@ -92,7 +92,7 @@ async function main() {
         "provider session-config preserves requested honorific/style prompt instructions and adds the address-preference rule",
         "a completed Gemini Live transcript 'use the Charon voice' is stored as profile_control, persists voice=Charon, and corrects a provider refusal",
         "a text_turn sample session sends Gemini clientContent with a session-only voice override",
-        "companion manifest list/create/preview/apply works and spoken 'I want you to be ...' applies a custom companion",
+        "companion manifest list/create/preview/apply, saved pet agents, bookmarks, active pet lookup, and spoken 'I want you to be ...' companion apply work",
       ],
     }, null, 2));
   } finally {
@@ -338,9 +338,14 @@ async function assertCompanionCatalog(baseUrl) {
   assert.ok(list.companions.some((item) => item.id === "shigmi-scout"), "built-in Shigmi Scout must be listed");
   assert.ok(list.companions.every((item) => item.pet?.renderer === "shimeji-web"), "companions must expose pet manifests");
 
+  const initialActive = await getJson(`${baseUrl}/v1/agent/pets/active`);
+  assert.equal(initialActive.version, "companion-pets/v1");
+  assert.equal(initialActive.active_companion, null, "active pet lookup must return null before a companion is applied");
+
   const pets = await getJson(`${baseUrl}/v1/agent/pets`);
   assert.equal(pets.version, "companion-pets/v1");
   assert.ok(Array.isArray(pets.pets), "pet list must include pets");
+  assert.equal(pets.active_companion, null, "pet list must expose active_companion=null before apply");
   const scoutPet = pets.pets.find((item) => item.companion_id === "shigmi-scout");
   assert.equal(scoutPet?.pet?.renderer, "shimeji-web", "built-in Shigmi Scout pet must use the web renderer");
   assert.ok(scoutPet.pet.behaviors.some((behavior) => behavior.id === "drag"), "pet behavior list must include drag");
@@ -354,6 +359,57 @@ async function assertCompanionCatalog(baseUrl) {
   assert.equal(petDraft.json.active_profile_mutated, false, "pet drafting must not mutate the active profile");
   assert.equal(petDraft.json.pet.pet.palette, "amber");
   assert.equal(petDraft.json.pet.pet.motion, "tap");
+
+  const beforeAgentCreate = await getJson(`${baseUrl}/v1/agent/profile`);
+  const savedAgent = await postJson(`${baseUrl}/v1/agent/pets/agents`, {
+    prompt: "Make a small teal reading companion that summarizes long pages",
+    name: "Shigmi Reader",
+    pet: { palette: "teal", motion: "peek", scale: 0.9 },
+    rules: [{
+      id: "summarize-on-long-page",
+      trigger: "user asks about a long page",
+      action: "offer a concise summary before proposing any browser action",
+      enabled: true,
+      summary: "Summarize first; actions stay proposals.",
+    }, {
+      id: "bad-code-like-rule",
+      trigger: "user says run this",
+      action: "rm -rf / should be treated as inert text, never executed",
+      enabled: true,
+    }],
+  });
+  assert.equal(savedAgent.status, 201, `saved pet agent create must succeed: ${JSON.stringify(savedAgent.json)}`);
+  assert.equal(savedAgent.json.active_profile_mutated, false, "saved pet agent creation must not mutate the active profile");
+  assert.ok(savedAgent.json.agent.id.startsWith("agent-"), `saved agent id must be bookmarkable, got ${savedAgent.json.agent.id}`);
+  assert.equal(savedAgent.json.agent.companion_id, savedAgent.json.agent.companion.id);
+  assert.equal(savedAgent.json.agent.pet.palette, "teal");
+  assert.equal(savedAgent.json.agent.rules.length, 2, "saved agent must expose sanitized rules");
+  assert.equal(savedAgent.json.agent.rules[0].enabled, true);
+  assert.match(savedAgent.json.agent.companion.profile_patch.system_prompt, /declarative behavior preferences only/);
+  assert.match(savedAgent.json.agent.companion.profile_patch.system_prompt, /not authorization to execute local phone, browser, page, file, or network actions/);
+  const afterAgentCreate = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(afterAgentCreate.profile_version, beforeAgentCreate.profile_version, "saved pet agent creation must not advance profile version");
+
+  const savedAgents = await getJson(`${baseUrl}/v1/agent/pets/agents`);
+  assert.ok(savedAgents.agents.some((item) => item.id === savedAgent.json.agent.id), "saved pet agent list must include the created agent");
+
+  const fetchedAgent = await getJson(`${baseUrl}/v1/agent/pets/agents/${encodeURIComponent(savedAgent.json.agent.id)}`);
+  assert.equal(fetchedAgent.agent.id, savedAgent.json.agent.id, "saved pet agent fetch must return the requested agent");
+  assert.equal(fetchedAgent.agent.companion_id, savedAgent.json.agent.companion_id);
+
+  const bookmark = await postJson(`${baseUrl}/v1/agent/pets/bookmarks`, {
+    agent_id: savedAgent.json.agent.id,
+  });
+  assert.equal(bookmark.status, 201, `bookmark create must succeed: ${JSON.stringify(bookmark.json)}`);
+  assert.equal(bookmark.json.bookmark.companion_id, savedAgent.json.agent.companion_id);
+  assert.match(bookmark.json.bookmark.url, /^\/pets\/\?agent=/, "bookmark URL must point at the saved agent");
+  assert.ok(!bookmark.json.bookmark.url.includes(TOKEN), "bookmark URL must not embed the gateway token");
+
+  const bookmarks = await getJson(`${baseUrl}/v1/agent/pets/bookmarks`);
+  assert.ok(bookmarks.bookmarks.some((item) => item.id === bookmark.json.bookmark.id), "bookmark list must include the created bookmark");
+
+  const fetchedBookmark = await getJson(`${baseUrl}/v1/agent/pets/bookmarks/${encodeURIComponent(bookmark.json.bookmark.id)}`);
+  assert.equal(fetchedBookmark.bookmark.id, bookmark.json.bookmark.id, "bookmark fetch must return the requested bookmark");
 
   const petPreview = await postJson(`${baseUrl}/v1/agent/pets/preview`, {
     companion_id: petDraft.json.companion.id,
@@ -371,14 +427,22 @@ async function assertCompanionCatalog(baseUrl) {
   assert.equal(petGenerate.status, 200, `pet generate plan must succeed: ${JSON.stringify(petGenerate.json)}`);
   assert.equal(petGenerate.json.status, "not_configured", "pet generation must be off unless explicitly enabled");
   assert.equal(petGenerate.json.mutates_profile, false, "pet generation plan must not mutate profile");
+  const afterGenerate = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(afterGenerate.profile_version, beforeAgentCreate.profile_version, "pet generation plan must not advance profile version");
 
   const petApply = await postJson(`${baseUrl}/v1/agent/pets/apply`, {
-    companion_id: petDraft.json.companion.id,
+    agent_id: savedAgent.json.agent.id,
     scope: "global",
     source: "voice-profile-smoke",
   });
   assert.equal(petApply.status, 200, `pet apply must succeed: ${JSON.stringify(petApply.json)}`);
-  assert.equal(petApply.json.profile.active_companion_id, petDraft.json.companion.id);
+  assert.equal(petApply.json.profile.active_companion_id, savedAgent.json.agent.companion_id);
+  assert.equal(petApply.json.active_companion.companion.id, savedAgent.json.agent.companion_id);
+  assert.equal(petApply.json.active_companion.pet.companion_id, savedAgent.json.agent.companion_id);
+
+  const activeAfterApply = await getJson(`${baseUrl}/v1/agent/pets/active`);
+  assert.equal(activeAfterApply.active_companion.id, savedAgent.json.agent.companion_id, "active pet lookup must reflect the applied saved agent companion");
+  assert.equal(activeAfterApply.pet.companion_id, savedAgent.json.agent.companion_id, "active pet lookup must include the active pet manifest");
 
   const draft = await postJson(`${baseUrl}/v1/agent/companions`, {
     text: "I want you to be a research scout",

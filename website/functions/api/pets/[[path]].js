@@ -7,6 +7,9 @@ const ROUTES = new Map([
   ["apply", "/v1/agent/pets/apply"],
   ["generate", "/v1/agent/pets/generate"],
   ["companions", "/v1/agent/companions"],
+  ["active", "/v1/agent/pets/active"],
+  ["agents", "/v1/agent/pets/agents"],
+  ["bookmarks", "/v1/agent/pets/bookmarks"],
 ]);
 
 const json = (status, body) =>
@@ -24,7 +27,7 @@ export async function onRequest({ request, env, params }) {
   }
 
   const key = routeKey(params?.path);
-  const upstreamPath = ROUTES.get(key);
+  const upstreamPath = upstreamPathFor(key);
   if (!upstreamPath) {
     return json(404, { error: "Unknown pet studio route." });
   }
@@ -32,8 +35,12 @@ export async function onRequest({ request, env, params }) {
   const base = stripTrailingSlash(env.MOA_GATEWAY_URL || env.AG_GATEWAY_URL || "");
   const token = env.MOA_GATEWAY_TOKEN || env.AG_GATEWAY_TOKEN || "";
   if (!base || !token) {
+    const missing = [];
+    if (!base) missing.push("MOA_GATEWAY_URL");
+    if (!token) missing.push("MOA_GATEWAY_TOKEN");
     return json(503, {
       error: "Pet studio gateway is not configured.",
+      missing,
       requirement: "Set MOA_GATEWAY_URL and MOA_GATEWAY_TOKEN as Pages secrets.",
     });
   }
@@ -58,6 +65,13 @@ export async function onRequest({ request, env, params }) {
 function routeKey(path) {
   if (Array.isArray(path)) return path.filter(Boolean).join("/");
   return String(path || "").replace(/^\/+|\/+$/g, "");
+}
+
+function upstreamPathFor(key) {
+  if (ROUTES.has(key)) return ROUTES.get(key);
+  if (/^agents\/[^/]+$/.test(key)) return `/v1/agent/pets/${key}`;
+  if (/^bookmarks\/[^/]+$/.test(key)) return `/v1/agent/pets/${key}`;
+  return "";
 }
 
 function stripTrailingSlash(value) {

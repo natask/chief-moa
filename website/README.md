@@ -16,11 +16,13 @@ confirmation email via Resend.
 
 - `public/index.html` — the landing page and waitlist form (one file, no build step)
 - `public/pets/index.html` — companion pet studio with catalog, preview,
-  upload, draft, apply, and generation controls
+  upload, declarative rules, saved agents, bookmarks, apply, and generation
+  controls
 - `public/assets/` — deck images and logos
 - `functions/api/waitlist.js` — `POST /api/waitlist`: validate, store, email
 - `functions/api/pets/[[path]].js` — `/api/pets/*`: proxy to token-guarded
-  gateway pet endpoints without exposing `MOA_GATEWAY_TOKEN` to the browser
+  gateway pet, active, saved-agent, and bookmark endpoints without exposing
+  `MOA_GATEWAY_TOKEN` to the browser
 - `schema.sql` — D1 table
 - `wrangler.toml` — Pages config and D1 binding
 

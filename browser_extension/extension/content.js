@@ -85,6 +85,8 @@
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
   const DEV_RELOAD_POLL_MS = 900;
   const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
+  const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
+  const PROFILE_CACHE_KEY = "ageeProfileCache";
   let devReloadTimer = null;
   let devReloadInFlight = false;
   let devReloadVersion = null;
@@ -98,6 +100,18 @@
   const AVATAR_BEHAVIOR_TRIGGERS = new Set(["idle", "editing", "listening", "thinking", "speaking", "done", "error", "attention", "busy"]);
   const AVATAR_BEHAVIOR_INTENSITIES = new Set(["subtle", "normal", "strong"]);
   const AVATAR_BEHAVIOR_DURATIONS = new Set(["while_active"]);
+  const COMPANION_PET_PALETTES = new Set(["graphite", "green", "blue", "violet", "red", "amber", "teal", "mono"]);
+  const COMPANION_PET_MOTIONS = new Set(["hover", "peek", "tap", "trail", "float", "walk", "climb", "spark"]);
+  const COMPANION_PET_COLORS = {
+    graphite: ["#555a62", "#262a30"],
+    green: ["#208553", "#0f5534"],
+    blue: ["#2f67d8", "#173778"],
+    violet: ["#7651c7", "#452284"],
+    red: ["#d84a39", "#84281f"],
+    amber: ["#c57a1b", "#77450e"],
+    teal: ["#0e7d85", "#06484e"],
+    mono: ["#f6f3ea", "#17191d"],
+  };
   const AVATAR_MOTION_CLASSES = [
     "agee-avatar-motion-still",
     "agee-avatar-motion-pulse",
@@ -119,6 +133,7 @@
     "agee-avatar-trigger-busy",
   ];
   let avatarBehaviorRuntime = null;
+  let activeCompanionPet = null;
   let extensionContextInvalidated = false;
 
   function markExtensionContextInvalidated(error) {
@@ -216,6 +231,20 @@
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
+        <span class="agee-pet-mark" aria-hidden="true">
+          <span class="agee-pet-shadow"></span>
+          <img class="agee-pet-image" alt="" draggable="false" />
+          <span class="agee-pet-core">
+            <span class="agee-pet-ear agee-pet-ear-left"></span>
+            <span class="agee-pet-ear agee-pet-ear-right"></span>
+            <span class="agee-pet-arm agee-pet-arm-left"></span>
+            <span class="agee-pet-arm agee-pet-arm-right"></span>
+            <span class="agee-pet-body"></span>
+            <span class="agee-pet-face"><i></i><i></i><b></b></span>
+            <span class="agee-pet-foot agee-pet-foot-left"></span>
+            <span class="agee-pet-foot agee-pet-foot-right"></span>
+          </span>
+        </span>
       </button>
       <div id="agee-panel" role="dialog" aria-label="A.G. command">
         <div id="agee-voice-state" aria-hidden="true">
@@ -249,6 +278,7 @@
     restoreMascotScale();
     restoreUiChimePreference();
     loadAvatarBehaviorRuntime();
+    loadActiveCompanionPet();
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
@@ -790,6 +820,96 @@
     safeRuntimeSendMessage({ cmd: "selfExtensionRuntime" })
       .then((response) => applyAvatarBehaviorRuntime(response?.runtime || response))
       .catch(() => applyAvatarBehaviorRuntime(null));
+  }
+
+  function compactText(value, max = 120) {
+    return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+  }
+
+  function safePetImageSource(value) {
+    const raw = String(value || "").trim();
+    if (!raw || raw.length > 350 * 1024) return "";
+    if (/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(raw)) return raw;
+    try {
+      const url = new URL(raw);
+      if (url.protocol === "https:") return url.href;
+      if (url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return url.href;
+    } catch {}
+    return "";
+  }
+
+  function sanitizeActiveCompanionPet(payload) {
+    const record = payload?.active_companion || payload?.activeCompanion || payload;
+    if (!record || typeof record !== "object") return null;
+    const pet = record.pet && typeof record.pet === "object" ? record.pet : {};
+    const sprite = pet.sprite && typeof pet.sprite === "object" ? pet.sprite : {};
+    const name = compactText(record.companion_name || record.name || pet.name, 80);
+    const id = compactText(record.companion_id || record.id, 100);
+    if (!name && !id) return null;
+    const palette = COMPANION_PET_PALETTES.has(String(pet.palette || "")) ? String(pet.palette) : "blue";
+    const motion = COMPANION_PET_MOTIONS.has(String(pet.motion || "")) ? String(pet.motion) : "walk";
+    const imageSrc = safePetImageSource(sprite.image_data_url || sprite.asset_url || pet.asset_url);
+    const scale = Number(pet.scale);
+    return {
+      id,
+      name: name || "A.G. companion",
+      summary: compactText(record.companion_summary || record.summary, 140),
+      source: compactText(record.source, 40),
+      palette,
+      motion,
+      scale: Number.isFinite(scale) ? Math.min(Math.max(scale, 0.65), 1.6) : 1,
+      imageSrc,
+    };
+  }
+
+  function loadActiveCompanionPet() {
+    safeStorageLocalGet({ [ACTIVE_COMPANION_PET_CACHE_KEY]: null })
+      .then((stored) => {
+        const cached = stored?.[ACTIVE_COMPANION_PET_CACHE_KEY];
+        if (cached) applyActiveCompanionPet(cached.active_companion || cached);
+      })
+      .catch(() => {});
+    safeRuntimeSendMessage({ cmd: "activeCompanionPet" })
+      .then((response) => {
+        if (response?.ok) applyActiveCompanionPet(response.active_companion);
+        else applyActiveCompanionPet(null);
+      })
+      .catch(() => applyActiveCompanionPet(null));
+  }
+
+  function applyActiveCompanionPet(payload) {
+    activeCompanionPet = sanitizeActiveCompanionPet(payload);
+    if (!root || !launcher) return;
+    const image = launcher.querySelector(".agee-pet-image");
+    root.classList.toggle("agee-companion-pet-active", Boolean(activeCompanionPet));
+    launcher.classList.toggle("agee-pet-active", Boolean(activeCompanionPet));
+    delete root.dataset.ageePetId;
+    delete root.dataset.ageePetPalette;
+    delete root.dataset.ageePetMotion;
+    delete root.dataset.ageePetImage;
+    launcher.style.removeProperty("--agee-pet-color");
+    launcher.style.removeProperty("--agee-pet-dark");
+    launcher.style.removeProperty("--agee-pet-scale");
+    launcher.setAttribute("aria-label", "A.G.");
+    launcher.dataset.ageeTip = "Click to type, drag to move, scroll to resize, hold to talk";
+    launcher.removeAttribute("title");
+    if (image) image.removeAttribute("src");
+    if (!activeCompanionPet) return;
+
+    const colors = COMPANION_PET_COLORS[activeCompanionPet.palette] || COMPANION_PET_COLORS.blue;
+    root.dataset.ageePetId = activeCompanionPet.id;
+    root.dataset.ageePetPalette = activeCompanionPet.palette;
+    root.dataset.ageePetMotion = activeCompanionPet.motion;
+    root.dataset.ageePetImage = activeCompanionPet.imageSrc ? "image" : "css";
+    launcher.style.setProperty("--agee-pet-color", colors[0]);
+    launcher.style.setProperty("--agee-pet-dark", colors[1]);
+    launcher.style.setProperty("--agee-pet-scale", String(activeCompanionPet.scale));
+    const label = `${activeCompanionPet.name} companion`;
+    const motionSummary = activeCompanionPet.motion.replace(/-/g, " ");
+    launcher.setAttribute("aria-label", `A.G., ${label}`);
+    launcher.setAttribute("title", `A.G. - ${label}`);
+    launcher.dataset.ageeTip = `${label} - ${motionSummary}`;
+    if (image && activeCompanionPet.imageSrc) image.src = activeCompanionPet.imageSrc;
   }
 
   function sanitizeAvatarBehaviorRuntime(runtime) {
@@ -2308,6 +2428,13 @@
           if (changes[SELF_EXTENSION_RUNTIME_CACHE_KEY]) {
             const cached = changes[SELF_EXTENSION_RUNTIME_CACHE_KEY].newValue;
             applyAvatarBehaviorRuntime(cached?.runtime || cached);
+          }
+          if (changes[ACTIVE_COMPANION_PET_CACHE_KEY]) {
+            const cached = changes[ACTIVE_COMPANION_PET_CACHE_KEY].newValue;
+            applyActiveCompanionPet(cached?.active_companion || cached);
+          }
+          if (changes[PROFILE_CACHE_KEY] || changes.ageeGatewayUrl || changes.ageeGatewayToken) {
+            loadActiveCompanionPet();
           }
           if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
             configure().catch(() => {});

@@ -33,6 +33,7 @@ final class MoaPrefs {
     // A device that never touched the checkbox starts speaking hosted replies.
     private static final String KEY_SPOKEN_REPLIES_AUDIBLE_DEFAULT_APPLIED = "spoken_replies_audible_default_applied";
     private static final String KEY_AGENT_PROFILE_JSON = "agent_profile_json";
+    private static final String KEY_ACTIVE_COMPANION_JSON = "active_companion_json";
     private static final String KEY_ORB_SCALE_PERCENT = "orb_scale_percent";
 
     // Orb scale contract shared by the overlay (applies it) and the main app
@@ -135,6 +136,53 @@ final class MoaPrefs {
 
     static void setAgentProfileJson(Context context, String profileJson) {
         prefs(context).edit().putString(KEY_AGENT_PROFILE_JSON, profileJson == null ? "" : profileJson).apply();
+    }
+
+    static String activeCompanionJson(Context context) {
+        return activeCompanion(context).toString();
+    }
+
+    static void setActiveCompanionJson(Context context, String companionJson) {
+        JSONObject companion = parseObject(companionJson);
+        prefs(context).edit()
+                .putString(KEY_ACTIVE_COMPANION_JSON, sanitizeActiveCompanion(companion).toString())
+                .apply();
+    }
+
+    static String companionName(Context context) {
+        return firstNonEmpty(
+                activeCompanion(context).optString("name", ""),
+                agentProfile(context).optString("assistant_name", ""),
+                "A.G."
+        );
+    }
+
+    static String companionSummary(Context context) {
+        return firstNonEmpty(
+                activeCompanion(context).optString("summary", ""),
+                "Local fallback companion"
+        );
+    }
+
+    static String companionPalette(Context context) {
+        return firstNonEmpty(activeCompanion(context).optString("palette", ""), "default");
+    }
+
+    static String companionMotion(Context context) {
+        return firstNonEmpty(activeCompanion(context).optString("motion", ""), "idle");
+    }
+
+    static String companionStatus(Context context) {
+        String name = companionName(context);
+        String summary = companionSummary(context);
+        if (summary.isEmpty()) {
+            return name;
+        }
+        return name + " / " + summary;
+    }
+
+    static String companionCompactStatus(Context context) {
+        return companionName(context) + " / " + companionPalette(context) + " " + companionMotion(context);
     }
 
     static String inputLanguageTag(Context context) {
@@ -267,6 +315,50 @@ final class MoaPrefs {
 
     private static JSONObject agentProfile(Context context) {
         String raw = agentProfileJson(context);
+        return parseObject(raw);
+    }
+
+    private static JSONObject activeCompanion(Context context) {
+        JSONObject stored = sanitizeActiveCompanion(parseObject(prefs(context).getString(KEY_ACTIVE_COMPANION_JSON, "")));
+        if (hasCompanionIdentity(stored)) {
+            return stored;
+        }
+        return activeCompanionFromProfile(agentProfile(context));
+    }
+
+    private static JSONObject activeCompanionFromProfile(JSONObject profile) {
+        JSONObject active = profile.optJSONObject("active_companion");
+        JSONObject companion = new JSONObject();
+        putSafe(companion, "id", firstNonEmpty(
+                active == null ? "" : active.optString("id", ""),
+                profile.optString("active_companion_id", "")));
+        putSafe(companion, "name", firstNonEmpty(
+                active == null ? "" : active.optString("name", ""),
+                profile.optString("active_companion_name", ""),
+                profile.optString("assistant_name", "")));
+        putSafe(companion, "source", firstNonEmpty(
+                active == null ? "" : active.optString("source", ""),
+                profile.optString("active_companion_source", "")));
+        putSafe(companion, "version", firstNonEmpty(
+                active == null ? "" : active.optString("version", ""),
+                profile.optString("active_companion_version", "")));
+        return sanitizeActiveCompanion(companion);
+    }
+
+    private static JSONObject sanitizeActiveCompanion(JSONObject input) {
+        JSONObject sanitized = new JSONObject();
+        putSafe(sanitized, "id", input.optString("id", input.optString("companion_id", "")));
+        putSafe(sanitized, "name", input.optString("name", input.optString("companion_name", "")));
+        putSafe(sanitized, "summary", input.optString("summary", input.optString("companion_summary", "")));
+        putSafe(sanitized, "palette", input.optString("palette", ""));
+        putSafe(sanitized, "motion", input.optString("motion", ""));
+        putSafe(sanitized, "renderer", input.optString("renderer", ""));
+        putSafe(sanitized, "source", input.optString("source", ""));
+        putSafe(sanitized, "version", input.optString("version", ""));
+        return sanitized;
+    }
+
+    private static JSONObject parseObject(String raw) {
         if (raw == null || raw.trim().isEmpty()) {
             return new JSONObject();
         }
@@ -274,6 +366,23 @@ final class MoaPrefs {
             return new JSONObject(raw);
         } catch (Exception ignored) {
             return new JSONObject();
+        }
+    }
+
+    private static boolean hasCompanionIdentity(JSONObject companion) {
+        return companion != null
+                && (!safe(companion.optString("id", "")).isEmpty()
+                || !safe(companion.optString("name", "")).isEmpty());
+    }
+
+    private static void putSafe(JSONObject target, String key, String value) {
+        String item = safe(value);
+        if (item.isEmpty()) {
+            return;
+        }
+        try {
+            target.put(key, item);
+        } catch (Exception ignored) {
         }
     }
 
