@@ -22,6 +22,8 @@ const {
 } = require("../lib/voice-intent");
 const {
   normalizeLanguageListValue,
+  normalizeLanguageList,
+  languageControlPatch,
   profileOptionsPayload,
 } = require("../lib/profile-options");
 
@@ -77,11 +79,16 @@ assert.strictEqual(classifyVoiceTurn({}, "what is going on in this world"), "cha
 assert.strictEqual(classifyVoiceTurn({}, "what's going on in this world"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on here, what does closing orders only mean?"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on?"), "chat");
-assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "only process English and Amharic"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "change your language to Amharic"), "profile_control");
+// Language switching is model-owned: a spoken language request is NOT keyword-
+// matched into a profile write. It routes as a chat turn so the reasoning model
+// decides and calls update_agent_profile / set_languages. (Read-only language
+// queries stay profile_control below.)
+assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "only process English and Amharic"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "change your language to Amharic"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "right now I want to speak Amharic"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "your name is Moa"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "you are Aggie"), "profile_control");
 assert.strictEqual(classifyVoiceTurn({}, "call yourself The Steward"), "profile_control");
@@ -101,72 +108,54 @@ assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
 const optionsPayload = profileOptionsPayload();
 assert.ok(optionsPayload.voices.some((voice) => voice.id === "Aoede"), "profile options must expose Aoede");
 assert.ok(optionsPayload.voices.some((voice) => voice.id === "Charon"), "profile options must expose Charon");
-assert.deepStrictEqual(optionsPayload.languages.map((language) => language.code), ["en-US", "am-ET"]);
+// The catalog is now the full Chirp 3 language set, not just English + Amharic.
+assert.ok(optionsPayload.languages.length > 2, "language catalog must be broadened beyond two languages");
 assert.ok(optionsPayload.languages.some((language) => language.code === "en-US"), "profile options must expose English");
 assert.ok(optionsPayload.languages.some((language) => language.code === "am-ET"), "profile options must expose Amharic");
+assert.ok(optionsPayload.languages.some((language) => language.code === "es-ES"), "profile options must expose Spanish");
+assert.ok(optionsPayload.languages.some((language) => language.code === "ja-JP"), "profile options must expose Japanese");
+// Tool-ARGUMENT normalization stays: a language name/code the model passes still
+// resolves to a canonical BCP-47 code; a code outside the catalog is dropped.
 assert.equal(normalizeLanguageListValue("English and Amharic"), "en-US,am-ET");
-assert.equal(normalizeLanguageListValue(["Spanish", "Amharic"]), "");
+assert.equal(normalizeLanguageListValue(["Spanish", "Amharic"]), "es-ES,am-ET");
+assert.equal(normalizeLanguageListValue(["Klingon", "Amharic"]), "");
 assert.equal(normalizeLanguageListValue("A-M-H-A-R-I-C"), "am-ET");
 
-const inputLanguageLock = parseProfileControlIntent("I'm only going to speak to you in English and Amharic, don't switch up");
-assert.deepStrictEqual(inputLanguageLock.patch, {
-  input_languages: "en-US,am-ET",
-  input_language_primary: "en-US",
-});
-const outputLanguageLock = parseProfileControlIntent("you only speak English and Amharic, don't switch up");
-assert.deepStrictEqual(outputLanguageLock.patch, {
-  language: "en-US,am-ET",
-  language_primary: "en-US",
-  language_mode: "explicit",
-  language_output: "primary_only",
-  language_auto_switch: false,
-});
-
-// One utterance sets both sides: the user's input language and the agent's reply.
-const bothSides = parseProfileControlIntent("I only speak Amharic and you only speak English");
-assert.deepStrictEqual(bothSides.patch, {
-  language: "en-US",
-  language_primary: "en-US",
-  language_mode: "explicit",
-  language_output: "primary_only",
-  language_auto_switch: false,
-  input_languages: "am-ET",
-  input_language_primary: "am-ET",
-});
-
-// An unsupported language is rejected with a spoken reason, not silently
-// dropped: the current setting stays and the user is told only English and
-// Amharic are supported. It must never persist an unsupported language.
+// Language switching is model-owned: the deterministic parser no longer emits a
+// language patch or a language rejection for any of these. They fall through to a
+// chat turn where the model reasons and calls the tool.
 for (const utterance of [
+  "I'm only going to speak to you in English and Amharic, don't switch up",
+  "you only speak English and Amharic, don't switch up",
+  "I only speak Amharic and you only speak English",
+  "right now I want to speak Amharic",
   "respond in Swahili",
-  "respond in Tigrinya",
   "I speak Japanese and Korean",
 ]) {
-  const rejected = parseProfileControlIntent(utterance);
-  assert.ok(rejected && rejected.action === "reject", `expected a language rejection for "${utterance}"`);
-  assert.strictEqual(rejected.subject, "language");
-  assert.ok(!rejected.patch, "a language rejection must carry no profile patch");
+  assert.strictEqual(parseProfileControlIntent(utterance), null, `language phrase must not be keyword-matched: "${utterance}"`);
 }
 
-assert.deepStrictEqual(parseProfileControlIntent("only process English and Amharic").patch, {
-  input_languages: "en-US,am-ET",
-  input_language_primary: "en-US",
-});
+// The tool ARGUMENT mapper (languageControlPatch) is the single path both the
+// classic update_agent_profile tool and the set_languages code-mode skill use to
+// turn a model-chosen language request into profile fields. It maps friendly keys
+// to profile fields; the sanitizer then normalizes codes.
+const understandPatch = languageControlPatch({ understand: ["English", "Amharic"], lock: true });
+assert.equal(normalizeLanguageList(understandPatch.input_languages).codes.join(","), "en-US,am-ET");
+const switchPatch = languageControlPatch({ understand_primary: "Amharic" });
+assert.deepStrictEqual(switchPatch, { input_language_primary: "Amharic" });
+const replyPatch = languageControlPatch({ reply: "English" });
+assert.equal(replyPatch.language, "English");
+assert.equal(replyPatch.language_mode, "explicit");
+assert.equal(replyPatch.language_output, "primary_only");
+assert.equal(replyPatch.language_auto_switch, false);
 
-assert.deepStrictEqual(parseProfileControlIntent("speak Amharic and English").patch, {
-  language: "am-ET,en-US",
-  language_primary: "am-ET",
-  language_mode: "explicit",
-  language_output: "primary_only",
-  language_auto_switch: false,
-});
-assert.deepStrictEqual(parseProfileControlIntent("speak A-M-H-A-R-I-C").patch, {
-  language: "am-ET",
-  language_primary: "am-ET",
-  language_mode: "explicit",
-  language_output: "primary_only",
-  language_auto_switch: false,
-});
+// These used to be keyword-matched into a language patch. Now they return null
+// (no deterministic language mutation) and route to a chat turn where the model
+// owns the change. A-M-H-A-R-I-C spelling normalization stays for the TOOL path
+// (asserted above via languageControlPatch), not for a transcript matcher.
+assert.strictEqual(parseProfileControlIntent("only process English and Amharic"), null);
+assert.strictEqual(parseProfileControlIntent("speak Amharic and English"), null);
+assert.strictEqual(parseProfileControlIntent("speak A-M-H-A-R-I-C"), null);
 
 assert.deepStrictEqual(parseProfileControlIntent("what voice are you using"), {
   action: "summary",
@@ -221,15 +210,9 @@ assert.deepStrictEqual(parseProfileControlIntent("change voices"), {
   scope: "global",
 });
 
-const globalScopedLanguage = parseProfileControlIntent("respond in English on all devices");
-assert.equal(globalScopedLanguage.scope, "global");
-assert.deepStrictEqual(globalScopedLanguage.patch, {
-  language: "en-US",
-  language_primary: "en-US",
-  language_mode: "explicit",
-  language_output: "primary_only",
-  language_auto_switch: false,
-});
+// A reply-language request no longer resolves to a deterministic patch; the model
+// owns it. (Scope detection is still exercised by the voice/name cases above.)
+assert.strictEqual(parseProfileControlIntent("respond in English on all devices"), null);
 
 assert.deepStrictEqual(parseProfileControlIntent("your name is Moa").patch, {
   assistant_name: "Moa",

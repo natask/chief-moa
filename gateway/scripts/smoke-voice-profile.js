@@ -267,10 +267,13 @@ async function assertPersonaOverrideStripped(baseUrl) {
 }
 
 async function assertProfileScopeReported(baseUrl) {
+  // A deterministic profile-control change (voice) so scope reporting is exercised
+  // without a model. Language switching is model-owned now and no longer routes
+  // through the deterministic profile-control path.
   const turn = await postJson(`${baseUrl}/v1/voice/turns`, {
     session_id: "voice-profile-smoke",
     turn_id: "scope-report",
-    transcript: "respond in Amharic",
+    transcript: "use the Kore voice",
     source: "voice-profile-smoke",
   });
   assert.equal(turn.status, 200, `scope-report turn must succeed: ${JSON.stringify(turn.json)}`);
@@ -281,6 +284,8 @@ async function assertProfileScopeReported(baseUrl) {
   assert.equal(action.scope, "global", "profile_update action must carry scope");
   assert.ok("device_id" in action, "profile_update action must carry device_id");
   assert.ok(action.application, "profile_update action must carry application semantics");
+  // Restore Aoede so downstream voice checks keep their precondition.
+  await putJson(`${baseUrl}/v1/agent/profile`, { profile: { voice: "Aoede" } });
 }
 
 async function assertTranscriptEcho(baseUrl) {

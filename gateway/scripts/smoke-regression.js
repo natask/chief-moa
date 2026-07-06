@@ -237,7 +237,13 @@ async function assertAgentProfileOptionsCatalog(baseUrl) {
   assert.ok(Array.isArray(catalog.models) && catalog.models.some((model) => model.id === "smoke-model" && model.current === true), "catalog must list the current gateway model");
   assert.ok(catalog.fields?.model?.values?.includes("smoke-model"), "catalog model field must include the current gateway model");
   assert.ok(Array.isArray(catalog.voices) && catalog.voices.length >= 8, "catalog must list supported voices");
-  assert.deepEqual(catalog.languages.map((language) => language.code), ["en-US", "am-ET"], "catalog must expose only English and Amharic for now");
+  // The catalog is the full Chirp 3 set now (GA + preview). Pin the floor and
+  // the two codes the live pipeline shipped on, not an exact list, so adding a
+  // language never breaks regression.
+  const catalogCodes = catalog.languages.map((language) => language.code);
+  assert.ok(catalogCodes.length >= 100, `catalog must expose the full Chirp 3 language set, got ${catalogCodes.length}`);
+  assert.ok(catalogCodes.includes("en-US") && catalogCodes.includes("am-ET"), "catalog must include en-US and am-ET");
+  assert.equal(new Set(catalogCodes).size, catalogCodes.length, "catalog codes must be unique");
 
   const aoede = catalog.voices.find((voice) => voice.id === "Aoede");
   const charon = catalog.voices.find((voice) => voice.id === "Charon");
@@ -269,7 +275,9 @@ async function assertAgentProfileOptionsCatalog(baseUrl) {
     source: "smoke-regression",
     profile: {
       voice: "not-a-real-voice",
-      language: "Spanish,French",
+      // Spanish and French are valid since the catalog covers all of Chirp 3;
+      // invalid-only means out-of-catalog names now.
+      language: "Klingon,Quenya",
       input_languages: "en-US,not-a-language",
     },
   });
@@ -479,24 +487,27 @@ async function assertAgentProfileDeviceScope(baseUrl, dataDir) {
   assert.equal(otherDeviceProfile.profile.voice, "Charon", "other devices should inherit global voice");
   assert.equal(otherDeviceProfile.profile.input_languages, "en-US", "other devices should inherit global input language");
 
+  // A spoken, deterministic profile-control change (voice) applies device-scoped.
+  // Language is model-owned now and no longer routes through the spoken parser, so
+  // this uses a voice change to exercise device-scoped spoken updates.
   const spokenDeviceUpdate = await postJson(`${baseUrl}/v1/voice/turns`, {
     session_id: "profile_scope_session",
     branch_id: "default",
     turn_id: "device_profile_voice_turn",
     source: "smoke-regression",
     device_id: deviceA,
-    transcript: "respond in Amharic on this device",
+    transcript: "use the Aoede voice on this device",
   });
   assert.equal(spokenDeviceUpdate.status, 200);
   assert.equal(spokenDeviceUpdate.json.classification, "profile_control");
   assert.equal(spokenDeviceUpdate.json.profile.scope, "device");
   assert.equal(spokenDeviceUpdate.json.profile.device_id, deviceA);
-  assert.equal(spokenDeviceUpdate.json.profile.language.allowed, "am-ET");
+  assert.equal(spokenDeviceUpdate.json.profile.voice, "Aoede");
 
   const afterSpokenDevice = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceA}`);
-  assert.equal(afterSpokenDevice.profile.language, "am-ET", "spoken profile control must update only this device");
+  assert.equal(afterSpokenDevice.profile.voice, "Aoede", "spoken profile control must update only this device");
   const afterSpokenGlobal = await getJson(`${baseUrl}/v1/agent/profile`);
-  assert.equal(afterSpokenGlobal.profile.language, "en-US", "spoken device update must not mutate global reply language");
+  assert.equal(afterSpokenGlobal.profile.voice, "Charon", "spoken device update must not mutate global voice");
 
   const versionsPath = path.join(dataDir, "agent-profile-device-overrides.json");
   assert.ok(fs.existsSync(versionsPath), "device override file must persist to disk");

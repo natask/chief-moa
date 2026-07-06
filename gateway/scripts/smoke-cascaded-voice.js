@@ -43,6 +43,7 @@ async function main() {
     await geminiTtsAmEtCascade(tempDir);
     await sttOnlyUnchanged(tempDir);
     await profileDerivedSttLanguages(tempDir);
+    await sttPrimaryFollowsProfilePrimary(tempDir);
     await turnDoneCarriesCascadedMetadata(tempDir);
     await errorContractEmitsTurnDoneAndCanonicalRecord(tempDir);
     await closedLiveTurnIgnoresLateProviderCompletion(tempDir);
@@ -84,6 +85,57 @@ async function profileDerivedSttLanguages(tempDir) {
   await provider.processTurn(makeTurn(tempDir, "profile-am"), recordingHooks(events));
   const sttCall = calls.find((c) => c.kind === "stt");
   assert.deepEqual(sttCall.body.config.languageCodes, ["am-ET"], "recognize request must be restricted to profile input language");
+}
+
+// Explicit switching ("right now I want to speak X"): the recognizer is
+// constrained to EXACTLY the stored understood set, and input_language_primary
+// reorders it so the chosen language leads. Same two-language set, different
+// leading code, driven only by the profile.
+async function sttPrimaryFollowsProfilePrimary(tempDir) {
+  const makeProvider = (inputPrimary) => createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US,am-ET",
+    },
+    agentProfile: {
+      effective: () => ({
+        input_languages: "en-US,am-ET",
+        input_language_primary: inputPrimary,
+        language: "en-US",
+        language_primary: "en-US",
+      }),
+    },
+  });
+
+  const englishLead = makeProvider("en-US");
+  assert.deepEqual(
+    englishLead.status().language_codes,
+    ["en-US", "am-ET"],
+    "with en-US primary, the constrained set must lead with en-US",
+  );
+
+  // "right now I want to speak Amharic": the model set input_language_primary to
+  // am-ET (already in the set); the recognizer now leads with am-ET, same set.
+  const amharicLead = makeProvider("am-ET");
+  assert.deepEqual(
+    amharicLead.status().language_codes,
+    ["am-ET", "en-US"],
+    "with am-ET primary, the same constrained set must lead with am-ET",
+  );
+
+  const calls = [];
+  stubFetch({ sttTranscript: "selam", calls });
+  const events = [];
+  await amharicLead.processTurn(makeTurn(tempDir, "primary-reorder"), recordingHooks(events));
+  const sttCall = calls.find((c) => c.kind === "stt");
+  assert.deepEqual(
+    sttCall.body.config.languageCodes,
+    ["am-ET", "en-US"],
+    "recognize request must lead with the profile's understood primary",
+  );
 }
 
 async function turnDoneCarriesCascadedMetadata(tempDir) {
