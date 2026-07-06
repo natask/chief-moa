@@ -435,6 +435,22 @@ coding, and simple messages can stay on the direct-answer path. Explicit broker
 launch starts at most one selected launchable route in this slice; ordinary
 messages still only store decisions and context packs.
 
+A broadcast turn ("update all active agents ...") fans out across active/forked
+runs: runs the message pertains to receive it as `broker_evidence_attached`, and
+each unrelated fork self-dismisses with a `dismiss_irrelevant` route decision
+plus a no-op `broker_fork_dismissed` run event. A dismissal only records why the
+broadcast was not attached; it never cancels, pauses, or restarts the run.
+
+When the broker selects the research workflow, `POST /v1/broker/research` runs a
+gateway-side research fan-out (`gateway/lib/research-workflow.js`): it derives
+focused sub-queries, runs one search/model pass per sub-query, then one refine
+pass that synthesizes a recommendation, and stores a durable `research_report`
+under `DATA_DIR/broker-research-reports` (readable at
+`GET /v1/broker/research/{id}`, mirrored as a `broker.research.completed` product
+event). Each pass uses the configured reasoning provider when present and a
+deterministic fallback otherwise, so a report returns with no model key. The
+report is a stored proposal; it launches and executes nothing.
+
 The broker is also the intent-management entry point. A user intent is the
 durable user-authored message plus its source surface, session/browser/page
 context, evidence references, route decisions, context packs, linked agent runs,
@@ -826,6 +842,10 @@ queues.
 - `gateway/scripts/smoke-work-history.js`: end-to-end control-plane smoke
   (voice create, worker evidence, status, feedback, cancel receipt, deployment
   links, ui.open claim/receipt), run via `npm run smoke:work-history`.
+- `gateway/lib/research-workflow.js`: broker research fan-out engine (derive
+  sub-queries -> pass per sub-query -> refine pass -> report); pure and
+  deterministic by default. Behind `POST /v1/broker/research`. Smoke:
+  `scripts/smoke-research-workflow.js` (`npm run smoke:research-workflow`).
 - `gateway/lib/audio-notes.js`: record-mode audio-note store (raw bytes +
   JSON sidecars under `DATA_DIR/audio-notes/`), served by the
   `/v1/audio-notes` routes; deterministic smoke in

@@ -29,7 +29,15 @@
 
 - [x] 4.1 Add workflow target metadata for research, coding, QA, design, writing, and direct-answer paths. Implemented in `gateway/agent-launcher-profiles.json`.
 - [x] 4.2 Build focused workflow context packs from broker event + selected session/project context. Implemented as broker context packs stored under `DATA_DIR/broker-context-packs` and referenced by route decisions.
-- [ ] 4.3 Add a research workflow path that can fan out search/model passes, refine, and return a report when the broker selects it.
+- [x] 4.3 Add a research workflow path that can fan out search/model passes, refine, and return a report when the broker selects it.
+      Implemented as `gateway/lib/research-workflow.js` (pure, deterministic by
+      default: derive focused sub-queries -> one pass each -> one refine pass ->
+      report) behind `POST /v1/broker/research` (+ `GET /v1/broker/research/{id}`).
+      Each model pass uses the configured reasoning provider when present and a
+      deterministic fallback otherwise, so a report returns with no network/key.
+      Reports are stored under `DATA_DIR/broker-research-reports` and mirror a
+      `broker.research.completed` product event. Verified 2026-07-06 with
+      `cd gateway && node scripts/smoke-research-workflow.js`.
 
 ## 5. Verification
 
