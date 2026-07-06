@@ -8964,6 +8964,9 @@ async function runCascadedVoiceReasoningInner(input) {
   // the turn in a later call) and returned in the result for surfacing.
   const contextCapture = {};
   const toolDefs = cascadedVoiceProfileTools(toolCall).concat([buildContextManagementToolDef(contextCapture)]);
+  if (voiceExecuteToolEnabled()) {
+    toolDefs.push(cascadedExecuteToolDef(toolCall));
+  }
   const toolTurn = await callModelToolLoop(modelMessages, profile, toolDefs);
   const text = String(toolTurn.text || "");
   const contextDecision = resolveContextDecision({
@@ -9004,6 +9007,71 @@ async function runCascadedVoiceReasoningInner(input) {
 // reaches applyAgentProfilePatch directly (no transcript gate) because the model
 // reasoned about the change; the shared sanitizer still prevents any field from
 // being blanked. revert and options reuse the Live handlers unchanged.
+// Code mode (executor.sh pattern): one `execute` tool that runs model-written
+// JavaScript in a QuickJS sandbox whose only reachable effects are the
+// capability functions below. Each capability is a closure over the SAME
+// sanitized paths the classic tool defs use, so model output stays a proposal.
+// Gated by VOICE_EXECUTE_TOOL=1 while the classic tools remain the default.
+function voiceExecuteToolEnabled() {
+  return String(process.env.VOICE_EXECUTE_TOOL || "").trim() === "1";
+}
+
+function cascadedExecuteCapabilities(call) {
+  const profileOptions = call?.device_id ? { deviceId: call.device_id } : {};
+  return {
+    profile_get: {
+      description: "Read the effective agent profile: identity (assistant_name, user_name, user_nickname, user_address), languages, voice, modality, model.",
+      run: () => ({ ok: true, profile: agentProfile.effective(profileOptions) }),
+    },
+    profile_options: {
+      description: "Catalog of valid voices, languages, and models. Read before setting voice/language/model.",
+      run: () => ({ ok: true, type: "profile_options", ...gatewayProfileOptionsPayload() }),
+    },
+    profile_patch: {
+      description: "Persist profile fields durably (same sanitizer as update_agent_profile). Args: { profile: { ...fields }, scope?: \"global\"|\"device\", reason?: string }.",
+      run: (args) => {
+        const patch = liveToolProfilePatch(args || {});
+        if (Object.keys(patch).length === 0) {
+          return { ok: false, error: "no supported profile fields provided", supported_fields: agentProfile.fields() };
+        }
+        return applyAgentProfilePatch(call, args || {}, patch, "voice-execute");
+      },
+    },
+    profile_revert: {
+      description: "Undo durable settings. Args: { mode?: \"previous\"|\"reset\", scope?: \"global\"|\"device\", reason?: string }.",
+      run: (args) => liveToolRevertAgentProfile(call, args || {}),
+    },
+  };
+}
+
+function cascadedExecuteToolDef(call) {
+  const capabilities = cascadedExecuteCapabilities(call);
+  const catalog = Object.entries(capabilities)
+    .map(([name, cap]) => `tools.moa.${name}(args) - ${cap.description}`)
+    .join("\n");
+  return {
+    name: "execute",
+    description: [
+      "Run a short JavaScript script in a sandbox to read or change your own configuration in ONE call instead of chaining tools.",
+      "Available functions (all async; each resolves to { ok, data } where data is the payload):",
+      catalog,
+      "Use console.log for debug output and `return` for the final value. No fs, no network, no other globals.",
+      "Example: const p = await tools.moa.profile_get({}); if (p.data.profile.voice !== \"Aoede\") { await tools.moa.profile_patch({ profile: { voice: \"Aoede\" }, reason: \"user asked\" }); } return p.data.profile.voice;",
+    ].join("\n"),
+    parameters: {
+      type: "object",
+      properties: {
+        code: { type: "string", description: "The JavaScript to run. `tools.moa.*` and console.log are the only APIs." },
+      },
+      required: ["code"],
+    },
+    handler: async (args) => {
+      const { runExecuteCode } = require("./lib/execute-engine");
+      return runExecuteCode({ code: String(args?.code || ""), capabilities });
+    },
+  };
+}
+
 function cascadedVoiceProfileTools(call) {
   return [
     {
