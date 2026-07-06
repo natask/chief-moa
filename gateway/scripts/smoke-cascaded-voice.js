@@ -46,6 +46,9 @@ async function main() {
     await turnDoneCarriesCascadedMetadata(tempDir);
     await errorContractEmitsTurnDoneAndCanonicalRecord(tempDir);
     await closedLiveTurnIgnoresLateProviderCompletion(tempDir);
+    await responseModalityTextSkipsTts(tempDir);
+    await ttsErrorSurfacedOnResult(tempDir);
+    await spokenProfileControlConfirmation(tempDir);
     console.log("smoke-cascaded-voice: ok");
   } finally {
     global.fetch = previousFetch;
@@ -385,6 +388,173 @@ async function sttOnlyUnchanged(tempDir) {
   assert.equal(result.assistant_text, "");
   assert.deepEqual(events.map((e) => e.type), ["transcript_final"], "STT-only must emit only the transcript");
   assert.ok(!calls.some((c) => c.kind === "tts"), "STT-only must not call TTS");
+}
+
+// response_modality:"text" deliberately delivers the reply as text: the cascaded
+// provider must NOT call hosted TTS and must mark the turn modality:"text",
+// distinct from tts_spoke=false caused by a synthesis failure.
+async function responseModalityTextSkipsTts(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "what time is it", calls });
+
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      VOICE_TTS_PROVIDER: "cloud-tts",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US",
+    },
+    agentProfile: {
+      effective: () => ({
+        response_modality: "text",
+        language: "en-US",
+        language_primary: "en-US",
+      }),
+    },
+    reasoner: async ({ transcript, response_modality }) => {
+      assert.equal(response_modality, "text", "reasoner input must carry the current response_modality");
+      return { speak: `You said: ${transcript}.`, display: `You said: ${transcript}.`, language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+
+  const events = [];
+  const result = await provider.processTurn(makeTurn(tempDir, "modality-text"), recordingHooks(events));
+
+  assert.equal(result.modality, "text", "text modality must be reported on the result");
+  assert.equal(result.tts_spoke, false, "text modality must not stream hosted audio");
+  assert.equal(result.tts_error, "", "a deliberate text turn is not a TTS failure");
+  assert.equal(result.assistant_text, "You said: what time is it.", "reply text must still be returned for display");
+  assert.deepEqual(events.map((e) => e.type), ["transcript_final", "assistant_text"], "text modality must emit no audio events");
+  assert.ok(!calls.some((c) => c.kind === "tts"), "text modality must skip the TTS request entirely");
+}
+
+// A hosted-TTS synthesis failure must be observable: tts_spoke=false plus a short
+// tts_error reason on the result, while the reply text still survives so the
+// device can speak it. The turn must not fail.
+async function ttsErrorSurfacedOnResult(tempDir) {
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const u = String(url);
+    if (u.includes(":recognize")) {
+      calls.push({ kind: "stt" });
+      return jsonResponse({ results: [{ alternatives: [{ transcript: "hello there" }] }] });
+    }
+    if (u.includes("texttospeech.googleapis.com")) {
+      calls.push({ kind: "tts" });
+      return { ok: false, status: 500, json: async () => ({}), text: async () => "internal error" };
+    }
+    throw new Error(`unexpected fetch to ${u}`);
+  };
+
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      VOICE_TTS_PROVIDER: "cloud-tts",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US",
+    },
+    reasoner: async ({ transcript }) => ({
+      speak: `You said: ${transcript}.`,
+      display: `You said: ${transcript}.`,
+      language: "en-US",
+      model: "test-model",
+      classification: "chat",
+    }),
+  });
+
+  const events = [];
+  const result = await provider.processTurn(makeTurn(tempDir, "tts-error"), recordingHooks(events));
+
+  assert.equal(result.tts_spoke, false, "a failed synthesis must report tts_spoke=false");
+  assert.ok(result.tts_error && result.tts_error.length > 0, "a failed synthesis must surface a tts_error reason");
+  assert.equal(result.assistant_text, "You said: hello there.", "reply text must survive a TTS failure");
+  assert.deepEqual(events.map((e) => e.type), ["transcript_final", "assistant_text"], "a TTS failure must emit no audio events");
+  assert.ok(calls.some((c) => c.kind === "tts"), "synthesis must have been attempted");
+}
+
+// A voice assistant must speak its confirmations. A profile-control turn is
+// classified non-chat, so the provider returns no spoken reply; the gateway
+// produces the confirmation while applying the change, and the streaming server
+// synthesizes it through the provider's synthesizeAssistantSpeech capability.
+async function spokenProfileControlConfirmation(tempDir) {
+  const confirmation = "Reply language set to Amharic.";
+  let synthesizeCalledWith = null;
+  const provider = {
+    status: () => ({
+      provider: "chirp-cascaded",
+      model: "test-model",
+      configured: true,
+      language_codes: ["am-ET"],
+      assistant_audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+    }),
+    async processTurn(_turn, hooks) {
+      await hooks.onTranscriptFinal("speak amharic");
+      return {
+        provider: "chirp-cascaded",
+        model: "test-model",
+        transcript: "speak amharic",
+        assistant_text: "",
+        audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+        transcription_only: false,
+        tts_spoke: false,
+        reply_language: "am-ET",
+        classification: "profile_control",
+        modality: "auto",
+        tts_error: "",
+      };
+    },
+    async synthesizeAssistantSpeech(text, hooks, options) {
+      synthesizeCalledWith = { text, options };
+      await hooks.onAssistantAudioStart({ encoding: "pcm16", sample_rate: 16000, channels: 1 });
+      await hooks.sendAudio(Buffer.from(generatePcm16Tone({ durationMs: 20, frequencyHz: 220, sampleRate: 16000, volume: 0.2 })));
+      await hooks.onAssistantAudioDone();
+      return { spoke: true, tts_error: "" };
+    },
+  };
+
+  const dataDir = path.join(tempDir, "session-profile-confirm");
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const events = [];
+  const connection = new VoiceSessionConnection(fakeWs(events), {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    onTurnCompleted: async () => ({
+      classification: "profile_control",
+      response: {
+        classification: "profile_control",
+        display: confirmation,
+        speak: confirmation,
+        reply_language: "am-ET",
+      },
+    }),
+  });
+
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: "sess_profile_confirm",
+    turn_id: "turn_profile_confirm",
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 60, frequencyHz: 240, sampleRate: 16000, volume: 0.2 }));
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_profile_confirm" });
+
+  assert.ok(synthesizeCalledWith, "profile-control confirmation must be synthesized");
+  assert.equal(synthesizeCalledWith.text, confirmation, "the gateway confirmation text must be spoken");
+  const assistantText = events.find((e) => e.type === "assistant_text");
+  assert.ok(assistantText && assistantText.text === confirmation, "confirmation must also be sent as assistant_text");
+  const kinds = events.map((e) => e.type).filter((t) => ["assistant_audio_start", "binary", "assistant_audio_done", "turn_done"].includes(t));
+  assert.deepEqual(kinds, ["assistant_audio_start", "binary", "assistant_audio_done", "turn_done"], `confirmation must stream hosted audio then finish: ${events.map((e) => e.type).join(",")}`);
+  const done = events.find((e) => e.type === "turn_done");
+  assert.equal(done.status, "completed");
+  assert.equal(done.tts_spoke, true, "a spoken confirmation must report tts_spoke=true on turn_done");
 }
 
 function makeTurn(tempDir, tag) {

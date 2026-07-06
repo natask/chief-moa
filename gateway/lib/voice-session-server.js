@@ -714,9 +714,26 @@ class VoiceSessionConnection {
       assistantAudioFormat,
     });
     const profileControlText = profileControlAssistantText(canonicalRecord);
+    // A voice assistant must speak its confirmations. A profile-control turn is
+    // classified non-chat, so the provider returned no spoken reply; the gateway
+    // produced the confirmation text while applying the change. Send it as text
+    // and, when the provider can synthesize (cascaded pipeline) and the modality
+    // is not text-only, also stream hosted reply audio. The profile change was
+    // already applied once by the turn recorder — this only adds the voice.
+    let confirmationTts = null;
     if (profileControlText) {
       if (String(providerEvents.assistantText || "").trim() !== profileControlText) {
         await providerHooks.onAssistantText(profileControlText);
+      }
+      if (!providerEvents.assistantAudioStarted
+          && typeof this.voiceProvider.synthesizeAssistantSpeech === "function") {
+        try {
+          confirmationTts = await this.voiceProvider.synthesizeAssistantSpeech(profileControlText, providerHooks, {
+            language: providerResult?.reply_language || canonicalRecord?.response?.reply_language || "",
+          });
+        } catch {
+          // The confirmation still shows as text; a synthesis fault is not fatal.
+        }
       }
     } else if (assistantText && !providerEvents.assistantTextSent) {
       await providerHooks.onAssistantText(assistantText);
@@ -729,6 +746,11 @@ class VoiceSessionConnection {
       assistant_text: assistantText,
       gateway_assistant_text: profileControlText || "",
     });
+    const doneModality = providerResult?.modality || confirmationTts?.modality || "";
+    const doneTtsError = providerResult?.tts_error || confirmationTts?.tts_error || "";
+    const doneTtsSpoke = confirmationTts && confirmationTts.spoke === true
+      ? true
+      : (typeof providerResult?.tts_spoke === "boolean" ? providerResult.tts_spoke : undefined);
     await this.sendEvent({
       type: "turn_done",
       session_id: turn.sessionId,
@@ -736,8 +758,12 @@ class VoiceSessionConnection {
       turn_id: turn.turnId,
       status: "completed",
       transcription_only: providerResult?.transcription_only === true,
-      ...(typeof providerResult?.tts_spoke === "boolean" ? { tts_spoke: providerResult.tts_spoke } : {}),
+      ...(typeof doneTtsSpoke === "boolean" ? { tts_spoke: doneTtsSpoke } : {}),
       ...(providerResult?.reply_language ? { reply_language: providerResult.reply_language } : {}),
+      // Honest delivery signals: how the reply was delivered ("text" = not
+      // spoken) and, when hosted TTS failed, the short reason.
+      ...(doneModality ? { modality: doneModality } : {}),
+      ...(doneTtsError ? { tts_error: doneTtsError } : {}),
     });
 
     turn.status = "completed";
@@ -856,6 +882,11 @@ class VoiceSessionConnection {
         // must speak the reply text locally (e.g. Amharic).
         reply_language: providerResult?.reply_language || "",
         tts_spoke: providerResult?.tts_spoke === true,
+        // How the reply was delivered ("text" = deliberately not spoken) and the
+        // reason a hosted-TTS attempt failed, recorded on the canonical turn so
+        // history distinguishes a text-only turn from a synthesis fault.
+        modality: providerResult?.modality || "",
+        tts_error: providerResult?.tts_error || "",
         transcript_language_rejected: providerResult?.transcript_language_rejected === true || turn.transcriptLanguageRejected === true,
         // The restricted INPUT languages the STT leg recognized, captured at
         // session start. Recorded on the canonical turn so a later audio-analysis

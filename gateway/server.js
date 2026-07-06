@@ -1346,6 +1346,10 @@ module.exports = {
   startServer,
   defaultSessionId,
   profileSystemInstruction,
+  // Exported for in-process smoke tests that drive the cascaded reasoner and its
+  // model-tool loop directly. Not part of the runtime HTTP surface.
+  runCascadedVoiceReasoning,
+  agentProfile,
 };
 
 async function handleCreateWorkerRegistration(request, response) {
@@ -7890,7 +7894,9 @@ async function runCascadedVoiceReasoning(input) {
 
 async function runCascadedVoiceReasoningInner(input) {
   const transcript = String(input?.transcript || "").trim();
-  const profile = agentProfile.effective();
+  const deviceId = normalizeDeviceId(input?.device_id || input?.deviceId || "");
+  const profileOptions = deviceId ? { deviceId } : {};
+  const profile = agentProfile.effective(profileOptions);
   const replyLanguage = profile.language_primary || profile.language || "en-US";
   if (MOA_MODE === "local") {
     const stallMs = Math.max(0, Number(process.env.MOA_TEST_REASONER_STALL_MS || 0));
@@ -7903,17 +7909,29 @@ async function runCascadedVoiceReasoningInner(input) {
   }
 
   // Reuse the same classifier as the HTTP path. Only chat turns produce a spoken
-  // reply here; control and agent-run turns are recorded by the caller and must
-  // not be spoken as a chat answer.
+  // chat reply here; control and agent-run turns are recorded by the caller, and
+  // a profile-control turn is applied AND its confirmation spoken by the
+  // streaming turn recorder, so none of them are answered as a chat turn here.
   const classification = classifyVoiceTurn({}, transcript);
   if (classification !== "chat") {
     return { speak: "", display: transcript, language: replyLanguage, model: profile.model || MODEL_ID, classification };
   }
 
-  const messages = [{ role: "user", content: transcript }];
+  // Prior conversation as OUTPUT context. Text-chat and the Live path already
+  // inject recent turns; the cascaded reasoner did not, so a spoken turn had no
+  // memory of what was just said. The ids arrive threaded through the streaming
+  // provider's reasoner call.
+  const sessionContext = durableSessionContextBlock({
+    sessionId: input?.session_id || input?.conversation_id || "",
+    branchId: input?.branch_id || "default",
+    excludeTurnId: input?.turn_id || "",
+    allBranches: input?.all_branches_context === true || input?.allBranchesContext === true,
+  });
   const memoryContext = recallMemoryContext(transcript);
   const languageDirective = replyLanguageDirective(profile);
-  const systemBlocks = [memoryContext, languageDirective].filter(Boolean);
+  const modalityHint = voiceModalityHintBlock(profile, input);
+  const messages = [{ role: "user", content: transcript }];
+  const systemBlocks = [memoryContext, sessionContext, modalityHint, languageDirective].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -7926,6 +7944,28 @@ async function runCascadedVoiceReasoningInner(input) {
     model: profile.model || MODEL_ID,
     classification: "chat",
   };
+}
+
+// A bounded system block that tells the reasoning model how this spoken turn is
+// delivered: the current response modality, whether a hosted TTS voice can
+// synthesize the reply, and (when known) why the previous turn fell back to
+// text. This is honesty context, not an instruction to restate — it lets the
+// model answer "why did you reply in text?" truthfully instead of guessing.
+function voiceModalityHintBlock(profile, input) {
+  const modality = String(profile?.response_modality || "auto").trim().toLowerCase() || "auto";
+  const ttsProvider = String(input?.tts_provider_id || "").trim();
+  const ttsAvailable = input?.tts_available === true;
+  const previousError = String(input?.previous_tts_error || "").trim();
+  const lines = [
+    "Voice delivery status (for truthful self-explanation, not an instruction to restate):",
+    `- response_modality: ${modality} (${modality === "text" ? "the reply is shown as text, not spoken aloud" : "the reply is spoken aloud when a hosted voice can synthesize it"}).`,
+    `- hosted text-to-speech: ${ttsAvailable ? `available via ${ttsProvider || "the configured provider"}` : "not available; the device speaks the reply text"}.`,
+  ];
+  if (previousError) {
+    lines.push(`- the previous turn could not be spoken by hosted TTS: ${truncate(previousError, 200)}.`);
+  }
+  lines.push("If the user asks why you answered in text or did not speak, explain using this status.");
+  return lines.join("\n");
 }
 
 // A bounded system directive so the reasoning model replies in the profile's
@@ -8000,6 +8040,11 @@ async function recordStreamingVoiceTurn(turn) {
       input_languages: Array.isArray(turn.input_languages) ? turn.input_languages : [],
       reply_language: turn.reply_language || "",
       tts_spoke: turn.tts_spoke === true,
+      // How the reply was delivered ("text" = deliberately not spoken) and, when
+      // hosted TTS was attempted but failed, the short reason. Distinct fields so
+      // a text-only delivery is never mistaken for a synthesis failure.
+      modality: String(turn.modality || ""),
+      tts_error: String(turn.tts_error || ""),
       transcript_language_rejected: turn.transcript_language_rejected === true,
       audio: turn.audio || null,
       assistant_audio: turn.assistant_audio || null,
