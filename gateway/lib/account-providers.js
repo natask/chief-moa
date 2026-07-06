@@ -237,7 +237,10 @@ function grantFromTokenPayload(payload) {
 // encodes the grant behavior so smoke tests can drive every lifecycle path:
 //   fixture-grant-ok[:name]         -> refreshable grant, 1h expiry
 //   fixture-grant-shortlived[:name] -> refreshable grant, 60s expiry
-//   fixture-grant-badrefresh[:name] -> grant whose refresh always fails
+//   fixture-grant-badrefresh[:name] -> grant whose refresh always fails, 1h expiry
+//   fixture-grant-shortbad[:name]   -> near-expiry (60s) grant whose refresh
+//                                      always fails, so a health pass must flag
+//                                      the user and queue a device notification
 //   fixture-grant-deny              -> access_denied error
 // [:name] sets a stable provider account subject so multiple connections per
 // provider (different subjects) and duplicate subjects are both testable.
@@ -251,16 +254,17 @@ function createFixtureAdapter() {
     }
     const shortlived = head === "fixture-grant-shortlived";
     const badRefresh = head === "fixture-grant-badrefresh";
-    if (!shortlived && !badRefresh && head !== "fixture-grant-ok") {
+    const shortbad = head === "fixture-grant-shortbad";
+    if (!shortlived && !badRefresh && !shortbad && head !== "fixture-grant-ok") {
       const error = new Error("unknown fixture authorization code");
       error.code = "invalid_grant";
       throw error;
     }
     const subject = name || "primary";
-    const ttlMs = shortlived ? 60 * 1000 : 60 * 60 * 1000;
+    const ttlMs = shortlived || shortbad ? 60 * 1000 : 60 * 60 * 1000;
     return {
       access_token: `fixture-access-${subject}-${Date.now().toString(36)}`,
-      refresh_token: badRefresh ? `fixture-refresh-expired-${subject}` : `fixture-refresh-ok-${subject}`,
+      refresh_token: badRefresh || shortbad ? `fixture-refresh-expired-${subject}` : `fixture-refresh-ok-${subject}`,
       token_type: "bearer",
       scope: ["fixture.read"],
       expires_at: new Date(Date.now() + ttlMs).toISOString(),
