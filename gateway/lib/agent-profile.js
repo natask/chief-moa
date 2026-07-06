@@ -23,6 +23,7 @@ const REQUIRED_VOICE_STYLE_RULE = "Voice style requirement: speak tersely. Honor
 const PROFILE_FIELDS = [
   "system_prompt",
   "assistant_name",
+  "user_address",
   "model",
   "temperature",
   "voice_max_chars",
@@ -580,6 +581,12 @@ function pickProfileFields(input) {
       out.assistant_name = name;
     }
   }
+  if (typeof input.user_address === "string" && input.user_address.trim()) {
+    const address = normalizeUserAddress(input.user_address);
+    if (address) {
+      out.user_address = address;
+    }
+  }
   if (typeof input.model === "string" && input.model.trim()) {
     out.model = input.model.trim();
   }
@@ -692,6 +699,7 @@ function normalizeProfile(defaults) {
   return {
     system_prompt: picked.system_prompt || "",
     assistant_name: picked.assistant_name || "A.G.",
+    user_address: picked.user_address || normalizeUserAddress(process.env.MOA_USER_ADDRESS) || "master",
     model: picked.model || "",
     temperature: picked.temperature !== undefined ? picked.temperature : 0.4,
     voice_max_chars: picked.voice_max_chars !== undefined ? picked.voice_max_chars : 280,
@@ -738,6 +746,16 @@ function normalizeAssistantName(value) {
     return "";
   }
   return cleaned;
+}
+
+function normalizeUserAddress(value) {
+  const cleaned = String(value || "")
+    .replace(/[\x00-\x1F\x7F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60)
+    .trim();
+  return cleaned || "";
 }
 
 // Phrases a spoken "become X" / "set your prompt to X" must never smuggle in:
@@ -872,6 +890,7 @@ module.exports = {
   CORE_VOICES,
   normalizeVoice,
   normalizeAssistantName,
+  normalizeUserAddress,
   normalizeDeviceId,
   normalizeSystemPromptField,
   sanitizePersonaPrompt,

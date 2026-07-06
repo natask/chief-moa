@@ -885,6 +885,7 @@ class GeminiLiveVoiceProvider {
     return [
       safeSystemPromptForProvider(effectiveProfile, this.systemPrompt),
       profileIdentityInstruction(effectiveProfile),
+      userAddressInstruction(effectiveProfile),
       answerPolicyInstruction(),
       missionAccessInstruction(),
       profileControlInstruction(effectiveProfile),
@@ -2181,6 +2182,19 @@ function profileIdentityInstruction(profile) {
     `- if asked who or what you are, say you are ${name}`,
     "- if your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word",
     "- use the user's requested form of address, title, or interaction style when provided",
+  ].join("\n");
+}
+
+function userAddressInstruction(profile) {
+  const address = String(profile?.user_address || "master").trim();
+  if (!address) {
+    return "";
+  }
+  return [
+    "Moa user address profile:",
+    `- always address the user as "${address}"`,
+    "- use that form of address naturally in your replies",
+    "- this rule outranks any older wording in the base prompt",
   ].join("\n");
 }
 

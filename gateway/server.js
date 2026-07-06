@@ -195,6 +195,7 @@ const agentProfile = createAgentProfileStore({
   defaults: {
     system_prompt: SYSTEM_PROMPT,
     assistant_name: "A.G.",
+    user_address: process.env.MOA_USER_ADDRESS || "master",
     model: MODEL_ID,
     temperature: MODEL_TEMPERATURE,
     voice_max_chars: VOICE_TTS_MAX_CHARS,
@@ -1051,6 +1052,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/v1/sessions/default") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, { session_id: defaultSessionId() });
+      return;
+    }
+
     if (
       request.method === "GET" &&
       url.pathname.startsWith("/v1/sessions/") &&
@@ -1310,19 +1320,32 @@ server.on("upgrade", (request, socket, head) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`A.G. gateway listening on http://${HOST}:${PORT}`);
-  console.log(
-    `Mode: ${MOA_MODE} trust_proxy=${TRUST_PROXY} database=${process.env.DATABASE_URL ? "postgres" : "file-fallback"}${WORKER_PULL_AGENT_RUNS ? " worker-pull=on" : ""}`
-  );
-  console.log(`Provider: ${MODEL_PROVIDER} model=${MODEL_ID}`);
-  if (MODEL_PROVIDER === "vertex") {
-    console.log(`Vertex: project=${VERTEX_PROJECT || "unset"} location=${VERTEX_LOCATION} auth=${vertexCredentialHint() || "missing"}`);
-  } else {
-    console.log(`Model base URL: ${MODEL_BASE_URL}`);
-  }
-  console.log(`Data dir: ${DATA_DIR}`);
-});
+function startServer() {
+  server.listen(PORT, HOST, () => {
+    console.log(`A.G. gateway listening on http://${HOST}:${PORT}`);
+    console.log(
+      `Mode: ${MOA_MODE} trust_proxy=${TRUST_PROXY} database=${process.env.DATABASE_URL ? "postgres" : "file-fallback"}${WORKER_PULL_AGENT_RUNS ? " worker-pull=on" : ""}`
+    );
+    console.log(`Provider: ${MODEL_PROVIDER} model=${MODEL_ID}`);
+    if (MODEL_PROVIDER === "vertex") {
+      console.log(`Vertex: project=${VERTEX_PROJECT || "unset"} location=${VERTEX_LOCATION} auth=${vertexCredentialHint() || "missing"}`);
+    } else {
+      console.log(`Model base URL: ${MODEL_BASE_URL}`);
+    }
+    console.log(`Data dir: ${DATA_DIR}`);
+  });
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  server,
+  startServer,
+  defaultSessionId,
+  profileSystemInstruction,
+};
 
 async function handleCreateWorkerRegistration(request, response) {
   try {
@@ -1604,6 +1627,10 @@ function accountUserId() {
   return `usr_${crypto.createHash("sha256").update(MOA_GATEWAY_TOKEN).digest("hex").slice(0, 16)}`;
 }
 
+function defaultSessionId() {
+  return sanitizeOptionalId(`shared-${accountUserId()}`, "shared-usr_local");
+}
+
 // Body reader for the gateway secret form: browsers post
 // application/x-www-form-urlencoded, API smoke posts JSON.
 function readFormOrJsonBody(request) {
@@ -1684,8 +1711,9 @@ async function handleChat(request, response) {
     return;
   }
 
-  const conversationId = sanitizeId(body.conversation_id || crypto.randomUUID());
-  const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id || conversationId, conversationId);
+  const canonicalSessionId = defaultSessionId();
+  const conversationId = sanitizeId(body.conversation_id || canonicalSessionId);
+  const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id || conversationId, canonicalSessionId);
   const branchId = sanitizeOptionalId(body.branch_id, "default");
   const turnId = sanitizeOptionalId(body.turn_id, randomId("chat"));
   const deviceId = profileDeviceIdFromBody(body);
@@ -2146,7 +2174,7 @@ async function buildBrowserTurnRecord(body, options = {}) {
   const now = new Date().toISOString();
   const text = browserTurnInputText(body);
   const turnId = sanitizeOptionalId(body.turn_id || body.turnId || body.id, randomId("browserturn"));
-  const sessionId = sanitizeOptionalId(body.session_id || body.sessionId || body.conversation_id || body.client?.session_id, "browser");
+  const sessionId = sanitizeOptionalId(body.session_id || body.sessionId || body.conversation_id || body.client?.session_id, defaultSessionId());
   const conversationId = sanitizeOptionalId(body.conversation_id || body.conversationId || sessionId, sessionId);
   const branchId = sanitizeOptionalId(body.branch_id || body.branchId || body.client?.branch_id, "default");
   const modality = options.modality === "voice" ? "voice" : browserTurnModality(body);
@@ -5028,7 +5056,7 @@ async function handleVoiceTurn(request, response) {
     return;
   }
 
-  const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id, crypto.randomUUID());
+  const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id, defaultSessionId());
   const conversationId = sanitizeOptionalId(body.conversation_id || sessionId, sessionId);
   const branchId = sanitizeOptionalId(body.branch_id, "default");
   const turnId = sanitizeOptionalId(body.turn_id, randomId("turn"));
@@ -8914,6 +8942,7 @@ function profileSystemInstruction(profile) {
   return [
     safeSystemPromptForProvider(profile, SYSTEM_PROMPT),
     profileIdentityInstruction(profile),
+    userAddressInstruction(profile),
     answerPolicyInstruction(),
     missionAccessInstruction(),
     profileLanguageInstruction(profile),
@@ -8954,6 +8983,19 @@ function profileIdentityInstruction(profile) {
     `- If asked who or what you are, say you are ${name}.`,
     "- If your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word.",
     "- Use the user's requested form of address, title, or interaction style when provided.",
+  ].join("\n");
+}
+
+function userAddressInstruction(profile) {
+  const address = String(profile?.user_address || "master").trim();
+  if (!address) {
+    return "";
+  }
+  return [
+    "User address profile:",
+    `- Always address the user as "${address}".`,
+    "- Use that form of address naturally in your replies.",
+    "- This rule outranks any older wording in the base prompt.",
   ].join("\n");
 }
 
