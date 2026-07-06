@@ -528,6 +528,10 @@ class ChirpSttVoiceProvider {
     // legacy transcript-then-android-TTS path and the STT smoke keep working.
     this.reasoner = typeof options?.reasoner === "function" ? options.reasoner : null;
     this.agentProfile = options?.agentProfile || null;
+    // Short reason the LAST hosted-TTS attempt failed (empty when it spoke or was
+    // deliberately text-only). Threaded into the next turn's reasoner input so the
+    // model can truthfully explain why the previous reply was not spoken.
+    this.lastTtsError = "";
     this.ttsProviderId = registryProviderId(this.names.tts);
     if (this.ttsProviderId === "gemini-tts") {
       this.ttsVoice = String(env.GEMINI_TTS_VOICE || env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim() || GEMINI_TTS_DEFAULT_VOICE;
@@ -658,6 +662,7 @@ class ChirpSttVoiceProvider {
     if (!transcript) {
       return this.cascadedResult(transcript, reasoning, false, transcription);
     }
+    const modality = this.replyModality();
     try {
       const result = await this.reasoner({
         transcript,
@@ -665,42 +670,72 @@ class ChirpSttVoiceProvider {
         conversation_id: turn.conversationId || turn.conversation_id || "",
         branch_id: turn.branchId || turn.branch_id || "",
         turn_id: turn.turnId || turn.turn_id || "",
+        device_id: turn.deviceId || turn.device_id || "",
+        all_branches_context: turn.allBranchesContext === true || turn.all_branches_context === true,
         source: turn.source || "voice-cascaded",
+        // Delivery context so the reasoner can answer "why did you reply in text?"
+        // honestly and can reason about the language/modality switch itself.
+        response_modality: modality,
+        tts_provider_id: this.ttsProviderId,
+        tts_available: this.cascaded(),
+        previous_tts_error: this.lastTtsError || "",
       });
       reasoning = { ...reasoning, ...(result && typeof result === "object" ? result : {}) };
     } catch (error) {
       throw new Error(`cascaded reasoning failed: ${cleanError(error)}`);
     }
 
+    // `speak` is the CLEAN reply shown/stored (no expressive tags); `ttsText`
+    // carries the whitelisted inline tags for the Gemini-TTS leg, and `ttsStyle`
+    // is the natural-language style prompt (input.prompt). Non-expressive
+    // providers get the clean text and no style prompt from the reasoner.
     const speak = String(reasoning.speak || "").trim();
+    const ttsText = String(reasoning.tts_text || reasoning.speak || "").trim();
+    const ttsStyle = String(reasoning.tts_style || "").trim();
     if (speak) {
       await hooks.onAssistantText(speak);
     }
 
-    // Leg 3 — Cloud TTS reply audio. Synthesize only when the reply language has
-    // a hosted voice (e.g. en-US). For a language with no hosted voice (am-ET),
-    // skip synthesis and let the device speak the reply text (android fallback).
+    // Leg 3 — hosted TTS reply audio. Respect the profile's response modality:
+    // "text" deliberately delivers the reply as text (no hosted audio), which is
+    // a distinct outcome from a synthesis failure. Otherwise synthesize when the
+    // reply language has a hosted voice; a language with no hosted voice (am-ET
+    // on cloud-tts) still returns reply text for the device to speak.
     let spoke = false;
-    if (speak && this.canSynthesize(reasoning.language)) {
+    let ttsError = "";
+    if (speak && modality === "text") {
+      // Deliberate text-only delivery, not a failure — leave spoke=false, no error.
+    } else if (speak && this.canSynthesize(reasoning.language)) {
       try {
-        const pcm = await this.synthesizeSpeech(speak, reasoning.language);
+        const pcm = await this.synthesizeSpeech(ttsText, reasoning.language, ttsStyle);
         if (pcm && pcm.length) {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
           await hooks.sendAudio(pcm);
           await hooks.onAssistantAudioDone();
           spoke = true;
+        } else {
+          ttsError = "hosted TTS returned no audio";
         }
       } catch (error) {
         // TTS is best-effort: a synthesis failure must not drop the reply text.
-        // The device can still speak `assistant_text`.
-        spoke = false;
+        // Log the reason once, carry it on the turn so a client and the next
+        // turn's modality hint can explain it; the device still speaks the text.
+        ttsError = cleanError(error);
+        console.warn(JSON.stringify({
+          level: "warn",
+          at: "cascaded_tts_synthesis_failed",
+          tts_provider: this.ttsProviderId,
+          reply_language: reasoning.language || "",
+          error: ttsError,
+        }));
       }
     }
+    this.lastTtsError = ttsError;
 
-    return this.cascadedResult(transcript, reasoning, spoke, transcription);
+    return this.cascadedResult(transcript, reasoning, spoke, transcription, { modality, ttsError });
   }
 
-  cascadedResult(transcript, reasoning, spoke, transcription = {}) {
+  cascadedResult(transcript, reasoning, spoke, transcription = {}, options = {}) {
     return {
       provider: "chirp-cascaded",
       model: reasoning.model || this.model,
@@ -713,9 +748,66 @@ class ChirpSttVoiceProvider {
       transcription_only: false,
       tts_spoke: spoke,
       reply_language: reasoning.language || "",
+      // How the reply was delivered and, when hosted TTS was attempted and
+      // failed, the short reason. `modality:"text"` is a deliberate text-only
+      // turn, never a failure; `tts_error` is only set on a real synthesis fault.
+      modality: options.modality || this.replyModality(),
+      tts_error: options.ttsError || "",
       transcript_language_rejected: transcription.languageRejected === true,
       classification: reasoning.classification || "chat",
     };
+  }
+
+  // The reply-delivery modality from the effective agent profile: "text" (write,
+  // no hosted audio), "speech" (speak), or "auto" (default; speak when a hosted
+  // voice can synthesize). Read fresh per turn so a spoken change applies next.
+  replyModality() {
+    const profile = this.agentProfile && typeof this.agentProfile.effective === "function"
+      ? this.agentProfile.effective()
+      : null;
+    return String(profile?.response_modality || "auto").trim().toLowerCase() || "auto";
+  }
+
+  // Synthesize gateway-produced reply text (today a profile-control confirmation)
+  // into hosted reply audio and stream it through the same hooks the cascaded
+  // reply uses. The streaming server calls this to SPEAK confirmations that are
+  // produced after processTurn — the profile change itself is applied once by the
+  // turn recorder, so this only adds the voice. Respects response_modality and
+  // hosted-voice availability; best-effort, so a failure records the reason and
+  // lets the device speak the text.
+  async synthesizeAssistantSpeech(text, hooks, options = {}) {
+    const speak = String(text || "").trim();
+    if (!speak || !this.cascaded()) {
+      return { spoke: false, tts_error: "" };
+    }
+    if (this.replyModality() === "text") {
+      return { spoke: false, tts_error: "", modality: "text" };
+    }
+    const language = String(options.language || "").trim() || this.replyLanguage();
+    if (!this.canSynthesize(language)) {
+      return { spoke: false, tts_error: "" };
+    }
+    try {
+      const pcm = await this.synthesizeSpeech(speak, language);
+      if (pcm && pcm.length) {
+        await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
+        await hooks.sendAudio(pcm);
+        await hooks.onAssistantAudioDone();
+        this.lastTtsError = "";
+        return { spoke: true, tts_error: "" };
+      }
+      return { spoke: false, tts_error: "hosted TTS returned no audio" };
+    } catch (error) {
+      const ttsError = cleanError(error);
+      this.lastTtsError = ttsError;
+      console.warn(JSON.stringify({
+        level: "warn",
+        at: "cascaded_confirmation_tts_failed",
+        tts_provider: this.ttsProviderId,
+        error: ttsError,
+      }));
+      return { spoke: false, tts_error: ttsError };
+    }
   }
 
   // The reply (OUTPUT) language from the effective agent profile, falling back to
@@ -746,10 +838,13 @@ class ChirpSttVoiceProvider {
     return Boolean(this.ttsVoice) || Boolean(cloudTtsVoiceFor(code));
   }
 
-  async synthesizeSpeech(text, language) {
+  async synthesizeSpeech(text, language, stylePrompt = "") {
     const token = await this.accessToken();
     return synthesizeCloudTts({
       text,
+      // The Gemini-TTS leg accepts a natural-language style prompt in
+      // input.prompt; classic Cloud TTS voices do not, so only forward it there.
+      prompt: this.ttsProviderId === "gemini-tts" ? String(stylePrompt || "") : "",
       language: language || this.replyLanguage(),
       voice: this.ttsVoice,
       modelName: this.ttsProviderId === "gemini-tts" ? this.ttsModel : "",
@@ -2173,8 +2268,17 @@ async function synthesizeCloudTts(options) {
     ? [explicitEndpoint]
     : (modelName ? [CLOUD_TTS_ENDPOINT, CLOUD_TTS_V1BETA1_ENDPOINT] : [CLOUD_TTS_ENDPOINT]);
   const timeoutMs = Math.max(1, Number(options.timeoutMs) || 20000);
+  // Gemini-TTS caps input.text and input.prompt at ~4000 bytes each; classic
+  // Cloud TTS allows a longer text field. The natural-language style prompt goes
+  // in input.prompt alongside input.text and is honored only by promptable
+  // (modelName) voices, so it is attached only when a Gemini-TTS model is set.
+  const input = { text: String(options.text || "").slice(0, modelName ? 4000 : 5000) };
+  const promptText = String(options.prompt || "").trim();
+  if (modelName && promptText) {
+    input.prompt = promptText.slice(0, 2000);
+  }
   const body = JSON.stringify({
-    input: { text: String(options.text || "").slice(0, 5000) },
+    input,
     voice,
     audioConfig: {
       audioEncoding: "LINEAR16",

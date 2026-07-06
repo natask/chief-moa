@@ -1395,6 +1395,10 @@ module.exports = {
   startServer,
   defaultSessionId,
   profileSystemInstruction,
+  // Exported for in-process smoke tests that drive the cascaded reasoner and its
+  // model-tool loop directly. Not part of the runtime HTTP surface.
+  runCascadedVoiceReasoning,
+  agentProfile,
 };
 
 async function handleCreateWorkerRegistration(request, response) {
@@ -6130,7 +6134,7 @@ function profileSummaryText(subject, options = {}) {
     return `Profile ${version} ${scopeText}. My name is ${profile.assistant_name || "A.G."}.`;
   }
   if (subject === "providers") {
-    return `Profile ${version}. Providers: voice ${profile.voice_provider || "default"}, STT ${profile.stt_provider || "default"}, reasoning ${profile.reasoning_provider || "default"}, TTS ${profile.tts_provider || "default"}.`;
+    return `Profile ${version}. Providers: voice ${profile.voice_provider || "default"}, STT ${profile.stt_provider || "default"}, reasoning ${profile.reasoning_provider || "default"} (model ${profile.model || "default"}), TTS ${profile.tts_provider || "default"}.`;
   }
   if (subject === "tool_policy") {
     return `Profile ${version}. Tool policy is ${profile.tool_policy}; autonomy is ${profile.autonomy_level}.`;
@@ -6148,16 +6152,36 @@ function profileClarificationText(subject, options = {}) {
   return "Tell me which profile setting to change.";
 }
 
+// The reasoning provider for THIS turn: the profile's reasoning_provider when it
+// names a supported provider, otherwise the boot MODEL_PROVIDER. This makes the
+// middle (reasoning) model swappable per profile at runtime for A/B testing
+// without a gateway restart, matching how profile.model already swaps the id.
+function resolveReasoningProvider(profile) {
+  const requested = String(profile?.reasoning_provider || "").trim().toLowerCase().replace(/_/g, "-");
+  if (requested === "vertex" || requested === "openai-compatible") {
+    return requested;
+  }
+  return MODEL_PROVIDER;
+}
+
+function providerConfiguredFor(provider) {
+  if (provider === "vertex") {
+    return Boolean(VERTEX_PROJECT) && Boolean(vertexCredentialHint());
+  }
+  return MODEL_API_KEY.length > 0 || !MODEL_BASE_URL.includes("api.openai.com");
+}
+
 async function callModel(messages, profile) {
   const effective = profile || agentProfile.effective();
-  if (!providerConfigured()) {
-    if (MODEL_PROVIDER === "vertex") {
+  const provider = resolveReasoningProvider(effective);
+  if (!providerConfiguredFor(provider)) {
+    if (provider === "vertex") {
       throw new Error("Vertex provider requires VERTEX_PROJECT or GOOGLE_CLOUD_PROJECT plus Application Default Credentials.");
     }
     throw new Error("MODEL_API_KEY or OPENAI_API_KEY is required for api.openai.com. For local models, set MODEL_BASE_URL to an OpenAI-compatible server such as Ollama or LiteLLM.");
   }
 
-  if (MODEL_PROVIDER === "vertex") {
+  if (provider === "vertex") {
     return callVertexModel(messages, effective);
   }
 
@@ -6257,8 +6281,9 @@ async function callVertexModel(messages, profile) {
 }
 
 async function callModelOrFallback(messages, profile) {
-  if (providerConfigured()) {
-    return callModel(messages, profile);
+  const effective = profile || agentProfile.effective();
+  if (providerConfiguredFor(resolveReasoningProvider(effective))) {
+    return callModel(messages, effective);
   }
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   return gatewayFallbackReply(lastUser?.content || "");
@@ -6360,6 +6385,199 @@ async function chatTurnWithPageTweakTool(messages, profile, source) {
   const confirm = String(message.content || "").trim()
     || `Done — ${result.record.name || result.record.kind} on this page.`;
   return { text: confirm, action: result.action };
+}
+
+// A bounded (default max 2 rounds) model tool loop for server-side turns that let
+// the model call gateway-executed tools, modeled on chatTurnWithPageTweakTool but
+// generalized. `toolDefs` is a list of { name, description, parameters (OpenAI
+// JSON schema), handler(args) -> result-object }. Supports the openai-compatible
+// provider (tools/tool_calls) and the Vertex provider (functionDeclarations/
+// functionCall). A provider/model without tool support, an unconfigured provider,
+// or any tool-round transport error degrades to a plain reply so the turn never
+// fails. Returns { text, tool_results: [...], rounds }.
+async function callModelToolLoop(messages, profile, toolDefs, options = {}) {
+  const effective = profile || agentProfile.effective();
+  const maxRounds = Math.max(1, Math.min(Number(options.maxRounds || 2), 4));
+  const provider = resolveReasoningProvider(effective);
+  if (!Array.isArray(toolDefs) || toolDefs.length === 0 || !providerConfiguredFor(provider)) {
+    const text = await callModelOrFallback(messages, effective);
+    return { text, tool_results: [], rounds: 0 };
+  }
+  try {
+    if (provider === "vertex") {
+      return await vertexToolLoop(messages, effective, toolDefs, maxRounds);
+    }
+    return await openAiToolLoop(messages, effective, toolDefs, maxRounds);
+  } catch (error) {
+    // The tool round failed to reach or parse the model. Fall back to a plain
+    // reply so the request still gets an answer instead of an error turn.
+    const text = await callModelOrFallback(messages, effective);
+    return { text, tool_results: [], rounds: 0, tool_error: cleanError(error) };
+  }
+}
+
+async function openAiToolLoop(messages, effective, toolDefs, maxRounds) {
+  const tools = toolDefs.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description || "",
+      parameters: tool.parameters || { type: "object", properties: {} },
+    },
+  }));
+  const convo = [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
+  const toolResults = [];
+  let lastText = "";
+  for (let round = 0; round < maxRounds; round += 1) {
+    const upstream = await fetchWithTimeout(`${MODEL_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: modelHeaders(),
+      body: JSON.stringify({
+        model: effective.model || MODEL_ID,
+        messages: convo,
+        temperature: effective.temperature,
+        tools,
+        tool_choice: "auto",
+        stream: false,
+      }),
+    }, MODEL_FETCH_TIMEOUT_MS);
+    const responseText = await upstream.text();
+    if (!upstream.ok) {
+      throw new Error(`model HTTP ${upstream.status}: ${truncate(responseText, 400)}`);
+    }
+    const json = JSON.parse(responseText);
+    const message = json.choices?.[0]?.message || {};
+    const content = String(message.content || json.output_text || "").trim();
+    if (content) lastText = content;
+    const calls = Array.isArray(message.tool_calls) ? message.tool_calls.filter((call) => call?.function?.name) : [];
+    if (calls.length === 0) {
+      return { text: lastText, tool_results: toolResults, rounds: round + 1 };
+    }
+    convo.push({ role: "assistant", content: message.content || "", tool_calls: message.tool_calls });
+    for (const call of calls) {
+      const def = toolDefs.find((tool) => tool.name === call.function.name);
+      let args = {};
+      try {
+        args = JSON.parse(call.function.arguments || "{}");
+      } catch {
+        args = {};
+      }
+      const result = def ? await def.handler(args || {}) : { ok: false, error: `unsupported tool: ${call.function.name}` };
+      toolResults.push({ name: call.function.name, result });
+      convo.push({
+        role: "tool",
+        tool_call_id: call.id || "",
+        content: truncate(JSON.stringify(result || {}), 4000),
+      });
+    }
+  }
+  // Rounds exhausted while still calling tools: a plain reply gives closing text.
+  return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
+}
+
+async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
+  const functionDeclarations = toolDefs.map((tool) => ({
+    name: tool.name,
+    description: tool.description || "",
+    parameters: toVertexFunctionSchema(tool.parameters),
+  }));
+  const { systemInstruction, contents } = vertexPayload(messages, effective);
+  const toolResults = [];
+  let lastText = "";
+  const accessToken = await vertexAccessToken();
+  for (let round = 0; round < maxRounds; round += 1) {
+    const body = {
+      contents,
+      tools: [{ functionDeclarations }],
+      generationConfig: {
+        temperature: effective.temperature,
+        maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 512),
+        thinkingConfig: { thinkingBudget: Number(process.env.VERTEX_THINKING_BUDGET || 0) },
+      },
+    };
+    const safetySettings = vertexSafetySettings();
+    if (safetySettings.length > 0) {
+      body.safetySettings = safetySettings;
+    }
+    if (systemInstruction) {
+      body.systemInstruction = { parts: [{ text: systemInstruction }] };
+    }
+    const headers = {
+      "authorization": `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    };
+    if (process.env.VERTEX_PRIORITY !== "0") {
+      headers["x-vertex-ai-llm-shared-request-type"] = "priority";
+    }
+    const upstream = await fetchWithTimeout(vertexEndpoint(effective), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    }, MODEL_FETCH_TIMEOUT_MS);
+    const responseText = await upstream.text();
+    if (!upstream.ok) {
+      throw new Error(`vertex HTTP ${upstream.status}: ${truncate(responseText, 400)}`);
+    }
+    const json = JSON.parse(responseText);
+    const parts = json.candidates?.[0]?.content?.parts || [];
+    const textParts = parts.map((part) => String(part.text || "")).filter(Boolean).join("\n").trim();
+    if (textParts) lastText = textParts;
+    const fnCalls = parts.map((part) => part.functionCall || part.function_call).filter(Boolean);
+    if (fnCalls.length === 0) {
+      return { text: lastText, tool_results: toolResults, rounds: round + 1 };
+    }
+    contents.push({
+      role: "model",
+      parts: parts
+        .map((part) => (part.functionCall || part.function_call
+          ? { functionCall: part.functionCall || part.function_call }
+          : (part.text ? { text: part.text } : null)))
+        .filter(Boolean),
+    });
+    const responseParts = [];
+    for (const fnCall of fnCalls) {
+      const name = String(fnCall.name || "");
+      const def = toolDefs.find((tool) => tool.name === name);
+      const args = fnCall.args && typeof fnCall.args === "object" && !Array.isArray(fnCall.args) ? fnCall.args : {};
+      const result = def ? await def.handler(args) : { ok: false, error: `unsupported tool: ${name}` };
+      toolResults.push({ name, result });
+      responseParts.push({
+        functionResponse: {
+          name,
+          response: result && typeof result === "object" && !Array.isArray(result) ? result : { result },
+        },
+      });
+    }
+    contents.push({ role: "function", parts: responseParts });
+  }
+  return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
+}
+
+// Convert an OpenAI-style JSON schema (lowercase "object"/"string" types) into the
+// Vertex function-declaration schema, which uses uppercase OpenAPI type names.
+function toVertexFunctionSchema(schema) {
+  if (!schema || typeof schema !== "object") {
+    return { type: "OBJECT" };
+  }
+  const out = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "type" && typeof value === "string") {
+      out.type = value.toUpperCase();
+    } else if (key === "properties" && value && typeof value === "object") {
+      out.properties = {};
+      for (const [propKey, propValue] of Object.entries(value)) {
+        out.properties[propKey] = toVertexFunctionSchema(propValue);
+      }
+    } else if (key === "items") {
+      out.items = toVertexFunctionSchema(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  if (!out.type) {
+    out.type = "OBJECT";
+  }
+  return out;
 }
 
 function localUtilityReply(prompt) {
@@ -7080,13 +7298,69 @@ function voiceSystemContext(screenContext) {
 }
 
 function capSpeakText(text, maxChars) {
+  // Strip markdown noise, but preserve bracketed expressive tags (e.g.
+  // [whispering], [short pause]) that the Gemini-TTS leg renders: split into
+  // [tag] and prose segments and clean only the prose.
   const compact = String(text || "")
     .replace(/```[\s\S]*?```/g, "code omitted")
-    .replace(/[*_`#>~-]+/g, "")
+    .split(/(\[[^\]\n]{1,40}\])/)
+    .map((segment) => (/^\[[^\]\n]{1,40}\]$/.test(segment) ? segment : segment.replace(/[*_`#>~-]+/g, "")))
+    .join("")
     .replace(/\s+/g, " ")
     .trim();
   const limit = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : VOICE_TTS_MAX_CHARS;
   return truncate(compact, limit);
+}
+
+// Whitelisted Gemini-TTS inline expressive tags (square-bracketed). Only these
+// survive into the synthesized `input.text`; anything else the model brackets is
+// stripped from both the spoken and displayed text. Grounded in the Cloud
+// Text-to-Speech Gemini-TTS docs (non-speech sounds, style modifiers, pacing).
+const EXPRESSIVE_TAG_WHITELIST = new Set([
+  "sigh", "laughing", "laughs", "laugh", "uhm", "clears throat", "exhales",
+  "whispering", "whispers", "whisper", "shouting", "robotic", "sarcasm",
+  "excited", "curious", "warm", "reassuring", "cheerful", "sad",
+  "slow", "fast", "extremely fast", "short pause", "medium pause", "long pause",
+]);
+const EXPRESSIVE_TAG_LIST = Array.from(EXPRESSIVE_TAG_WHITELIST).map((tag) => `[${tag}]`).join(", ");
+
+function normalizeExpressiveTag(inner) {
+  return String(inner || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Parse a model reply for the expressive-speech carrying convention: an optional
+// leading `[style: ...]` line and whitelisted inline `[tag]`s. Returns the style
+// prompt (for input.prompt), the clean DISPLAY text (all tags removed), and the
+// speech text (only whitelisted inline tags kept, style line removed).
+function parseExpressiveReply(rawText) {
+  let text = String(rawText || "");
+  let style = "";
+  const styleMatch = text.match(/^\s*\[\s*style\s*:\s*([^\]\n]{1,200})\]\s*/i);
+  if (styleMatch) {
+    style = styleMatch[1].trim();
+    text = text.slice(styleMatch[0].length);
+  }
+  const displayText = text.replace(/\[[^\]\n]{0,60}\]/g, " ").replace(/\s+/g, " ").trim();
+  const speechText = text
+    .replace(/\[([^\]\n]{0,60})\]/g, (full, inner) => (EXPRESSIVE_TAG_WHITELIST.has(normalizeExpressiveTag(inner)) ? full : " "))
+    .replace(/\s+/g, " ")
+    .trim();
+  return { style, displayText, speechText };
+}
+
+// Tell the reasoning model it is driving an expressive TTS voice and how to steer
+// it. Only added for the gemini-tts leg, the one provider that renders a style
+// prompt and inline tags; the classic Cloud TTS voices would speak them literally.
+function voiceExpressiveDirective(input) {
+  if (String(input?.tts_provider_id || "") !== "gemini-tts") {
+    return "";
+  }
+  return [
+    "Expressive voice direction (you speak through an expressive TTS voice that renders emotion, pacing, and tone):",
+    "- When it genuinely fits the moment, open your reply with ONE style line in square brackets: [style: <a few words>], for example [style: warm, amused] or [style: calm, reassuring]. Put it first, on its own line, at most once.",
+    `- You may also place whitelisted inline tags in square brackets exactly where the effect belongs, separated by words. Allowed tags: ${EXPRESSIVE_TAG_LIST}.`,
+    "- Use expression sparingly and only when it fits; a neutral reply needs no tags. Never describe the tags in words. The voice performs them and they are removed from the on-screen text.",
+  ].join("\n");
 }
 
 function voiceTurnPayload(record, patch) {
@@ -7530,9 +7804,24 @@ function liveToolUpdateAgentProfile(call, args) {
       supported_fields: agentProfile.fields(),
     };
   }
+  // The Live path gates the write on the deterministic transcript parser so the
+  // native-audio model cannot silently persist a change the user did not ask
+  // for. The cascaded reasoner instead reasons about the change and reaches
+  // applyAgentProfilePatch directly (see cascadedProfileTools), because the
+  // user's requirement is that language/voice/modality switching is reasoned
+  // about, not keyword-matched.
   if (!liveToolAllowsProfileUpdate(call, patch)) {
     return liveToolBlocked("update_agent_profile", "transcript did not request this profile update");
   }
+  return applyAgentProfilePatch(call, args, patch, "gemini-live-tool");
+}
+
+// Apply a sanitized profile patch and build the tool result. Shared by the Live
+// update_agent_profile handler and the cascaded voice tool loop so both write
+// through the SAME sanitizer (agentProfile.patch drops empty/invalid values, so
+// no tool call can blank a field) and record the same history and rejection
+// semantics. Callers own whether a transcript gate runs before this.
+function applyAgentProfilePatch(call, args, patch, sourceLabel = "agent-tool") {
   const requestedScope = String(args.scope || args.profile_scope || "global").toLowerCase() === "device" ? "device" : "global";
   const deviceId = normalizeDeviceId(args.device_id || call.device_id || "");
   if (requestedScope === "device" && !deviceId) {
@@ -7548,15 +7837,15 @@ function liveToolUpdateAgentProfile(call, args) {
   const before = agentProfile.effective(profileOptions);
   const beforeVersion = agentProfile.currentVersion(profileOptions);
   agentProfile.patch(patch, {
-    source: "gemini-live-tool",
-    reason: String(args.reason || "live_profile_update").slice(0, 80),
+    source: sourceLabel,
+    reason: String(args.reason || "profile_update").slice(0, 80),
     scope: profileOptions.scope,
     deviceId: profileOptions.deviceId,
   });
   const after = agentProfile.effective(profileOptions);
   const afterVersion = agentProfile.currentVersion(profileOptions);
   const changed = agentProfile.fields().filter((field) => before?.[field] !== after?.[field]);
-  recordProfileHistory(before, after, "gemini-live-tool", {
+  recordProfileHistory(before, after, sourceLabel, {
     beforeVersion,
     afterVersion,
     scope: profileOptions.scope,
@@ -8229,7 +8518,9 @@ async function runCascadedVoiceReasoning(input) {
 
 async function runCascadedVoiceReasoningInner(input) {
   const transcript = String(input?.transcript || "").trim();
-  const profile = agentProfile.effective();
+  const deviceId = normalizeDeviceId(input?.device_id || input?.deviceId || "");
+  const profileOptions = deviceId ? { deviceId } : {};
+  const profile = agentProfile.effective(profileOptions);
   const replyLanguage = profile.language_primary || profile.language || "en-US";
   if (MOA_MODE === "local") {
     const stallMs = Math.max(0, Number(process.env.MOA_TEST_REASONER_STALL_MS || 0));
@@ -8242,29 +8533,146 @@ async function runCascadedVoiceReasoningInner(input) {
   }
 
   // Reuse the same classifier as the HTTP path. Only chat turns produce a spoken
-  // reply here; control and agent-run turns are recorded by the caller and must
-  // not be spoken as a chat answer.
+  // chat reply here; control and agent-run turns are recorded by the caller, and
+  // a profile-control turn is applied AND its confirmation spoken by the
+  // streaming turn recorder, so none of them are answered as a chat turn here.
   const classification = classifyVoiceTurn({}, transcript);
   if (classification !== "chat") {
     return { speak: "", display: transcript, language: replyLanguage, model: profile.model || MODEL_ID, classification };
   }
 
-  const messages = [{ role: "user", content: transcript }];
+  // Prior conversation as OUTPUT context. Text-chat and the Live path already
+  // inject recent turns; the cascaded reasoner did not, so a spoken turn had no
+  // memory of what was just said. The ids arrive threaded through the streaming
+  // provider's reasoner call.
+  const sessionContext = durableSessionContextBlock({
+    sessionId: input?.session_id || input?.conversation_id || "",
+    branchId: input?.branch_id || "default",
+    excludeTurnId: input?.turn_id || "",
+    allBranches: input?.all_branches_context === true || input?.allBranchesContext === true,
+  });
   const memoryContext = recallMemoryContext(transcript);
   const languageDirective = replyLanguageDirective(profile);
-  const systemBlocks = [memoryContext, languageDirective].filter(Boolean);
+  const modalityHint = voiceModalityHintBlock(profile, input);
+  const expressiveDirective = voiceExpressiveDirective(input);
+  const messages = [{ role: "user", content: transcript }];
+  const systemBlocks = [memoryContext, sessionContext, modalityHint, expressiveDirective, languageDirective].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
-  const text = await callModelOrFallback(modelMessages, profile);
-  const speak = capSpeakText(text, profile.voice_max_chars);
+  // Model-driven profile control is the primary switch mechanism on the cascaded
+  // path: a chat-classified turn that indirectly asks to change reply/heard
+  // language, voice, modality, or model is REASONED about by the model, which
+  // calls update_agent_profile through the same sanitizer as the Live/HTTP path.
+  // Exact phrases are still short-circuited above by the deterministic classifier
+  // (fast path), and a non-tool-capable provider degrades to a plain reply.
+  const toolCall = {
+    session_id: input?.session_id || input?.conversation_id || "",
+    conversation_id: input?.conversation_id || input?.session_id || "",
+    branch_id: input?.branch_id || "default",
+    turn_id: input?.turn_id || "",
+    device_id: deviceId,
+    profile_version: agentProfile.currentVersion(profileOptions),
+    source: input?.source || "voice-cascaded",
+    transcript,
+  };
+  const toolTurn = await callModelToolLoop(modelMessages, profile, cascadedVoiceProfileTools(toolCall));
+  const text = String(toolTurn.text || "");
+  // Re-read the profile: a tool may have changed voice_max_chars this turn.
+  const effectiveAfter = agentProfile.effective(profileOptions);
+  // Split expressive direction out of the reply: the DISPLAY/stored transcript
+  // stays clean; the whitelisted inline tags and a leading style prompt only feed
+  // the Gemini-TTS leg (input.text + input.prompt). Other TTS providers get the
+  // clean text and no style prompt.
+  const expressive = parseExpressiveReply(text);
+  const useExpressiveTts = String(input?.tts_provider_id || "") === "gemini-tts";
+  const displaySpeak = capSpeakText(expressive.displayText, effectiveAfter.voice_max_chars);
+  const ttsText = useExpressiveTts
+    ? capSpeakText(expressive.speechText, effectiveAfter.voice_max_chars)
+    : displaySpeak;
   return {
-    speak,
-    display: text,
+    speak: displaySpeak,
+    display: displaySpeak,
+    tts_text: ttsText,
+    tts_style: useExpressiveTts ? expressive.style : "",
     language: replyLanguage,
-    model: profile.model || MODEL_ID,
+    model: effectiveAfter.model || MODEL_ID,
     classification: "chat",
   };
+}
+
+// The gateway-executed tools exposed to the cascaded reasoning model: profile
+// updates, reverts, and reading the profile-option catalog. update_agent_profile
+// reaches applyAgentProfilePatch directly (no transcript gate) because the model
+// reasoned about the change; the shared sanitizer still prevents any field from
+// being blanked. revert and options reuse the Live handlers unchanged.
+function cascadedVoiceProfileTools(call) {
+  return [
+    {
+      name: "update_agent_profile",
+      description: "Change your own durable settings when the user asks to. Set `language` to the comma-separated BCP-47 codes YOU reply in, and `input_languages` to the codes the USER speaks (en-US and am-ET only). Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in your reply after calling.",
+      parameters: {
+        type: "object",
+        properties: {
+          profile: {
+            type: "object",
+            description: "Profile fields to persist: language, input_languages, response_modality, voice, voice_max_chars, assistant_name, user_name, user_nickname, user_address, model, reasoning_provider, temperature, persona/system_prompt.",
+          },
+          scope: { type: "string", description: "global for all devices, or device for only this device." },
+          reason: { type: "string", description: "Short reason for the change." },
+        },
+        required: ["profile"],
+      },
+      handler: (args) => {
+        const patch = liveToolProfilePatch(args || {});
+        if (Object.keys(patch).length === 0) {
+          return { ok: false, error: "no supported profile fields provided", supported_fields: agentProfile.fields() };
+        }
+        return applyAgentProfilePatch(call, args || {}, patch, "voice-cascaded-tool");
+      },
+    },
+    {
+      name: "revert_agent_profile",
+      description: "Undo your durable settings: mode=\"previous\" restores the state before your last change (undo); mode=\"reset\" restores the gateway defaults. Honors scope like update_agent_profile.",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string", description: "previous (undo the last change) or reset (restore defaults). Defaults to previous." },
+          scope: { type: "string", description: "global for all devices, or device for only this device." },
+          reason: { type: "string", description: "Short reason for the revert." },
+        },
+      },
+      handler: (args) => liveToolRevertAgentProfile(call, args || {}),
+    },
+    {
+      name: "get_profile_options",
+      description: "Read the current catalog of valid voices, languages, and models before setting a voice, language, or model field.",
+      parameters: { type: "object", properties: {} },
+      handler: () => ({ ok: true, type: "profile_options", ...gatewayProfileOptionsPayload() }),
+    },
+  ];
+}
+
+// A bounded system block that tells the reasoning model how this spoken turn is
+// delivered: the current response modality, whether a hosted TTS voice can
+// synthesize the reply, and (when known) why the previous turn fell back to
+// text. This is honesty context, not an instruction to restate — it lets the
+// model answer "why did you reply in text?" truthfully instead of guessing.
+function voiceModalityHintBlock(profile, input) {
+  const modality = String(profile?.response_modality || "auto").trim().toLowerCase() || "auto";
+  const ttsProvider = String(input?.tts_provider_id || "").trim();
+  const ttsAvailable = input?.tts_available === true;
+  const previousError = String(input?.previous_tts_error || "").trim();
+  const lines = [
+    "Voice delivery status (for truthful self-explanation, not an instruction to restate):",
+    `- response_modality: ${modality} (${modality === "text" ? "the reply is shown as text, not spoken aloud" : "the reply is spoken aloud when a hosted voice can synthesize it"}).`,
+    `- hosted text-to-speech: ${ttsAvailable ? `available via ${ttsProvider || "the configured provider"}` : "not available; the device speaks the reply text"}.`,
+  ];
+  if (previousError) {
+    lines.push(`- the previous turn could not be spoken by hosted TTS: ${truncate(previousError, 200)}.`);
+  }
+  lines.push("If the user asks why you answered in text or did not speak, explain using this status.");
+  return lines.join("\n");
 }
 
 // A bounded system directive so the reasoning model replies in the profile's
@@ -8339,6 +8747,11 @@ async function recordStreamingVoiceTurn(turn) {
       input_languages: Array.isArray(turn.input_languages) ? turn.input_languages : [],
       reply_language: turn.reply_language || "",
       tts_spoke: turn.tts_spoke === true,
+      // How the reply was delivered ("text" = deliberately not spoken) and, when
+      // hosted TTS was attempted but failed, the short reason. Distinct fields so
+      // a text-only delivery is never mistaken for a synthesis failure.
+      modality: String(turn.modality || ""),
+      tts_error: String(turn.tts_error || ""),
       transcript_language_rejected: turn.transcript_language_rejected === true,
       audio: turn.audio || null,
       assistant_audio: turn.assistant_audio || null,
@@ -9256,10 +9669,7 @@ function delay(ms) {
 }
 
 function providerConfigured() {
-  if (MODEL_PROVIDER === "vertex") {
-    return Boolean(VERTEX_PROJECT) && Boolean(vertexCredentialHint());
-  }
-  return MODEL_API_KEY.length > 0 || !MODEL_BASE_URL.includes("api.openai.com");
+  return providerConfiguredFor(MODEL_PROVIDER);
 }
 
 function vertexEndpoint(profile) {

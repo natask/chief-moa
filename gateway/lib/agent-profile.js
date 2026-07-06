@@ -602,7 +602,14 @@ function pickProfileFields(input) {
     }
   }
   if (typeof input.model === "string" && input.model.trim()) {
-    out.model = input.model.trim();
+    // The model id becomes a swappable reasoning target (env MODEL_ID default,
+    // provider path/URL segment). Cap length and restrict to a safe id charset so
+    // a bad value is dropped and the previous model is kept, never blanked and
+    // never able to inject into a provider URL path.
+    const model = input.model.trim();
+    if (model.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model)) {
+      out.model = model;
+    }
   }
   if (input.temperature !== undefined && input.temperature !== null && input.temperature !== "") {
     const temperature = Number(input.temperature);
