@@ -29,7 +29,9 @@ final class MoaPrefs {
     private static final String KEY_CONVERSATION_ID = "conversation_id";
     private static final String KEY_HISTORY_JSON = "history_json";
     private static final String KEY_SPOKEN_REPLIES_ENABLED = "spoken_replies_enabled";
-    private static final String KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED = "spoken_replies_quiet_default_applied";
+    // One-time flag that flips the earlier hidden "quiet" default to audible.
+    // A device that never touched the checkbox starts speaking hosted replies.
+    private static final String KEY_SPOKEN_REPLIES_AUDIBLE_DEFAULT_APPLIED = "spoken_replies_audible_default_applied";
     private static final String KEY_AGENT_PROFILE_JSON = "agent_profile_json";
     private static final String KEY_ORB_SCALE_PERCENT = "orb_scale_percent";
 
@@ -78,20 +80,25 @@ final class MoaPrefs {
 
     static boolean spokenRepliesEnabled(Context context) {
         SharedPreferences preferences = prefs(context);
-        if (!preferences.getBoolean(KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED, false)) {
+        // Spoken replies are ON by default: this is a voice assistant with hosted
+        // TTS (there is no local TTS fallback). The one-time migration flips the
+        // earlier hidden "quiet" default to audible so devices that never found
+        // the checkbox start speaking. Once the user makes an explicit choice via
+        // setSpokenRepliesEnabled, that value sticks.
+        if (!preferences.getBoolean(KEY_SPOKEN_REPLIES_AUDIBLE_DEFAULT_APPLIED, false)) {
             preferences.edit()
-                    .putBoolean(KEY_SPOKEN_REPLIES_ENABLED, false)
-                    .putBoolean(KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED, true)
+                    .putBoolean(KEY_SPOKEN_REPLIES_ENABLED, true)
+                    .putBoolean(KEY_SPOKEN_REPLIES_AUDIBLE_DEFAULT_APPLIED, true)
                     .apply();
-            return false;
+            return true;
         }
-        return preferences.getBoolean(KEY_SPOKEN_REPLIES_ENABLED, false);
+        return preferences.getBoolean(KEY_SPOKEN_REPLIES_ENABLED, true);
     }
 
     static void setSpokenRepliesEnabled(Context context, boolean enabled) {
         prefs(context).edit()
                 .putBoolean(KEY_SPOKEN_REPLIES_ENABLED, enabled)
-                .putBoolean(KEY_SPOKEN_REPLIES_QUIET_DEFAULT_APPLIED, true)
+                .putBoolean(KEY_SPOKEN_REPLIES_AUDIBLE_DEFAULT_APPLIED, true)
                 .apply();
     }
 

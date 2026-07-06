@@ -56,6 +56,12 @@ public final class OverlayService extends Service {
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
     private static final long VOICE_USER_EXIT_MS = 150;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
+    // A text-only reply (the gateway returned text but no spoken audio) is held on
+    // screen noticeably longer than a spoken one, since the eye is the only way to
+    // receive it. Paired with a small "(not spoken)" marker so it does not read as
+    // a broken or blank turn. No local TTS is used (hosted-audio-only policy).
+    private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
+    private static final String NOT_SPOKEN_SUFFIX = "\n\n(not spoken)";
     // Inactivity watchdog for a committed streaming turn. It is armed on commit
     // and RESET by every streaming event (partial/final transcript, assistant
     // text, assistant audio start/done). If no event arrives for this long while
@@ -1723,6 +1729,12 @@ public final class OverlayService extends Service {
             return new ToolRequestExecution(false, "Speech text is required.", receipt);
         }
         boolean spoken = voiceController != null && voiceController.speak(text);
+        // On-device TextToSpeech is disabled by policy (hosted TTS only), so this
+        // path returns false by design. Report that plainly instead of implying a
+        // broken/unavailable engine.
+        String summary = spoken
+                ? "Spoke requested text."
+                : "On-device speech is disabled by policy; replies speak through hosted audio only.";
         JSONObject receipt = MoaActionReceiptStore.record(
                 this,
                 "audio.speak",
@@ -1730,9 +1742,9 @@ public final class OverlayService extends Service {
                 "implicit_user_command",
                 "device_speaker",
                 spoken,
-                spoken ? "Spoke requested text." : "TextToSpeech was unavailable."
+                summary
         );
-        return new ToolRequestExecution(spoken, spoken ? "Spoke requested text." : "TextToSpeech was unavailable.", receipt);
+        return new ToolRequestExecution(spoken, summary, receipt);
     }
 
     private void postToolRequestReceipt(String requestId, ToolRequestExecution execution) {
@@ -2631,9 +2643,9 @@ public final class OverlayService extends Service {
                 }
                 String turnStatus = safe(status);
                 if ("completed".equals(turnStatus)) {
-                    // If the gateway produced text but never spoke it (tts_spoke
-                    // false, or no assistant audio arrived at all), speak it
-                    // locally so a completed turn is never silent.
+                    // Local TTS is disabled by policy (hosted audio only), so this
+                    // returns false. Kept as the single seam for the on-device
+                    // engine; a text-only reply is handled by the not-spoken cue.
                     boolean fallbackSpeaking = maybeSpeakStreamingFallback(ttsSpoke, replyLanguage);
                     refreshVoiceProfile();
                     if (fallbackSpeaking) {
@@ -2642,6 +2654,15 @@ public final class OverlayService extends Service {
                     }
                     if (streamingAssistantAudioPlaying) {
                         pendingContinuousVoiceRestartAfterAudio = true;
+                        return;
+                    }
+                    boolean gatewaySpoke = ttsSpoke && currentStreamingTurnAudioReceived;
+                    if (!gatewaySpoke) {
+                        // Completed, but no spoken audio arrived. Mark the reply
+                        // "(not spoken)" and hold it longer so a text-only turn is
+                        // read as intentional, not a broken/silent turn.
+                        markCurrentReplyNotSpoken();
+                        showReadyForNextVoiceTurn(generation, VOICE_NOT_SPOKEN_HOLD_MS);
                         return;
                     }
                     showReadyForNextVoiceTurn(generation);
@@ -2895,6 +2916,10 @@ public final class OverlayService extends Service {
     }
 
     private void showReadyForNextVoiceTurn(int generation) {
+        showReadyForNextVoiceTurn(generation, VOICE_RESPONSE_HOLD_MS);
+    }
+
+    private void showReadyForNextVoiceTurn(int generation, long dismissDelayMs) {
         cancelStreamingTurnWatchdog();
         setVoiceRuntimeState(VoiceRuntimeState.READY);
         updateMicState();
@@ -2902,7 +2927,18 @@ public final class OverlayService extends Service {
             scheduleContinuousVoiceRestart(generation);
             return;
         }
-        scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
+        scheduleAutoDismiss(dismissDelayMs);
+    }
+
+    // Append a small "(not spoken)" marker to the visible assistant reply. The
+    // stored chat message was already recorded before this runs, so only the
+    // overlay row shows the marker; history stays clean.
+    private void markCurrentReplyNotSpoken() {
+        String text = safe(voiceAssistantTranscript);
+        if (text.isEmpty() || text.endsWith(NOT_SPOKEN_SUFFIX)) {
+            return;
+        }
+        updateVoiceAssistantTranscript(text + NOT_SPOKEN_SUFFIX);
     }
 
     private boolean shouldStartVoice(Intent intent) {
