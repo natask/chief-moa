@@ -286,6 +286,30 @@ reasoner sees the delivery state (modality, TTS availability, the previous
 turn's `tts_error`) as a hint block, so "why did you answer in text?" gets a
 truthful answer and the model can change `response_modality` by tool call.
 
+### LiveKit prototype (flag-gated)
+
+The default voice transport is the cascaded WebSocket pipeline above and is
+unchanged. A separate LiveKit (WebRTC) transport exists as a measurement
+prototype behind flags and is inert by default. It is Option A: the gateway
+mints room tokens (`POST /v1/voice/livekit/token`, env-gated on `LIVEKIT_URL` +
+`LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET`, 503 when unset) and a standalone
+`@livekit/agents` worker (`livekit_worker/`, its own package, not in the gateway
+deps) joins the room and drives Chirp 3 STT -> the gateway's existing reasoning
+(`/v1/internal/voice/reason`) -> the gateway's existing TTS
+(`/v1/internal/voice/synthesize`), recording each turn through
+`/v1/internal/voice/turn-record`. The gateway stays the single owner of
+reasoning, hosted TTS, turn records, threads, incognito, and the tool loop, so a
+LiveKit turn is byte-identical to a WS turn. The production droplet cannot host
+the LiveKit SFU (1 vCPU, no UDP surface), so the spike runs on LiveKit Cloud or
+an external LiveKit server. A custom Chirp STT plugin is required because the
+Node agents Google plugin has Gemini LLM + beta Gemini TTS but no Chirp STT. The
+browser extension has an off-by-default "LiveKit voice (experimental)" setting
+that mints a token, publishes the mic with the pre-connect audio buffer, and
+maps `lk.agent.state` onto the mark states, falling back to the WS path on any
+error. The pre-connect buffer and `lk.agent.state` are the features being
+measured; live cutover is not decided. Contract:
+`reference/openspec/changes/livekit-voice-transport/proposal.md`.
+
 ### Record Mode (raw audio notes)
 
 ```text
