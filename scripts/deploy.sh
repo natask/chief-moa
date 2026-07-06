@@ -65,6 +65,10 @@ gateway_drifted() {
 
 deploy_gateway() {
   local force="${1:-}"
+  if [ -z "$REMOTE" ] || [ -z "$REMOTE_GW_DIR" ]; then
+    log "gateway: push target unset; use the CI verified vps-deploy path for VPS promotion"
+    return 75
+  fi
   # Hook-safe: when the main machine is unreachable (offline / ZeroTier down),
   # return a distinct status without marking the target deployed. BatchMode
   # avoids any password hang.
@@ -84,9 +88,15 @@ deploy_android() {
   log "android: building + syncing OTA artifact"
   # OTA hosting moved to the VPS gateway (api.agee.app); the main machine is
   # decommissioned. sync-vps.sh refuses to run without an explicit host.
-  ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
-    bash "$ROOT_DIR/android_app/deploy/ota/sync-vps.sh"
-  direct_install_android
+  if ! ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
+    bash "$ROOT_DIR/android_app/deploy/ota/sync-vps.sh"; then
+    log "android: OTA sync failed; not marking Android deployed"
+    return 1
+  fi
+  if ! direct_install_android; then
+    log "android: direct install failed; not marking Android deployed"
+    return 1
+  fi
   if curl -fsS "$GATEWAY_URL/health" >/dev/null 2>&1; then
     log "android: gateway health smoke passed at $GATEWAY_URL"
   else
