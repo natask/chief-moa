@@ -134,6 +134,24 @@ function isOperationalStatusQuestion(text) {
     || lower.includes("current status");
 }
 
+// The user plainly asked to dispatch agent work in free phrasing ("launch an
+// agent to...", "have an agent do...", "spawn agents for..."). This is the
+// authorization signal for the MODEL-DRIVEN launch tool: it deliberately stays
+// out of classifyVoiceTurn so these turns still reason as chat and the model
+// decides the prompt/harness, but the launch tool is unblocked because the
+// user's own words asked for an agent.
+function wantsAgentDispatch(text) {
+  const lower = normalizeSpeech(text);
+  if (!lower) return false;
+  if (/\b(launch|start|spawn|dispatch|deploy|send|use|have|get|run|kick off|fire off)\b[^.?!]{0,40}\bagents?\b/.test(lower)) {
+    return true;
+  }
+  if (/\bagents?\b[^.?!]{0,20}\b(to|that|which|do|handle|work on|research|figure out)\b/.test(lower)) {
+    return true;
+  }
+  return lower.includes("in the background") || lower.includes("background agent") || lower.includes("delegate");
+}
+
 // An explicit "run an agent" prefix. Returns the prompt after the prefix, or "".
 function explicitAgentPromptFrom(text) {
   const trimmed = String(text || "").trim();
@@ -837,6 +855,7 @@ module.exports = {
   normalizeSpeech,
   isStopLike,
   wantsMultipleAgents,
+  wantsAgentDispatch,
   hasOperationalWorkContext,
   isOperationalStatusQuestion,
   shouldRunAgentFromVoice,

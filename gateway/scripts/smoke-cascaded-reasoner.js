@@ -113,6 +113,7 @@ async function main() {
   await historyReachesTheModel();
   await modalityHintIsInjected();
   await modelToolCallUpdatesProfile();
+  await modelToolCallLaunchesAgentRun();
   await modelAndReasoningProviderRoute();
   await expressiveDirectiveAndParsing();
 
@@ -122,10 +123,72 @@ async function main() {
       "a prior voice turn's transcript reaches the cascaded reasoning model messages",
       "the reasoner injects a modality/TTS delivery hint (modality, availability, previous error)",
       "a model update_agent_profile tool call patches the profile through the sanitizer and the confirmation is spoken",
+      "a model launch_agent_run tool call starts a run in this session's work state, and the transcript gate blocks launches the user never asked for",
       "profile.model and profile.reasoning_provider route the next reasoning call to the selected provider/model",
       "on gemini-tts the reasoner prompts for expressive speech and splits style, tags, and clean display text",
     ],
   }, null, 2));
+}
+
+async function modelToolCallLaunchesAgentRun() {
+  // A transcript that plainly asks for agent work passes the transcript gate,
+  // and the model's launch_agent_run tool call queues a run bound to THIS
+  // session (conversation_id = session), which is what makes the run visible
+  // to later turns' session context and list_agent_runs.
+  pendingToolCall = { name: "launch_agent_run", arguments: { prompt: "Research the top three voice pipelines and summarize the tradeoffs.", harness: "echo" } };
+  fetchCalls.length = 0;
+  try {
+    await runCascadedVoiceReasoning({
+      transcript: "launch an agent to research the top three voice pipelines",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-agent-turn",
+    });
+    const openaiCalls = fetchCalls.filter((c) => c.kind === "openai");
+    assert.ok(openaiCalls.length >= 1, "the reasoner must call the model");
+    const offered = openaiCalls[0].body.tools.map((t) => t.function && t.function.name).filter(Boolean);
+    for (const name of ["launch_agent_run", "list_agent_runs", "cancel_agent_run"]) {
+      assert.ok(offered.includes(name), `${name} must be offered to the cascaded model (offered: ${offered.join(",")})`);
+    }
+    const runs = await requestJson("GET", "/v1/agent/runs");
+    const sessionRuns = (runs.json?.runs || []).filter((run) => run.conversation_id === SESSION_ID);
+    assert.ok(sessionRuns.length >= 1, `the launched run must be stored under this session (got ${JSON.stringify(runs.json).slice(0, 300)})`);
+
+    // The full loop: the echo run executes and reaches a terminal state, so the
+    // completion is visible to later turns in this session's work state.
+    const deadline = Date.now() + 15000;
+    let finished = null;
+    while (Date.now() < deadline && !finished) {
+      const poll = await requestJson("GET", "/v1/agent/runs");
+      finished = (poll.json?.runs || []).find((run) => run.conversation_id === SESSION_ID
+        && ["completed", "failed", "timed-out", "canceled"].includes(String(run.status)));
+      if (!finished) await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.ok(finished, "the launched echo run must reach a terminal state");
+    assert.equal(finished.status, "completed", `the echo run must complete (got ${finished && finished.status})`);
+    const detail = await requestJson("GET", `/v1/agent/runs/${finished.id}`);
+    const detailRun = detail.json?.run || detail.json || {};
+    assert.ok(String(detailRun.output || detailRun.stdout || "").includes("Routed intent"), `the run output must carry the agent result back to the session (got ${JSON.stringify(detailRun).slice(0, 300)})`);
+  } finally {
+    pendingToolCall = null;
+  }
+
+  // The gate: a transcript with no agent request must block the same tool call.
+  pendingToolCall = { name: "launch_agent_run", arguments: { prompt: "do something" } };
+  fetchCalls.length = 0;
+  try {
+    await runCascadedVoiceReasoning({
+      transcript: "what is the weather like today",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-agent-blocked-turn",
+    });
+    const runs = await requestJson("GET", "/v1/agent/runs");
+    const sessionRuns = (runs.json?.runs || []).filter((run) => run.conversation_id === SESSION_ID);
+    assert.equal(sessionRuns.length, 1, "a non-agent transcript must not launch a second run");
+  } finally {
+    pendingToolCall = null;
+  }
 }
 
 async function historyReachesTheModel() {
