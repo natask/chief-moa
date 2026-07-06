@@ -106,6 +106,11 @@ public final class OverlayService extends Service {
     private Runnable pendingAutoDismiss;
     private Runnable pendingContinuousVoiceRestart;
     private Runnable pendingStreamingTurnWatchdog;
+    // Shape of the current streaming turn, kept so a pre-commit failure can
+    // silently restart the same kind of turn exactly once.
+    private boolean streamingTurnAutoCommit;
+    private boolean streamingTurnContinuous;
+    private boolean streamingTurnRetried;
     private MoaVoiceController voiceController;
     private MoaStreamingVoiceSessionController streamingVoiceController;
     private MoaVoiceSamplePlayer voiceSamplePlayer;
@@ -1263,7 +1268,7 @@ public final class OverlayService extends Service {
             return;
         }
         if (gatewayUrl.isEmpty()) {
-            mainHandler.postDelayed(() -> deliverReply(replyFor(text), fromVoice), 240);
+            deliverReply("The gateway isn't connected yet. Open the Moa app to set it up.", fromVoice);
             return;
         }
 
@@ -1430,9 +1435,8 @@ public final class OverlayService extends Service {
             public void onError(String message, Throwable error) {
                 mainHandler.post(() -> {
                     voiceSamplePlayer = null;
-                    String failure = "Voice sampler failed: " + safe(message);
-                    addMessage(true, failure);
-                    updateVoiceAssistantTranscript(failure);
+                    Log.w(TAG, "voice sampler failed: " + safe(message));
+                    updateVoiceAssistantTranscript("The voice sampler failed. Try again.");
                     setVoiceRuntimeState(VoiceRuntimeState.ERROR);
                     holdVoiceReplyThenContinueOrDismiss();
                 });
@@ -1463,7 +1467,7 @@ public final class OverlayService extends Service {
         try {
             requestBody = gatewayRequestBody();
         } catch (JSONException error) {
-            deliverReply(replyFor(userText), fromVoice);
+            deliverReply("I couldn't send that. Try again.", fromVoice);
             return;
         }
 
@@ -1475,8 +1479,9 @@ public final class OverlayService extends Service {
                     deliverReply(reply.text, fromVoice);
                 });
             } catch (Exception error) {
-                String fallback = replyFor(userText) + "\n\nGateway unavailable: " + cleanError(error) + ".";
-                mainHandler.post(() -> deliverReply(fallback, fromVoice));
+                Log.w(TAG, "gateway chat failed: " + cleanError(error));
+                mainHandler.post(() -> deliverReply(
+                        "I can't reach the gateway right now. Check the connection and try again.", fromVoice));
             }
         }, "moa-gateway").start();
     }
@@ -1510,8 +1515,9 @@ public final class OverlayService extends Service {
                     deliverReply(MoaGatewayClient.agentRunReply(response), fromVoice, false);
                 });
             } catch (Exception error) {
-                String fallback = "Home-machine agent run failed: " + cleanError(error) + ".";
-                mainHandler.post(() -> deliverReply(fallback, fromVoice));
+                Log.w(TAG, "agent run failed: " + cleanError(error));
+                mainHandler.post(() -> deliverReply(
+                        "The agent run didn't start. Check the gateway connection and try again.", fromVoice));
             }
         }, "moa-agent-run").start();
     }
@@ -1545,8 +1551,9 @@ public final class OverlayService extends Service {
                     deliverReply(MoaGatewayClient.agentRunReply(response), fromVoice, false);
                 });
             } catch (Exception error) {
-                String fallback = "Agent follow-up failed: " + cleanError(error) + ".";
-                mainHandler.post(() -> deliverReply(fallback, fromVoice, false));
+                Log.w(TAG, "agent follow-up failed: " + cleanError(error));
+                mainHandler.post(() -> deliverReply(
+                        "That didn't reach the agent. Try again.", fromVoice, false));
             }
         }, "moa-agent-follow-up").start();
     }
@@ -1957,23 +1964,6 @@ public final class OverlayService extends Service {
             return value;
         }
         return value.substring(0, MAX_AGENT_PROMPT_CHARS);
-    }
-
-    private String replyFor(String prompt) {
-        String lower = prompt.toLowerCase(Locale.US);
-        if (lower.contains("overlay") || lower.contains("screen")) {
-            return "I am already running as an Android overlay. The circle stays over the current app, and the panel opens only when you summon it.";
-        }
-        if (lower.contains("voice") || lower.contains("mic") || lower.contains("talk")) {
-            return "Voice input streams through Gemini Live from the overlay. If an agent is active, the next spoken turn is sent to that agent thread.";
-        }
-        if (lower.contains("deploy") || lower.contains("apk") || lower.contains("install")) {
-            return "Build the debug APK with ./gradlew assembleDebug, then install it with adb install app/build/outputs/apk/debug/app-debug.apk.";
-        }
-        if (lower.contains("gemini") || lower.contains("replace")) {
-            return "The replacement shape is clear: one always-available A.G. circle, local overlay controls, voice capture, and your model gateway behind it.";
-        }
-        return "I heard you. The product loop is: capture the command fast, keep context from the current screen, answer in place, and stay out of the way.";
     }
 
     // TAP the orb = chat menu. Voice is reserved for double-click-and-hold, so
@@ -2470,6 +2460,9 @@ public final class OverlayService extends Service {
             streamingVoiceController.destroy();
         }
         continuousVoiceLoop = continuousLoop;
+        streamingTurnAutoCommit = autoCommitOnSilence;
+        streamingTurnContinuous = continuousLoop;
+        streamingTurnRetried = false;
         final int generation = ++streamingVoiceGeneration;
         currentStreamingTurnRouted = false;
         currentStreamingTurnCommitRequested = false;
@@ -2718,15 +2711,23 @@ public final class OverlayService extends Service {
                 }
                 cancelStreamingTurnWatchdog();
                 nextStreamingTurnFollowsActiveRun = false;
+                Log.w(TAG, "streaming voice error: " + safe(message), error);
                 if (isRecoverableStreamingVoiceError(message)) {
                     recoverStreamingVoiceTurn(generation);
                     return;
                 }
-                String failure = "Streaming voice failed: " + message;
-                addMessage(true, failure);
-                updateVoiceAssistantTranscript(failure);
-                // Keep the detailed banner visible but speak a short line so the
-                // failure is never silent (the full message may be a long URL).
+                // A failure before the user committed anything gets one silent
+                // reconnect instead of an error banner: nothing was lost yet.
+                if (!currentStreamingTurnCommitRequested
+                        && currentStreamingTranscript.isEmpty()
+                        && !streamingTurnRetried) {
+                    retryStreamingVoiceTurn();
+                    return;
+                }
+                // Raw socket/provider diagnostics stay in logcat. The transcript
+                // gets one short line, and errors never land in the chat history.
+                String notice = shortVoiceFailureNotice(message);
+                updateVoiceAssistantTranscript(notice);
                 speakOverlayNotice("The voice turn failed. Tap to try again.");
                 setVoiceRuntimeState(VoiceRuntimeState.ERROR);
                 continuousVoiceLoop = false;
@@ -2744,6 +2745,33 @@ public final class OverlayService extends Service {
         String normalized = safe(message).toLowerCase(Locale.US);
         return normalized.contains("gemini-live generation was interrupted")
                 || normalized.contains("failed to complete turn: gemini-live");
+    }
+
+    // One silent reconnect for a voice session that failed before the user
+    // committed anything. Restarts the same turn shape; the retry budget stays
+    // spent so a second failure surfaces normally.
+    private void retryStreamingVoiceTurn() {
+        Log.i(TAG, "silently retrying streaming voice session after pre-commit failure");
+        boolean autoCommit = streamingTurnAutoCommit;
+        boolean continuous = streamingTurnContinuous;
+        startStreamingVoiceTurn(autoCommit, continuous);
+        streamingTurnRetried = true;
+    }
+
+    // Raw socket diagnostics carry URLs and HTTP codes; those belong in logcat.
+    // The transcript gets one short line, actionable only when the failure is a
+    // setup problem the user can fix.
+    private String shortVoiceFailureNotice(String message) {
+        String normalized = safe(message).toLowerCase(Locale.US);
+        if (normalized.contains("token was rejected")) {
+            return "Voice can't connect: the gateway rejected this device's token. Re-pair in the Moa app.";
+        }
+        if (normalized.contains("url issue")
+                || normalized.contains("not deployed")
+                || normalized.contains("could not resolve")) {
+            return "Voice can't connect. Check the gateway URL in the Moa app.";
+        }
+        return "The voice turn failed. Tap to try again.";
     }
 
     private void recoverStreamingVoiceTurn(int generation) {
