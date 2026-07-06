@@ -7,6 +7,7 @@ import { gatewayUrlDiagnostic, getEffectiveGatewayConfig, seedGatewayConfig } fr
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
+import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
@@ -1688,6 +1689,35 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
     closeVoiceSession(id, reason, { revoked: true });
   }
   return tabIds;
+}
+
+// Voice-start mode switch. When the flag-gated "LiveKit voice (experimental)"
+// setting is ON, try the LiveKit transport first; on ANY failure show a visible
+// notice and fall back to the default WS path. When OFF (the default), this is a
+// straight passthrough to the WS path, so verify/smoke stay on the WS pipeline.
+async function startVoiceSessionWithMode(tabId, opts = {}) {
+  if (await isLivekitVoiceEnabled()) {
+    try {
+      const cfg = await getConfig();
+      const sessionId = await getStableSessionId();
+      const deviceId = await getStableDeviceId();
+      return await startLivekitVoiceSession({
+        tabId,
+        cueId: opts.cueId,
+        gatewayUrl: cfg.gatewayUrl,
+        gatewayToken: cfg.gatewayToken,
+        sessionId,
+        deviceId,
+      });
+    } catch (error) {
+      chrome.tabs.sendMessage(tabId, {
+        cmd: "livekitNotice",
+        cueId: opts.cueId || null,
+        text: `LiveKit voice unavailable, using standard voice (${String(error?.message || error)}).`,
+      }).catch(() => {});
+    }
+  }
+  return startVoiceSessionProxy(tabId, opts);
 }
 
 async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel } = {}) {
@@ -3379,7 +3409,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       cue_id: msg.cueId || null,
       status: "listening",
     });
-    startVoiceSessionProxy(tabId, {
+    startVoiceSessionWithMode(tabId, {
       cueId: msg.cueId,
       turnId: msg.turnId,
       assistantOverlap: msg.assistantOverlap === true,

@@ -2979,6 +2979,21 @@
           if (state) handleLiveVoiceMessage(state, msg);
         }
         return false;
+      case "livekitAgentState":
+        // Flag-gated LiveKit voice prototype: map the LiveKit agent-state
+        // participant attribute onto the existing mark states.
+        if (!root) build();
+        if (["idle", "listening", "thinking", "speaking"].includes(msg.state)) {
+          setAgentState(msg.state);
+        }
+        return false;
+      case "livekitNotice":
+        // Visible notice for the LiveKit path (e.g. fallback to WS voice).
+        if (!root) build();
+        if (msg.cueId) {
+          updateCue(msg.cueId, msg.text, "running");
+        }
+        return false;
     }
   });
 

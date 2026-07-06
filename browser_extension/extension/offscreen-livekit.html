@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>A.G. LiveKit voice (experimental)</title>
+  </head>
+  <body>
+    <!-- Flag-gated LiveKit voice prototype. This offscreen document owns the
+         WebRTC peer connection and extension-origin microphone capture for the
+         experimental LiveKit transport. It is created on demand only when the
+         "LiveKit voice (experimental)" setting is ON; the default WS voice path
+         uses offscreen.html instead. -->
+    <script type="module" src="offscreen-livekit.js"></script>
+  </body>
+</html>

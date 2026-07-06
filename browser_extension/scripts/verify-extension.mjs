@@ -12,6 +12,10 @@ const requiredFiles = [
   "extension/offscreen.html",
   "extension/offscreen.js",
   "extension/offscreen-audio-worklet.js",
+  "extension/livekit-voice.js",
+  "extension/offscreen-livekit.html",
+  "extension/offscreen-livekit.js",
+  "extension/vendor/livekit-client.esm.js",
   "extension/options.html",
   "extension/options.js",
   "extension/settings-intent.js",
@@ -595,6 +599,44 @@ if (!/msg\.type === "turn_progress"/.test(contentSource)) {
   throw new Error("content.js must tolerate and route the gateway turn_progress keepalive");
 }
 
+// ---- LiveKit voice prototype (flag-gated, OFF by default) -----------------
+// The experimental LiveKit transport must stay OFF by default so verify/smoke
+// exercise the WS path. Pin the default-OFF flag and the fallback-to-WS wiring.
+const livekitVoiceSource = readFileSync("extension/livekit-voice.js", "utf8");
+if (!/LIVEKIT_VOICE_FLAG_KEY\s*=\s*"ageeLivekitVoiceEnabled"/.test(livekitVoiceSource)) {
+  throw new Error("livekit-voice.js must define the ageeLivekitVoiceEnabled flag key");
+}
+if (
+  !/chrome\.storage\.local\.get\(\{\s*\[LIVEKIT_VOICE_FLAG_KEY\]:\s*false\s*\}\)/.test(livekitVoiceSource) ||
+  !/\[LIVEKIT_VOICE_FLAG_KEY\]\s*===\s*true/.test(livekitVoiceSource)
+) {
+  throw new Error("livekit-voice.js must read the experimental flag defaulting to false");
+}
+if (
+  !/isLivekitVoiceEnabled\(\)/.test(backgroundSource) ||
+  !/startLivekitVoiceSession\(/.test(backgroundSource) ||
+  !/if \(await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
+  !/return startVoiceSessionProxy\(tabId, opts\);/.test(backgroundSource)
+) {
+  throw new Error("background.js must gate LiveKit voice behind the flag and fall back to the WS startVoiceSessionProxy path");
+}
+if (!/id="livekitVoice"\s+type="checkbox"/.test(optionsHtmlSource)) {
+  throw new Error("options page must expose the LiveKit voice (experimental) checkbox");
+}
+if (
+  !/chrome\.storage\.local\.get\(\{\s*\[LIVEKIT_VOICE_FLAG_KEY\]:\s*false\s*\}\)/.test(optionsSource)
+) {
+  throw new Error("options.js must default the LiveKit voice flag to OFF");
+}
+const offscreenLivekitSource = readFileSync("extension/offscreen-livekit.js", "utf8");
+if (
+  !/from "\.\/vendor\/livekit-client\.esm\.js"/.test(offscreenLivekitSource) ||
+  !/preConnectBuffer:\s*true/.test(offscreenLivekitSource) ||
+  !/lk\.agent\.state/.test(offscreenLivekitSource)
+) {
+  throw new Error("offscreen-livekit.js must use the vendored livekit-client, publish with the pre-connect buffer, and read lk.agent.state");
+}
+
 if (!/parsed\?\.type === "turn_progress"/.test(backgroundSource)) {
   throw new Error("background.js must route the turn_progress keepalive to the content script like other voice-session events");
 }
@@ -756,6 +798,8 @@ for (const file of [
   "extension/content.js",
   "extension/offscreen.js",
   "extension/offscreen-audio-worklet.js",
+  "extension/livekit-voice.js",
+  "extension/offscreen-livekit.js",
   "extension/tweaks.js",
   "extension/options.js",
   "extension/settings-intent.js",

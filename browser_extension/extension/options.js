@@ -50,6 +50,25 @@ chrome.storage.local
     loadProfile();
   });
 
+// Experimental LiveKit voice flag (off by default). Stored in chrome.storage.local
+// and read by background.js at voice start; when off, browser voice stays on the
+// default WebSocket path.
+const LIVEKIT_VOICE_FLAG_KEY = "ageeLivekitVoiceEnabled";
+const livekitVoiceEl = document.getElementById("livekitVoice");
+const livekitVoiceStatusEl = document.getElementById("livekitVoiceStatus");
+if (livekitVoiceEl) {
+  chrome.storage.local.get({ [LIVEKIT_VOICE_FLAG_KEY]: false }).then((stored) => {
+    livekitVoiceEl.checked = stored[LIVEKIT_VOICE_FLAG_KEY] === true;
+  });
+  livekitVoiceEl.addEventListener("change", async () => {
+    await chrome.storage.local.set({ [LIVEKIT_VOICE_FLAG_KEY]: livekitVoiceEl.checked === true });
+    if (livekitVoiceStatusEl) {
+      livekitVoiceStatusEl.textContent = livekitVoiceEl.checked ? "On (experimental)" : "Off";
+      livekitVoiceStatusEl.style.color = "#777";
+    }
+  });
+}
+
 function flash(text, ok = true) {
   statusEl.textContent = text;
   statusEl.style.color = ok ? "#35a35a" : "#c0392b";
