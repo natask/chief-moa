@@ -8,6 +8,11 @@
     "dev": "node --env-file-if-exists=.env server.js",
     "check": "MOA_SKIP_SLOW=1 node --test \"test/**/*.test.js\"",
     "test": "node --test \"test/**/*.test.js\"",
+    "migrate": "node-pg-migrate up",
+    "migrate:up": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "migrate:redo": "node-pg-migrate redo",
+    "migrate:create": "node-pg-migrate create --migration-file-language js",
     "worker:runtime": "node scripts/worker-runtime.js",
     "smoke:worker-runtime": "node scripts/smoke-worker-runtime.js",
     "smoke:gateway": "node scripts/smoke-main-machine.js",
@@ -65,6 +70,7 @@
     "@executor-js/execution": "^1.5.28",
     "@executor-js/runtime-quickjs": "^1.5.28",
     "@executor-js/sdk": "^1.5.28",
+    "node-pg-migrate": "^7.9.1",
     "pg": "^8.22.0",
     "ws": "^8.21.0"
   }
