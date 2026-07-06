@@ -67,11 +67,16 @@ public final class OverlayService extends Service {
     private static final String NOT_SAVED_SUFFIX = "\n\n(not saved)";
     // Inactivity watchdog for a committed streaming turn. It is armed on commit
     // and RESET by every streaming event (partial/final transcript, assistant
-    // text, assistant audio start/done). If no event arrives for this long while
-    // a turn is in flight, the turn is torn down with a visible + spoken timeout
-    // notice so the user is never left in unexplained silence. It is suspended
-    // while assistant audio is actively playing and cleared on turn_done.
-    private static final long STREAMING_TURN_WATCHDOG_MS = 15000;
+    // text, assistant audio start + each audio frame, turn_progress keepalives).
+    // If no event arrives for this long while a turn is in flight, the turn is
+    // torn down with a visible + spoken timeout notice so the user is never left
+    // in unexplained silence. Cleared on turn_done.
+    //
+    // 30s is the no-keepalive fallback: the gateway's reasoning budget is ~45s,
+    // but it now emits turn_progress every ~5s during the reasoning and TTS legs,
+    // so a healthy long answer re-arms well within 30s. An old gateway (no
+    // keepalive) still gets a generous 30s before a false timeout.
+    private static final long STREAMING_TURN_WATCHDOG_MS = 30000;
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
     private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
@@ -1494,6 +1499,16 @@ public final class OverlayService extends Service {
         String speakText = response.optString("speak", "").trim();
         String text = display.isEmpty() ? response.optString("text", speakText).trim() : display;
         if (text.isEmpty()) {
+            // The gateway answered with no display, speak, or text. On the voice
+            // path the overlay was left in THINKING forever; reset it to READY
+            // with a visible notice instead of a silent hang.
+            if (fromVoice) {
+                String notice = "I didn't get a reply. Tap to try again.";
+                updateVoiceAssistantTranscript(notice);
+                setVoiceRuntimeState(VoiceRuntimeState.READY);
+                updateMicState();
+                holdVoiceReplyThenContinueOrDismiss();
+            }
             return;
         }
         // An incognito voice turn is answered but never stored; mark the visible
@@ -2894,9 +2909,11 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                // Audio is actively playing: suspend the inactivity watchdog so a
-                // long reply is not mistaken for a stall.
-                cancelStreamingTurnWatchdog();
+                // Audio started: re-arm (do NOT cancel) the watchdog. Each audio
+                // frame re-arms it again, so a mid-stream stall surfaces the
+                // visible timeout in ~30s instead of hanging on the gateway's own
+                // 60s backstop.
+                resetStreamingTurnWatchdog();
                 currentStreamingTurnAudioReceived = true;
                 if (currentStreamingTurnRouted) {
                     return;
@@ -2904,6 +2921,30 @@ public final class OverlayService extends Service {
                 streamingAssistantAudioPlaying = true;
                 setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
                 updateMicState();
+            }
+
+            @Override
+            public void onAssistantAudioChunk(String turnId) {
+                if (!isCurrentStreamingGeneration(generation)) {
+                    return;
+                }
+                // Keep the watchdog pushed out while audio keeps flowing; the gap
+                // between frames is ~40ms, so 30s of silence is a genuine stall.
+                // Guarded on active playback so a stray late frame never re-arms a
+                // watchdog after the turn has already finished.
+                if (streamingAssistantAudioPlaying) {
+                    resetStreamingTurnWatchdog();
+                }
+            }
+
+            @Override
+            public void onTurnProgress(String turnId) {
+                if (!isCurrentStreamingGeneration(generation)) {
+                    return;
+                }
+                // Gateway keepalive during a long reasoning / TTS leg: re-arm the
+                // watchdog and promote the visible state past "sending".
+                markStreamingTurnProgressing();
             }
 
             @Override

@@ -45,7 +45,15 @@ final class MoaStreamingVoiceSessionController {
 
         void onAssistantAudioStarted(String turnId);
 
+        // A single assistant audio frame arrived. Lets the client re-arm its
+        // inactivity watchdog so a mid-stream audio stall is caught, not held
+        // open until the gateway's own backstop.
+        void onAssistantAudioChunk(String turnId);
+
         void onAssistantAudioDone(String turnId);
+
+        // Keepalive during a long reasoning / TTS leg. Re-arms the watchdog.
+        void onTurnProgress(String turnId);
 
         void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
 
@@ -761,12 +769,16 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onAssistantAudio(byte[] pcm) {
             MoaAudioPlaybackController playback;
+            String currentTurnId;
             synchronized (lock) {
                 playback = playbackController;
+                currentTurnId = turnId;
             }
             if (playbackEnabled && playback != null && !playback.write(pcm)) {
                 reportError("Could not write assistant audio frame to playback.", null);
             }
+            // Prove liveness on every frame so a mid-stream stall is caught.
+            post(() -> callback.onAssistantAudioChunk(currentTurnId));
         }
 
         @Override
@@ -787,6 +799,11 @@ final class MoaStreamingVoiceSessionController {
                 }
             }, 800);
             post(() -> callback.onAssistantAudioDone(audioTurnId));
+        }
+
+        @Override
+        public void onTurnProgress(String progressTurnId) {
+            post(() -> callback.onTurnProgress(progressTurnId));
         }
 
         @Override

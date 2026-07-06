@@ -51,6 +51,11 @@ final class MoaVoiceGatewaySocket {
 
         void onAssistantAudioDone(String turnId);
 
+        // Keepalive emitted every ~5s while the gateway reasons or synthesizes
+        // speech. Carries no content; it only proves the turn is still alive so
+        // the client can re-arm its inactivity watchdog during a long answer.
+        void onTurnProgress(String turnId);
+
         void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
 
         void onGatewayError(String message);
@@ -268,6 +273,11 @@ final class MoaVoiceGatewaySocket {
                 }
                 if (callback != null) {
                     callback.onAssistantAudioDone(event.optString("turn_id", ""));
+                }
+                break;
+            case "turn_progress":
+                if (callback != null) {
+                    callback.onTurnProgress(event.optString("turn_id", ""));
                 }
                 break;
             case "turn_done":
