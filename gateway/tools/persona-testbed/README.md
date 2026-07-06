@@ -40,10 +40,18 @@ Keys never go in git. Two places, both gitignored:
 
 - Local machine: `.env` in this directory (copy `.env.example`), run with
   `node --env-file=.env run.mjs`.
-- Droplet (api.agee.app): add keys to the droplet's `gateway.env`
-  (`$MOA_ROOT/gateway.env`, outside the repo checkout, so deploys never touch
-  it), then run `node --env-file=/path/to/gateway.env run.mjs`. Or keep a
-  separate `.env` next to this script on the droplet.
+- Droplet (api.agee.app): add keys to `/opt/chief-moa/gateway.env` (outside
+  the repo checkout, so deploys never touch it). The droplet host has no
+  node, so run the testbed in a throwaway container from the gateway image:
+
+  ```sh
+  docker run --rm --env-file /opt/chief-moa/gateway.env \
+    -v /opt/chief-moa/app/gateway/tools/persona-testbed:/tb -w /tb \
+    chief-moa-gateway:local node run.mjs
+  ```
+
+  This never touches the running gateway container. Results print to stdout
+  (the container's copy of the results file is discarded with the container).
 
 ## Where the keys come from
 

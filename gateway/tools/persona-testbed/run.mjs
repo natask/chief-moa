@@ -22,6 +22,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const here = path.dirname(new URL(import.meta.url).pathname);
@@ -268,6 +269,16 @@ for (const name of requested) {
   }
 }
 
-const outFile = path.join(here, `results-${new Date().toISOString().replace(/[:.]/g, "-")}.md`);
-fs.writeFileSync(outFile, lines.join("\n") + "\n");
-console.log(`\nwrote ${outFile}`);
+// Save the transcript next to the script; fall back to the OS tmpdir when the
+// script dir is not writable (e.g. a read-only bind mount in a container).
+const resultsName = `results-${new Date().toISOString().replace(/[:.]/g, "-")}.md`;
+for (const dir of [here, os.tmpdir()]) {
+  try {
+    const outFile = path.join(dir, resultsName);
+    fs.writeFileSync(outFile, lines.join("\n") + "\n");
+    console.log(`\nwrote ${outFile}`);
+    break;
+  } catch {
+    // try the next location; the transcript was already printed to stdout
+  }
+}
