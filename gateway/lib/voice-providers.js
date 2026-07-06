@@ -817,6 +817,16 @@ class ChirpSttVoiceProvider {
       this.tokenCache = token;
       return token.value;
     }
+    // The gateway container has no gcloud binary, and the mounted ADC file may
+    // be an authorized_user credential rather than a service_account key.
+    // Exchange either shape directly against oauth2.googleapis.com, the same
+    // way the Vertex Live provider does; gcloud stays as the host fallback.
+    const credentialFile = this.serviceAccountKeyFile || googleCredentialFile(this.env);
+    if (credentialFile && fs.existsSync(credentialFile)) {
+      const token = await adcAccessToken(credentialFile);
+      this.tokenCache = token;
+      return token.value;
+    }
     try {
       return execFileSync(this.gcloudBin, ["auth", "application-default", "print-access-token"], {
         encoding: "utf8",
