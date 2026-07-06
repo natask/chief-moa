@@ -908,6 +908,27 @@ public final class OverlayService extends Service {
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
         voiceRuntimeState = state == null ? VoiceRuntimeState.READY : state;
         updateVoiceHeaderState();
+        // Single choke point for the orb's response state so the lion visibly
+        // reflects thinking / responding / error without touching other call
+        // sites. The watchdog + error paths become visible here for free.
+        if (orbView != null) {
+            orbView.setResponseState(orbResponseStateFor(voiceRuntimeState));
+        }
+    }
+
+    private OrbView.ResponseState orbResponseStateFor(VoiceRuntimeState state) {
+        switch (state) {
+            case SENDING:
+            case THINKING:
+                return OrbView.ResponseState.THINKING;
+            case SPEAKING:
+                return OrbView.ResponseState.RESPONDING;
+            case ERROR:
+            case RECOVERING:
+                return OrbView.ResponseState.ERROR;
+            default:
+                return OrbView.ResponseState.NONE;
+        }
     }
 
     private void updateVoiceHeaderState() {
@@ -2900,7 +2921,11 @@ public final class OverlayService extends Service {
                     return;
                 }
                 if (!safe(text).isEmpty()) {
+                    // Streamed assistant text is the reply arriving: show the agent
+                    // responding on the orb even for a text-only turn (no audio),
+                    // rather than leaving it stuck on THINKING.
                     updateVoiceAssistantTranscript(text);
+                    setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
                 }
             }
 
