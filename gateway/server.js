@@ -22,6 +22,11 @@ const { createCompanionCatalogStore } = require("./lib/companion-catalog");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createBrain } = require("./lib/brain");
+const { createThreadStore, isIncognitoBranch, newBranchId } = require("./lib/thread-store");
+const {
+  resolveContextDecision,
+  buildContextManagementToolDef,
+} = require("./lib/context-decision");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
 const { createEventSubstrateStore } = require("./lib/event-substrate");
@@ -151,6 +156,11 @@ const ROUTER_DEFAULT_HARNESS = process.env.ROUTER_DEFAULT_HARNESS || "echo";
 // best-effort; these only bound cost, never correctness.
 const BRAIN_RECALL_LIMIT = Number(process.env.BRAIN_RECALL_LIMIT || 5);
 const BRAIN_CONTEXT_MAX_CHARS = Number(process.env.BRAIN_CONTEXT_MAX_CHARS || 1200);
+// The bounded semantic-recall block: brain.recall over rolling thread summaries
+// and intent memories, injected per query alongside standing facts + recency.
+const THREAD_RECALL_MAX_CHARS = Number(process.env.THREAD_RECALL_MAX_CHARS || 1200);
+// Regenerate a thread's rolling summary every Nth persisted turn on the branch.
+const THREAD_SUMMARY_EVERY_TURNS = Math.max(1, Number(process.env.THREAD_SUMMARY_EVERY_TURNS || 6));
 const SESSION_CONTEXT_MAX_CHARS = Number(process.env.SESSION_CONTEXT_MAX_CHARS || 5000);
 // How many prior turns to pack into the context window when building model
 // messages. The env var caps the global default; individual requests can pass
@@ -229,6 +239,12 @@ const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_
 // it always knows the user, and writes memory-worthy statements + what tasks
 // accomplished back to it. Memory ONLY -- it is not the operational store.
 const brain = createBrain({ recallLimit: BRAIN_RECALL_LIMIT });
+// Thread store: durable per-session branch metadata, the active-thread pointer,
+// and rolling per-thread summaries. Threads are branches inside the one shared
+// session; this layer adds the lifecycle (new/fork/incognito), labels, fork
+// lineage, and cross-device active-thread resolution the turn ledgers do not
+// carry.
+const threadStore = createThreadStore({ dataDir: DATA_DIR });
 const workGraph = createWorkGraphStore({
   dataDir: DATA_DIR,
   databaseUrl: process.env.DATABASE_URL,
@@ -1190,6 +1206,52 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    // Thread control plane. A thread is a branch inside the one shared session.
+    // GET /v1/threads lists every branch (chat + voice + browser) with its
+    // lifecycle metadata and rolling summary. POST /v1/threads/switch records
+    // the active thread so every device resolves the same one, and GET
+    // /v1/threads/active returns it. Backward-compatible: callers that never
+    // touch these keep continuing on their caller-provided or default branch.
+    if (request.method === "GET" && url.pathname === "/v1/threads") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const sessionId = url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || defaultSessionId();
+      sendJson(response, 200, threadListPayload(sessionId, Number(url.searchParams.get("limit") || 50)));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/threads/active") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const sessionId = sanitizeOptionalId(url.searchParams.get("session_id") || url.searchParams.get("conversation_id"), defaultSessionId());
+      const surface = String(url.searchParams.get("surface") || "").slice(0, 60);
+      const active = threadStore.getActive(sessionId, surface);
+      const meta = threadStore.getThread(sessionId, active.branch_id);
+      sendJson(response, 200, {
+        session_id: sessionId,
+        surface,
+        active: {
+          ...active,
+          kind: meta?.kind || (active.branch_id === "default" ? "default" : "new"),
+          label: meta?.label || (active.branch_id === "default" ? "Main thread" : active.branch_id),
+        },
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/threads/switch") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleThreadSwitch(request, response);
+      return;
+    }
+
     if (
       request.method === "GET" &&
       url.pathname.startsWith("/v1/sessions/") &&
@@ -1477,6 +1539,7 @@ module.exports = {
   // Exported for in-process smoke tests that drive the cascaded reasoner and its
   // model-tool loop directly. Not part of the runtime HTTP surface.
   runCascadedVoiceReasoning,
+  recordStreamingVoiceTurn,
   agentProfile,
 };
 
@@ -1847,7 +1910,12 @@ async function handleChat(request, response) {
   const canonicalSessionId = defaultSessionId();
   const conversationId = sanitizeId(body.conversation_id || canonicalSessionId);
   const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id || conversationId, canonicalSessionId);
-  const branchId = sanitizeOptionalId(body.branch_id, "default");
+  const surface = String(body.source || "unknown").slice(0, 60);
+  // The caller branch: an explicit branch_id, else the session's active thread
+  // (so a prior /v1/threads/switch takes effect cross-device), else default.
+  const callerBranchId = body.branch_id
+    ? sanitizeOptionalId(body.branch_id, "default")
+    : sanitizeOptionalId(threadStore.getActive(sessionId, surface).branch_id, "default");
   const turnId = sanitizeOptionalId(body.turn_id, randomId("chat"));
   const deviceId = profileDeviceIdFromBody(body);
   const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
@@ -1865,18 +1933,54 @@ async function handleChat(request, response) {
   // alongside the system prompt + screen context so the model always knows the
   // user.
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
-  const memoryContext = recallMemoryContext(lastUser?.content || "");
+  const userText = lastUser?.content || "";
+  const memoryContext = recallMemoryContext(userText);
+  // Fork-point inheritance: continuing on a fork branch reads the parent's
+  // history up to the fork point plus the fork's own turns.
+  const callerThread = threadStore.getThread(sessionId, callerBranchId);
+  const inheritFrom = callerThread?.kind === "fork" && callerThread.parent_branch_id && callerThread.fork_point
+    ? { branchId: callerThread.parent_branch_id, uptoCreatedAt: callerThread.fork_point.created_at }
+    : null;
   const sessionContext = durableSessionContextBlock({
     sessionId,
-    branchId,
+    branchId: callerBranchId,
     excludeTurnId: turnId,
     allBranches: body.all_branches_context === true,
+    inheritFrom,
   });
-  const systemBlocks = [memoryContext, sessionContext, screenContext].filter(Boolean);
+  // Per-query semantic recall over rolling thread summaries + intent memories,
+  // deduped against the recency block. retrieval_query is produced by the tool
+  // during the answer, so at read time the raw user text is the recall query.
+  const recallContext = threadRecallContext(userText, sessionContext);
+  const systemBlocks = [memoryContext, sessionContext, recallContext, screenContext].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
-  const text = localUtilityReply(lastUser?.content || "") || await callModelOrFallback(modelMessages, profile);
+
+  // Context management: the model may call context_management to decide where
+  // this turn belongs (continue/new/fork/incognito) while it answers. A local
+  // utility reply short-circuits the model, so no tool is offered and the
+  // deterministic prior stands.
+  const contextCapture = {};
+  let text;
+  const utilityReply = localUtilityReply(userText);
+  if (utilityReply) {
+    text = utilityReply;
+  } else {
+    const toolTurn = await callModelToolLoop(modelMessages, profile, [buildContextManagementToolDef(contextCapture)]);
+    text = String(toolTurn.text || "");
+  }
+  const decision = resolveContextDecision({
+    text: userText,
+    contextAction: body.context_action,
+    toolCall: contextCapture.called ? contextCapture : null,
+  });
+  if (!decision.thread_label && body.thread_label) {
+    decision.thread_label = String(body.thread_label).slice(0, 120);
+  }
+  const thread = resolveTurnFilingThread({ sessionId, callerBranchId, decision, surface, deviceId });
+  const branchId = thread.branch_id;
+
   const savedMessages = messages.concat([{ role: "assistant", content: text }]);
   const saved = {
     id: conversationId,
@@ -1892,42 +1996,55 @@ async function handleChat(request, response) {
     messages: savedMessages,
   };
 
-  fs.writeFileSync(conversationPath(conversationId), JSON.stringify(saved, null, 2));
-  const ledgerEntry = {
-    ts: saved.updated_at,
-    conversation_id: conversationId,
-    session_id: sessionId,
-    branch_id: branchId,
-    turn_id: turnId,
-    source: saved.source,
-    device_id: deviceId,
-    model: profile.model,
-    profile_version: profileVersion,
-    user_text: lastUser?.content || "",
-    request_messages: modelMessages,
-    screen: saved.screen,
-    response_text: text,
-  };
-  fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify(ledgerEntry) + "\n");
-  // Per-session record for fast, O(1) session-scoped reads. Parallel to how
-  // voice turns are stored under voice-turns/<session_id>/<turn_id>.json.
-  writeChatTurnRecord({
-    turn_id: turnId,
-    conversation_id: conversationId,
-    session_id: sessionId,
-    branch_id: branchId,
-    source: saved.source,
-    device_id: deviceId,
-    model: profile.model,
-    profile_version: profileVersion,
-    created_at: saved.updated_at,
-    updated_at: saved.updated_at,
-    user_text: lastUser?.content || "",
-    screen: saved.screen,
-    request_messages: modelMessages,
-    response_text: text,
-  });
-  await recordChatTurnProductEvent(saved, lastUser?.content || "", text);
+  // Incognito turns are answered but never persisted: no conversation file, no
+  // ledger line, no per-session record, no product-event mirror, no gbrain write.
+  if (thread.persisted) {
+    fs.writeFileSync(conversationPath(conversationId), JSON.stringify(saved, null, 2));
+    const ledgerEntry = {
+      ts: saved.updated_at,
+      conversation_id: conversationId,
+      session_id: sessionId,
+      branch_id: branchId,
+      turn_id: turnId,
+      source: saved.source,
+      device_id: deviceId,
+      model: profile.model,
+      profile_version: profileVersion,
+      user_text: userText,
+      request_messages: modelMessages,
+      screen: saved.screen,
+      response_text: text,
+    };
+    fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify(ledgerEntry) + "\n");
+    // Per-session record for fast, O(1) session-scoped reads. Parallel to how
+    // voice turns are stored under voice-turns/<session_id>/<turn_id>.json.
+    writeChatTurnRecord({
+      turn_id: turnId,
+      conversation_id: conversationId,
+      session_id: sessionId,
+      branch_id: branchId,
+      source: saved.source,
+      device_id: deviceId,
+      model: profile.model,
+      profile_version: profileVersion,
+      created_at: saved.updated_at,
+      updated_at: saved.updated_at,
+      user_text: userText,
+      screen: saved.screen,
+      request_messages: modelMessages,
+      response_text: text,
+    });
+    await recordChatTurnProductEvent(saved, userText, text);
+    threadStore.touchThread(sessionId, branchId);
+    recordContextDecisionProductEventBestEffort({ sessionId, thread, turnId, decision, surface, deviceId });
+    // Rolling summary upkeep (async, never adds latency): refresh this branch on
+    // the cadence boundary, and summarize the branch the user just moved off of
+    // when this turn started a new or forked thread.
+    maybeScheduleThreadSummaryAfterTurn(sessionId, branchId);
+    if ((decision.action === "new" || decision.action === "fork") && callerBranchId !== branchId) {
+      scheduleThreadSummary(sessionId, callerBranchId, decision.action);
+    }
+  }
 
   sendJson(response, 200, {
     conversation_id: conversationId,
@@ -1936,6 +2053,7 @@ async function handleChat(request, response) {
     turn_id: turnId,
     profile_version: profileVersion,
     text,
+    context: contextResponseBlock(thread, decision),
   });
 }
 
@@ -2039,6 +2157,9 @@ async function recordBrokerProductEvent(event) {
 }
 
 async function recordVoiceTurnAcceptedProductEvent(record) {
+  if (isIncognitoBranch(record?.branch_id)) {
+    return;
+  }
   await recordProductEvent({
     event_type: "voice.turn.accepted",
     stream_id: productSessionStreamId(record.session_id),
@@ -2121,8 +2242,15 @@ async function recordVoiceProviderEventsProductEvent(record) {
 }
 
 async function writeCompletedVoiceTurnRecord(record) {
+  // Incognito turns are answered but never persisted: no turn file, no ledger
+  // line, no product-event mirror.
+  if (isIncognitoBranch(record?.branch_id)) {
+    return;
+  }
   writeVoiceTurnRecord(record);
   await recordVoiceTurnCompletedProductEvent(record);
+  // Rolling summary upkeep for the voice paths (async, never adds latency).
+  maybeScheduleThreadSummaryAfterTurn(record.session_id, record.branch_id);
 }
 
 async function handleBrowserTurn(request, response) {
@@ -3291,7 +3419,9 @@ function brokerRouteDecisions(event, body = {}) {
   const explicitProjectId = event.project_id;
   const explicitRunId = body.agent_run_id ? sanitizeOptionalId(body.agent_run_id, "") : "";
 
-  const sessions = sessionSummaryPayload(50).sessions;
+  // Voice-only source keeps the broker's continuation routing stable; the merged
+  // chat/browser summaries are a read model for /v1/sessions and /v1/threads.
+  const sessions = sessionSummaryPayload(50, { sources: ["voice"] }).sessions;
   for (const session of sessions) {
     const score = explicitSessionId && session.session_id === explicitSessionId
       ? 0.98
@@ -5619,6 +5749,27 @@ async function handleVoiceTurn(request, response) {
   }
 
   const source = String(body.source || body.client?.source || "android-overlay").slice(0, 80);
+  // Context decision. This HTTP path is tool-less, so the decision is
+  // deterministic: an explicit client context_action or an incognito warrant may
+  // move or skip the thread; phrasing-only new/fork stays continue so a spoken
+  // "let's start" does not fragment the phone conversation. The caller branch
+  // still drives enrichment; only the FILING branch changes (incognito rides an
+  // ephemeral inc- branch that is never persisted).
+  const voiceDecision = resolveContextDecision({ text: transcript, contextAction: body.context_action, toolCall: null });
+  let voiceEffectiveAction = voiceDecision.action;
+  if (voiceEffectiveAction !== "incognito" && voiceDecision.prior_source !== "client") {
+    voiceEffectiveAction = "continue";
+  }
+  const voiceThread = resolveTurnFilingThread({
+    sessionId,
+    callerBranchId: branchId,
+    decision: { ...voiceDecision, action: voiceEffectiveAction },
+    surface: source,
+    deviceId,
+  });
+  const filingBranchId = voiceThread.branch_id;
+  const incognitoTurn = voiceThread.persisted === false;
+  const voiceContextBlock = contextResponseBlock(voiceThread, { ...voiceDecision, action: voiceEffectiveAction });
   const screen = summarizeScreen(body.screen || body.context?.screen);
   const profileVersion = agentProfile.currentVersion(profileOptions);
   const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
@@ -5643,14 +5794,18 @@ async function handleVoiceTurn(request, response) {
   // Capture memory-worthy statements ("call me Bob", "talk to me like a baller")
   // to the Brain deterministically, before we branch on classification, so a
   // fact lands even when the turn is a control/agent turn that never hits the
-  // model. Best-effort; never blocks the turn.
-  captureMemoryFromTurn(transcript, source);
+  // model. Best-effort; never blocks the turn. Incognito turns write no memory.
+  if (!incognitoTurn) {
+    captureMemoryFromTurn(transcript, source);
+  }
   const startedAt = new Date().toISOString();
   const baseRecord = {
     id: turnId,
     session_id: sessionId,
     conversation_id: conversationId,
-    branch_id: branchId,
+    // The filing branch: an incognito turn rides an ephemeral inc- branch so the
+    // voice write guards skip persisting it entirely.
+    branch_id: filingBranchId,
     profile_version: profileVersion,
     profile_overrides: body.profile_overrides && typeof body.profile_overrides === "object"
       ? Object.keys(body.profile_overrides)
@@ -5857,37 +6012,45 @@ async function handleVoiceTurn(request, response) {
     const turnActions = pageTweakAction ? [pageTweakAction] : [];
     const savedMessages = messages.concat([{ role: "assistant", content: text }]);
     const now = new Date().toISOString();
-    fs.writeFileSync(conversationPath(conversationId), JSON.stringify({
-      id: conversationId,
-      session_id: sessionId,
-      branch_id: branchId,
-      source,
-      model: profile.model,
-      profile_version: profileVersion,
-      updated_at: now,
-      screen,
-      messages: savedMessages,
-    }, null, 2));
-    fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify({
-      ts: now,
-      conversation_id: conversationId,
-      session_id: sessionId,
-      branch_id: branchId,
-      source,
-      model: profile.model,
-      profile_version: profileVersion,
-      request_messages: modelMessages,
-      screen,
-      response_text: text,
-      voice_turn_id: turnId,
-    }) + "\n");
+    // Incognito turns are answered but never persisted: skip the conversation
+    // file and the ledger append (the voice turn record + product events are
+    // already skipped by the write guards on the inc- branch).
+    if (!incognitoTurn) {
+      fs.writeFileSync(conversationPath(conversationId), JSON.stringify({
+        id: conversationId,
+        session_id: sessionId,
+        branch_id: filingBranchId,
+        source,
+        model: profile.model,
+        profile_version: profileVersion,
+        updated_at: now,
+        screen,
+        messages: savedMessages,
+      }, null, 2));
+      fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify({
+        ts: now,
+        conversation_id: conversationId,
+        session_id: sessionId,
+        branch_id: filingBranchId,
+        source,
+        model: profile.model,
+        profile_version: profileVersion,
+        request_messages: modelMessages,
+        screen,
+        response_text: text,
+        voice_turn_id: turnId,
+      }) + "\n");
+    }
 
-    const payload = voiceTurnPayload(baseRecord, {
-      speak,
-      display: text,
-      actions: turnActions,
-      follow_up_expected: false,
-    });
+    const payload = {
+      ...voiceTurnPayload(baseRecord, {
+        speak,
+        display: text,
+        actions: turnActions,
+        follow_up_expected: false,
+      }),
+      context: voiceContextBlock,
+    };
     await writeCompletedVoiceTurnRecord({
       ...baseRecord,
       updated_at: now,
@@ -8690,6 +8853,10 @@ function handleVoiceTurnGet(response, turnId, sessionId) {
 }
 
 function writeVoiceTurnRecord(record) {
+  // Incognito branch: never write a turn file or append to the ledger.
+  if (isIncognitoBranch(record?.branch_id)) {
+    return;
+  }
   const dir = path.join(VOICE_TURNS_DIR, sanitizeOptionalId(record.session_id, "default"));
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `${sanitizeOptionalId(record.id, randomId("turn"))}.json`);
@@ -8751,18 +8918,27 @@ async function runCascadedVoiceReasoningInner(input) {
   // inject recent turns; the cascaded reasoner did not, so a spoken turn had no
   // memory of what was just said. The ids arrive threaded through the streaming
   // provider's reasoner call.
+  const reasonSessionId = input?.session_id || input?.conversation_id || "";
+  const reasonBranchId = input?.branch_id || "default";
+  const reasonThread = reasonSessionId ? threadStore.getThread(reasonSessionId, reasonBranchId) : null;
+  const reasonInheritFrom = reasonThread?.kind === "fork" && reasonThread.parent_branch_id && reasonThread.fork_point
+    ? { branchId: reasonThread.parent_branch_id, uptoCreatedAt: reasonThread.fork_point.created_at }
+    : null;
   const sessionContext = durableSessionContextBlock({
-    sessionId: input?.session_id || input?.conversation_id || "",
-    branchId: input?.branch_id || "default",
+    sessionId: reasonSessionId,
+    branchId: reasonBranchId,
     excludeTurnId: input?.turn_id || "",
     allBranches: input?.all_branches_context === true || input?.allBranchesContext === true,
+    inheritFrom: reasonInheritFrom,
   });
   const memoryContext = recallMemoryContext(transcript);
+  // Per-query semantic recall over rolling thread summaries + intent memories.
+  const recallContext = threadRecallContext(transcript, sessionContext);
   const languageDirective = replyLanguageDirective(profile);
   const modalityHint = voiceModalityHintBlock(profile, input);
   const expressiveDirective = voiceExpressiveDirective(input);
   const messages = [{ role: "user", content: transcript }];
-  const systemBlocks = [memoryContext, sessionContext, modalityHint, expressiveDirective, languageDirective].filter(Boolean);
+  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, languageDirective].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -8782,8 +8958,20 @@ async function runCascadedVoiceReasoningInner(input) {
     source: input?.source || "voice-cascaded",
     transcript,
   };
-  const toolTurn = await callModelToolLoop(modelMessages, profile, cascadedVoiceProfileTools(toolCall));
+  // Offer the context_management tool alongside the profile tools so the model
+  // can decide where this spoken turn belongs (continue/new/fork/incognito) as it
+  // answers. The decision is stashed for the streaming recorder (which persists
+  // the turn in a later call) and returned in the result for surfacing.
+  const contextCapture = {};
+  const toolDefs = cascadedVoiceProfileTools(toolCall).concat([buildContextManagementToolDef(contextCapture)]);
+  const toolTurn = await callModelToolLoop(modelMessages, profile, toolDefs);
   const text = String(toolTurn.text || "");
+  const contextDecision = resolveContextDecision({
+    text: transcript,
+    contextAction: input?.context_action,
+    toolCall: contextCapture.called ? contextCapture : null,
+  });
+  stashContextDecision(input?.session_id || input?.conversation_id || "", input?.turn_id || "", contextDecision);
   // Re-read the profile: a tool may have changed voice_max_chars this turn.
   const effectiveAfter = agentProfile.effective(profileOptions);
   // Split expressive direction out of the reply: the DISPLAY/stored transcript
@@ -8804,6 +8992,10 @@ async function runCascadedVoiceReasoningInner(input) {
     language: replyLanguage,
     model: effectiveAfter.model || MODEL_ID,
     classification: "chat",
+    context: contextResponseBlock(
+      { branch_id: input?.branch_id || "default", persisted: contextDecision.action !== "incognito", label: contextDecision.thread_label },
+      contextDecision
+    ),
   };
 }
 
@@ -8898,11 +9090,21 @@ function replyLanguageDirective(profile) {
 async function recordStreamingVoiceTurn(turn) {
   const sessionId = sanitizeOptionalId(turn.session_id || turn.conversation_id, "default");
   const conversationId = sanitizeOptionalId(turn.conversation_id || sessionId, sessionId);
-  const branchId = sanitizeOptionalId(turn.branch_id, "default");
+  const callerBranchId = sanitizeOptionalId(turn.branch_id, "default");
   const turnId = sanitizeOptionalId(turn.turn_id, randomId("turn"));
   const existing = readVoiceTurnRecord(sessionId, turnId);
   if (existing?.response) {
     return existing;
+  }
+
+  // Incognito: the cascaded reasoner stashed this turn's context decision; fall
+  // back to the branch prefix. An incognito streaming turn is answered but never
+  // persisted, and its buffered PCM archive is deleted so nothing survives.
+  const stashedDecision = takeContextDecision(sessionId, turnId);
+  const incognito = stashedDecision ? stashedDecision.action === "incognito" : isIncognitoBranch(callerBranchId);
+  const branchId = incognito && !isIncognitoBranch(callerBranchId) ? newBranchId("incognito") : callerBranchId;
+  if (incognito) {
+    deleteVoiceTurnPcm(sessionId, turnId);
   }
 
   const transcript = truncate(String(turn.transcript || ""), 16000);
@@ -8912,7 +9114,10 @@ async function recordStreamingVoiceTurn(turn) {
   // Capture memory-worthy statements ("my name is X", "remember that …") from
   // live voice transcripts the same way the HTTP voice-turn handler does, so
   // identity and preference facts are stored regardless of the voice path used.
-  captureMemoryFromTurn(transcript, turn.source || "voice-live");
+  // Incognito turns write no memory.
+  if (!incognito) {
+    captureMemoryFromTurn(transcript, turn.source || "voice-live");
+  }
   const profileVersion = sanitizeOptionalId(turn.profile_version || agentProfile.currentVersion(), agentProfile.currentVersion());
   const now = turn.completed_at || new Date().toISOString();
   // An interrupted/canceled/closed live turn is still durable conversation
@@ -9404,6 +9609,21 @@ function voiceTurnAudioPath(sessionId, turnId, kind) {
   return path.join(DATA_DIR, "voice-sessions", safeSessionId, `${safeTurnId}${suffix}`);
 }
 
+// Delete both PCM archives for a turn. Used for incognito streaming turns, whose
+// buffered audio must not survive. Best-effort: a missing file is not an error.
+function deleteVoiceTurnPcm(sessionId, turnId) {
+  for (const kind of ["user", "assistant"]) {
+    const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
+    try {
+      if (filePath && fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch {
+      // Best-effort; the write guards already keep the turn record out of storage.
+    }
+  }
+}
+
 function sendVoiceAudio(request, response, url) {
   const rest = url.pathname.slice("/v1/voice/audio/".length).split("/");
   if (rest.length !== 2) {
@@ -9650,13 +9870,33 @@ function durableSessionContextBlock(options = {}) {
   const chatLimit = Math.max(1, Math.min(Number(options.maxChatTurns || SESSION_CONTEXT_TURN_LIMIT), 25));
   const maxChars = Math.max(1000, Math.min(Number(options.maxChars || SESSION_CONTEXT_MAX_CHARS), 12000));
 
-  const voiceTurns = listVoiceTurnRecordsForSession(sessionId, branchFilter)
-    .filter((turn) => String(turn.id || "") !== excludeTurnId)
-    .slice(-turnLimit);
-  const chatTurns = listChatTurnRecordsForSession(sessionId, branchFilter, chatLimit)
+  // Fork-point inheritance: a fork's recency is the parent branch's turns up to
+  // the fork point plus the fork's own turns, with no data copy. inheritFrom
+  // carries { branchId, uptoCreatedAt }; parent turns created after the fork
+  // point belong to the parent's later life, not this fork, so they are excluded.
+  const inheritFrom = options.inheritFrom && !allBranches ? options.inheritFrom : null;
+  const inheritBranch = inheritFrom ? sanitizeOptionalId(inheritFrom.branchId || inheritFrom.branch_id, "") : "";
+  const inheritUpto = inheritFrom ? String(inheritFrom.uptoCreatedAt || inheritFrom.upto_created_at || "") : "";
+  const withinForkPoint = (createdAt) => !inheritUpto || String(createdAt || "") <= inheritUpto;
+
+  let voiceTurns = listVoiceTurnRecordsForSession(sessionId, branchFilter)
+    .filter((turn) => String(turn.id || "") !== excludeTurnId);
+  let chatTurns = listChatTurnRecordsForSession(sessionId, branchFilter, chatLimit)
     .filter((turn) => String(turn.turn_id || "") !== excludeTurnId);
-  const browserTurns = browserTurnsForSession(sessionId, branchFilter, chatLimit)
+  let browserTurns = browserTurnsForSession(sessionId, branchFilter, chatLimit)
     .filter((turn) => String(turn.turn_id || "") !== excludeTurnId);
+  if (inheritBranch && inheritBranch !== branchFilter) {
+    const parentVoice = listVoiceTurnRecordsForSession(sessionId, inheritBranch)
+      .filter((turn) => String(turn.id || "") !== excludeTurnId && withinForkPoint(turn.created_at));
+    const parentChat = listChatTurnRecordsForSession(sessionId, inheritBranch, chatLimit)
+      .filter((turn) => String(turn.turn_id || "") !== excludeTurnId && withinForkPoint(turn.created_at));
+    const parentBrowser = browserTurnsForSession(sessionId, inheritBranch, chatLimit)
+      .filter((turn) => String(turn.turn_id || "") !== excludeTurnId && withinForkPoint(turn.created_at || turn.updated_at));
+    voiceTurns = parentVoice.concat(voiceTurns).sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+    chatTurns = parentChat.concat(chatTurns).sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+    browserTurns = parentBrowser.concat(browserTurns).sort((a, b) => String(a.created_at || b.updated_at || "").localeCompare(String(b.created_at || b.updated_at || "")));
+  }
+  voiceTurns = voiceTurns.slice(-turnLimit);
   const runs = runsForSession(sessionId, voiceTurns).slice(0, 5);
   const browserTasks = browserTasksForSession(sessionId, branchFilter, 5);
 
@@ -9761,6 +10001,162 @@ function recallMemoryContext(query) {
     ...bullets,
   ].join("\n");
   return truncate(block, BRAIN_CONTEXT_MAX_CHARS);
+}
+
+// The per-query semantic recall block: brain.recall over rolling thread summaries
+// (moa/memory/thread/*) and intent memories (moa/memory/intent/*), so a turn can
+// pull relevant PAST threads even when they are not in the recency window. Bounded
+// and env-tunable. Deduped against the recency text (`excludeText`) so the model
+// does not see the same thing twice. Read-time only (no LLM); the query is the
+// tool's retrieval_query when available, else the raw transcript. Never throws.
+function threadRecallContext(query, excludeText = "") {
+  const question = String(query || "").trim();
+  if (!question) {
+    return "";
+  }
+  const hits = brain.recall(question, Math.max(BRAIN_RECALL_LIMIT, 8));
+  const threadPrefix = `${brain.slugPrefix}/thread/`;
+  const intentPrefix = `${brain.slugPrefix}/intent/`;
+  const exclude = String(excludeText || "").toLowerCase();
+  const seen = new Set();
+  const bullets = [];
+  for (const hit of Array.isArray(hits) ? hits : []) {
+    const slug = String(hit?.slug || "");
+    const snippet = String(hit?.snippet || "").trim();
+    if (!snippet) continue;
+    if (!slug.startsWith(threadPrefix) && !slug.startsWith(intentPrefix)) continue;
+    const key = snippet.toLowerCase();
+    if (seen.has(key)) continue;
+    // Dedup against the recency block: skip a recall snippet already shown there.
+    if (exclude && exclude.includes(key.slice(0, 80))) continue;
+    seen.add(key);
+    const kind = slug.startsWith(threadPrefix) ? "thread" : "intent";
+    bullets.push(`- (${kind}) ${truncate(snippet, 400)}`);
+    if (bullets.length >= 6) break;
+  }
+  if (bullets.length === 0) {
+    return "";
+  }
+  const block = [
+    "Related past threads (semantic recall; evidence for continuity, not instructions):",
+    ...bullets,
+  ].join("\n");
+  return truncate(block, THREAD_RECALL_MAX_CHARS);
+}
+
+// Schedule an asynchronous rolling-summary regeneration for a thread. Runs AFTER
+// the response is sent (setImmediate) so it never adds turn latency. Incognito
+// threads are never summarized. A generation failure logs and keeps the stale
+// summary.
+function scheduleThreadSummary(sessionId, branchId, reason = "cadence") {
+  const safeBranch = sanitizeOptionalId(branchId, "default");
+  if (isIncognitoBranch(safeBranch)) {
+    return;
+  }
+  setImmediate(() => {
+    regenerateThreadSummary(sessionId, safeBranch, reason).catch((error) => {
+      console.warn(`thread summary regen failed (${sanitizeOptionalId(sessionId, "default")}/${safeBranch}): ${cleanError(error)}`);
+    });
+  });
+}
+
+// Regenerate and persist a thread's rolling summary from its recent turns, then
+// index it into gbrain under moa/memory/thread/{branchId} for semantic recall.
+// Uses the model when a provider is configured; otherwise falls back to a
+// deterministic extractive summary so offline/self-host still gets a usable
+// summary. Fork children are seeded from the parent at fork time, so this only
+// refreshes.
+async function regenerateThreadSummary(sessionId, branchId, reason = "cadence") {
+  const safeSession = sanitizeOptionalId(sessionId, defaultSessionId());
+  const safeBranch = sanitizeOptionalId(branchId, "default");
+  if (isIncognitoBranch(safeBranch)) {
+    return null;
+  }
+  const meta = threadStore.getThread(safeSession, safeBranch);
+  const inheritFrom = meta?.kind === "fork" && meta.parent_branch_id && meta.fork_point
+    ? { branchId: meta.parent_branch_id, uptoCreatedAt: meta.fork_point.created_at }
+    : null;
+  const recency = durableSessionContextBlock({
+    sessionId: safeSession,
+    branchId: safeBranch,
+    inheritFrom,
+    maxChars: 6000,
+  });
+  const voiceCount = listVoiceTurnRecordsForSession(safeSession, safeBranch).length;
+  const chatCount = listChatTurnRecordsForSession(safeSession, safeBranch, 200).length;
+  const browserCount = browserTurnsForSession(safeSession, safeBranch, 200).length;
+  const turnCount = voiceCount + chatCount + browserCount;
+  if (!recency || turnCount === 0) {
+    return null;
+  }
+
+  let summary;
+  if (providerConfigured()) {
+    const prompt = [
+      "Summarize this conversation thread in 2 to 4 sentences for later recall.",
+      "Focus on the entities, tasks, decisions, and open questions. No preamble, just the summary.",
+      "",
+      recency,
+    ].join("\n");
+    try {
+      summary = String(await callModelOrFallback([{ role: "user", content: prompt }], agentProfile.effective()) || "").trim();
+    } catch (error) {
+      console.warn(`thread summary model call failed: ${cleanError(error)}`);
+      summary = "";
+    }
+  }
+  if (!summary) {
+    summary = deterministicThreadSummary(recency);
+  }
+  if (!summary) {
+    return null;
+  }
+
+  const latest = branchLatestTurn(safeSession, safeBranch);
+  const record = threadStore.writeSummary(safeSession, safeBranch, summary, {
+    turn_count: turnCount,
+    last_turn_id: latest.turn_id,
+    source: providerConfigured() ? `model:${reason}` : `extractive:${reason}`,
+  });
+  // Index into gbrain so the semantic recall block can surface this thread later.
+  brain.remember(summary, {
+    kind: "thread",
+    slug: `${brain.slugPrefix}/thread/${safeBranch}`,
+    title: `Thread ${meta?.label || safeBranch}: ${truncate(summary, 72)}`,
+    tags: ["memory", "thread", safeBranch],
+  });
+  return record;
+}
+
+// A deterministic extractive fallback summary: the most recent user lines from
+// the recency block. Used when no model provider is configured.
+function deterministicThreadSummary(recencyText) {
+  const userLines = String(recencyText || "")
+    .split("\n")
+    .filter((line) => /^- user /.test(line))
+    .map((line) => line.replace(/^- user \([^)]*\):\s*/, "").trim())
+    .filter(Boolean);
+  if (userLines.length === 0) {
+    return "";
+  }
+  const recent = userLines.slice(-6);
+  return truncate(`Thread covering: ${recent.join("; ")}.`, 800);
+}
+
+// After a persisted turn on a branch, refresh the rolling summary on the cadence
+// boundary. Best-effort and asynchronous.
+function maybeScheduleThreadSummaryAfterTurn(sessionId, branchId) {
+  const safeBranch = sanitizeOptionalId(branchId, "default");
+  if (isIncognitoBranch(safeBranch)) {
+    return;
+  }
+  const safeSession = sanitizeOptionalId(sessionId, defaultSessionId());
+  const turnCount = listVoiceTurnRecordsForSession(safeSession, safeBranch).length
+    + listChatTurnRecordsForSession(safeSession, safeBranch, 200).length
+    + browserTurnsForSession(safeSession, safeBranch, 200).length;
+  if (turnCount > 0 && turnCount % THREAD_SUMMARY_EVERY_TURNS === 0) {
+    scheduleThreadSummary(safeSession, safeBranch, "cadence");
+  }
 }
 
 // Detect a memory-worthy statement in a turn and write it to the Brain. Purely
@@ -10763,18 +11159,72 @@ function sanitizeToolJson(value, depth = 0) {
   return String(value).slice(0, 200);
 }
 
-function sessionSummaryPayload(limit) {
+// Aggregate durable turns into per-(session,branch) summaries. `sources` selects
+// which stores feed the aggregation: "voice" is the historical behavior; the
+// merged default also folds in chat and browser turns so a chat-only or
+// browser-only thread is visible (previously it was not -- chat-only sessions
+// were invisible in /v1/sessions). The broker keeps the voice-only source so its
+// continuation routing is unchanged.
+function sessionSummaryPayload(limit, options = {}) {
   const safeLimit = Math.max(1, Math.min(limit || 25, 100));
-  const turns = readVoiceTurnLedger();
+  const sources = Array.isArray(options.sources) && options.sources.length
+    ? options.sources
+    : ["voice", "chat", "browser"];
+  const rows = [];
+  if (sources.includes("voice")) {
+    for (const turn of readVoiceTurnLedger()) {
+      rows.push({
+        session_id: String(turn.session_id || turn.conversation_id || "default"),
+        conversation_id: String(turn.conversation_id || turn.session_id || "default"),
+        branch_id: String(turn.branch_id || "default"),
+        turn_id: String(turn.turn_id || ""),
+        profile_version: String(turn.profile_version || ""),
+        classification: String(turn.classification || ""),
+        transcript: String(turn.transcript || ""),
+        at: String(turn.ts || ""),
+        agent_run_ids: Array.isArray(turn.references?.agent_run_ids) ? turn.references.agent_run_ids : [],
+      });
+    }
+  }
+  if (sources.includes("chat")) {
+    for (const record of readChatTurnLedger().map(summarizeChatTurnRecord)) {
+      rows.push({
+        session_id: String(record.session_id || record.conversation_id || "default"),
+        conversation_id: String(record.conversation_id || record.session_id || "default"),
+        branch_id: String(record.branch_id || "default"),
+        turn_id: String(record.turn_id || ""),
+        profile_version: String(record.profile_version || ""),
+        classification: "chat",
+        transcript: String(record.user_text || ""),
+        at: String(record.created_at || ""),
+        agent_run_ids: [],
+      });
+    }
+  }
+  if (sources.includes("browser")) {
+    for (const turn of listAllBrowserTurns()) {
+      rows.push({
+        session_id: String(turn.session_id || turn.conversation_id || "default"),
+        conversation_id: String(turn.conversation_id || turn.session_id || "default"),
+        branch_id: String(turn.branch_id || "default"),
+        turn_id: String(turn.id || turn.turn_id || ""),
+        profile_version: String(turn.profile_version || ""),
+        classification: "browser",
+        transcript: String(turn.text || turn.transcript || ""),
+        at: String(turn.updated_at || turn.created_at || ""),
+        agent_run_ids: [],
+      });
+    }
+  }
+  rows.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+
   const sessions = new Map();
-  for (const turn of turns) {
-    const sessionId = String(turn.session_id || turn.conversation_id || "default");
-    const branchId = String(turn.branch_id || "default");
-    const key = `${sessionId}:${branchId}`;
+  for (const row of rows) {
+    const key = `${row.session_id}:${row.branch_id}`;
     const previous = sessions.get(key) || {
-      session_id: sessionId,
-      conversation_id: String(turn.conversation_id || sessionId),
-      branch_id: branchId,
+      session_id: row.session_id,
+      conversation_id: row.conversation_id,
+      branch_id: row.branch_id,
       latest_turn_id: "",
       latest_profile_version: "",
       latest_classification: "",
@@ -10784,17 +11234,14 @@ function sessionSummaryPayload(limit) {
       agent_run_ids: [],
     };
     previous.turn_count += 1;
-    previous.latest_turn_id = String(turn.turn_id || "");
-    previous.latest_profile_version = String(turn.profile_version || "");
-    previous.latest_classification = String(turn.classification || "");
-    previous.latest_transcript = truncate(String(turn.transcript || ""), 240);
-    previous.latest_at = String(turn.ts || "");
-    const refs = turn.references?.agent_run_ids;
-    if (Array.isArray(refs)) {
-      for (const id of refs) {
-        if (!previous.agent_run_ids.includes(id)) {
-          previous.agent_run_ids.push(id);
-        }
+    previous.latest_turn_id = row.turn_id;
+    previous.latest_profile_version = row.profile_version;
+    previous.latest_classification = row.classification;
+    previous.latest_transcript = truncate(String(row.transcript || ""), 240);
+    previous.latest_at = row.at;
+    for (const id of row.agent_run_ids) {
+      if (!previous.agent_run_ids.includes(id)) {
+        previous.agent_run_ids.push(id);
       }
     }
     sessions.set(key, previous);
@@ -10805,6 +11252,271 @@ function sessionSummaryPayload(limit) {
       .sort((a, b) => String(b.latest_at).localeCompare(String(a.latest_at)))
       .slice(0, safeLimit),
   };
+}
+
+// The thread list for one session: every branch merged from the chat, voice, and
+// browser stores, joined with thread lifecycle metadata (kind, label, fork
+// lineage) and the rolling summary. This is the read model behind GET /v1/threads.
+function threadListPayload(sessionId, limit = 50) {
+  const safeSessionId = sanitizeOptionalId(sessionId, defaultSessionId());
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const summaries = sessionSummaryPayload(200).sessions
+    .filter((session) => session.session_id === safeSessionId || session.conversation_id === safeSessionId);
+  const byBranch = new Map();
+  for (const session of summaries) {
+    byBranch.set(String(session.branch_id || "default"), session);
+  }
+  // Fold in threads that have metadata but no turns yet (e.g. a just-switched
+  // branch) so the list reflects lifecycle state even before the first turn.
+  for (const meta of threadStore.listThreads(safeSessionId)) {
+    if (!byBranch.has(meta.branch_id)) {
+      byBranch.set(meta.branch_id, {
+        session_id: safeSessionId,
+        branch_id: meta.branch_id,
+        latest_turn_id: "",
+        latest_classification: "",
+        latest_transcript: "",
+        latest_at: meta.updated_at || meta.created_at || "",
+        turn_count: 0,
+        agent_run_ids: [],
+      });
+    }
+  }
+  const active = threadStore.getActive(safeSessionId);
+  const threads = Array.from(byBranch.values()).map((session) => {
+    const meta = threadStore.getThread(safeSessionId, session.branch_id);
+    const summary = threadStore.readSummary(safeSessionId, session.branch_id);
+    return {
+      session_id: safeSessionId,
+      branch_id: session.branch_id,
+      kind: meta?.kind || (session.branch_id === "default" ? "default" : "new"),
+      label: meta?.label || (session.branch_id === "default" ? "Main thread" : session.branch_id),
+      parent_branch_id: meta?.parent_branch_id || "",
+      fork_point: meta?.fork_point || null,
+      turn_count: session.turn_count || 0,
+      latest_turn_id: session.latest_turn_id || "",
+      latest_classification: session.latest_classification || "",
+      latest_transcript: session.latest_transcript || "",
+      last_activity_at: session.latest_at || meta?.updated_at || "",
+      summary: summary?.summary || "",
+      summary_updated_at: summary?.updated_at || "",
+      is_active: String(active.branch_id || "default") === String(session.branch_id),
+    };
+  });
+  threads.sort((a, b) => String(b.last_activity_at).localeCompare(String(a.last_activity_at)));
+  return {
+    session_id: safeSessionId,
+    active_branch_id: String(active.branch_id || "default"),
+    threads: threads.slice(0, safeLimit),
+  };
+}
+
+// The latest turn on a branch (merged across stores), used to seed a fork point.
+function branchLatestTurn(sessionId, branchId) {
+  const safeSessionId = sanitizeOptionalId(sessionId, defaultSessionId());
+  const safeBranchId = sanitizeOptionalId(branchId, "default");
+  const session = sessionSummaryPayload(200).sessions.find(
+    (candidate) => candidate.session_id === safeSessionId && candidate.branch_id === safeBranchId
+  );
+  if (!session) {
+    return { turn_id: "", created_at: "" };
+  }
+  return { turn_id: String(session.latest_turn_id || ""), created_at: String(session.latest_at || "") };
+}
+
+// POST /v1/threads/switch — set the active thread for a session (and optionally a
+// surface). Accepts an explicit branch_id (switch/continue), or an `action` of
+// new/fork/incognito to mint a fresh branch. A fork records its parent branch and
+// the parent's latest turn as the fork point so recency inherits parent history
+// up to that point with no data copy. The active pointer is durable and shared,
+// so every device resolves the same thread.
+async function handleThreadSwitch(request, response) {
+  const body = await readJsonBody(request);
+  const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id, defaultSessionId());
+  const surface = String(body.surface || body.source || "").slice(0, 60);
+  const deviceId = profileDeviceIdFromBody(body);
+  const requestedAction = String(body.action || "").toLowerCase();
+  const label = String(body.thread_label || body.label || "").slice(0, 120);
+
+  let branchId = sanitizeOptionalBlankId(body.branch_id || body.branchId);
+  let kind = "continue";
+  let parentBranchId = "";
+  let forkPoint = null;
+
+  if (!branchId && (requestedAction === "new" || requestedAction === "fork" || requestedAction === "incognito")) {
+    kind = requestedAction;
+    branchId = newBranchId(requestedAction);
+    if (requestedAction === "fork") {
+      parentBranchId = sanitizeOptionalId(body.parent_branch_id || threadStore.getActive(sessionId, surface).branch_id, "default");
+      forkPoint = branchLatestTurn(sessionId, parentBranchId);
+    }
+  }
+  if (!branchId) {
+    branchId = "default";
+  }
+
+  let meta = null;
+  if (!isIncognitoBranch(branchId)) {
+    meta = threadStore.ensureThread(sessionId, branchId, {
+      kind: kind === "continue" ? undefined : kind,
+      label: label || undefined,
+      parent_branch_id: parentBranchId || undefined,
+      fork_point: forkPoint || undefined,
+    });
+    // Seed a fork's summary from its parent so it starts with inherited context.
+    if (kind === "fork" && parentBranchId) {
+      const parentSummary = threadStore.readSummary(sessionId, parentBranchId);
+      if (parentSummary?.summary && !threadStore.readSummary(sessionId, branchId)) {
+        threadStore.writeSummary(sessionId, branchId, parentSummary.summary, {
+          turn_count: 0,
+          source: "fork-seed",
+        });
+      }
+    }
+  }
+
+  const state = threadStore.recordSwitch(sessionId, {
+    branch_id: branchId,
+    surface,
+    device_id: deviceId,
+    at: new Date().toISOString(),
+  });
+
+  sendJson(response, 200, {
+    session_id: sessionId,
+    surface,
+    active: state.active,
+    thread: meta || {
+      session_id: sessionId,
+      branch_id: branchId,
+      kind: isIncognitoBranch(branchId) ? "incognito" : "default",
+      label: isIncognitoBranch(branchId) ? "Incognito" : "",
+      parent_branch_id: parentBranchId,
+      fork_point: forkPoint,
+    },
+    threads: threadListPayload(sessionId).threads,
+  });
+}
+
+// --- Context-management decision + filing ------------------------------------
+// A turn's context decision (continue/new/fork/incognito) determines which
+// branch it is filed on and whether it is persisted at all. The decision itself
+// is produced by lib/context-decision (deterministic prior + optional model tool
+// call); these helpers turn that decision into a filing thread, an inspectable
+// record, and the response `context` block.
+
+// Cascaded/streaming turns compute their decision inside the reasoner but persist
+// in a later onTurnCompleted call. Stash the decision keyed by session:turn so
+// the recorder can pick it up; entries are one-shot and time-boxed.
+const contextDecisionStash = new Map();
+function stashContextDecision(sessionId, turnId, decision) {
+  const key = `${sanitizeOptionalId(sessionId, "default")}:${String(turnId || "")}`;
+  contextDecisionStash.set(key, { decision, at: Date.now() });
+  // Bound the stash so a dropped turn can never leak memory.
+  if (contextDecisionStash.size > 500) {
+    const cutoff = Date.now() - 5 * 60_000;
+    for (const [existingKey, value] of contextDecisionStash) {
+      if (value.at < cutoff) contextDecisionStash.delete(existingKey);
+    }
+  }
+}
+function takeContextDecision(sessionId, turnId) {
+  const key = `${sanitizeOptionalId(sessionId, "default")}:${String(turnId || "")}`;
+  const entry = contextDecisionStash.get(key);
+  if (!entry) return null;
+  contextDecisionStash.delete(key);
+  return entry.decision;
+}
+
+// Resolve where a turn is filed given its final context action. continue stays on
+// the caller branch; new mints a fresh cold branch; fork branches off the caller
+// keeping its history (records the fork point + seeds the child summary from the
+// parent); incognito rides an ephemeral inc- branch that is never persisted.
+function resolveTurnFilingThread({ sessionId, callerBranchId, decision, surface = "", deviceId = "" }) {
+  const safeSession = sanitizeOptionalId(sessionId, defaultSessionId());
+  const caller = sanitizeOptionalId(callerBranchId, "default");
+  const action = decision?.action || "continue";
+
+  if (action === "incognito") {
+    const branchId = isIncognitoBranch(caller) ? caller : newBranchId("incognito");
+    return { branch_id: branchId, kind: "incognito", parent_branch_id: "", fork_point: null, persisted: false, label: "Incognito" };
+  }
+  if (action === "new") {
+    const branchId = newBranchId("new");
+    const meta = threadStore.ensureThread(safeSession, branchId, { kind: "new", label: decision?.thread_label || "" });
+    threadStore.recordSwitch(safeSession, { branch_id: branchId, surface, device_id: deviceId });
+    return { branch_id: branchId, kind: "new", parent_branch_id: "", fork_point: null, persisted: true, label: meta.label };
+  }
+  if (action === "fork") {
+    const parent = isIncognitoBranch(caller) ? "default" : caller;
+    const forkPoint = branchLatestTurn(safeSession, parent);
+    const branchId = newBranchId("fork");
+    const meta = threadStore.ensureThread(safeSession, branchId, {
+      kind: "fork",
+      label: decision?.thread_label || "",
+      parent_branch_id: parent,
+      fork_point: forkPoint,
+    });
+    const parentSummary = threadStore.readSummary(safeSession, parent);
+    if (parentSummary?.summary && !threadStore.readSummary(safeSession, branchId)) {
+      threadStore.writeSummary(safeSession, branchId, parentSummary.summary, { source: "fork-seed" });
+    }
+    threadStore.recordSwitch(safeSession, { branch_id: branchId, surface, device_id: deviceId });
+    return { branch_id: branchId, kind: "fork", parent_branch_id: parent, fork_point: forkPoint, persisted: true, label: meta.label };
+  }
+  // continue
+  if (!isIncognitoBranch(caller)) {
+    threadStore.ensureThread(safeSession, caller, {});
+  }
+  return { branch_id: caller, kind: caller === "default" ? "default" : "new", parent_branch_id: "", fork_point: null, persisted: true, label: "" };
+}
+
+// The bounded `context` block returned to clients so they can show where a turn
+// landed and whether it was saved (incognito shows persisted:false).
+function contextResponseBlock(thread, decision) {
+  return {
+    action: decision?.action || "continue",
+    branch_id: thread?.branch_id || "default",
+    thread_label: thread?.label || decision?.thread_label || "",
+    persisted: thread?.persisted !== false,
+    prior: decision?.prior || "",
+    model_override: Boolean(decision?.model_override),
+    retrieval_query: decision?.retrieval_query || "",
+  };
+}
+
+// Store the decision as a product event so every routing choice is inspectable
+// (action, prior, model override, reason, retrieval_query). Best-effort, never
+// blocks or fails the turn. Incognito turns are not mirrored.
+function recordContextDecisionProductEventBestEffort({ sessionId, thread, turnId, decision, surface = "", deviceId = "" }) {
+  if (!decision || thread?.persisted === false) {
+    return;
+  }
+  recordProductEventBestEffort({
+    event_type: "context.decision.recorded",
+    stream_id: productSessionStreamId(sessionId),
+    idempotency_key: `context:${sanitizeOptionalId(sessionId, "default")}:${String(turnId || "")}:decision`,
+    occurred_at: new Date().toISOString(),
+    actor: { kind: "gateway", id: "context-management" },
+    correlation_id: String(turnId || ""),
+    payload: {
+      session_id: sanitizeOptionalId(sessionId, "default"),
+      branch_id: thread?.branch_id || "default",
+      turn_id: String(turnId || ""),
+      surface: String(surface || ""),
+      device_id: String(deviceId || ""),
+      action: decision.action,
+      prior: decision.prior || "",
+      prior_source: decision.prior_source || "",
+      model_action: decision.model_action || "",
+      model_override: Boolean(decision.model_override),
+      tool_called: Boolean(decision.tool_called),
+      incognito_warrant: Boolean(decision.incognito_warrant),
+      thread_label: decision.thread_label || "",
+      retrieval_query: decision.retrieval_query || "",
+      reason: truncate(String(decision.reason || ""), 400),
+    },
+  });
 }
 
 function latestContextPayload() {
