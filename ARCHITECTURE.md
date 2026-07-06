@@ -202,7 +202,8 @@ preserved: it is the same provider without the hosted-TTS leg.
 ### Cascaded voice pipeline and the switch
 
 ```text
-Chirp 3 STT (input restricted to CHIRP_LANGUAGE_CODES, e.g. en-US + am-ET)
+Chirp 3 STT (input restricted per turn to the agent profile's input_languages;
+             CHIRP_LANGUAGE_CODES is only the boot fallback)
   -> gateway LLM turn (model-agnostic; reply language/voice from the agent
      profile as OUTPUT policy)
   -> Cloud TTS reply audio when the reply language has a hosted voice,
@@ -227,6 +228,22 @@ restricted. am-ET (Amharic) exists only on `chirp_3`; the provider asserts the
 model before a recognize call. Google Cloud TTS has no Amharic voice under any
 type, so an Amharic reply is returned as text and spoken by the device
 (android-tts); a hosted en-US Chirp 3 HD voice is used for English.
+
+The restricted input set is read from the agent profile per turn (mirroring how
+the reply language already works), so a spoken or typed language change applies
+without a gateway restart. Recognize results whose language falls outside the
+active restricted set are dropped and flagged on the turn record instead of
+leaking a foreign-language transcript.
+
+A voice turn can never end silently. Model and Cloud TTS calls run under
+bounded timeouts, every commit/text turn error also emits
+`turn_done{status:"error"}` (not just an `error` event), and completed
+cascaded turns carry `tts_spoke` and `reply_language` on `turn_done`. Clients
+act on those: when no hosted reply audio arrives (`tts_spoke=false`, e.g. an
+Amharic reply) the phone speaks the assistant text with device TTS, `no_speech`
+turns are surfaced ("didn't catch that"), a mid-turn socket drop shows a
+visible retry message, and the Android watchdog re-arms on every streaming
+event so a stalled turn times out audibly instead of hanging forever.
 
 ### Record Mode (raw audio notes)
 
@@ -559,7 +576,12 @@ audit event on the `account-connection:{id}` stream. Contract:
 - `device`: a registered Android device with local permissions and settings.
 - `device_client`: a connected Android, browser, or future desktop surface that
   heartbeats its online state and local tool manifest to the gateway.
-- `session`: a coherent mobile work session.
+- `session`: a coherent work session. The gateway owns one canonical shared
+  default session per account (`GET /v1/sessions/default`); chat, voice, and
+  browser turns that omit a session id resolve to it, and Android and the
+  browser extension adopt it on startup so every surface continues the same
+  stored conversation. Threads inside the shared session stay separated by
+  `branch`.
 - `branch`: a thread of work inside a session, initially `default`.
 - `turn`: one voice or chat input with optional screen context.
 - `broker_event`: one inbound user message stored before routing to sessions,
@@ -581,7 +603,11 @@ audit event on the `account-connection:{id}` stream. Contract:
 - `agent_profile`: a versioned gateway-owned runtime profile for hard settings
   such as assistant voice, input languages, reply languages, response modality,
   persona (vetted catalog or sanitized free-form system prompt), model behavior,
-  and mission-agent access policy. The global profile applies to all devices;
+  and mission-agent access policy. The `user_address` field (default "master",
+  env `MOA_USER_ADDRESS`) carries the required form of address for the user; it
+  is emitted as an explicit directive after the identity instruction in every
+  prompt assembly (chat and Live voice), so it survives companion apply,
+  profile reset, and persona rewrites. The global profile applies to all devices;
   device overrides persist only for a named device client. Profile-change
   responses report the scope and device id they applied to. The current
   language catalog is intentionally limited to English (`en-US`) and Amharic
