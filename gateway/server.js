@@ -1539,6 +1539,7 @@ module.exports = {
   // Exported for in-process smoke tests that drive the cascaded reasoner and its
   // model-tool loop directly. Not part of the runtime HTTP surface.
   runCascadedVoiceReasoning,
+  recordStreamingVoiceTurn,
   agentProfile,
 };
 
@@ -2156,6 +2157,9 @@ async function recordBrokerProductEvent(event) {
 }
 
 async function recordVoiceTurnAcceptedProductEvent(record) {
+  if (isIncognitoBranch(record?.branch_id)) {
+    return;
+  }
   await recordProductEvent({
     event_type: "voice.turn.accepted",
     stream_id: productSessionStreamId(record.session_id),
@@ -2238,8 +2242,15 @@ async function recordVoiceProviderEventsProductEvent(record) {
 }
 
 async function writeCompletedVoiceTurnRecord(record) {
+  // Incognito turns are answered but never persisted: no turn file, no ledger
+  // line, no product-event mirror.
+  if (isIncognitoBranch(record?.branch_id)) {
+    return;
+  }
   writeVoiceTurnRecord(record);
   await recordVoiceTurnCompletedProductEvent(record);
+  // Rolling summary upkeep for the voice paths (async, never adds latency).
+  maybeScheduleThreadSummaryAfterTurn(record.session_id, record.branch_id);
 }
 
 async function handleBrowserTurn(request, response) {
@@ -5738,6 +5749,27 @@ async function handleVoiceTurn(request, response) {
   }
 
   const source = String(body.source || body.client?.source || "android-overlay").slice(0, 80);
+  // Context decision. This HTTP path is tool-less, so the decision is
+  // deterministic: an explicit client context_action or an incognito warrant may
+  // move or skip the thread; phrasing-only new/fork stays continue so a spoken
+  // "let's start" does not fragment the phone conversation. The caller branch
+  // still drives enrichment; only the FILING branch changes (incognito rides an
+  // ephemeral inc- branch that is never persisted).
+  const voiceDecision = resolveContextDecision({ text: transcript, contextAction: body.context_action, toolCall: null });
+  let voiceEffectiveAction = voiceDecision.action;
+  if (voiceEffectiveAction !== "incognito" && voiceDecision.prior_source !== "client") {
+    voiceEffectiveAction = "continue";
+  }
+  const voiceThread = resolveTurnFilingThread({
+    sessionId,
+    callerBranchId: branchId,
+    decision: { ...voiceDecision, action: voiceEffectiveAction },
+    surface: source,
+    deviceId,
+  });
+  const filingBranchId = voiceThread.branch_id;
+  const incognitoTurn = voiceThread.persisted === false;
+  const voiceContextBlock = contextResponseBlock(voiceThread, { ...voiceDecision, action: voiceEffectiveAction });
   const screen = summarizeScreen(body.screen || body.context?.screen);
   const profileVersion = agentProfile.currentVersion(profileOptions);
   const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
@@ -5762,14 +5794,18 @@ async function handleVoiceTurn(request, response) {
   // Capture memory-worthy statements ("call me Bob", "talk to me like a baller")
   // to the Brain deterministically, before we branch on classification, so a
   // fact lands even when the turn is a control/agent turn that never hits the
-  // model. Best-effort; never blocks the turn.
-  captureMemoryFromTurn(transcript, source);
+  // model. Best-effort; never blocks the turn. Incognito turns write no memory.
+  if (!incognitoTurn) {
+    captureMemoryFromTurn(transcript, source);
+  }
   const startedAt = new Date().toISOString();
   const baseRecord = {
     id: turnId,
     session_id: sessionId,
     conversation_id: conversationId,
-    branch_id: branchId,
+    // The filing branch: an incognito turn rides an ephemeral inc- branch so the
+    // voice write guards skip persisting it entirely.
+    branch_id: filingBranchId,
     profile_version: profileVersion,
     profile_overrides: body.profile_overrides && typeof body.profile_overrides === "object"
       ? Object.keys(body.profile_overrides)
@@ -5976,37 +6012,45 @@ async function handleVoiceTurn(request, response) {
     const turnActions = pageTweakAction ? [pageTweakAction] : [];
     const savedMessages = messages.concat([{ role: "assistant", content: text }]);
     const now = new Date().toISOString();
-    fs.writeFileSync(conversationPath(conversationId), JSON.stringify({
-      id: conversationId,
-      session_id: sessionId,
-      branch_id: branchId,
-      source,
-      model: profile.model,
-      profile_version: profileVersion,
-      updated_at: now,
-      screen,
-      messages: savedMessages,
-    }, null, 2));
-    fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify({
-      ts: now,
-      conversation_id: conversationId,
-      session_id: sessionId,
-      branch_id: branchId,
-      source,
-      model: profile.model,
-      profile_version: profileVersion,
-      request_messages: modelMessages,
-      screen,
-      response_text: text,
-      voice_turn_id: turnId,
-    }) + "\n");
+    // Incognito turns are answered but never persisted: skip the conversation
+    // file and the ledger append (the voice turn record + product events are
+    // already skipped by the write guards on the inc- branch).
+    if (!incognitoTurn) {
+      fs.writeFileSync(conversationPath(conversationId), JSON.stringify({
+        id: conversationId,
+        session_id: sessionId,
+        branch_id: filingBranchId,
+        source,
+        model: profile.model,
+        profile_version: profileVersion,
+        updated_at: now,
+        screen,
+        messages: savedMessages,
+      }, null, 2));
+      fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify({
+        ts: now,
+        conversation_id: conversationId,
+        session_id: sessionId,
+        branch_id: filingBranchId,
+        source,
+        model: profile.model,
+        profile_version: profileVersion,
+        request_messages: modelMessages,
+        screen,
+        response_text: text,
+        voice_turn_id: turnId,
+      }) + "\n");
+    }
 
-    const payload = voiceTurnPayload(baseRecord, {
-      speak,
-      display: text,
-      actions: turnActions,
-      follow_up_expected: false,
-    });
+    const payload = {
+      ...voiceTurnPayload(baseRecord, {
+        speak,
+        display: text,
+        actions: turnActions,
+        follow_up_expected: false,
+      }),
+      context: voiceContextBlock,
+    };
     await writeCompletedVoiceTurnRecord({
       ...baseRecord,
       updated_at: now,
@@ -8809,6 +8853,10 @@ function handleVoiceTurnGet(response, turnId, sessionId) {
 }
 
 function writeVoiceTurnRecord(record) {
+  // Incognito branch: never write a turn file or append to the ledger.
+  if (isIncognitoBranch(record?.branch_id)) {
+    return;
+  }
   const dir = path.join(VOICE_TURNS_DIR, sanitizeOptionalId(record.session_id, "default"));
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `${sanitizeOptionalId(record.id, randomId("turn"))}.json`);
@@ -9042,11 +9090,21 @@ function replyLanguageDirective(profile) {
 async function recordStreamingVoiceTurn(turn) {
   const sessionId = sanitizeOptionalId(turn.session_id || turn.conversation_id, "default");
   const conversationId = sanitizeOptionalId(turn.conversation_id || sessionId, sessionId);
-  const branchId = sanitizeOptionalId(turn.branch_id, "default");
+  const callerBranchId = sanitizeOptionalId(turn.branch_id, "default");
   const turnId = sanitizeOptionalId(turn.turn_id, randomId("turn"));
   const existing = readVoiceTurnRecord(sessionId, turnId);
   if (existing?.response) {
     return existing;
+  }
+
+  // Incognito: the cascaded reasoner stashed this turn's context decision; fall
+  // back to the branch prefix. An incognito streaming turn is answered but never
+  // persisted, and its buffered PCM archive is deleted so nothing survives.
+  const stashedDecision = takeContextDecision(sessionId, turnId);
+  const incognito = stashedDecision ? stashedDecision.action === "incognito" : isIncognitoBranch(callerBranchId);
+  const branchId = incognito && !isIncognitoBranch(callerBranchId) ? newBranchId("incognito") : callerBranchId;
+  if (incognito) {
+    deleteVoiceTurnPcm(sessionId, turnId);
   }
 
   const transcript = truncate(String(turn.transcript || ""), 16000);
@@ -9056,7 +9114,10 @@ async function recordStreamingVoiceTurn(turn) {
   // Capture memory-worthy statements ("my name is X", "remember that …") from
   // live voice transcripts the same way the HTTP voice-turn handler does, so
   // identity and preference facts are stored regardless of the voice path used.
-  captureMemoryFromTurn(transcript, turn.source || "voice-live");
+  // Incognito turns write no memory.
+  if (!incognito) {
+    captureMemoryFromTurn(transcript, turn.source || "voice-live");
+  }
   const profileVersion = sanitizeOptionalId(turn.profile_version || agentProfile.currentVersion(), agentProfile.currentVersion());
   const now = turn.completed_at || new Date().toISOString();
   // An interrupted/canceled/closed live turn is still durable conversation
@@ -9546,6 +9607,21 @@ function voiceTurnAudioPath(sessionId, turnId, kind) {
   }
   const suffix = kind === "assistant" ? ".assistant.pcm" : ".pcm";
   return path.join(DATA_DIR, "voice-sessions", safeSessionId, `${safeTurnId}${suffix}`);
+}
+
+// Delete both PCM archives for a turn. Used for incognito streaming turns, whose
+// buffered audio must not survive. Best-effort: a missing file is not an error.
+function deleteVoiceTurnPcm(sessionId, turnId) {
+  for (const kind of ["user", "assistant"]) {
+    const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
+    try {
+      if (filePath && fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch {
+      // Best-effort; the write guards already keep the turn record out of storage.
+    }
+  }
 }
 
 function sendVoiceAudio(request, response, url) {
