@@ -83,3 +83,22 @@
 - [ ] 6.5 Research existing companion catalogs and reusable open-source engines
       before expanding the renderer; reuse compatible licensed assets and APIs
       instead of copying copyrighted sprites or rebuilding mature tooling.
+
+## 7. Pet Library Catalog
+
+- [x] 7.1 Seed the built-in companion catalog with six additional well-crafted
+      pets (sentinel, cartographer, tinker, nomad, lumen, anchor), each with a
+      distinct skin, palette, motion, scale, and generation prompt, alongside
+      the original four (steward, scout, builder, scribe).
+- [x] 7.2 Add a `/pets/library/` catalog page: a parametric Shimeji renderer
+      (one root `--pet-em` scalar drives every inner measurement in `em`, per
+      the mascot's `--agee-mascot-font` pattern), an interactive hero stage
+      with drag/walk/climb/fall physics, a search and tag-filter bar, and a
+      card grid over the full catalog. Falls back to a local pet list when the
+      gateway proxy is unavailable.
+- [x] 7.3 Link the studio and library pages both ways: a "Library" nav link
+      from `/pets/`, and `?companion=<id>` deep-linking from the library back
+      into the studio (alongside the existing `?agent=<id>`).
+- [x] 7.4 Verify end to end with a local QA gateway and `wrangler pages dev`:
+      catalog list, preview, and apply all round-trip through the `/api/pets/*`
+      Pages Function proxy without the browser ever holding a gateway token.

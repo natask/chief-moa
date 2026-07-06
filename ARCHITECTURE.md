@@ -1327,6 +1327,11 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   Custom voice enrollment is a gateway-owned, consent-gated lifecycle that
   mutates only gateway-side consent/provider records; it is never executable
   client authority.
+  The website exposes the same catalog two ways: `/pets/` (studio: search,
+  create, edit, generate) and `/pets/library/` (a browsable catalog with
+  animated previews for picking a pre-designed pet); both go through the same
+  token-guarded `/api/pets/*` Pages proxy and never hold a gateway token in
+  browser JavaScript.
 - `browser_agent_owner`: the single active browser tab/page/run that may listen,
   speak, and show browser-local task cues for a browser session; non-owner tabs
   can show passive status but must not capture voice or claim local cues.

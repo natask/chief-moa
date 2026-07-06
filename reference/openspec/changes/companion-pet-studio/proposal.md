@@ -15,6 +15,10 @@ behaviors, drag, walk, climb, fall, and idle loops.
 - Add a website `/pets/` studio with catalog selection, animated preview,
   drag/move behavior, image upload, create, preview, apply, and generation
   controls.
+- Add a website `/pets/library/` catalog page: a browsable, pre-designed pet
+  library with animated previews, search and tag filters, and the same
+  select-preview-apply flow, so the studio's catalog is discoverable without
+  first knowing a companion id.
 - Keep Gemini/Vertex image and animation configuration gateway-only. The
   website calls a Pages proxy and never receives provider credentials.
 - Add an additive `voice_binding` field to active companion/pet payloads:

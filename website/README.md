@@ -19,6 +19,10 @@ confirmation email via Resend.
   (one line makes a character; the panels refine it), catalog, preview, upload,
   declarative rules, saved agents, bookmarks, apply, generation controls, a
   shared-library browse/install/publish section, and cloned-voice status
+- `public/pets/library/index.html` — pet library catalog page: parametric
+  Shimeji-style creature renderer, search/tag filters, and a select-preview-
+  apply flow over the same `/api/pets/*` proxy; links both ways with the studio
+  via `?companion=<id>` / `?agent=<id>`
 - `public/assets/` — deck images and logos
 - `functions/api/waitlist.js` — `POST /api/waitlist`: validate, store, email
 - `functions/api/pets/[[path]].js` — `/api/pets/*`: proxy to token-guarded

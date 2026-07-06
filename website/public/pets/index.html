@@ -301,6 +301,7 @@
       <button class="tab active" id="tabAgent" type="button">My agent</button>
       <button class="tab" id="tabStudio" type="button">Studio</button>
     </nav>
+    <a class="home-link" href="library/">Library</a>
     <a class="home-link" href="../">Home</a>
   </header>
 
@@ -744,7 +745,8 @@
   }
 
   async function loadPets(){
-    var requestedAgent=new URLSearchParams(window.location.search).get("agent");
+    var searchParams=new URLSearchParams(window.location.search);
+    var requestedAgent=searchParams.get("agent")||searchParams.get("companion");
     try{
       var res=await fetch("/api/pets",{headers:{"accept":"application/json"}});
       if(!res.ok)throw new Error("HTTP "+res.status);

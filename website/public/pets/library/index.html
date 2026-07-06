@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A.G. Pet Library</title>
+<meta name="description" content="Browse pre-designed A.G. companion pets, preview them animated, and apply one as your companion." />
+<link rel="icon" type="image/png" sizes="32x32" href="../../assets/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="../../assets/favicon-16.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,650&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================================
+   PET LIBRARY — parametric Shimeji renderer
+   ----------------------------------------------------------------------------
+   Every creature is one `.shimeji` element whose own font-size (set from the
+   single custom property --pet-em) is the one root scalar. Every inner part
+   is sized and positioned in `em`, so scaling a creature up or down is a
+   single number, never a rewrite of ears/arms/feet/topper math. This mirrors
+   browser_extension/extension/overlay.css's --agee-mascot-font pattern.
+   ============================================================================ */
+:root{
+  --paper:#fbfaf7;
+  --panel:#ffffff;
+  --ink:#17191d;
+  --muted:#6d7179;
+  --line:#d9d5ca;
+  --signal:#e5482b;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --serif:"Fraunces",Georgia,serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--paper);color:var(--ink)}
+body{font-family:var(--serif);letter-spacing:0;-webkit-font-smoothing:antialiased}
+button,input{font:inherit}
+button{cursor:pointer}
+a{color:inherit}
+
+.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;gap:20px;
+  padding:0 22px;border-bottom:1px solid var(--line);background:rgba(251,250,247,.92);position:sticky;top:0;z-index:5}
+.brand{display:flex;align-items:center;gap:11px;font-family:var(--mono);font-size:12px;
+  letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
+.brand img{width:30px;height:30px;object-fit:contain}
+.navlinks{display:flex;align-items:center;gap:18px}
+.topbar a{font-family:var(--mono);font-size:12px;color:var(--muted);text-decoration:none}
+.topbar a:hover,.topbar a.current{color:var(--signal)}
+
+main{max-width:1180px;margin:0 auto;padding:0 22px 80px}
+
+/* ---- Hero: eyebrow + headline + interactive stage ----------------------- */
+.hero{padding:44px 0 0}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--muted);margin:0}
+h1{font-size:clamp(32px,5vw,52px);font-weight:500;line-height:1.05;margin:16px 0 0;max-width:18ch}
+h1 em{font-style:italic;color:var(--signal);font-weight:400}
+.hero-sub{font-size:17px;font-weight:300;color:var(--ink);max-width:58ch;margin:18px 0 0;line-height:1.55}
+.hero-sub b{font-weight:500}
+
+.stage-frame{margin-top:30px;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}
+.stage{position:relative;height:clamp(300px,36vw,420px);overflow:hidden;touch-action:none;
+  background:
+    linear-gradient(#f5f2eb 1px,transparent 1px),
+    linear-gradient(90deg,#f5f2eb 1px,transparent 1px),#fbfaf7;
+  background-size:44px 44px}
+.stage .floor{position:absolute;left:0;right:0;bottom:58px;height:1px;background:#c9c3b7}
+.ambient{position:absolute;left:0;top:0;opacity:.5;pointer-events:none;filter:saturate(.85)}
+.hero-info{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap;
+  padding:16px 20px;border-top:1px solid var(--line);background:#fff}
+.hero-copy{min-width:0}
+.hero-copy strong{display:block;font-size:23px;font-weight:500;line-height:1.1}
+.hero-copy span{display:block;margin-top:5px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.hero-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.tag{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  border:1px solid var(--line);border-radius:999px;padding:3px 9px}
+.hero-actions{display:flex;gap:8px;flex-wrap:wrap}
+.cmd{height:36px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);
+  font-family:var(--mono);font-size:12px;padding:0 14px}
+.cmd:hover{border-color:rgba(0,0,0,.32)}
+.cmd.primary{background:var(--signal);border-color:var(--signal);color:#fff}
+.console{padding:10px 20px 16px;border-top:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--muted)}
+.console b{color:var(--ink);font-weight:500}
+
+/* ---- Filter row ----------------------------------------------------------- */
+.filters{margin-top:44px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.filters h2{font-size:22px;font-weight:500;margin:0}
+.filter-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.search input{width:220px;max-width:60vw;border:1px solid var(--line);background:#fff;color:var(--ink);
+  border-radius:999px;padding:9px 14px;outline:none;font-family:var(--mono);font-size:12px}
+.search input:focus{border-color:rgba(229,72,43,.68)}
+.chip{height:30px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:0 12px;
+  font-family:var(--mono);font-size:11px;color:var(--muted)}
+.chip.active{color:#fff;background:var(--ink);border-color:var(--ink)}
+.status{font-family:var(--mono);font-size:11px;color:var(--muted)}
+
+/* ---- Card grid ------------------------------------------------------------ */
+.grid{margin-top:18px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px}
+.card{display:block;text-align:left;width:100%;border:1px solid var(--line);border-radius:12px;background:var(--panel);
+  padding:0;overflow:hidden;transition:border-color .15s ease,transform .15s ease}
+.card:hover{border-color:rgba(0,0,0,.3)}
+.card.active{border-color:var(--signal)}
+.card-stage{position:relative;height:118px;overflow:hidden;
+  background:linear-gradient(#f5f2eb 1px,transparent 1px),linear-gradient(90deg,#f5f2eb 1px,transparent 1px),#fbfaf7;
+  background-size:36px 36px}
+.card-stage .floor{position:absolute;left:0;right:0;bottom:20px;height:1px;background:#c9c3b7}
+.card-body{padding:12px 14px 14px}
+.card-body strong{display:block;font-size:16px;font-weight:500;line-height:1.15}
+.card-body p{margin:6px 0 0;font-size:12.5px;color:var(--muted);line-height:1.4;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card-meta{margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card-meta .tag{font-size:9.5px}
+.card-dot{width:9px;height:9px;border-radius:50%;flex:none}
+
+footer{margin-top:56px;padding:20px 0 0;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:11.5px;color:var(--muted);line-height:1.6}
+
+@media (max-width:640px){
+  .topbar{padding:0 14px}
+  main{padding:0 14px 60px}
+  .hero-info{flex-direction:column;align-items:flex-start}
+  .hero-actions{width:100%}
+  .hero-actions .cmd{flex:1}
+}
+
+/* ============================================================================
+   The creature. One instance = one `.shimeji`. font-size comes from --pet-em,
+   set inline by JS per context (hero / card / ambient). Every measurement
+   below is `em`, so it all scales from that single number.
+   ============================================================================ */
+.shimeji{position:relative;width:2.6em;height:2.9em;font-size:var(--pet-em,64px);
+  --pet-color:#2f67d8;--pet-dark:#173778;user-select:none}
+.shimeji.interactive{cursor:grab;touch-action:none}
+.shimeji.dragging{cursor:grabbing;filter:drop-shadow(0 0.14em 0.16em rgba(0,0,0,.18))}
+.shimeji-shadow{position:absolute;left:0.5em;bottom:0.04em;width:1.6em;height:0.22em;border-radius:50%;
+  background:rgba(0,0,0,.2);filter:blur(0.05em)}
+.shimeji-core{position:absolute;left:0.4em;top:0.2em;width:1.8em;height:2.1em;transform-origin:center bottom}
+.shimeji-body{position:absolute;left:0.36em;top:0.32em;width:1.08em;height:1.28em;
+  border:0.045em solid rgba(0,0,0,.34);border-radius:0.5em 0.5em 0.34em 0.34em;
+  background:var(--pet-color);box-shadow:inset -0.18em -0.2em 0 rgba(0,0,0,.14)}
+.shimeji-body:before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(135deg,rgba(255,255,255,.38) 0%,rgba(255,255,255,0) 46%)}
+.shimeji-body:after{content:"";display:none}
+.shimeji-ear{position:absolute;top:0.04em;width:0.4em;height:0.5em;
+  border:0.045em solid rgba(0,0,0,.34);background:var(--pet-dark)}
+.shimeji-ear-left{left:0.16em;border-radius:0.32em 0.08em 0.24em 0.12em;transform:rotate(-16deg)}
+.shimeji-ear-right{right:0.16em;border-radius:0.08em 0.32em 0.12em 0.24em;transform:rotate(16deg)}
+.shimeji-arm{position:absolute;top:0.84em;width:0.26em;height:0.56em;border-radius:999px;
+  background:var(--pet-dark);transform-origin:top center}
+.shimeji-arm-left{left:0.06em}
+.shimeji-arm-right{right:0.06em}
+.shimeji-foot{position:absolute;bottom:0.06em;width:0.46em;height:0.2em;border-radius:999px;background:var(--pet-dark)}
+.shimeji-foot-left{left:0.38em}
+.shimeji-foot-right{right:0.38em}
+.shimeji-face{position:absolute;left:0.58em;top:0.66em;width:0.5em;height:0.26em}
+.shimeji-eye{position:absolute;top:0;width:0.11em;height:0.11em;border-radius:50%;background:#fff}
+.shimeji-eye-left{left:0.02em}
+.shimeji-eye-right{right:0.02em}
+.shimeji-mouth{position:absolute;left:0.19em;top:0.15em;width:0.14em;height:0.045em;border-radius:999px;background:rgba(0,0,0,.55)}
+.shimeji-topper{position:absolute;left:1.22em;top:-0.04em;width:0.16em;height:0.16em;border-radius:50%;
+  background:var(--pet-dark);opacity:.92}
+
+/* ---- Per-skin toppers and silhouette tweaks ------------------------------ */
+.shimeji[data-skin="steward"] .shimeji-topper{display:none}
+
+.shimeji[data-skin="scout"] .shimeji-topper{left:0.98em;top:-0.3em;width:0.14em;height:0.34em;border-radius:0.07em;background:var(--pet-dark)}
+.shimeji[data-skin="scout"] .shimeji-topper:after{content:"";position:absolute;top:-0.11em;left:-0.035em;width:0.21em;height:0.21em;
+  border-radius:50%;background:var(--pet-color);border:0.03em solid rgba(0,0,0,.34)}
+
+.shimeji[data-skin="builder"] .shimeji-ear{display:none}
+.shimeji[data-skin="builder"] .shimeji-topper{left:0.65em;top:-0.16em;width:1.3em;height:0.22em;
+  border-radius:0.5em 0.5em 0 0;background:var(--pet-dark)}
+.shimeji[data-skin="builder"] .shimeji-topper:after{content:"";position:absolute;left:0.42em;top:-0.1em;width:0.46em;height:0.2em;
+  border-radius:0.2em 0.2em 0 0;background:var(--pet-dark)}
+
+.shimeji[data-skin="scribe"] .shimeji-topper{left:1.62em;top:-0.32em;width:0.055em;height:0.62em;background:var(--pet-dark);
+  border-radius:999px;transform:rotate(26deg);transform-origin:bottom center}
+.shimeji[data-skin="scribe"] .shimeji-topper:after{content:"";position:absolute;top:-0.06em;left:-0.05em;
+  width:0;height:0;border-style:solid;border-width:0.1em 0.14em 0 0;border-color:var(--pet-color) transparent transparent transparent}
+
+.shimeji[data-skin="sentinel"] .shimeji-topper{background:transparent}
+.shimeji[data-skin="sentinel"] .shimeji-topper:before,
+.shimeji[data-skin="sentinel"] .shimeji-topper:after{content:"";position:absolute;bottom:0;width:0.05em;height:0.32em;
+  background:var(--pet-dark);border-radius:999px}
+.shimeji[data-skin="sentinel"] .shimeji-topper:before{left:0.01em;transform:rotate(-12deg);transform-origin:bottom center}
+.shimeji[data-skin="sentinel"] .shimeji-topper:after{right:0.01em;transform:rotate(12deg);transform-origin:bottom center}
+.shimeji[data-skin="sentinel"] .shimeji-body{border-radius:0.22em 0.22em 0.16em 0.16em}
+
+.shimeji[data-skin="cartographer"] .shimeji-topper{left:1.08em;top:-0.32em;width:0.34em;height:0.34em;border-radius:50%;
+  border:0.035em solid var(--pet-dark);background:transparent}
+.shimeji[data-skin="cartographer"] .shimeji-topper:after{content:"";position:absolute;left:0.05em;top:0.15em;
+  width:0.24em;height:0.03em;background:var(--pet-dark);transform:rotate(-24deg)}
+
+.shimeji[data-skin="tinker"] .shimeji-topper{left:0.9em;top:-0.22em;width:0.3em;height:0.3em;background:var(--pet-dark);
+  border-radius:0;clip-path:polygon(50% 0%,80% 15%,100% 50%,80% 85%,50% 100%,20% 85%,0% 50%,20% 15%)}
+.shimeji[data-skin="tinker"] .shimeji-topper:after{content:"";position:absolute;left:0.095em;top:0.095em;width:0.11em;height:0.11em;
+  border-radius:50%;background:var(--pet-color)}
+
+.shimeji[data-skin="nomad"] .shimeji-topper{left:0.55em;top:-0.15em;width:1.5em;height:0.22em;border-radius:50%;background:var(--pet-dark)}
+.shimeji[data-skin="nomad"] .shimeji-topper:after{content:"";position:absolute;left:0.55em;top:-0.22em;width:0.4em;height:0.24em;
+  border-radius:0.14em 0.14em 0 0;background:var(--pet-dark)}
+.shimeji[data-skin="nomad"] .shimeji-ear{display:none}
+
+.shimeji[data-skin="lumen"] .shimeji-topper{left:1.06em;top:-0.28em;width:0.32em;height:0.32em;background:var(--pet-color);
+  border-radius:0;clip-path:polygon(50% 0%,61% 35%,100% 50%,61% 65%,50% 100%,39% 65%,0% 50%,39% 35%);
+  filter:drop-shadow(0 0 0.12em var(--pet-color))}
+
+.shimeji[data-skin="anchor"] .shimeji-topper{display:none}
+.shimeji[data-skin="anchor"] .shimeji-ear-left{border-radius:0.05em 0.3em 0.05em 0.3em;transform:rotate(-4deg)}
+.shimeji[data-skin="anchor"] .shimeji-ear-right{border-radius:0.3em 0.05em 0.3em 0.05em;transform:rotate(4deg)}
+.shimeji[data-skin="anchor"] .shimeji-foot{display:none}
+.shimeji[data-skin="anchor"] .shimeji-body:after{content:"";display:block;position:absolute;left:-0.14em;right:-0.14em;
+  bottom:-0.1em;height:0.16em;border-radius:999px;background:var(--pet-dark)}
+
+/* ---- Palettes -------------------------------------------------------------- */
+.shimeji[data-palette="graphite"]{--pet-color:#555a62;--pet-dark:#262a30}
+.shimeji[data-palette="green"]{--pet-color:#208553;--pet-dark:#0f5534}
+.shimeji[data-palette="blue"]{--pet-color:#2f67d8;--pet-dark:#173778}
+.shimeji[data-palette="violet"]{--pet-color:#7651c7;--pet-dark:#452284}
+.shimeji[data-palette="red"]{--pet-color:#d84a39;--pet-dark:#84281f}
+.shimeji[data-palette="amber"]{--pet-color:#c57a1b;--pet-dark:#77450e}
+.shimeji[data-palette="teal"]{--pet-color:#0e7d85;--pet-dark:#06484e}
+.shimeji[data-palette="mono"]{--pet-color:#f6f3ea;--pet-dark:#17191d}
+
+/* ---- Ambient motion (data-mode drives everything below in em units) ------ */
+@keyframes pet-step-a{50%{transform:translateX(0.08em)}}
+@keyframes pet-step-b{50%{transform:translateX(-0.08em)}}
+@keyframes pet-climb{50%{transform:translateY(-0.07em) rotate(-2deg)}}
+@keyframes pet-wave{0%,100%{transform:rotate(0deg)}50%{transform:rotate(-46deg)}}
+@keyframes pet-float{50%{transform:translateY(-0.12em)}}
+@keyframes pet-tap{50%{transform:translateY(0.05em) scaleY(.96)}}
+@keyframes pet-peek{0%,100%{transform:translateX(0) rotate(0deg)}50%{transform:translateX(0.05em) rotate(-4deg)}}
+@keyframes pet-trail{0%,100%{transform:translateX(0)}50%{transform:translateX(-0.06em)}}
+@keyframes pet-spark{0%,100%{filter:brightness(1)}50%{filter:brightness(1.4)}}
+.shimeji[data-mode="walk"] .shimeji-foot-left{animation:pet-step-a .34s ease-in-out infinite}
+.shimeji[data-mode="walk"] .shimeji-foot-right{animation:pet-step-b .34s ease-in-out infinite}
+.shimeji[data-mode="climb"] .shimeji-core{animation:pet-climb .5s ease-in-out infinite}
+.shimeji[data-mode="wave"] .shimeji-arm-right{animation:pet-wave .62s ease-in-out infinite}
+.shimeji[data-mode="float"] .shimeji-core,.shimeji[data-mode="hover"] .shimeji-core{animation:pet-float 1.7s ease-in-out infinite}
+.shimeji[data-mode="tap"] .shimeji-core{animation:pet-tap .4s ease-in-out infinite}
+.shimeji[data-mode="peek"] .shimeji-core{animation:pet-peek 1.8s ease-in-out infinite}
+.shimeji[data-mode="trail"] .shimeji-core{animation:pet-trail 1.3s ease-in-out infinite}
+.shimeji[data-mode="spark"] .shimeji-topper{animation:pet-spark .8s ease-in-out infinite}
+
+@media (prefers-reduced-motion:reduce){
+  .shimeji *{animation:none!important}
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="../../assets/moa-mark.png" alt="" /> A.G. Pet Library</div>
+  <div class="navlinks">
+    <a href="../">Studio</a>
+    <a href="../../">Home</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <p class="eyebrow">Companion pet studio — library</p>
+    <h1>Pick a companion. Watch it <em>come alive</em>.</h1>
+    <p class="hero-sub">Every pet below is a real, gateway-owned manifest — a skin, a palette, a motion, and a full set of walk, climb, fall, drag, and wave frames. Applying one is <b>a companion-profile patch only</b>; it never grants local action authority.</p>
+
+    <div class="stage-frame">
+      <div class="stage" id="stage">
+        <div class="floor"></div>
+      </div>
+      <div class="hero-info">
+        <div class="hero-copy">
+          <strong id="heroName">Loading…</strong>
+          <span id="heroMeta">shimeji-web</span>
+          <div class="hero-tags" id="heroTags"></div>
+        </div>
+        <div class="hero-actions">
+          <button class="cmd" id="previewBtn" type="button">Preview voice</button>
+          <button class="cmd" id="studioBtn" type="button">Open in studio</button>
+          <button class="cmd primary" id="applyBtn" type="button">Apply companion</button>
+        </div>
+      </div>
+      <div class="console"><b id="consoleTitle">Ready</b> <span id="consoleLine">— drag the pet, or pick another below.</span></div>
+    </div>
+  </section>
+
+  <section class="filters">
+    <h2>Catalog</h2>
+    <div class="filter-tools">
+      <div class="search"><input id="searchInput" type="search" placeholder="Search the library" autocomplete="off" /></div>
+      <div id="tagChips"></div>
+      <span class="status" id="catalogStatus">Loading</span>
+    </div>
+  </section>
+
+  <div class="grid" id="grid"></div>
+
+  <footer>
+    A.G. designs each pet on the gateway; the site never holds provider credentials. Applying a pet patches your
+    companion profile only — it grants no local action authority. Generation status and Vertex config stay
+    gateway-side.
+  </footer>
+</main>
+
+<script>
+(function(){
+  "use strict";
+
+  var PALETTE_HEX={graphite:"#555a62",green:"#208553",blue:"#2f67d8",violet:"#7651c7",
+    red:"#d84a39",amber:"#c57a1b",teal:"#0e7d85",mono:"#8a8577"};
+
+  /* Local fallback catalog: used only when /api/pets is not reachable (the
+     Pages proxy is not configured, or the gateway is unavailable). Mirrors
+     gateway/lib/companion-catalog.js's BUILTIN_COMPANIONS visual data so the
+     library still renders full animated previews per the spec's "local
+     fallback" scenario. Apply/generate still report a gateway blocker. */
+  var FALLBACK_PETS=[
+    petRecord("shigmi-steward","Shigmi Steward","Default voice-first operator for everyday routing, memory, and short answers.",["default","operations","voice","routing"],"steward","graphite","hover",1),
+    petRecord("shigmi-scout","Shigmi Scout","Research and discovery companion for searching, comparing, and narrowing options.",["research","discovery","search","compare"],"scout","green","peek",1),
+    petRecord("shigmi-builder","Shigmi Builder","Implementation companion for code changes, tests, and deployment blockers.",["coding","build","tests","implementation"],"builder","blue","tap",1),
+    petRecord("shigmi-scribe","Shigmi Scribe","Writing companion for notes, emails, specs, drafts, and concise rewrites.",["writing","docs","notes","drafting"],"scribe","violet","trail",1),
+    petRecord("shigmi-sentinel","Shigmi Sentinel","Vigilant companion for monitoring alerts, incidents, and risk before they escalate.",["security","monitoring","alerts","incident-response"],"sentinel","red","tap",1.05),
+    petRecord("shigmi-cartographer","Shigmi Cartographer","Planning companion for roadmaps, sequencing, and turning goals into an ordered path.",["planning","roadmap","sequencing","navigation"],"cartographer","teal","peek",0.95),
+    petRecord("shigmi-tinker","Shigmi Tinker","Prototyping companion for quick experiments, small tools, and testing an idea fast.",["prototyping","tools","experiments","playful"],"tinker","amber","spark",0.9),
+    petRecord("shigmi-nomad","Shigmi Nomad","Scheduling companion for logistics, travel, and keeping commitments moving.",["scheduling","logistics","travel","planning"],"nomad","mono","walk",1.2),
+    petRecord("shigmi-lumen","Shigmi Lumen","Brainstorming companion for generating ideas fast and finding the sharpest one.",["brainstorming","ideas","creative","playful"],"lumen","violet","float",0.85),
+    petRecord("shigmi-anchor","Shigmi Anchor","Grounding companion for focus, calm, and steady follow-through on one thing at a time.",["focus","calm","wellbeing","grounding"],"anchor","blue","hover",1.1)
+  ];
+
+  var state={
+    pets:[],hero:null,query:"",tag:"",
+    x:140,y:120,vx:44,vy:0,dir:1,mode:"walk",drag:false,last:0,nextModeAt:0
+  };
+
+  var els={
+    stage:document.getElementById("stage"),
+    heroName:document.getElementById("heroName"),
+    heroMeta:document.getElementById("heroMeta"),
+    heroTags:document.getElementById("heroTags"),
+    previewBtn:document.getElementById("previewBtn"),
+    studioBtn:document.getElementById("studioBtn"),
+    applyBtn:document.getElementById("applyBtn"),
+    consoleTitle:document.getElementById("consoleTitle"),
+    consoleLine:document.getElementById("consoleLine"),
+    searchInput:document.getElementById("searchInput"),
+    tagChips:document.getElementById("tagChips"),
+    catalogStatus:document.getElementById("catalogStatus"),
+    grid:document.getElementById("grid")
+  };
+
+  var heroActor=null,heroCreature=null;
+
+  bindEvents();
+  loadPets();
+  requestAnimationFrame(tick);
+
+  function petRecord(id,name,summary,tags,skin,palette,motion,scale){
+    return {
+      id:id,companion_id:id,companion_name:name,companion_summary:summary,source:"builtin",
+      tags:tags,voice:"",
+      pet:{renderer:"shimeji-web",family:"shigmi",skin:skin,palette:palette,motion:motion,scale:scale}
+    };
+  }
+
+  function normalizePet(item){
+    var companion=item.companion||item;
+    var pet=item.pet||companion.pet||{};
+    return {
+      id:item.id||item.companion_id||companion.id,
+      companion_id:item.companion_id||companion.id||item.id,
+      companion_name:item.companion_name||companion.name||"Custom pet",
+      companion_summary:item.companion_summary||companion.summary||"",
+      source:item.source||companion.source||"custom",
+      tags:item.tags||companion.tags||[],
+      pet:{
+        skin:pet.skin||"companion",
+        palette:pet.palette||"blue",
+        motion:pet.motion||"walk",
+        scale:Number(pet.scale)||1
+      }
+    };
+  }
+
+  async function loadPets(){
+    try{
+      var res=await fetch("/api/pets",{headers:{accept:"application/json"}});
+      if(!res.ok)throw new Error("HTTP "+res.status);
+      var data=await res.json();
+      var pets=(data.pets||[]).map(normalizePet);
+      state.pets=pets.length?pets:FALLBACK_PETS;
+      els.catalogStatus.textContent=state.pets.length+" pets · gateway";
+    }catch(err){
+      state.pets=FALLBACK_PETS;
+      els.catalogStatus.textContent=state.pets.length+" pets · local fallback";
+    }
+    renderTagChips();
+    buildAmbient();
+    setupHero();
+    selectHero(pickFromUrl()||state.pets[0]);
+    renderGrid();
+  }
+
+  function pickFromUrl(){
+    var id=new URLSearchParams(window.location.search).get("companion");
+    if(!id)return null;
+    var match=state.pets.filter(function(item){return item.id===id;})[0];
+    return match||null;
+  }
+
+  function renderTagChips(){
+    var tags={};
+    state.pets.forEach(function(item){(item.tags||[]).forEach(function(tag){tags[tag]=true;});});
+    var list=Object.keys(tags).slice(0,10);
+    els.tagChips.innerHTML="";
+    list.forEach(function(tag){
+      var button=document.createElement("button");
+      button.type="button";button.className="chip";button.textContent=tag;
+      button.addEventListener("click",function(){
+        state.tag=state.tag===tag?"":tag;
+        renderTagChips();renderGrid();
+      });
+      if(state.tag===tag)button.classList.add("active");
+      els.tagChips.appendChild(button);
+    });
+  }
+
+  function bindEvents(){
+    els.searchInput.addEventListener("input",function(){
+      state.query=els.searchInput.value.trim().toLowerCase();
+      renderGrid();
+    });
+    els.previewBtn.addEventListener("click",previewHero);
+    els.applyBtn.addEventListener("click",applyHero);
+    els.studioBtn.addEventListener("click",function(){
+      if(!state.hero)return;
+      window.location.href="../?companion="+encodeURIComponent(state.hero.id);
+    });
+  }
+
+  /* ---- Creature DOM ------------------------------------------------------ */
+  function createCreature(){
+    var el=document.createElement("div");
+    el.className="shimeji";
+    el.innerHTML=
+      '<div class="shimeji-shadow"></div>'+
+      '<div class="shimeji-core">'+
+        '<div class="shimeji-ear shimeji-ear-left"></div><div class="shimeji-ear shimeji-ear-right"></div>'+
+        '<div class="shimeji-arm shimeji-arm-left"></div><div class="shimeji-arm shimeji-arm-right"></div>'+
+        '<div class="shimeji-body"></div>'+
+        '<div class="shimeji-face"><span class="shimeji-eye shimeji-eye-left"></span><span class="shimeji-eye shimeji-eye-right"></span><span class="shimeji-mouth"></span></div>'+
+        '<div class="shimeji-foot shimeji-foot-left"></div><div class="shimeji-foot shimeji-foot-right"></div>'+
+        '<div class="shimeji-topper"></div>'+
+      '</div>';
+    return el;
+  }
+
+  function styleCreature(el,pet,em,mode){
+    el.style.setProperty("--pet-em",Math.round(em*(Number(pet.scale)||1))+"px");
+    el.setAttribute("data-skin",pet.skin||"companion");
+    el.setAttribute("data-palette",pet.palette||"blue");
+    el.setAttribute("data-mode",mode||motionMode(pet.motion));
+  }
+
+  function motionMode(motion){
+    if(motion==="float"||motion==="trail")return "float";
+    if(motion==="tap"||motion==="spark")return motion;
+    if(motion==="climb"||motion==="peek")return motion==="peek"?"peek":"climb";
+    if(motion==="hover")return "hover";
+    return "walk";
+  }
+
+  /* ---- Ambient background creatures (pure CSS, no JS tick) --------------- */
+  function buildAmbient(){
+    var picks=state.pets.filter(function(item,index){return index%3===1;}).slice(0,2);
+    picks.forEach(function(pet,index){
+      var wrap=document.createElement("div");
+      wrap.className="ambient";
+      wrap.style.top=(30+index*90)+"px";
+      wrap.style.animation="pet-wander-"+index+" "+(14+index*4)+"s linear infinite";
+      var style=document.createElement("style");
+      var distance=180+index*60;
+      style.textContent="@keyframes pet-wander-"+index+"{0%{transform:translateX(-40px) scaleX(1)}"+
+        "49%{transform:translateX("+distance+"px) scaleX(1)}"+
+        "50%{transform:translateX("+distance+"px) scaleX(-1)}"+
+        "99%{transform:translateX(-40px) scaleX(-1)}100%{transform:translateX(-40px) scaleX(1)}}";
+      document.head.appendChild(style);
+      var creature=createCreature();
+      styleCreature(creature,pet.pet,44,motionMode(pet.pet.motion));
+      wrap.appendChild(creature);
+      els.stage.appendChild(wrap);
+    });
+  }
+
+  /* ---- Hero (interactive, JS-driven) -------------------------------------- */
+  function setupHero(){
+    heroActor=document.createElement("div");
+    heroActor.style.position="absolute";heroActor.style.left="0";heroActor.style.top="0";heroActor.style.willChange="transform";
+    heroCreature=createCreature();
+    heroCreature.className+=" interactive";
+    heroActor.appendChild(heroCreature);
+    els.stage.appendChild(heroActor);
+    heroCreature.addEventListener("pointerdown",startDrag);
+    window.addEventListener("pointermove",dragMove);
+    window.addEventListener("pointerup",endDrag);
+  }
+
+  function selectHero(pet){
+    if(!pet)return;
+    state.hero=pet;
+    state.mode=motionMode(pet.pet.motion);
+    styleCreature(heroCreature,pet.pet,84,state.mode);
+    els.heroName.textContent=pet.companion_name;
+    els.heroMeta.textContent="shimeji-web / "+(pet.pet.motion||"walk")+" / "+(pet.pet.palette||"blue");
+    els.heroTags.innerHTML="";
+    (pet.tags||[]).slice(0,5).forEach(function(tag){
+      var span=document.createElement("span");span.className="tag";span.textContent=tag;els.heroTags.appendChild(span);
+    });
+    setConsole("Ready","drag the pet, or pick another below.");
+    renderGrid();
+  }
+
+  function renderGrid(){
+    var query=state.query,tag=state.tag;
+    var list=state.pets.filter(function(item){
+      if(tag&&(item.tags||[]).indexOf(tag)<0)return false;
+      if(!query)return true;
+      var haystack=[item.companion_name,item.companion_summary,item.id,(item.tags||[]).join(" ")].join(" ").toLowerCase();
+      return haystack.indexOf(query)>=0;
+    });
+    els.grid.innerHTML="";
+    list.forEach(function(item){
+      var card=document.createElement("button");
+      card.type="button";
+      card.className="card"+(state.hero&&state.hero.id===item.id?" active":"");
+      var cardStage=document.createElement("div");
+      cardStage.className="card-stage";
+      var floor=document.createElement("div");floor.className="floor";cardStage.appendChild(floor);
+      var creature=createCreature();
+      styleCreature(creature,item.pet,40,motionMode(item.pet.motion));
+      var creatureWrap=document.createElement("div");
+      creatureWrap.style.position="absolute";creatureWrap.style.left="34%";creatureWrap.style.top="8px";
+      creatureWrap.appendChild(creature);
+      cardStage.appendChild(creatureWrap);
+      var body=document.createElement("div");
+      body.className="card-body";
+      body.innerHTML='<strong></strong><p></p><div class="card-meta"><span class="tag"></span><span class="card-dot"></span></div>';
+      body.querySelector("strong").textContent=item.companion_name;
+      body.querySelector("p").textContent=item.companion_summary;
+      body.querySelector(".card-meta .tag").textContent=item.pet.motion||"walk";
+      body.querySelector(".card-dot").style.background=PALETTE_HEX[item.pet.palette]||PALETTE_HEX.blue;
+      card.appendChild(cardStage);
+      card.appendChild(body);
+      card.addEventListener("click",function(){
+        selectHero(item);
+        els.stage.scrollIntoView({behavior:"smooth",block:"center"});
+      });
+      els.grid.appendChild(card);
+    });
+  }
+
+  /* ---- Hero physics (mirrors the pet studio's tick loop) ------------------ */
+  function tick(time){
+    var rect=els.stage.getBoundingClientRect();
+    if(!state.last)state.last=time;
+    var dt=Math.min((time-state.last)/1000,.04);state.last=time;
+    if(!state.drag&&rect.width>0&&rect.height>0){
+      if(time>state.nextModeAt){
+        state.mode=randomMode(state.hero?state.hero.pet.motion:"walk");
+        state.nextModeAt=time+1800+Math.random()*2600;
+        heroCreature.setAttribute("data-mode",state.mode);
+      }
+      var floorY=Math.max(30,rect.height-150);
+      if(state.mode==="walk"){
+        state.x+=state.vx*state.dir*dt;
+        state.y+=(floorY-state.y)*Math.min(1,dt*8);
+      }else if(state.mode==="climb"){
+        state.y-=36*dt;
+        if(state.y<12){state.mode="fall";heroCreature.setAttribute("data-mode","idle");}
+      }else if(state.mode==="fall"){
+        state.y+=210*dt;
+        if(state.y>floorY){state.y=floorY;state.mode="walk";heroCreature.setAttribute("data-mode","walk");}
+      }else{
+        state.y+=(floorY-state.y)*Math.min(1,dt*2);
+      }
+      if(state.x<8){state.x=8;state.dir=1}
+      if(state.x>rect.width-96){state.x=rect.width-96;state.dir=-1}
+      positionHero();
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function randomMode(motion){
+    if(motion==="climb"||motion==="peek")return Math.random()<.38?"climb":"walk";
+    if(motion==="float"||motion==="trail"||motion==="hover")return Math.random()<.5?"float":"walk";
+    if(motion==="spark"||motion==="tap")return Math.random()<.42?"wave":motion;
+    return Math.random()<.22?"idle":"walk";
+  }
+
+  function positionHero(){
+    heroActor.style.transform="translate("+state.x+"px,"+state.y+"px) scaleX("+state.dir+")";
+  }
+
+  function startDrag(event){
+    state.drag=true;heroCreature.classList.add("dragging");heroCreature.setPointerCapture(event.pointerId);
+    moveToPointer(event);
+  }
+  function dragMove(event){if(!state.drag)return;moveToPointer(event);}
+  function endDrag(){
+    if(!state.drag)return;
+    state.drag=false;heroCreature.classList.remove("dragging");
+    state.mode=motionMode(state.hero?state.hero.pet.motion:"walk");
+    heroCreature.setAttribute("data-mode",state.mode);
+  }
+  function moveToPointer(event){
+    var rect=els.stage.getBoundingClientRect();
+    state.x=event.clientX-rect.left-42;state.y=event.clientY-rect.top-46;
+    state.x=Math.max(8,Math.min(state.x,Math.max(8,rect.width-96)));
+    state.y=Math.max(8,Math.min(state.y,Math.max(8,rect.height-118)));
+    positionHero();
+  }
+
+  /* ---- Gateway actions (best-effort; never hold credentials here) -------- */
+  async function previewHero(){
+    if(!state.hero)return;
+    setConsole("Previewing",state.hero.companion_name);
+    try{
+      var res=await fetch("/api/pets/preview",{method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({companion_id:state.hero.companion_id})});
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Preview failed");
+      setConsole("Preview",data.sample_text||state.hero.companion_name);
+    }catch(err){
+      setConsole("Preview",state.hero.companion_summary||state.hero.companion_name);
+    }
+  }
+
+  async function applyHero(){
+    if(!state.hero)return;
+    setConsole("Applying",state.hero.companion_name);
+    try{
+      var res=await fetch("/api/pets/apply",{method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({companion_id:state.hero.companion_id,scope:"global",source:"website-pet-library"})});
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Apply failed");
+      setConsole("Applied",(data.profile&&data.profile.active_companion_name)||state.hero.companion_name);
+    }catch(err){
+      setConsole("Apply blocked",err.message||"Gateway unavailable — no credentials are held on this page.");
+    }
+  }
+
+  function setConsole(title,line){els.consoleTitle.textContent=title;els.consoleLine.textContent="— "+(line||"");}
+})();
+</script>
+</body>
+</html>
