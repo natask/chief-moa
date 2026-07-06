@@ -87,6 +87,8 @@ const SYNTAX_CHECK_FILES = [
   "lib/execute-engine.js",
   "scripts/smoke-execute-engine.js",
   "scripts/smoke-execute-language.js",
+  "lib/livekit-transport.js",
+  "scripts/smoke-livekit-transport.js",
 ];
 
 const SMOKE_SCRIPTS = [
@@ -140,6 +142,7 @@ const SMOKE_SCRIPTS = [
   "scripts/smoke-incognito.js",
   "scripts/smoke-execute-engine.js",
   "scripts/smoke-execute-language.js",
+  "scripts/smoke-livekit-transport.js",
 ];
 
 function hasDatabaseUrl() {

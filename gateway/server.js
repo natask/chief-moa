@@ -10,7 +10,12 @@ const {
   safeSystemPromptForProvider,
   withRequiredVoiceStyle,
 } = require("./lib/agent-profile");
-const { voiceProviderNames } = require("./lib/voice-providers");
+const { voiceProviderNames, createVoiceProvider } = require("./lib/voice-providers");
+const {
+  livekitConfigured,
+  livekitStatus,
+  mintRoomToken,
+} = require("./lib/livekit-transport");
 const {
   profileOptionsPayload,
   languageOptionsPayload,
@@ -430,6 +435,10 @@ const server = http.createServer(async (request, response) => {
           },
         },
         agent_profile: agentProfileRuntimeStatus(),
+        // Flag-gated LiveKit voice-transport prototype. Inert (enabled:false)
+        // unless LIVEKIT_URL/KEY/SECRET are set; the default WS pipeline above is
+        // unchanged either way.
+        livekit_voice: livekitStatus(),
         agent_loop: {
           runs_dir: AGENT_RUNS_DIR,
           harness_workdir: HARNESS_WORKDIR,
@@ -1527,6 +1536,59 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       await handleVoiceSessionTicket(request, response);
+      return;
+    }
+
+    // ---- LiveKit voice-transport PROTOTYPE (flag-gated) ---------------------
+    // All four routes below are inert unless LIVEKIT_URL + LIVEKIT_API_KEY +
+    // LIVEKIT_API_SECRET are set, so the default cascaded WS pipeline is
+    // unchanged. The client-facing token route and the three worker-facing
+    // internal hooks share the same bearer-token auth as their peers.
+    if (request.method === "POST" && url.pathname === "/v1/voice/livekit/token") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleLivekitToken(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/internal/voice/reason") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      if (!livekitConfigured()) {
+        sendJson(response, 503, livekitNotConfiguredPayload());
+        return;
+      }
+      await handleInternalVoiceReason(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/internal/voice/synthesize") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      if (!livekitConfigured()) {
+        sendJson(response, 503, livekitNotConfiguredPayload());
+        return;
+      }
+      await handleInternalVoiceSynthesize(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/internal/voice/turn-record") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      if (!livekitConfigured()) {
+        sendJson(response, 503, livekitNotConfiguredPayload());
+        return;
+      }
+      await handleInternalVoiceTurnRecord(request, response);
       return;
     }
 
@@ -6384,6 +6446,191 @@ async function handleVoiceSessionTicket(request, response) {
     expires_in_ms: expiresAt - now,
     device_id: profileDeviceIdFromBody(body),
   });
+}
+
+// ---- LiveKit voice-transport PROTOTYPE handlers ---------------------------
+
+function livekitNotConfiguredPayload() {
+  return {
+    error: "livekit transport not configured",
+    status: "not_configured",
+    reason: "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must all be set on the gateway",
+    docs: "livekit_worker/README.md",
+  };
+}
+
+// Mint a short-lived room token so a client (or the agents worker) can join the
+// per-session/branch room. Respects the same thread/branch semantics the
+// /v1/threads/switch consumers use: an explicit branch_id is honored, else the
+// session's active thread. Returns 503 when the spike is not configured.
+async function handleLivekitToken(request, response) {
+  if (!livekitConfigured()) {
+    sendJson(response, 503, livekitNotConfiguredPayload());
+    return;
+  }
+  const body = await readJsonBody(request);
+  const sessionId = sanitizeOptionalId(body.session_id || body.conversation_id, "default");
+  const surface = String(body.surface || body.client?.surface || "voice-livekit").slice(0, 80);
+  const branchId = body.branch_id
+    ? sanitizeOptionalId(body.branch_id, "default")
+    : sanitizeOptionalId(threadStore.getActive(sessionId, surface).branch_id, "default");
+  const deviceId = profileDeviceIdFromBody(body);
+  const identity = String(body.identity || body.client_id || deviceId || "").trim()
+    || randomId("moa-lk");
+  try {
+    const minted = await mintRoomToken({
+      sessionId,
+      branchId,
+      identity,
+      ttlSeconds: body.ttl_seconds,
+      metadata: JSON.stringify({ session_id: sessionId, branch_id: branchId, device_id: deviceId, surface }),
+    });
+    sendJson(response, 201, {
+      url: minted.url,
+      token: minted.token,
+      room: minted.room,
+      identity: minted.identity,
+      session_id: sessionId,
+      branch_id: branchId,
+      device_id: deviceId,
+      expires_at: minted.expires_at,
+      expires_in_ms: minted.expires_in_ms,
+    });
+  } catch (error) {
+    sendJson(response, 500, { error: `livekit token mint failed: ${cleanError(error)}` });
+  }
+}
+
+// Worker-facing reasoning hook: wraps the SAME runCascadedVoiceReasoning the
+// cascaded WS pipeline uses, so a LiveKit turn's reasoning, tool loop, context
+// decision, and thread handling are byte-identical. Source is tagged
+// "voice-livekit".
+async function handleInternalVoiceReason(request, response) {
+  const body = await readJsonBody(request);
+  const transcript = String(body.transcript || "").trim();
+  if (!transcript) {
+    sendJson(response, 400, { error: "transcript is required" });
+    return;
+  }
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript,
+      session_id: body.session_id || body.conversation_id || "",
+      conversation_id: body.conversation_id || body.session_id || "",
+      branch_id: body.branch_id || "default",
+      turn_id: body.turn_id || "",
+      device_id: body.device_id || body.deviceId || "",
+      all_branches_context: body.all_branches_context === true,
+      context_action: body.context_action,
+      response_modality: body.response_modality,
+      tts_provider_id: body.tts_provider_id,
+      tts_available: body.tts_available,
+      previous_tts_error: body.previous_tts_error,
+      source: "voice-livekit",
+    });
+    sendJson(response, 200, reasoning);
+  } catch (error) {
+    sendJson(response, 502, { error: `voice reasoning failed: ${cleanError(error)}` });
+  }
+}
+
+// Worker-facing TTS hook: wraps the active provider's synthesizeSpeech and
+// returns raw PCM16@16k mono as application/octet-stream, with reply metadata on
+// headers. If the active provider has no hosted TTS leg (e.g. gemini-live), this
+// reports the known migration gap instead of guessing.
+let internalTtsProviderInstance = null;
+function internalTtsProvider() {
+  if (!internalTtsProviderInstance) {
+    internalTtsProviderInstance = createVoiceProvider({
+      env: process.env,
+      systemPrompt: SYSTEM_PROMPT,
+      agentProfile,
+      reasoner: runCascadedVoiceReasoning,
+    });
+  }
+  return internalTtsProviderInstance;
+}
+
+async function handleInternalVoiceSynthesize(request, response) {
+  const body = await readJsonBody(request);
+  const text = String(body.text || body.tts_text || "").trim();
+  if (!text) {
+    sendJson(response, 400, { error: "text is required" });
+    return;
+  }
+  const provider = internalTtsProvider();
+  if (typeof provider.synthesizeSpeech !== "function") {
+    sendJson(response, 501, {
+      error: "active voice provider has no hosted TTS leg",
+      status: "tts_unavailable",
+      provider: provider.status?.().provider || "unknown",
+      reason: "the LiveKit spike needs a cascaded (chirp + cloud-tts/gemini-tts) provider for the synthesize hook",
+    });
+    return;
+  }
+  const language = String(body.language || "").trim();
+  const style = String(body.tts_style || body.style || "").trim();
+  try {
+    const pcm = await provider.synthesizeSpeech(text, language, style);
+    if (!pcm || !pcm.length) {
+      sendJson(response, 502, { error: "hosted TTS returned no audio", status: "tts_empty" });
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-length": pcm.length,
+      "cache-control": "private, no-store",
+      "x-moa-audio-encoding": "pcm16",
+      "x-moa-audio-sample-rate": "16000",
+      "x-moa-audio-channels": "1",
+      "x-moa-reply-language": language || "",
+    });
+    response.end(Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm));
+  } catch (error) {
+    sendJson(response, 502, { error: `voice synthesis failed: ${cleanError(error)}`, status: "tts_error" });
+  }
+}
+
+// Worker-facing turn-record hook: persists a completed LiveKit turn through the
+// SAME recordStreamingVoiceTurn path the WS pipeline uses, so LiveKit turns are
+// stored identically (transcript, assistant text, timings, tts_spoke, modality).
+async function handleInternalVoiceTurnRecord(request, response) {
+  const body = await readJsonBody(request);
+  try {
+    const record = await recordStreamingVoiceTurn({
+      session_id: body.session_id || body.conversation_id || "",
+      conversation_id: body.conversation_id || body.session_id || "",
+      branch_id: body.branch_id || "default",
+      turn_id: body.turn_id || "",
+      device_id: body.device_id || body.deviceId || "",
+      source: body.source || "voice-livekit",
+      transcript: body.transcript || "",
+      transcript_source: body.transcript_source || "stt",
+      assistant_text: body.assistant_text || "",
+      provider: body.provider || "livekit",
+      model: body.model || "",
+      input_languages: Array.isArray(body.input_languages) ? body.input_languages : [],
+      reply_language: body.reply_language || "",
+      tts_spoke: body.tts_spoke === true,
+      modality: body.modality || "",
+      tts_error: body.tts_error || "",
+      transcription_only: body.transcription_only === true,
+      incomplete: body.incomplete === true,
+      status: body.status || "",
+      started_at: body.started_at || "",
+      completed_at: body.completed_at || "",
+      profile_version: body.profile_version || "",
+    });
+    sendJson(response, 201, {
+      ok: true,
+      turn_id: record.id,
+      session_id: record.session_id,
+      branch_id: record.branch_id,
+      classification: record.classification,
+    });
+  } catch (error) {
+    sendJson(response, 502, { error: `voice turn-record failed: ${cleanError(error)}` });
+  }
 }
 
 async function handleVoiceProfileControl(record, transcript, turnProfileOptions = {}) {
