@@ -6959,13 +6959,69 @@ function voiceSystemContext(screenContext) {
 }
 
 function capSpeakText(text, maxChars) {
+  // Strip markdown noise, but preserve bracketed expressive tags (e.g.
+  // [whispering], [short pause]) that the Gemini-TTS leg renders: split into
+  // [tag] and prose segments and clean only the prose.
   const compact = String(text || "")
     .replace(/```[\s\S]*?```/g, "code omitted")
-    .replace(/[*_`#>~-]+/g, "")
+    .split(/(\[[^\]\n]{1,40}\])/)
+    .map((segment) => (/^\[[^\]\n]{1,40}\]$/.test(segment) ? segment : segment.replace(/[*_`#>~-]+/g, "")))
+    .join("")
     .replace(/\s+/g, " ")
     .trim();
   const limit = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : VOICE_TTS_MAX_CHARS;
   return truncate(compact, limit);
+}
+
+// Whitelisted Gemini-TTS inline expressive tags (square-bracketed). Only these
+// survive into the synthesized `input.text`; anything else the model brackets is
+// stripped from both the spoken and displayed text. Grounded in the Cloud
+// Text-to-Speech Gemini-TTS docs (non-speech sounds, style modifiers, pacing).
+const EXPRESSIVE_TAG_WHITELIST = new Set([
+  "sigh", "laughing", "laughs", "laugh", "uhm", "clears throat", "exhales",
+  "whispering", "whispers", "whisper", "shouting", "robotic", "sarcasm",
+  "excited", "curious", "warm", "reassuring", "cheerful", "sad",
+  "slow", "fast", "extremely fast", "short pause", "medium pause", "long pause",
+]);
+const EXPRESSIVE_TAG_LIST = Array.from(EXPRESSIVE_TAG_WHITELIST).map((tag) => `[${tag}]`).join(", ");
+
+function normalizeExpressiveTag(inner) {
+  return String(inner || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Parse a model reply for the expressive-speech carrying convention: an optional
+// leading `[style: ...]` line and whitelisted inline `[tag]`s. Returns the style
+// prompt (for input.prompt), the clean DISPLAY text (all tags removed), and the
+// speech text (only whitelisted inline tags kept, style line removed).
+function parseExpressiveReply(rawText) {
+  let text = String(rawText || "");
+  let style = "";
+  const styleMatch = text.match(/^\s*\[\s*style\s*:\s*([^\]\n]{1,200})\]\s*/i);
+  if (styleMatch) {
+    style = styleMatch[1].trim();
+    text = text.slice(styleMatch[0].length);
+  }
+  const displayText = text.replace(/\[[^\]\n]{0,60}\]/g, " ").replace(/\s+/g, " ").trim();
+  const speechText = text
+    .replace(/\[([^\]\n]{0,60})\]/g, (full, inner) => (EXPRESSIVE_TAG_WHITELIST.has(normalizeExpressiveTag(inner)) ? full : " "))
+    .replace(/\s+/g, " ")
+    .trim();
+  return { style, displayText, speechText };
+}
+
+// Tell the reasoning model it is driving an expressive TTS voice and how to steer
+// it. Only added for the gemini-tts leg, the one provider that renders a style
+// prompt and inline tags; the classic Cloud TTS voices would speak them literally.
+function voiceExpressiveDirective(input) {
+  if (String(input?.tts_provider_id || "") !== "gemini-tts") {
+    return "";
+  }
+  return [
+    "Expressive voice direction (you speak through an expressive TTS voice that renders emotion, pacing, and tone):",
+    "- When it genuinely fits the moment, open your reply with ONE style line in square brackets: [style: <a few words>], for example [style: warm, amused] or [style: calm, reassuring]. Put it first, on its own line, at most once.",
+    `- You may also place whitelisted inline tags in square brackets exactly where the effect belongs, separated by words. Allowed tags: ${EXPRESSIVE_TAG_LIST}.`,
+    "- Use expression sparingly and only when it fits; a neutral reply needs no tags. Never describe the tags in words. The voice performs them and they are removed from the on-screen text.",
+  ].join("\n");
 }
 
 function voiceTurnPayload(record, patch) {
@@ -8159,8 +8215,9 @@ async function runCascadedVoiceReasoningInner(input) {
   const memoryContext = recallMemoryContext(transcript);
   const languageDirective = replyLanguageDirective(profile);
   const modalityHint = voiceModalityHintBlock(profile, input);
+  const expressiveDirective = voiceExpressiveDirective(input);
   const messages = [{ role: "user", content: transcript }];
-  const systemBlocks = [memoryContext, sessionContext, modalityHint, languageDirective].filter(Boolean);
+  const systemBlocks = [memoryContext, sessionContext, modalityHint, expressiveDirective, languageDirective].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -8184,10 +8241,21 @@ async function runCascadedVoiceReasoningInner(input) {
   const text = String(toolTurn.text || "");
   // Re-read the profile: a tool may have changed voice_max_chars this turn.
   const effectiveAfter = agentProfile.effective(profileOptions);
-  const speak = capSpeakText(text, effectiveAfter.voice_max_chars);
+  // Split expressive direction out of the reply: the DISPLAY/stored transcript
+  // stays clean; the whitelisted inline tags and a leading style prompt only feed
+  // the Gemini-TTS leg (input.text + input.prompt). Other TTS providers get the
+  // clean text and no style prompt.
+  const expressive = parseExpressiveReply(text);
+  const useExpressiveTts = String(input?.tts_provider_id || "") === "gemini-tts";
+  const displaySpeak = capSpeakText(expressive.displayText, effectiveAfter.voice_max_chars);
+  const ttsText = useExpressiveTts
+    ? capSpeakText(expressive.speechText, effectiveAfter.voice_max_chars)
+    : displaySpeak;
   return {
-    speak,
-    display: text,
+    speak: displaySpeak,
+    display: displaySpeak,
+    tts_text: ttsText,
+    tts_style: useExpressiveTts ? expressive.style : "",
     language: replyLanguage,
     model: effectiveAfter.model || MODEL_ID,
     classification: "chat",

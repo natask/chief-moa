@@ -18,6 +18,9 @@
 //      returns the spoken confirmation text.
 //   4. Model routing: profile.model + profile.reasoning_provider route the next
 //      cascaded reasoning call to the selected provider/model (openai + vertex).
+//   5. Expressive speech: on the gemini-tts leg the reasoner prompts for style +
+//      inline tags, then splits a reply into a clean display transcript, the
+//      whitelisted-tag speech text, and the style prompt.
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -57,6 +60,8 @@ const fetchCalls = [];
 // When set, the model returns this tool call on the first round of a tools
 // request (no prior tool result), then plain confirmation text on the next round.
 let pendingToolCall = null;
+// When set, the model returns this exact text as its plain reply content.
+let pendingReply = null;
 global.fetch = async (url, options = {}) => {
   const u = String(url);
   if (u.includes("/chat/completions")) {
@@ -79,7 +84,7 @@ global.fetch = async (url, options = {}) => {
       });
     }
     return jsonResponse({
-      choices: [{ message: { role: "assistant", content: pendingToolCall ? "Done, master — switched to the Charon voice." : "Understood, master." } }],
+      choices: [{ message: { role: "assistant", content: pendingReply != null ? pendingReply : (pendingToolCall ? "Done, master — switched to the Charon voice." : "Understood, master.") } }],
     });
   }
   if (u.includes(":generateContent")) {
@@ -109,6 +114,7 @@ async function main() {
   await modalityHintIsInjected();
   await modelToolCallUpdatesProfile();
   await modelAndReasoningProviderRoute();
+  await expressiveDirectiveAndParsing();
 
   console.log(JSON.stringify({
     ok: true,
@@ -117,6 +123,7 @@ async function main() {
       "the reasoner injects a modality/TTS delivery hint (modality, availability, previous error)",
       "a model update_agent_profile tool call patches the profile through the sanitizer and the confirmation is spoken",
       "profile.model and profile.reasoning_provider route the next reasoning call to the selected provider/model",
+      "on gemini-tts the reasoner prompts for expressive speech and splits style, tags, and clean display text",
     ],
   }, null, 2));
 }
@@ -246,6 +253,36 @@ async function modelAndReasoningProviderRoute() {
 
   const reset = await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
   assert.equal(reset.status, 200, `provider reset must succeed: ${JSON.stringify(reset.json)}`);
+}
+
+async function expressiveDirectiveAndParsing() {
+  pendingReply = "[style: warm, amused] Hey there [whispering] good to see you [bogustag] friend.";
+  fetchCalls.length = 0;
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "hello again",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-expressive-turn",
+      // Signals the gemini-tts leg is active so the reasoner opts into expressive
+      // direction and tag parsing.
+      tts_provider_id: "gemini-tts",
+      tts_available: true,
+    });
+
+    const call = fetchCalls.find((c) => c.kind === "openai");
+    assert.ok(call, "the reasoner must call the configured model");
+    assert.match(JSON.stringify(call.body.messages || []), /Expressive voice direction/, "the reasoner must add the expressive-speech directive on the gemini-tts leg");
+
+    assert.equal(reasoning.tts_style, "warm, amused", "the leading style directive must become the TTS style prompt");
+    assert.match(reasoning.tts_text, /\[whispering\]/, "a whitelisted inline tag must survive into the speech text");
+    assert.doesNotMatch(reasoning.tts_text, /\[bogustag\]/, "a non-whitelisted tag must be stripped from the speech text");
+    assert.doesNotMatch(reasoning.tts_text, /\[style/i, "the style directive line must not remain in the speech text");
+    assert.doesNotMatch(reasoning.speak, /\[/, "the displayed/stored reply must be clean of all bracket tags");
+    assert.match(reasoning.speak, /Hey there/, "the displayed reply must keep the actual words");
+  } finally {
+    pendingReply = null;
+  }
 }
 
 function requestJson(method, url, body = null) {

@@ -49,6 +49,7 @@ async function main() {
     await responseModalityTextSkipsTts(tempDir);
     await ttsErrorSurfacedOnResult(tempDir);
     await spokenProfileControlConfirmation(tempDir);
+    await expressiveTtsRequestShape(tempDir);
     console.log("smoke-cascaded-voice: ok");
   } finally {
     global.fetch = previousFetch;
@@ -555,6 +556,47 @@ async function spokenProfileControlConfirmation(tempDir) {
   const done = events.find((e) => e.type === "turn_done");
   assert.equal(done.status, "completed");
   assert.equal(done.tts_spoke, true, "a spoken confirmation must report tts_spoke=true on turn_done");
+}
+
+// The Gemini-TTS leg carries expressive direction: the reasoner's clean reply is
+// spoken/displayed, while its whitelisted inline tags feed input.text and its
+// style prompt feeds input.prompt. The synthesize request must carry both, and
+// the displayed assistant_text must stay clean.
+async function expressiveTtsRequestShape(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "how are you", calls });
+
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      VOICE_TTS_PROVIDER: "gemini-tts",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US",
+    },
+    reasoner: async () => ({
+      speak: "Sure thing.",
+      display: "Sure thing.",
+      tts_text: "[whispering] Sure thing.",
+      tts_style: "warm, amused",
+      language: "en-US",
+      model: "test-model",
+      classification: "chat",
+    }),
+  });
+
+  const events = [];
+  const result = await provider.processTurn(makeTurn(tempDir, "expressive"), recordingHooks(events));
+
+  assert.equal(result.tts_spoke, true, "an expressive gemini-tts reply must stream hosted audio");
+  assert.equal(result.assistant_text, "Sure thing.", "the displayed/stored transcript must be the clean reply, no tags");
+
+  const ttsCall = calls.find((c) => c.kind === "tts");
+  assert.ok(ttsCall, "synthesize must be called");
+  assert.equal(ttsCall.body.input.prompt, "warm, amused", "the style prompt must ride input.prompt");
+  assert.match(String(ttsCall.body.input.text || ""), /\[whispering\]/, "whitelisted inline tags must ride input.text");
+  assert.equal(ttsCall.body.voice.modelName, "gemini-3.1-flash-tts-preview", "gemini-tts model must be selected");
 }
 
 function makeTurn(tempDir, tag) {

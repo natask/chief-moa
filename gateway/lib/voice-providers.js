@@ -685,7 +685,13 @@ class ChirpSttVoiceProvider {
       throw new Error(`cascaded reasoning failed: ${cleanError(error)}`);
     }
 
+    // `speak` is the CLEAN reply shown/stored (no expressive tags); `ttsText`
+    // carries the whitelisted inline tags for the Gemini-TTS leg, and `ttsStyle`
+    // is the natural-language style prompt (input.prompt). Non-expressive
+    // providers get the clean text and no style prompt from the reasoner.
     const speak = String(reasoning.speak || "").trim();
+    const ttsText = String(reasoning.tts_text || reasoning.speak || "").trim();
+    const ttsStyle = String(reasoning.tts_style || "").trim();
     if (speak) {
       await hooks.onAssistantText(speak);
     }
@@ -701,7 +707,7 @@ class ChirpSttVoiceProvider {
       // Deliberate text-only delivery, not a failure — leave spoke=false, no error.
     } else if (speak && this.canSynthesize(reasoning.language)) {
       try {
-        const pcm = await this.synthesizeSpeech(speak, reasoning.language);
+        const pcm = await this.synthesizeSpeech(ttsText, reasoning.language, ttsStyle);
         if (pcm && pcm.length) {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
           await hooks.sendAudio(pcm);
@@ -832,10 +838,13 @@ class ChirpSttVoiceProvider {
     return Boolean(this.ttsVoice) || Boolean(cloudTtsVoiceFor(code));
   }
 
-  async synthesizeSpeech(text, language) {
+  async synthesizeSpeech(text, language, stylePrompt = "") {
     const token = await this.accessToken();
     return synthesizeCloudTts({
       text,
+      // The Gemini-TTS leg accepts a natural-language style prompt in
+      // input.prompt; classic Cloud TTS voices do not, so only forward it there.
+      prompt: this.ttsProviderId === "gemini-tts" ? String(stylePrompt || "") : "",
       language: language || this.replyLanguage(),
       voice: this.ttsVoice,
       modelName: this.ttsProviderId === "gemini-tts" ? this.ttsModel : "",
@@ -2259,8 +2268,17 @@ async function synthesizeCloudTts(options) {
     ? [explicitEndpoint]
     : (modelName ? [CLOUD_TTS_ENDPOINT, CLOUD_TTS_V1BETA1_ENDPOINT] : [CLOUD_TTS_ENDPOINT]);
   const timeoutMs = Math.max(1, Number(options.timeoutMs) || 20000);
+  // Gemini-TTS caps input.text and input.prompt at ~4000 bytes each; classic
+  // Cloud TTS allows a longer text field. The natural-language style prompt goes
+  // in input.prompt alongside input.text and is honored only by promptable
+  // (modelName) voices, so it is attached only when a Gemini-TTS model is set.
+  const input = { text: String(options.text || "").slice(0, modelName ? 4000 : 5000) };
+  const promptText = String(options.prompt || "").trim();
+  if (modelName && promptText) {
+    input.prompt = promptText.slice(0, 2000);
+  }
   const body = JSON.stringify({
-    input: { text: String(options.text || "").slice(0, 5000) },
+    input,
     voice,
     audioConfig: {
       audioEncoding: "LINEAR16",
