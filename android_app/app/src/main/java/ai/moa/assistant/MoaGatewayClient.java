@@ -31,12 +31,62 @@ final class MoaGatewayClient {
         if (text.isEmpty()) {
             throw new IllegalStateException("empty gateway reply");
         }
-        return new GatewayTextResponse(text, response.optString("conversation_id", "").trim());
+        return new GatewayTextResponse(
+                text,
+                response.optString("conversation_id", "").trim(),
+                turnNotPersisted(response));
     }
 
     JSONObject voiceTurn(JSONObject body) throws Exception {
         String responseText = postJson(apiEndpoint("/v1/voice/turns"), body.toString(), 90000);
         return new JSONObject(responseText);
+    }
+
+    // Set the active thread for the shared session, or mint a new/fork/incognito
+    // branch. Streaming voice must call this before opening the WS session so the
+    // socket branch is fixed to the resolved thread; the reply carries the
+    // resolved branch under `thread.branch_id`.
+    JSONObject switchThread(JSONObject body) throws Exception {
+        String responseText = postJson(apiEndpoint("/v1/threads/switch"), body.toString(), 15000);
+        if (responseText.trim().isEmpty()) {
+            return new JSONObject();
+        }
+        return new JSONObject(responseText);
+    }
+
+    // A turn whose response context block says persisted:false was answered but
+    // never stored (incognito). Clients surface a "(not saved)" cue for it.
+    static boolean turnNotPersisted(JSONObject response) {
+        JSONObject context = response == null ? null : response.optJSONObject("context");
+        return context != null && context.has("persisted") && !context.optBoolean("persisted", true);
+    }
+
+    // Resolve the branch a /v1/threads/switch response landed on. The gateway
+    // returns the resolved thread under `thread.branch_id`; fall back through the
+    // active pointer and a top-level field for older shapes.
+    static String branchIdFromSwitch(JSONObject response) {
+        if (response == null) {
+            return "";
+        }
+        String direct = safe(response.optString("branch_id", ""));
+        if (!direct.isEmpty()) {
+            return direct;
+        }
+        JSONObject thread = response.optJSONObject("thread");
+        if (thread != null) {
+            String value = firstNonEmpty(thread.optString("branch_id", ""), thread.optString("id", ""));
+            if (!value.isEmpty()) {
+                return value;
+            }
+        }
+        JSONObject active = response.optJSONObject("active");
+        if (active != null) {
+            String value = firstNonEmpty(active.optString("branch_id", ""), active.optString("id", ""));
+            if (!value.isEmpty()) {
+                return value;
+            }
+        }
+        return "";
     }
 
     // Record mode: upload a finished raw-audio note. This is a plain HTTP POST
@@ -499,10 +549,17 @@ final class MoaGatewayClient {
     static final class GatewayTextResponse {
         final String text;
         final String conversationId;
+        // True when the gateway did not persist this turn (incognito context).
+        final boolean notSaved;
 
         GatewayTextResponse(String text, String conversationId) {
+            this(text, conversationId, false);
+        }
+
+        GatewayTextResponse(String text, String conversationId, boolean notSaved) {
             this.text = text;
             this.conversationId = conversationId == null ? "" : conversationId.trim();
+            this.notSaved = notSaved;
         }
     }
 }

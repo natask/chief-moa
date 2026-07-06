@@ -62,6 +62,9 @@ public final class OverlayService extends Service {
     // a broken or blank turn. No local TTS is used (hosted-audio-only policy).
     private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
     private static final String NOT_SPOKEN_SUFFIX = "\n\n(not spoken)";
+    // Mirror of the "(not spoken)" convention for an incognito turn the gateway
+    // answered but did not persist (context.persisted === false).
+    private static final String NOT_SAVED_SUFFIX = "\n\n(not saved)";
     // Inactivity watchdog for a committed streaming turn. It is armed on commit
     // and RESET by every streaming event (partial/final transcript, assistant
     // text, assistant audio start/done). If no event arrives for this long while
@@ -145,6 +148,25 @@ public final class OverlayService extends Service {
     private MoaAudioCaptureController audioNoteCapture;
     private ByteArrayOutputStream audioNoteBuffer;
     private TextView recordModePill;
+    // Context/thread controls (client-affordances lane). "New thread" arms a
+    // one-shot so the NEXT sent turn (chat or voice) starts a fresh thread;
+    // incognito is a persistent mode where every turn is answered but never
+    // persisted by the gateway. Both are explicit client overrides that always
+    // win over the model's own context choice.
+    private boolean newThreadArmed;
+    private boolean incognitoEnabled;
+    private TextView newThreadPill;
+    private TextView incognitoPill;
+    private LinearLayout contextControlsRow;
+    // The active streaming voice session runs on an inc- branch fixed at session
+    // start via /v1/threads/switch; its turns are never persisted, so the reply
+    // is marked "(not saved)".
+    private boolean streamingTurnIncognito;
+    // Guards the async /v1/threads/switch that resolves a branch before a
+    // streaming voice session can open for an incognito / new-thread turn.
+    private int streamingSwitchToken;
+    private boolean streamingBranchSwitchPending;
+    private boolean streamingCommitPendingOpen;
     private boolean pendingContinuousVoiceRestartAfterAudio;
     private boolean streamingAssistantAudioPlaying;
     // Whether any assistant audio frame actually played during the current
@@ -593,6 +615,9 @@ public final class OverlayService extends Service {
         composer = null;
         runStatusView = null;
         recordModePill = null;
+        newThreadPill = null;
+        incognitoPill = null;
+        contextControlsRow = null;
         dying.animate()
                 .alpha(0f)
                 .translationY(dp(14))
@@ -1066,6 +1091,7 @@ public final class OverlayService extends Service {
         ));
 
         panel.addView(createHeader());
+        panel.addView(createContextControlsRow());
 
         messageScroll = new ScrollView(this);
         messageScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -1120,6 +1146,82 @@ public final class OverlayService extends Service {
         close.setOnClickListener(v -> dismissOverlayUi());
         header.addView(close);
         return header;
+    }
+
+    // Compact thread controls under the header. "New thread" arms a one-shot
+    // fresh-thread state for the next turn; "Incognito" toggles a persistent
+    // no-persistence mode. The row itself tints while incognito is on so the
+    // state reads at a glance without opening the full app.
+    private View createContextControlsRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(6), dp(5), dp(6), dp(5));
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        rowParams.topMargin = dp(8);
+        row.setLayoutParams(rowParams);
+        contextControlsRow = row;
+
+        newThreadPill = pill("New thread", 0x16FFFFFF, MoaColors.MUTED);
+        newThreadPill.setOnClickListener(v -> toggleNewThreadArmed());
+        row.addView(newThreadPill);
+
+        incognitoPill = pill("Incognito", 0x16FFFFFF, MoaColors.MUTED);
+        incognitoPill.setOnClickListener(v -> toggleIncognito());
+        row.addView(incognitoPill);
+
+        // Flexible spacer keeps the pills left-aligned; the row tint fills behind.
+        row.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
+
+        refreshContextControls();
+        return row;
+    }
+
+    // Arm/disarm the one-shot new-thread state. Re-tapping disarms it; it is also
+    // consumed automatically once a turn rides on it.
+    private void toggleNewThreadArmed() {
+        newThreadArmed = !newThreadArmed;
+        refreshContextControls();
+    }
+
+    // Toggle the persistent incognito mode on/off.
+    private void toggleIncognito() {
+        incognitoEnabled = !incognitoEnabled;
+        refreshContextControls();
+    }
+
+    private void refreshContextControls() {
+        if (newThreadPill != null) {
+            boolean armed = newThreadArmed;
+            newThreadPill.setText(armed ? "New thread armed" : "New thread");
+            newThreadPill.setTextColor(armed ? MoaColors.INK : MoaColors.MUTED);
+            newThreadPill.setBackground(MoaDrawables.rounded(
+                    armed ? MoaColors.GOLD : 0x16FFFFFF,
+                    dp(999),
+                    armed ? 0x33FFFFFF : 0x10FFFFFF,
+                    dp(1)
+            ));
+        }
+        if (incognitoPill != null) {
+            boolean on = incognitoEnabled;
+            incognitoPill.setText(on ? "Incognito on" : "Incognito");
+            incognitoPill.setTextColor(on ? MoaColors.INK : MoaColors.MUTED);
+            incognitoPill.setBackground(MoaDrawables.rounded(
+                    on ? MoaColors.EMBER : 0x16FFFFFF,
+                    dp(999),
+                    on ? 0x40FFFFFF : 0x10FFFFFF,
+                    dp(1)
+            ));
+        }
+        if (contextControlsRow != null) {
+            // Persistent tinted status row while incognito is on.
+            contextControlsRow.setBackground(incognitoEnabled
+                    ? MoaDrawables.rounded(0x22FF8A3D, dp(14), 0x40FF8A3D, dp(1))
+                    : null);
+        }
     }
 
     private View createComposer() {
@@ -1380,6 +1482,12 @@ public final class OverlayService extends Service {
         if (text.isEmpty()) {
             return;
         }
+        // An incognito voice turn is answered but never stored; mark the visible
+        // reply so the user knows nothing was saved. The spoken `speak` string is
+        // left untouched so the marker is never read aloud.
+        if (MoaGatewayClient.turnNotPersisted(response)) {
+            text = appendNotSaved(text);
+        }
 
         boolean shouldSpeak = fromVoice && !speakText.isEmpty();
         boolean speaking = false;
@@ -1501,7 +1609,7 @@ public final class OverlayService extends Service {
                 MoaGatewayClient.GatewayTextResponse reply = gatewayClient().chat(requestBody);
                 mainHandler.post(() -> {
                     updateConversationId(reply.conversationId);
-                    deliverReply(reply.text, fromVoice);
+                    deliverReply(reply.notSaved ? appendNotSaved(reply.text) : reply.text, fromVoice);
                 });
             } catch (Exception error) {
                 Log.w(TAG, "gateway chat failed: " + cleanError(error));
@@ -1600,7 +1708,32 @@ public final class OverlayService extends Service {
             history.put(item);
         }
         body.put("messages", history);
+        applyContextControls(body);
         return body;
+    }
+
+    // Attach the explicit client thread control to an HTTP turn body (chat or
+    // voice turn). Incognito is a persistent mode and always wins; the one-shot
+    // new-thread arm is consumed by the turn it rides on. The gateway treats an
+    // explicit context_action as an override that beats the model's own choice.
+    private void applyContextControls(JSONObject body) throws JSONException {
+        if (incognitoEnabled) {
+            body.put("context_action", "incognito");
+            return;
+        }
+        if (newThreadArmed) {
+            body.put("context_action", "new");
+            newThreadArmed = false;
+            refreshContextControls();
+        }
+    }
+
+    private String appendNotSaved(String text) {
+        String value = safe(text);
+        if (value.isEmpty() || value.endsWith(NOT_SAVED_SUFFIX)) {
+            return value;
+        }
+        return value + NOT_SAVED_SUFFIX;
     }
 
     private String androidDeviceId() {
@@ -2041,6 +2174,15 @@ public final class OverlayService extends Service {
         if (orbView != null) {
             orbView.setHeld(false);
         }
+        // Released while an incognito / new-thread branch switch is still in
+        // flight: the session has not opened yet, so remember to commit as soon
+        // as it does instead of dropping the release.
+        if (streamingBranchSwitchPending && streamingVoiceController == null) {
+            streamingCommitPendingOpen = true;
+            setVoiceRuntimeState(VoiceRuntimeState.SENDING);
+            updateMicState();
+            return;
+        }
         if (streamingVoiceActive() && streamingVoiceController != null) {
             commitStreamingVoiceTurnNow();
             return;
@@ -2177,6 +2319,7 @@ public final class OverlayService extends Service {
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
         nextManualVoiceFollowsActiveRun = false;
+        invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
             cancelStreamingVoice();
@@ -2444,6 +2587,7 @@ public final class OverlayService extends Service {
     private void cancelStreamingVoice() {
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
+        invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
         cancelStreamingTurnWatchdog();
         if (streamingVoiceActive()) {
@@ -2486,8 +2630,107 @@ public final class OverlayService extends Service {
 
     private void startStreamingVoiceTurn(boolean autoCommitOnSilence, boolean continuousLoop) {
         loadSettings();
-        Log.i(TAG, "startStreamingVoiceTurn autoCommit=" + autoCommitOnSilence
+        // Any prior in-flight branch switch is now stale, and a fresh start
+        // clears any pending commit-on-open.
+        invalidatePendingBranchSwitch();
+        // The default branch opens with no extra round trip. Incognito and a
+        // one-shot "new thread" must first resolve their branch through
+        // /v1/threads/switch, because the streaming WS branch is fixed at session
+        // start and cannot change once the socket is open.
+        String contextAction = incognitoEnabled ? "incognito" : (newThreadArmed ? "new" : "");
+        if (contextAction.isEmpty()) {
+            openStreamingVoiceSession(autoCommitOnSilence, continuousLoop, "default", false);
+            return;
+        }
+        resolveThreadBranchThenOpenStreamingVoice(autoCommitOnSilence, continuousLoop, contextAction);
+    }
+
+    // Resolve the thread branch for an incognito / new-thread streaming voice turn
+    // off the main thread, then open the session on the returned branch. The fast
+    // (default-branch) path never enters here, so ordinary voice keeps its
+    // immediate socket connect. An incognito switch that fails is surfaced rather
+    // than silently opening a persisted session, keeping the incognito guarantee.
+    private void resolveThreadBranchThenOpenStreamingVoice(boolean autoCommit, boolean continuous, String action) {
+        final boolean incognito = "incognito".equals(action);
+        // Consume the one-shot "new" arm now that we are acting on it; incognito
+        // is a persistent mode and stays on.
+        if (!incognito) {
+            newThreadArmed = false;
+            refreshContextControls();
+        }
+        // Release any prior controller/timers so the mic and socket are free while
+        // the branch resolves, mirroring openStreamingVoiceSession's entry.
+        cancelContinuousVoiceRestart();
+        cancelStreamingTurnWatchdog();
+        if (streamingVoiceController != null) {
+            streamingVoiceController.destroy();
+            streamingVoiceController = null;
+        }
+        showTranscriptOverlay("");
+        setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
+        updateMicState();
+        final int token = ++streamingSwitchToken;
+        streamingBranchSwitchPending = true;
+        streamingCommitPendingOpen = false;
+        final String switchSession = conversationId.isEmpty() ? MoaPrefs.conversationId(this) : conversationId;
+        final String url = gatewayUrl;
+        final String authToken = gatewayToken;
+        final String deviceId = androidDeviceId();
+        new Thread(() -> {
+            String branch = "";
+            try {
+                JSONObject body = new JSONObject();
+                body.put("session_id", switchSession);
+                body.put("action", action);
+                body.put("surface", "android-overlay");
+                body.put("device_id", deviceId);
+                JSONObject switchResponse = new MoaGatewayClient(url, authToken).switchThread(body);
+                branch = MoaGatewayClient.branchIdFromSwitch(switchResponse);
+            } catch (Exception error) {
+                Log.w(TAG, "threads/switch failed: " + cleanError(error));
+            }
+            final String resolvedBranch = branch;
+            mainHandler.post(() -> {
+                if (token != streamingSwitchToken) {
+                    // Superseded by a newer start, cancel, or dismiss.
+                    return;
+                }
+                streamingBranchSwitchPending = false;
+                boolean switchOk = !resolvedBranch.isEmpty();
+                if (incognito && !switchOk) {
+                    // Never open a persisted session for an incognito request; that
+                    // would break the "nothing is stored" guarantee.
+                    streamingCommitPendingOpen = false;
+                    pushToTalkVoiceTurn = false;
+                    if (orbView != null) {
+                        orbView.setHeld(false);
+                    }
+                    String notice = "Couldn't start a private turn. Try again.";
+                    showTranscriptOverlay("");
+                    updateVoiceAssistantTranscript(notice);
+                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+                    updateMicState();
+                    scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
+                    return;
+                }
+                String branchToUse = switchOk ? resolvedBranch : "default";
+                openStreamingVoiceSession(autoCommit, continuous, branchToUse, incognito && switchOk);
+            });
+        }, "moa-thread-switch").start();
+    }
+
+    private void invalidatePendingBranchSwitch() {
+        streamingSwitchToken++;
+        streamingBranchSwitchPending = false;
+        streamingCommitPendingOpen = false;
+    }
+
+    private void openStreamingVoiceSession(boolean autoCommitOnSilence, boolean continuousLoop, String branchId, boolean incognito) {
+        loadSettings();
+        Log.i(TAG, "openStreamingVoiceSession autoCommit=" + autoCommitOnSilence
                 + " continuousLoop=" + continuousLoop
+                + " branch=" + safe(branchId)
+                + " incognito=" + incognito
                 + " gatewayConfigured=" + !safe(gatewayUrl).isEmpty()
                 + " token=" + (safe(gatewayToken).isEmpty() ? "missing" : "set"));
         cancelContinuousVoiceRestart();
@@ -2499,6 +2742,7 @@ public final class OverlayService extends Service {
         streamingTurnAutoCommit = autoCommitOnSilence;
         streamingTurnContinuous = continuousLoop;
         streamingTurnRetried = false;
+        streamingTurnIncognito = incognito;
         final int generation = ++streamingVoiceGeneration;
         currentStreamingTurnRouted = false;
         currentStreamingTurnCommitRequested = false;
@@ -2510,7 +2754,8 @@ public final class OverlayService extends Service {
         resetVoiceTurnTranscript();
         final String stableSessionId = conversationId.isEmpty() ? MoaPrefs.conversationId(this) : conversationId;
         updateConversationId(stableSessionId);
-        streamingVoiceController = new MoaStreamingVoiceSessionController(gatewayUrl, gatewayToken, MoaPrefs.spokenRepliesEnabled(this), stableSessionId, "default", autoCommitOnSilence, new MoaStreamingVoiceSessionController.Callback() {
+        final String sessionBranch = safe(branchId).isEmpty() ? "default" : safe(branchId);
+        streamingVoiceController = new MoaStreamingVoiceSessionController(gatewayUrl, gatewayToken, MoaPrefs.spokenRepliesEnabled(this), stableSessionId, sessionBranch, autoCommitOnSilence, new MoaStreamingVoiceSessionController.Callback() {
             @Override
             public void onSessionStarted(String sessionId, String turnId) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -2664,6 +2909,9 @@ public final class OverlayService extends Service {
                 if (!currentStreamingTurnRouted) {
                     nextStreamingTurnFollowsActiveRun = false;
                     recordCurrentStreamingAssistant();
+                    if (streamingTurnIncognito) {
+                        markCurrentReplyNotSaved();
+                    }
                 }
                 String turnStatus = safe(status);
                 if ("completed".equals(turnStatus)) {
@@ -2784,6 +3032,13 @@ public final class OverlayService extends Service {
             }
         });
         streamingVoiceController.startSession();
+        if (streamingCommitPendingOpen) {
+            // The user released while the branch was still resolving. Commit the
+            // turn now that the session exists so it does not hang listening; a
+            // near-empty capture returns a no_speech turn_done rather than a stall.
+            streamingCommitPendingOpen = false;
+            mainHandler.post(this::commitStreamingVoiceTurnNow);
+        }
     }
 
     private boolean isRecoverableStreamingVoiceError(String message) {
@@ -2963,6 +3218,17 @@ public final class OverlayService extends Service {
             return;
         }
         updateVoiceAssistantTranscript(text + NOT_SPOKEN_SUFFIX);
+    }
+
+    // Append the "(not saved)" marker to the streaming reply of an incognito
+    // voice session (its inc- branch is never persisted). The stored chat message
+    // was already recorded before this runs, so only the overlay row shows it.
+    private void markCurrentReplyNotSaved() {
+        String text = safe(voiceAssistantTranscript);
+        if (text.isEmpty() || text.endsWith(NOT_SAVED_SUFFIX)) {
+            return;
+        }
+        updateVoiceAssistantTranscript(text + NOT_SAVED_SUFFIX);
     }
 
     private boolean shouldStartVoice(Intent intent) {
