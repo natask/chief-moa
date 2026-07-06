@@ -113,6 +113,11 @@ const GATEWAY_UI_PATH = path.join(GATEWAY_DIR, "public", "gateway-ui.html");
 // sessions per project. Served by this same gateway service -- one surface,
 // no second app to maintain.
 const GATEWAY_CONSOLE_PATH = path.join(GATEWAY_DIR, "public", "console.html");
+// Credential autopilot panel: gateway-served, read-and-fix view of account
+// connections, credential health, expiry, and pending device notifications.
+// Reads the /v1/account-connections endpoints with the gateway token; it never
+// receives or displays raw provider credentials.
+const CREDENTIAL_PANEL_PATH = path.join(GATEWAY_DIR, "public", "credential-panel.html");
 // Projects store. A project is a named working directory the agent operates in.
 // Flat JSON file next to the run store -- same durability model, no database.
 const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
@@ -289,7 +294,38 @@ const PUBLIC_BASE_URL = stripTrailingSlash(
 const accountConnections = createAccountConnectionStore({
   dataDir: DATA_DIR,
   publicBaseUrl: PUBLIC_BASE_URL,
+  // Bridge a needs_user_action credential notification into the cross-device
+  // tool hub so the target phone/browser actually learns it must reauthorize.
+  // The store owns the durable notification; this only mirrors it onto the
+  // /v1/tool/requests queue and links the two by id.
+  onUserActionNotification: bridgeCredentialNotificationToDeviceHub,
 });
+
+// Turn a freshly queued credential notification into a device-hub tool request.
+// Input carries only the non-secret fields the store already built
+// (connection id, provider label, connection label, reason, reauth endpoint).
+// Returns the created tool-request id so the store can link them; returns null
+// on any failure so credential health never depends on the hub being reachable.
+function bridgeCredentialNotificationToDeviceHub(notification) {
+  try {
+    const toolRequest = createToolRequest({
+      tool: notification.tool,
+      target_device_id: notification.device_id,
+      target_surface_type: notification.surface_type,
+      input: notification.input,
+      source: "credential-health",
+      source_surface_type: "gateway",
+      instruction: `Reauthorize ${notification.input.provider_label} ("${notification.input.connection_label}").`,
+    });
+    recordToolRequestProductEvent(toolRequest, "queued").catch((error) => {
+      console.error(`credential notification product event failed: ${cleanError(error)}`);
+    });
+    return { tool_request_id: toolRequest.id };
+  } catch (error) {
+    console.error(`credential notification device-hub bridge failed: ${cleanError(error)}`);
+    return null;
+  }
+}
 // Periodic credential-health pass: refresh ahead of expiry where the provider
 // supports it, otherwise flag the user and queue a device notification. Set
 // ACCOUNT_HEALTH_INTERVAL_MS=0 to disable (tests drive it via
@@ -335,6 +371,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && (url.pathname === "/console" || url.pathname === "/agent")) {
       sendStaticHtml(response, GATEWAY_CONSOLE_PATH);
+      return;
+    }
+
+    if (request.method === "GET" && (url.pathname === "/credentials" || url.pathname === "/credential-panel")) {
+      sendStaticHtml(response, CREDENTIAL_PANEL_PATH);
       return;
     }
 

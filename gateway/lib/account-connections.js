@@ -98,6 +98,13 @@ function createAccountConnectionStore(options = {}) {
   const refreshLeewayMs = numberOr(options.refreshLeewayMs, numberOr(env.ACCOUNT_REFRESH_LEEWAY_MS, 15 * 60 * 1000));
   const actionTtlMs = numberOr(options.actionTtlMs, numberOr(env.ACCOUNT_ACTION_TTL_MS, 10 * 60 * 1000));
   const now = options.now || (() => Date.now());
+  // Optional bridge into the cross-device tool hub. The store stays decoupled
+  // from the device-hub implementation: the gateway injects a hook that turns a
+  // freshly queued credential notification into a /v1/tool/requests entry and
+  // returns its id. A missing or failing hook never breaks refresh/health.
+  const onUserActionNotification = typeof options.onUserActionNotification === "function"
+    ? options.onUserActionNotification
+    : null;
 
   fs.mkdirSync(storeDir, { recursive: true });
   const encryptionKey = loadEncryptionKey(env, keyPath);
@@ -379,9 +386,23 @@ function createAccountConnectionStore(options = {}) {
         reauth_endpoint: `/v1/account-connections/${record.id}/reauth`,
       },
       status: "queued",
+      tool_request_id: "",
       created_at: nowIso(),
       receipt: null,
     };
+    // Bridge to the cross-device tool hub so the target device actually learns
+    // it must reauthorize. Failure or absence of the bridge must not break the
+    // health/refresh path; the internal notification stays the durable record.
+    if (onUserActionNotification) {
+      try {
+        const bridged = onUserActionNotification(clone(notification));
+        if (bridged && bridged.tool_request_id) {
+          notification.tool_request_id = String(bridged.tool_request_id);
+        }
+      } catch {
+        // swallow: notification stays queued without a device-hub link
+      }
+    }
     notifications[notification.id] = notification;
     flushNotifications();
     emitEvent(record.id, "account.connection.notification.queued", gatewayActor(), {
@@ -390,6 +411,7 @@ function createAccountConnectionStore(options = {}) {
       notification_id: notification.id,
       device_id: target.device_id,
       channel: notification.channel,
+      tool_request_id: notification.tool_request_id,
     });
     return notification;
   }
