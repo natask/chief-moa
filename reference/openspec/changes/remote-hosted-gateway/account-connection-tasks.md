@@ -24,19 +24,38 @@ and verified by `gateway/scripts/smoke-account-connections.js`
       with the first gateway feature that consumes these credentials)
 - [x] Ticket 6: `POST .../reauth` + queued device notifications with receipts
       (gateway-owned queue at `GET /v1/account-connections/notifications` and
-      `POST .../notifications/{id}/receipt`; wiring through `/v1/tool/requests`
-      is deferred until the device-client tool-request hub exists in this repo)
+      `POST .../notifications/{id}/receipt`). Update 2026-07-06: the
+      `/v1/tool/requests` wiring is now implemented. When a connection enters
+      `needs_user_action`, the store's `onUserActionNotification` hook (supplied
+      by `gateway/server.js` `bridgeCredentialNotificationToDeviceHub`) creates a
+      `notification.account_connection` tool request targeting the connection's
+      device, links it back by `tool_request_id`, and lets the device claim and
+      receipt it. Missing/offline targets still record a skipped notification.
 - [x] Ticket 7: disable/disconnect/revocation audit (provider-side revoke is
       best-effort; the generic OAuth adapter has no per-provider revoke
       endpoints yet)
 - [x] Ticket 8: policy + tasks artifacts in repo (fabro workflow validation not
       available in this checkout)
 
+Follow-on implemented 2026-07-06 (credential autopilot, PRODUCT 4):
+
+- [x] Device-hub notification bridge (Ticket 6 deferred item): store hook +
+      `bridgeCredentialNotificationToDeviceHub`. Fixture gained a
+      `fixture-grant-shortbad` code so a health pass can be proven to flag the
+      user deterministically. Verified by
+      `scripts/smoke-credential-device-notification.js`
+      (`npm run smoke:credential-notify`, part of `npm run check`).
+- [x] Gateway-served credential panel at `/credentials` (and
+      `/credential-panel`): `gateway/public/credential-panel.html`, a
+      read-and-fix view over the `/v1/account-connections` endpoints
+      (connections, health, expiry, pending device notifications, refresh /
+      reauth / run-health). It never receives raw credential material.
+
 Deferred, in one list: better-auth per-user identity (single-user id derived
 from the gateway token until then), Postgres-backed store module,
-`oauth2_device_code` flow, per-provider revoke/userinfo endpoints, and
-`/v1/tool/requests` notification wiring. Out of scope by policy: any automated
-account creation or signup automation.
+`oauth2_device_code` flow, and per-provider revoke/userinfo endpoints. Out of
+scope by policy: any automated account creation, email/inbox provisioning, or
+signup automation (the account-provisioning pipeline from wants 2 / doc 02b).
 
 ## Ticket 1: Provider Catalog
 

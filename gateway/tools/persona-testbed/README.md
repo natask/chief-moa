@@ -4,7 +4,37 @@ Send the same system-instruction stack + persona + probe questions to
 swappable middle models (the LLM leg of the cascaded voice pipeline).
 STT and TTS stay out of scope. Never touches the live gateway.
 
-## Run it
+## UI (the normal way)
+
+```sh
+cd gateway/tools/persona-testbed
+node server.mjs                  # -> http://127.0.0.1:8899
+node --env-file=.env server.mjs  # with OpenAI/Grok/Claude keys
+```
+
+Open http://127.0.0.1:8899. Edit the persona in the left rail, toggle the
+gateway stack, pick providers, then type a question or click a probe. Each
+provider answers in its own card, side by side, with model and latency.
+"Run full suite" fires every probe at every selected provider.
+
+On the droplet, run it in a throwaway container bound to localhost and reach
+it through an ssh tunnel (the server holds credentials — never publish the
+port):
+
+```sh
+ssh -L 8899:localhost:8899 root@<droplet>
+# then on the droplet:
+cd /opt/chief-moa
+ADC_HOST=$(sed -n 's/^GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH=//p' gateway.env)
+ADC_CONT=$(sed -n 's/^GOOGLE_APPLICATION_CREDENTIALS=//p' gateway.env)
+docker run --rm --env-file gateway.env \
+  -v "$ADC_HOST:$ADC_CONT:ro" \
+  -v /opt/chief-moa/app/gateway/tools/persona-testbed:/tb -w /tb \
+  -p 127.0.0.1:8899:8899 \
+  chief-moa-gateway:local node server.mjs --host 0.0.0.0
+```
+
+## CLI
 
 ```sh
 cd gateway/tools/persona-testbed

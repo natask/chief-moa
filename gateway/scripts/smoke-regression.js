@@ -237,7 +237,13 @@ async function assertAgentProfileOptionsCatalog(baseUrl) {
   assert.ok(Array.isArray(catalog.models) && catalog.models.some((model) => model.id === "smoke-model" && model.current === true), "catalog must list the current gateway model");
   assert.ok(catalog.fields?.model?.values?.includes("smoke-model"), "catalog model field must include the current gateway model");
   assert.ok(Array.isArray(catalog.voices) && catalog.voices.length >= 8, "catalog must list supported voices");
-  assert.deepEqual(catalog.languages.map((language) => language.code), ["en-US", "am-ET"], "catalog must expose only English and Amharic for now");
+  // The catalog is the full Chirp 3 set now (GA + preview). Pin the floor and
+  // the two codes the live pipeline shipped on, not an exact list, so adding a
+  // language never breaks regression.
+  const catalogCodes = catalog.languages.map((language) => language.code);
+  assert.ok(catalogCodes.length >= 100, `catalog must expose the full Chirp 3 language set, got ${catalogCodes.length}`);
+  assert.ok(catalogCodes.includes("en-US") && catalogCodes.includes("am-ET"), "catalog must include en-US and am-ET");
+  assert.equal(new Set(catalogCodes).size, catalogCodes.length, "catalog codes must be unique");
 
   const aoede = catalog.voices.find((voice) => voice.id === "Aoede");
   const charon = catalog.voices.find((voice) => voice.id === "Charon");
@@ -269,7 +275,9 @@ async function assertAgentProfileOptionsCatalog(baseUrl) {
     source: "smoke-regression",
     profile: {
       voice: "not-a-real-voice",
-      language: "Spanish,French",
+      // Spanish and French are valid since the catalog covers all of Chirp 3;
+      // invalid-only means out-of-catalog names now.
+      language: "Klingon,Quenya",
       input_languages: "en-US,not-a-language",
     },
   });
@@ -374,7 +382,10 @@ async function assertAgentProfileRuntimeCycle(baseUrl, dataDir) {
     session_id: "profile_runtime_session",
     branch_id: "default",
     turn_id: "turn_after_reset",
-    transcript: "voice check after reset",
+    // Plain chat phrasing on purpose: mentioning "reset" alongside a profile
+    // word would be parsed as a profile-control revert and skip the
+    // conversation write this step asserts on.
+    transcript: "voice check once more",
     source: "smoke-regression",
   });
   assert.equal(resetTurn.status, 200);

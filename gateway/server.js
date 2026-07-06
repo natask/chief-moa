@@ -46,6 +46,7 @@ const {
   normalizeSpeech,
   isStopLike,
   wantsMultipleAgents,
+  wantsAgentDispatch,
   hasOperationalWorkContext,
   isOperationalStatusQuestion,
   shouldRunAgentFromVoice,
@@ -113,6 +114,11 @@ const GATEWAY_UI_PATH = path.join(GATEWAY_DIR, "public", "gateway-ui.html");
 // sessions per project. Served by this same gateway service -- one surface,
 // no second app to maintain.
 const GATEWAY_CONSOLE_PATH = path.join(GATEWAY_DIR, "public", "console.html");
+// Credential autopilot panel: gateway-served, read-and-fix view of account
+// connections, credential health, expiry, and pending device notifications.
+// Reads the /v1/account-connections endpoints with the gateway token; it never
+// receives or displays raw provider credentials.
+const CREDENTIAL_PANEL_PATH = path.join(GATEWAY_DIR, "public", "credential-panel.html");
 // Projects store. A project is a named working directory the agent operates in.
 // Flat JSON file next to the run store -- same durability model, no database.
 const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
@@ -289,7 +295,38 @@ const PUBLIC_BASE_URL = stripTrailingSlash(
 const accountConnections = createAccountConnectionStore({
   dataDir: DATA_DIR,
   publicBaseUrl: PUBLIC_BASE_URL,
+  // Bridge a needs_user_action credential notification into the cross-device
+  // tool hub so the target phone/browser actually learns it must reauthorize.
+  // The store owns the durable notification; this only mirrors it onto the
+  // /v1/tool/requests queue and links the two by id.
+  onUserActionNotification: bridgeCredentialNotificationToDeviceHub,
 });
+
+// Turn a freshly queued credential notification into a device-hub tool request.
+// Input carries only the non-secret fields the store already built
+// (connection id, provider label, connection label, reason, reauth endpoint).
+// Returns the created tool-request id so the store can link them; returns null
+// on any failure so credential health never depends on the hub being reachable.
+function bridgeCredentialNotificationToDeviceHub(notification) {
+  try {
+    const toolRequest = createToolRequest({
+      tool: notification.tool,
+      target_device_id: notification.device_id,
+      target_surface_type: notification.surface_type,
+      input: notification.input,
+      source: "credential-health",
+      source_surface_type: "gateway",
+      instruction: `Reauthorize ${notification.input.provider_label} ("${notification.input.connection_label}").`,
+    });
+    recordToolRequestProductEvent(toolRequest, "queued").catch((error) => {
+      console.error(`credential notification product event failed: ${cleanError(error)}`);
+    });
+    return { tool_request_id: toolRequest.id };
+  } catch (error) {
+    console.error(`credential notification device-hub bridge failed: ${cleanError(error)}`);
+    return null;
+  }
+}
 // Periodic credential-health pass: refresh ahead of expiry where the provider
 // supports it, otherwise flag the user and queue a device notification. Set
 // ACCOUNT_HEALTH_INTERVAL_MS=0 to disable (tests drive it via
@@ -335,6 +372,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && (url.pathname === "/console" || url.pathname === "/agent")) {
       sendStaticHtml(response, GATEWAY_CONSOLE_PATH);
+      return;
+    }
+
+    if (request.method === "GET" && (url.pathname === "/credentials" || url.pathname === "/credential-panel")) {
+      sendStaticHtml(response, CREDENTIAL_PANEL_PATH);
       return;
     }
 
@@ -1596,7 +1638,21 @@ async function handleWorkerResult(request, response, id) {
   try {
     const auth = workerPull.authenticate(request, "agent_runs:complete");
     const body = await readJsonBody(request);
-    sendJson(response, 200, workerPull.result(id, body, auth));
+    const result = workerPull.result(id, body, auth);
+    sendJson(response, 200, result);
+    // Parity with gateway-executed runs (executeAgentRun's finish): a
+    // worker-reported terminal result must also land in the Brain and the work
+    // graph, or worker-run work never pings the session's project state.
+    // Best-effort; the worker's 200 is already sent.
+    try {
+      const run = readAgentRun(id);
+      rememberRunOutcome(run);
+      syncWorkGraphFromRun(run).catch((error) => {
+        appendAgentEvent(id, "work_node_sync_failed", { error: cleanError(error) });
+      });
+    } catch (error) {
+      appendAgentEvent(id, "completion_hooks_failed", { error: cleanError(error) });
+    }
   } catch (error) {
     sendWorkerError(response, error);
   }
@@ -7839,7 +7895,8 @@ function liveToolAllowsAgentRun(call) {
   return Boolean(
     explicitAgentPromptFrom(transcript)
       || shouldRunAgentFromVoice(transcript)
-      || wantsMultipleAgents(transcript),
+      || wantsMultipleAgents(transcript)
+      || wantsAgentDispatch(transcript),
   );
 }
 
@@ -8981,7 +9038,9 @@ async function runCascadedVoiceReasoningInner(input) {
   // answers. The decision is stashed for the streaming recorder (which persists
   // the turn in a later call) and returned in the result for surfacing.
   const contextCapture = {};
-  const toolDefs = cascadedVoiceProfileTools(toolCall).concat([buildContextManagementToolDef(contextCapture)]);
+  const toolDefs = cascadedVoiceProfileTools(toolCall)
+    .concat(cascadedAgentRunTools(toolCall))
+    .concat([buildContextManagementToolDef(contextCapture)]);
   if (voiceExecuteToolEnabled()) {
     toolDefs.push(cascadedExecuteToolDef(toolCall));
   }
@@ -9069,6 +9128,18 @@ function cascadedExecuteCapabilities(call) {
         return applyAgentProfilePatch(call, args || {}, patch, "voice-execute-languages");
       },
     },
+    agents_launch: {
+      description: "Start a background agent run in this session's work state. Args: { prompt: string, harness?: \"echo\"|\"gemini\"|\"codex\"|\"claude\" }. Only works when the user's words asked for agent work.",
+      run: (args) => liveToolLaunchAgentRun(call, args || {}),
+    },
+    agents_list: {
+      description: "Status and latest output of this session's agent runs. Args: {}.",
+      run: (args) => liveToolListAgentRuns(call, args || {}),
+    },
+    agents_cancel: {
+      description: "Cancel a queued or running agent run. Args: { run_id?: string } (defaults to this session's most recent active run).",
+      run: (args) => liveToolCancelAgentRun(call, args || {}),
+    },
   };
 }
 
@@ -9098,6 +9169,48 @@ function cascadedExecuteToolDef(call) {
       return runExecuteCode({ code: String(args?.code || ""), capabilities });
     },
   };
+}
+
+// Agent-run tools for the cascaded reasoner - the same launch/list/cancel
+// handlers the Live path uses, so a spoken "have an agent do X" works on the
+// pipeline that is actually live. Launch keeps the transcript gate
+// (liveToolAllowsAgentRun): the model can only start a run when the user's own
+// words asked for agent work. Runs land in the shared agent-run store with
+// conversation_id = this session, so the next turn's session context and
+// list_agent_runs both see them - the "same work directory" contract.
+function cascadedAgentRunTools(call) {
+  return [
+    {
+      name: "launch_agent_run",
+      description: "Start a background agent to do multi-step work the user asked for (research, coding, long tasks). The run is queued in this session's work state; it executes on a connected worker or the gateway and its result appears in session context when finished. Confirm briefly that the agent started; do not claim the work is done.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "Complete task instruction for the agent, self-contained." },
+          harness: { type: "string", description: "Optional harness: echo, gemini, codex, or claude. Omit for the default." },
+        },
+        required: ["prompt"],
+      },
+      handler: (args) => liveToolLaunchAgentRun(call, args || {}),
+    },
+    {
+      name: "list_agent_runs",
+      description: "Check the status and latest output of agent runs for this session. Call when the user asks how their agents/tasks are going or whether work finished.",
+      parameters: { type: "object", properties: {} },
+      handler: (args) => liveToolListAgentRuns(call, args || {}),
+    },
+    {
+      name: "cancel_agent_run",
+      description: "Cancel a running or queued agent run. Args: run_id from list_agent_runs (or omit to cancel this session's most recent active run).",
+      parameters: {
+        type: "object",
+        properties: {
+          run_id: { type: "string", description: "The run to cancel. Optional; defaults to the most recent active run in this session." },
+        },
+      },
+      handler: (args) => liveToolCancelAgentRun(call, args || {}),
+    },
+  ];
 }
 
 function cascadedVoiceProfileTools(call) {
@@ -12020,7 +12133,14 @@ function appendAgentEvent(runId, type, data) {
     type,
     ...(data || {}),
   };
-  fs.appendFileSync(agentEventPath(runId), JSON.stringify(event) + "\n");
+  // Best-effort ledger: this is called from child-process stream handlers, and
+  // an uncaught throw there (e.g. the runs dir vanished) would kill the whole
+  // gateway process, dropping every open session for a log line.
+  try {
+    fs.appendFileSync(agentEventPath(runId), JSON.stringify(event) + "\n");
+  } catch {
+    return;
+  }
   recordProductEventBestEffort({
     event_type: `agent.run.${String(type || "event").replace(/_/g, ".")}`,
     stream_id: productRunStreamId(runId),

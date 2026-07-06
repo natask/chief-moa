@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "A.G.",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -56,6 +56,14 @@
         "default": "Ctrl+Period"
       },
       "description": "Start or send A.G. voice"
+    },
+    "open-agee-global": {
+      "suggested_key": {
+        "mac": "Command+Shift+9",
+        "default": "Ctrl+Shift+9"
+      },
+      "description": "Open A.G. overlay from any app while Chrome is running",
+      "global": true
     }
   },
   "action": {

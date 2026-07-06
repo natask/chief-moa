@@ -8,6 +8,8 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
+const { spawn, spawnSync } = require("node:child_process");
 
 class WorkerRuntimeError extends Error {
   constructor(code, message, { status = 0, retryable = false } = {}) {
@@ -33,10 +35,163 @@ async function echoHarness(run) {
 const DEFAULT_HARNESSES = { echo: echoHarness };
 const FORBIDDEN_CLAIM_KEYS = new Set(["command", "args", "shell", "env", "credentials", "credential"]);
 
+// Real CLI harnesses. Each runs a locally-installed agent CLI against the
+// claimed run's PROMPT ONLY - the gateway never supplies command, args, paths,
+// or env (FORBIDDEN_CLAIM_KEYS enforces that upstream). The CLI executes in a
+// fresh worker-local temp directory and inherits this machine's credentials,
+// which never leave the machine. A harness is registered only when its binary
+// answers a version probe, so the worker's hello advertises exactly what this
+// machine can actually execute.
+function cliHarness(command, argsFor, { parseOutput } = {}) {
+  return async function runCliHarness(run, { isCanceled } = {}) {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-worker-run-"));
+    const timeoutMs = clamp(run.timeout_ms, 10_000, 30 * 60_000, 10 * 60_000);
+    try {
+      return await new Promise((resolve, reject) => {
+        let stdout = "";
+        let stderr = "";
+        let settled = false;
+        let child;
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          clearInterval(cancelPoll);
+          fn(value);
+        };
+        const kill = () => {
+          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        };
+        const timer = setTimeout(kill, timeoutMs);
+        const cancelPoll = setInterval(() => {
+          if (typeof isCanceled === "function" && isCanceled()) kill();
+        }, 2000);
+        try {
+          child = spawn(command, argsFor(run, workDir), {
+            cwd: workDir,
+            env: process.env,
+            shell: false,
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+        } catch (error) {
+          finish(reject, error);
+          return;
+        }
+        child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+        child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+        child.on("error", (error) => finish(reject, error));
+        child.on("close", (code) => {
+          const parsed = typeof parseOutput === "function" ? parseOutput(stdout) : null;
+          finish(resolve, {
+            exit_code: code == null ? null : Number(code),
+            output: truncate(String(parsed?.output || stdout.trim() || stderr.trim()), 120_000),
+            stdout_tail: truncate(stdout.slice(-16_000), 16_000),
+            stderr_tail: truncate(stderr.slice(-16_000), 16_000),
+          });
+        });
+      });
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  };
+}
+
+// Claude with --output-format json prints { result, session_id, ... }; unwrap
+// to the human text. Non-JSON stdout passes through untouched.
+function parseClaudeJsonEnvelope(stdout) {
+  const text = String(stdout || "").trim();
+  if (!text.startsWith("{")) return { output: text };
+  try {
+    const json = JSON.parse(text);
+    return { output: String(json.result || json.output || text) };
+  } catch {
+    return { output: text };
+  }
+}
+
+const CLI_HARNESS_DEFS = {
+  gemini: {
+    bin: () => process.env.GEMINI_BIN || "gemini",
+    versionArgs: ["-v"],
+    argsFor: (run) => [
+      "--prompt", String(run.prompt || ""),
+      "--skip-trust",
+      "--approval-mode", process.env.GEMINI_APPROVAL_MODE || "yolo",
+      "--output-format", "text",
+    ],
+  },
+  codex: {
+    bin: () => process.env.CODEX_BIN || "codex",
+    versionArgs: ["--version"],
+    argsFor: (run, workDir) => {
+      const args = ["exec", "--cd", workDir, "--skip-git-repo-check"];
+      if (process.env.CODEX_BYPASS_APPROVALS === "1") {
+        args.push("--dangerously-bypass-approvals-and-sandbox");
+      } else {
+        args.push("--sandbox", process.env.CODEX_SANDBOX || "workspace-write");
+      }
+      args.push(String(run.prompt || ""));
+      return args;
+    },
+  },
+  claude: {
+    bin: () => process.env.CLAUDE_BIN || "claude",
+    versionArgs: ["--version"],
+    parseOutput: parseClaudeJsonEnvelope,
+    argsFor: (run, workDir) => {
+      const args = [
+        "--print",
+        "--output-format", "json",
+        "--model", process.env.CLAUDE_AGENT_MODEL || process.env.CLAUDE_MODEL || "sonnet",
+        "--add-dir", workDir,
+      ];
+      if (process.env.CLAUDE_DANGEROUS_SKIP_PERMISSIONS === "1") {
+        args.push("--dangerously-skip-permissions");
+      } else {
+        args.push("--permission-mode", process.env.CLAUDE_PERMISSION_MODE || "plan");
+      }
+      args.push(String(run.prompt || ""));
+      return args;
+    },
+  },
+};
+
+function binaryAnswersProbe(bin, versionArgs) {
+  try {
+    const probe = spawnSync(bin, versionArgs, { stdio: "ignore", timeout: 8000 });
+    return probe.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+// echo is always available; each CLI harness registers only when its binary
+// answers a version probe. MOA_WORKER_HARNESSES (comma list) narrows the set.
+function detectHarnesses(env = process.env) {
+  const harnesses = { ...DEFAULT_HARNESSES };
+  for (const [name, def] of Object.entries(CLI_HARNESS_DEFS)) {
+    const bin = def.bin();
+    if (binaryAnswersProbe(bin, def.versionArgs)) {
+      harnesses[name] = cliHarness(bin, def.argsFor, { parseOutput: def.parseOutput });
+    }
+  }
+  const allowlist = String(env.MOA_WORKER_HARNESSES || "").split(",").map((item) => item.trim()).filter(Boolean);
+  if (allowlist.length === 0) {
+    return harnesses;
+  }
+  const filtered = {};
+  for (const name of allowlist) {
+    if (harnesses[name]) filtered[name] = harnesses[name];
+  }
+  return Object.keys(filtered).length > 0 ? filtered : { echo: echoHarness };
+}
+
 function createWorkerRuntime(options = {}) {
   const gatewayUrl = normalizeGatewayUrl(options.gatewayUrl);
   if (!gatewayUrl) throw new WorkerRuntimeError("invalid_config", "gatewayUrl is required (http or https)");
-  const harnesses = DEFAULT_HARNESSES;
+  const harnesses = options.harnesses && typeof options.harnesses === "object"
+    ? options.harnesses
+    : detectHarnesses();
   const projectAliases = [...new Set(listOf(options.projectAliases).map(sanitizeAlias).filter(Boolean))];
   const configuredProjects = Array.isArray(options.projects)
     ? options.projects.map((item) => ({ id: sanitizeId(item?.id || ""), local_alias: sanitizeAlias(item?.local_alias || item?.localAlias || item?.id || "") })).filter((item) => item.id)
@@ -385,4 +540,4 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = { WorkerRuntimeError, createWorkerRuntime, echoHarness };
+module.exports = { WorkerRuntimeError, createWorkerRuntime, echoHarness, detectHarnesses, cliHarness };
