@@ -2985,6 +2985,7 @@ async function storeBrokerMessage(body, text) {
   writeBrokerEvent(stored);
   indexBrokerEventInBrain(stored);
   attachBrokerEvidenceToRuns(stored);
+  dismissIrrelevantForkedRuns(stored);
   await recordBrokerProductEvent(stored);
   return { stored, decisions, contextPacks, launches };
 }
@@ -3519,14 +3520,19 @@ function brokerRouteDecisions(event, body = {}) {
   const activeOrRecentRuns = listAllAgentRuns()
     .filter((run) => run.active || !isTerminalRunStatus(run.status))
     .slice(0, 25);
+  // A broadcast is an explicit "reach every active agent" turn. Under a
+  // broadcast the broker evaluates each active/forked run: runs the message
+  // actually pertains to receive it as evidence, and runs it does NOT pertain to
+  // self-dismiss with a stored no-op reason (task 3.3). A dismissal never
+  // cancels, pauses, or restarts the run; it only records why the broadcast was
+  // not attached, so the agent-manager decision stays inspectable.
+  const broadcast = body.fanout_all_active === true
+    || /\b(?:all|every)\b[^.]*\b(?:active|running|open)\b[^.]*\b(?:agent|thread|run|fork)s?\b/.test(lower)
+    || /\b(?:tell|update|notify|ask)\s+(?:all|every|the)\b[^.]*\bagents?\b/.test(lower);
   for (const run of activeOrRecentRuns) {
     const explicit = explicitRunId && run.id === explicitRunId;
-    const fanout = body.fanout_all_active === true || /\b(?:all|every)\b.*\b(?:active|running)\b.*\b(?:agent|thread|run)s?\b/.test(lower);
-    const score = explicit
-      ? 0.99
-      : fanout
-        ? 0.72
-        : textOverlapScore(text, `${run.prompt_preview || ""} ${run.output_preview || ""} ${run.id || ""}`);
+    const overlap = textOverlapScore(text, `${run.prompt_preview || ""} ${run.output_preview || ""} ${run.id || ""}`);
+    const score = explicit ? 0.99 : overlap;
     if (score >= 0.16) {
       decisions.push(brokerDecision({
         targetType: "agent_run",
@@ -3535,9 +3541,19 @@ function brokerRouteDecisions(event, body = {}) {
         confidence: score,
         reason: explicit
           ? "message carried this agent_run_id"
-          : fanout
-            ? "message asked to reach active/running agents"
+          : broadcast
+            ? "broadcast overlaps this active run's context"
             : "message overlaps active run context",
+        contextRefs: [{ type: "agent_run", id: run.id }],
+        cancellation: "none",
+      }));
+    } else if (broadcast) {
+      decisions.push(brokerDecision({
+        targetType: "agent_run",
+        targetId: run.id,
+        action: "dismiss_irrelevant",
+        confidence: 0.1,
+        reason: "broadcast to active agents did not match this run; left running unchanged as a no-op",
         contextRefs: [{ type: "agent_run", id: run.id }],
         cancellation: "none",
       }));
@@ -3571,9 +3587,14 @@ function brokerRouteDecisions(event, body = {}) {
     }));
   }
 
-  return decisions
+  // Cap the launchable/attach routes by confidence, but always keep the no-op
+  // dismissals so every broadcast records why each unrelated fork stood down.
+  const dismissals = decisions.filter((decision) => decision.action === "dismiss_irrelevant").slice(0, 25);
+  const primary = decisions
+    .filter((decision) => decision.action !== "dismiss_irrelevant")
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 12);
+  return [...primary, ...dismissals];
 }
 
 function brokerDecision({ targetType, targetId, action, confidence, reason, contextRefs, cancellation }) {
@@ -3656,7 +3677,8 @@ function meaningfulTokens(text) {
 
 function brokerContextPacksForDecisions(event, decisions, body = {}) {
   const profiles = brokerLauncherProfiles();
-  return decisions.map((decision) => {
+  // A dismissal is a no-op: it launches nothing and needs no context pack.
+  return decisions.filter((decision) => decision.action !== "dismiss_irrelevant").map((decision) => {
     const profile = brokerLauncherProfileForDecision(decision, event, profiles);
     const pack = buildBrokerContextPack(event, decision, profile, body);
     decision.launcher_profile_id = pack.launcher_profile_id;
@@ -4033,6 +4055,34 @@ function attachBrokerEvidenceToRuns(event) {
     } catch {
       // Broker evidence should be best-effort observability; a stale run id must
       // not prevent the canonical broker event from being stored.
+    }
+  }
+}
+
+// Task 3.3: when a broadcast fans out to active/forked runs, each run the
+// message does NOT pertain to self-dismisses with a stored no-op reason. The
+// dismissal only appends an inspectable `broker_fork_dismissed` event; it never
+// changes run status, cancels, pauses, or restarts the run. Best-effort so a
+// stale run id can never block the canonical broker event.
+function dismissIrrelevantForkedRuns(event) {
+  for (const decision of event.decisions || []) {
+    if (decision.target_type !== "agent_run" || decision.action !== "dismiss_irrelevant" || !decision.target_id) {
+      continue;
+    }
+    try {
+      if (!fs.existsSync(agentRunPath(decision.target_id))) {
+        continue;
+      }
+      appendAgentEvent(decision.target_id, "broker_fork_dismissed", {
+        broker_event_id: event.id,
+        route_decision_id: decision.id,
+        source: event.source,
+        reason: decision.reason,
+        text: truncate(String(event.text || ""), 4000),
+        no_op: true,
+      });
+    } catch {
+      // Dismissal is best-effort observability; leave the run untouched.
     }
   }
 }
