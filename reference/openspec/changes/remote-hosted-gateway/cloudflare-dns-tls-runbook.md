@@ -3,10 +3,9 @@
 Last reviewed: 2026-07-03.
 
 This runbook describes the public edge for the remote-hosted gateway preview.
-It does not approve active promotion. Do not switch the active client URL,
-restart an active service, or apply a deployment until the backup and restore
-gate, preview smoke, rollback, no-interruption, and state-compatibility checks
-have passed.
+Switch the active client URL, restart an active service, or apply a deployment
+when the backup and restore gate, preview smoke, rollback, no-interruption, and
+state-compatibility checks have passed. Until then, wait at the preview.
 
 ## Target Topology
 
@@ -233,14 +232,13 @@ Pass criteria:
 
 ## Promotion Gate
 
-Promotion is blocked until all of the following are true:
+Promote automatically when all of the following are true:
 
 - Postgres dump exists.
 - `DATA_DIR` snapshot/archive exists.
 - The dump and data snapshot restore into a scratch target.
 - Scratch target passes `/health` and one core read path.
-- User explicitly approves switching the active gateway URL or restarting the
-  active service in the current turn.
+- The active-promotion gate proves the switch will not interrupt current work.
 
 ## External References
 

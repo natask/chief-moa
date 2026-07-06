@@ -176,8 +176,9 @@ Keep the Cloudflare Pages split from `cloudflare-dns-tls-runbook.md`:
 - gateway API and voice use the Railway gateway domain;
 - clients are configured with the exact gateway base URL.
 
-Do not repoint the active `api.<domain>` hostname to Railway without the backup
-gate, smoke evidence, and explicit user approval.
+Repoint the active `api.<domain>` hostname to Railway when the backup gate,
+smoke evidence, rollback path, no-interruption check, and state-compatibility
+check pass. Until then, keep the preview hostname.
 
 ## Persistent Data
 
@@ -225,8 +226,8 @@ Restore check:
 5. Verify `/health` and one core read path such as `GET /v1/agent/runs` with
    the scratch token.
 
-Promotion is blocked if the backup or scratch restore check is missing or
-fails.
+Wait at the preview or artifact if the backup or scratch restore check is
+missing or fails.
 
 ## Rollback
 

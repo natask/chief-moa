@@ -85,8 +85,8 @@ re-deriving the commands. Each is a thin wrapper over the repo's real
   Audit mode is read-only and never restarts the live service. Promotion
   (`scripts/deploy.sh gateway`) requires the active-promotion gate to pass:
   preview smoke, rollback path, no interrupted work, state compatibility, and
-  backup/restore evidence for persisted state. Background/cron invocations stop
-  at audit unless they can prove the same gate.
+  backup/restore evidence for persisted state. Background/cron invocations may
+  promote when they can prove the same gate; otherwise they stop at audit.
 
 The main machine (10.147.17.10) has been decommissioned. The production
 gateway is the DigitalOcean droplet behind https://api.agee.app. Fix work
@@ -98,9 +98,9 @@ to master that touches the gateway deploy path is verified by the
 a systemd timer on the droplet (`scripts/vps/auto-update.sh`) promotes that
 ref within ~2 minutes through `scripts/vps/update.sh`, whose backup +
 restore-check gate still aborts before touching the service if either fails.
-Agents may deploy the gateway by merging verified work to master and pushing
-only when the active-promotion gate below passes. Manual promotion
-(`scripts/vps/push.sh`) uses the same gate.
+Agents deploy the gateway by merging verified work to master and pushing when
+the active-promotion gate below passes. If the gate is not proven, they wait.
+Manual promotion (`scripts/vps/push.sh`) uses the same gate.
 
 ## Active Promotion Safety
 
@@ -108,7 +108,7 @@ Preview deployments should happen for every deployable change when the platform
 supports them. A preview must use a separate URL, state store, queue, storage
 path, and worker pool from the active app.
 
-Active promotion is allowed only when all of these are true:
+Promote automatically when all of these are true:
 
 - Verification and preview smoke checks passed.
 - Rollback is known and fast: a previous artifact, git ref, deployment, config,
@@ -118,8 +118,8 @@ Active promotion is allowed only when all of these are true:
   session. If the process can be drained, resumed, or retried, prove that first.
 - Persisted state is compatible across old and new code during rollout.
 
-For stateless services, active promotion may proceed after preview and smoke
-checks if restarting or replacing the process cannot drop user work.
+For stateless services, promote automatically after preview and smoke checks if
+restarting or replacing the process cannot drop user work.
 
 For stateful services, use staged changes. Add new schema or storage first. Run
 code that can read old and new state, and write bridge data when needed.
@@ -131,7 +131,7 @@ requires new code.
 If recordings, transcripts, archives, databases, queues, or generated user data
 are involved, promotion must include backup and restore evidence. If preview,
 rollback, compatibility, drain or resume, backup, restore, or smoke evidence is
-missing, stop at the preview or artifact and record the blocker.
+missing, stop at the preview or artifact and record what is missing.
 
 ## Finish Order
 
@@ -142,7 +142,7 @@ For every completed implementation unit, finish in this order:
 3. Commit the completed unit with a Conventional Commit.
 4. Create or update the preview deployment or release artifact for every changed
    deployable surface.
-5. Promote the active target only when the active-promotion gate passes.
+5. Promote the active target automatically when the active-promotion gate passes.
 6. Smoke-check the promoted target or record the promotion blocker.
 
 Do not deploy target files from a dirty tree unless the user explicitly asks for
@@ -162,9 +162,10 @@ with a Conventional Commit or explicitly record why it could not be committed.
 
 Completed deployable changes must also create a preview deployment or release
 artifact through the repo's existing deployment path after verification. Active
-promotion happens only when the active-promotion gate passes, then the target is
-smoke-checked. For Android app changes, publish the OTA artifact only when the
-install path will not interrupt an active phone session and rollback is clear.
+promotion happens automatically when the active-promotion gate passes, then the
+target is smoke-checked. For Android app changes, publish the OTA artifact when
+the install path will not interrupt an active phone session and rollback is
+clear.
 If preview or active promotion is blocked by missing credentials, failing
 verification, unavailable network, unsafe state, or a non-deployable docs-only
 change, record the blocker plainly before ending the task.

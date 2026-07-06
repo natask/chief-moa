@@ -310,11 +310,11 @@ managed operations.
   active service restart, active URL switch, Master Orch apply, OTA publish, or
   browser package reload.
 
-Current blocker: active promotion remains blocked. This integration task does
-not deploy, restart, apply, switch active URLs, publish OTA artifacts, or reload
-browser packages. Active backup execution also remains blocked until the
-active-promotion gate passes or an operator-controlled backup context exists;
-the unattended timer and off-host mirror installers are committed but not
+Current blocker: active promotion waits on missing evidence. This integration
+task does not deploy, restart, apply, switch active URLs, publish OTA artifacts,
+or reload browser packages. Active backup execution also waits until the
+active-promotion gate passes or an operator-controlled backup context exists.
+The unattended timer and off-host mirror installers are committed but not
 installed.
 
 ## 11. Incoming Shipped VPS Stack Ledger

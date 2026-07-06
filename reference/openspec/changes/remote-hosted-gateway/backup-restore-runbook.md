@@ -6,7 +6,7 @@ deployment, or otherwise points users at a new active Chief Moa gateway.
 
 The scripts in this lane are intentionally separate from `scripts/deploy.sh`.
 They never read `.env`, never print database URLs, never restart the active
-service, and never apply a deployment. Promotion is allowed only when the active
+service, and never apply a deployment. Promotion is automatic when the active
 promotion gate passes: preview smoke, rollback path, no interrupted work, state
 compatibility, backup, and restore check.
 
@@ -194,15 +194,15 @@ Use this exact sequence before any active VPS promotion:
 11. Record the preview URL, rollback ref, no-interruption evidence, state
     compatibility evidence, backup directory, restore scratch directory, health
     URL, and any blocker in the promotion notes.
-12. Only after every gate passes may the operator or approved automation
-    promote: apply the deployment, restart the active service, or change the
-    active URL through the approved deployment control plane.
+12. After every gate passes, the operator or automation promotes: apply the
+    deployment, restart the active service, or change the active URL through the
+    approved deployment control plane.
 13. Smoke-check the active gateway after promotion with `GET /health` and the
     smallest user-facing API check relevant to the release.
 
 ## Blockers
 
-Promotion is blocked when any of these are true:
+Wait at the preview or artifact when any of these are true:
 
 - `pg_dump`, `psql`, `tar`, `gzip`, `curl`, `node`, `shasum`, or required remote
   copy tooling is unavailable.
@@ -218,5 +218,5 @@ Promotion is blocked when any of these are true:
 - The promotion can halt or strand active user work.
 - Old and new code cannot share the active state safely during rollout.
 
-When blocked, do not promote. Fix the tooling or scratch target first, then rerun
-the dry-run and execute steps.
+Fix the missing evidence, tooling, or scratch target first, then rerun the
+dry-run and execute steps.

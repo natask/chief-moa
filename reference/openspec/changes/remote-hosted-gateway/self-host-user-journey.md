@@ -23,7 +23,7 @@ that must exist before the next step can work.
 - Worker: execution machine that connects outbound, claims scoped runs, edits
   repos locally, verifies, and reports results.
 - Deployment control plane: script, Master Orch, or external deploy target that
-  can create preview/artifact records and later apply promotion only when the
+  can create preview/artifact records and apply promotion when the
   active-promotion gate passes.
 
 ## Preconditions
@@ -299,8 +299,8 @@ Implementation acceptance:
 
 - preview and active URLs are different fields;
 - asking for a link never applies a deployment by implication;
-- active promotion remains blocked without explicit current-turn approval and
-  backup/restore evidence.
+- active promotion waits until preview smoke, rollback, no-interruption,
+  state-compatibility, and backup/restore evidence exists.
 
 ## Step 8: Review From Mobile
 

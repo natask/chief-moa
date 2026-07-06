@@ -351,7 +351,7 @@ Restore check:
 5. Verify `/health` and one core read path, such as `GET /v1/agent/runs` with
    the scratch token.
 
-Promotion is blocked if this restore check is missing or fails.
+Wait at the preview or artifact if this restore check is missing or fails.
 
 ## Rollback
 

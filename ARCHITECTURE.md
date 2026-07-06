@@ -889,7 +889,7 @@ verify changed surface
   -> fix failures
   -> commit the unit
   -> create or update the preview deployment or release artifact
-  -> promote the active target only when the active-promotion gate passes
+  -> promote the active target automatically when the active-promotion gate passes
   -> smoke-check the promoted target or record the blocker
 ```
 
@@ -900,6 +900,8 @@ across old and new code. Stateful changes use staged releases: add schema or
 storage first, run bridge code that reads old and new state, backfill with
 idempotent jobs, switch reads after verification, and remove old state only after
 active code no longer needs it.
+Promote automatically when the gate is proven. Wait at the preview or artifact
+when it is not proven.
 
 `scripts/deploy.sh auto` is the repo-level active-promotion target after the
 gate passes. It deploys only committed gateway, Android, and browser-extension

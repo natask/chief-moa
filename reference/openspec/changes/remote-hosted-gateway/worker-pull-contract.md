@@ -16,8 +16,9 @@ The contract is intentionally bounded:
   environment, or harness credential for the execution machine.
 - The gateway queues and records work. The worker validates, executes, and
   receipts work inside the local execution boundary.
-- Harness output remains a proposal. Deployment promotion remains a human gate
-  unless a later turn explicitly approves promotion.
+- Harness output remains a proposal. Deployment promotion runs automatically
+  when the active-promotion gate is proven. If the gate is not proven, the
+  candidate waits at preview.
 
 ## Authorities
 

@@ -2,8 +2,8 @@
 
 This task ledger turns the bounded worker-pull contract into implementation
 tickets. It preserves the lane split required for the VPS agent control-plane
-workflow and keeps active deployment promotion blocked until a human approves
-it.
+workflow and keeps active deployment promotion waiting until the
+active-promotion gate is proven.
 
 ## Lane Split
 
@@ -31,7 +31,8 @@ Verification:
 `fabro validate .fabro/workflows/vps-agent-control-plane/workflow.fabro`
 
 Deploy target or blocker:
-Docs-only lane. No deployable target. Active promotion remains blocked.
+Docs-only lane. No deployable target. Active promotion waits on a deployable
+candidate and promotion evidence.
 
 ## Implementation Tickets
 
@@ -65,7 +66,8 @@ Gateway unit or smoke test covers registration success, duplicate setup code
 failure, expired setup code failure, and revoked token rejection.
 
 Deploy target or blocker:
-Gateway preview only after verification. Active promotion blocked by human gate.
+Gateway preview after verification. Promote automatically when the
+active-promotion gate is proven.
 
 ### 2. Run Linkage And Queue Metadata
 
@@ -96,7 +98,8 @@ Gateway smoke creates a run through the existing `/v1/agent/runs` path and reads
 it back with linkage present and no active process started in worker-pull mode.
 
 Deploy target or blocker:
-Gateway preview only after verification. Active promotion blocked by human gate.
+Gateway preview after verification. Promote automatically when the
+active-promotion gate is proven.
 
 ### 3. Long-poll Claim Endpoint
 
@@ -126,7 +129,8 @@ Gateway smoke covers claim success, no-work response, unauthorized token,
 out-of-scope harness/project, and duplicate claim conflict.
 
 Deploy target or blocker:
-Gateway preview only after verification. Active promotion blocked by human gate.
+Gateway preview after verification. Promote automatically when the
+active-promotion gate is proven.
 
 ### 4. Heartbeat, Event, And Result Endpoints
 
@@ -158,7 +162,8 @@ idempotency, terminal result update, stale claim rejection, and product event
 mirroring where configured.
 
 Deploy target or blocker:
-Gateway preview only after verification. Active promotion blocked by human gate.
+Gateway preview after verification. Promote automatically when the
+active-promotion gate is proven.
 
 ### 5. Cancellation And Retry Semantics
 
@@ -189,8 +194,8 @@ Smoke covers queued cancel, running cancel, stale result after cancel, lease
 expiry requeue, and max-attempt failure.
 
 Deploy target or blocker:
-Gateway and worker preview only after verification. Active promotion blocked by
-human gate.
+Gateway and worker preview after verification. Promote automatically when the
+active-promotion gate is proven.
 
 ### 6. Worker Runtime Pull Loop
 
@@ -260,7 +265,7 @@ For this docs-only lane, run
 
 Deploy target or blocker:
 No deploy for docs-only work. Future code smoke runs against preview only;
-active promotion blocked by human gate.
+active promotion waits until the active-promotion gate is proven.
 
 ## Open Implementation Decisions
 

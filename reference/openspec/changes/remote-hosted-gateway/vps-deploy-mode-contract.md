@@ -81,12 +81,13 @@ or points clients at this VPS stack:
 8. Start a scratch gateway against the restored state.
 9. Verify `/health` and one core read path without touching the active service.
 
-Promotion is blocked if preview, rollback, no-interruption,
-state-compatibility, backup, restore, or smoke evidence is missing or fails.
+Promotion is automatic when preview, rollback, no-interruption,
+state-compatibility, backup, restore, and smoke evidence pass. Wait at the
+preview or artifact when any evidence is missing or fails.
 
-## Active-Deploy Blocker
+## Active Deploy Status
 
 Do not apply this scaffold to the active user URL yet. This ticket only adds
 the Docker image, Compose shape, and deploy-mode contract. Active promotion is
-blocked until preview, rollback, no-interruption, state-compatibility,
-backup/restore, and remaining remote-hosted gateway acceptance evidence exists.
+waiting on preview, rollback, no-interruption, state-compatibility,
+backup/restore, and remaining remote-hosted gateway acceptance evidence.
