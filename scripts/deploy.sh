@@ -16,9 +16,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE="${REMOTE:-reclaim@10.147.17.10}"
-REMOTE_GW_DIR="${REMOTE_GW_DIR:-/home/reclaim-ethiopia/moa-assistant/gateway}"
-GATEWAY_URL="${GATEWAY_URL:-http://10.147.17.10:8787}"
+# The main machine (10.147.17.10) is decommissioned; the production gateway is
+# the DigitalOcean droplet behind https://api.agee.app. REMOTE/REMOTE_GW_DIR
+# stay overridable for a future push-style target but no longer default to the
+# dead host.
+REMOTE="${REMOTE:-}"
+REMOTE_GW_DIR="${REMOTE_GW_DIR:-}"
+GATEWAY_URL="${GATEWAY_URL:-https://api.agee.app}"
 log() { printf '[deploy] %s\n' "$*"; }
 VERSION_STATUS_SCRIPT="$ROOT_DIR/scripts/deploy-version-status.mjs"
 
