@@ -68,6 +68,15 @@
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
+  // Mascot scale: one root scalar (font-size px on #agee-launcher) drives the
+  // hit circle, the lion and every animation distance. Scroll on the lion
+  // adjusts it; the value persists like the launcher position does.
+  const MASCOT_FONT_DEFAULT = 26;
+  const MASCOT_FONT_MIN = 12;
+  const MASCOT_FONT_MAX = 72;
+  const MASCOT_SCALE_SAVE_DEBOUNCE_MS = 350;
+  let mascotFontPx = MASCOT_FONT_DEFAULT;
+  let mascotScaleSaveTimer = null;
   const COMMAND_ECHO_DEDUPE_MS = 450;
   let browserAgentOwner = null;
   let browserAgentOwnerState = "unknown";
@@ -203,7 +212,7 @@
     root.id = "agee-root";
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <button id="agee-launcher" type="button" data-agee-tip="Click to type, drag to move, hold to talk" aria-label="A.G.">
+      <button id="agee-launcher" type="button" data-agee-tip="Click to type, drag to move, scroll to resize, hold to talk" aria-label="A.G.">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
@@ -237,6 +246,7 @@
 
     setupOverlayTooltips();
     restoreLauncherPosition();
+    restoreMascotScale();
     restoreUiChimePreference();
     loadAvatarBehaviorRuntime();
     // Launcher gestures intentionally match the Android orb:
@@ -248,6 +258,7 @@
       e.stopPropagation();
     });
     launcher.addEventListener("pointerdown", startLauncherDrag);
+    launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
     window.addEventListener("resize", handleViewportResize);
 
     input.addEventListener("keydown", (e) => {
@@ -396,6 +407,32 @@
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
       placeLauncher(x, y, false);
     }).catch(() => {});
+  }
+
+  function restoreMascotScale() {
+    safeStorageLocalGet({ ageeMascotScale: null }).then(({ ageeMascotScale }) => {
+      if (!launcher || !Number.isFinite(ageeMascotScale)) return;
+      applyMascotScale(ageeMascotScale, false);
+    }).catch(() => {});
+  }
+
+  function applyMascotScale(px, persist) {
+    if (!launcher) return;
+    mascotFontPx = Math.max(MASCOT_FONT_MIN, Math.min(MASCOT_FONT_MAX, px));
+    launcher.style.setProperty("--agee-mascot-font", `${mascotFontPx}px`);
+    reclampLauncher(); // growing near an edge must not push the lion off-screen
+    if (!persist) return;
+    clearTimeout(mascotScaleSaveTimer);
+    mascotScaleSaveTimer = setTimeout(() => {
+      safeStorageLocalSet({ ageeMascotScale: mascotFontPx }).catch(() => {});
+    }, MASCOT_SCALE_SAVE_DEBOUNCE_MS);
+  }
+
+  function handleLauncherWheel(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const step = e.deltaY < 0 ? 2 : -2;
+    applyMascotScale(mascotFontPx + step, true);
   }
 
   function placeLauncher(x, y, persist) {

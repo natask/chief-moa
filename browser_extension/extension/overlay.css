@@ -62,15 +62,19 @@
 }
 
 /* ---- Launcher: the bare mascot, no plate, no halo ------------------------ */
-/* The lion floats directly on the page. The 56px circle stays as the hit and
-   drag target, but it paints nothing: no border, no background, no shadow. */
+/* The lion floats directly on the page. The circle stays as the hit and drag
+   target, but it paints nothing: no border, no background, no shadow.
+   Root scalar: --agee-mascot-font. One knob drives the hit circle, the lion,
+   and every animation distance (all in em). Scroll on the lion to resize;
+   content.js persists the knob as ageeMascotScale. */
 #agee-launcher {
   appearance: none;
   position: absolute;
   right: max(18px, env(safe-area-inset-right));
   bottom: max(18px, env(safe-area-inset-bottom));
-  width: 56px;
-  height: 56px;
+  font-size: var(--agee-mascot-font, 26px);
+  width: 2.8em;
+  height: 2.8em;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -85,20 +89,25 @@
   overflow: visible;
   transition: transform 0.2s ease;
 }
-/* The lion sits inside the plate and breathes: a single combined transform
-   (scale + bob) so the animation stays compositor-only. */
+/* The lion breathes: a single combined transform (scale + bob) so the
+   animation stays compositor-only. */
 #agee-launcher .agee-bird {
-  width: 40px;
-  height: 40px;
+  width: 2em;
+  height: 2em;
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
   pointer-events: none;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+  filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5));
   animation: agee-mascot-idle 6s ease-in-out infinite;
 }
 #agee-launcher:hover {
   transform: scale(1.06);
+}
+/* Hover: the lion perks up — a quick tilt-and-bounce loop while the cursor
+   stays on it. AI-driven avatar-runtime motion outranks this by specificity. */
+#agee-launcher:hover .agee-bird {
+  animation: agee-perk 0.9s ease-in-out infinite;
 }
 #agee-launcher:focus-visible {
   outline: 2px solid var(--agee-amber);
@@ -154,23 +163,29 @@
 }
 @keyframes agee-mascot-idle {
   0% { transform: translateY(0) scale(1); }
-  25% { transform: translateY(-1.5px) scale(1.008); }
-  50% { transform: translateY(-2px) scale(1.016); }
-  75% { transform: translateY(-1px) scale(1.006); }
+  25% { transform: translateY(-0.06em) scale(1.008); }
+  50% { transform: translateY(-0.08em) scale(1.016); }
+  75% { transform: translateY(-0.04em) scale(1.006); }
   100% { transform: translateY(0) scale(1); }
+}
+@keyframes agee-perk {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  20% { transform: translateY(-0.12em) rotate(-6deg) scale(1.05); }
+  45% { transform: translateY(-0.05em) rotate(5deg) scale(1.05); }
+  70% { transform: translateY(-0.1em) rotate(-3deg) scale(1.04); }
 }
 @keyframes agee-hop {
   0%, 100% { transform: translateY(0) scale(1); }
-  35% { transform: translateY(-12px) scale(1.08, 0.94); }
+  35% { transform: translateY(-0.46em) scale(1.08, 0.94); }
   60% { transform: translateY(0) scale(0.96, 1.05); }
-  80% { transform: translateY(-3px) scale(1); }
+  80% { transform: translateY(-0.12em) scale(1); }
 }
 @keyframes agee-shake {
   0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-5px) rotate(-5deg); }
-  40% { transform: translateX(5px) rotate(5deg); }
-  60% { transform: translateX(-4px) rotate(-3deg); }
-  80% { transform: translateX(4px) rotate(3deg); }
+  20% { transform: translateX(-0.19em) rotate(-5deg); }
+  40% { transform: translateX(0.19em) rotate(5deg); }
+  60% { transform: translateX(-0.15em) rotate(-3deg); }
+  80% { transform: translateX(0.15em) rotate(3deg); }
 }
 @keyframes agee-attention {
   0%, 100% { transform: scale(1); }
@@ -184,27 +199,27 @@
 }
 @keyframes agee-avatar-hop {
   0%, 100% { transform: translateY(0); }
-  35% { transform: translateY(-9px); }
+  35% { transform: translateY(-0.35em); }
   62% { transform: translateY(0); }
-  78% { transform: translateY(-3px); }
+  78% { transform: translateY(-0.12em); }
 }
 @keyframes agee-avatar-orbit {
   0% { transform: translate(0, 0) rotate(0deg); }
-  25% { transform: translate(4px, -4px) rotate(5deg); }
-  50% { transform: translate(0, -7px) rotate(0deg); }
-  75% { transform: translate(-4px, -4px) rotate(-5deg); }
+  25% { transform: translate(0.15em, -0.15em) rotate(5deg); }
+  50% { transform: translate(0, -0.27em) rotate(0deg); }
+  75% { transform: translate(-0.15em, -0.15em) rotate(-5deg); }
   100% { transform: translate(0, 0) rotate(0deg); }
 }
 @keyframes agee-avatar-float {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
+  50% { transform: translateY(-0.31em); }
 }
 @keyframes agee-avatar-shake {
   0%, 100% { transform: translateX(0) rotate(0deg); }
-  20% { transform: translateX(-3px) rotate(-4deg); }
-  40% { transform: translateX(3px) rotate(4deg); }
-  60% { transform: translateX(-2px) rotate(-3deg); }
-  80% { transform: translateX(2px) rotate(3deg); }
+  20% { transform: translateX(-0.12em) rotate(-4deg); }
+  40% { transform: translateX(0.12em) rotate(4deg); }
+  60% { transform: translateX(-0.08em) rotate(-3deg); }
+  80% { transform: translateX(0.08em) rotate(3deg); }
 }
 @keyframes agee-avatar-glow {
   0%, 100% { transform: scale(1); }
@@ -402,7 +417,7 @@
 /* While recording, the lion itself warms toward red — an in-body tint on the
    mascot, no ring, no glow, no halo. */
 #agee-root.agee-recording #agee-launcher .agee-bird {
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)) hue-rotate(-42deg) saturate(1.5);
+  filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) hue-rotate(-42deg) saturate(1.5);
 }
 #agee-stop {
   display: none;
@@ -717,6 +732,7 @@
 /* ---- Reduced motion ------------------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {
   #agee-launcher .agee-bird,
+  #agee-launcher:hover .agee-bird,
   #agee-root.agee-avatar-runtime-active #agee-launcher .agee-bird {
     animation: none;
   }
@@ -761,12 +777,9 @@
   #agee-input {
     font-size: 14px;
   }
+  /* Smaller default knob on narrow screens; a user-set scale still wins
+     because content.js writes --agee-mascot-font as an inline property. */
   #agee-launcher {
-    width: 50px;
-    height: 50px;
-  }
-  #agee-launcher .agee-bird {
-    width: 36px;
-    height: 36px;
+    font-size: var(--agee-mascot-font, 20px);
   }
 }
