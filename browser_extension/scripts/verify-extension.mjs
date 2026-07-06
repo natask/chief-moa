@@ -567,6 +567,38 @@ if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, 
   throw new Error("browser voice partial transcripts must render as cue cards above the input");
 }
 
+if (
+  !/#agee-root\.agee-state-thinking #agee-launcher \.agee-bird/.test(overlayCssSource) ||
+  !/#agee-root\.agee-state-speaking #agee-launcher \.agee-bird/.test(overlayCssSource) ||
+  !/@keyframes agee-state-thinking-pulse/.test(overlayCssSource)
+) {
+  throw new Error("overlay.css must carry visible thinking (pulse) and speaking (steady tint) mark states for the already-toggled agee-state-* classes");
+}
+
+if (!/if \(isCurrentTurn\) setAgentState\("speaking"\);/.test(contentSource)) {
+  throw new Error("content.js must flip the mark to speaking when assistant text starts rendering, not only on assistant_audio_start");
+}
+
+if (
+  !/function armVoiceWatchdog/.test(contentSource) ||
+  !/function resetVoiceWatchdog/.test(contentSource) ||
+  !/function clearVoiceWatchdog/.test(contentSource) ||
+  !/armVoiceWatchdog\(state\)/.test(contentSource) ||
+  !/resetVoiceWatchdog\(state\)/.test(contentSource) ||
+  !/clearVoiceWatchdog\(state\)/.test(contentSource) ||
+  !/Voice turn timed out/.test(contentSource)
+) {
+  throw new Error("content.js must arm a post-commit voice response watchdog, reset it on every voice-session event, clear it on turn teardown, and surface a visible timeout");
+}
+
+if (!/msg\.type === "turn_progress"/.test(contentSource)) {
+  throw new Error("content.js must tolerate and route the gateway turn_progress keepalive");
+}
+
+if (!/parsed\?\.type === "turn_progress"/.test(backgroundSource)) {
+  throw new Error("background.js must route the turn_progress keepalive to the content script like other voice-session events");
+}
+
 if (!/function mergeLiveVoiceTranscript/.test(contentSource) || !/mergeLiveVoiceTranscript\(state\.transcript, incomingText\)/.test(contentSource)) {
   throw new Error("browser voice transcript fragments must be accumulated instead of replacing early speech");
 }

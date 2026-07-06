@@ -1423,6 +1423,10 @@
 
   function untrackLiveVoiceState(state) {
     if (!state) return;
+    // Universal terminal chokepoint for a turn: every done/error/recover/route/
+    // revoke/stop path funnels through here. Clearing the response watchdog here
+    // guarantees it can never fire after a turn has ended (no false timeouts).
+    clearVoiceWatchdog(state);
     liveVoiceStates.delete(state);
     if (state.voiceSessionId) liveVoiceBySessionId.delete(state.voiceSessionId);
     if (liveVoice === state) liveVoice = null;
@@ -1430,6 +1434,48 @@
 
   function isLiveVoiceStateActive(state) {
     return !!state && liveVoiceStates.has(state);
+  }
+
+  // ---- Post-commit response watchdog ------------------------------------
+  // After a voice turn is committed the mark sits in "thinking" and relies on
+  // the gateway to send transcript/assistant_text/assistant_audio_*/turn_progress
+  // /turn_done or to close the socket. A live-but-silent stall would hang
+  // "thinking" forever. Arm a per-turn inactivity timer at commit; every inbound
+  // voice-session event for that turn pushes it out. On expiry, surface a visible
+  // timeout and tear the stalled turn down the same way a gateway error does.
+  const VOICE_TURN_WATCHDOG_MS = 30000;
+
+  function armVoiceWatchdog(state) {
+    if (!state) return;
+    clearVoiceWatchdog(state);
+    state.watchdogTimer = setTimeout(() => {
+      state.watchdogTimer = null;
+      handleVoiceWatchdogTimeout(state);
+    }, VOICE_TURN_WATCHDOG_MS);
+  }
+
+  function resetVoiceWatchdog(state) {
+    // Only re-arm a watchdog that is already running (i.e. the turn was committed).
+    // Pre-commit listening events must not start the timer.
+    if (!state?.watchdogTimer) return;
+    armVoiceWatchdog(state);
+  }
+
+  function clearVoiceWatchdog(state) {
+    if (!state?.watchdogTimer) return;
+    clearTimeout(state.watchdogTimer);
+    state.watchdogTimer = null;
+  }
+
+  function handleVoiceWatchdogTimeout(state) {
+    if (!isLiveVoiceStateActive(state)) return;
+    // The gateway went silent after commit — no transcript, assistant text,
+    // audio, turn_progress, or turn_done for the whole window. finishLiveVoiceError
+    // shows the message in the result stack, closes the stalled session, settles
+    // the mark to idle, and ends conversation mode so the mic does not silently
+    // re-arm on a dead turn. It routes through untrackLiveVoiceState, which has
+    // already nulled this timer, so there is no double fire.
+    finishLiveVoiceError(state, "Voice turn timed out — try again");
   }
 
   // ---- The mark: sound, reactions ---------------------------------------
@@ -1675,6 +1721,10 @@
   }
 
   function handleLiveVoiceMessage(state, payload) {
+    // Any inbound voice-session event (audio chunk or JSON event) proves the turn
+    // is still alive, so push the post-commit watchdog out. No-op until the turn
+    // is committed (armed) and after it has ended (timer cleared on untrack).
+    resetVoiceWatchdog(state);
     if (payload?.audio) {
       playLiveAssistantPcm(state, base64ToBuffer(payload.audio));
       return;
@@ -1709,6 +1759,14 @@
       return;
     }
     if (msg.type === "profile_applied") {
+      return;
+    }
+    if (msg.type === "turn_progress") {
+      // Keepalive emitted by the gateway every ~5s between commit and turn_done.
+      // Its only job here is to prove the turn is still being worked; the watchdog
+      // reset at the top of this handler already consumed it. Tolerated and routed
+      // so a live-but-slow turn is never mistaken for a stall. Stage is available
+      // as msg.stage for any future progress UI.
       return;
     }
     if (msg.type === "page_tweak") {
@@ -1838,6 +1896,9 @@
     stopLiveCapture(state);
     setVoiceState(false);
     setAgentState("thinking");
+    // The turn is now waiting on the gateway. Arm the inactivity watchdog; any
+    // inbound voice-session event for this turn resets it (see handleLiveVoiceMessage).
+    armVoiceWatchdog(state);
     setTranscript(state.transcript || "");
     ensureVoiceCueCard(state, state.transcript || "Voice", "processing...");
     updateCue(state.cueId, "", "running");

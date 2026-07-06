@@ -2053,6 +2053,15 @@ async function forwardVoiceSessionEvent(session, event) {
         .catch((error) => handleOffscreenVoiceError(session.id, error));
     }
   }
+  if (parsed?.type === "turn_progress") {
+    // Keepalive the gateway emits every ~5s between commit and turn_done. Route it
+    // to the content script exactly like assistant_text / turn_done (the generic
+    // relay below) so the client's post-commit response watchdog resets on it and
+    // any future UI can read parsed.stage. Delivered here and returned so the
+    // generic forward does not double-send it.
+    deliverVoiceSessionEvent(session, { event: parsed });
+    return;
+  }
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
   });
