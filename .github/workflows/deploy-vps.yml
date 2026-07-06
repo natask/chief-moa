@@ -1,0 +1,80 @@
+name: Deploy VPS gateway
+
+# Automatic promotion of the DigitalOcean gateway (api.agee.app).
+# Every push to master that touches the gateway deploy path is verified on a
+# GitHub-hosted runner, then promoted via scripts/vps/update.sh on the droplet.
+# update.sh keeps its own data gate: backup + restore-check run on the VPS and
+# abort the update before touching the active service if either fails.
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/deploy-vps.yml"
+      - "gateway/**"
+      - "docker-compose.yml"
+      - "docker-compose.vps.yml"
+      - "scripts/vps/**"
+  workflow_dispatch: {}
+
+concurrency:
+  group: chief-moa-vps-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Verify and promote gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      PUBLIC_HEALTH_URL: https://api.agee.app/health
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd gateway
+          npm install --no-audit --no-fund
+          npm run check
+
+      - name: Set up SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          host="${VPS_HOST#*@}"
+          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Promote gateway on VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh "$VPS_HOST" \
+            "bash /opt/chief-moa/app/scripts/vps/update.sh --ref master"
+
+      - name: Smoke public gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 10); do
+            if curl -fsS -m 10 "$PUBLIC_HEALTH_URL" | grep -q '"ok":true'; then
+              echo "Public gateway healthy."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Public gateway did not report healthy." >&2
+          exit 1
