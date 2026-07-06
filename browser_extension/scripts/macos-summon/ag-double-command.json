@@ -1,0 +1,49 @@
+{
+  "title": "A.G. double-tap Command summon",
+  "rules": [
+    {
+      "description": "Double-tap Left Command to raise Chrome and open the A.G. overlay",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "left_command",
+            "modifiers": { "optional": ["any"] }
+          },
+          "conditions": [
+            { "type": "variable_if", "name": "ag_left_command_tap", "value": 1 }
+          ],
+          "to": [
+            { "set_variable": { "name": "ag_left_command_tap", "value": 0 } },
+            { "key_code": "9", "modifiers": ["left_command", "left_shift"] },
+            { "shell_command": "open -a 'Google Chrome'" }
+          ]
+        },
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "left_command",
+            "modifiers": { "optional": ["any"] }
+          },
+          "to": [
+            { "key_code": "left_command", "lazy": true }
+          ],
+          "to_if_alone": [
+            { "set_variable": { "name": "ag_left_command_tap", "value": 1 } }
+          ],
+          "to_delayed_action": {
+            "to_if_invoked": [
+              { "set_variable": { "name": "ag_left_command_tap", "value": 0 } }
+            ],
+            "to_if_canceled": [
+              { "set_variable": { "name": "ag_left_command_tap", "value": 0 } }
+            ]
+          },
+          "parameters": {
+            "basic.to_delayed_action_delay_milliseconds": 300
+          }
+        }
+      ]
+    }
+  ]
+}

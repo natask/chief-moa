@@ -56,6 +56,14 @@
         "default": "Ctrl+Period"
       },
       "description": "Start or send A.G. voice"
+    },
+    "open-agee-global": {
+      "suggested_key": {
+        "mac": "Command+Shift+9",
+        "default": "Ctrl+Shift+9"
+      },
+      "description": "Open A.G. overlay from any app while Chrome is running",
+      "global": true
     }
   },
   "action": {
