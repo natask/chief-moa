@@ -335,6 +335,15 @@ async function geminiTtsAmEtCascade(tempDir) {
       model: "test-model",
       classification: "chat",
     }),
+    agentProfile: {
+      effective: () => ({
+        voice: "Aoede", // persisted self-configured voice must win over the env default
+        input_languages: "am-ET,en-US",
+        input_language_primary: "am-ET",
+        language: "am-ET",
+        language_primary: "am-ET",
+      }),
+    },
   });
 
   const status = provider.status();
@@ -361,7 +370,7 @@ async function geminiTtsAmEtCascade(tempDir) {
   assert.ok(ttsCall, "synthesize must be called");
   assert.equal(ttsCall.body.voice.modelName, "gemini-3.1-flash-tts-preview", "synthesize must select the Gemini TTS model via voice.modelName");
   assert.equal(ttsCall.body.voice.languageCode, "am-ET", "reply language must be pinned in the synthesize request");
-  assert.equal(ttsCall.body.voice.name, "Kore", "gemini-tts must default to the Kore voice");
+  assert.equal(ttsCall.body.voice.name, "Aoede", "the persisted profile voice must win over the env/Kore default");
 }
 
 async function sttOnlyUnchanged(tempDir) {

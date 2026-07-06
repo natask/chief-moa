@@ -838,6 +838,20 @@ class ChirpSttVoiceProvider {
     return Boolean(this.ttsVoice) || Boolean(cloudTtsVoiceFor(code));
   }
 
+  // The persisted profile voice wins over the env default on the Gemini-TTS
+  // leg (both use the same Gemini voice names), so a spoken "change your
+  // voice" self-configuration applies on the next turn. Classic Cloud TTS
+  // voices have provider-specific names, so that leg stays env-driven.
+  ttsVoiceName() {
+    if (this.ttsProviderId === "gemini-tts" && this.agentProfile && typeof this.agentProfile.effective === "function") {
+      const fromProfile = String(this.agentProfile.effective().voice || "").trim();
+      if (fromProfile) {
+        return fromProfile;
+      }
+    }
+    return this.ttsVoice;
+  }
+
   async synthesizeSpeech(text, language, stylePrompt = "") {
     const token = await this.accessToken();
     return synthesizeCloudTts({
@@ -846,7 +860,7 @@ class ChirpSttVoiceProvider {
       // input.prompt; classic Cloud TTS voices do not, so only forward it there.
       prompt: this.ttsProviderId === "gemini-tts" ? String(stylePrompt || "") : "",
       language: language || this.replyLanguage(),
-      voice: this.ttsVoice,
+      voice: this.ttsVoiceName(),
       modelName: this.ttsProviderId === "gemini-tts" ? this.ttsModel : "",
       token,
       location: this.location,
