@@ -55,6 +55,11 @@
     // The A.G. mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
+  // Custom tooltip chip + viewport-resize batching for the overlay.
+  let tipEl = null,
+    tipTimer = null,
+    tipTarget = null,
+    resizeRaf = null;
   const assistantPlaybackSources = new Set();
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
@@ -198,7 +203,11 @@
     root.id = "agee-root";
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <button id="agee-launcher" type="button" title="Click for chat · drag to move · double-click and hold to talk" aria-label="A.G.">
+      <div id="agee-aura" aria-hidden="true">
+        <span class="agee-aura-ring"></span>
+        <span class="agee-aura-glow"></span>
+      </div>
+      <button id="agee-launcher" type="button" data-agee-tip="Click to type, drag to move, hold to talk" aria-label="A.G.">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
@@ -212,11 +221,12 @@
         <div id="agee-bar">
           <span id="agee-dot"></span>
           <textarea id="agee-input" rows="1" placeholder="Ask A.G." autocomplete="off" spellcheck="true"></textarea>
-          <button id="agee-voice" type="button" title="Start voice" aria-label="Start voice"></button>
-          <button id="agee-record" type="button" title="Record note" aria-label="Record note"></button>
-          <button id="agee-stop" type="button" title="Stop current task" aria-label="Stop current task">Stop</button>
+          <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
+          <button id="agee-record" type="button" data-agee-tip="Capture an audio note" aria-label="Record note"></button>
+          <button id="agee-stop" type="button" data-agee-tip="Halt the running task" aria-label="Stop current task">Stop</button>
         </div>
-      </div>`;
+      </div>
+      <div id="agee-tip" role="tooltip" aria-hidden="true"></div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
     panel = root.querySelector("#agee-panel");
@@ -227,7 +237,10 @@
     log = root.querySelector("#agee-log");
     voiceState = root.querySelector("#agee-voice-state");
     transcriptEl = root.querySelector("#agee-transcript");
+    tipEl = root.querySelector("#agee-tip");
 
+    setupOverlayTooltips();
+    updateAuraGutter();
     restoreLauncherPosition();
     restoreUiChimePreference();
     loadAvatarBehaviorRuntime();
@@ -240,9 +253,7 @@
       e.stopPropagation();
     });
     launcher.addEventListener("pointerdown", startLauncherDrag);
-    window.addEventListener("resize", () => {
-      if (open) positionPanel();
-    });
+    window.addEventListener("resize", handleViewportResize);
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -287,6 +298,104 @@
     });
 
     // Explicit voice playback primes audio from the voice path itself.
+  }
+
+  // ---- Custom tooltips --------------------------------------------------
+  // A single dark chip replaces native title tooltips on the overlay controls.
+  // 400 ms hover delay, instant hide, edge-aware so it never clips a viewport
+  // edge. aria-labels stay on the controls for assistive tech; the chip reads
+  // the live data-agee-tip text so state-driven labels stay in sync.
+  function setupOverlayTooltips() {
+    if (!tipEl) return;
+    for (const target of [launcher, voiceButton, recordButton, stopButton]) {
+      if (!target) continue;
+      target.addEventListener("mouseenter", () => armTooltip(target));
+      target.addEventListener("mouseleave", hideTooltip);
+      target.addEventListener("focus", () => armTooltip(target));
+      target.addEventListener("blur", hideTooltip);
+      target.addEventListener("pointerdown", hideTooltip);
+    }
+  }
+
+  function armTooltip(target) {
+    hideTooltip();
+    if (!target?.getAttribute("data-agee-tip")) return;
+    tipTarget = target;
+    tipTimer = setTimeout(() => {
+      if (tipTarget === target) showTooltip(target);
+    }, 400);
+  }
+
+  function showTooltip(target) {
+    if (!tipEl) return;
+    const text = target.getAttribute("data-agee-tip");
+    if (!text) return;
+    tipEl.textContent = text;
+    tipEl.setAttribute("data-show", "");
+    tipEl.setAttribute("aria-hidden", "false");
+    positionTooltip(target);
+  }
+
+  function positionTooltip(target) {
+    if (!tipEl) return;
+    const r = target.getBoundingClientRect();
+    const tw = tipEl.offsetWidth;
+    const th = tipEl.offsetHeight;
+    let left = r.left + r.width / 2 - tw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+    let top = r.top - th - 8;
+    if (top < 8) top = r.bottom + 8; // not enough room above → flip below
+    tipEl.style.left = `${Math.round(left)}px`;
+    tipEl.style.top = `${Math.round(top)}px`;
+  }
+
+  function hideTooltip() {
+    if (tipTimer) {
+      clearTimeout(tipTimer);
+      tipTimer = null;
+    }
+    tipTarget = null;
+    if (!tipEl) return;
+    tipEl.removeAttribute("data-show");
+    tipEl.setAttribute("aria-hidden", "true");
+  }
+
+  // Update a control's tooltip text; if that control's chip is showing, refresh
+  // it in place so a state change (start↔send, record↔stop) reads immediately.
+  function setTooltip(target, text) {
+    if (!target) return;
+    target.setAttribute("data-agee-tip", text);
+    if (tipTarget === target && tipEl?.hasAttribute("data-show")) {
+      tipEl.textContent = text;
+      positionTooltip(target);
+    }
+  }
+
+  // The right-edge aura must not sit under a native scrollbar gutter, which can
+  // paint above fixed content. Measure the gutter and offset the aura's right.
+  function updateAuraGutter() {
+    const aura = root && root.querySelector("#agee-aura");
+    if (!aura) return;
+    const gutter = Math.max(0, window.innerWidth - (document.documentElement?.clientWidth || window.innerWidth));
+    aura.style.setProperty("--agee-aura-gutter", `${gutter}px`);
+  }
+
+  // Re-clamp the launcher into the viewport and re-anchor the panel on resize
+  // and orientation change so neither can end up off-screen. Batched to a frame.
+  function handleViewportResize() {
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = null;
+      reclampLauncher();
+      updateAuraGutter();
+      if (open) positionPanel();
+    });
+  }
+
+  function reclampLauncher() {
+    if (!launcher) return;
+    const rect = launcher.getBoundingClientRect();
+    placeLauncher(rect.left, rect.top, false);
   }
 
   function restoreUiChimePreference() {
@@ -499,16 +608,27 @@
     if (!panel || !launcher) return;
     const lr = launcher.getBoundingClientRect();
     const gap = 12;
+    const margin = 8;
     const pw = panel.offsetWidth || Math.min(540, window.innerWidth - 24);
     let left = lr.left + lr.width / 2 - pw / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
     panel.style.left = `${left}px`;
     panel.style.right = "auto";
+    // Clamp vertically too, accounting for the panel's full height (which grows
+    // with the cue stack), so the surface never spills past the top or bottom.
+    const ph = panel.offsetHeight || 54;
+    const maxTop = Math.max(margin, window.innerHeight - ph - margin);
     if (lr.top > 140) {
-      panel.style.bottom = `${Math.max(8, window.innerHeight - lr.top + gap)}px`;
+      // Open above the mark, bottom pinned just above it, so results stack up.
+      let bottom = window.innerHeight - lr.top + gap;
+      const maxBottom = Math.max(margin, window.innerHeight - ph - margin);
+      bottom = Math.max(margin, Math.min(bottom, maxBottom));
+      panel.style.bottom = `${bottom}px`;
       panel.style.top = "auto";
     } else {
-      panel.style.top = `${lr.bottom + gap}px`;
+      let top = lr.bottom + gap;
+      top = Math.max(margin, Math.min(top, maxTop));
+      panel.style.top = `${top}px`;
       panel.style.bottom = "auto";
     }
   }
@@ -945,10 +1065,29 @@
     const you = document.createElement("div");
     you.className = "agee-row agee-you";
     you.textContent = String(label || entry?.label || "A.G.");
+    // Assistant header: a glowing status dot plus the label, so state reads from
+    // the header rather than a heavy left border.
+    const head = document.createElement("div");
+    head.className = "agee-cue-head";
+    const headDot = document.createElement("span");
+    headDot.className = "agee-cue-dot";
+    const headName = document.createElement("span");
+    headName.className = "agee-cue-name";
+    headName.textContent = "Agee";
+    head.appendChild(headDot);
+    head.appendChild(headName);
+    // Skeleton shimmer shown while waiting, replaced by the answer once it
+    // starts streaming (the card gains agee-cue-streaming).
+    const skeleton = document.createElement("div");
+    skeleton.className = "agee-cue-skeleton";
+    skeleton.appendChild(document.createElement("div")).className = "agee-skeleton-line";
+    skeleton.appendChild(document.createElement("div")).className = "agee-skeleton-line";
     const status = document.createElement("div");
     status.className = "agee-cue-status";
     status.textContent = statusText || "";
     card.appendChild(you);
+    card.appendChild(head);
+    card.appendChild(skeleton);
     card.appendChild(status);
     log.appendChild(card);
     entry = {
@@ -1019,7 +1158,11 @@
       }
     }
     if (!entry?.statusEl) return;
-    if (typeof text === "string" && text) entry.statusEl.textContent = text;
+    if (typeof text === "string" && text) {
+      entry.statusEl.textContent = text;
+      // Real streamed content arrived: drop the skeleton and fade the text in.
+      if (kind === "running" && entry.cardEl) entry.cardEl.classList.add("agee-cue-streaming");
+    }
     if (kind === "done" || kind === "error") {
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
@@ -1193,7 +1336,7 @@
     if (voiceButton) {
       voiceButton.classList.toggle("listening", listening);
       voiceButton.textContent = "";
-      voiceButton.title = listening ? "Send voice" : "Start voice";
+      setTooltip(voiceButton, listening ? "Send what you said" : "Speak your request");
       voiceButton.setAttribute("aria-label", listening ? "Send voice" : "Start voice");
     }
   }
@@ -1790,7 +1933,7 @@
     if (root) root.classList.toggle("agee-recording", active);
     if (recordButton) {
       recordButton.classList.toggle("recording", active);
-      recordButton.title = active ? "Stop recording" : "Record note";
+      setTooltip(recordButton, active ? "Finish the recording" : "Capture an audio note");
       recordButton.setAttribute("aria-label", active ? "Stop recording" : "Record note");
     }
   }
