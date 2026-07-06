@@ -214,18 +214,13 @@ final class MoaVoiceController {
     }
 
     boolean speak(String text) {
-        String value = safe(text);
-        if (value.isEmpty() || !ttsReady || textToSpeech == null) {
-            return false;
-        }
-        String utteranceId = "moa-reply-" + (++utteranceSequence);
-        activeUtteranceId = utteranceId;
-        int result = textToSpeech.speak(value, TextToSpeech.QUEUE_FLUSH, null, utteranceId);
-        if (result == TextToSpeech.ERROR) {
-            activeUtteranceId = "";
-            return false;
-        }
-        return true;
+        // Hard rule: the device local TextToSpeech is never used as a fallback
+        // voice. The robotic on-device voice breaks the product's voice identity,
+        // so when hosted assistant audio is absent we stay text-only (silent)
+        // rather than speak locally. Returning false keeps the reply visible as
+        // text; callers already treat false as "not spoken". Hosted audio still
+        // plays through MoaAudioPlaybackController on the streaming path.
+        return false;
     }
 
     private void setupSpeechRecognizer() {
