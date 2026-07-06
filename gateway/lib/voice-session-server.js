@@ -18,6 +18,7 @@ const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 // the turn once it is ready, so the start of the utterance is never dropped.
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
 const EARLY_AUDIO_MAX_AGE_MS = 3000;
+const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "closed", "interrupted", "replaced", "no_speech"]);
 
 function createVoiceSessionServer(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
@@ -397,16 +398,7 @@ class VoiceSessionConnection {
       turn.completing = true;
       await this.completeTurnWithProviderResult(turn, providerEvents, providerResult);
     } catch (error) {
-      turn.status = "error";
-      await closeAssistantAudioStream(turn);
-      await this.recordProviderEvent(turn, providerEvents, "turn_error", {
-        error: cleanError(error),
-      });
-      writeTurnMetadata(turn, {
-        status: "error",
-        error: cleanError(error),
-      });
-      this.sendError(`failed to complete turn: ${cleanError(error)}`);
+      await this.failCommittedTurn(turn, providerEvents, error);
     } finally {
       this.responding = false;
     }
@@ -452,16 +444,7 @@ class VoiceSessionConnection {
       turn.completing = true;
       await this.completeTurnWithProviderResult(turn, providerEvents, providerResult);
     } catch (error) {
-      turn.status = "error";
-      await closeAssistantAudioStream(turn);
-      await this.recordProviderEvent(turn, providerEvents, "turn_error", {
-        error: cleanError(error),
-      });
-      writeTurnMetadata(turn, {
-        status: "error",
-        error: cleanError(error),
-      });
-      this.sendError(`failed to complete turn: ${cleanError(error)}`);
+      await this.failCommittedTurn(turn, providerEvents, error);
     } finally {
       this.responding = false;
     }
@@ -630,7 +613,7 @@ class VoiceSessionConnection {
   }
 
   async completeLiveTurn(turn, providerResult) {
-    if (this.turn !== turn || turn.completing || turn.status === "completed" || turn.status === "canceled" || turn.status === "error") {
+    if (this.turn !== turn || turn.completing || TERMINAL_TURN_STATUSES.has(turn.status)) {
       return;
     }
     turn.completing = true;
@@ -640,7 +623,7 @@ class VoiceSessionConnection {
       await closeAssistantAudioStream(turn);
       await this.completeTurnWithProviderResult(turn, turn.providerEvents || this.createProviderEvents(turn), providerResult);
     } catch (error) {
-      this.failLiveTurn(turn, error);
+      await this.failLiveTurn(turn, error);
     } finally {
       this.responding = false;
     }
@@ -670,10 +653,12 @@ class VoiceSessionConnection {
       await this.recordProviderEvent(turn, providerEvents, "turn_no_speech", {
         reason: "stt_empty",
         audio_bytes: turn.audioBytes,
+        transcript_language_rejected: providerResult?.transcript_language_rejected === true,
       });
       writeTurnMetadata(turn, {
         status: "no_speech",
         completed_at: nowIso(),
+        transcript_language_rejected: providerResult?.transcript_language_rejected === true,
       });
       turn.status = "no_speech";
       await this.sendEvent({
@@ -743,6 +728,8 @@ class VoiceSessionConnection {
       turn_id: turn.turnId,
       status: "completed",
       transcription_only: providerResult?.transcription_only === true,
+      ...(typeof providerResult?.tts_spoke === "boolean" ? { tts_spoke: providerResult.tts_spoke } : {}),
+      ...(providerResult?.reply_language ? { reply_language: providerResult.reply_language } : {}),
     });
 
     turn.status = "completed";
@@ -807,6 +794,7 @@ class VoiceSessionConnection {
         incomplete: true,
         status,
         error: errorMessage,
+        transcript_language_rejected: turn.transcriptLanguageRejected === true,
         // Input languages the STT leg restricted to, so an interrupted turn's
         // stored PCM still carries its language for later audio analysis.
         input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
@@ -860,6 +848,7 @@ class VoiceSessionConnection {
         // must speak the reply text locally (e.g. Amharic).
         reply_language: providerResult?.reply_language || "",
         tts_spoke: providerResult?.tts_spoke === true,
+        transcript_language_rejected: providerResult?.transcript_language_rejected === true || turn.transcriptLanguageRejected === true,
         // The restricted INPUT languages the STT leg recognized, captured at
         // session start. Recorded on the canonical turn so a later audio-analysis
         // agent can fetch the stored PCM and know both input and output languages.
@@ -875,22 +864,56 @@ class VoiceSessionConnection {
   }
 
   async failLiveTurn(turn, error) {
-    if (this.turn !== turn || turn.status === "completed" || turn.status === "canceled") {
+    if (this.turn !== turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
       return;
     }
+    await this.failCommittedTurn(turn, turn.providerEvents || this.createProviderEvents(turn), error);
+  }
+
+  async failCommittedTurn(turn, providerEvents, error) {
+    if (!turn) {
+      return;
+    }
+    const message = cleanError(error);
     turn.status = "error";
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
-    await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), "turn_error", {
-      error: cleanError(error),
+    if (turn.liveSession) {
+      turn.liveSession.cancel();
+    }
+    await this.recordProviderEvent(turn, providerEvents || this.createProviderEvents(turn), "turn_error", {
+      error: message,
+      reason: turnErrorReason(error),
     });
-    await this.recordIncompleteTurn(turn, "error", cleanError(error));
+    await this.recordIncompleteTurn(turn, "error", message);
     writeTurnMetadata(turn, {
       status: "error",
-      error: cleanError(error),
+      error: message,
+      error_reason: turnErrorReason(error),
+      completed_at: nowIso(),
     });
-    this.sendError(`failed to complete turn: ${cleanError(error)}`);
-    this.turn = null;
+    this.sendError(`failed to complete turn: ${message}`);
+    await this.sendTurnDone({
+      type: "turn_done",
+      session_id: turn.sessionId,
+      branch_id: turn.branchId,
+      turn_id: turn.turnId,
+      status: "error",
+      reason: turnErrorReason(error),
+    });
+    if (this.turn === turn) {
+      this.turn = null;
+    }
+  }
+
+  async sendTurnDone(payload) {
+    try {
+      await this.sendEvent(payload);
+    } catch {
+      // The client may already have closed during interruption/replacement. The
+      // canonical turn and provider event are the recovery record; do not let a
+      // terminal notification failure keep the server-side turn open.
+    }
   }
 
   async handleCancelTurn(event) {
@@ -1246,6 +1269,17 @@ function randomId(prefix) {
 
 function cleanError(error) {
   return String(error?.message || error || "unknown error").replace(/[\r\n]+/g, " ").slice(0, 500);
+}
+
+function turnErrorReason(error) {
+  const message = cleanError(error).toLowerCase();
+  if (error?.name === "AbortError" || message.includes("timeout") || message.includes("timed out")) {
+    return "timeout";
+  }
+  if (message.includes("no speech") || message.includes("empty audio")) {
+    return "stt_empty";
+  }
+  return "processing_error";
 }
 
 function nowIso() {

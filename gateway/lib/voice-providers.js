@@ -491,11 +491,11 @@ class ChirpSttVoiceProvider {
     this.projectId = chirpProjectId(env);
     this.location = String(env.CHIRP_LOCATION || env.GCP_LOCATION || env.GOOGLE_CLOUD_LOCATION || "us").trim() || "us";
     this.model = String(env.CHIRP_MODEL || env.VOICE_STT_MODEL || DEFAULT_CHIRP_MODEL).trim() || DEFAULT_CHIRP_MODEL;
-    this.languageCodes = languageCodes(env.CHIRP_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODE || env.GEMINI_LIVE_LANGUAGE_CODE || env.MODEL_LANGUAGE || "en-US");
-    // Codes that require chirp_3 (e.g. am-ET). If any are configured with an
-    // older model, recognition degrades silently, so we surface it and refuse.
-    this.chirp3OnlyLanguages = chirp3OnlyLanguages(this.languageCodes);
+    this.envLanguageCodes = languageCodes(env.CHIRP_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODE || env.GEMINI_LIVE_LANGUAGE_CODE || env.MODEL_LANGUAGE || "en-US");
     this.timeoutMs = Math.max(5000, numberFrom(env.CHIRP_TIMEOUT_MS || env.VOICE_PROVIDER_TIMEOUT_MS, 30000));
+    this.cloudTtsTimeoutMs = Math.max(1, numberFrom(env.CLOUD_TTS_TIMEOUT_MS, 20000));
+    this.testChirpEndpoint = env.MOA_MODE === "local" ? String(env.MOA_TEST_CHIRP_ENDPOINT || "").trim() : "";
+    this.testCloudTtsEndpoint = env.MOA_MODE === "local" ? String(env.MOA_TEST_CLOUD_TTS_ENDPOINT || "").trim() : "";
     this.gcloudBin = env.GCLOUD_BIN || "gcloud";
     this.staticAccessToken = env.CHIRP_ACCESS_TOKEN || env.GCP_ACCESS_TOKEN || "";
     this.serviceAccountKeyJson = env.CHIRP_SERVICE_ACCOUNT_KEY || env.GCP_SERVICE_ACCOUNT_KEY || "";
@@ -525,17 +525,29 @@ class ChirpSttVoiceProvider {
 
   // am-ET and other Chirp-3-only languages require model=chirp_3. Fail loudly
   // rather than let recognition silently fall back to an unrestricted result.
-  assertModelSupportsLanguages() {
-    if (this.chirp3OnlyLanguages.length > 0 && !isChirp3Model(this.model)) {
-      throw new Error(`chirp language codes ${this.chirp3OnlyLanguages.join(", ")} require model=chirp_3, but CHIRP_MODEL is ${this.model || "unset"}`);
+  sttLanguageCodes() {
+    if (this.agentProfile && typeof this.agentProfile.effective === "function") {
+      const profile = this.agentProfile.effective();
+      const input = String(profile?.input_languages || profile?.input_language_primary || "").trim();
+      return languageCodes(input);
+    }
+    return this.envLanguageCodes;
+  }
+
+  assertModelSupportsLanguages(codes = this.sttLanguageCodes()) {
+    const chirp3Only = chirp3OnlyLanguages(codes);
+    if (chirp3Only.length > 0 && !isChirp3Model(this.model)) {
+      throw new Error(`chirp language codes ${chirp3Only.join(", ")} require model=chirp_3, but CHIRP_MODEL is ${this.model || "unset"}`);
     }
   }
 
   endpoint() {
-    return chirpEndpoint(this.projectId, this.location);
+    return this.testChirpEndpoint || chirpEndpoint(this.projectId, this.location);
   }
 
   status() {
+    const codes = this.sttLanguageCodes();
+    const chirp3Only = chirp3OnlyLanguages(codes);
     const runtime = voiceRuntimeStatus({
       env: this.env,
       names: this.names,
@@ -551,12 +563,12 @@ class ChirpSttVoiceProvider {
       model: this.model,
       endpoint: redactEndpoint(this.endpoint()),
       auth: this.authStatus(),
-      language_codes: this.languageCodes,
+      language_codes: codes,
       // "restricted": the request truly limits recognition to language_codes.
       // "auto": language-agnostic (auto-detect) because CHIRP_LANGUAGE_CODES=auto.
-      language_recognition: this.languageCodes[0] === "auto" ? "auto" : "restricted",
-      requires_chirp_3: this.chirp3OnlyLanguages.length > 0,
-      chirp_3_only_languages: this.chirp3OnlyLanguages,
+      language_recognition: codes[0] === "auto" ? "auto" : "restricted",
+      requires_chirp_3: chirp3Only.length > 0,
+      chirp_3_only_languages: chirp3Only,
       // "cascaded": STT -> gateway LLM turn -> hosted Cloud TTS reply audio.
       // "stt_only": transcript only; the device speaks the reply.
       pipeline: this.cascaded() ? "cascaded" : "stt_only",
@@ -580,13 +592,18 @@ class ChirpSttVoiceProvider {
     if (!this.configured()) {
       throw new Error("chirp STT provider requires GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT plus GCP_SERVICE_ACCOUNT_KEY, GOOGLE_APPLICATION_CREDENTIALS, CHIRP_ACCESS_TOKEN, or gcloud ADC on the gateway machine");
     }
-    this.assertModelSupportsLanguages();
+    const sttLanguageCodes = this.sttLanguageCodes();
+    this.assertModelSupportsLanguages(sttLanguageCodes);
     if (!turn.audioBytes || turn.audioBytes <= 0) {
       throw new Error("cannot send an empty audio turn to chirp");
     }
 
     // Leg 1 — streaming Chirp 3 STT, restricted to the configured languages.
-    const transcript = await this.transcribePcmFile(turn);
+    const transcription = await this.transcribePcmFile(turn, sttLanguageCodes);
+    const transcript = transcription.text;
+    if (transcription.languageRejected) {
+      turn.transcriptLanguageRejected = true;
+    }
     if (transcript) {
       await hooks.onTranscriptFinal(transcript);
     }
@@ -601,6 +618,7 @@ class ChirpSttVoiceProvider {
         assistant_text: "",
         audio_format: CLIENT_AUDIO_FORMAT,
         transcription_only: true,
+        transcript_language_rejected: transcription.languageRejected === true,
       };
     }
 
@@ -610,7 +628,7 @@ class ChirpSttVoiceProvider {
     // turn returns no speak text; we then skip TTS.
     let reasoning = { speak: "", display: transcript, language: this.replyLanguage(), model: this.model, classification: "chat" };
     if (!transcript) {
-      return this.cascadedResult(transcript, reasoning, false);
+      return this.cascadedResult(transcript, reasoning, false, transcription);
     }
     try {
       const result = await this.reasoner({
@@ -651,10 +669,10 @@ class ChirpSttVoiceProvider {
       }
     }
 
-    return this.cascadedResult(transcript, reasoning, spoke);
+    return this.cascadedResult(transcript, reasoning, spoke, transcription);
   }
 
-  cascadedResult(transcript, reasoning, spoke) {
+  cascadedResult(transcript, reasoning, spoke, transcription = {}) {
     return {
       provider: "chirp-cascaded",
       model: reasoning.model || this.model,
@@ -667,6 +685,7 @@ class ChirpSttVoiceProvider {
       transcription_only: false,
       tts_spoke: spoke,
       reply_language: reasoning.language || "",
+      transcript_language_rejected: transcription.languageRejected === true,
       classification: reasoning.classification || "chat",
     };
   }
@@ -679,7 +698,7 @@ class ChirpSttVoiceProvider {
       ? this.agentProfile.effective()
       : null;
     const fromProfile = String(profile?.language || profile?.language_primary || "").trim();
-    return fromProfile || this.languageCodes[0] || "en-US";
+    return fromProfile || this.sttLanguageCodes()[0] || "en-US";
   }
 
   canSynthesize(language) {
@@ -699,12 +718,13 @@ class ChirpSttVoiceProvider {
       token,
       location: this.location,
       projectId: this.projectId,
-      timeoutMs: this.timeoutMs,
+      timeoutMs: this.cloudTtsTimeoutMs,
+      endpoint: this.testCloudTtsEndpoint,
       targetSampleRate: CLIENT_AUDIO_FORMAT.sample_rate,
     });
   }
 
-  async transcribePcmFile(turn) {
+  async transcribePcmFile(turn, sttLanguageCodes = this.sttLanguageCodes()) {
     const audio = fs.readFileSync(turn.pcmPath);
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
@@ -728,7 +748,7 @@ class ChirpSttVoiceProvider {
             sampleRateHertz: sampleRate,
             audioChannelCount: channels,
           },
-          languageCodes: this.languageCodes,
+          languageCodes: sttLanguageCodes,
           model: this.model,
           features: {
             enableAutomaticPunctuation: true,
@@ -742,7 +762,7 @@ class ChirpSttVoiceProvider {
       const text = await response.text();
       throw new Error(`chirp STT failed (${response.status}): ${cleanError(text)}`);
     }
-    return extractSpeechTranscript(await response.json());
+    return extractSpeechTranscript(await response.json(), sttLanguageCodes);
   }
 
   async accessToken() {
@@ -2086,7 +2106,7 @@ async function synthesizeCloudTts(options) {
   if (!voiceName) {
     throw new Error(`no Cloud TTS voice for language ${language}`);
   }
-  const endpoint = "https://texttospeech.googleapis.com/v1/text:synthesize";
+  const endpoint = String(options.endpoint || "").trim() || "https://texttospeech.googleapis.com/v1/text:synthesize";
   const response = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {
@@ -2101,7 +2121,7 @@ async function synthesizeCloudTts(options) {
         sampleRateHertz: CLOUD_TTS_SAMPLE_RATE,
       },
     }),
-  }, Math.max(5000, Number(options.timeoutMs) || 30000));
+  }, Math.max(1, Number(options.timeoutMs) || 20000));
 
   if (!response.ok) {
     const text = await response.text();
@@ -2282,14 +2302,31 @@ function transcriptionText(value) {
   return String(value.text || value.transcript || "").trim();
 }
 
-function extractSpeechTranscript(response) {
+function extractSpeechTranscript(response, activeLanguageCodes = []) {
   const results = Array.isArray(response?.results) ? response.results : [];
-  return results
+  const restricted = new Set((Array.isArray(activeLanguageCodes) ? activeLanguageCodes : [])
+    .map((code) => String(code || "").trim().toLowerCase())
+    .filter((code) => code && code !== "auto"));
+  let rejected = 0;
+  const accepted = results
+    .filter((result) => {
+      const languageCode = String(result?.languageCode || result?.language_code || "").trim().toLowerCase();
+      if (!languageCode || restricted.size === 0 || restricted.has(languageCode)) {
+        return true;
+      }
+      rejected += 1;
+      return false;
+    })
     .map((result) => result?.alternatives?.[0]?.transcript || "")
     .filter(Boolean)
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+  return {
+    text: accepted,
+    languageRejected: rejected > 0 && !accepted,
+    rejected_results: rejected,
+  };
 }
 
 function fetchWithTimeout(url, options, timeoutMs) {

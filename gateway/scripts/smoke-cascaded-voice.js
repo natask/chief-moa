@@ -20,12 +20,14 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { WebSocket } = require("ws");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const {
   createVoiceProvider,
   generatePcm16Tone,
 } = require(path.join(GATEWAY_DIR, "lib", "voice-providers"));
+const { VoiceSessionConnection } = require(path.join(GATEWAY_DIR, "lib", "voice-session-server"));
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -39,11 +41,164 @@ async function main() {
     await enUsCascade(tempDir);
     await amEtFallback(tempDir);
     await sttOnlyUnchanged(tempDir);
+    await profileDerivedSttLanguages(tempDir);
+    await turnDoneCarriesCascadedMetadata(tempDir);
+    await errorContractEmitsTurnDoneAndCanonicalRecord(tempDir);
+    await closedLiveTurnIgnoresLateProviderCompletion(tempDir);
     console.log("smoke-cascaded-voice: ok");
   } finally {
     global.fetch = previousFetch;
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+async function profileDerivedSttLanguages(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "selam", calls });
+
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US,am-ET",
+    },
+    agentProfile: {
+      effective: () => ({
+        input_languages: "am-ET",
+        input_language_primary: "am-ET",
+        language: "en-US",
+        language_primary: "en-US",
+      }),
+    },
+  });
+
+  assert.deepEqual(provider.status().language_codes, ["am-ET"], "profile input_languages must override env for Chirp STT");
+  const events = [];
+  await provider.processTurn(makeTurn(tempDir, "profile-am"), recordingHooks(events));
+  const sttCall = calls.find((c) => c.kind === "stt");
+  assert.deepEqual(sttCall.body.config.languageCodes, ["am-ET"], "recognize request must be restricted to profile input language");
+}
+
+async function turnDoneCarriesCascadedMetadata(tempDir) {
+  const provider = {
+    status: () => ({
+      provider: "chirp-cascaded",
+      model: "test-model",
+      configured: true,
+      language_codes: ["am-ET"],
+      assistant_audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+    }),
+    async processTurn(_turn, hooks) {
+      await hooks.onTranscriptFinal("selam");
+      await hooks.onAssistantText("ሰላም");
+      return {
+        provider: "chirp-cascaded",
+        model: "test-model",
+        transcript: "selam",
+        assistant_text: "ሰላም",
+        audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+        transcription_only: false,
+        tts_spoke: false,
+        reply_language: "am-ET",
+      };
+    },
+  };
+  const outcome = await driveVoiceSession(tempDir, "metadata", provider);
+  const done = outcome.events.find((event) => event.type === "turn_done");
+  assert.equal(done.status, "completed");
+  assert.equal(done.tts_spoke, false, "completed cascaded turn_done must expose tts_spoke=false");
+  assert.equal(done.reply_language, "am-ET", "completed cascaded turn_done must expose reply_language");
+}
+
+async function errorContractEmitsTurnDoneAndCanonicalRecord(tempDir) {
+  const provider = {
+    status: () => ({
+      provider: "chirp-cascaded",
+      model: "test-model",
+      configured: true,
+      language_codes: ["en-US"],
+      assistant_audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+    }),
+    async processTurn() {
+      throw new Error("simulated provider failure");
+    },
+  };
+  const records = [];
+  const outcome = await driveVoiceSession(tempDir, "error", provider, records);
+  assert.ok(outcome.events.some((event) => event.type === "error"), "error event must still be emitted");
+  const done = outcome.events.find((event) => event.type === "turn_done");
+  assert.equal(done.status, "error", "provider failure must end with turn_done status=error");
+  assert.equal(done.reason, "processing_error");
+  assert.equal(records.length, 1, "error turn with captured audio must record an incomplete canonical turn");
+  assert.equal(records[0].status, "error");
+  assert.equal(records[0].incomplete, true);
+}
+
+async function closedLiveTurnIgnoresLateProviderCompletion(tempDir) {
+  let resolveDone;
+  const done = new Promise((resolve) => {
+    resolveDone = resolve;
+  });
+  const provider = {
+    status: () => ({
+      provider: "gemini-live",
+      model: "test-live",
+      configured: true,
+      assistant_audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+    }),
+    createLiveTurnSession(_turn, hooks) {
+      return {
+        done,
+        sendAudio() {
+          void hooks.onTranscriptPartial("interrupted partial transcript");
+          void hooks.onAssistantText("interrupted partial reply");
+        },
+        cancel() {
+          resolveDone({
+            provider: "gemini-live",
+            model: "test-live",
+            transcript: "late transcript",
+            assistant_text: "late reply",
+            audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+          });
+        },
+      };
+    },
+  };
+  const records = [];
+  const dataDir = path.join(tempDir, "session-closed-live");
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const events = [];
+  const connection = new VoiceSessionConnection(fakeWs(events), {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    onTurnCompleted: async (record) => {
+      records.push(record);
+      return record;
+    },
+  });
+
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: "sess_closed_live",
+    turn_id: "turn_closed_live",
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 40, frequencyHz: 260, sampleRate: 16000, volume: 0.2 }));
+  await connection.closeCurrentTurn("closed");
+  await Promise.resolve();
+
+  assert.equal(records.length, 1, "closed live turn must be recorded once");
+  assert.equal(records[0].status, "closed");
+  assert.equal(records[0].incomplete, true);
+  assert.equal(connection.turn, null, "closed live turn must be cleared");
+  assert.ok(!events.some((event) => event.type === "turn_done" && event.status === "error"), "late provider completion must not emit error turn_done");
 }
 
 // Stub Chirp recognize + Cloud TTS synthesize. `sttTranscript` is what STT
@@ -197,6 +352,56 @@ function recordingHooks(events) {
     onAssistantAudioStart: async (format) => events.push({ type: "assistant_audio_start", format }),
     sendAudio: async (chunk) => events.push({ type: "audio", bytes: chunk.length }),
     onAssistantAudioDone: async () => events.push({ type: "assistant_audio_done" }),
+  };
+}
+
+async function driveVoiceSession(tempDir, tag, provider, records = []) {
+  const dataDir = path.join(tempDir, `session-${tag}`);
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const events = [];
+  const ws = fakeWs(events);
+  const connection = new VoiceSessionConnection(ws, {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    agentProfile: null,
+    contextProvider: null,
+    toolHandler: null,
+    onTurnCompleted: async (record) => {
+      records.push(record);
+      return record;
+    },
+  });
+  const pcm = generatePcm16Tone({ durationMs: 80, frequencyHz: 240, sampleRate: 16000, volume: 0.2 });
+
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: `sess_${tag}`,
+    turn_id: `turn_${tag}`,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(pcm);
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: `turn_${tag}` });
+  return { events, records };
+}
+
+function fakeWs(events) {
+  return {
+    readyState: WebSocket.OPEN,
+    send(data, options, callback) {
+      const cb = typeof options === "function" ? options : callback;
+      if (Buffer.isBuffer(data)) {
+        events.push({ type: "binary", bytes: data.length });
+      } else {
+        events.push(JSON.parse(Buffer.from(data).toString("utf8")));
+      }
+      if (cb) {
+        process.nextTick(cb);
+      }
+    },
   };
 }
 

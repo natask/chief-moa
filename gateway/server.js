@@ -131,6 +131,7 @@ const MODEL_LANGUAGE = String(process.env.MODEL_LANGUAGE || "").trim();
 const MAX_BODY_BYTES = 1024 * 1024;
 const AUDIO_NOTE_MAX_BODY_BYTES = 32 * 1024 * 1024;
 const VOICE_SESSION_TICKET_TTL_MS = Number(process.env.VOICE_SESSION_TICKET_TTL_MS || 60 * 1000);
+const MODEL_FETCH_TIMEOUT_MS = positiveNumberFrom(process.env.MODEL_FETCH_TIMEOUT_MS, 45000);
 const DEFAULT_HARNESS = process.env.DEFAULT_AGENT_HARNESS || "gemini";
 const HARNESS_WORKDIR = path.resolve(process.env.HARNESS_WORKDIR || REPO_ROOT);
 const AGENT_RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 10 * 60 * 1000);
@@ -5821,7 +5822,7 @@ async function callModel(messages, profile) {
     return callVertexModel(messages, effective);
   }
 
-  const upstreamResponse = await fetch(`${MODEL_BASE_URL}/chat/completions`, {
+  const upstreamResponse = await fetchWithTimeout(`${MODEL_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: modelHeaders(),
     body: JSON.stringify({
@@ -5830,7 +5831,7 @@ async function callModel(messages, profile) {
       temperature: effective.temperature,
       stream: false,
     }),
-  });
+  }, MODEL_FETCH_TIMEOUT_MS);
 
   const responseText = await upstreamResponse.text();
   if (!upstreamResponse.ok) {
@@ -5885,11 +5886,11 @@ async function callVertexModel(messages, profile) {
     headers["x-vertex-ai-llm-shared-request-type"] = "priority";
   }
 
-  const upstreamResponse = await fetch(vertexEndpoint(effective), {
+  const upstreamResponse = await fetchWithTimeout(vertexEndpoint(effective), {
     method: "POST",
     headers,
     body: JSON.stringify(body),
-  });
+  }, MODEL_FETCH_TIMEOUT_MS);
 
   const responseText = await upstreamResponse.text();
   if (!upstreamResponse.ok) {
@@ -7884,9 +7885,19 @@ function writeVoiceTurnRecord(record) {
 // the restricted INPUT languages. Control/agent-run turns return empty speak so
 // the cascaded provider skips TTS.
 async function runCascadedVoiceReasoning(input) {
+  return withTimeout(runCascadedVoiceReasoningInner(input), MODEL_FETCH_TIMEOUT_MS, "cascaded voice reasoning");
+}
+
+async function runCascadedVoiceReasoningInner(input) {
   const transcript = String(input?.transcript || "").trim();
   const profile = agentProfile.effective();
   const replyLanguage = profile.language_primary || profile.language || "en-US";
+  if (MOA_MODE === "local") {
+    const stallMs = Math.max(0, Number(process.env.MOA_TEST_REASONER_STALL_MS || 0));
+    if (stallMs > 0) {
+      await delay(stallMs);
+    }
+  }
   if (!transcript) {
     return { speak: "", display: "", language: replyLanguage, model: profile.model || MODEL_ID, classification: "empty" };
   }
@@ -7989,6 +8000,7 @@ async function recordStreamingVoiceTurn(turn) {
       input_languages: Array.isArray(turn.input_languages) ? turn.input_languages : [],
       reply_language: turn.reply_language || "",
       tts_spoke: turn.tts_spoke === true,
+      transcript_language_rejected: turn.transcript_language_rejected === true,
       audio: turn.audio || null,
       assistant_audio: turn.assistant_audio || null,
       playback_policy: turn.playback_policy || {},
@@ -8864,6 +8876,44 @@ function modelHeaders() {
     headers.authorization = `Bearer ${MODEL_API_KEY}`;
   }
   return headers;
+}
+
+function positiveNumberFrom(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error(`fetch timeout after ${timeoutMs}ms`)), timeoutMs);
+  timeout.unref?.();
+  return fetch(url, {
+    ...options,
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`${label || "operation"} timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timeout.unref?.();
+    Promise.resolve(promise).then((value) => {
+      clearTimeout(timeout);
+      resolve(value);
+    }, (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }
 
 function providerConfigured() {
