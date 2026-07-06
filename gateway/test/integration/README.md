@@ -1,0 +1,1 @@
+Integration tests live here and require a real Postgres database through `DATABASE_URL`; each file MUST skip with `test(name, { skip: !hasDatabaseUrl() }, ...)` when it is unset so `npm run check` stays green in CI and local shells without a database.

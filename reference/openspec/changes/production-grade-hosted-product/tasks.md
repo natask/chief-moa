@@ -43,11 +43,20 @@ each ticket keeps all existing smokes green.
   Acceptance: byte-equal responses on the smoke suite; no route lost (route
   inventory diff before/after).
 
-- [ ] R.3 `[ready]` Adopt `node --test`: wrap the existing smoke scripts as test
+- [x] R.3 `[ready]` Adopt `node --test`: wrap the existing smoke scripts as test
   files under `test/`, split unit (no DB) vs integration (Postgres), replace the
   flat `npm run check` command chain.
   Acceptance: `npm test` runs the same assertions the old chain ran, in under
   the old wall-clock time.
+  DONE 2026-07-06: `test/smoke-manifest.js` (82 syntax + 47 smoke lists),
+  `test/syntax.test.js`, `test/smoke-unit.test.js` (async spawn, concurrency 4),
+  `test/regression.test.js` (env-gated `[slow]`), `test/integration/` for DB
+  tests (skip when no `DATABASE_URL`). `npm run check` = 14.3s vs 57s old chain,
+  129 pass / 1 skip / 0 fail with no DB. Old chain preserved as `check:legacy`
+  for rollback. Note: the `smoke-regression.js` e2e that `npm test` now runs
+  fails on master (pre-existing, uncaught because CI's `check` never ran it) at
+  `assertAgentProfileRuntimeCycle` — a gateway model-recording bug, not an R.3
+  wrapper defect.
 
 ## Phase 1. Postgres as source of truth
 
