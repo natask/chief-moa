@@ -640,6 +640,28 @@
 #agee-root.agee-recording #agee-launcher .agee-bird {
   filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) hue-rotate(-42deg) saturate(1.5);
 }
+/* Responding mark states. setAgentState() already toggles agee-state-* on the
+   root at every real transition; these are the visuals. Same filter-only
+   technique as the recording tint above: no ring, no glow, no halo. Thinking is
+   a slow, subtle brightness/saturate pulse on the gold mark; speaking is a
+   steady, richer gold — brighter and more saturated, distinct from the
+   recording red. Idle and listening keep the plain plate. */
+#agee-root.agee-state-thinking #agee-launcher .agee-bird {
+  animation: agee-mascot-idle 6s ease-in-out infinite,
+    agee-state-thinking-pulse 1.4s ease-in-out infinite;
+}
+@keyframes agee-state-thinking-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) brightness(0.9) saturate(0.95);
+  }
+  50% {
+    filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) brightness(1.14) saturate(1.18);
+  }
+}
+#agee-root.agee-state-speaking #agee-launcher .agee-bird {
+  filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) saturate(1.5) brightness(1.12);
+}
 #agee-stop {
   display: none;
 }

@@ -1749,6 +1749,12 @@
       const text = String(msg.text || "").trim();
       if (!text) return;
       state.assistantText = text;
+      // The assistant is now replying: flip the mark to speaking as soon as text
+      // starts rendering, not only when spoken audio starts. Covers text-first
+      // and text-only replies (response_modality text) where assistant_audio_start
+      // never arrives, so the mark shows "responding" instead of hanging on
+      // "thinking". assistant_audio_start re-asserts speaking; the flip is idempotent.
+      if (isCurrentTurn) setAgentState("speaking");
       ensureVoiceCueCard(state, state.transcript || "Voice", text);
       updateCue(state.cueId, text, "running");
       return;
