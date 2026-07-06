@@ -22,6 +22,7 @@ import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -46,6 +47,10 @@ public final class OverlayService extends Service {
 
     static final String ACTION_ASSIST_BUTTON = "ai.moa.assistant.action.ASSIST_BUTTON";
     static final String ACTION_COLLAPSE_SURFACES = "ai.moa.assistant.action.COLLAPSE_SURFACES";
+    // Fixed contract with MainActivity: it fires this action via startService
+    // after the orb-size slider changes so the live orb resizes without a
+    // service restart. Do not rename.
+    static final String ACTION_REFRESH_ORB_SCALE = "ai.moa.assistant.REFRESH_ORB_SCALE";
     static final String EXTRA_START_VOICE = "ai.moa.assistant.extra.START_VOICE";
 
     private static final int MAX_HISTORY_MESSAGES = 50;
@@ -88,6 +93,8 @@ public final class OverlayService extends Service {
     private ScrollView messageScroll;
     private EditText composer;
     private TextView runStatusView;
+    private PulseDot headerDot;
+    private TextView voiceLangChip;
     private View transcriptView;
     private LinearLayout voiceTranscriptColumn;
     private ScrollView voiceTranscriptScroll;
@@ -269,6 +276,10 @@ public final class OverlayService extends Service {
             collapseInteractiveSurfaces();
             return START_STICKY;
         }
+        if (ACTION_REFRESH_ORB_SCALE.equals(intent != null ? intent.getAction() : null)) {
+            applyOrbScale();
+            return START_STICKY;
+        }
         if (shouldStartVoice(intent)) {
             mainHandler.post(this::startContinuousStreamingVoiceTurn);
         }
@@ -424,6 +435,16 @@ public final class OverlayService extends Service {
         renderMessages();
     }
 
+    // A status/error line that renders as a muted-ember notice, not a bubble.
+    private void addNotice(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return;
+        }
+        messages.add(new ChatMessage(true, text.trim(), true));
+        trimHistory();
+        renderMessages();
+    }
+
     private void trimHistory() {
         while (messages.size() > MAX_HISTORY_MESSAGES) {
             messages.remove(0);
@@ -435,7 +456,7 @@ public final class OverlayService extends Service {
             return;
         }
 
-        int size = dp(ORB_WINDOW_DP);
+        int size = scaledOrbSizePx();
         orbView = new OrbView(this);
         orbParams = new WindowManager.LayoutParams(
                 size,
@@ -449,19 +470,54 @@ public final class OverlayService extends Service {
         orbParams.gravity = Gravity.TOP | Gravity.START;
         orbParams.x = getResources().getDisplayMetrics().widthPixels - size - dp(ORB_EDGE_MARGIN_DP);
         orbParams.y = dp(164);
-        orbView.setOnTouchListener(new MoaOrbTouchListener(
+        orbView.setOnTouchListener(createOrbTouchListener(size));
+
+        windowManager.addView(orbView, orbParams);
+    }
+
+    // The orb window size in pixels for the user's stored scale percent. The
+    // 70% default shrinks the base 96dp mascot to ~67dp, which reads as a
+    // small pin rather than a large badge.
+    private int scaledOrbSizePx() {
+        return Math.round(dp(ORB_WINDOW_DP) * MoaPrefs.orbScalePercent(this) / 100f);
+    }
+
+    private MoaOrbTouchListener createOrbTouchListener(int sizePx) {
+        return new MoaOrbTouchListener(
                 this,
                 windowManager,
                 orbView,
                 orbParams,
-                ORB_WINDOW_DP,
+                sizePx,
                 ORB_EDGE_MARGIN_DP,
                 this::handleOrbSingleTap,
                 this::handleOrbDoublePressStart,
                 this::handleOrbVoicePressRelease
-        ));
+        );
+    }
 
-        windowManager.addView(orbView, orbParams);
+    // Live-resize the orb window when the user changes the size slider. Keeps
+    // the orb clamped inside the screen at the new size and rebinds the touch
+    // listener so drag clamping matches the new footprint.
+    private void applyOrbScale() {
+        if (orbView == null || orbParams == null) {
+            showOrb();
+            return;
+        }
+        int size = scaledOrbSizePx();
+        orbParams.width = size;
+        orbParams.height = size;
+        int margin = dp(ORB_EDGE_MARGIN_DP);
+        int maxX = Math.max(margin, getResources().getDisplayMetrics().widthPixels - size - margin);
+        int maxY = Math.max(margin, getResources().getDisplayMetrics().heightPixels - size - margin);
+        orbParams.x = Math.max(margin, Math.min(orbParams.x, maxX));
+        orbParams.y = Math.max(margin, Math.min(orbParams.y, maxY));
+        orbView.setOnTouchListener(createOrbTouchListener(size));
+        try {
+            windowManager.updateViewLayout(orbView, orbParams);
+        } catch (IllegalArgumentException ignored) {
+            // Orb detached mid-resize; the next showOrb rebuilds at scale.
+        }
     }
 
     private void removeOrb() {
@@ -535,17 +591,26 @@ public final class OverlayService extends Service {
 
     private void animateSurfaceIn(View view) {
         view.setAlpha(0f);
-        view.setTranslationY(dp(18));
-        view.setScaleX(0.97f);
-        view.setScaleY(0.97f);
+        view.setTranslationY(dp(16));
+        view.setScaleX(0.98f);
+        view.setScaleY(0.98f);
         view.animate()
                 .alpha(1f)
                 .translationY(0f)
                 .scaleX(1f)
                 .scaleY(1f)
-                .setDuration(170)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .setDuration(200)
+                .setInterpolator(expoOut())
                 .start();
+    }
+
+    // Expo-out easing: a quick launch that settles softly, matching the
+    // extension panel's enter feel. Falls back to decelerate before API 21.
+    private android.view.animation.Interpolator expoOut() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            return new android.view.animation.PathInterpolator(0.16f, 1f, 0.3f, 1f);
+        }
+        return new android.view.animation.DecelerateInterpolator();
     }
 
     private void removePanel() {
@@ -562,6 +627,7 @@ public final class OverlayService extends Service {
         messageScroll = null;
         composer = null;
         runStatusView = null;
+        headerDot = null;
         recordModePill = null;
         dying.animate()
                 .alpha(0f)
@@ -612,8 +678,10 @@ public final class OverlayService extends Service {
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(MoaDrawables.roundedGradient(0xF4101D18, 0xF40A1410, dp(24), 0x33F4D35E, dp(1)));
-        card.setElevation(dp(26));
+        // Same near-opaque neutral dark glass as the chat panel: no green cast,
+        // no page bleed-through, one hairline rim.
+        card.setBackground(MoaDrawables.roundedGradient(0xFF1A1B20, 0xFF0E0F12, dp(22), MoaColors.PANEL_BORDER, dp(1)));
+        card.setElevation(dp(28));
         card.setPadding(dp(16), dp(14), dp(16), dp(16));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             card.setOutlineSpotShadowColor(0xFF000000);
@@ -670,20 +738,51 @@ public final class OverlayService extends Service {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(2), 0, dp(2), dp(8));
 
-        PulseDot dot = new PulseDot(this);
-        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(9), dp(9));
-        dotParams.rightMargin = dp(10);
-        dotParams.gravity = Gravity.CENTER_VERTICAL;
-        header.addView(dot, dotParams);
+        LinearLayout.LayoutParams avatarParams = new LinearLayout.LayoutParams(dp(30), dp(30));
+        avatarParams.rightMargin = dp(10);
+        avatarParams.gravity = Gravity.CENTER_VERTICAL;
+        header.addView(avatarPlate(dp(30), dp(20)), avatarParams);
 
-        TextView title = text("Voice", MoaColors.PAPER, 13, true);
-        title.setLetterSpacing(0.04f);
+        TextView title = text("Voice", MoaColors.PAPER, 14, true);
+        title.setLetterSpacing(0.02f);
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
-        header.addView(voiceMetaLine);
+        voiceMetaLine = text(voiceStateLabel(), MoaColors.MUTED, 11, false);
+        LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        metaParams.rightMargin = dp(8);
+        header.addView(voiceMetaLine, metaParams);
+
+        voiceLangChip = languageChip();
+        header.addView(voiceLangChip);
         updateVoiceHeaderState();
         return header;
+    }
+
+    // Small rounded language tag, for example "am-ET". Sits in the voice header
+    // so the active understood language reads at a glance.
+    private TextView languageChip() {
+        TextView chip = text(MoaPrefs.inputLanguageTag(this), MoaColors.MUTED, 10, true);
+        chip.setLetterSpacing(0.03f);
+        chip.setGravity(Gravity.CENTER);
+        chip.setPadding(dp(8), dp(3), dp(8), dp(3));
+        chip.setBackground(MoaDrawables.rounded(0x1FFFFFFF, dp(999), 0x22FFFFFF, dp(1)));
+        return chip;
+    }
+
+    // A dark circular plate holding the lion mark with an amber rim. Used as the
+    // header avatar for both the chat panel and the voice card, so the app-bar
+    // placeholder always shows the real mascot.
+    private View avatarPlate(int plateSize, int markSize) {
+        FrameLayout plate = new FrameLayout(this);
+        plate.setBackground(MoaDrawables.circle(0xFF17181C, 0x66F5A623, dp(1)));
+        ImageView mark = new ImageView(this);
+        mark.setImageResource(R.drawable.moa_mark);
+        mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        FrameLayout.LayoutParams markParams = new FrameLayout.LayoutParams(markSize, markSize);
+        markParams.gravity = Gravity.CENTER;
+        plate.addView(mark, markParams);
+        return plate;
     }
 
     private void showCurrentScreenContext() {
@@ -805,9 +904,9 @@ public final class OverlayService extends Service {
         int stroke = assistant ? MoaColors.RAISED_BORDER : MoaColors.USER_BORDER;
         bubble.setBackground(MoaDrawables.roundedCorners(fill, radii, stroke, dp(1)));
 
-        String bodyText = text.isEmpty() ? "..." : text;
-        TextView body = text(bodyText, MoaColors.PAPER, assistant ? 15 : 16, false);
-        body.setLineSpacing(dp(4), 1f);
+        String bodyText = text.isEmpty() ? "…" : text;
+        TextView body = text(bodyText, MoaColors.PAPER, 15, false);
+        body.setLineSpacing(0f, 1.4f);
         body.setMaxWidth(Math.min(getResources().getDisplayMetrics().widthPixels - dp(92), dp(430)));
         body.setAlpha(text.isEmpty() ? 0.48f : finalText ? 1f : 0.82f);
         bubble.addView(body);
@@ -842,6 +941,9 @@ public final class OverlayService extends Service {
     }
 
     private void updateVoiceHeaderState() {
+        if (voiceLangChip != null) {
+            voiceLangChip.setText(MoaPrefs.inputLanguageTag(this));
+        }
         if (voiceMetaLine == null) {
             return;
         }
@@ -850,35 +952,28 @@ public final class OverlayService extends Service {
         voiceMetaLine.setTextColor(voiceStateColor());
     }
 
+    // Just the live state word, right-aligned in the voice header. Active states
+    // carry an ellipsis so the card reads as in-progress. Language lives in the
+    // separate chip, not in this line.
     private String voiceStateLabel() {
-        String state;
         switch (voiceRuntimeState) {
             case LISTENING:
-                state = "Listening";
-                break;
+                return "Listening…";
             case SENDING:
-                state = "Sending";
-                break;
+                return "Sending…";
             case THINKING:
-                state = "Thinking";
-                break;
+                return "Thinking…";
             case SPEAKING:
-                state = "Speaking";
-                break;
+                return "Speaking…";
             case ERROR:
-                state = "Error";
-                break;
+                return "Error";
             case INTERRUPTED:
-                state = "Interrupted";
-                break;
+                return "Interrupted";
             case RECOVERING:
-                state = "Recovering";
-                break;
+                return "Recovering…";
             default:
-                state = "Ready";
-                break;
+                return "Ready";
         }
-        return state + " / " + MoaPrefs.languageStatus(this);
     }
 
     private int voiceStateColor() {
@@ -945,6 +1040,7 @@ public final class OverlayService extends Service {
         voiceUserRow = null;
         voiceAssistantRow = null;
         voiceMetaLine = null;
+        voiceLangChip = null;
         dying.animate()
                 .alpha(0f)
                 .translationY(dp(12))
@@ -1011,10 +1107,12 @@ public final class OverlayService extends Service {
 
     private View createPanel() {
         FrameLayout shell = new FrameLayout(this);
-        // Rounded dark card: a soft top-to-bottom gradient plus a hairline border
-        // and real elevation so it reads as a raised surface, not a flat box.
-        shell.setBackground(MoaDrawables.roundedGradient(0xF20D1A15, MoaColors.PANEL_BG, dp(26), MoaColors.PANEL_BORDER, dp(1)));
-        shell.setElevation(dp(28));
+        // Near-opaque neutral dark glass: a subtle top-to-bottom gradient, a
+        // hairline rim, and real elevation so it reads as a raised sheet. No
+        // green cast and no page bleed-through behind the text.
+        final int panelRadius = dp(22);
+        shell.setBackground(MoaDrawables.roundedGradient(0xFF1A1B20, 0xFF0E0F12, panelRadius, MoaColors.PANEL_BORDER, dp(1)));
+        shell.setElevation(dp(30));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             shell.setOutlineSpotShadowColor(0xFF000000);
             shell.setOutlineAmbientShadowColor(0xFF000000);
@@ -1023,7 +1121,7 @@ public final class OverlayService extends Service {
         shell.setOutlineProvider(new android.view.ViewOutlineProvider() {
             @Override
             public void getOutline(View view, android.graphics.Outline outline) {
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(26));
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), panelRadius);
             }
         });
 
@@ -1065,31 +1163,52 @@ public final class OverlayService extends Service {
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setPadding(0, 0, 0, dp(4));
 
-        PulseDot dot = new PulseDot(this);
-        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(10), dp(10));
-        dotParams.rightMargin = dp(10);
-        dotParams.gravity = Gravity.CENTER_VERTICAL;
-        header.addView(dot, dotParams);
+        LinearLayout.LayoutParams avatarParams = new LinearLayout.LayoutParams(dp(34), dp(34));
+        avatarParams.rightMargin = dp(11);
+        avatarParams.gravity = Gravity.CENTER_VERTICAL;
+        header.addView(avatarPlate(dp(34), dp(23)), avatarParams);
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = text("A.G.", MoaColors.PAPER, 17, true);
-        label.setLetterSpacing(0.02f);
+        TextView label = text("A.G.", MoaColors.PAPER, 16, true);
+        label.setLetterSpacing(0.01f);
         copy.addView(label);
         runStatusView = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         copy.addView(runStatusView);
         header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        recordModePill = pill("Record", 0x16FFFFFF, MoaColors.MUTED);
+        headerDot = new PulseDot(this);
+        headerDot.setBusy(!activeAgentRuns.isEmpty());
+        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(9), dp(9));
+        dotParams.rightMargin = dp(10);
+        dotParams.gravity = Gravity.CENTER_VERTICAL;
+        header.addView(headerDot, dotParams);
+
+        recordModePill = ghostButton("Record");
         recordModePill.setOnClickListener(v -> toggleRecordMode());
         refreshRecordModePill();
         header.addView(recordModePill);
 
-        TextView close = pill("Done", 0x16FFFFFF, MoaColors.MUTED);
+        TextView close = ghostButton("Done");
         close.setOnClickListener(v -> dismissOverlayUi());
         header.addView(close);
         return header;
+    }
+
+    // Compact rounded ghost button: dark raised fill, hairline rim, PAPER text.
+    private TextView ghostButton(String label) {
+        TextView button = text(label, MoaColors.PAPER, 12, true);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(13), dp(7), dp(13), dp(7));
+        button.setBackground(MoaDrawables.rounded(MoaColors.RAISED, dp(999), 0x24FFFFFF, dp(1)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        params.leftMargin = dp(6);
+        button.setLayoutParams(params);
+        return button;
     }
 
     private View createComposer() {
@@ -1108,7 +1227,7 @@ public final class OverlayService extends Service {
 
         composer = new EditText(this);
         composer.setHint("Message A.G.");
-        composer.setHintTextColor(0x66B8C9C2);
+        composer.setHintTextColor(MoaColors.MUTED);
         composer.setTextColor(MoaColors.PAPER);
         composer.setTextSize(15);
         composer.setMinLines(1);
@@ -1119,14 +1238,14 @@ public final class OverlayService extends Service {
         composer.setPadding(dp(12), dp(9), dp(8), dp(9));
         row.addView(composer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        // Round gold send button. 46dp target, gold brand accent.
+        // Round gold send button with a dark arrow glyph. Darkens on press.
         TextView send = new TextView(this);
         send.setText("↑");
         send.setTextColor(MoaColors.INK);
         send.setTextSize(20);
         send.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         send.setGravity(Gravity.CENTER);
-        send.setBackground(MoaDrawables.circle(MoaColors.GOLD, 0x33FFFFFF, dp(1)));
+        send.setBackground(MoaDrawables.circlePressable(MoaColors.GOLD, 0xFFE5B94D, 0x33FFFFFF, dp(1)));
         LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(46), dp(46));
         sendParams.leftMargin = dp(4);
         send.setLayoutParams(sendParams);
@@ -1166,6 +1285,10 @@ public final class OverlayService extends Service {
     // bottom-left corner tucked. User right, teal-violet tint, bottom-right
     // corner tucked. A small muted sender label sits above each.
     private View messageBubble(ChatMessage message) {
+        if (message.notice) {
+            return noticeRow(message.text);
+        }
+
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
@@ -1175,7 +1298,7 @@ public final class OverlayService extends Service {
 
         LinearLayout bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
-        bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
+        bubble.setPadding(dp(14), dp(12), dp(14), dp(12));
         int r = dp(20);
         int tuck = dp(6);
         float[] radii = message.assistant
@@ -1187,10 +1310,10 @@ public final class OverlayService extends Service {
         int stroke = message.assistant ? MoaColors.RAISED_BORDER : MoaColors.USER_BORDER;
         bubble.setBackground(MoaDrawables.roundedCorners(fill, radii, stroke, dp(1)));
 
-        // Cap the text width so a bubble never spans edge to edge (~80%).
-        int maxBubbleText = (int) (getResources().getDisplayMetrics().widthPixels * 0.80f) - dp(28) - dp(36);
-        TextView body = text(message.text, MoaColors.PAPER, 15, false);
-        body.setLineSpacing(dp(4), 1f);
+        // Cap the text width so a bubble never spans edge to edge (~78%).
+        int maxBubbleText = (int) (getResources().getDisplayMetrics().widthPixels * 0.78f) - dp(28) - dp(36);
+        TextView body = text(message.text, MoaColors.PAPER, 14, false);
+        body.setLineSpacing(0f, 1.4f);
         body.setMaxWidth(maxBubbleText);
         bubble.addView(body);
 
@@ -1207,6 +1330,27 @@ public final class OverlayService extends Service {
         params.rightMargin = message.assistant ? dp(36) : 0;
         wrap.setLayoutParams(params);
         wrap.setGravity(message.assistant ? Gravity.START : Gravity.END);
+        return wrap;
+    }
+
+    // Status/error notice: a distinct muted-ember inline strip, centered and
+    // full width, so a dropped turn never masquerades as an A.G. reply bubble.
+    private View noticeRow(String value) {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        params.topMargin = dp(9);
+        wrap.setLayoutParams(params);
+
+        TextView notice = text(value, 0xFFFFB38A, 13, false);
+        notice.setLineSpacing(0f, 1.35f);
+        notice.setGravity(Gravity.CENTER);
+        notice.setPadding(dp(14), dp(9), dp(14), dp(9));
+        notice.setBackground(MoaDrawables.rounded(0x14FF8A3D, dp(14), 0x33FF8A3D, dp(1)));
+        wrap.addView(notice);
         return wrap;
     }
 
@@ -1431,7 +1575,7 @@ public final class OverlayService extends Service {
                 mainHandler.post(() -> {
                     voiceSamplePlayer = null;
                     String failure = "Voice sampler failed: " + safe(message);
-                    addMessage(true, failure);
+                    addNotice(failure);
                     updateVoiceAssistantTranscript(failure);
                     setVoiceRuntimeState(VoiceRuntimeState.ERROR);
                     holdVoiceReplyThenContinueOrDismiss();
@@ -1874,6 +2018,9 @@ public final class OverlayService extends Service {
         if (runStatusView != null) {
             runStatusView.setText(agentRunStatusText());
         }
+        if (headerDot != null) {
+            headerDot.setBusy(!activeAgentRuns.isEmpty());
+        }
         updateVoiceHeaderState();
     }
 
@@ -2212,11 +2359,11 @@ public final class OverlayService extends Service {
         }
         boolean on = recordModeEnabled;
         recordModePill.setText(on ? "Record on" : "Record");
-        recordModePill.setTextColor(on ? MoaColors.INK : MoaColors.MUTED);
+        recordModePill.setTextColor(on ? MoaColors.INK : MoaColors.PAPER);
         recordModePill.setBackground(MoaDrawables.rounded(
-                on ? MoaColors.GOLD : 0x16FFFFFF,
+                on ? MoaColors.GOLD : MoaColors.RAISED,
                 dp(999),
-                on ? 0x33FFFFFF : 0x10FFFFFF,
+                on ? 0x33FFFFFF : 0x24FFFFFF,
                 dp(1)
         ));
     }
@@ -2723,7 +2870,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 String failure = "Streaming voice failed: " + message;
-                addMessage(true, failure);
+                addNotice(failure);
                 updateVoiceAssistantTranscript(failure);
                 // Keep the detailed banner visible but speak a short line so the
                 // failure is never silent (the full message may be a long URL).
@@ -2893,20 +3040,6 @@ public final class OverlayService extends Service {
         if (orbView != null) {
             orbView.setListening(voiceController.isActive() || streamingVoiceActive() || voiceSamplePlayer != null);
         }
-    }
-
-    private TextView pill(String text, int background, int foreground) {
-        TextView pill = text(text, foreground, 11, true);
-        pill.setGravity(Gravity.CENTER);
-        pill.setPadding(dp(10), dp(5), dp(10), dp(5));
-        pill.setBackground(MoaDrawables.rounded(background, dp(999), 0x10FFFFFF, dp(1)));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        params.rightMargin = dp(6);
-        pill.setLayoutParams(params);
-        return pill;
     }
 
     private TextView text(String text, int color, int sp, boolean bold) {
