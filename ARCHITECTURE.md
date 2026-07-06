@@ -777,22 +777,32 @@ execution machine connects outbound to claim queued runs.
 
 ## Deployment Finish Loop
 
-Agents must treat deployment as part of completion for deployable surfaces:
+Agents must treat preview deployment or release artifact creation as part of
+completion for deployable surfaces:
 
 ```text
 verify changed surface
   -> fix failures
   -> commit the unit
-  -> deploy the changed target
-  -> smoke-check the deployed target
-  -> record any blocker
+  -> create or update the preview deployment or release artifact
+  -> promote the active target only when the active-promotion gate passes
+  -> smoke-check the promoted target or record the blocker
 ```
 
-`scripts/deploy.sh auto` is the repo-level hook target. It deploys only committed
-gateway, Android, and browser-extension changes since each target's last
-successful deploy marker, and skips dirty target files so uncommitted work is not
-published. Explicit deploy targets remain available when a human or agent needs
-one surface: `gateway`, `android`, `extension`, or `all`.
+The active-promotion gate requires a passing preview smoke, a known rollback
+path, proof that no running recording, voice turn, upload, agent run, queue job,
+migration, or user session will be stopped or stranded, and state compatibility
+across old and new code. Stateful changes use staged releases: add schema or
+storage first, run bridge code that reads old and new state, backfill with
+idempotent jobs, switch reads after verification, and remove old state only after
+active code no longer needs it.
+
+`scripts/deploy.sh auto` is the repo-level active-promotion target after the
+gate passes. It deploys only committed gateway, Android, and browser-extension
+changes since each target's last successful deploy marker, and skips dirty
+target files so uncommitted work is not published. Explicit deploy targets
+remain available when a human or agent needs one surface: `gateway`, `android`,
+`extension`, or `all`.
 
 Each successful target deploy records a monotonic deploy sequence, git SHA, and
 target version metadata next to the existing deploy marker. Android OTA builds

@@ -372,7 +372,8 @@ State rollback:
 - Never delete or recreate `/mnt/moa-gateway-state` during image rollback.
 - If a schema or state migration makes image rollback unsafe, restore the
   Postgres dump and `DATA_DIR` archive into a scratch target first.
-- Restore active state only inside an approved maintenance window.
+- Restore active state only after the active-promotion gate passes and the
+  operator has a tested restore target.
 
 ## External References
 

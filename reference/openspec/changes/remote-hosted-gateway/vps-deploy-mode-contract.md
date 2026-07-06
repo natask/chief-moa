@@ -69,18 +69,24 @@ only for health probing.
 Before any promotion that changes the active URL, restarts the active service,
 or points clients at this VPS stack:
 
-1. Take a Postgres dump from the active database.
-2. Snapshot the active `DATA_DIR` volume.
-3. Restore both into a scratch Postgres and scratch data volume.
-4. Start a scratch gateway against the restored state.
-5. Verify `/health` and one core read path without touching the active service.
+1. Verify the candidate in an isolated preview path.
+2. Prove rollback can restore the previous artifact, ref, deployment, config, or
+   state.
+3. Prove the promotion will not halt or strand active recordings, voice turns,
+   uploads, agent runs, queue jobs, migrations, or user sessions.
+4. Prove old and new code can share the active state during rollout.
+5. Take a Postgres dump from the active database.
+6. Snapshot the active `DATA_DIR` volume.
+7. Restore both into a scratch Postgres and scratch data volume.
+8. Start a scratch gateway against the restored state.
+9. Verify `/health` and one core read path without touching the active service.
 
-Promotion is blocked if the restore check is missing or fails.
+Promotion is blocked if preview, rollback, no-interruption,
+state-compatibility, backup, restore, or smoke evidence is missing or fails.
 
 ## Active-Deploy Blocker
 
 Do not apply this scaffold to the active user URL yet. This ticket only adds
 the Docker image, Compose shape, and deploy-mode contract. Active promotion is
-blocked until the user explicitly approves a maintenance window, backup/restore
-evidence exists, and the remaining remote-hosted gateway tasks for remote-mode
-hardening and worker-pull execution have passed their acceptance checks.
+blocked until preview, rollback, no-interruption, state-compatibility,
+backup/restore, and remaining remote-hosted gateway acceptance evidence exists.

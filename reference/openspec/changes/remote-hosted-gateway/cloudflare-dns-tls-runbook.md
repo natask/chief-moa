@@ -5,7 +5,8 @@ Last reviewed: 2026-07-03.
 This runbook describes the public edge for the remote-hosted gateway preview.
 It does not approve active promotion. Do not switch the active client URL,
 restart an active service, or apply a deployment until the backup and restore
-gate has passed and the user approves the maintenance window.
+gate, preview smoke, rollback, no-interruption, and state-compatibility checks
+have passed.
 
 ## Target Topology
 

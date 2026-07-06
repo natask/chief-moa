@@ -6,7 +6,9 @@ deployment, or otherwise points users at a new active Chief Moa gateway.
 
 The scripts in this lane are intentionally separate from `scripts/deploy.sh`.
 They never read `.env`, never print database URLs, never restart the active
-service, and never apply a deployment. Promotion remains a human gate.
+service, and never apply a deployment. Promotion is allowed only when the active
+promotion gate passes: preview smoke, rollback path, no interrupted work, state
+compatibility, backup, and restore check.
 
 ## Backup Script
 
@@ -170,27 +172,32 @@ and an operator-controlled machine has an off-host copy.
 
 Use this exact sequence before any active VPS promotion:
 
-1. Freeze active-app mutation for the maintenance window. Do not restart the
-   active gateway, apply a deployment, change DNS, change the active URL, run
-   migrations against the active database, or switch Master Orch `applyTo`.
-2. Verify the candidate in an isolated preview path. The preview may use a
+1. Verify the candidate in an isolated preview path. The preview may use a
    separate branch, worktree, image tag, compose project, or preview deployment,
    but it must not be the active user URL.
-3. Prepare a backup destination owned by the operator.
-4. Run `scripts/vps-backup.sh --dry-run` with the explicit `MOA_BACKUP_*` env.
+2. Prove the rollback path: previous artifact, ref, deployment, config, or
+   restore path.
+3. Prove the promotion will not halt or strand active recordings, voice turns,
+   uploads, agent runs, queue jobs, migrations, or user sessions. Drain, resume,
+   or retry them before promotion when needed.
+4. Prove state compatibility. Schema and storage changes must be staged so old
+   and new code can run during rollout.
+5. Prepare a backup destination owned by the operator.
+6. Run `scripts/vps-backup.sh --dry-run` with the explicit `MOA_BACKUP_*` env.
    Stop if the dry-run reports blockers.
-5. Run `scripts/vps-backup.sh --execute`.
-6. Provision an empty scratch Postgres database and a new scratch directory.
+7. Run `scripts/vps-backup.sh --execute`.
+8. Provision an empty scratch Postgres database and a new scratch directory.
    These must be separate from the active database and active `DATA_DIR`.
-7. Run `scripts/vps-restore-check.sh --dry-run` with the explicit
+9. Run `scripts/vps-restore-check.sh --dry-run` with the explicit
    `MOA_RESTORE_*` env. Stop if the dry-run reports blockers.
-8. Run `scripts/vps-restore-check.sh --execute`.
-9. Record the backup directory, restore scratch directory, health URL, and any
-   blocker in the promotion notes.
-10. Only after the backup and restore check pass may the human operator promote:
-    apply the deployment, restart the active service, or change the active URL
-    through the approved deployment control plane.
-11. Smoke-check the active gateway after promotion with `GET /health` and the
+10. Run `scripts/vps-restore-check.sh --execute`.
+11. Record the preview URL, rollback ref, no-interruption evidence, state
+    compatibility evidence, backup directory, restore scratch directory, health
+    URL, and any blocker in the promotion notes.
+12. Only after every gate passes may the operator or approved automation
+    promote: apply the deployment, restart the active service, or change the
+    active URL through the approved deployment control plane.
+13. Smoke-check the active gateway after promotion with `GET /health` and the
     smallest user-facing API check relevant to the release.
 
 ## Blockers
@@ -207,6 +214,9 @@ Promotion is blocked when any of these are true:
   is not installed for a production VPS.
 - The backup or restore command prints or requires pasting secrets into logs.
 - The candidate has not been verified in an isolated preview path.
+- Rollback is unknown or slow.
+- The promotion can halt or strand active user work.
+- Old and new code cannot share the active state safely during rollout.
 
 When blocked, do not promote. Fix the tooling or scratch target first, then rerun
 the dry-run and execute steps.

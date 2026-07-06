@@ -36,11 +36,12 @@ leave artifacts that another agent can resume.
    - Run the narrowest real command that proves the ticket.
    - If verification fails, make the failure visible instead of silently changing
      the plan.
-   - For implementation changes, deploy the committed target after verification:
-     `bash scripts/deploy.sh auto` from the repo root, or the explicit
-     `gateway`, `android`, or `extension` target when only one surface changed.
-     VPS promotion is separate: use `scripts/vps/push.sh` only after an
-     operator explicitly approves active gateway promotion.
+   - For implementation changes, create or update the preview deployment or
+     release artifact after verification. Promote the active target only when
+     preview smoke, rollback, no-interruption, state-compatibility, and
+     backup/restore gates pass. Use `bash scripts/deploy.sh auto` from the repo
+     root, or the explicit `gateway`, `android`, or `extension` target, only for
+     active promotion after those gates pass.
    - Extension releases must bump `browser_extension/extension/manifest.json`;
      Android OTA builds get deploy-time version codes from the OTA build script.
 

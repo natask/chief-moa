@@ -23,8 +23,8 @@ that must exist before the next step can work.
 - Worker: execution machine that connects outbound, claims scoped runs, edits
   repos locally, verifies, and reports results.
 - Deployment control plane: script, Master Orch, or external deploy target that
-  can create preview/artifact records and later apply promotion only when
-  explicitly approved.
+  can create preview/artifact records and later apply promotion only when the
+  active-promotion gate passes.
 
 ## Preconditions
 
@@ -34,8 +34,9 @@ that must exist before the next step can work.
   `https://api.<your-domain>`.
 - The execution machine already has local repos, harness CLIs, and local
   credentials. The VPS does not receive those credentials.
-- No active app, active URL, or active service is mutated during preview setup
-  without an explicit maintenance window and promotion request.
+- No active app, active URL, or active service is mutated during preview setup.
+  Active promotion waits for preview smoke, rollback, no-interruption,
+  state-compatibility, and backup/restore evidence.
 
 ## Journey Summary
 

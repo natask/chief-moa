@@ -63,7 +63,7 @@ For Android-first product work, the active change is usually
 
 Recurring maintenance loops have agent-runnable skills. Prefer them over
 re-deriving the commands. Each is a thin wrapper over the repo's real
-`npm`/`bash` commands and respects the live-gateway freeze.
+`npm`/`bash` commands and respects the active-promotion safety gate.
 
 - `moa-voice-qa` - verify a spoken turn flows phone/browser -> gateway ->
   reply, and audit why a voice turn failed. Primary path is the cascaded Chirp 3
@@ -83,10 +83,10 @@ re-deriving the commands. Each is a thin wrapper over the repo's real
   unverified. For deep fuzzing use `chrome-extension-qa-ralph` instead.
 - `moa-gateway-refresh` - audit-first gateway health, drift, and change review.
   Audit mode is read-only and never restarts the live service. Promotion
-  (`scripts/deploy.sh gateway`) requires the user to explicitly say
-  promote/apply/deploy in the current turn, plus a read-only backup/restore
-  check first. Background/cron invocations stop at audit and must not
-  self-promote.
+  (`scripts/deploy.sh gateway`) requires the active-promotion gate to pass:
+  preview smoke, rollback path, no interrupted work, state compatibility, and
+  backup/restore evidence for persisted state. Background/cron invocations stop
+  at audit unless they can prove the same gate.
 
 The main machine (10.147.17.10) has been decommissioned. The production
 gateway is the DigitalOcean droplet behind https://api.agee.app. Fix work
@@ -98,9 +98,40 @@ to master that touches the gateway deploy path is verified by the
 a systemd timer on the droplet (`scripts/vps/auto-update.sh`) promotes that
 ref within ~2 minutes through `scripts/vps/update.sh`, whose backup +
 restore-check gate still aborts before touching the service if either fails.
-Agents therefore deploy the gateway by merging verified work to master and
-pushing. Manual promotion (`scripts/vps/push.sh`) remains available and still
-requires an explicit user request in the current turn.
+Agents may deploy the gateway by merging verified work to master and pushing
+only when the active-promotion gate below passes. Manual promotion
+(`scripts/vps/push.sh`) uses the same gate.
+
+## Active Promotion Safety
+
+Preview deployments should happen for every deployable change when the platform
+supports them. A preview must use a separate URL, state store, queue, storage
+path, and worker pool from the active app.
+
+Active promotion is allowed only when all of these are true:
+
+- Verification and preview smoke checks passed.
+- Rollback is known and fast: a previous artifact, git ref, deployment, config,
+  or restore path can put the active app back.
+- The change will not halt, strand, or erase a running user process such as a
+  recording, voice turn, upload, agent run, queue job, migration, or active
+  session. If the process can be drained, resumed, or retried, prove that first.
+- Persisted state is compatible across old and new code during rollout.
+
+For stateless services, active promotion may proceed after preview and smoke
+checks if restarting or replacing the process cannot drop user work.
+
+For stateful services, use staged changes. Add new schema or storage first. Run
+code that can read old and new state, and write bridge data when needed.
+Backfill with idempotent jobs. Switch reads after the backfill is verified.
+Remove old fields, files, or behavior only after active code no longer needs
+them. Do not couple an irreversible migration to the same active promotion that
+requires new code.
+
+If recordings, transcripts, archives, databases, queues, or generated user data
+are involved, promotion must include backup and restore evidence. If preview,
+rollback, compatibility, drain or resume, backup, restore, or smoke evidence is
+missing, stop at the preview or artifact and record the blocker.
 
 ## Finish Order
 
@@ -109,12 +140,15 @@ For every completed implementation unit, finish in this order:
 1. Run the narrow verification and smoke checks for the touched surface.
 2. Fix any errors found by those checks or by manual QA.
 3. Commit the completed unit with a Conventional Commit.
-4. Deploy every changed deployable surface.
-5. Smoke-check the deployed target and record any blocker.
+4. Create or update the preview deployment or release artifact for every changed
+   deployable surface.
+5. Promote the active target only when the active-promotion gate passes.
+6. Smoke-check the promoted target or record the promotion blocker.
 
 Do not deploy target files from a dirty tree unless the user explicitly asks for
-a local-only throwaway run. Agents should leave either a committed and deployed
-unit or a plain blocker explaining why commit or deploy could not happen.
+a local-only throwaway run. Agents should leave either a committed unit with a
+preview, release artifact, or safe active promotion, or a plain blocker
+explaining why commit, preview, or active promotion could not happen.
 
 ## Changelog, Commits, And Deploys
 
@@ -126,15 +160,16 @@ Completed code, spec, workflow, or verification changes must not be left as an
 uncommitted working tree. Before ending a task, either commit the completed unit
 with a Conventional Commit or explicitly record why it could not be committed.
 
-Completed deployable changes must also be deployed through the repo's existing
-deployment path after verification, then smoke-checked against the target. For
-Android app changes, deploy by publishing the OTA artifact to the main-machine
-gateway unless the user explicitly asks for a local-only build. If deployment is
-blocked by missing credentials, failing verification, unavailable network, or a
-non-deployable docs-only change, record the blocker plainly before ending the
-task.
+Completed deployable changes must also create a preview deployment or release
+artifact through the repo's existing deployment path after verification. Active
+promotion happens only when the active-promotion gate passes, then the target is
+smoke-checked. For Android app changes, publish the OTA artifact only when the
+install path will not interrupt an active phone session and rollback is clear.
+If preview or active promotion is blocked by missing credentials, failing
+verification, unavailable network, unsafe state, or a non-deployable docs-only
+change, record the blocker plainly before ending the task.
 
-Deployment commands:
+Active promotion commands:
 
 - Auto-detect committed target changes: `bash scripts/deploy.sh auto`
 - Gateway: `bash scripts/deploy.sh gateway`
@@ -142,15 +177,18 @@ Deployment commands:
 - Browser extension/local browser: `bash scripts/deploy.sh extension`
 - Explicit all-target deploy: `bash scripts/deploy.sh all`
 
-`scripts/deploy.sh auto` is the default hook target for repo-level agents. It
-deploys committed gateway, Android, and browser-extension changes since each
-target's last successful deploy marker. It skips dirty target files and logs the
-reason instead of publishing uncommitted work.
+`scripts/deploy.sh auto` is the default active-promotion target for repo-level
+agents after the active-promotion gate passes. It deploys committed gateway,
+Android, and browser-extension changes since each target's last successful
+deploy marker. It skips dirty target files and logs the reason instead of
+publishing uncommitted work.
 
-Browser-extension deployment means: verify, smoke-test, package the extension,
-and send a short dev-reload signal to any already-loaded unpacked extension in
-the user's browser. If the unpacked extension's dev auto-reload bridge has not
-been enabled, record that browser reload is blocked and give the package path.
+Browser-extension packaging is a release artifact. Browser-extension active
+promotion means verify, smoke-test, package the extension, and send a short
+dev-reload signal to any already-loaded unpacked extension in the user's
+browser. Send the reload only when it will not interrupt active browser work. If
+the unpacked extension's dev auto-reload bridge has not been enabled, record
+that browser reload is blocked and give the package path.
 
 When the user asks to deploy, publish, or put changes "onto Git", push the
 committed branch to the configured remote after verification if a remote is

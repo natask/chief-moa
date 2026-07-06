@@ -244,7 +244,8 @@ State rollback:
   state migration caused the incident.
 - Restore Postgres and `/data` only from a backup that already passed the
   scratch restore check.
-- Restoring active state requires an explicit maintenance window.
+- Restore active state only after the active-promotion gate passes and the
+  operator has a tested restore target.
 
 ## External References
 

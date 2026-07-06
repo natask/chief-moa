@@ -245,8 +245,9 @@ Verification:
   rejection.
 - [x] 8.3 Document the pre-promotion sequence and blockers in
   `backup-restore-runbook.md`.
-- [ ] 8.4 Run backup dry-run and execute against the active source only inside
-  an approved maintenance window or operator-controlled backup context.
+- [ ] 8.4 Run backup dry-run and execute against the active source only after
+  preview smoke, rollback, no-interruption, and state-compatibility checks pass,
+  or inside an operator-controlled backup context.
 - [ ] 8.5 Run restore-check dry-run and execute against scratch Postgres and
   scratch `DATA_DIR`, then record backup directory, restore scratch directory,
   health URL, and blockers in promotion notes.
@@ -311,9 +312,10 @@ managed operations.
 
 Current blocker: active promotion remains blocked. This integration task does
 not deploy, restart, apply, switch active URLs, publish OTA artifacts, or reload
-browser packages. Active backup execution also remains blocked until an
-approved maintenance window or operator-controlled backup context; the
-unattended timer and off-host mirror installers are committed but not installed.
+browser packages. Active backup execution also remains blocked until the
+active-promotion gate passes or an operator-controlled backup context exists;
+the unattended timer and off-host mirror installers are committed but not
+installed.
 
 ## 11. Incoming Shipped VPS Stack Ledger
 
