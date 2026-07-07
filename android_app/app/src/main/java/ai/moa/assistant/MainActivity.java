@@ -426,11 +426,10 @@ public final class MainActivity extends Activity {
     private void populateGestureRows(LinearLayout rows, boolean voiceFirst) {
         rows.removeAllViews();
         if (voiceFirst) {
-            gestureRow(rows, "Tap", "Interrupt");
-            gestureRow(rows, "Press + hold", "Talk");
+            gestureRow(rows, "Tap", "Talk (tap again to send)");
+            gestureRow(rows, "Press + hold", "Talk precisely");
+            gestureRow(rows, "Double-tap", "Chat");
             gestureRow(rows, "Drag", "Move");
-            gestureRow(rows, "Double-tap", "Toggle talk");
-            gestureRow(rows, "Triple-tap", "Chat");
         } else {
             gestureRow(rows, "Tap", "Chat");
             gestureRow(rows, "Hold", "Move");

@@ -21,15 +21,25 @@ import java.util.function.BooleanSupplier;
 //   A single tap is confirmed only after the double-tap window passes, so the
 //   chat menu never flashes before a double-click hold engages voice.
 //
-// Flag ON (voice-first):
-//   single tap (quick)     -> onInterruptTap, fired immediately on the first
-//                             tap-up with no deferral (compatible with a
-//                             following double/triple tap); never opens chat
+// Flag ON (voice-first, v2):
+//   single quick tap       -> talk toggle with barge-in. Loop off: onStartTalkLoop
+//                             fires immediately on the first tap-up (it stops any
+//                             assistant audio and opens the hands-free loop). Loop
+//                             on: the tap defers onCommitAndEndLoop by the double-
+//                             tap window so a second tap can supersede it.
+//   double quick tap       -> onOpenChat. If tap 1 started the loop it is undone
+//                             first via onCancelTalkLoop; if tap 1 deferred a send,
+//                             that timer was cleared at tap 2's ACTION_DOWN so the
+//                             loop simply stays on while chat opens.
+//   triple tap and beyond  -> nothing (swallowed; the chord stays alive so rapid
+//                             extra taps never re-toggle the loop)
 //   press-and-hold, still  -> onDoublePressStart / onPressToTalkRelease
 //                             (push to talk; the mic warms at press-down)
+//   hold + large move      -> onPressToTalkCancel, then reposition the orb: once
+//                             the hold has confirmed, a move past doubleTapSlop
+//                             cancels the capture (nothing sent) and turns the
+//                             gesture into a normal drag. Smaller drift is ignored.
 //   press + move past slop -> reposition the orb, no callback (unchanged)
-//   double-tap (quick)     -> onToggleTalk, toggle the continuous voice loop
-//   triple-tap             -> onTripleTap, open the chat panel
 final class MoaOrbTouchListener implements View.OnTouchListener {
     private static final long DOUBLE_CLICK_HOLD_MS = 120;
     // Voice-first press-and-hold threshold. Deliberately separate from the
@@ -38,6 +48,12 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private static final long VOICE_FIRST_HOLD_MS = 260;
     private static final long SINGLE_TAP_MAX_MS = ViewConfiguration.getLongPressTimeout();
     private static final long DOUBLE_TAP_TIMEOUT_MS = ViewConfiguration.getDoubleTapTimeout();
+
+    // What the first tap of a voice-first chord did, so a second tap can undo or
+    // supersede it. Mirrors the browser overlay's chain.toggled bookkeeping.
+    private static final int TAP1_NONE = 0;
+    private static final int TAP1_STARTED = 1;       // tap 1 started the loop
+    private static final int TAP1_SEND_PENDING = 2;  // tap 1 deferred a commit+end
 
     private final Context context;
     private final WindowManager windowManager;
@@ -55,14 +71,21 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     // a drag or an early release, so the warm mic is dropped and never leaks.
     private final Runnable onDoublePressArmed;
     private final Runnable onDoublePressAbort;
-    // Voice-first callbacks (flag on). onInterruptTap fires on a quick single
-    // tap; onToggleTalk on a quick double tap; onTripleTap on a triple tap.
+    // Voice-first callbacks (flag on). voiceLoopActive reports whether the
+    // hands-free voice loop is running, so the first tap knows whether to start it
+    // or to defer a send. onStartTalkLoop starts the loop with barge-in;
+    // onCommitAndEndLoop commits any in-flight speech and ends it; onCancelTalkLoop
+    // quietly drops a just-started loop; onOpenChat opens the chat panel;
+    // onPressToTalkCancel aborts a confirmed hold's capture without committing.
     // The hold path reuses onDoublePressStart / onPressToTalkRelease and the
     // warm-mic pair onDoublePressArmed / onDoublePressAbort.
     private final BooleanSupplier voiceFirstEnabled;
-    private final Runnable onInterruptTap;
-    private final Runnable onToggleTalk;
-    private final Runnable onTripleTap;
+    private final BooleanSupplier voiceLoopActive;
+    private final Runnable onStartTalkLoop;
+    private final Runnable onCommitAndEndLoop;
+    private final Runnable onCancelTalkLoop;
+    private final Runnable onOpenChat;
+    private final Runnable onPressToTalkCancel;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final int touchSlop;
     private final int doubleTapSlop;
@@ -86,6 +109,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     // ACTION_DOWN so a mid-gesture flag flip cannot mix the two machines.
     private boolean gestureUsesVoiceFirst;
     private int voiceFirstTapCount;
+    private int voiceFirstTap1Action;
     private boolean voiceFirstHoldActive;
     private Runnable pendingVoiceFirstHold;
     private Runnable pendingVoiceFirstTapResolve;
@@ -103,9 +127,12 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             Runnable onDoublePressArmed,
             Runnable onDoublePressAbort,
             BooleanSupplier voiceFirstEnabled,
-            Runnable onInterruptTap,
-            Runnable onToggleTalk,
-            Runnable onTripleTap
+            BooleanSupplier voiceLoopActive,
+            Runnable onStartTalkLoop,
+            Runnable onCommitAndEndLoop,
+            Runnable onCancelTalkLoop,
+            Runnable onOpenChat,
+            Runnable onPressToTalkCancel
     ) {
         this.context = context;
         this.windowManager = windowManager;
@@ -119,9 +146,12 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.onDoublePressArmed = onDoublePressArmed;
         this.onDoublePressAbort = onDoublePressAbort;
         this.voiceFirstEnabled = voiceFirstEnabled;
-        this.onInterruptTap = onInterruptTap;
-        this.onToggleTalk = onToggleTalk;
-        this.onTripleTap = onTripleTap;
+        this.voiceLoopActive = voiceLoopActive;
+        this.onStartTalkLoop = onStartTalkLoop;
+        this.onCommitAndEndLoop = onCommitAndEndLoop;
+        this.onCancelTalkLoop = onCancelTalkLoop;
+        this.onOpenChat = onOpenChat;
+        this.onPressToTalkCancel = onPressToTalkCancel;
         ViewConfiguration viewConfiguration = ViewConfiguration.get(context);
         this.touchSlop = viewConfiguration.getScaledTouchSlop();
         this.doubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
@@ -224,9 +254,10 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         }
     }
 
-    // The voice-first contract (flag on). Single tap interrupts, press-and-hold
-    // talks, double tap toggles the loop, triple tap opens chat. Drag and the
-    // coordinate clamp are unchanged.
+    // The voice-first contract (flag on, v2). Single quick tap toggles the talk
+    // loop with barge-in, double tap opens chat, press-and-hold talks, and a large
+    // move after the hold confirms cancels the capture into a drag. The plain drag
+    // and coordinate clamp are unchanged.
     private boolean onTouchVoiceFirst(View view, MotionEvent event) {
         int action = event.getActionMasked();
         switch (action) {
@@ -238,6 +269,14 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 downTimeMs = event.getEventTime();
                 moved = false;
                 voiceFirstHoldActive = false;
+                // A chord is already in progress, so this press-down is a potential
+                // second (or later) tap. Suspend the pending tap-resolve now: for a
+                // loop-active tap 1 that resolve carries the deferred commit+end, so
+                // clearing it here lets tap 2 supersede the send and keeps the loop
+                // on while chat opens. The chord count is preserved for the tap-up.
+                if (voiceFirstTapCount > 0) {
+                    cancelVoiceFirstTapResolve();
+                }
                 // Warm the mic on this press-down so a hold-to-talk buffers the
                 // head of the utterance from the very first press. A quick
                 // release or a drag drops it; only a confirmed hold consumes it.
@@ -245,13 +284,24 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 scheduleVoiceFirstHold();
                 return true;
             case MotionEvent.ACTION_MOVE:
-                if (voiceFirstHoldActive) {
-                    // A confirmed press-to-talk owns the gesture: ignore drift so
-                    // a shaky hold never repositions the orb.
-                    return true;
-                }
                 int dx = Math.round(event.getRawX() - downX);
                 int dy = Math.round(event.getRawY() - downY);
+                if (voiceFirstHoldActive) {
+                    // A confirmed press-to-talk owns the gesture. Small drift is
+                    // ignored so a shaky hold never repositions the orb. A large
+                    // move (past doubleTapSlop) is the escape hatch: cancel the
+                    // capture the hold started without committing it, then let the
+                    // drag reposition the orb from the current finger position.
+                    if (Math.abs(dx) > doubleTapSlop || Math.abs(dy) > doubleTapSlop) {
+                        voiceFirstHoldActive = false;
+                        moved = true;
+                        onPressToTalkCancel.run();
+                        orbParams.x = clampOrbX(startX + dx);
+                        orbParams.y = clampOrbY(startY + dy);
+                        windowManager.updateViewLayout(orbView, orbParams);
+                    }
+                    return true;
+                }
                 if (!moved && (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop)) {
                     moved = true;
                     // Drift past the slop before the hold confirms is a drag:
@@ -278,7 +328,8 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 // No hold consumed the warm mic, so drop it.
                 onDoublePressAbort.run();
                 if (action == MotionEvent.ACTION_CANCEL || moved) {
-                    // A cancel or a drag is never a tap.
+                    // A cancel or a drag is never a tap. A drag already reset the
+                    // chord; the escape-hatch drag reset it when the hold confirmed.
                     return true;
                 }
                 handleVoiceFirstTapUp(event);
@@ -288,25 +339,46 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         }
     }
 
-    // A quick tap released. Interrupt fires on the first tap-up immediately, then
-    // the count decides: two -> toggle talk (after the double-tap window, so a
-    // third tap can supersede it), three -> chat now.
+    // A quick tap released. Tap 1 toggles the loop: start it now (with barge-in)
+    // when it is off, or defer a commit+end past the double-tap window when it is
+    // on so a second tap can supersede. Tap 2 opens chat (undoing a just-started
+    // loop). Tap 3+ does nothing but keeps the chord alive so extra taps stay inert.
     private void handleVoiceFirstTapUp(MotionEvent event) {
         voiceFirstTapCount++;
         if (voiceFirstTapCount == 1) {
-            onInterruptTap.run();
+            boolean loopActive = voiceLoopActive != null && voiceLoopActive.getAsBoolean();
+            if (loopActive) {
+                // Loop on: this tap means "send and end", but wait out the double-
+                // tap window so a second tap (chat) can supersede it. The user has
+                // already stopped talking by then, so the delay is not felt.
+                voiceFirstTap1Action = TAP1_SEND_PENDING;
+            } else {
+                // Loop off (or the assistant is only speaking): start it now.
+                // Starting stops any assistant audio, so barge-in is built in. A
+                // second tap within the window undoes this just-started loop.
+                voiceFirstTap1Action = TAP1_STARTED;
+                onStartTalkLoop.run();
+            }
             scheduleVoiceFirstTapResolve();
             return;
         }
         if (voiceFirstTapCount == 2) {
-            // Could still grow into a triple tap; wait one more window.
+            // Double tap is chat. Tap 1 either started the loop (undo the
+            // milliseconds-old session) or deferred a send (its resolve was
+            // already cleared at this press-down, so the loop simply stays on).
+            int tap1 = voiceFirstTap1Action;
+            voiceFirstTap1Action = TAP1_NONE;
+            if (tap1 == TAP1_STARTED) {
+                onCancelTalkLoop.run();
+            }
+            onOpenChat.run();
+            // Keep the chord alive so a third tap stays inert instead of
+            // re-toggling. The re-armed resolve now carries no deferred action.
             scheduleVoiceFirstTapResolve();
             return;
         }
-        // Third tap: open chat now and end the chord without waiting.
-        cancelVoiceFirstTapResolve();
-        voiceFirstTapCount = 0;
-        onTripleTap.run();
+        // Third tap and beyond: nothing new. Keep swallowing rapid taps.
+        scheduleVoiceFirstTapResolve();
     }
 
     private void scheduleVoiceFirstHold() {
@@ -338,11 +410,16 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         pendingVoiceFirstTapResolve = () -> {
             pendingVoiceFirstTapResolve = null;
             int count = voiceFirstTapCount;
+            int tap1 = voiceFirstTap1Action;
             voiceFirstTapCount = 0;
-            if (count == 2) {
-                onToggleTalk.run();
+            voiceFirstTap1Action = TAP1_NONE;
+            if (count == 1 && tap1 == TAP1_SEND_PENDING) {
+                // A lone tap while the loop was on and no second tap arrived:
+                // commit the in-flight utterance and end the loop.
+                onCommitAndEndLoop.run();
             }
-            // count == 1: interrupt already fired on the tap-up; nothing more.
+            // count == 1 TAP1_STARTED: the loop already started on the tap-up.
+            // count >= 2: chat already opened. Nothing more to do here.
         };
         mainHandler.postDelayed(pendingVoiceFirstTapResolve, DOUBLE_TAP_TIMEOUT_MS);
     }
@@ -357,6 +434,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private void resetVoiceFirstTapChord() {
         cancelVoiceFirstTapResolve();
         voiceFirstTapCount = 0;
+        voiceFirstTap1Action = TAP1_NONE;
     }
 
     private boolean isSecondTap(MotionEvent event) {

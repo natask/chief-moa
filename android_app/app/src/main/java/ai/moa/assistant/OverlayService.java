@@ -145,6 +145,10 @@ public final class OverlayService extends Service {
     private String lastActiveAgentRunId = "";
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
+    // Set when a voice-first tap starts the loop, cleared once the first turn
+    // captures speech or re-arms. While true, a first turn that ends as an empty
+    // no_speech turn disarms quietly instead of surfacing "I didn't catch that".
+    private boolean suppressFirstTapTurnEmptyCue;
     private boolean pushToTalkVoiceTurn;
     // Record mode: while enabled, double-click-and-hold captures a raw audio
     // note locally and uploads it on release. Never a voice turn.
@@ -526,9 +530,12 @@ public final class OverlayService extends Service {
                 this::beginWarmMic,
                 this::discardWarmMic,
                 () -> MoaPrefs.voiceFirstGestures(this),
-                this::handleOrbInterruptTap,
-                this::handleOrbToggleTalk,
-                this::handleOrbTripleTap
+                this::isContinuousLoopActive,
+                this::handleOrbStartTalkLoop,
+                this::endContinuousVoiceLoop,
+                this::handleOrbCancelTalkLoop,
+                this::showPanel,
+                this::handleOrbPushToTalkCancel
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -1083,6 +1090,9 @@ public final class OverlayService extends Service {
     }
 
     private void scheduleContinuousVoiceRestart(int generation) {
+        // Re-arming for a later turn: the first tap-started turn is over, so the
+        // quiet-disarm suppression no longer applies.
+        suppressFirstTapTurnEmptyCue = false;
         cancelAutoDismiss();
         cancelContinuousVoiceRestart();
         // Warm the mic through the re-arm gap so the next hands-free turn opens on
@@ -1317,7 +1327,7 @@ public final class OverlayService extends Service {
         if (MoaPrefs.voiceFirstGestures(this)) {
             return recordModeEnabled
                     ? "Record mode: press and hold to record a note."
-                    : "Hold to talk. Double-tap to toggle. Triple-tap for chat.";
+                    : "Tap to talk (tap again to send). Hold to talk precisely. Double-tap for chat. Drag to move.";
         }
         return recordModeEnabled
                 ? "Record mode: double-click and hold to record a note."
@@ -2209,58 +2219,81 @@ public final class OverlayService extends Service {
 
     // TAP the orb = chat menu. Voice is reserved for double-click-and-hold, so
     // a normal click never commits, stops, or starts a spoken turn. (Flag-off
-    // contract; the voice-first flag routes a tap to handleOrbInterruptTap.)
+    // contract; the voice-first flag routes a tap to handleOrbStartTalkLoop.)
     private void handleOrbSingleTap() {
         showPanel();
     }
 
-    // VOICE-FIRST single tap = interrupt/dismiss. Stops assistant speech, clears
-    // the transient voice card, and folds away an open chat panel. It never
-    // opens chat and never cuts an actively listening mic (a PTT hold, a record
-    // capture, or a continuous loop mid-utterance): the user must never be cut
-    // off while speaking. An idle tap with nothing to interrupt is a no-op.
-    private void handleOrbInterruptTap() {
-        boolean listeningMicActive = pushToTalkVoiceTurn
-                || audioNoteActive
-                || voiceController.isCommandListening()
-                || (streamingVoiceActive()
-                        && voiceRuntimeState == VoiceRuntimeState.LISTENING
-                        && !streamingAssistantAudioPlaying);
-        if (listeningMicActive) {
-            // Leave the live capture running; only fold away a stray chat panel.
-            if (panelOpen) {
-                removePanel();
-            }
-            return;
-        }
-        boolean somethingToInterrupt = panelOpen
-                || transcriptView != null
-                || streamingVoiceActive()
-                || voiceController.isActive()
-                || voiceSamplePlayer != null
-                || continuousVoiceLoop
-                || pendingContinuousVoiceRestart != null;
-        if (!somethingToInterrupt) {
-            return;
-        }
-        dismissOverlayUi();
-    }
-
-    // VOICE-FIRST double tap = toggle the continuous voice loop. Off -> start it;
-    // on -> end it gracefully, committing an in-flight utterance so the last
-    // speech is answered, otherwise tearing the session down.
-    private void handleOrbToggleTalk() {
-        boolean loopActive = continuousVoiceLoop
+    // Whether the hands-free voice loop is running. The voice-first tap chord asks
+    // this at the first tap-up to choose between starting the loop and deferring a
+    // commit+end, mirroring the browser's `conversationActive || (liveVoice &&
+    // listening)` check.
+    private boolean isContinuousLoopActive() {
+        return continuousVoiceLoop
                 || pendingContinuousVoiceRestart != null
                 || (streamingVoiceActive() && streamingTurnContinuous);
-        if (loopActive) {
-            endContinuousVoiceLoop();
+    }
+
+    // VOICE-FIRST single quick tap (loop off) = start the hands-free loop with
+    // barge-in. Starting stops any assistant audio first, which is the interrupt.
+    // A tap never cuts a live user mic: while a PTT hold or a record capture owns
+    // the mic this is a no-op, so nothing spoken is dropped.
+    private void handleOrbStartTalkLoop() {
+        if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
+        stopAssistantAudioForBargeIn();
+        // Suppress the "didn't catch that" cue for this first turn only: a tap that
+        // starts the loop and captures no speech was a barge-in or a stray tap, not
+        // a failed utterance. Set after the barge-in teardown clears it.
+        suppressFirstTapTurnEmptyCue = true;
         startContinuousStreamingVoiceTurn();
     }
 
+    // Stop any assistant audio so a tap-to-talk starts on a quiet mic. Cancels an
+    // in-flight streaming turn's playback, a local TTS reply, and the voice
+    // sampler. A fresh session opens immediately after.
+    private void stopAssistantAudioForBargeIn() {
+        cancelContinuousVoiceRestart();
+        if (streamingVoiceActive()) {
+            cancelStreamingVoice();
+        }
+        cancelVoiceSampler();
+        voiceController.stopQuietly();
+    }
+
+    // VOICE-FIRST double tap after a just-started loop = undo it quietly before
+    // chat opens. The session is milliseconds old with nothing meaningful
+    // captured, so it is torn down without a cue.
+    private void handleOrbCancelTalkLoop() {
+        suppressFirstTapTurnEmptyCue = false;
+        cancelStreamingVoice();
+        removeTranscriptOverlay();
+        updateMicState();
+    }
+
+    // The escape hatch: a large move after a press-to-talk hold confirmed cancels
+    // the capture that hold started (streaming turn or audio note) WITHOUT
+    // committing it, so the gesture becomes a plain drag. Nothing is sent.
+    private void handleOrbPushToTalkCancel() {
+        if (audioNoteActive) {
+            cancelAudioNoteCapture();
+        }
+        if (pushToTalkVoiceTurn || streamingVoiceActive()) {
+            cancelStreamingVoice();
+        }
+        pushToTalkVoiceTurn = false;
+        discardWarmMic();
+        if (orbView != null) {
+            orbView.setHeld(false);
+        }
+        updateMicState();
+    }
+
+    // Commit an in-flight utterance and end the loop, or tear the session down when
+    // nothing is in flight. Used by the voice-first deferred "send and end" tap.
     private void endContinuousVoiceLoop() {
+        suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
         boolean hasInFlightSpeech = streamingVoiceActive()
@@ -2277,12 +2310,6 @@ public final class OverlayService extends Service {
             return;
         }
         dismissOverlayUi();
-    }
-
-    // VOICE-FIRST triple tap = open the chat panel. Chat is demoted to the
-    // rarest gesture; the primitive gestures drive voice.
-    private void handleOrbTripleTap() {
-        showPanel();
     }
 
     private void startPushToTalkVoiceTurn() {
@@ -2463,6 +2490,7 @@ public final class OverlayService extends Service {
         discardWarmMic();
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
+        suppressFirstTapTurnEmptyCue = false;
         nextManualVoiceFollowsActiveRun = false;
         invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
@@ -2746,6 +2774,7 @@ public final class OverlayService extends Service {
     private void cancelStreamingVoice() {
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
+        suppressFirstTapTurnEmptyCue = false;
         invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
         cancelStreamingTurnWatchdog();
@@ -3130,6 +3159,19 @@ public final class OverlayService extends Service {
                     return;
                 }
                 if ("no_speech".equals(turnStatus)) {
+                    if (suppressFirstTapTurnEmptyCue
+                            && !currentStreamingTurnRouted
+                            && currentStreamingTranscript.isEmpty()
+                            && voiceAssistantTranscript.isEmpty()) {
+                        // Quiet disarm: the user tapped to talk and said nothing on
+                        // this first turn. Fold the loop away without a cue instead
+                        // of scolding a barge-in or a stray tap.
+                        suppressFirstTapTurnEmptyCue = false;
+                        cancelStreamingVoice();
+                        removeTranscriptOverlay();
+                        updateMicState();
+                        return;
+                    }
                     String notice = "I didn't catch that.";
                     updateVoiceAssistantTranscript(notice);
                     speakOverlayNotice(notice);
