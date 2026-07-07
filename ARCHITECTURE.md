@@ -96,6 +96,16 @@ hold with movement only repositions the mark. Browser voice can opt a session
 into background assistant speech, where starting a new spoken turn opens a new
 gateway voice turn without stopping already queued assistant audio.
 
+An experimental voice-first gesture mode (off by default; browser flag
+`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
+both surfaces to the same contract: a still first-press hold is push-to-talk
+(release commits), double-click toggles hands-free talk mode with a visible
+active state on the mark/orb, triple click opens the demoted chat surface, and
+single click interrupts (stops assistant speech, dismisses the panel) instead
+of opening chat. Drag and resize are unchanged, and the flag off keeps the
+default contract above. Contract:
+`reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
+
 The overlay surface stays small: it shows the current intent/result and compact
 run state, not a full scrollback manager. Browser text replies render in the
 result stack above the command input; replies, errors, and voice state never
