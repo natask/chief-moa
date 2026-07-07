@@ -326,6 +326,7 @@ class VoiceSessionConnection {
     const startedAt = nowIso();
     const profileVersion = this.profileVersion(deviceId);
     const effectiveProfile = effectiveProfileForSession(this.effectiveProfile(deviceId), event);
+    const persona = personaForSession(event);
     const providerStatus = this.voiceProvider.status();
     fs.mkdirSync(turnDir, { recursive: true });
 
@@ -336,6 +337,7 @@ class VoiceSessionConnection {
       turnId,
       profileVersion,
       effectiveProfile,
+      persona,
       providerStatus,
       deviceId,
       source: String(event.source || "android-overlay").slice(0, 120),
@@ -978,6 +980,7 @@ class VoiceSessionConnection {
         profile_version: turn.profileVersion || "",
         device_id: turn.deviceId || "",
         source: turn.source,
+        persona: turn.persona || null,
         started_at: turn.startedAt,
         completed_at: nowIso(),
         transcript: transcript || (turn.audioBytes > 0 ? "Voice captured." : ""),
@@ -1029,6 +1032,7 @@ class VoiceSessionConnection {
         profile_version: turn.profileVersion || "",
         device_id: turn.deviceId || "",
         source: turn.source,
+        persona: turn.persona || null,
         started_at: turn.startedAt,
         completed_at: nowIso(),
         transcript: completed.transcript,
@@ -1330,6 +1334,31 @@ function normalizePlaybackPolicy(policy) {
   return {
     assistant_overlap: input.assistant_overlap === true,
   };
+}
+
+// A session may speak AS a companion (a website pet, a picked character): a
+// bounded per-session persona from session_start, treated as untrusted client
+// input — sanitized, hard-capped, session-scoped, never written to the stored
+// profile. The reasoner turns it into one extra system block for this session's
+// turns only.
+function personaForSession(event) {
+  const raw = event?.persona && typeof event.persona === "object" && !Array.isArray(event.persona)
+    ? event.persona
+    : {};
+  const name = sanitizePersonaText(raw.name || event?.assistant_name || "", 80);
+  const text = sanitizePersonaText(raw.text || raw.summary || "", 400);
+  if (!name && !text) {
+    return null;
+  }
+  return { name, text };
+}
+
+function sanitizePersonaText(value, max) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
 }
 
 function effectiveProfileForSession(profile, event) {

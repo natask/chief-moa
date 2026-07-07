@@ -154,6 +154,7 @@ async function main() {
   await streamingVertexDeltasAndEndpoint();
   await streamingVertexReplaysThoughtSignature();
   await streamingSseFaultFallsBackPerRound();
+  await sessionPersonaReachesTheModel();
 
   console.log(JSON.stringify({
     ok: true,
@@ -170,6 +171,7 @@ async function main() {
       "SSE stubs yield Uint8Array chunks (undici shape) and the parser still decodes them",
       "a signed vertex functionCall part replays with its thoughtSignature on the next round",
       "an SSE transport fault falls back to one non-streaming call for that round and the reply is still spoken",
+      "a session persona (pet name/character) becomes a system block for that turn and is absent without one",
     ],
   }, null, 2));
 }
@@ -562,6 +564,38 @@ async function streamingSseFaultFallsBackPerRound() {
     pendingStreamRounds = null;
     pendingReply = null;
   }
+}
+
+// A voice session that speaks AS a companion (website pet) passes a sanitized
+// persona through the session server to the reasoner; it must land as a system
+// block for that turn only, and a persona-less turn must not carry the block.
+async function sessionPersonaReachesTheModel() {
+  fetchCalls.length = 0;
+  await runCascadedVoiceReasoning({
+    transcript: "tell me about yourself",
+    session_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "reasoner-persona-1",
+    persona: { name: "Shigmi Scout", text: "A curious research scout that peeks around page edges." },
+  });
+  const personaCall = fetchCalls.find((c) => c.kind === "openai");
+  assert.ok(personaCall, "the persona turn must reach the model");
+  const personaSystem = personaCall.body.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n---\n");
+  assert.match(personaSystem, /Session persona/, "the persona system block must be injected");
+  assert.match(personaSystem, /Shigmi Scout/, "the persona name must reach the model");
+  assert.match(personaSystem, /research scout/, "the persona character text must reach the model");
+
+  fetchCalls.length = 0;
+  await runCascadedVoiceReasoning({
+    transcript: "tell me about yourself",
+    session_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "reasoner-persona-2",
+  });
+  const plainCall = fetchCalls.find((c) => c.kind === "openai");
+  assert.ok(plainCall, "the persona-less turn must reach the model");
+  const plainSystem = plainCall.body.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n---\n");
+  assert.ok(!/Session persona/.test(plainSystem), "a turn without a persona must not carry the block");
 }
 
 function requestJson(method, url, body = null) {

@@ -855,6 +855,9 @@ class CascadedVoiceProvider {
         tts_provider_id: this.ttsProviderId,
         tts_available: this.cascaded(),
         previous_tts_error: this.lastTtsError || "",
+        // Session persona (already sanitized/capped by the session server): the
+        // reasoner speaks AS this companion for this session's turns only.
+        ...(turn.persona ? { persona: turn.persona } : {}),
         // Streaming taps: sanitized final-answer deltas feed the chunked TTS
         // pipeline; the leading [style: ...] line arrives before any prose so
         // every chunk can carry the style prompt.

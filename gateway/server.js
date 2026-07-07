@@ -10144,7 +10144,7 @@ async function runCascadedVoiceReasoningInner(input) {
   // chat reply here; control and agent-run turns are recorded by the caller, and
   // a profile-control turn is applied AND its confirmation spoken by the
   // streaming turn recorder, so none of them are answered as a chat turn here.
-  const classification = classifyVoiceTurn({}, transcript);
+  const classification = classifyVoiceTurnWithPersona(input?.persona, {}, transcript);
   if (classification !== "chat") {
     return { speak: "", display: transcript, language: replyLanguage, model: profile.model || MODEL_ID, classification };
   }
@@ -10173,8 +10173,9 @@ async function runCascadedVoiceReasoningInner(input) {
   const languageControl = languageControlDirective(profile);
   const modalityHint = voiceModalityHintBlock(profile, input);
   const expressiveDirective = voiceExpressiveDirective(input);
+  const personaBlock = sessionPersonaBlock(input?.persona);
   const messages = [{ role: "user", content: transcript }];
-  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, languageControl, languageDirective].filter(Boolean);
+  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, personaBlock, languageControl, languageDirective].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -10265,6 +10266,45 @@ async function runCascadedVoiceReasoningInner(input) {
       contextDecision
     ),
   };
+}
+
+// One extra system block when the session speaks AS a companion (a website
+// pet, a picked character). The name/text are client input the session server
+// already sanitized and hard-capped (personaForSession); session-scoped, never
+// written to the profile. It layers after the durable context blocks, so a
+// stored identity fact can still override it the same way it can override the
+// base system prompt.
+// Persona-aware turn routing, used by BOTH the cascaded reasoner and the
+// streaming turn recorder so they never disagree. On a persona session (a
+// website pet), an identity READ ("who are you", "what's your name") must be
+// answered in character by the model — the deterministic profile-control
+// summary would answer as the stored global assistant. Profile UPDATES
+// ("change your voice to charon") keep the profile-control path unchanged.
+function classifyVoiceTurnWithPersona(persona, body, transcript) {
+  const classification = classifyVoiceTurn(body, transcript);
+  if (classification !== "profile_control" || !persona || typeof persona !== "object") {
+    return classification;
+  }
+  const intent = parseProfileControlIntent(transcript);
+  return intent && intent.action === "summary" ? "chat" : classification;
+}
+
+function sessionPersonaBlock(persona) {
+  if (!persona || typeof persona !== "object") {
+    return "";
+  }
+  const name = String(persona.name || "").trim();
+  const text = String(persona.text || "").trim();
+  if (!name && !text) {
+    return "";
+  }
+  return [
+    "Session persona (this voice session only):",
+    name ? `- You are speaking as "${name}", a companion pet character.` : "",
+    text ? `- Character: ${text}` : "",
+    "- Stay in character as this companion: answer with the persona's tone and keep replies short and spoken.",
+    name ? "- If asked your name or who you are, answer as the persona." : "",
+  ].filter(Boolean).join("\n");
 }
 
 // The streaming sanitizer's cap: the profile's voice_max_chars first (so the
@@ -10578,7 +10618,7 @@ async function recordStreamingVoiceTurn(turn) {
   const turnStatus = String(turn.status || (incomplete ? "interrupted" : "completed"));
   const hasRealTranscript = Boolean(transcript && transcriptSource !== "synthetic");
   const liveClassification = !incomplete && hasRealTranscript
-    ? classifyVoiceTurn({ source: turn.source || "voice-live" }, transcript)
+    ? classifyVoiceTurnWithPersona(turn.persona, { source: turn.source || "voice-live" }, transcript)
     : "";
   const classification = incomplete ? "interrupted" : (liveClassification || "chat");
   const baseRecord = {

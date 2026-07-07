@@ -455,6 +455,7 @@ async function perSessionVoiceOverride(tempDir) {
     }),
   };
 
+  const reasonerInputs = [];
   const runSession = async (tag, sessionStartExtras) => {
     const calls = [];
     stubFetch({ sttTranscript: "hello pet", calls });
@@ -467,13 +468,16 @@ async function perSessionVoiceOverride(tempDir) {
         CHIRP_MODEL: "chirp_3",
         CHIRP_LANGUAGE_CODES: "en-US",
       },
-      reasoner: async ({ transcript }) => ({
-        speak: `Hi! You said: ${transcript}.`,
-        display: `Hi! You said: ${transcript}.`,
-        language: "en-US",
-        model: "test-model",
-        classification: "chat",
-      }),
+      reasoner: async (input) => {
+        reasonerInputs.push(input);
+        return {
+          speak: `Hi! You said: ${input.transcript}.`,
+          display: `Hi! You said: ${input.transcript}.`,
+          language: "en-US",
+          model: "test-model",
+          classification: "chat",
+        };
+      },
       agentProfile,
     });
     const dataDir = path.join(tempDir, `voice-override-${tag}`);
@@ -503,21 +507,36 @@ async function perSessionVoiceOverride(tempDir) {
   };
 
   // Lowercase override exercises canonicalization (client voice lists are
-  // lowercase) and must win over the profile's Aoede for this session.
-  const overridden = await runSession("override", { voice: "puck", source: "website-pet-studio" });
+  // lowercase) and must win over the profile's Aoede for this session. The
+  // persona rides the same session_start and must reach the reasoner input
+  // sanitized (control chars stripped, capped) for this session only.
+  const overridden = await runSession("override", {
+    voice: "puck",
+    source: "website-pet-studio",
+    persona: { name: "Shigmi  Scout", text: "A curious research scout.\n\nPeeks around edges." },
+  });
+  assert.equal(reasonerInputs.length, 1, "override session must run the reasoner once");
+  assert.deepEqual(
+    reasonerInputs[0].persona,
+    { name: "Shigmi Scout", text: "A curious research scout. Peeks around edges." },
+    "session_start persona must reach the reasoner sanitized",
+  );
   const overriddenTts = overridden.filter((c) => c.kind === "tts");
   assert.ok(overriddenTts.length > 0, "override session must synthesize hosted audio");
   for (const call of overriddenTts) {
     assert.equal(call.body.voice.name, "Puck", "session_start voice override must reach every synthesize request");
   }
 
-  // No override: unchanged behavior, the persisted profile voice speaks.
+  // No override: unchanged behavior, the persisted profile voice speaks and
+  // no persona reaches the reasoner.
   const defaulted = await runSession("default", {});
   const defaultedTts = defaulted.filter((c) => c.kind === "tts");
   assert.ok(defaultedTts.length > 0, "default session must synthesize hosted audio");
   for (const call of defaultedTts) {
     assert.equal(call.body.voice.name, "Aoede", "a session with no override must keep the profile voice");
   }
+  assert.equal(reasonerInputs.length, 2, "default session must run the reasoner once");
+  assert.equal(reasonerInputs[1].persona, undefined, "a session with no persona must not carry one");
   assert.equal(agentProfile.effective().voice, "Aoede", "a session override must not mutate the stored profile voice");
 }
 
