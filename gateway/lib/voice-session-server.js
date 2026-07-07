@@ -524,7 +524,11 @@ class VoiceSessionConnection {
       this.sendError("text_turn requires text");
       return;
     }
-    if (!turn.liveSession || typeof turn.liveSession.sendText !== "function") {
+    // Live/native providers need a session-level sendText. Cascaded and
+    // loopback providers have no liveSession at all: their processTurn path
+    // reads turn.syntheticText and skips the STT leg, same shape as
+    // handleCommitTurn's non-live branch.
+    if (turn.liveSession && typeof turn.liveSession.sendText !== "function") {
       this.sendError("voice provider does not support text_turn");
       return;
     }
@@ -532,6 +536,7 @@ class VoiceSessionConnection {
     this.responding = true;
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     turn.providerEvents = providerEvents;
+    const providerHooks = this.providerHooks(turn, providerEvents);
 
     try {
       turn.status = "committed";
@@ -540,7 +545,9 @@ class VoiceSessionConnection {
         this.startTurnProgress(turn, "reasoning");
       }
       await closeAudioStream(turn);
-      const providerResult = await commitLiveTextSession(turn, text);
+      const providerResult = turn.liveSession
+        ? await commitLiveTextSession(turn, text)
+        : await this.voiceProvider.processTurn(turn, providerHooks);
       if (this.turn !== turn || turn.completing) {
         return;
       }

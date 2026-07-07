@@ -548,8 +548,13 @@ class LoopbackVoiceProvider {
   }
 
   async processTurn(turn, hooks) {
-    const transcript = "Fake transcript for the streaming voice MVP.";
-    const assistantText = "Streaming voice transport is connected. I received your audio and can play this test tone.";
+    // Mirror the cascaded provider's typed-turn contract so deterministic
+    // smokes can exercise text_turn without audio or credentials.
+    const typedText = String(turn.syntheticText || "").trim();
+    const transcript = typedText || "Fake transcript for the streaming voice MVP.";
+    const assistantText = typedText
+      ? `Loopback reply to: ${typedText}`
+      : "Streaming voice transport is connected. I received your audio and can play this test tone.";
     await hooks.onTranscriptFinal(transcript);
     await hooks.onAssistantText(assistantText);
     await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
@@ -769,12 +774,18 @@ class CascadedVoiceProvider {
     }
     const sttLanguageCodes = this.sttLanguageCodes();
     this.assertModelSupportsLanguages(sttLanguageCodes);
-    if (!turn.audioBytes || turn.audioBytes <= 0) {
+    // A typed text turn (side panel / text surfaces) carries its transcript in
+    // turn.syntheticText and records no audio: skip the STT leg entirely.
+    const typedText = String(turn.syntheticText || "").trim();
+    if (!typedText && (!turn.audioBytes || turn.audioBytes <= 0)) {
       throw new Error("cannot send an empty audio turn to chirp");
     }
 
     // Leg 1 — streaming Chirp 3 STT, restricted to the configured languages.
-    const transcription = await this.sttStage.transcribe({ turn, languageCodes: sttLanguageCodes });
+    let transcription = { text: typedText, languageRejected: false };
+    if (!typedText) {
+      transcription = await this.sttStage.transcribe({ turn, languageCodes: sttLanguageCodes });
+    }
     const transcript = transcription.text;
     if (transcription.languageRejected) {
       turn.transcriptLanguageRejected = true;
