@@ -7581,11 +7581,7 @@ async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
     }
     contents.push({
       role: "model",
-      parts: parts
-        .map((part) => (part.functionCall || part.function_call
-          ? { functionCall: part.functionCall || part.function_call }
-          : (part.text ? { text: part.text } : null)))
-        .filter(Boolean),
+      parts: parts.map(vertexReplayPart).filter(Boolean),
     });
     const responseParts = [];
     for (const fnCall of fnCalls) {
@@ -7677,7 +7673,12 @@ async function* sseJsonEvents(body) {
   }
   let buffer = "";
   for await (const chunk of body) {
-    buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    // Node fetch (undici) yields Uint8Array chunks, NOT Buffer. String(chunk)
+    // on a Uint8Array renders comma-separated byte values ("100,97,116,..."),
+    // so no "data:" line ever matches and the stream parses to ZERO events
+    // with no error — the caller sees an empty round and never falls back.
+    // Decode via Buffer for anything binary; pass strings through.
+    buffer += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
     let newlineIndex;
     while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, newlineIndex).trim();
@@ -7945,16 +7946,24 @@ async function vertexStreamRound(contents, systemInstruction, effective, functio
       if (fnCall) {
         sawTool = true;
         fnCalls.push(fnCall);
-        mergedParts.push({ functionCall: fnCall });
+        // thoughtSignature must ride the replayed functionCall part verbatim
+        // (vertexReplayPart's contract); a signed call replayed bare is a 400.
+        mergedParts.push(vertexReplayPart(part));
         continue;
       }
       const text = String(part.text || "");
       if (!text) continue;
+      // Merge consecutive text deltas into one replay part, but never merge
+      // ACROSS a thoughtSignature: the signature signs exactly the part it
+      // arrived on, so a signed part closes and later text starts a new part.
       const last = mergedParts[mergedParts.length - 1];
-      if (last && typeof last.text === "string") {
+      if (last && typeof last.text === "string" && !last.thoughtSignature) {
         last.text += text;
+        if (part.thoughtSignature) {
+          last.thoughtSignature = part.thoughtSignature;
+        }
       } else {
-        mergedParts.push({ text });
+        mergedParts.push(part.thoughtSignature ? { text, thoughtSignature: part.thoughtSignature } : { text });
       }
       roundText += text;
       if (!sawTool) {
@@ -7979,13 +7988,22 @@ async function vertexPlainRound(contents, systemInstruction, effective, function
   const json = JSON.parse(responseText);
   const parts = json.candidates?.[0]?.content?.parts || [];
   const textParts = parts.map((part) => String(part.text || "")).filter(Boolean).join("\n").trim();
-  const mergedParts = parts
-    .map((part) => (part.functionCall || part.function_call
-      ? { functionCall: part.functionCall || part.function_call }
-      : (part.text ? { text: part.text } : null)))
-    .filter(Boolean);
+  const mergedParts = parts.map(vertexReplayPart).filter(Boolean);
   const fnCalls = parts.map((part) => part.functionCall || part.function_call).filter(Boolean);
   return { text: textParts, mergedParts, fnCalls };
+}
+
+// Rebuild a model part for the tool-loop replay turn. Gemini 3.x thinking
+// models attach a `thoughtSignature` to parts and REQUIRE it back verbatim on
+// the replayed model turn: replaying a functionCall without its signature is a
+// vertex HTTP 400 ("Function call is missing a thought_signature").
+function vertexReplayPart(part) {
+  const fnCall = part.functionCall || part.function_call;
+  const replay = fnCall ? { functionCall: fnCall } : (part.text ? { text: part.text } : null);
+  if (replay && part.thoughtSignature) {
+    replay.thoughtSignature = part.thoughtSignature;
+  }
+  return replay;
 }
 
 // Convert an OpenAI-style JSON schema (lowercase "object"/"string" types) into the

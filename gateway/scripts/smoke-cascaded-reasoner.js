@@ -73,9 +73,13 @@ function sseResponse(events) {
       if (event === "__fault__") {
         throw new Error("simulated SSE transport fault");
       }
-      yield Buffer.from(`data: ${JSON.stringify(event)}\n\n`);
+      // Plain Uint8Array, NOT Buffer: undici's fetch yields Uint8Array chunks
+      // in production. A stub that yields Buffer hid the String(chunk)
+      // corruption bug (2026-07-07 empty-voice-reply incident), so the stub
+      // must match the real chunk type.
+      yield new Uint8Array(Buffer.from(`data: ${JSON.stringify(event)}\n\n`));
     }
-    yield Buffer.from("data: [DONE]\n\n");
+    yield new Uint8Array(Buffer.from("data: [DONE]\n\n"));
   }
   return { ok: true, status: 200, body: body(), json: async () => ({}), text: async () => "" };
 }
@@ -148,6 +152,7 @@ async function main() {
   await streamingDeltasForPlainReply();
   await streamingToolRoundOnlyTextIsFlushed();
   await streamingVertexDeltasAndEndpoint();
+  await streamingVertexReplaysThoughtSignature();
   await streamingSseFaultFallsBackPerRound();
 
   console.log(JSON.stringify({
@@ -162,6 +167,8 @@ async function main() {
       "with on_speak_delta the reasoner streams the final answer via SSE (stream:true) and the deltas equal the returned speak",
       "tool-round-only text is buffered, flushed to deltas at loop end, and the tool handler runs (streaming loop)",
       "reasoning_provider=vertex streams over :streamGenerateContent?alt=sse and deltas fire only for final text",
+      "SSE stubs yield Uint8Array chunks (undici shape) and the parser still decodes them",
+      "a signed vertex functionCall part replays with its thoughtSignature on the next round",
       "an SSE transport fault falls back to one non-streaming call for that round and the reply is still spoken",
     ],
   }, null, 2));
@@ -474,6 +481,55 @@ async function streamingVertexDeltasAndEndpoint() {
     assert.match(streamCall.url, /gemini-stream-custom/, "profile.model must select the streamed Vertex model");
     assert.equal(reasoning.speak, "Selam friend, master.");
     assert.equal(deltas.join(""), "Selam friend, master.", "vertex deltas must equal the spoken reply");
+  } finally {
+    pendingStreamRounds = null;
+    await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  }
+}
+
+// Gemini 3.x thinking models sign functionCall parts with a thoughtSignature
+// and reject a tool-loop replay that omits it (vertex HTTP 400 "Function call
+// is missing a thought_signature"). Round 1 streams a signed functionCall;
+// the round-2 request must replay the model turn with the signature verbatim.
+// Regression for the 2026-07-07 empty-voice-reply incident.
+async function streamingVertexReplaysThoughtSignature() {
+  const put = await requestJson("PUT", "/v1/agent/profile", {
+    profile: { reasoning_provider: "vertex" },
+  });
+  assert.equal(put.status, 200, `provider swap must succeed: ${JSON.stringify(put.json)}`);
+  pendingStreamRounds = [
+    [{
+      candidates: [{
+        content: {
+          parts: [{
+            functionCall: { name: "update_agent_profile", args: { profile: { voice: "charon" }, reason: "user asked for a deeper voice" } },
+            thoughtSignature: "sig-thought-round1",
+          }],
+        },
+      }],
+    }],
+    [{ candidates: [{ content: { parts: [{ text: "Done, master." }] } }] }],
+  ];
+  fetchCalls.length = 0;
+  const deltas = [];
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "good evening",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-stream-thought-sig",
+      on_speak_delta: (delta) => deltas.push(delta),
+    });
+    const streamCalls = fetchCalls.filter((c) => c.kind === "vertex-stream");
+    assert.equal(streamCalls.length, 2, `the tool round must be followed by a second streamed round (got ${streamCalls.length})`);
+    const replayTurn = (streamCalls[1].body.contents || []).find((entry) => entry.role === "model");
+    assert.ok(replayTurn, "round 2 must replay the model's tool-call turn");
+    const replayedCall = (replayTurn.parts || []).find((part) => part.functionCall);
+    assert.ok(replayedCall, "the replayed model turn must carry the functionCall part");
+    assert.equal(replayedCall.thoughtSignature, "sig-thought-round1", "the replayed functionCall must carry its thoughtSignature verbatim");
+    assert.equal(agentProfile.effective().voice, "Charon", "the signed tool call must still patch the profile");
+    assert.equal(reasoning.speak, "Done, master.");
+    assert.equal(deltas.join(""), "Done, master.", "round-2 text must stream to deltas");
   } finally {
     pendingStreamRounds = null;
     await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });

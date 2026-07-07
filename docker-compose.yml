@@ -51,6 +51,10 @@ services:
       VOICE_STT_PROVIDER: ${VOICE_STT_PROVIDER:-loopback}
       VOICE_LLM_PROVIDER: ${VOICE_LLM_PROVIDER:-loopback}
       VOICE_TTS_PROVIDER: ${VOICE_TTS_PROVIDER:-loopback}
+      # Streaming voice kill switch: "0" restores the pre-streaming blocking
+      # reply path per turn. Unset/empty keeps streaming on. Mapped through so
+      # the documented env switch is actually operable on compose deployments.
+      VOICE_STREAMING: ${VOICE_STREAMING:-}
       VERTEX_PROJECT: ${VERTEX_PROJECT:-}
       VERTEX_LOCATION: ${VERTEX_LOCATION:-global}
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
