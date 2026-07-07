@@ -69,6 +69,25 @@ if (livekitVoiceEl) {
   });
 }
 
+// Experimental voice-first mark gestures flag (off by default). Read live by
+// content.js: hold = push-to-talk, double-click = talk mode, triple-click =
+// text surface, single click = interrupt. Off keeps the legacy gesture map.
+const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
+const voiceFirstGesturesEl = document.getElementById("voiceFirstGestures");
+const voiceFirstGesturesStatusEl = document.getElementById("voiceFirstGesturesStatus");
+if (voiceFirstGesturesEl) {
+  chrome.storage.local.get({ [VOICE_FIRST_GESTURES_KEY]: false }).then((stored) => {
+    voiceFirstGesturesEl.checked = stored[VOICE_FIRST_GESTURES_KEY] === true;
+  });
+  voiceFirstGesturesEl.addEventListener("change", async () => {
+    await chrome.storage.local.set({ [VOICE_FIRST_GESTURES_KEY]: voiceFirstGesturesEl.checked === true });
+    if (voiceFirstGesturesStatusEl) {
+      voiceFirstGesturesStatusEl.textContent = voiceFirstGesturesEl.checked ? "On (experimental)" : "Off";
+      voiceFirstGesturesStatusEl.style.color = "#777";
+    }
+  });
+}
+
 function flash(text, ok = true) {
   statusEl.textContent = text;
   statusEl.style.color = ok ? "#35a35a" : "#c0392b";

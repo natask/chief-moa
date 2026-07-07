@@ -662,6 +662,33 @@
 #agee-root.agee-state-speaking #agee-launcher .agee-bird {
   filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) saturate(1.5) brightness(1.12);
 }
+/* Voice-first gesture experiment (agee-voice-first root class, flag-gated).
+   Talk mode revives the dormant ring as a slow amber halo so toggled-on reads
+   at a glance, and listening brightens the mark. Both are scoped to the
+   experiment so the default mode keeps the plain plate. */
+#agee-root.agee-voice-first.agee-talk #agee-launcher .agee-ring {
+  display: block;
+  position: absolute;
+  inset: -0.18em;
+  border-radius: 50%;
+  border: 0.08em solid rgba(245, 166, 35, 0.55);
+  pointer-events: none;
+  animation: agee-talk-ring 2.2s ease-in-out infinite;
+}
+@keyframes agee-talk-ring {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.05);
+  }
+}
+#agee-root.agee-voice-first.agee-state-listening #agee-launcher .agee-bird {
+  filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) brightness(1.12) saturate(1.2);
+}
 #agee-stop {
   display: none;
 }

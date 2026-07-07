@@ -68,6 +68,16 @@
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
+  // Voice-first gesture experiment (off by default). When the flag is on the
+  // mark remaps to: still hold = push-to-talk, double-click = toggle talk
+  // mode (hands-free conversation loop), triple-click = the text surface,
+  // single click = interrupt (stop assistant speech / dismiss the panel).
+  // Flag off keeps the legacy contract untouched.
+  const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
+  const VOICE_FIRST_HOLD_MS = 260;
+  let voiceFirstGestures = false;
+  let voiceFirstHoldTimer = null;
+  let voiceFirstTapChain = null;
   // Mascot scale: one root scalar (font-size px on #agee-launcher) drives the
   // hit circle, the lion and every animation distance. Scroll on the lion
   // adjusts it; the value persists like the launcher position does.
@@ -341,12 +351,16 @@
     restoreLauncherPosition();
     restoreMascotScale();
     restoreUiChimePreference();
+    restoreVoiceFirstGestures();
     loadAvatarBehaviorRuntime();
     loadActiveCompanionPet();
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
     //   double-click and hold   -> manual push-to-talk
+    // With the voice-first flag on (ageeVoiceFirstGesturesEnabled) the map
+    // becomes: still hold -> push-to-talk, double-click -> talk mode toggle,
+    // triple-click -> text surface, single click -> interrupt.
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -556,7 +570,12 @@
       top: rect.top,
       moved: false,
     };
-    if (isLauncherSecondTap(e)) {
+    if (voiceFirstGestures) {
+      cancelLauncherTap();
+      doubleClickHoldPending = false;
+      launcherSecondTapAction = null;
+      beginVoiceFirstPress(e);
+    } else if (isLauncherSecondTap(e)) {
       cancelLauncherTap();
       scheduleLauncherDoubleClickHold(e);
     } else {
@@ -580,6 +599,7 @@
     if (Math.abs(dx) + Math.abs(dy) > LAUNCHER_DRAG_SLOP) {
       dragState.moved = true;
       cancelLauncherDoubleClickHold({ cancelStartedVoice: true });
+      clearVoiceFirstHoldTimer();
     }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
   }
@@ -589,6 +609,7 @@
     const wasHoldToTalk = holdToTalkActive && e.pointerId === holdToTalkPointerId;
     const wasPendingDoubleClickHold = doubleClickHoldPending && e.pointerId === holdToTalkPointerId;
     const moved = dragState.moved;
+    const chainCount = dragState.chainCount || 0;
     const downMs = e.timeStamp - dragState.startTime;
     dragState = null;
     launcher.releasePointerCapture(e.pointerId);
@@ -596,11 +617,13 @@
     launcher.removeEventListener("pointerup", stopLauncherDrag);
     launcher.removeEventListener("pointercancel", stopLauncherDrag);
     cancelLauncherDoubleClickHold({ cancelStartedVoice: e.type === "pointercancel" });
+    clearVoiceFirstHoldTimer();
     if (wasHoldToTalk) {
       finishLauncherPushToTalk();
+      resetVoiceFirstTapChain();
       return;
     }
-    if (wasPendingDoubleClickHold) {
+    if (!voiceFirstGestures && wasPendingDoubleClickHold) {
       // The second press already started or stopped voice. A quick release
       // keeps that toggle state; a held release commits in the hold branch.
       return;
@@ -611,6 +634,10 @@
       return;
     }
     if (e.type === "pointercancel" || downMs > LAUNCHER_TAP_MAX_MS) return;
+    if (voiceFirstGestures) {
+      handleVoiceFirstTap(e, chainCount);
+      return;
+    }
     scheduleLauncherTap(e);
   }
 
@@ -702,6 +729,151 @@
 
   function finishManualPushToTalk() {
     if (liveVoice && listening) commitLiveVoiceTurn();
+  }
+
+  // ---- Voice-first gesture machine (flag-gated) --------------------------
+  // Chain membership is decided at press-down (up-to-down window, same as the
+  // legacy isLauncherSecondTap), so a pending single-tap resolution never
+  // fires in the middle of a double- or triple-click.
+  function beginVoiceFirstPress(e) {
+    clearVoiceFirstHoldTimer();
+    const chain = voiceFirstTapChain;
+    const withinWindow =
+      chain &&
+      e.timeStamp - chain.lastTime >= 0 &&
+      e.timeStamp - chain.lastTime <= LAUNCHER_DOUBLE_CLICK_MS;
+    const dx = chain ? e.clientX - chain.x : 0;
+    const dy = chain ? e.clientY - chain.y : 0;
+    const withinSlop = chain && dx * dx + dy * dy <= LAUNCHER_DOUBLE_CLICK_SLOP * LAUNCHER_DOUBLE_CLICK_SLOP;
+    if (withinWindow && withinSlop) {
+      if (chain.timer) {
+        clearTimeout(chain.timer);
+        chain.timer = null;
+      }
+      if (dragState) dragState.chainCount = chain.count;
+    } else {
+      resetVoiceFirstTapChain();
+    }
+    const pointerId = e.pointerId;
+    voiceFirstHoldTimer = setTimeout(() => {
+      voiceFirstHoldTimer = null;
+      if (!dragState || dragState.pointerId !== pointerId || dragState.moved || holdToTalkActive) return;
+      // A still hold is push-to-talk: a manual turn, committed on release.
+      // Holding while talk mode is already listening rides that session, so
+      // the release commits the current conversation turn.
+      resetVoiceFirstTapChain();
+      holdToTalkActive = true;
+      holdToTalkPointerId = pointerId;
+      if (!(liveVoice && listening)) {
+        if (liveVoice) stopLiveVoiceTurn("cancel");
+        startLiveVoiceTurn({
+          preserveAssistantPlayback: assistantSpeechOverlap === true,
+          conversation: false,
+          autoCommit: false,
+        });
+      }
+    }, VOICE_FIRST_HOLD_MS);
+  }
+
+  function clearVoiceFirstHoldTimer() {
+    if (voiceFirstHoldTimer) {
+      clearTimeout(voiceFirstHoldTimer);
+      voiceFirstHoldTimer = null;
+    }
+  }
+
+  function resetVoiceFirstTapChain() {
+    if (voiceFirstTapChain?.timer) clearTimeout(voiceFirstTapChain.timer);
+    voiceFirstTapChain = null;
+  }
+
+  function handleVoiceFirstTap(e, chainCount) {
+    const count = chainCount + 1;
+    const prevToggled = voiceFirstTapChain ? voiceFirstTapChain.toggled : null;
+    resetVoiceFirstTapChain();
+    voiceFirstTapChain = {
+      count,
+      lastTime: e.timeStamp,
+      x: e.clientX,
+      y: e.clientY,
+      toggled: null,
+      timer: null,
+    };
+    if (count === 1) {
+      // Barge-in is the only latency-critical part of a single tap, so it
+      // fires immediately; it stays correct even when more taps follow.
+      // Dismissing the panel waits out the chain window instead.
+      stopSpeaking();
+      const chain = voiceFirstTapChain;
+      chain.timer = setTimeout(() => {
+        chain.timer = null;
+        if (voiceFirstTapChain === chain) voiceFirstTapChain = null;
+        if (open) closeTextSurface();
+      }, LAUNCHER_DOUBLE_CLICK_MS);
+      return;
+    }
+    if (count === 2) {
+      // Toggle talk mode optimistically; a third tap cancels the session it
+      // just started (nothing meaningful has been captured that fast).
+      voiceFirstTapChain.toggled = toggleTalkMode();
+      const chain = voiceFirstTapChain;
+      chain.timer = setTimeout(() => {
+        chain.timer = null;
+        if (voiceFirstTapChain === chain) voiceFirstTapChain = null;
+      }, LAUNCHER_DOUBLE_CLICK_MS);
+      return;
+    }
+    // Triple click: undo only a toggle-ON from the second tap (the session it
+    // started is milliseconds old); a toggle-OFF already committed a real turn
+    // and must not be cancelled. Then open the text surface.
+    resetVoiceFirstTapChain();
+    if (prevToggled === "on") cancelTalkMode();
+    openTextSurface({ fresh: false });
+  }
+
+  // Double-click talk mode: the hands-free conversation loop. On = one
+  // conversation session (silence commits each turn, the mic re-arms after
+  // the reply). Off = commit anything in flight and stop re-arming.
+  function toggleTalkMode() {
+    if (conversationActive || (liveVoice && listening)) {
+      conversationActive = false;
+      if (liveVoice && listening) commitLiveVoiceTurn();
+      syncTalkModeUi();
+      return "off";
+    }
+    primeAudio();
+    startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+    syncTalkModeUi();
+    return "on";
+  }
+
+  function cancelTalkMode() {
+    conversationActive = false;
+    stopAllLiveVoiceTurns("cancel");
+    syncTalkModeUi();
+  }
+
+  function syncTalkModeUi() {
+    if (root) root.classList.toggle("agee-talk", conversationActive === true);
+  }
+
+  function restoreVoiceFirstGestures() {
+    safeStorageLocalGet({ [VOICE_FIRST_GESTURES_KEY]: false })
+      .then((stored) => {
+        voiceFirstGestures = stored[VOICE_FIRST_GESTURES_KEY] === true;
+        applyGestureModeHints();
+      })
+      .catch(() => {});
+  }
+
+  function applyGestureModeHints() {
+    if (root) root.classList.toggle("agee-voice-first", voiceFirstGestures === true);
+    if (launcher) {
+      launcher.dataset.ageeTip = voiceFirstGestures
+        ? "Hold to talk, double-click to toggle talk, triple-click to type, drag to move"
+        : "Click to type, drag to move, scroll to resize, hold to talk";
+    }
+    syncTalkModeUi();
   }
 
   function toggle(force) {
@@ -1619,6 +1791,9 @@
     root.classList.toggle("agee-voicing", voicing);
     if (voiceState) voiceState.setAttribute("aria-hidden", "true");
     if (next === "idle") setTranscript("");
+    // Every stop/error/teardown path lands here, so the talk-mode ring can
+    // never outlive conversation mode.
+    syncTalkModeUi();
     syncAvatarBehaviorTrigger();
   }
 
@@ -2602,6 +2777,12 @@
           }
           if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
             configure().catch(() => {});
+          }
+          if (changes[VOICE_FIRST_GESTURES_KEY]) {
+            voiceFirstGestures = changes[VOICE_FIRST_GESTURES_KEY].newValue === true;
+            resetVoiceFirstTapChain();
+            clearVoiceFirstHoldTimer();
+            applyGestureModeHints();
           }
         });
       } catch (error) {
