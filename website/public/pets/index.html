@@ -953,6 +953,7 @@
         device_id:voiceDeviceId(),
         source:"website-pet-studio",
         voice:state.voice,
+        persona:petPersona(),
         format:{encoding:"pcm16",sample_rate:16000,channels:1},
         client:{surface:"website-pet-studio",pet_id:state.selected&&state.selected.id||""}
       }));
@@ -1155,6 +1156,16 @@
 
   function petDisplayName(){
     return state.selected&&state.selected.companion_name||"Pet";
+  }
+
+  // The pet speaks AS itself: its name and prompt ride session_start as a
+  // session-scoped persona (the gateway sanitizes and caps it; nothing is
+  // written to the stored profile).
+  function petPersona(){
+    var name=cleanText(state.selected&&state.selected.companion_name,80);
+    var text=cleanText(state.selected&&state.selected.companion_summary,400);
+    if(!name&&!text)return undefined;
+    return {name:name,text:text};
   }
 
   function voiceSessionId(){
