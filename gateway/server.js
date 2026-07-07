@@ -7586,7 +7586,6 @@ async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds,
   const convo = [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
   const toolResults = [];
   let lastText = "";
-  let lastTextEmitted = false;
   for (let round = 0; round < maxRounds; round += 1) {
     let roundOutcome;
     try {
@@ -7602,7 +7601,6 @@ async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds,
     }
     if (roundOutcome.text) {
       lastText = roundOutcome.text;
-      lastTextEmitted = roundOutcome.emitted;
     }
     const calls = roundOutcome.toolCalls;
     if (calls.length === 0) {
@@ -7634,7 +7632,6 @@ async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds,
       });
     }
   }
-  void lastTextEmitted;
   return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
 }
 
@@ -7660,7 +7657,6 @@ async function openAiStreamRound(convo, effective, tools, emit) {
   }
   let rawText = "";
   let sawTool = false;
-  let emitted = false;
   const toolCallsByIndex = new Map();
   for await (const event of sseJsonEvents(upstream.body)) {
     const delta = event.choices?.[0]?.delta || {};
@@ -7680,7 +7676,6 @@ async function openAiStreamRound(convo, effective, tools, emit) {
       rawText += text;
       if (!sawTool) {
         emit(text);
-        emitted = true;
       }
     }
   }
@@ -7688,7 +7683,7 @@ async function openAiStreamRound(convo, effective, tools, emit) {
     .sort((a, b) => a[0] - b[0])
     .map(([, call]) => call)
     .filter((call) => call.name);
-  return { text: rawText.trim(), rawText, toolCalls, emitted };
+  return { text: rawText.trim(), rawText, toolCalls };
 }
 
 // The non-streaming per-round fallback, shaped like one openAiToolLoop round.
@@ -7715,7 +7710,7 @@ async function openAiPlainRound(convo, effective, tools) {
   const toolCalls = (Array.isArray(message.tool_calls) ? message.tool_calls : [])
     .filter((call) => call?.function?.name)
     .map((call) => ({ id: call.id || "", name: call.function.name, arguments: call.function.arguments || "{}" }));
-  return { text: rawText.trim(), rawText, toolCalls, emitted: false };
+  return { text: rawText.trim(), rawText, toolCalls };
 }
 
 async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit) {
