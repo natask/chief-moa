@@ -42,3 +42,10 @@
 - [x] 4.5 Add a cascaded-voice smoke scenario asserting the override reaches
       every synthesize request and a no-override session keeps the profile
       voice.
+- [x] 4.6 Per-session persona: `session_start` carries the pet's name/prompt
+      (sanitized, hard-capped, session-scoped); the cascaded reasoner speaks
+      in character and identity READS route to chat on persona sessions so
+      the pet answers as itself, while profile UPDATES stay profile-control.
+- [x] 4.7 Smoke coverage: persona reaches the reasoner input sanitized
+      (cascaded-voice smoke) and becomes a system block for that turn only
+      (cascaded-reasoner smoke).

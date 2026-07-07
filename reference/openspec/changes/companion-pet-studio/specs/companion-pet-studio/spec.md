@@ -119,3 +119,11 @@ reply stays text.
 - **WHEN** the page requests `/api/voice/session-ticket`
 - **THEN** the Pages Function calls the gateway with its server-side token
 - **AND** the browser receives only the short-lived ticket and `wss://` URL
+
+#### Scenario: Pet speaks as itself
+- **WHEN** `session_start` carries a persona (the pet's name and prompt)
+- **THEN** the cascaded reasoner answers in character for that session only,
+  including identity questions ("who are you", "what's your name")
+- **AND** the persona is sanitized and hard-capped as untrusted client input
+- **AND** the stored agent profile is unchanged; profile updates spoken to the
+  pet still route through the normal profile-control path
