@@ -17,6 +17,11 @@ behaviors, drag, walk, climb, fall, and idle loops.
   controls.
 - Keep Gemini/Vertex image and animation configuration gateway-only. The
   website calls a Pages proxy and never receives provider credentials.
+- Add an additive `voice_binding` field to active companion/pet payloads:
+  provider, provider voice id, legacy voice alias, preset-only style, and a
+  gateway-owned `custom_voice` enrollment record. Applying a pet patches
+  `agent_profile.voice` from `voice_binding.provider_voice_id`;
+  `agent_profile.voice` stays the runtime source of truth.
 
 ## Boundaries
 

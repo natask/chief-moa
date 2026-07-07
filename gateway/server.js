@@ -252,7 +252,10 @@ const agentProfile = createAgentProfileStore({
     recovery_mode: "normal",
   },
 });
-const companionCatalog = createCompanionCatalogStore({ dataDir: DATA_DIR });
+const companionCatalog = createCompanionCatalogStore({
+  dataDir: DATA_DIR,
+  voiceBinding: companionVoiceBindingOptions(),
+});
 
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
 // surfaces from this; a "deployment" is a spec change here, not new extension
@@ -4757,6 +4760,7 @@ function petCatalogPayload(url) {
 function activeCompanionPayload(profile) {
   if (!profile?.active_companion_id) return null;
   const companion = companionCatalog.get(profile.active_companion_id);
+  const pet = companion ? companionPetRecord(companion) : null;
   const metadata = {
     id: profile.active_companion_id,
     name: profile.active_companion_name || companion?.name || "",
@@ -4765,8 +4769,9 @@ function activeCompanionPayload(profile) {
   };
   return {
     ...metadata,
+    voice_binding: companion?.voice_binding || pet?.voice_binding || null,
     companion: companion || null,
-    pet: companion ? companionPetRecord(companion) : null,
+    pet,
   };
 }
 
@@ -5091,6 +5096,7 @@ function companionPetRecord(companion) {
     source: source.source || "",
     tags: Array.isArray(source.tags) ? source.tags.slice() : [],
     voice: source.voice || "",
+    voice_binding: source.voice_binding || null,
     appearance: { ...(source.appearance || {}) },
     pet: { ...(source.pet || {}) },
     starters: Array.isArray(source.starters) ? source.starters.slice() : [],
@@ -5117,6 +5123,20 @@ function petGenerationStatus() {
     animation_model: PET_ANIMATION_MODEL,
     vertex_project_configured: Boolean(VERTEX_PROJECT),
     credential: vertexCredentialHint() || "",
+  };
+}
+
+function companionVoiceBindingOptions() {
+  return {
+    provider: process.env.MOA_PET_VOICE_PROVIDER || "gemini-tts",
+    customVoice: {
+      provider: process.env.MOA_CUSTOM_VOICE_PROVIDER || "chirp3-instant-custom-voice",
+      enrollment_id: process.env.MOA_CUSTOM_VOICE_ENROLLMENT_ID || "",
+      consent_required: process.env.MOA_CUSTOM_VOICE_CONSENT_REQUIRED !== "0",
+      consent_granted: process.env.MOA_CUSTOM_VOICE_CONSENT_GRANTED === "1",
+      access_configured: process.env.MOA_CUSTOM_VOICE_ACCESS === "1",
+      last_error: process.env.MOA_CUSTOM_VOICE_LAST_ERROR || "",
+    },
   };
 }
 

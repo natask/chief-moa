@@ -1,5 +1,5 @@
 digraph Fable5Orchestrator {
-    graph [goal="Implement a website-hosted Shimeji-style companion pet studio for Chief Moa: research-informed pet manifests, animated web preview, create/preview/apply endpoints that reuse the gateway companion profile boundary, and verification without mutating the active deployment."]
+    graph [goal="Execute scratch/enrichment/pet-voice-plan-20260707/enriched.md: contract-first pet voice binding, gateway voice_binding payload, Android orb visual binding, and website voice UI if schema is settled."]
     rankdir=LR
 
     start [shape=Mdiamond, label="Start"]

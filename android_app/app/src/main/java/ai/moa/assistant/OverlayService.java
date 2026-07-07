@@ -434,7 +434,14 @@ public final class OverlayService extends Service {
         if (voiceController != null) {
             voiceController.setLanguageTags(MoaPrefs.inputLanguageTag(this), MoaPrefs.replyLanguageTag(this));
         }
+        applyCachedPetVisualState();
         updateVoiceHeaderState();
+    }
+
+    private void applyCachedPetVisualState() {
+        if (orbView != null) {
+            orbView.setPetVisualState(MoaPrefs.petVisualState(this));
+        }
     }
 
     private void refreshVoiceProfile() {
@@ -447,6 +454,8 @@ public final class OverlayService extends Service {
         new Thread(() -> {
             String profileJson = "";
             String companionJson = "";
+            boolean companionFetched = false;
+            boolean refreshFailed = false;
             try {
                 MoaGatewayClient client = new MoaGatewayClient(url, token);
                 JSONObject payload = client.agentProfile("device", deviceId);
@@ -456,24 +465,31 @@ public final class OverlayService extends Service {
                 }
                 try {
                     JSONObject companion = client.activeCompanionPet("device", deviceId);
-                    if (companion != null && companion.length() > 0) {
+                    if (companion != null) {
                         companionJson = companion.toString();
+                        companionFetched = true;
                     }
                 } catch (Exception ignored) {
+                    refreshFailed = true;
                 }
             } catch (Exception ignored) {
                 // Profile refresh is best-effort; cached/default language still works.
+                refreshFailed = true;
             }
             final String nextProfileJson = profileJson;
             final String nextCompanionJson = companionJson;
+            final boolean nextCompanionFetched = companionFetched;
+            final boolean nextRefreshFailed = refreshFailed;
             mainHandler.post(() -> {
                 if (!nextProfileJson.isEmpty()) {
                     MoaPrefs.setAgentProfileJson(this, nextProfileJson);
                 }
-                if (!nextCompanionJson.isEmpty()) {
+                if (nextCompanionFetched) {
                     MoaPrefs.setActiveCompanionJson(this, nextCompanionJson);
+                } else if (nextRefreshFailed) {
+                    MoaPrefs.setActiveCompanionStale(this, true);
                 }
-                if (!nextProfileJson.isEmpty() || !nextCompanionJson.isEmpty()) {
+                if (!nextProfileJson.isEmpty() || nextCompanionFetched || nextRefreshFailed) {
                     applyCachedVoiceProfile();
                     updateAgentRunStatus();
                 }
@@ -505,6 +521,7 @@ public final class OverlayService extends Service {
 
         int size = dp(ORB_WINDOW_DP);
         orbView = new OrbView(this);
+        applyCachedPetVisualState();
         orbParams = new WindowManager.LayoutParams(
                 size,
                 size,

@@ -144,6 +144,11 @@
   .swatch.active:after{content:"";position:absolute;inset:6px;border:2px solid #fff;border-radius:4px;box-shadow:0 0 0 1px rgba(0,0,0,.4)}
   .seg{height:32px;border:1px solid var(--line);border-radius:7px;background:#fff;font-family:var(--mono);font-size:12px;padding:0 11px;color:var(--muted)}
   .seg.active{color:#fff;background:var(--ink);border-color:var(--ink)}
+  .voice-status{min-height:30px;border:1px solid var(--line);border-radius:7px;background:#fbfaf7;
+    padding:7px 9px;font-family:var(--mono);font-size:11px;line-height:1.35;color:var(--muted)}
+  .voice-status.ready{border-color:rgba(32,133,83,.36);background:#f3fbf6;color:var(--green)}
+  .voice-status.waiting{border-color:rgba(197,122,27,.36);background:#fff8ed;color:var(--amber)}
+  .voice-status.error{border-color:rgba(229,72,43,.36);background:#fff6f2;color:var(--signal)}
   .file{position:relative;display:flex;align-items:center;gap:10px}
   .file input{position:absolute;inset:0;opacity:0;cursor:pointer}
   .file .cmd{display:inline-flex;align-items:center}
@@ -264,6 +269,7 @@
         <div class="field">
           <label>Voice</label>
           <div class="segments" id="voiceControls"></div>
+          <div class="voice-status waiting" id="voiceStatus"></div>
         </div>
         <div class="field">
           <label for="scaleInput">Scale</label>
@@ -356,6 +362,7 @@
     paletteControls:document.getElementById("paletteControls"),
     motionControls:document.getElementById("motionControls"),
     voiceControls:document.getElementById("voiceControls"),
+    voiceStatus:document.getElementById("voiceStatus"),
     talkBtn:document.getElementById("talkBtn"),
     scaleInput:document.getElementById("scaleInput"),
     scaleOutput:document.getElementById("scaleOutput"),
@@ -485,6 +492,7 @@
       source:item.source||companion.source||"custom",
       tags:item.tags||companion.tags||[],
       voice:item.voice||companion.voice||"",
+      voice_binding:item.voice_binding||companion.voice_binding||null,
       pet:{
         renderer:pet.renderer||"shimeji-web",
         family:pet.family||"shigmi",
@@ -672,7 +680,7 @@
     state.selected=item;
     state.palette=item.pet.palette||"blue";
     state.motion=item.pet.motion||"walk";
-    state.voice=canonicalVoiceId(item.voice)||"Kore";
+    state.voice=voiceBindingVoice(item);
     state.scale=Number(item.pet.scale)||1;
     state.mode=motionMode(state.motion);
     state.imageDataUrl=item.pet.sprite&&item.pet.sprite.image_data_url||"";
@@ -692,6 +700,10 @@
       state.selected.pet.motion=state.motion;
       state.selected.pet.scale=state.scale;
       state.selected.voice=state.voice;
+      if(state.selected.voice_binding&&typeof state.selected.voice_binding==="object"){
+        state.selected.voice_binding.provider_voice_id=state.voice;
+        state.selected.voice_binding.legacy_voice=state.voice;
+      }
     }
     applyPetVisual();
   }
@@ -702,6 +714,38 @@
     return match?match.id:"";
   }
 
+  function voiceBinding(item){
+    return item&&item.voice_binding&&typeof item.voice_binding==="object"?item.voice_binding:null;
+  }
+
+  function voiceBindingVoice(item){
+    var binding=voiceBinding(item);
+    return canonicalVoiceId(binding&&binding.provider_voice_id)||
+      canonicalVoiceId(binding&&binding.legacy_voice)||
+      canonicalVoiceId(item&&item.voice)||"Kore";
+  }
+
+  function customVoiceState(item){
+    var binding=voiceBinding(item);
+    return binding&&binding.custom_voice&&typeof binding.custom_voice==="object"?binding.custom_voice:null;
+  }
+
+  function voiceReadiness(item){
+    var custom=customVoiceState(item);
+    var status=String(custom&&custom.status||"not_configured").toLowerCase();
+    if(status==="ready")return {kind:"ready",label:"Custom voice ready"};
+    if(status==="consent_required")return {kind:"waiting",label:"Custom voice needs consent"};
+    if(status==="error")return {kind:"error",label:"Custom voice unavailable"};
+    if(custom&&custom.access_required===true)return {kind:"waiting",label:"Custom voice access required"};
+    return {kind:"waiting",label:"Custom voice not configured"};
+  }
+
+  function renderVoiceStatus(item){
+    var readiness=voiceReadiness(item);
+    els.voiceStatus.className="voice-status "+readiness.kind;
+    els.voiceStatus.textContent=state.voice+" · "+readiness.label;
+  }
+
   function applyPetVisual(){
     var selected=state.selected||fallbackPets[0];
     var pet=selected.pet||{};
@@ -709,12 +753,13 @@
     var motion=state.motion||pet.motion||"walk";
     state.scale=Number(state.scale||pet.scale||1);
     els.selectedName.textContent=selected.companion_name||"Custom pet";
-    els.selectedMeta.textContent=(pet.renderer||"shimeji-web")+" / "+motion+" / "+palette;
+    els.selectedMeta.textContent=(pet.renderer||"shimeji-web")+" / "+motion+" / "+palette+" / "+state.voice;
     els.scaleInput.value=String(state.scale);
     els.scaleOutput.textContent=state.scale.toFixed(2);
     els.pet.className="pet palette-"+palette+" mode-"+state.mode+(state.imageDataUrl?" has-image":"");
     els.petImage.src=state.imageDataUrl||"";
     renderBehaviors(pet.behaviors||[]);
+    renderVoiceStatus(selected);
   }
 
   function renderBehaviors(behaviors){
@@ -740,6 +785,7 @@
       button.classList.toggle("active",button.dataset.voice===state.voice);
     });
     els.scaleOutput.textContent=(Number(els.scaleInput.value)||1).toFixed(2);
+    renderVoiceStatus(state.selected);
   }
 
   async function createPet(event){

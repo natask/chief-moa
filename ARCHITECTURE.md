@@ -940,6 +940,17 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   gateway-side image/animation generation metadata. Applying a pet applies the
   underlying companion through the same versioned `agent_profile` path; it does
   not add any executable client code or provider credentials.
+- `voice_binding`: a derived, additive field on active companion/pet payloads
+  that names the speech provider, provider voice id, legacy voice alias, style
+  (preset-only until a bounded sanitizer produces `style.prompt`), and a
+  `custom_voice` enrollment record. `agent_profile.voice` stays the runtime
+  source of truth; applying a pet patches `agent_profile.voice` from
+  `voice_binding.provider_voice_id`, and the gateway derives `voice_binding`
+  from the companion profile patch plus provider readiness. Old pets default to
+  the companion/profile voice with `custom_voice.status="not_configured"`.
+  Custom voice enrollment is a gateway-owned, consent-gated lifecycle that
+  mutates only gateway-side consent/provider records; it is never executable
+  client authority.
 - `browser_agent_owner`: the single active browser tab/page/run that may listen,
   speak, and show browser-local task cues for a browser session; non-owner tabs
   can show passive status but must not capture voice or claim local cues.

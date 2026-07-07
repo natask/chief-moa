@@ -6,9 +6,12 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
+import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.animation.LinearInterpolator;
+
+import java.util.Locale;
 
 // The floating Moa lion mark sits on a solid warm near-black disc, mirroring the
 // adaptive launcher icon (mark over ic_launcher_background). The opaque disc is
@@ -20,10 +23,10 @@ import android.view.animation.LinearInterpolator;
 // like a live voice turn.
 //
 // The agent's response is visible on the orb itself: THINKING pulses the disc
-// rim between the hairline and gold (~1.4s cycle, no scale change), RESPONDING
-// holds a steady gold tint on the mark, and ERROR holds a steady ember rim for
-// the short error window. The pulse animator only runs while THINKING, so the
-// idle orb never burns battery.
+// rim between the pet hairline and accent (~1.4s cycle, no scale change),
+// RESPONDING holds a steady pet-accent tint on the mark, and ERROR holds a
+// steady ember rim for the short error window. The pulse animator only runs
+// while THINKING, so the idle orb never burns battery.
 //
 // LISTENING is separate: while the mic is open it holds a steady, slightly
 // thicker violet rim (no pulse), distinct from the THINKING pulse and the
@@ -36,10 +39,6 @@ final class OrbView extends View {
     private static final float MARK_CX = 54f;
     private static final float MARK_CY = 54f;
     private static final int RECORDING_TINT = 0x8CFF4D4D;
-    // Steady gold laid over the mark while the agent is responding, via the same
-    // SRC_ATOP tint the recording state uses. Softened alpha so the lion's form
-    // still reads through the wash.
-    private static final int RESPONDING_TINT = 0xCCFFD76A;
     // Steady rim while the mic is listening. A bright violet, matching the "You"
     // transcript label, so an open mic reads as the user's turn and stays clear
     // of the gold response cue.
@@ -58,6 +57,8 @@ final class OrbView extends View {
     private final Drawable mark;
     private final Paint backingPaint;
     private final Paint rimPaint;
+    private final Paint petMotionPaint;
+    private final RectF petMotionArc = new RectF();
     private final float rimWidthPx;
     // A touch thicker so the steady listening rim reads clearly against the disc.
     private final float listeningRimWidthPx;
@@ -68,6 +69,10 @@ final class OrbView extends View {
     private ResponseState responseState = ResponseState.NONE;
     private ValueAnimator thinkingPulse;
     private float thinkingPulseFraction;
+    private int petBackingColor = MoaColors.MARK_BACKING;
+    private int petAccentColor = MoaColors.GOLD;
+    private int petRimColor = MoaColors.RAISED_BORDER;
+    private String petMotion = "idle";
 
     OrbView(Context context) {
         super(context);
@@ -87,6 +92,38 @@ final class OrbView extends View {
         rimPaint.setStyle(Paint.Style.STROKE);
         rimPaint.setStrokeWidth(rimWidthPx);
         rimPaint.setColor(MoaColors.RAISED_BORDER);
+        petMotionPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        petMotionPaint.setStyle(Paint.Style.STROKE);
+        petMotionPaint.setStrokeCap(Paint.Cap.ROUND);
+    }
+
+    void setPetVisualState(MoaPrefs.PetVisualState visual) {
+        if (visual == null) {
+            setPetPalette(MoaColors.MARK_BACKING, MoaColors.GOLD, MoaColors.RAISED_BORDER);
+            setPetMotion("idle");
+            return;
+        }
+        setPetPalette(visual.backingColor, visual.accentColor, visual.rimColor);
+        setPetMotion(visual.motion);
+    }
+
+    void setPetPalette(int backingColor, int accentColor, int rimColor) {
+        if (petBackingColor == backingColor && petAccentColor == accentColor && petRimColor == rimColor) {
+            return;
+        }
+        petBackingColor = backingColor;
+        petAccentColor = accentColor;
+        petRimColor = rimColor;
+        invalidate();
+    }
+
+    void setPetMotion(String motion) {
+        String next = motion == null || motion.trim().isEmpty() ? "idle" : motion.trim().toLowerCase(Locale.US);
+        if (next.equals(petMotion)) {
+            return;
+        }
+        petMotion = next;
+        invalidate();
     }
 
     void setListening(boolean listening) {
@@ -173,6 +210,7 @@ final class OrbView extends View {
         // state-driven mark scale. Inset the rim by half its width so the
         // stroke stays inside the view and is not clipped at the edge.
         float discRadius = Math.min(w, h) / 2f;
+        backingPaint.setColor(petBackingColor);
         canvas.drawCircle(cx, cy, discRadius, backingPaint);
         // The steady listening rim is a touch thicker; every other state keeps
         // the hairline. Inset by half the active stroke so it stays inside.
@@ -180,11 +218,12 @@ final class OrbView extends View {
         rimPaint.setStrokeWidth(rimStroke);
         rimPaint.setColor(currentRimColor());
         canvas.drawCircle(cx, cy, discRadius - rimStroke / 2f, rimPaint);
+        drawPetMotionTreatment(canvas, cx, cy, discRadius, rimStroke);
 
         if (recordingNote) {
             mark.setColorFilter(RECORDING_TINT, PorterDuff.Mode.SRC_ATOP);
         } else if (responseState == ResponseState.RESPONDING) {
-            mark.setColorFilter(RESPONDING_TINT, PorterDuff.Mode.SRC_ATOP);
+            mark.setColorFilter(colorWithAlpha(petAccentColor, 0xCC), PorterDuff.Mode.SRC_ATOP);
         } else {
             mark.clearColorFilter();
         }
@@ -199,7 +238,7 @@ final class OrbView extends View {
     // red mark tint), so a capture never reads like a live response.
     private int currentRimColor() {
         if (responseState == ResponseState.THINKING) {
-            return (int) argb.evaluate(thinkingPulseFraction, MoaColors.RAISED_BORDER, MoaColors.GOLD);
+            return (int) argb.evaluate(thinkingPulseFraction, petRimColor, petAccentColor);
         }
         if (responseState == ResponseState.ERROR) {
             return MoaColors.EMBER;
@@ -207,7 +246,47 @@ final class OrbView extends View {
         if (listeningRimActive()) {
             return LISTENING_RIM;
         }
-        return MoaColors.RAISED_BORDER;
+        return petRimColor;
+    }
+
+    private void drawPetMotionTreatment(Canvas canvas, float cx, float cy, float discRadius, float rimStroke) {
+        if (responseState == ResponseState.ERROR || recordingNote) {
+            return;
+        }
+        float inset = Math.max(rimStroke * 3f, rimWidthPx * 4f);
+        float radius = Math.max(0f, discRadius - inset);
+        if (radius <= 0f) {
+            return;
+        }
+        petMotionPaint.setStrokeWidth(Math.max(rimWidthPx, rimStroke));
+        petMotionPaint.setColor(colorWithAlpha(petAccentColor, listening ? 0x66 : 0x42));
+        petMotionPaint.setStyle(Paint.Style.STROKE);
+        petMotionArc.set(cx - radius, cy - radius, cx + radius, cy + radius);
+        switch (petMotion) {
+            case "float":
+            case "trail":
+            case "hover":
+                canvas.drawCircle(cx, cy, radius, petMotionPaint);
+                break;
+            case "peek":
+            case "climb":
+                canvas.drawArc(petMotionArc, 205f, 95f, false, petMotionPaint);
+                break;
+            case "tap":
+            case "spark":
+                petMotionPaint.setStyle(Paint.Style.FILL);
+                canvas.drawCircle(cx + radius * 0.45f, cy - radius * 0.45f, Math.max(2f, rimWidthPx * 2.2f), petMotionPaint);
+                break;
+            case "walk":
+                canvas.drawArc(petMotionArc, 50f, 80f, false, petMotionPaint);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private int colorWithAlpha(int color, int alpha) {
+        return ((alpha & 0xFF) << 24) | (color & 0x00FFFFFF);
     }
 
     // The listening rim shows whenever the mic is open, unless a THINKING pulse

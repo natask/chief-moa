@@ -17,12 +17,19 @@
 - [x] 2.4 Add a Pages Function proxy for `/api/pets/*` so gateway credentials
       stay server-side.
 
-## 3. Verification
+## 3. Pet Voice Binding
 
-- [x] 3.1 Add smoke coverage for the gateway pet endpoints.
-- [x] 3.2 Run gateway syntax/smoke checks.
-- [x] 3.3 Run static website syntax checks and browser QA.
-- [ ] 3.4 Deployment is blocked until the user explicitly approves promotion.
+- [x] 3.1 Spec the additive `voice_binding` contract: apply semantics, old-pet
+      defaults, stale-cache behavior, and the consent-gated custom voice
+      enrollment lifecycle.
+- [x] 3.2 Derive `voice_binding` on gateway active/list/preview/apply payloads
+      and keep pet apply patching `agent_profile.voice`.
+- [x] 3.3 Bind the active pet palette/motion to the Android overlay orb and
+      render cached pet state as stale when active-pet refresh fails.
+- [x] 3.4 Surface supported voice choice in the website pet studio through the
+      per-pet voice picker.
+- [x] 3.5 Surface custom-voice readiness in the website pet studio once the UI
+      consumes `voice_binding.custom_voice`.
 
 ## 4. Pet Voice Agent (2026-07-06)
 
@@ -49,3 +56,14 @@
 - [x] 4.7 Smoke coverage: persona reaches the reasoner input sanitized
       (cascaded-voice smoke) and becomes a system block for that turn only
       (cascaded-reasoner smoke).
+
+## 5. Verification
+
+- [x] 5.1 Add smoke coverage for the gateway pet endpoints.
+- [x] 5.2 Run gateway syntax/smoke checks.
+- [x] 5.3 Run static website syntax checks and browser QA.
+- [x] 5.4 Run gateway `voice_binding` smoke/check coverage after dependencies
+      are available.
+- [x] 5.5 Run Android debug build after Gradle can create/cache its wrapper and
+      bind the required local daemon socket.
+- [ ] 5.6 Deployment is blocked until the user explicitly approves promotion.

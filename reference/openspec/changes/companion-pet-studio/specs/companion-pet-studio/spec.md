@@ -40,6 +40,58 @@ existing versioned profile store.
 - **THEN** the runtime profile active companion fields change on the next turn
 - **AND** profile history records the companion application
 
+### Requirement: Pet voice binding is additive and profile-owned
+The gateway SHALL expose a `voice_binding` object on companion, pet, preview,
+apply, and active-pet payloads without removing the legacy `voice` field.
+`voice_binding` SHALL include `provider`, `provider_voice_id`, `legacy_voice`,
+`style`, and `custom_voice`. The runtime source of truth SHALL remain
+`agent_profile.voice`; applying a pet SHALL patch `agent_profile.voice` from
+`voice_binding.provider_voice_id`.
+
+#### Scenario: Existing pet exposes default voice binding
+- **WHEN** a client lists or previews an existing companion pet with no custom
+  voice enrollment
+- **THEN** `voice_binding.provider` is the configured pet TTS provider
+- **AND** `voice_binding.provider_voice_id` and `voice_binding.legacy_voice`
+  match the companion/profile voice
+- **AND** `voice_binding.style.mode` is `preset`
+- **AND** `voice_binding.style.prompt` is empty until sanitized prompt support
+  exists
+- **AND** `voice_binding.custom_voice.status` is `not_configured`
+
+#### Scenario: Applying pet switches voice through profile control
+- **WHEN** a client applies a pet through `POST /v1/agent/pets/apply`
+- **THEN** the returned profile voice equals
+  `voice_binding.provider_voice_id`
+- **AND** the active companion and active pet payloads include the same
+  `voice_binding`
+- **AND** no provider credentials are returned to the client
+
+### Requirement: Custom voice enrollment stays gateway-owned
+The gateway SHALL represent voice cloning/custom voice state as readiness
+metadata only until an explicit consent-gated enrollment flow is implemented.
+Custom voice enrollment state SHALL be stored and mutated gateway-side, not by
+Android, the browser extension, or the website.
+
+#### Scenario: Client reads custom voice readiness
+- **WHEN** a client reads pet catalog, preview, apply, or active-pet payloads
+- **THEN** `voice_binding.custom_voice` includes `status`, `provider`,
+  `enrollment_id`, `consent_required`, `access_required`, and `last_error`
+- **AND** the read does not advance the profile version
+- **AND** clients treat `status != ready` as unavailable for voice cloning
+
+### Requirement: Clients render cached pet state as stale
+Clients SHALL cache the last known active companion pet only as display state.
+If active-pet refresh fails, clients SHALL keep the cached pet visual available
+but indicate that it is stale. If refresh succeeds with an empty active-pet
+payload, clients SHALL clear the active pet visual through the same sanitizer.
+
+#### Scenario: Active pet refresh fails
+- **WHEN** a client cannot refresh `GET /v1/agent/pets/active`
+- **THEN** it keeps the last sanitized active pet visual
+- **AND** it marks the companion/pet state as cached or stale
+- **AND** it does not mutate the runtime profile
+
 ### Requirement: Saved companion builder agents
 The gateway SHALL expose token-guarded endpoints under `/v1/agent/pets` for
 saved custom companion agents and token-free bookmark records. A saved agent
