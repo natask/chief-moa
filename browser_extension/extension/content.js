@@ -69,15 +69,16 @@
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
   // Voice-first gesture experiment (off by default). When the flag is on the
-  // mark remaps to: still hold = push-to-talk, double-click = toggle talk
-  // mode (hands-free conversation loop), triple-click = the text surface,
-  // single click = interrupt (stop assistant speech / dismiss the panel).
-  // Flag off keeps the legacy contract untouched.
+  // mark remaps to: single click = talk toggle with barge-in (click again
+  // sends and ends talk mode), still hold = push-to-talk (a large move
+  // escapes into a drag), double-click = the text surface. Flag off keeps
+  // the legacy contract untouched.
   const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
   const VOICE_FIRST_HOLD_MS = 260;
   let voiceFirstGestures = false;
   let voiceFirstHoldTimer = null;
   let voiceFirstTapChain = null;
+  let voiceFirstHoldStartedTurn = false;
   // Mascot scale: one root scalar (font-size px on #agee-launcher) drives the
   // hit circle, the lion and every animation distance. Scroll on the lion
   // adjusts it; the value persists like the launcher position does.
@@ -359,8 +360,8 @@
     //   first press + movement  -> drag the mark
     //   double-click and hold   -> manual push-to-talk
     // With the voice-first flag on (ageeVoiceFirstGesturesEnabled) the map
-    // becomes: still hold -> push-to-talk, double-click -> talk mode toggle,
-    // triple-click -> text surface, single click -> interrupt.
+    // becomes: single click -> talk toggle with barge-in, still hold ->
+    // push-to-talk, double-click -> text surface.
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -593,7 +594,21 @@
 
   function moveLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
-    if (holdToTalkActive && e.pointerId === holdToTalkPointerId) return;
+    if (holdToTalkActive && e.pointerId === holdToTalkPointerId) {
+      if (!voiceFirstGestures) return;
+      // Voice-first escape hatch: a large move during push-to-talk turns the
+      // gesture into a drag (hold-then-move muscle memory). Cancel only a
+      // capture the hold itself started; a hold riding an existing talk-mode
+      // session releases the hold and leaves the session listening.
+      const ex = e.clientX - dragState.startX;
+      const ey = e.clientY - dragState.startY;
+      if (ex * ex + ey * ey <= LAUNCHER_DOUBLE_CLICK_SLOP * LAUNCHER_DOUBLE_CLICK_SLOP) return;
+      holdToTalkActive = false;
+      holdToTalkPointerId = null;
+      if (voiceFirstHoldStartedTurn) stopLiveVoiceTurn("cancel");
+      voiceFirstHoldStartedTurn = false;
+      dragState.moved = true;
+    }
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
     if (Math.abs(dx) + Math.abs(dy) > LAUNCHER_DRAG_SLOP) {
@@ -764,8 +779,10 @@
       resetVoiceFirstTapChain();
       holdToTalkActive = true;
       holdToTalkPointerId = pointerId;
+      voiceFirstHoldStartedTurn = false;
       if (!(liveVoice && listening)) {
         if (liveVoice) stopLiveVoiceTurn("cancel");
+        voiceFirstHoldStartedTurn = true;
         startLiveVoiceTurn({
           preserveAssistantPlayback: assistantSpeechOverlap === true,
           conversation: false,
@@ -800,40 +817,52 @@
       timer: null,
     };
     if (count === 1) {
-      // Barge-in is the only latency-critical part of a single tap, so it
-      // fires immediately; it stays correct even when more taps follow.
-      // Dismissing the panel waits out the chain window instead.
-      stopSpeaking();
-      const chain = voiceFirstTapChain;
-      chain.timer = setTimeout(() => {
-        chain.timer = null;
-        if (voiceFirstTapChain === chain) voiceFirstTapChain = null;
-        if (open) closeTextSurface();
-      }, LAUNCHER_DOUBLE_CLICK_MS);
+      if (conversationActive || (liveVoice && listening)) {
+        // A click while listening means "send and end talk mode", but the
+        // send waits out the double-click window so a second click (the text
+        // surface) can supersede it. The user has already stopped talking by
+        // then, so the delay is not felt.
+        voiceFirstTapChain.toggled = "send-pending";
+        armVoiceFirstChainReset(() => toggleTalkMode());
+        return;
+      }
+      // A click while idle or while the assistant is speaking arms the mic
+      // immediately; starting the turn already stops assistant playback, so
+      // barge-in is built in. A second click within the window cancels this
+      // sub-300ms-old session and opens the text surface instead.
+      voiceFirstTapChain.toggled = toggleTalkMode();
+      armVoiceFirstChainReset();
       return;
     }
     if (count === 2) {
-      // Toggle talk mode optimistically; a third tap cancels the session it
-      // just started (nothing meaningful has been captured that fast).
-      voiceFirstTapChain.toggled = toggleTalkMode();
-      const chain = voiceFirstTapChain;
-      chain.timer = setTimeout(() => {
-        chain.timer = null;
-        if (voiceFirstTapChain === chain) voiceFirstTapChain = null;
-      }, LAUNCHER_DOUBLE_CLICK_MS);
+      // Double click is the text surface. Tap 1 either armed the mic (undo
+      // the milliseconds-old session) or deferred a send (its timer was
+      // already cleared at this press-down, so talk mode simply stays on).
+      if (prevToggled === "on") cancelTalkMode();
+      openTextSurface({ fresh: false });
+      armVoiceFirstChainReset();
       return;
     }
-    // Triple click: undo only a toggle-ON from the second tap (the session it
-    // started is milliseconds old); a toggle-OFF already committed a real turn
-    // and must not be cancelled. Then open the text surface.
-    resetVoiceFirstTapChain();
-    if (prevToggled === "on") cancelTalkMode();
-    openTextSurface({ fresh: false });
+    // Three or more taps add nothing beyond the double; keep the chain alive
+    // so further rapid taps stay inert instead of re-arming the mic.
+    armVoiceFirstChainReset();
   }
 
-  // Double-click talk mode: the hands-free conversation loop. On = one
+  function armVoiceFirstChainReset(onExpire) {
+    const chain = voiceFirstTapChain;
+    if (!chain) return;
+    chain.timer = setTimeout(() => {
+      chain.timer = null;
+      if (voiceFirstTapChain === chain) voiceFirstTapChain = null;
+      if (typeof onExpire === "function") onExpire();
+    }, LAUNCHER_DOUBLE_CLICK_MS);
+  }
+
+  // Single-click talk mode: the hands-free conversation loop. On = one
   // conversation session (silence commits each turn, the mic re-arms after
-  // the reply). Off = commit anything in flight and stop re-arming.
+  // the reply). Off = commit anything in flight and stop re-arming. The
+  // tapTalk mark lets a tap-armed turn that captured no speech disarm
+  // quietly instead of scolding "didn't catch that".
   function toggleTalkMode() {
     if (conversationActive || (liveVoice && listening)) {
       conversationActive = false;
@@ -842,7 +871,13 @@
       return "off";
     }
     primeAudio();
+    // Same teardown rule as toggleVoice(): a lingering non-listening turn is
+    // cancelled unless background speech overlap wants it kept playing.
+    if (liveVoice && !(assistantSpeechOverlap === true && liveVoice.committed)) {
+      stopLiveVoiceTurn("cancel");
+    }
     startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+    if (liveVoice) liveVoice.tapTalk = true;
     syncTalkModeUi();
     return "on";
   }
@@ -870,7 +905,7 @@
     if (root) root.classList.toggle("agee-voice-first", voiceFirstGestures === true);
     if (launcher) {
       launcher.dataset.ageeTip = voiceFirstGestures
-        ? "Hold to talk, double-click to toggle talk, triple-click to type, drag to move"
+        ? "Click to talk, click again to send, hold for push-to-talk, double-click to type"
         : "Click to type, drag to move, scroll to resize, hold to talk";
     }
     syncTalkModeUi();
@@ -2013,6 +2048,17 @@
       if (msg.reply_language) state.replyLanguage = String(msg.reply_language);
       if (msg.turn_id) state.gatewayTurnId = String(msg.turn_id);
       if (status === "no_speech" && !state.assistantText) {
+        if (state.tapTalk && !String(state.transcript || "").trim()) {
+          // Quiet disarm: a tap-armed talk turn that captured no speech was a
+          // barge-in or a stray tap, not a failed utterance. Fold it away
+          // without a cue and stop the conversation re-arm loop.
+          conversationActive = false;
+          stopLiveVoiceState(state, "stop");
+          removeCueCard(state.cueId);
+          setVoiceState(false);
+          if (agentState !== "idle") setAgentState("idle");
+          return;
+        }
         // Explicit failed-capture turn from the gateway: no transcript and no
         // assistant output. Say so instead of pretending the turn completed.
         state.assistantText = "Didn't catch that.";
