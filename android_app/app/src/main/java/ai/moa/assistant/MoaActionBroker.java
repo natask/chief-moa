@@ -1,10 +1,13 @@
 package ai.moa.assistant;
 
+import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.provider.ContactsContract;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -180,6 +183,18 @@ final class MoaActionBroker {
 
         if ("sms.compose".equals(name)) {
             return composeSmsDraft(args);
+        }
+
+        if ("url.open".equals(name)) {
+            return openUrlForTool(args);
+        }
+
+        if ("phone.dial".equals(name)) {
+            return dialNumberForTool(args);
+        }
+
+        if ("contact.open".equals(name)) {
+            return openContactForTool(args);
         }
 
         return ToolExecutionResult.done(false, "Unsupported local tool: " + name + ".", null);
@@ -364,6 +379,108 @@ final class MoaActionBroker {
         }
     }
 
+    private ToolExecutionResult openUrlForTool(JSONObject args) {
+        Capability capability = CAPABILITIES.get("url.open");
+        String rawUrl = openUrlTarget(args);
+        String url = sanitizeOpenUrl(rawUrl);
+        if (url.isEmpty()) {
+            String reason = rawUrl.isEmpty() ? "A web URL is required." : "Only http and https links can be opened.";
+            JSONObject receipt = recordReceipt(capability, rawUrl, false, reason);
+            return ToolExecutionResult.done(false, reason, receipt);
+        }
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            context.startActivity(intent);
+            JSONObject receipt = recordReceipt(capability, url, true, "Opened URL.");
+            return ToolExecutionResult.done(true, "Opened " + url + ".", receipt);
+        } catch (RuntimeException error) {
+            JSONObject receipt = recordReceipt(capability, url, false, "No handler for URL.");
+            return ToolExecutionResult.done(false, "I could not open that link.", receipt);
+        }
+    }
+
+    private ToolExecutionResult dialNumberForTool(JSONObject args) {
+        Capability capability = CAPABILITIES.get("phone.dial");
+        String rawNumber = dialNumberTarget(args);
+        String number = normalizeDialNumber(rawNumber);
+        if (number.isEmpty()) {
+            String reason = rawNumber.isEmpty() ? "A phone number is required." : "That does not look like a phone number.";
+            JSONObject receipt = recordReceipt(capability, rawNumber, false, reason);
+            return ToolExecutionResult.done(false, reason, receipt);
+        }
+        // ACTION_DIAL only pre-fills the dialer; the user still presses call. No
+        // CALL_PHONE permission, no auto-call. Do not change this to ACTION_CALL.
+        Intent intent = new Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", number, null));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            context.startActivity(intent);
+            JSONObject receipt = recordReceipt(capability, number, true, "Opened dialer pre-filled with the number.");
+            return ToolExecutionResult.done(true, "Opened the dialer with " + number + ". Press call to dial.", receipt);
+        } catch (RuntimeException error) {
+            JSONObject receipt = recordReceipt(capability, number, false, "No dialer available.");
+            return ToolExecutionResult.done(false, "I could not open the dialer.", receipt);
+        }
+    }
+
+    private ToolExecutionResult openContactForTool(JSONObject args) {
+        Capability capability = CAPABILITIES.get("contact.open");
+        String name = contactOpenName(args);
+        if (name.isEmpty()) {
+            JSONObject receipt = recordReceipt(capability, "", false, "Contact name is required.");
+            return ToolExecutionResult.done(false, "Tell me the contact name to open.", receipt);
+        }
+        if (!hasContactsPermission()) {
+            JSONObject receipt = recordReceipt(capability, name, false, "Contacts permission not granted.");
+            return ToolExecutionResult.done(false, CONTACTS_PERMISSION_MISSING, receipt);
+        }
+        Uri lookupUri = findContactLookupUri(name);
+        if (lookupUri == null) {
+            JSONObject receipt = recordReceipt(capability, name, false, "No matching contact.");
+            return ToolExecutionResult.done(false, contactNotFoundReply(name), receipt);
+        }
+        Intent intent = new Intent(Intent.ACTION_VIEW, lookupUri);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            context.startActivity(intent);
+            JSONObject receipt = recordReceipt(capability, name, true, "Opened contact card.");
+            return ToolExecutionResult.done(true, "Opened the contact card for " + name + ".", receipt);
+        } catch (RuntimeException error) {
+            JSONObject receipt = recordReceipt(capability, name, false, "No contacts app available.");
+            return ToolExecutionResult.done(false, "I could not open the contact card.", receipt);
+        }
+    }
+
+    private boolean hasContactsPermission() {
+        return context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private Uri findContactLookupUri(String name) {
+        Uri filterUri = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_FILTER_URI, Uri.encode(name));
+        Cursor cursor = null;
+        try {
+            cursor = context.getContentResolver().query(
+                    filterUri,
+                    new String[]{ContactsContract.Contacts._ID, ContactsContract.Contacts.LOOKUP_KEY},
+                    null,
+                    null,
+                    null
+            );
+            if (cursor != null && cursor.moveToFirst()) {
+                long id = cursor.getLong(0);
+                String lookupKey = cursor.getString(1);
+                return ContactsContract.Contacts.getLookupUri(id, lookupKey);
+            }
+        } catch (RuntimeException error) {
+            return null;
+        } finally {
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+        return null;
+    }
+
     private static List<AppCandidate> matchingLauncherApps(PackageManager packageManager, String target) {
         String normalizedTarget = normalizeAppLabel(target);
         if (normalizedTarget.isEmpty()) {
@@ -522,6 +639,89 @@ final class MoaActionBroker {
         return safe(args.optString("body", args.optString("message", args.optString("text", ""))));
     }
 
+    static final String CONTACTS_PERMISSION_MISSING =
+            "Contacts permission not granted. Open the A.G. app to grant it.";
+
+    static String openUrlTarget(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("url", args.optString("link", args.optString("href", ""))));
+    }
+
+    // http/https only. Returns the trimmed URL when the scheme is allowed,
+    // otherwise "" so the caller rejects javascript:, file:, content:, intent:
+    // and every other non-web scheme before ACTION_VIEW.
+    static String sanitizeOpenUrl(String value) {
+        String trimmed = safe(value);
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        int schemeEnd = trimmed.indexOf("://");
+        if (schemeEnd <= 0) {
+            return "";
+        }
+        String scheme = trimmed.substring(0, schemeEnd).toLowerCase(Locale.US);
+        if (scheme.equals("http") || scheme.equals("https")) {
+            return trimmed;
+        }
+        return "";
+    }
+
+    static String dialNumberTarget(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("number", args.optString("phone", args.optString("tel", args.optString("to", "")))));
+    }
+
+    // Strip spaces, dashes, parens, and dots; keep a single leading +; digits
+    // only otherwise. Returns "" for empty input or garbage (letters, stray
+    // symbols, a lone +) so the dialer never opens on nonsense.
+    static String normalizeDialNumber(String value) {
+        String trimmed = safe(value);
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        boolean leadingPlus = trimmed.charAt(0) == '+';
+        String body = leadingPlus ? trimmed.substring(1) : trimmed;
+        StringBuilder digits = new StringBuilder();
+        for (int i = 0; i < body.length(); i += 1) {
+            char c = body.charAt(i);
+            if (c >= '0' && c <= '9') {
+                digits.append(c);
+            } else if (c == ' ' || c == '-' || c == '(' || c == ')' || c == '.' || c == '\t') {
+                // allowed formatting, drop it
+            } else {
+                // letters, a second +, or any other symbol -> reject as garbage
+                return "";
+            }
+        }
+        if (digits.length() == 0) {
+            return "";
+        }
+        return (leadingPlus ? "+" : "") + digits;
+    }
+
+    static String contactOpenName(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("name", args.optString("contact", args.optString("person", args.optString("query", "")))));
+    }
+
+    static String contactNotFoundReply(String name) {
+        return "No contact found matching \"" + safe(name) + "\".";
+    }
+
+    static boolean isKnownTool(String tool) {
+        return CAPABILITIES.containsKey(safe(tool).toLowerCase(Locale.US));
+    }
+
+    static String capabilityRisk(String tool) {
+        Capability capability = CAPABILITIES.get(safe(tool).toLowerCase(Locale.US));
+        return capability == null ? "" : capability.risk;
+    }
+
+    static String capabilityApproval(String tool) {
+        Capability capability = CAPABILITIES.get(safe(tool).toLowerCase(Locale.US));
+        return capability == null ? "" : capability.approval;
+    }
+
     private static String[] splitAddressList(String recipients) {
         String[] raw = safe(recipients).split("[,;]");
         List<String> addresses = new ArrayList<>();
@@ -539,6 +739,8 @@ final class MoaActionBroker {
         return target.isEmpty() ? Uri.parse("smsto:") : Uri.parse("smsto:" + Uri.encode(target));
     }
 
+    // Keep this list in sync with OverlayService.androidLocalToolManifest(),
+    // which advertises the same tools to the gateway cross-device hub.
     private static Map<String, Capability> createCapabilityManifest() {
         Map<String, Capability> capabilities = new HashMap<>();
         capabilities.put("screen.summary", new Capability("screen.summary", RISK_READ_ONLY, "none"));
@@ -549,6 +751,9 @@ final class MoaActionBroker {
         capabilities.put("app.list", new Capability("app.list", RISK_READ_ONLY, "none"));
         capabilities.put("email.compose", new Capability("email.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
         capabilities.put("sms.compose", new Capability("sms.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
+        capabilities.put("url.open", new Capability("url.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));
+        capabilities.put("phone.dial", new Capability("phone.dial", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
+        capabilities.put("contact.open", new Capability("contact.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("external.side_effect", new Capability("external.side_effect", RISK_EXTERNAL_SIDE_EFFECT, "confirm"));
         capabilities.put("sensitive.side_effect", new Capability("sensitive.side_effect", "sensitive_side_effect", "blocked"));
         return Collections.unmodifiableMap(capabilities);

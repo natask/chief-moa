@@ -49,6 +49,7 @@ public final class MainActivity extends Activity {
     private static final String ACTION_REFRESH_ORB_SCALE = "ai.moa.assistant.REFRESH_ORB_SCALE";
 
     private static final int REQUEST_AUDIO = 4101;
+    private static final int REQUEST_CONTACTS = 4102;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private TextView overlayStatus;
@@ -67,6 +68,7 @@ public final class MainActivity extends Activity {
     private Button accessibilityButton;
     private Button appInfoButton;
     private Button micButton;
+    private Button contactsButton;
     private Button startButton;
     private Button stopButton;
     private Button updateButton;
@@ -131,7 +133,7 @@ public final class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_AUDIO) {
+        if (requestCode == REQUEST_AUDIO || requestCode == REQUEST_CONTACTS) {
             updatePermissionState();
         }
     }
@@ -292,6 +294,11 @@ public final class MainActivity extends Activity {
         micButton = secondaryButton("Enable microphone");
         micButton.setOnClickListener(v -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO));
         card.addView(micButton);
+
+        // Optional: lets the contact.open phone tool find and open a contact card.
+        contactsButton = secondaryButton("Enable contacts access");
+        contactsButton.setOnClickListener(v -> requestPermissions(new String[]{Manifest.permission.READ_CONTACTS}, REQUEST_CONTACTS));
+        card.addView(contactsButton);
 
         startButton = primaryButton("Start assistant circle");
         startButton.setOnClickListener(v -> startOverlay());
@@ -460,6 +467,7 @@ public final class MainActivity extends Activity {
         boolean overlayGranted = Settings.canDrawOverlays(this);
         boolean accessibilityGranted = MoaAccessibilityService.isEnabled(this);
         boolean micGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+        boolean contactsGranted = checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED;
 
         if (overlayStatus != null) {
             overlayStatus.setText(overlayGranted ? "Ready" : "Needs draw-over-apps");
@@ -518,6 +526,10 @@ public final class MainActivity extends Activity {
 
         if (micButton != null) {
             micButton.setVisibility(micGranted ? View.GONE : View.VISIBLE);
+        }
+
+        if (contactsButton != null) {
+            contactsButton.setVisibility(contactsGranted ? View.GONE : View.VISIBLE);
         }
 
         if (startButton != null) {

@@ -1893,6 +1893,10 @@ public final class OverlayService extends Service {
         return body;
     }
 
+    // Keep this list in sync with MoaActionBroker.createCapabilityManifest(),
+    // which is the authority that actually executes and receipts each tool.
+    // audio.speak is overlay-local (not in the broker manifest); every other
+    // entry here must match the broker's risk/approval for the same tool name.
     private JSONArray androidLocalToolManifest() throws JSONException {
         JSONArray manifest = new JSONArray();
         putToolManifestItem(manifest, "app.launch", "navigation", "implicit_user_command");
@@ -1904,6 +1908,9 @@ public final class OverlayService extends Service {
         putToolManifestItem(manifest, "audio.speak", "local_output", "implicit_user_command");
         putToolManifestItem(manifest, "email.compose", "external_side_effect", "target_app_confirmation");
         putToolManifestItem(manifest, "sms.compose", "external_side_effect", "target_app_confirmation");
+        putToolManifestItem(manifest, "url.open", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "phone.dial", "external_side_effect", "target_app_confirmation");
+        putToolManifestItem(manifest, "contact.open", "navigation", "implicit_user_command");
         return manifest;
     }
 
