@@ -14,6 +14,17 @@ final class MoaAudioPlaybackController {
     private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
     private static final int PCM_BYTES_PER_SAMPLE = 2;
     private static final int MIN_BUFFER_MS = 250;
+    // Cap on a single native AudioTrack.write() call inside write() below. Under
+    // multi-frame streaming a single PCM frame can carry a whole sentence (up to
+    // voice-chunker's ~220-char maxChars, several seconds of audio); writing it
+    // as one AudioTrack.write() would hold `lock` for that whole blocking
+    // duration, so an interrupt's stop() (invoked from another thread) could not
+    // acquire `lock` to pause/flush until the entire frame finished playing.
+    // Slicing keeps each write()'s critical section down to ~100ms so stop()
+    // can preempt within about one slice instead of one whole frame.
+    private static final int MAX_WRITE_SLICE_MS = 100;
+    private static final int MAX_WRITE_SLICE_BYTES =
+            SAMPLE_RATE_HZ * PCM_BYTES_PER_SAMPLE * MAX_WRITE_SLICE_MS / 1000;
 
     interface Callback {
         void onPlaybackStarted();
@@ -91,16 +102,22 @@ final class MoaAudioPlaybackController {
             return false;
         }
 
-        synchronized (lock) {
-            if (!playing || audioTrack == null) {
-                return false;
-            }
-
-            int offset = 0;
-            while (offset < pcm.length && playing && audioTrack != null) {
-                int written;
+        // Each slice's blocking AudioTrack.write() runs inside its own
+        // synchronized(lock) instead of one synchronized block wrapping the
+        // whole frame. That lets stop() (called from another thread on a
+        // barge-in) acquire `lock` between slices and flip `playing`/`
+        // audioTrack` promptly, instead of waiting out an entire multi-second
+        // frame's worth of blocking writes before it can even start pausing.
+        int offset = 0;
+        while (offset < pcm.length) {
+            int written;
+            synchronized (lock) {
+                if (!playing || audioTrack == null) {
+                    return false;
+                }
+                int sliceLength = Math.min(pcm.length - offset, MAX_WRITE_SLICE_BYTES);
                 try {
-                    written = audioTrack.write(pcm, offset, pcm.length - offset);
+                    written = audioTrack.write(pcm, offset, sliceLength);
                 } catch (RuntimeException error) {
                     reportError("Audio playback write failed: " + cleanError(error) + ".", error);
                     return false;
@@ -110,13 +127,13 @@ final class MoaAudioPlaybackController {
                     reportError("AudioTrack write failed with code " + written + ".", null);
                     return false;
                 }
-                if (written == 0) {
-                    break;
-                }
-                offset += written;
             }
-            return offset == pcm.length;
+            if (written == 0) {
+                break;
+            }
+            offset += written;
         }
+        return offset == pcm.length;
     }
 
     void stop() {
