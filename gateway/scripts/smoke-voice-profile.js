@@ -342,10 +342,19 @@ async function assertCompanionCatalog(baseUrl) {
   assert.ok(Array.isArray(list.companions), "companion list must include companions");
   assert.ok(list.companions.some((item) => item.id === "shigmi-scout"), "built-in Shigmi Scout must be listed");
   assert.ok(list.companions.every((item) => item.pet?.renderer === "shimeji-web"), "companions must expose pet manifests");
+  const scoutCompanion = list.companions.find((item) => item.id === "shigmi-scout");
+  assertVoiceBinding(scoutCompanion.voice_binding, "Orus", "built-in legacy companion voice");
 
+  const beforeInitialActiveRead = await getJson(`${baseUrl}/v1/agent/profile`);
   const initialActive = await getJson(`${baseUrl}/v1/agent/pets/active`);
+  const afterInitialActiveRead = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(initialActive.version, "companion-pets/v1");
   assert.equal(initialActive.active_companion, null, "active pet lookup must return null before a companion is applied");
+  assert.equal(
+    afterInitialActiveRead.profile_version,
+    beforeInitialActiveRead.profile_version,
+    "active pet readiness lookup must not mutate the profile",
+  );
 
   const pets = await getJson(`${baseUrl}/v1/agent/pets`);
   assert.equal(pets.version, "companion-pets/v1");
@@ -354,6 +363,8 @@ async function assertCompanionCatalog(baseUrl) {
   const scoutPet = pets.pets.find((item) => item.companion_id === "shigmi-scout");
   assert.equal(scoutPet?.pet?.renderer, "shimeji-web", "built-in Shigmi Scout pet must use the web renderer");
   assert.ok(scoutPet.pet.behaviors.some((behavior) => behavior.id === "drag"), "pet behavior list must include drag");
+  assert.equal(scoutPet.voice, "Orus", "legacy pet voice field must stay unchanged");
+  assertVoiceBinding(scoutPet.voice_binding, "Orus", "built-in legacy pet voice");
 
   const petDraft = await postJson(`${baseUrl}/v1/agent/pets`, {
     text: "Make a small amber build helper that taps when it is thinking",
@@ -364,6 +375,16 @@ async function assertCompanionCatalog(baseUrl) {
   assert.equal(petDraft.json.active_profile_mutated, false, "pet drafting must not mutate the active profile");
   assert.equal(petDraft.json.pet.pet.palette, "amber");
   assert.equal(petDraft.json.pet.pet.motion, "tap");
+  assertVoiceBinding(
+    petDraft.json.companion.voice_binding,
+    petDraft.json.companion.profile_patch.voice,
+    "draft companion voice",
+  );
+  assertVoiceBinding(
+    petDraft.json.pet.voice_binding,
+    petDraft.json.companion.profile_patch.voice,
+    "draft pet voice",
+  );
 
   const beforeAgentCreate = await getJson(`${baseUrl}/v1/agent/profile`);
   const savedAgent = await postJson(`${baseUrl}/v1/agent/pets/agents`, {
@@ -388,6 +409,11 @@ async function assertCompanionCatalog(baseUrl) {
   assert.ok(savedAgent.json.agent.id.startsWith("agent-"), `saved agent id must be bookmarkable, got ${savedAgent.json.agent.id}`);
   assert.equal(savedAgent.json.agent.companion_id, savedAgent.json.agent.companion.id);
   assert.equal(savedAgent.json.agent.pet.palette, "teal");
+  assertVoiceBinding(
+    savedAgent.json.agent.companion.voice_binding,
+    savedAgent.json.agent.companion.profile_patch.voice,
+    "saved agent companion voice",
+  );
   assert.equal(savedAgent.json.agent.rules.length, 2, "saved agent must expose sanitized rules");
   assert.equal(savedAgent.json.agent.rules[0].enabled, true);
   assert.match(savedAgent.json.agent.companion.profile_patch.system_prompt, /declarative behavior preferences only/);
@@ -422,6 +448,16 @@ async function assertCompanionCatalog(baseUrl) {
   assert.equal(petPreview.status, 200, `pet preview must succeed: ${JSON.stringify(petPreview.json)}`);
   assert.equal(petPreview.json.mutates_profile, false, "pet preview must be non-mutating");
   assert.equal(petPreview.json.pet.companion_id, petDraft.json.companion.id);
+  assertVoiceBinding(
+    petPreview.json.companion.voice_binding,
+    petPreview.json.profile_overrides.voice,
+    "pet preview companion voice",
+  );
+  assertVoiceBinding(
+    petPreview.json.pet.voice_binding,
+    petPreview.json.profile_overrides.voice,
+    "pet preview pet voice",
+  );
 
   const petGenerate = await postJson(`${baseUrl}/v1/agent/pets/generate`, {
     name: "Shigmi Tapper",
@@ -442,12 +478,44 @@ async function assertCompanionCatalog(baseUrl) {
   });
   assert.equal(petApply.status, 200, `pet apply must succeed: ${JSON.stringify(petApply.json)}`);
   assert.equal(petApply.json.profile.active_companion_id, savedAgent.json.agent.companion_id);
+  assert.equal(
+    petApply.json.profile.voice,
+    savedAgent.json.agent.companion.voice_binding.provider_voice_id,
+    "pet apply must patch agent_profile.voice from voice_binding.provider_voice_id",
+  );
   assert.equal(petApply.json.active_companion.companion.id, savedAgent.json.agent.companion_id);
   assert.equal(petApply.json.active_companion.pet.companion_id, savedAgent.json.agent.companion_id);
+  assertVoiceBinding(
+    petApply.json.active_companion.voice_binding,
+    savedAgent.json.agent.companion.voice_binding.provider_voice_id,
+    "active companion metadata voice",
+  );
+  assertVoiceBinding(
+    petApply.json.pet.voice_binding,
+    savedAgent.json.agent.companion.voice_binding.provider_voice_id,
+    "pet apply pet voice",
+  );
 
+  const beforeActiveAfterApplyRead = await getJson(`${baseUrl}/v1/agent/profile`);
   const activeAfterApply = await getJson(`${baseUrl}/v1/agent/pets/active`);
+  const afterActiveAfterApplyRead = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(activeAfterApply.active_companion.id, savedAgent.json.agent.companion_id, "active pet lookup must reflect the applied saved agent companion");
   assert.equal(activeAfterApply.pet.companion_id, savedAgent.json.agent.companion_id, "active pet lookup must include the active pet manifest");
+  assertVoiceBinding(
+    activeAfterApply.active_companion.voice_binding,
+    savedAgent.json.agent.companion.voice_binding.provider_voice_id,
+    "active pet lookup metadata voice",
+  );
+  assertVoiceBinding(
+    activeAfterApply.pet.voice_binding,
+    savedAgent.json.agent.companion.voice_binding.provider_voice_id,
+    "active pet lookup pet voice",
+  );
+  assert.equal(
+    afterActiveAfterApplyRead.profile_version,
+    beforeActiveAfterApplyRead.profile_version,
+    "active custom voice readiness/status metadata must not mutate the profile",
+  );
 
   const draft = await postJson(`${baseUrl}/v1/agent/companions`, {
     text: "I want you to be a research scout",
@@ -466,6 +534,11 @@ async function assertCompanionCatalog(baseUrl) {
   assert.equal(preview.json.mutates_profile, false, "preview must be non-mutating");
   assert.equal(preview.json.profile_version, before.profile_version, "preview must not advance the profile version");
   assert.equal(preview.json.profile_overrides.active_companion_id, draft.json.companion.id);
+  assertVoiceBinding(
+    preview.json.companion.voice_binding,
+    preview.json.profile_overrides.voice,
+    "companion preview voice",
+  );
 
   const apply = await postJson(`${baseUrl}/v1/agent/companions/apply`, {
     companion_id: draft.json.companion.id,
@@ -475,6 +548,11 @@ async function assertCompanionCatalog(baseUrl) {
   assert.equal(apply.status, 200, `companion apply must succeed: ${JSON.stringify(apply.json)}`);
   assert.equal(apply.json.profile.active_companion_id, draft.json.companion.id);
   assert.equal(apply.json.profile.active_companion_name, draft.json.companion.name);
+  assert.equal(
+    apply.json.profile.voice,
+    draft.json.companion.voice_binding.provider_voice_id,
+    "companion apply must patch agent_profile.voice from voice_binding.provider_voice_id",
+  );
   assert.equal(apply.json.profile.tool_policy, "propose_only");
 
   const after = await getJson(`${baseUrl}/v1/agent/profile`);
@@ -492,6 +570,22 @@ async function assertCompanionCatalog(baseUrl) {
   assert.equal(turn.json.actions?.[0]?.type, "companion_applied");
   assert.ok(turn.json.profile?.active_companion?.id, "voice response must expose active companion status");
   assert.match(turn.json.display, /Created and switched to/);
+}
+
+function assertVoiceBinding(binding, expectedVoice, label) {
+  assert.ok(binding && typeof binding === "object", `${label} must expose voice_binding`);
+  assert.equal(binding.provider, "gemini-tts", `${label} provider`);
+  assert.equal(binding.provider_voice_id, expectedVoice, `${label} provider_voice_id`);
+  assert.equal(binding.legacy_voice, expectedVoice, `${label} legacy_voice`);
+  assert.equal(binding.style?.mode, "preset", `${label} style.mode`);
+  assert.ok(typeof binding.style?.preset === "string" && binding.style.preset, `${label} style.preset`);
+  assert.equal(binding.style?.prompt, "", `${label} style.prompt must be empty until sanitized custom prompts exist`);
+  assert.equal(binding.custom_voice?.status, "not_configured", `${label} custom voice status`);
+  assert.equal(binding.custom_voice?.provider, "chirp3-instant-custom-voice", `${label} custom voice provider`);
+  assert.equal(binding.custom_voice?.enrollment_id, "", `${label} custom voice enrollment_id`);
+  assert.equal(binding.custom_voice?.consent_required, true, `${label} custom voice consent_required`);
+  assert.equal(binding.custom_voice?.access_required, true, `${label} custom voice access_required`);
+  assert.equal(binding.custom_voice?.last_error, "", `${label} custom voice last_error`);
 }
 
 async function assertHealthVoice(baseUrl) {

@@ -34,6 +34,7 @@ final class MoaPrefs {
     private static final String KEY_SPOKEN_REPLIES_AUDIBLE_DEFAULT_APPLIED = "spoken_replies_audible_default_applied";
     private static final String KEY_AGENT_PROFILE_JSON = "agent_profile_json";
     private static final String KEY_ACTIVE_COMPANION_JSON = "active_companion_json";
+    private static final String KEY_ACTIVE_COMPANION_STALE = "active_companion_stale";
     private static final String KEY_ORB_SCALE_PERCENT = "orb_scale_percent";
     // Experimental voice-first orb gestures. Off by default: the overlay keeps
     // today's tap/double-click-and-hold contract until this is turned on.
@@ -159,7 +160,12 @@ final class MoaPrefs {
         JSONObject companion = parseObject(companionJson);
         prefs(context).edit()
                 .putString(KEY_ACTIVE_COMPANION_JSON, sanitizeActiveCompanion(companion).toString())
+                .putBoolean(KEY_ACTIVE_COMPANION_STALE, false)
                 .apply();
+    }
+
+    static void setActiveCompanionStale(Context context, boolean stale) {
+        prefs(context).edit().putBoolean(KEY_ACTIVE_COMPANION_STALE, stale).apply();
     }
 
     static String companionName(Context context) {
@@ -185,9 +191,72 @@ final class MoaPrefs {
         return firstNonEmpty(activeCompanion(context).optString("motion", ""), "idle");
     }
 
+    static PetVisualState petVisualState(Context context) {
+        String palette = companionPalette(context);
+        String motion = companionMotion(context);
+        int backing = MoaColors.MARK_BACKING;
+        int accent = MoaColors.GOLD;
+        int rim = MoaColors.RAISED_BORDER;
+        switch (palette) {
+            case "graphite":
+                backing = 0xFF20242A;
+                accent = 0xFFAAB0BA;
+                rim = 0x55AAB0BA;
+                break;
+            case "green":
+                backing = 0xFF0E2A1F;
+                accent = 0xFF46D88C;
+                rim = 0x5546D88C;
+                break;
+            case "blue":
+                backing = 0xFF10234F;
+                accent = 0xFF6FA3FF;
+                rim = 0x556FA3FF;
+                break;
+            case "violet":
+                backing = 0xFF211449;
+                accent = 0xFFB29CFF;
+                rim = 0x55B29CFF;
+                break;
+            case "red":
+                backing = 0xFF3A1714;
+                accent = 0xFFFF7A66;
+                rim = 0x55FF7A66;
+                break;
+            case "amber":
+                backing = 0xFF34210C;
+                accent = 0xFFFFBF5F;
+                rim = 0x55FFBF5F;
+                break;
+            case "teal":
+                backing = 0xFF082D31;
+                accent = 0xFF45D3DE;
+                rim = 0x5545D3DE;
+                break;
+            case "mono":
+                backing = 0xFF15171A;
+                accent = 0xFFF6F3EA;
+                rim = 0x66F6F3EA;
+                break;
+            default:
+                palette = "default";
+                break;
+        }
+        return new PetVisualState(
+                palette,
+                motion,
+                backing,
+                accent,
+                rim,
+                prefs(context).getBoolean(KEY_ACTIVE_COMPANION_STALE, false));
+    }
+
     static String companionStatus(Context context) {
         String name = companionName(context);
         String summary = companionSummary(context);
+        if (prefs(context).getBoolean(KEY_ACTIVE_COMPANION_STALE, false)) {
+            name += " (cached)";
+        }
         if (summary.isEmpty()) {
             return name;
         }
@@ -195,7 +264,33 @@ final class MoaPrefs {
     }
 
     static String companionCompactStatus(Context context) {
-        return companionName(context) + " / " + companionPalette(context) + " " + companionMotion(context);
+        String suffix = prefs(context).getBoolean(KEY_ACTIVE_COMPANION_STALE, false) ? " cached" : "";
+        return companionName(context) + " / " + companionPalette(context) + " " + companionMotion(context) + suffix;
+    }
+
+    static final class PetVisualState {
+        final String palette;
+        final String motion;
+        final int backingColor;
+        final int accentColor;
+        final int rimColor;
+        final boolean stale;
+
+        private PetVisualState(
+                String palette,
+                String motion,
+                int backingColor,
+                int accentColor,
+                int rimColor,
+                boolean stale
+        ) {
+            this.palette = palette;
+            this.motion = motion;
+            this.backingColor = backingColor;
+            this.accentColor = accentColor;
+            this.rimColor = rimColor;
+            this.stale = stale;
+        }
     }
 
     static String inputLanguageTag(Context context) {
@@ -363,12 +458,90 @@ final class MoaPrefs {
         putSafe(sanitized, "id", input.optString("id", input.optString("companion_id", "")));
         putSafe(sanitized, "name", input.optString("name", input.optString("companion_name", "")));
         putSafe(sanitized, "summary", input.optString("summary", input.optString("companion_summary", "")));
-        putSafe(sanitized, "palette", input.optString("palette", ""));
-        putSafe(sanitized, "motion", input.optString("motion", ""));
-        putSafe(sanitized, "renderer", input.optString("renderer", ""));
+        JSONObject pet = companionPetObject(input);
+        putSafe(sanitized, "palette", cleanPalette(firstNonEmpty(
+                stringField(input, "palette"),
+                stringField(pet, "palette"))));
+        putSafe(sanitized, "motion", cleanMotion(firstNonEmpty(
+                stringField(input, "motion"),
+                stringField(pet, "motion"))));
+        putSafe(sanitized, "renderer", cleanToken(firstNonEmpty(
+                stringField(input, "renderer"),
+                stringField(pet, "renderer")), 40));
         putSafe(sanitized, "source", input.optString("source", ""));
         putSafe(sanitized, "version", input.optString("version", ""));
         return sanitized;
+    }
+
+    private static JSONObject companionPetObject(JSONObject input) {
+        JSONObject pet = input.optJSONObject("pet");
+        if (pet == null) {
+            pet = input.optJSONObject("companion_pet");
+        }
+        if (pet == null) {
+            pet = input.optJSONObject("companionPet");
+        }
+        if (pet == null) {
+            pet = input.optJSONObject("pet_spec");
+        }
+        if (pet == null) {
+            return new JSONObject();
+        }
+        JSONObject nested = pet.optJSONObject("pet");
+        return nested == null ? pet : nested;
+    }
+
+    private static String stringField(JSONObject input, String key) {
+        Object value = input == null ? null : input.opt(key);
+        return value instanceof String ? (String) value : "";
+    }
+
+    private static String cleanPalette(String value) {
+        String token = cleanToken(value, 40);
+        switch (token) {
+            case "graphite":
+            case "green":
+            case "blue":
+            case "violet":
+            case "red":
+            case "amber":
+            case "teal":
+            case "mono":
+                return token;
+            default:
+                return "";
+        }
+    }
+
+    private static String cleanMotion(String value) {
+        String token = cleanToken(value, 40);
+        switch (token) {
+            case "walk":
+            case "peek":
+            case "climb":
+            case "tap":
+            case "trail":
+            case "float":
+            case "spark":
+            case "hover":
+            case "idle":
+                return token;
+            default:
+                return "";
+        }
+    }
+
+    private static String cleanToken(String value, int max) {
+        String raw = safe(value).toLowerCase(Locale.US);
+        StringBuilder builder = new StringBuilder();
+        int limit = Math.max(1, max);
+        for (int i = 0; i < raw.length() && builder.length() < limit; i++) {
+            char c = raw.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+                builder.append(c);
+            }
+        }
+        return builder.toString();
     }
 
     private static JSONObject parseObject(String raw) {

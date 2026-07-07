@@ -112,12 +112,13 @@ const BUILTIN_COMPANIONS = Object.freeze([
 function createCompanionCatalogStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || "./data");
   const catalogPath = path.join(dataDir, CATALOG_FILENAME);
+  const voiceBindingOptions = cleanVoiceBindingOptions(options.voiceBinding || {});
   fs.mkdirSync(dataDir, { recursive: true });
   let state = loadState(catalogPath);
 
   function list(options = {}) {
     const query = normalizeSearch(options.q || options.query || "");
-    const all = [...BUILTIN_COMPANIONS, ...state.companions].map(publicCompanion);
+    const all = [...BUILTIN_COMPANIONS, ...state.companions].map((item) => publicCompanion(item, voiceBindingOptions));
     const filtered = query
       ? all.filter((item) => searchText(item).includes(query))
       : all;
@@ -132,6 +133,7 @@ function createCompanionCatalogStore(options = {}) {
       BUILTIN_COMPANIONS.find((item) => item.id === target)
         || state.companions.find((item) => item.id === target)
         || null,
+      voiceBindingOptions,
     );
   }
 
@@ -177,7 +179,7 @@ function createCompanionCatalogStore(options = {}) {
     });
     state.companions.push(record);
     persist();
-    return publicCompanion(record);
+    return publicCompanion(record, voiceBindingOptions);
   }
 
   function createAgent(input = {}) {
@@ -199,7 +201,7 @@ function createCompanionCatalogStore(options = {}) {
 
   function listAgents(options = {}) {
     const query = normalizeSearch(options.q || options.query || "");
-    const all = state.agents.map((item) => publicAgent(item, getRaw)).filter(Boolean);
+    const all = state.agents.map((item) => publicAgent(item, getRaw, voiceBindingOptions)).filter(Boolean);
     const filtered = query
       ? all.filter((item) => searchText(item.companion || {}).includes(query) || normalizeSearch(item.id).includes(query))
       : all;
@@ -211,7 +213,7 @@ function createCompanionCatalogStore(options = {}) {
     const target = normalizeId(id);
     if (!target) return null;
     const found = state.agents.find((item) => item.id === target);
-    return publicAgent(found || null, getRaw);
+    return publicAgent(found || null, getRaw, voiceBindingOptions);
   }
 
   function createBookmark(input = {}) {
@@ -226,7 +228,7 @@ function createCompanionCatalogStore(options = {}) {
       if (agentId && item.agent_id === agentId) return true;
       return !agentId && item.companion_id === companionRecord.id;
     });
-    if (existing) return publicBookmark(existing, getRaw);
+    if (existing) return publicBookmark(existing, getRaw, voiceBindingOptions);
 
     const now = new Date().toISOString();
     const record = bookmark({
@@ -237,12 +239,12 @@ function createCompanionCatalogStore(options = {}) {
     }, getRaw);
     state.bookmarks.push(record);
     persist();
-    return publicBookmark(record, getRaw);
+    return publicBookmark(record, getRaw, voiceBindingOptions);
   }
 
   function listBookmarks(options = {}) {
     const query = normalizeSearch(options.q || options.query || "");
-    const all = state.bookmarks.map((item) => publicBookmark(item, getRaw)).filter(Boolean);
+    const all = state.bookmarks.map((item) => publicBookmark(item, getRaw, voiceBindingOptions)).filter(Boolean);
     const filtered = query
       ? all.filter((item) => searchText(item.companion || {}).includes(query) || normalizeSearch(item.id).includes(query))
       : all;
@@ -254,7 +256,7 @@ function createCompanionCatalogStore(options = {}) {
     const target = normalizeId(id);
     if (!target) return null;
     const found = state.bookmarks.find((item) => item.id === target);
-    return publicBookmark(found || null, getRaw);
+    return publicBookmark(found || null, getRaw, voiceBindingOptions);
   }
 
   function preview(input = {}) {
@@ -264,7 +266,7 @@ function createCompanionCatalogStore(options = {}) {
     }
     const patch = compileProfilePatch(selected);
     return {
-      companion: publicCompanion(selected),
+      companion: publicCompanion(selected, voiceBindingOptions),
       profile_overrides: patch,
       mutates_profile: false,
       sample_text: `This is ${selected.name}. ${selected.summary}`,
@@ -276,8 +278,10 @@ function createCompanionCatalogStore(options = {}) {
     if (!selected) {
       throw new Error("companion not found");
     }
+    const voiceBinding = voiceBindingForCompanion(selected, voiceBindingOptions);
     return {
       ...(selected.profile_patch || {}),
+      voice: voiceBinding.provider_voice_id,
       active_companion_id: selected.id,
       active_companion_name: selected.name,
       active_companion_source: selected.source || "builtin",
@@ -423,8 +427,9 @@ function companion(input) {
   });
 }
 
-function publicCompanion(input) {
+function publicCompanion(input, voiceBindingOptions = {}) {
   if (!input) return null;
+  const voiceBinding = voiceBindingForCompanion(input, voiceBindingOptions);
   return {
     id: input.id,
     version: input.version,
@@ -433,6 +438,7 @@ function publicCompanion(input) {
     summary: input.summary,
     tags: Array.isArray(input.tags) ? input.tags.slice() : [],
     voice: input.voice,
+    voice_binding: voiceBinding,
     appearance: { ...(input.appearance || {}) },
     pet: publicPetSpec(input.pet),
     starters: Array.isArray(input.starters) ? input.starters.slice() : [],
@@ -460,11 +466,11 @@ function agent(input, getRaw) {
   });
 }
 
-function publicAgent(input, getRaw) {
+function publicAgent(input, getRaw, voiceBindingOptions = {}) {
   if (!input) return null;
   const companionRecord = getRaw(input.companion_id);
   if (!companionRecord) return null;
-  const companionPublic = publicCompanion(companionRecord);
+  const companionPublic = publicCompanion(companionRecord, voiceBindingOptions);
   return {
     id: input.id,
     url: `/pets/?agent=${encodeURIComponent(input.id)}`,
@@ -492,7 +498,7 @@ function bookmark(input, getRaw) {
   });
 }
 
-function publicBookmark(input, getRaw) {
+function publicBookmark(input, getRaw, voiceBindingOptions = {}) {
   if (!input) return null;
   const companionRecord = getRaw(input.companion_id);
   if (!companionRecord) return null;
@@ -504,8 +510,78 @@ function publicBookmark(input, getRaw) {
     companion_id: companionRecord.id,
     created_at: input.created_at || "",
     pet: publicPetSpec(companionRecord.pet),
-    companion: publicCompanion(companionRecord),
+    companion: publicCompanion(companionRecord, voiceBindingOptions),
   };
+}
+
+function voiceBindingForCompanion(input, options = {}) {
+  const voice = normalizeVoiceChoice(input?.profile_patch?.voice || input?.voice) || "Kore";
+  return {
+    provider: cleanProviderName(options.provider) || "gemini-tts",
+    provider_voice_id: voice,
+    legacy_voice: voice,
+    style: {
+      mode: "preset",
+      preset: voiceStylePreset(voice),
+      prompt: "",
+    },
+    custom_voice: customVoiceStatus(options.customVoice),
+  };
+}
+
+function cleanVoiceBindingOptions(input = {}) {
+  return {
+    provider: cleanProviderName(input.provider) || "gemini-tts",
+    customVoice: {
+      provider: cleanProviderName(input.customVoice?.provider) || "chirp3-instant-custom-voice",
+      enrollment_id: cleanText(input.customVoice?.enrollment_id, 160),
+      consent_required: input.customVoice?.consent_required !== false,
+      consent_granted: input.customVoice?.consent_granted === true,
+      access_configured: input.customVoice?.access_configured === true,
+      last_error: cleanText(input.customVoice?.last_error, 260),
+    },
+  };
+}
+
+function customVoiceStatus(input = {}) {
+  const lastError = cleanText(input.last_error, 260);
+  const accessConfigured = input.access_configured === true;
+  const enrollmentId = cleanText(input.enrollment_id, 160);
+  const consentRequired = input.consent_required !== false && input.consent_granted !== true;
+  const status = lastError
+    ? "error"
+    : !accessConfigured || !enrollmentId
+      ? "not_configured"
+      : consentRequired
+        ? "consent_required"
+        : "ready";
+  return {
+    status,
+    provider: cleanProviderName(input.provider) || "chirp3-instant-custom-voice",
+    enrollment_id: enrollmentId,
+    consent_required: consentRequired,
+    access_required: !accessConfigured,
+    last_error: lastError,
+  };
+}
+
+function voiceStylePreset(voice) {
+  switch (normalizeVoiceChoice(voice)) {
+    case "Aoede":
+    case "Leda":
+    case "Zephyr":
+      return "warm";
+    case "Puck":
+      return "bright";
+    case "Charon":
+    case "Fenrir":
+      return "steady";
+    case "Orus":
+      return "formal";
+    case "Kore":
+    default:
+      return "measured";
+  }
 }
 
 function cleanProfilePatch(input, fallback = {}) {
@@ -951,6 +1027,10 @@ function cleanText(value, max = 400) {
 
 function cleanMachineValue(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
+}
+
+function cleanProviderName(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
 }
 
 function normalizeName(value) {
