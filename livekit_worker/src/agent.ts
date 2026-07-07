@@ -24,7 +24,7 @@ import {
   type VAD,
 } from "@livekit/agents";
 import { VAD as SileroVAD } from "@livekit/agents-plugin-silero";
-import { loadConfig } from "./config.js";
+import { loadConfig, resolveSessionChirpConfig } from "./config.js";
 import { ChirpSTT } from "./plugins/chirp-stt.js";
 import { GatewayLLM, LiveKitTurnState } from "./plugins/gateway-llm.js";
 import { GatewayTTS } from "./plugins/gateway-tts.js";
@@ -54,9 +54,15 @@ export default defineAgent({
     state.branchId = meta.branch_id || "default";
     state.deviceId = meta.device_id || participant.identity || "";
 
+    // Pin Chirp recognition languages from the gateway's durable profile for
+    // this session; falls back to MOA_LIVEKIT_LANGS on any fetch problem.
+    // One fetch, here, before the ChirpSTT plugin is constructed -- never
+    // re-fetched or auto-detected for the rest of the session.
+    const chirpConfig = await resolveSessionChirpConfig(config);
+
     const session = new voice.AgentSession({
       vad,
-      stt: new ChirpSTT(config.chirp),
+      stt: new ChirpSTT(chirpConfig),
       llm: new GatewayLLM(config.gateway, state),
       tts: new GatewayTTS(config.gateway, state),
       // Default VAD endpointing; 'manual' + commitUserTurn()/clearUserTurn() is

@@ -1,7 +1,12 @@
 // Pure config unit test (no LiveKit runtime), run as: node --test dist/**/*.test.js
 import assert from "node:assert";
 import { test } from "node:test";
-import { loadConfig } from "./config.js";
+import {
+  fetchSessionLanguageCodes,
+  loadConfig,
+  normalizeSessionLanguageCodes,
+  resolveSessionChirpConfig,
+} from "./config.js";
 
 function withEnv(env: Record<string, string | undefined>, fn: () => void): void {
   const saved: Record<string, string | undefined> = {};
@@ -52,3 +57,130 @@ test("default language is en-US", () => {
     assert.deepEqual(config.chirp.languageCodes, ["en-US"]);
   });
 });
+
+// --- Session-start profile language pinning ---------------------------------
+
+function stubFetch(handler: typeof fetch, fn: () => Promise<void>): Promise<void> {
+  const original = globalThis.fetch;
+  globalThis.fetch = handler;
+  return fn().finally(() => {
+    globalThis.fetch = original;
+  });
+}
+
+test("session start pins profile input_languages, primary first, over MOA_LIVEKIT_LANGS", async () => {
+  await withEnvAsync(
+    { MOA_GATEWAY_URL: "https://api.example.test", MOA_LIVEKIT_LANGS: "en-US" },
+    async () => {
+      const config = loadConfig();
+      assert.deepEqual(config.chirp.languageCodes, ["en-US"]); // boot fallback, unused below
+
+      await stubFetch(
+        (async (input: string | URL) => {
+          assert.equal(String(input), "https://api.example.test/v1/agent/profile");
+          return new Response(
+            JSON.stringify({
+              profile: { input_languages: "en-US,am-ET", input_language_primary: "en-US" },
+            }),
+            { status: 200 },
+          );
+        }) as typeof fetch,
+        async () => {
+          const chirpConfig = await resolveSessionChirpConfig(config);
+          assert.deepEqual(chirpConfig.languageCodes, ["en-US", "am-ET"]);
+        },
+      );
+    },
+  );
+});
+
+test("primary reorders to the front when the profile lists it out of order", async () => {
+  const codes = normalizeSessionLanguageCodes("en-US,am-ET", "am-ET");
+  assert.deepEqual(codes, ["am-ET", "en-US"]);
+});
+
+test("caps to two codes BEFORE reordering the primary, matching the gateway", () => {
+  // Gateway languageCodes() caps to 2 first, so a primary listed third or later
+  // is dropped by the cap instead of being pulled to the front of the full list.
+  const codes = normalizeSessionLanguageCodes("am-ET,fr-FR,en-US", "en-US");
+  assert.deepEqual(codes, ["am-ET", "fr-FR"]);
+});
+
+test("a lone \"auto\" passes through and a mixed \"auto\" is stripped", () => {
+  assert.deepEqual(normalizeSessionLanguageCodes("auto", ""), ["auto"]);
+  assert.deepEqual(normalizeSessionLanguageCodes("auto,en-US", ""), ["en-US"]);
+});
+
+test("profile fetch failure falls back to MOA_LIVEKIT_LANGS", async () => {
+  await withEnvAsync(
+    { MOA_GATEWAY_URL: "https://api.example.test", MOA_LIVEKIT_LANGS: "en-US" },
+    async () => {
+      const config = loadConfig();
+
+      await stubFetch(
+        (async () => {
+          throw new Error("network unreachable");
+        }) as unknown as typeof fetch,
+        async () => {
+          const codes = await fetchSessionLanguageCodes(config.gateway, config.chirp.languageCodes);
+          assert.deepEqual(codes, ["en-US"]);
+        },
+      );
+    },
+  );
+});
+
+test("profile fetch non-2xx falls back to MOA_LIVEKIT_LANGS", async () => {
+  await withEnvAsync(
+    { MOA_GATEWAY_URL: "https://api.example.test", MOA_LIVEKIT_LANGS: "en-US,am-ET" },
+    async () => {
+      const config = loadConfig();
+
+      await stubFetch(
+        (async () => new Response("unauthorized", { status: 401 })) as typeof fetch,
+        async () => {
+          const codes = await fetchSessionLanguageCodes(config.gateway, config.chirp.languageCodes);
+          assert.deepEqual(codes, ["en-US", "am-ET"]);
+        },
+      );
+    },
+  );
+});
+
+test("profile fetch with empty language fields falls back to MOA_LIVEKIT_LANGS", async () => {
+  await withEnvAsync(
+    { MOA_GATEWAY_URL: "https://api.example.test", MOA_LIVEKIT_LANGS: "en-US" },
+    async () => {
+      const config = loadConfig();
+
+      await stubFetch(
+        (async () => new Response(JSON.stringify({ profile: {} }), { status: 200 })) as typeof fetch,
+        async () => {
+          const codes = await fetchSessionLanguageCodes(config.gateway, config.chirp.languageCodes);
+          assert.deepEqual(codes, ["en-US"]);
+        },
+      );
+    },
+  );
+});
+
+function withEnvAsync(env: Record<string, string | undefined>, fn: () => Promise<void>): Promise<void> {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(env)) {
+    saved[key] = process.env[key];
+    if (env[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = env[key];
+    }
+  }
+  return fn().finally(() => {
+    for (const key of Object.keys(saved)) {
+      if (saved[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = saved[key];
+      }
+    }
+  });
+}
