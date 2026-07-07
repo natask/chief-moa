@@ -20,6 +20,8 @@ const requiredFiles = [
   "extension/options.js",
   "extension/settings-intent.js",
   "extension/overlay.css",
+  "extension/sidepanel.html",
+  "extension/sidepanel.js",
   "extension/dev.html",
   "extension/dev.js",
   "docs/research.md",
@@ -54,7 +56,7 @@ const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
-const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen"];
+const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel"];
 const requiredHostPermissions = ["http://*/*", "https://*/*", "wss://api.agee.app/*"];
 
 if (manifest.manifest_version !== 3) {
@@ -282,7 +284,34 @@ if (
   !/summonOverlay\(tab, cmd\)/.test(backgroundSource) ||
   !/summonOverlay\(tab, "open"\)/.test(backgroundSource)
 ) {
-  throw new Error("per-tab shortcuts and the toolbar click must fall back to summonOverlay on restricted pages (chrome://, Web Store, PDF viewer) instead of failing silently");
+  throw new Error("per-tab shortcuts must fall back to summonOverlay on restricted pages (chrome://, Web Store, PDF viewer) instead of failing silently");
+}
+
+// The side panel is the extension-owned agent surface: it renders on every
+// page, including chrome:// pages where content scripts are forbidden.
+if (manifest.side_panel?.default_path !== "sidepanel.html") {
+  throw new Error("manifest must declare side_panel.default_path = sidepanel.html");
+}
+if (!manifest.commands?.["open-agee-panel"]) {
+  throw new Error("manifest must declare the open-agee-panel command");
+}
+if (
+  !/const PANEL_TAB_ID = -2/.test(backgroundSource) ||
+  !/port\.name !== "agee-panel"/.test(backgroundSource) ||
+  !/function openAgentPanel\(/.test(backgroundSource) ||
+  !/chrome\.sidePanel\.open\(target\)/.test(backgroundSource) ||
+  !/tabId === PANEL_TAB_ID/.test(backgroundSource)
+) {
+  throw new Error("background.js must bridge the side panel: PANEL_TAB_ID routing in send(), the agee-panel port, and a synchronous sidePanel.open from the action click and open-agee-panel command");
+}
+const sidepanelSource = readFileSync("extension/sidepanel.js", "utf8");
+if (
+  !/chrome\.runtime\.connect\(\{ name: "agee-panel" \}\)/.test(sidepanelSource) ||
+  !/"extension-offscreen"/.test(sidepanelSource) ||
+  !/text_turn/.test(sidepanelSource) ||
+  !/commit_turn/.test(sidepanelSource)
+) {
+  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture, and support commit_turn + text_turn");
 }
 
 if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {
@@ -624,7 +653,7 @@ if (
 if (
   !/isLivekitVoiceEnabled\(\)/.test(backgroundSource) ||
   !/startLivekitVoiceSession\(/.test(backgroundSource) ||
-  !/if \(await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
+  !/if \(tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
   !/return startVoiceSessionProxy\(tabId, opts\);/.test(backgroundSource)
 ) {
   throw new Error("background.js must gate LiveKit voice behind the flag and fall back to the WS startVoiceSessionProxy path");

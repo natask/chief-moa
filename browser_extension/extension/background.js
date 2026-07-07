@@ -1534,6 +1534,13 @@ async function maybeApplyTurnActions(tabId, data, signal, cueId) {
 }
 
 function send(tabId, msg) {
+  // Panel-owned sessions are addressed with the PANEL_TAB_ID sentinel: the
+  // side panel is an extension page, not a tab, so tabs.sendMessage can never
+  // reach it. Route its traffic over the panel port instead.
+  if (tabId === PANEL_TAB_ID) {
+    sendToPanel(msg);
+    return;
+  }
   chrome.tabs.sendMessage(tabId, msg).catch(() => {});
 }
 
@@ -1696,7 +1703,9 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
 // notice and fall back to the default WS path. When OFF (the default), this is a
 // straight passthrough to the WS path, so verify/smoke stay on the WS pipeline.
 async function startVoiceSessionWithMode(tabId, opts = {}) {
-  if (await isLivekitVoiceEnabled()) {
+  // livekit-voice.js delivers straight to a tab's content script; panel
+  // sessions must stay on the proxy path, whose events route through send().
+  if (tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
     try {
       const cfg = await getConfig();
       const sessionId = await getStableSessionId();
@@ -1710,11 +1719,11 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
         deviceId,
       });
     } catch (error) {
-      chrome.tabs.sendMessage(tabId, {
+      send(tabId, {
         cmd: "livekitNotice",
         cueId: opts.cueId || null,
         text: `LiveKit voice unavailable, using standard voice (${String(error?.message || error)}).`,
-      }).catch(() => {});
+      });
     }
   }
   return startVoiceSessionProxy(tabId, opts);
@@ -3613,21 +3622,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   closeTabRecordSessions(tabId);
 });
 
-chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab?.id) return;
-  // Restricted pages (chrome://, the Web Store, the PDF viewer) cannot host
-  // the overlay; summon it on the nearest injectable tab instead of silently
-  // doing nothing.
-  if (!isInjectableOverlayUrl(tab.url)) {
-    summonOverlay(tab, "open");
-    return;
-  }
-  try {
-    await ensureContent(tab.id);
-    await chrome.tabs.sendMessage(tab.id, { cmd: "open" });
-  } catch {
-    summonOverlay(tab, "open");
-  }
+chrome.action.onClicked.addListener((tab) => {
+  // The toolbar icon opens the extension-owned agent panel. Unlike the injected
+  // overlay, the side panel renders on every page — chrome:// pages, the Web
+  // Store, the PDF viewer — and persists across tab switches. sidePanel.open
+  // must be the first synchronous call in this handler: the user-gesture flag
+  // for this API decays almost immediately (crbug.com/1478648), so no awaits
+  // before it.
+  const opened = openAgentPanel(tab);
+  if (!opened) summonOverlay(tab, "open");
 });
 
 chrome.commands.onCommand.addListener(async (command, tab) => {
@@ -3769,4 +3772,132 @@ function summonOverlay(firedTab, cmd = "open") {
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== "open-agee-global") return;
   summonOverlay(tab, "open");
+});
+
+// ---- Side panel agent surface ----------------------------------------------
+// The side panel is the extension-owned home of the agent: an extension page
+// Chrome renders on every tab — chrome:// pages and the Web Store included —
+// that persists across tab switches. It is not a tab, so tabs.sendMessage can
+// never reach it; a long-lived port bridges it into the same tab-addressed
+// delivery layer the overlay uses. Panel-owned voice sessions carry the
+// PANEL_TAB_ID sentinel and send() routes their events over the port. Mic
+// capture stays in the offscreen document (extension pages cannot render the
+// getUserMedia permission prompt), which is already how overlay voice works.
+const PANEL_TAB_ID = -2;
+let panelPort = null;
+
+function sendToPanel(msg) {
+  if (!panelPort) return;
+  try {
+    panelPort.postMessage(msg);
+  } catch {}
+}
+
+function openAgentPanel(tab) {
+  if (!chrome.sidePanel?.open) return false;
+  const target = tab?.windowId != null
+    ? { windowId: tab.windowId }
+    : tab?.id != null
+      ? { tabId: tab.id }
+      : null;
+  if (!target) return false;
+  chrome.sidePanel.open(target).catch(() => {});
+  return true;
+}
+
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command !== "open-agee-panel") return;
+  // Same gesture constraint as the action click: open synchronously, no awaits.
+  if (openAgentPanel(tab)) return;
+  chrome.windows.getLastFocused((win) => {
+    if (win?.id != null) chrome.sidePanel?.open?.({ windowId: win.id }).catch(() => {});
+  });
+});
+
+function closePanelSessions(reason) {
+  for (const [id, session] of [...voiceSessions]) {
+    if (session.tabId === PANEL_TAB_ID) closeVoiceSession(id, reason);
+  }
+  if (activeAgentTabId === PANEL_TAB_ID) {
+    activeAgentTabId = null;
+    clearActiveBrowserAgentOwner(PANEL_TAB_ID, reason).catch(() => {});
+  }
+}
+
+async function handlePanelRequest(msg) {
+  if (msg.cmd === "voiceSessionStart") {
+    if (activeRecordSession()) {
+      return { ok: false, error: "An audio note recording is in progress. Stop recording before starting voice." };
+    }
+    claimActiveAgentTab(PANEL_TAB_ID, "panel voice session started", {
+      cue_id: msg.cueId || null,
+      status: "listening",
+    });
+    const session = await startVoiceSessionWithMode(PANEL_TAB_ID, {
+      cueId: msg.cueId,
+      turnId: msg.turnId,
+      assistantOverlap: msg.assistantOverlap === true,
+      capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
+      autoCommit: msg.autoCommit !== false,
+      contextAction: msg.contextAction,
+      threadLabel: msg.threadLabel,
+    });
+    if (session?.voiceSessionId) {
+      setActiveBrowserAgentOwner(PANEL_TAB_ID, "panel voice session started", {
+        cue_id: msg.cueId || null,
+        voice_session_id: session.voiceSessionId,
+        status: "listening",
+      }).catch(() => {});
+    }
+    return { ok: true, ...session };
+  }
+  if (msg.cmd === "voiceSessionAttach") {
+    return attachVoiceSession(msg.voiceSessionId, PANEL_TAB_ID);
+  }
+  if (msg.cmd === "voiceSessionControl") {
+    return sendVoiceSessionControl(msg.voiceSessionId, msg.message);
+  }
+  if (msg.cmd === "voiceSessionClose") {
+    closeVoiceSession(msg.voiceSessionId, String(msg.reason || "closed"));
+    return { ok: true };
+  }
+  if (msg.cmd === "voiceTurnFetch") {
+    const turn = await fetchStoredVoiceTurn(msg.turnId);
+    return { ok: Boolean(turn), turn: turn || null };
+  }
+  if (msg.cmd === "history") {
+    const cfg = await getConfig();
+    const turns = await loadHistory(cfg);
+    return { ok: true, turns };
+  }
+  return { ok: false, error: `unsupported panel command: ${String(msg.cmd || "")}` };
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "agee-panel") return;
+  if (panelPort && panelPort !== port) {
+    try {
+      panelPort.disconnect();
+    } catch {}
+  }
+  panelPort = port;
+  port.onMessage.addListener((msg) => {
+    if (!msg || typeof msg !== "object" || msg.reqId == null) return;
+    Promise.resolve()
+      .then(() => handlePanelRequest(msg))
+      .then((result) => {
+        try {
+          port.postMessage({ reqId: msg.reqId, ...(result || { ok: false, error: "empty panel response" }) });
+        } catch {}
+      })
+      .catch((error) => {
+        try {
+          port.postMessage({ reqId: msg.reqId, ok: false, error: String(error?.message || error) });
+        } catch {}
+      });
+  });
+  port.onDisconnect.addListener(() => {
+    if (panelPort === port) panelPort = null;
+    closePanelSessions("panel closed");
+  });
 });
