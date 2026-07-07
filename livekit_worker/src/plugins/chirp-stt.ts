@@ -4,8 +4,11 @@
 // Google Cloud Speech (Chirp) STT, so this plugin implements Speech-to-Text v2
 // against {location}-speech.googleapis.com with the same request shape the
 // gateway's lib/voice-providers.js uses: explicit LINEAR16 decoding and
-// `languageCodes` pinned from config (primary + at most one alternate). Language
-// is NEVER auto-detected.
+// `languageCodes` pinned from config (primary + at most one alternate). The
+// config passed in is resolved once per session by
+// config.ts#resolveSessionChirpConfig -- from the gateway's durable profile
+// when reachable, else MOA_LIVEKIT_LANGS -- and never changes after that.
+// Language is NEVER auto-detected.
 //
 // API-surface delta (documented in README): @livekit/agents' STT base gives a
 // streaming SpeechStream, but Speech-to-Text v2 true bidi streamingRecognize is
