@@ -662,7 +662,7 @@ class CascadedVoiceProvider {
           expressive_tags: this.ttsProviderId === "gemini-tts",
           language_pinning: this.ttsProviderId === "gemini-tts",
         },
-        synthesize: ({ text, language, stylePrompt, signal }) => this.synthesizeSpeech(text, language, stylePrompt, signal),
+        synthesize: ({ text, language, stylePrompt, signal, voice }) => this.synthesizeSpeech(text, language, stylePrompt, signal, voice),
       })
       : null;
   }
@@ -823,9 +823,14 @@ class CascadedVoiceProvider {
     // next turn; a post-stream language divergence is recorded as
     // tts_language_mismatch instead of re-synthesizing.
     const pinnedLanguage = this.replyLanguage();
+    // Like the language, the TTS voice is pinned ONCE per turn, from the turn's
+    // effective profile (which carries a validated session_start voice
+    // override), so every streamed chunk speaks with the same voice and a
+    // per-session voice never leaks into other sessions.
+    const pinnedVoice = this.ttsVoiceName(turn.effectiveProfile);
     const turnStartedAtMs = Date.now();
     const pipeline = this.streamingEnabledForTurn() && modality !== "text" && this.canSynthesize(pinnedLanguage)
-      ? this.createStreamingReplyPipeline({ hooks, language: pinnedLanguage, turnStartedAtMs })
+      ? this.createStreamingReplyPipeline({ hooks, language: pinnedLanguage, turnStartedAtMs, voice: pinnedVoice })
       : null;
     // The reasoner (gateway LLM/tool turn) runs with no stream events until it
     // returns. Tell the session server to keep the client alive with turn_progress
@@ -954,7 +959,7 @@ class CascadedVoiceProvider {
         await hooks.onTurnProgress("tts");
       }
       try {
-        const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle });
+        const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle, voice: pinnedVoice });
         if (pcm && pcm.length) {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
           await hooks.sendAudio(pcm);
@@ -1049,7 +1054,7 @@ class CascadedVoiceProvider {
   // the session-server write guard aborts silently (no tts_error, no events
   // for the dead turn). One nulled stream crash-looped this gateway 24 times
   // in a day; the guard lives on the write, not only in callers.
-  createStreamingReplyPipeline({ hooks, language, turnStartedAtMs }) {
+  createStreamingReplyPipeline({ hooks, language, turnStartedAtMs, voice }) {
     const provider = this;
     const chunker = createSpeechChunker(this.chunkerOptions());
     const abortController = new AbortController();
@@ -1126,6 +1131,7 @@ class CascadedVoiceProvider {
           language,
           stylePrompt: state.style,
           signal: abortController.signal,
+          voice,
         });
         if (!pcm || !pcm.length) {
           throw new Error("hosted TTS returned no audio");
@@ -1315,7 +1321,11 @@ class CascadedVoiceProvider {
       await hooks.onTurnProgress("tts");
     }
     try {
-      const pcm = await this.ttsStage.synthesize({ text: speak, language });
+      const pcm = await this.ttsStage.synthesize({
+        text: speak,
+        language,
+        voice: this.ttsVoiceName(options.profile),
+      });
       if (pcm && pcm.length) {
         await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
         await hooks.sendAudio(pcm);
@@ -1365,21 +1375,30 @@ class CascadedVoiceProvider {
     return Boolean(this.ttsVoice) || Boolean(cloudTtsVoiceFor(code));
   }
 
-  // The persisted profile voice wins over the env default on the Gemini-TTS
-  // leg (both use the same Gemini voice names), so a spoken "change your
-  // voice" self-configuration applies on the next turn. Classic Cloud TTS
-  // voices have provider-specific names, so that leg stays env-driven.
-  ttsVoiceName() {
-    if (this.ttsProviderId === "gemini-tts" && this.agentProfile && typeof this.agentProfile.effective === "function") {
-      const fromProfile = String(this.agentProfile.effective().voice || "").trim();
-      if (fromProfile) {
-        return fromProfile;
+  // The voice for the Gemini-TTS leg, most specific first: a per-turn profile
+  // (turn.effectiveProfile — carries the session_start voice override the
+  // session server already canonicalized, e.g. a website pet speaking in its
+  // own voice), then the persisted profile voice (a spoken "change your voice"
+  // self-configuration applies on the next turn), then the env default.
+  // Classic Cloud TTS voices have provider-specific names, so that leg stays
+  // env-driven.
+  ttsVoiceName(profile) {
+    if (this.ttsProviderId === "gemini-tts") {
+      const fromTurnProfile = profile && typeof profile === "object" ? String(profile.voice || "").trim() : "";
+      if (fromTurnProfile) {
+        return fromTurnProfile;
+      }
+      if (this.agentProfile && typeof this.agentProfile.effective === "function") {
+        const fromProfile = String(this.agentProfile.effective().voice || "").trim();
+        if (fromProfile) {
+          return fromProfile;
+        }
       }
     }
     return this.ttsVoice;
   }
 
-  async synthesizeSpeech(text, language, stylePrompt = "", signal = undefined) {
+  async synthesizeSpeech(text, language, stylePrompt = "", signal = undefined, voice = "") {
     const token = await this.accessToken();
     return synthesizeCloudTts({
       text,
@@ -1388,7 +1407,7 @@ class CascadedVoiceProvider {
       // input.prompt; classic Cloud TTS voices do not, so only forward it there.
       prompt: this.ttsProviderId === "gemini-tts" ? String(stylePrompt || "") : "",
       language: language || this.replyLanguage(),
-      voice: this.ttsVoiceName(),
+      voice: (this.ttsProviderId === "gemini-tts" && String(voice || "").trim()) || this.ttsVoiceName(),
       modelName: this.ttsProviderId === "gemini-tts" ? this.ttsModel : "",
       token,
       location: this.location,

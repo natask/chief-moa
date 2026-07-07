@@ -11,8 +11,10 @@
 //                                  language, model, classification, context } }
 //   TtsProvider  { id, capabilities: { streaming_tts, expressive_tags,
 //                                      language_pinning },
-//                  synthesize({ text, language, stylePrompt, signal })
+//                  synthesize({ text, language, stylePrompt, signal, voice })
 //                    -> Buffer /* pcm16 @ the client rate */ }
+//                  `voice` is the turn-pinned voice name (per-session override
+//                  or profile voice); empty means the provider's own default.
 //
 // The transport contract is untouched: the composed voice provider still
 // exposes processTurn(turn, hooks)/status()/synthesizeAssistantSpeech, and the

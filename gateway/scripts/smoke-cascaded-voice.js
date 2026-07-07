@@ -45,6 +45,7 @@ async function main() {
     await enUsCascade(tempDir);
     await amEtFallback(tempDir);
     await geminiTtsAmEtCascade(tempDir);
+    await perSessionVoiceOverride(tempDir);
     await sttOnlyUnchanged(tempDir);
     await profileDerivedSttLanguages(tempDir);
     await sttPrimaryFollowsProfilePrimary(tempDir);
@@ -438,6 +439,86 @@ async function geminiTtsAmEtCascade(tempDir) {
   assert.equal(ttsCall.body.voice.modelName, "gemini-3.1-flash-tts-preview", "synthesize must select the Gemini TTS model via voice.modelName");
   assert.equal(ttsCall.body.voice.languageCode, "am-ET", "reply language must be pinned in the synthesize request");
   assert.equal(ttsCall.body.voice.name, "Aoede", "the persisted profile voice must win over the env/Kore default");
+}
+
+// A session_start `voice` override (a website pet speaking in its own voice)
+// must drive the Gemini-TTS leg for THAT session only: every synthesize request
+// carries the canonicalized override, a session with no override still speaks
+// the persisted profile voice, and the stored profile is never mutated.
+async function perSessionVoiceOverride(tempDir) {
+  const agentProfile = {
+    effective: () => ({
+      voice: "Aoede",
+      language: "en-US",
+      language_primary: "en-US",
+      input_languages: "en-US",
+    }),
+  };
+
+  const runSession = async (tag, sessionStartExtras) => {
+    const calls = [];
+    stubFetch({ sttTranscript: "hello pet", calls });
+    const provider = createVoiceProvider({
+      env: {
+        VOICE_PROVIDER: "chirp",
+        VOICE_TTS_PROVIDER: "gemini-tts",
+        GCP_PROJECT_ID: "test-project",
+        CHIRP_ACCESS_TOKEN: "test-token",
+        CHIRP_MODEL: "chirp_3",
+        CHIRP_LANGUAGE_CODES: "en-US",
+      },
+      reasoner: async ({ transcript }) => ({
+        speak: `Hi! You said: ${transcript}.`,
+        display: `Hi! You said: ${transcript}.`,
+        language: "en-US",
+        model: "test-model",
+        classification: "chat",
+      }),
+      agentProfile,
+    });
+    const dataDir = path.join(tempDir, `voice-override-${tag}`);
+    const sessionsDir = path.join(dataDir, "voice-sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const events = [];
+    const connection = new VoiceSessionConnection(fakeWs(events), {
+      request: {},
+      sessionsDir,
+      providerEventsFile: path.join(dataDir, "voice-provider-events.jsonl"),
+      voiceProvider: provider,
+      agentProfile,
+      contextProvider: null,
+      toolHandler: null,
+      onTurnCompleted: null,
+    });
+    await connection.handleSessionStart({
+      type: "session_start",
+      session_id: `sess_voice_${tag}`,
+      turn_id: `turn_voice_${tag}`,
+      format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+      ...sessionStartExtras,
+    });
+    connection.handleAudio(generatePcm16Tone({ durationMs: 80, frequencyHz: 240, sampleRate: 16000, volume: 0.2 }));
+    await connection.handleCommitTurn({ type: "commit_turn", turn_id: `turn_voice_${tag}` });
+    return calls;
+  };
+
+  // Lowercase override exercises canonicalization (client voice lists are
+  // lowercase) and must win over the profile's Aoede for this session.
+  const overridden = await runSession("override", { voice: "puck", source: "website-pet-studio" });
+  const overriddenTts = overridden.filter((c) => c.kind === "tts");
+  assert.ok(overriddenTts.length > 0, "override session must synthesize hosted audio");
+  for (const call of overriddenTts) {
+    assert.equal(call.body.voice.name, "Puck", "session_start voice override must reach every synthesize request");
+  }
+
+  // No override: unchanged behavior, the persisted profile voice speaks.
+  const defaulted = await runSession("default", {});
+  const defaultedTts = defaulted.filter((c) => c.kind === "tts");
+  assert.ok(defaultedTts.length > 0, "default session must synthesize hosted audio");
+  for (const call of defaultedTts) {
+    assert.equal(call.body.voice.name, "Aoede", "a session with no override must keep the profile voice");
+  }
+  assert.equal(agentProfile.effective().voice, "Aoede", "a session override must not mutate the stored profile voice");
 }
 
 async function sttOnlyUnchanged(tempDir) {

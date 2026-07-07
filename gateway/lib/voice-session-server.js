@@ -887,6 +887,9 @@ class VoiceSessionConnection {
         try {
           confirmationTts = await this.voiceProvider.synthesizeAssistantSpeech(profileControlText, providerHooks, {
             language: providerResult?.reply_language || canonicalRecord?.response?.reply_language || "",
+            // Confirmations speak with the same per-turn voice as the reply
+            // (session_start override included), not the global default.
+            profile: turn.effectiveProfile,
           });
         } catch {
           // The confirmation still shows as text; a synthesis fault is not fatal.
