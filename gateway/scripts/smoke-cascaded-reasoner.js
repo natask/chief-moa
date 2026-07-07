@@ -62,11 +62,40 @@ const fetchCalls = [];
 let pendingToolCall = null;
 // When set, the model returns this exact text as its plain reply content.
 let pendingReply = null;
+// When set, streaming (stream:true or :streamGenerateContent) requests consume
+// one round of SSE events per request. The literal "__fault__" makes the body
+// throw mid-stream, exercising the per-round non-streaming fallback.
+let pendingStreamRounds = null;
+
+function sseResponse(events) {
+  async function* body() {
+    for (const event of events) {
+      if (event === "__fault__") {
+        throw new Error("simulated SSE transport fault");
+      }
+      yield Buffer.from(`data: ${JSON.stringify(event)}\n\n`);
+    }
+    yield Buffer.from("data: [DONE]\n\n");
+  }
+  return { ok: true, status: 200, body: body(), json: async () => ({}), text: async () => "" };
+}
+
 global.fetch = async (url, options = {}) => {
   const u = String(url);
+  if (u.includes(":streamGenerateContent")) {
+    const body = JSON.parse(String(options.body || "{}"));
+    fetchCalls.push({ kind: "vertex-stream", url: u, body });
+    if (Array.isArray(pendingStreamRounds) && pendingStreamRounds.length > 0) {
+      return sseResponse(pendingStreamRounds.shift());
+    }
+    return sseResponse([{ candidates: [{ content: { parts: [{ text: "Understood, master." }] } }] }]);
+  }
   if (u.includes("/chat/completions")) {
     const body = JSON.parse(String(options.body || "{}"));
     fetchCalls.push({ kind: "openai", url: u, body });
+    if (body.stream === true && Array.isArray(pendingStreamRounds) && pendingStreamRounds.length > 0) {
+      return sseResponse(pendingStreamRounds.shift());
+    }
     const hasToolResult = Array.isArray(body.messages) && body.messages.some((m) => m.role === "tool");
     if (pendingToolCall && !hasToolResult) {
       return jsonResponse({
@@ -116,6 +145,10 @@ async function main() {
   await modelToolCallLaunchesAgentRun();
   await modelAndReasoningProviderRoute();
   await expressiveDirectiveAndParsing();
+  await streamingDeltasForPlainReply();
+  await streamingToolRoundOnlyTextIsFlushed();
+  await streamingVertexDeltasAndEndpoint();
+  await streamingSseFaultFallsBackPerRound();
 
   console.log(JSON.stringify({
     ok: true,
@@ -126,6 +159,10 @@ async function main() {
       "a model launch_agent_run tool call starts a run in this session's work state, and the transcript gate blocks launches the user never asked for",
       "profile.model and profile.reasoning_provider route the next reasoning call to the selected provider/model",
       "on gemini-tts the reasoner prompts for expressive speech and splits style, tags, and clean display text",
+      "with on_speak_delta the reasoner streams the final answer via SSE (stream:true) and the deltas equal the returned speak",
+      "tool-round-only text is buffered, flushed to deltas at loop end, and the tool handler runs (streaming loop)",
+      "reasoning_provider=vertex streams over :streamGenerateContent?alt=sse and deltas fire only for final text",
+      "an SSE transport fault falls back to one non-streaming call for that round and the reply is still spoken",
     ],
   }, null, 2));
 }
@@ -344,6 +381,129 @@ async function expressiveDirectiveAndParsing() {
     assert.doesNotMatch(reasoning.speak, /\[/, "the displayed/stored reply must be clean of all bracket tags");
     assert.match(reasoning.speak, /Hey there/, "the displayed reply must keep the actual words");
   } finally {
+    pendingReply = null;
+  }
+}
+
+// Streaming reasoning: with on_speak_delta wired the loop uses stream:true and
+// forwards final-answer deltas; the sanitized deltas concatenate to the speak.
+async function streamingDeltasForPlainReply() {
+  pendingStreamRounds = [[
+    { choices: [{ delta: { content: "Hello " } }] },
+    { choices: [{ delta: { content: "there, master." } }] },
+  ]];
+  fetchCalls.length = 0;
+  const deltas = [];
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "say hello to me",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-stream-plain",
+      on_speak_delta: (delta) => deltas.push(delta),
+    });
+    assert.equal(reasoning.speak, "Hello there, master.", `streamed reply must be returned whole (got ${JSON.stringify(reasoning.speak)})`);
+    assert.ok(deltas.length >= 1, "on_speak_delta must fire");
+    assert.equal(deltas.join(""), "Hello there, master.", `deltas must equal the spoken reply (got ${JSON.stringify(deltas.join(""))})`);
+    const streamCall = fetchCalls.find((c) => c.kind === "openai" && c.body.stream === true);
+    assert.ok(streamCall, "the reasoner must request stream:true when a delta consumer exists");
+  } finally {
+    pendingStreamRounds = null;
+  }
+}
+
+// Tool-round text is buffered, not dropped: when the ONLY prose rides the tool
+// round, the loop flushes it to deltas at loop end so it is spoken, and the
+// tool handler ran through the shared sanitizer. Split tool-call argument
+// fragments must accumulate by index.
+async function streamingToolRoundOnlyTextIsFlushed() {
+  assert.notEqual(agentProfile.effective().voice, "Charon", "precondition: voice must not already be Charon");
+  pendingStreamRounds = [
+    [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_s1", function: { name: "update_agent_profile", arguments: "{\"profile\":{\"voi" } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "ce\":\"charon\"}}" } }] } }] },
+      { choices: [{ delta: { content: "Done, master. Charon voice is active." } }] },
+    ],
+    [
+      { choices: [{ delta: { content: "" } }] },
+    ],
+  ];
+  fetchCalls.length = 0;
+  const deltas = [];
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "good evening",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-stream-toolround",
+      on_speak_delta: (delta) => deltas.push(delta),
+    });
+    assert.equal(agentProfile.effective().voice, "Charon", "the streamed tool call must patch the profile through the sanitizer");
+    assert.equal(reasoning.speak, "Done, master. Charon voice is active.");
+    assert.equal(deltas.join(""), "Done, master. Charon voice is active.", "the tool round's buffered text must be flushed to deltas at loop end");
+  } finally {
+    pendingStreamRounds = null;
+    await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  }
+}
+
+// Vertex streaming: the loop switches to :streamGenerateContent?alt=sse and
+// forwards text-part deltas from the SSE chunks.
+async function streamingVertexDeltasAndEndpoint() {
+  const put = await requestJson("PUT", "/v1/agent/profile", {
+    profile: { reasoning_provider: "vertex", model: "gemini-stream-custom" },
+  });
+  assert.equal(put.status, 200, `provider swap must succeed: ${JSON.stringify(put.json)}`);
+  pendingStreamRounds = [[
+    { candidates: [{ content: { parts: [{ text: "Selam " }] } }] },
+    { candidates: [{ content: { parts: [{ text: "friend, master." }] } }] },
+  ]];
+  fetchCalls.length = 0;
+  const deltas = [];
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "greet me warmly",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-stream-vertex",
+      on_speak_delta: (delta) => deltas.push(delta),
+    });
+    const streamCall = fetchCalls.find((c) => c.kind === "vertex-stream");
+    assert.ok(streamCall, "reasoning_provider=vertex must stream over :streamGenerateContent");
+    assert.match(streamCall.url, /:streamGenerateContent\?alt=sse/, `the streaming URL must use alt=sse (got ${streamCall && streamCall.url})`);
+    assert.match(streamCall.url, /gemini-stream-custom/, "profile.model must select the streamed Vertex model");
+    assert.equal(reasoning.speak, "Selam friend, master.");
+    assert.equal(deltas.join(""), "Selam friend, master.", "vertex deltas must equal the spoken reply");
+  } finally {
+    pendingStreamRounds = null;
+    await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  }
+}
+
+// SSE safety valve: a transport fault mid-stream falls back to ONE
+// non-streaming call for that round; the reply still arrives and is flushed to
+// deltas, and the turn never fails.
+async function streamingSseFaultFallsBackPerRound() {
+  pendingStreamRounds = [["__fault__"]];
+  pendingReply = "Fallback reply, master.";
+  fetchCalls.length = 0;
+  const deltas = [];
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "tell me something",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-stream-fault",
+      on_speak_delta: (delta) => deltas.push(delta),
+    });
+    assert.equal(reasoning.speak, "Fallback reply, master.", "the per-round fallback must still answer");
+    assert.equal(deltas.join(""), "Fallback reply, master.", "the fallback reply must still be flushed to deltas");
+    const streamAttempt = fetchCalls.find((c) => c.kind === "openai" && c.body.stream === true);
+    const plainRound = fetchCalls.find((c) => c.kind === "openai" && c.body.stream !== true);
+    assert.ok(streamAttempt, "the streaming round must have been attempted");
+    assert.ok(plainRound, "the faulted round must retry once without streaming");
+  } finally {
+    pendingStreamRounds = null;
     pendingReply = null;
   }
 }

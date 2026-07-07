@@ -6,6 +6,8 @@ const path = require("node:path");
 const { WebSocket, WebSocketServer } = require("ws");
 const {
   CLIENT_AUDIO_FORMAT,
+  TurnSupersededError,
+  isTurnSupersededError,
   createVoiceProvider,
   generatePcm16Tone: generateProviderTone,
 } = require("./voice-providers");
@@ -134,6 +136,15 @@ class VoiceSessionConnection {
           || TERMINAL_TURN_STATUSES.has(turn.status)) {
         this.stopTurnProgress();
         return;
+      }
+      // Streaming turns: audio frames are their own liveness signal. Skip the
+      // tick while a frame flowed within the interval; keep the interval armed
+      // for inter-chunk gaps.
+      if (turn.streamingAudio && turn.lastAssistantAudioAt) {
+        const lastAudioMs = Date.parse(turn.lastAssistantAudioAt);
+        if (Number.isFinite(lastAudioMs) && Date.now() - lastAudioMs < intervalMs) {
+          return;
+        }
       }
       try {
         this.ws.send(JSON.stringify({
@@ -346,6 +357,14 @@ class VoiceSessionConnection {
       metadata: {},
       audioStream: null,
       assistantAudioStream: null,
+      // Latched by closeAssistantAudioStream: once the assistant PCM stream is
+      // finalized, a late streamed chunk is DROPPED — never re-created with
+      // flags:"w", which would wipe the stored artifact back to zero bytes.
+      assistantAudioClosed: false,
+      // Set when the provider declares a pipelined multi-frame audio stream;
+      // the turn_progress keepalive then keeps running and skips ticks only
+      // while audio frames are flowing.
+      streamingAudio: false,
       providerEvents: null,
       liveSession: null,
       completing: false,
@@ -547,7 +566,24 @@ class VoiceSessionConnection {
   }
 
   providerHooks(turn, providerEvents) {
+    // Interruption guard, part 1: a barge-in (handleSessionStart ->
+    // closeCurrentTurn) can replace this.turn while a streaming pipeline still
+    // holds these hooks. Audio hooks check turn identity at entry AND re-check
+    // synchronously right before every socket write (writeAssistantAudio can
+    // await a stream drain, opening a TOCTOU window), throwing
+    // TurnSupersededError so the pipeline aborts silently.
+    const assertTurnActive = () => {
+      if (this.turn !== turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
+        throw new TurnSupersededError(`turn ${turn.turnId} was superseded`);
+      }
+    };
+    // Text/transcript hooks drop silently after supersession (no throw: live
+    // providers fire them from fire-and-forget chains where a rejection would
+    // become an unhandled rejection); audio hooks throw so the pipeline aborts.
+    const turnSuperseded = () => this.turn !== turn || TERMINAL_TURN_STATUSES.has(turn.status);
     return {
+      // Additive: lets the streaming pipeline poll cheaply between chunks.
+      isTurnActive: () => !turnSuperseded(),
       // Additive keepalive control: the cascaded provider calls this when it
       // begins the reasoner ("reasoning") and the TTS leg ("tts"). The session
       // server owns the interval + socket write; the provider only reports which
@@ -556,6 +592,7 @@ class VoiceSessionConnection {
         this.startTurnProgress(turn, stage);
       },
       onTranscriptPartial: async (text) => {
+        if (turnSuperseded()) return;
         const value = String(text || "").trim();
         if (!value) return;
         providerEvents.transcript = value;
@@ -569,6 +606,7 @@ class VoiceSessionConnection {
         });
       },
       onTranscriptFinal: async (text) => {
+        if (turnSuperseded()) return;
         const value = String(text || "").trim();
         if (!value) return;
         providerEvents.transcript = value;
@@ -583,6 +621,7 @@ class VoiceSessionConnection {
         });
       },
       onAssistantText: async (text) => {
+        if (turnSuperseded()) return;
         const value = String(text || "").trim();
         if (!value) return;
         providerEvents.assistantText = value;
@@ -596,23 +635,44 @@ class VoiceSessionConnection {
           text: value,
         });
       },
-      onAssistantAudioStart: async (format) => {
+      onAssistantAudioStart: async (format, options) => {
+        assertTurnActive();
         providerEvents.assistantAudioStarted = true;
-        // Real assistant audio now streams (Live model audio or hosted TTS), so
-        // the keepalive is no longer needed: audio frames reset the client
-        // watchdog on their own. Stop it here rather than waiting for turn_done.
-        this.stopTurnProgress();
-        await this.recordProviderEvent(turn, providerEvents, "assistant_audio_start", { format: format || ASSISTANT_AUDIO_FORMAT });
+        const streaming = options?.streaming === true;
+        if (streaming) {
+          // Pipelined multi-frame stream: KEEP the keepalive running. The
+          // interval skips ticks while turn.lastAssistantAudioAt is fresh, so
+          // a healthy stream sends no redundant ticks, but an inter-chunk gap
+          // (a slow later sentence, a mid-reply tool round) still keeps the
+          // client watchdog fed. It stops at turn completion as today.
+          turn.streamingAudio = true;
+        } else {
+          // Single-blob path: real assistant audio now streams, so the
+          // keepalive is no longer needed. Unchanged pre-streaming behavior.
+          this.stopTurnProgress();
+        }
+        await this.recordProviderEvent(turn, providerEvents, "assistant_audio_start", {
+          format: format || ASSISTANT_AUDIO_FORMAT,
+          ...(streaming ? { streaming: true } : {}),
+        });
+        assertTurnActive();
         await this.sendEvent({
           type: "assistant_audio_start",
           session_id: turn.sessionId,
           branch_id: turn.branchId,
           turn_id: turn.turnId,
           format: format || ASSISTANT_AUDIO_FORMAT,
+          ...(streaming ? { streaming: true } : {}),
         });
       },
       sendAudio: async (chunk) => {
+        assertTurnActive();
         await writeAssistantAudio(turn, chunk);
+        // Re-check synchronously right before the socket write: the disk write
+        // above may have awaited a drain while a barge-in replaced the turn,
+        // and a stale frame (or a stale assistant_audio_done) on the shared
+        // socket corrupts the NEXT turn's audio window on current clients.
+        assertTurnActive();
         await sendWs(this.ws, chunk, { binary: true });
       },
       sendToolResponse: async (functionResponses) => {
@@ -629,8 +689,10 @@ class VoiceSessionConnection {
       },
       onToolCall: async (call) => this.handleToolCall(turn, providerEvents, call),
       onAssistantAudioDone: async () => {
+        assertTurnActive();
         providerEvents.assistantAudioDone = true;
         await this.recordProviderEvent(turn, providerEvents, "assistant_audio_done", {});
+        assertTurnActive();
         await this.sendEvent({
           type: "assistant_audio_done",
           session_id: turn.sessionId,
@@ -833,6 +895,11 @@ class VoiceSessionConnection {
       transcript,
       assistant_text: assistantText,
       gateway_assistant_text: profileControlText || "",
+      // Streaming latency observability: time to first PCM write and segment
+      // count land per turn in voice-provider-events.jsonl for moa-voice-qa.
+      ...(Number.isFinite(providerResult?.first_audio_ms) ? { first_audio_ms: providerResult.first_audio_ms } : {}),
+      ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
+      ...(Number.isFinite(providerResult?.reasoner_first_delta_ms) ? { reasoner_first_delta_ms: providerResult.reasoner_first_delta_ms } : {}),
     });
     const doneModality = providerResult?.modality || confirmationTts?.modality || "";
     const doneTtsError = providerResult?.tts_error || confirmationTts?.tts_error || "";
@@ -856,6 +923,10 @@ class VoiceSessionConnection {
       // spoken) and, when hosted TTS failed, the short reason.
       ...(doneModality ? { modality: doneModality } : {}),
       ...(doneTtsError ? { tts_error: doneTtsError } : {}),
+      // Additive streaming fields; old clients ignore them.
+      ...(providerResult?.streaming ? { streaming: true } : {}),
+      ...(Number.isFinite(providerResult?.first_audio_ms) ? { first_audio_ms: providerResult.first_audio_ms } : {}),
+      ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
     });
 
     turn.status = "completed";
@@ -979,6 +1050,13 @@ class VoiceSessionConnection {
         // history distinguishes a text-only turn from a synthesis fault.
         modality: providerResult?.modality || "",
         tts_error: providerResult?.tts_error || "",
+        // Additive streaming metadata on the canonical record. Old code
+        // reading new records ignores these; new code reading old records
+        // treats absence as the non-streaming default.
+        ...(providerResult?.streaming ? { streaming: true } : {}),
+        ...(Number.isFinite(providerResult?.first_audio_ms) ? { first_audio_ms: providerResult.first_audio_ms } : {}),
+        ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
+        ...(providerResult?.tts_language_mismatch ? { tts_language_mismatch: true } : {}),
         transcript_language_rejected: providerResult?.transcript_language_rejected === true || turn.transcriptLanguageRejected === true,
         // The restricted INPUT languages the STT leg recognized, captured at
         // session start. Recorded on the canonical turn so a later audio-analysis
@@ -1003,6 +1081,12 @@ class VoiceSessionConnection {
 
   async failCommittedTurn(turn, providerEvents, error) {
     if (!turn) {
+      return;
+    }
+    if (isTurnSupersededError(error)) {
+      // A superseded turn already got its terminal record from
+      // closeCurrentTurn (barge-in). Broadcasting it as a turn error would
+      // rebrand a normal interruption and emit events for the dead turn.
       return;
     }
     const message = cleanError(error);
@@ -1285,6 +1369,14 @@ async function writeAssistantAudio(turn, chunk) {
   if (value.length === 0) {
     return;
   }
+  // Null-guard, mirroring the 2026-07-06 writeTurnAudio crash-loop fix: once
+  // closeAssistantAudioStream finalized the stream (barge-in, cancel, close,
+  // completion), a late streamed chunk is stale output. Drop it — re-creating
+  // the stream with flags:"w" here would silently wipe the stored PCM of a
+  // finalized turn, and throwing would take the whole session down.
+  if (turn.assistantAudioClosed || TERMINAL_TURN_STATUSES.has(turn.status)) {
+    return;
+  }
   if (!turn.assistantAudioStream) {
     turn.assistantAudioStream = fs.createWriteStream(turn.assistantPcmPath, { flags: "w" });
     turn.assistantAudioStream.on("error", (error) => {
@@ -1303,6 +1395,9 @@ async function writeAssistantAudio(turn, chunk) {
 }
 
 async function closeAssistantAudioStream(turn) {
+  // Latch first: even when no stream was ever opened, the assistant-audio
+  // lifecycle for this turn is over and a late chunk must not re-open it.
+  turn.assistantAudioClosed = true;
   if (!turn.assistantAudioStream) {
     return;
   }
@@ -1443,6 +1538,7 @@ function nowIso() {
 
 module.exports = {
   VOICE_SESSION_ENDPOINT,
+  TurnSupersededError,
   createVoiceSessionServer,
   generatePcm16Tone: generateProviderTone,
   // Exported for in-process smoke tests that drive the connection without a real
