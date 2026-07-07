@@ -240,6 +240,10 @@ const agentProfile = createAgentProfileStore({
     model: MODEL_ID,
     temperature: MODEL_TEMPERATURE,
     voice_max_chars: VOICE_TTS_MAX_CHARS,
+    // Delivery defaults: fast speech out of the box (1.5x), no tone. Both are
+    // runtime-editable by voice ("speak slower", "warmer") via the profile tool.
+    speaking_rate: process.env.VOICE_SPEAKING_RATE || 1.5,
+    voice_tone: process.env.VOICE_TONE || "",
     language: MODEL_LANGUAGE,
     language_primary: MODEL_LANGUAGE || "en-US",
     language_mode: "explicit",
@@ -7665,6 +7669,20 @@ async function callModelToolLoopStreaming(messages, profile, toolDefs, options =
     }
   };
 
+  // Tool-round tap for interim speech: fires once per tool round, BEFORE the
+  // handlers run, with whether any text has been forwarded yet this turn. The
+  // voice reasoner uses it to speak a canned acknowledgment when the model
+  // went straight to tools. Best-effort; a consumer fault never breaks the turn.
+  const onToolRound = typeof options.onToolRound === "function"
+    ? (info) => {
+      try {
+        options.onToolRound({ ...info, emitted: emittedText.length > 0 });
+      } catch {
+        // Tool-round consumers are best-effort; the turn continues.
+      }
+    }
+    : null;
+
   const provider = resolveReasoningProvider(effective);
   if (!Array.isArray(toolDefs) || toolDefs.length === 0 || !providerConfiguredFor(provider)) {
     const text = await callModelOrFallback(messages, effective);
@@ -7673,8 +7691,8 @@ async function callModelToolLoopStreaming(messages, profile, toolDefs, options =
   }
   try {
     const result = provider === "vertex"
-      ? await vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit)
-      : await openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit);
+      ? await vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound)
+      : await openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound);
     reconcile(result.text);
     return result;
   } catch (error) {
@@ -7719,7 +7737,7 @@ async function* sseJsonEvents(body) {
   }
 }
 
-async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit) {
+async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null) {
   const tools = toolDefs.map((tool) => ({
     type: "function",
     function: {
@@ -7750,6 +7768,9 @@ async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds,
     const calls = roundOutcome.toolCalls;
     if (calls.length === 0) {
       return { text: lastText, tool_results: toolResults, rounds: round + 1 };
+    }
+    if (onToolRound) {
+      onToolRound({ round: round + 1, toolNames: calls.map((call) => call.name) });
     }
     convo.push({
       role: "assistant",
@@ -7858,7 +7879,7 @@ async function openAiPlainRound(convo, effective, tools) {
   return { text: rawText.trim(), rawText, toolCalls };
 }
 
-async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit) {
+async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null) {
   const functionDeclarations = toolDefs.map((tool) => ({
     name: tool.name,
     description: tool.description || "",
@@ -7885,6 +7906,9 @@ async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds,
     }
     if (roundOutcome.fnCalls.length === 0) {
       return { text: lastText, tool_results: toolResults, rounds: round + 1 };
+    }
+    if (onToolRound) {
+      onToolRound({ round: round + 1, toolNames: roundOutcome.fnCalls.map((fnCall) => String(fnCall.name || "")) });
     }
     // Replay the MERGED part list (consecutive text parts joined, functionCall
     // parts preserved in order) so the model-turn replay matches what the
@@ -10191,11 +10215,13 @@ async function runCascadedVoiceReasoningInner(input) {
   const recallContext = threadRecallContext(transcript, sessionContext);
   const languageDirective = replyLanguageDirective(profile);
   const languageControl = languageControlDirective(profile);
+  const deliveryDirective = voiceDeliveryDirective(profile);
+  const toolAckDirective = voiceToolAckDirective();
   const modalityHint = voiceModalityHintBlock(profile, input);
   const expressiveDirective = voiceExpressiveDirective(input);
   const personaBlock = sessionPersonaBlock(input?.persona);
   const messages = [{ role: "user", content: transcript }];
-  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, personaBlock, languageControl, languageDirective].filter(Boolean);
+  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, personaBlock, languageControl, deliveryDirective, toolAckDirective, languageDirective].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -10246,9 +10272,33 @@ async function runCascadedVoiceReasoningInner(input) {
       maxChars: () => streamingSpeakCap(profileOptions),
     })
     : null;
+  // Canned-ack fallback: the directive tells the model to speak before real
+  // tool calls; when a tool round starts with NOTHING spoken yet, the gateway
+  // says one short acknowledgment through the pipeline's immediate tap. Like
+  // the profile-control confirmations this is gateway-produced speech, not
+  // part of the stored reply text.
+  let toolAckSpoken = false;
+  const speakToolAck = wantsSpeakStream && typeof input?.on_speak_say === "function"
+    ? ({ emitted, toolNames }) => {
+      if (toolAckSpoken || emitted) {
+        return;
+      }
+      const names = Array.isArray(toolNames) ? toolNames : [];
+      if (names.length === 0 || names.every((name) => QUICK_VOICE_TOOLS.has(name))) {
+        return;
+      }
+      toolAckSpoken = true;
+      try {
+        input.on_speak_say(cascadedToolAckText(replyLanguage));
+      } catch {
+        // Interim speech is best-effort; the turn continues.
+      }
+    }
+    : null;
   const toolTurn = speakSanitizer
     ? await callModelToolLoopStreaming(modelMessages, profile, toolDefs, {
       onTextDelta: (delta) => speakSanitizer.push(delta),
+      ...(speakToolAck ? { onToolRound: speakToolAck } : {}),
     })
     : await callModelToolLoop(modelMessages, profile, toolDefs);
   if (speakSanitizer) {
@@ -10500,13 +10550,13 @@ function cascadedVoiceProfileTools(call) {
   return [
     {
       name: "update_agent_profile",
-      description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks (recognition is constrained to exactly this set, at most two). Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language leads right now (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in your reply after calling.",
+      description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks (recognition is constrained to exactly this set, at most two). Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language leads right now (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `speaking_rate` (0.5–2.0; 1.0 = normal speed) when asked to speak faster or slower, and `voice_tone` (a few words like \"warm, upbeat\"; \"neutral\" clears it) when asked for a different voice mood. Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in your reply after calling.",
       parameters: {
         type: "object",
         properties: {
           profile: {
             type: "object",
-            description: "Profile fields to persist: language, input_languages, input_language_primary, response_modality, voice, voice_max_chars, assistant_name, user_name, user_nickname, user_address, model, reasoning_provider, temperature, persona/system_prompt.",
+            description: "Profile fields to persist: language, input_languages, input_language_primary, response_modality, voice, speaking_rate, voice_tone, voice_max_chars, assistant_name, user_name, user_nickname, user_address, model, reasoning_provider, temperature, persona/system_prompt.",
           },
           scope: { type: "string", description: "global for all devices, or device for only this device." },
           reason: { type: "string", description: "Short reason for the change." },
@@ -10594,7 +10644,44 @@ function languageControlDirective(profile) {
     "- If the user says to lead with one of those right now (\"right now I want to speak Amharic\"), set input_language_primary to that code.",
     "- If the user asks which language YOU reply in (\"answer in English\"), set language. Understood languages and reply language are separate settings.",
     "- Understood and reply languages may be any code in the supported catalog; call get_profile_options if unsure. Confirm briefly after changing.",
+    "- When you change the reply language, confirm the change out loud IN THE NEW LANGUAGE (one short sentence — e.g. after switching to Amharic, confirm in Amharic) so the user hears the switch immediately. Your later replies then stay in that language.",
   ].filter(Boolean).join("\n");
+}
+
+// The model owns spoken pace and tone the same way it owns language: by tool
+// call, negotiated conversationally ("speak faster" has no keyword matcher).
+function voiceDeliveryDirective(profile) {
+  const rate = Number(profile?.speaking_rate);
+  const rateText = Number.isFinite(rate) && rate > 0 ? String(Math.round(rate * 100) / 100) : "1.5";
+  const tone = String(profile?.voice_tone || "").trim();
+  return [
+    "Speaking pace and tone (you own these; change them with update_agent_profile):",
+    `- Current speaking_rate: ${rateText} (1.0 = normal speed, 0.5 = slowest, 2.0 = fastest).${tone ? ` Current voice_tone: ${tone}.` : ""}`,
+    "- If the user asks you to speak faster or slower, call update_agent_profile with a new speaking_rate. Without a number: 'a bit faster/slower' steps 0.25 from the current rate, 'much faster/slower' steps 0.5, 'as fast as you can' is 2.0, 'normal speed' is 1.0.",
+    "- If the user names a multiplier ('1.5x', 'double speed', 'half speed'), use that number; it is capped to 0.5–2.0.",
+    "- If the user asks for a voice mood ('warmer', 'calm', 'hype it up'), set voice_tone to a few words (e.g. 'warm, upbeat'); 'neutral' clears it. When the request is vague, ask ONE short follow-up to pin the pace or tone, then set it.",
+    "- The new pace/tone applies from your NEXT spoken reply. Confirm briefly after changing.",
+  ].join("\n");
+}
+
+// Voice turns must never leave dead air while a tool runs: the model speaks a
+// one-line acknowledgment BEFORE calling real tools. A canned gateway fallback
+// (cascadedToolAckText) covers the case where it goes straight to tools.
+function voiceToolAckDirective() {
+  return [
+    "Tool-use narration (spoken turns): before calling any tool that does real work (launching an agent, running code, changing settings, starting a task), FIRST say one very short acknowledgment in the reply language — like 'Okay, doing that now.' or 'On it — one moment.' — then call the tool. When the tool finishes, report the outcome in one short sentence. Do not narrate instant lookups (reading options, context, or catalogs).",
+  ].join("\n");
+}
+
+// Canned spoken acknowledgment for a tool round the model started silently.
+// Localized to the reply language for the two active catalog languages.
+const QUICK_VOICE_TOOLS = new Set(["get_profile_options", "context_management"]);
+function cascadedToolAckText(language) {
+  const code = String(language || "").trim().toLowerCase();
+  if (code.startsWith("am")) {
+    return "እሺ፣ አሁን እሰራዋለሁ።";
+  }
+  return "Okay — doing that now.";
 }
 
 async function recordStreamingVoiceTurn(turn) {

@@ -56,6 +56,7 @@ async function main() {
     await ttsErrorSurfacedOnResult(tempDir);
     await spokenProfileControlConfirmation(tempDir);
     await expressiveTtsRequestShape(tempDir);
+    await deliveryRateAndToneRequestShape(tempDir);
     await turnProgressDuringStalledReasoner(tempDir);
     await turnProgressStopsAfterCancel(tempDir);
     await turnProgressStopsAfterClose(tempDir);
@@ -770,9 +771,52 @@ async function expressiveTtsRequestShape(tempDir) {
 
   const ttsCall = calls.find((c) => c.kind === "tts");
   assert.ok(ttsCall, "synthesize must be called");
-  assert.equal(ttsCall.body.input.prompt, "warm, amused", "the style prompt must ride input.prompt");
+  const prompt = String(ttsCall.body.input.prompt || "");
+  assert.ok(prompt.startsWith("warm, amused"), `the style prompt must lead input.prompt: ${prompt}`);
+  assert.match(prompt, /speak fast/i, "the default fast speaking_rate (1.5) must append a pace instruction to input.prompt");
+  assert.equal(ttsCall.body.audioConfig.speakingRate, 1.5, "the pinned speaking rate must ride audioConfig.speakingRate");
   assert.match(String(ttsCall.body.input.text || ""), /\[whispering\]/, "whitelisted inline tags must ride input.text");
   assert.equal(ttsCall.body.voice.modelName, "gemini-3.1-flash-tts-preview", "gemini-tts model must be selected");
+}
+
+// Delivery controls: speaking_rate and voice_tone reach the synthesize request.
+// A session override on turn.effectiveProfile pins the turn's rate/tone; on the
+// gemini-tts leg pace + tone ride input.prompt (with the per-turn style leading)
+// and the numeric rate rides audioConfig.speakingRate.
+async function deliveryRateAndToneRequestShape(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "tell me something", calls });
+
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      VOICE_TTS_PROVIDER: "gemini-tts",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US",
+      VOICE_SPEAKING_RATE: "1.0",
+    },
+    reasoner: async () => ({
+      speak: "Here it is.",
+      display: "Here it is.",
+      language: "en-US",
+      model: "test-model",
+      classification: "chat",
+    }),
+  });
+
+  const turn = makeTurn(tempDir, "delivery");
+  turn.effectiveProfile = { speaking_rate: 2, voice_tone: "calm, gentle" };
+  const result = await provider.processTurn(turn, recordingHooks([]));
+
+  assert.equal(result.tts_spoke, true, "the delivery-controls turn must speak");
+  const ttsCall = calls.find((c) => c.kind === "tts");
+  assert.ok(ttsCall, "synthesize must be called");
+  const prompt = String(ttsCall.body.input.prompt || "");
+  assert.match(prompt, /calm, gentle/, "voice_tone must ride input.prompt on gemini-tts");
+  assert.match(prompt, /very fast/i, "a 2.0 speaking_rate must map to the fastest pace instruction");
+  assert.equal(ttsCall.body.audioConfig.speakingRate, 2, "the session-pinned rate must ride audioConfig.speakingRate");
 }
 
 // Keepalive contract: while a committed cascaded turn sits between

@@ -662,7 +662,7 @@ class CascadedVoiceProvider {
           expressive_tags: this.ttsProviderId === "gemini-tts",
           language_pinning: this.ttsProviderId === "gemini-tts",
         },
-        synthesize: ({ text, language, stylePrompt, signal, voice }) => this.synthesizeSpeech(text, language, stylePrompt, signal, voice),
+        synthesize: ({ text, language, stylePrompt, signal, voice, speakingRate, tone }) => this.synthesizeSpeech(text, language, stylePrompt, signal, voice, { speakingRate, tone }),
       })
       : null;
   }
@@ -747,6 +747,9 @@ class CascadedVoiceProvider {
       tts_provider_id: this.ttsProviderId,
       tts_model: this.ttsModel || null,
       tts_voice: this.ttsVoice || null,
+      // Effective delivery controls (profile/env), for ops verification.
+      tts_speaking_rate: this.speakingRate(),
+      tts_tone: this.voiceTone() || null,
       // Streaming posture for ops: the per-turn flag decision and whether the
       // in-process circuit breaker has latched streaming off.
       voice_streaming: {
@@ -828,9 +831,13 @@ class CascadedVoiceProvider {
     // override), so every streamed chunk speaks with the same voice and a
     // per-session voice never leaks into other sessions.
     const pinnedVoice = this.ttsVoiceName(turn.effectiveProfile);
+    // Delivery pace/tone are pinned per turn like the voice, so every streamed
+    // chunk speaks at one speed; a mid-turn change applies next turn.
+    const pinnedRate = this.speakingRate(turn.effectiveProfile);
+    const pinnedTone = this.voiceTone(turn.effectiveProfile);
     const turnStartedAtMs = Date.now();
     const pipeline = this.streamingEnabledForTurn() && modality !== "text" && this.canSynthesize(pinnedLanguage)
-      ? this.createStreamingReplyPipeline({ hooks, language: pinnedLanguage, turnStartedAtMs, voice: pinnedVoice })
+      ? this.createStreamingReplyPipeline({ hooks, language: pinnedLanguage, turnStartedAtMs, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone })
       : null;
     // The reasoner (gateway LLM/tool turn) runs with no stream events until it
     // returns. Tell the session server to keep the client alive with turn_progress
@@ -864,6 +871,9 @@ class CascadedVoiceProvider {
         ...(pipeline ? {
           on_speak_delta: (delta) => pipeline.pushDelta(delta),
           on_speak_style: (style) => pipeline.setStyle(style),
+          // Gateway-produced interim speech (tool-call acknowledgment): spoken
+          // NOW as its own chunk, not buffered by the sentence chunker.
+          on_speak_say: (text) => pipeline.pushImmediate(text),
         } : {}),
       });
       reasoning = { ...reasoning, ...(result && typeof result === "object" ? result : {}) };
@@ -962,7 +972,7 @@ class CascadedVoiceProvider {
         await hooks.onTurnProgress("tts");
       }
       try {
-        const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle, voice: pinnedVoice });
+        const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone });
         if (pcm && pcm.length) {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
           await hooks.sendAudio(pcm);
@@ -1057,7 +1067,7 @@ class CascadedVoiceProvider {
   // the session-server write guard aborts silently (no tts_error, no events
   // for the dead turn). One nulled stream crash-looped this gateway 24 times
   // in a day; the guard lives on the write, not only in callers.
-  createStreamingReplyPipeline({ hooks, language, turnStartedAtMs, voice }) {
+  createStreamingReplyPipeline({ hooks, language, turnStartedAtMs, voice, speakingRate, tone }) {
     const provider = this;
     const chunker = createSpeechChunker(this.chunkerOptions());
     const abortController = new AbortController();
@@ -1135,6 +1145,8 @@ class CascadedVoiceProvider {
           stylePrompt: state.style,
           signal: abortController.signal,
           voice,
+          speakingRate,
+          tone,
         });
         if (!pcm || !pcm.length) {
           throw new Error("hosted TTS returned no audio");
@@ -1248,6 +1260,24 @@ class CascadedVoiceProvider {
         }
         enqueue(value);
       },
+      // Gateway-produced interim speech (a tool-call acknowledgment): synthesize
+      // and emit NOW as one standalone chunk, bypassing the sentence chunker so
+      // a short line is never held back waiting for min-chars while a tool runs.
+      // Counted as a delta so the zero-delta fallback never double-speaks.
+      pushImmediate(text) {
+        if (state.superseded || state.failed || state.finished) {
+          return;
+        }
+        const value = String(text || "").trim();
+        if (!value) {
+          return;
+        }
+        state.deltaCount += 1;
+        if (!state.firstDeltaAtMs) {
+          state.firstDeltaAtMs = Date.now();
+        }
+        enqueue(value);
+      },
       deltaCount() {
         return state.deltaCount;
       },
@@ -1328,6 +1358,8 @@ class CascadedVoiceProvider {
         text: speak,
         language,
         voice: this.ttsVoiceName(options.profile),
+        speakingRate: this.speakingRate(options.profile),
+        tone: this.voiceTone(options.profile),
       });
       if (pcm && pcm.length) {
         await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
@@ -1348,6 +1380,46 @@ class CascadedVoiceProvider {
       }));
       return { spoke: false, tts_error: ttsError };
     }
+  }
+
+  // The spoken delivery pace, most specific first: the turn's effective profile
+  // (session override merged over the persisted profile), then the live profile,
+  // then the env default. 1.0 = provider-normal speed; clamped to the 0.5–2.0
+  // band both Chirp3-HD audioConfig and the Gemini-TTS pace prompt support.
+  speakingRate(profile) {
+    const candidates = [
+      profile && typeof profile === "object" ? profile.speaking_rate : undefined,
+      this.agentProfile && typeof this.agentProfile.effective === "function"
+        ? this.agentProfile.effective().speaking_rate
+        : undefined,
+      this.env.VOICE_SPEAKING_RATE,
+    ];
+    for (const candidate of candidates) {
+      const rate = Number(candidate);
+      if (Number.isFinite(rate) && rate > 0) {
+        return Math.min(2, Math.max(0.5, rate));
+      }
+    }
+    return 1.5;
+  }
+
+  // The spoken delivery tone (a few free-text words for the expressive style
+  // prompt). "" means neutral/no tone. Same precedence as speakingRate; the
+  // turn profile's "" is an explicit "no tone", not a fallthrough.
+  voiceTone(profile) {
+    const candidates = [
+      profile && typeof profile === "object" ? profile.voice_tone : undefined,
+      this.agentProfile && typeof this.agentProfile.effective === "function"
+        ? this.agentProfile.effective().voice_tone
+        : undefined,
+      this.env.VOICE_TONE,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string") {
+        return candidate.trim().slice(0, 160);
+      }
+    }
+    return "";
   }
 
   // The reply (OUTPUT) language from the effective agent profile, falling back to
@@ -1401,17 +1473,26 @@ class CascadedVoiceProvider {
     return this.ttsVoice;
   }
 
-  async synthesizeSpeech(text, language, stylePrompt = "", signal = undefined, voice = "") {
+  async synthesizeSpeech(text, language, stylePrompt = "", signal = undefined, voice = "", delivery = {}) {
     const token = await this.accessToken();
+    const rateInput = Number(delivery?.speakingRate);
+    const speakingRate = Number.isFinite(rateInput) && rateInput > 0
+      ? Math.min(2, Math.max(0.5, rateInput))
+      : this.speakingRate();
+    const tone = typeof delivery?.tone === "string" ? delivery.tone : this.voiceTone();
     return synthesizeCloudTts({
       text,
       signal,
       // The Gemini-TTS leg accepts a natural-language style prompt in
       // input.prompt; classic Cloud TTS voices do not, so only forward it there.
-      prompt: this.ttsProviderId === "gemini-tts" ? String(stylePrompt || "") : "",
+      // Pace and tone ride the SAME prompt on Gemini-TTS (audioConfig
+      // speakingRate is unreliable there); classic voices get audioConfig
+      // speakingRate below instead.
+      prompt: this.ttsProviderId === "gemini-tts" ? composeTtsStylePrompt(stylePrompt, tone, speakingRate) : "",
       language: language || this.replyLanguage(),
       voice: (this.ttsProviderId === "gemini-tts" && String(voice || "").trim()) || this.ttsVoiceName(),
       modelName: this.ttsProviderId === "gemini-tts" ? this.ttsModel : "",
+      speakingRate,
       token,
       location: this.location,
       projectId: this.projectId,
@@ -2810,6 +2891,52 @@ function cloudTtsLanguageCode(language) {
   return value;
 }
 
+// Natural-language pace direction for the Gemini-TTS style prompt. Gemini-TTS
+// does not reliably honor audioConfig.speakingRate, but it follows explicit
+// pace instructions in input.prompt with high fidelity, so the numeric rate is
+// mapped to words here.
+function speakingPaceInstruction(rate) {
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return "";
+  }
+  if (rate >= 1.75) {
+    return "Speak very fast, close to double normal speed, but keep every word crisp and clear.";
+  }
+  if (rate >= 1.35) {
+    return "Speak fast, at about one and a half times normal conversational speed, energetic but clear.";
+  }
+  if (rate >= 1.1) {
+    return "Speak at a brisk, quick conversational pace.";
+  }
+  if (rate <= 0.7) {
+    return "Speak slowly and deliberately, with unhurried pacing.";
+  }
+  if (rate <= 0.9) {
+    return "Speak at a relaxed, slightly slower than normal pace.";
+  }
+  return "";
+}
+
+// Compose the Gemini-TTS input.prompt from the model's per-turn [style: ...]
+// direction, the durable voice_tone, and the numeric speaking_rate. Per-turn
+// style leads; tone is skipped when the style already names it.
+function composeTtsStylePrompt(style, tone, rate) {
+  const parts = [];
+  const styleText = String(style || "").trim();
+  if (styleText) {
+    parts.push(styleText);
+  }
+  const toneText = String(tone || "").trim();
+  if (toneText && !styleText.toLowerCase().includes(toneText.toLowerCase())) {
+    parts.push(`Overall tone: ${toneText}.`);
+  }
+  const pace = speakingPaceInstruction(Number(rate));
+  if (pace) {
+    parts.push(pace);
+  }
+  return parts.join(" ").trim();
+}
+
 // Synthesize reply audio with Google Cloud Text-to-Speech and return PCM16 mono
 // at the client's sample rate. Uses LINEAR16 output so no decoding is needed;
 // resamples from the TTS rate to the client rate when they differ.
@@ -2841,12 +2968,21 @@ async function synthesizeCloudTts(options) {
   if (modelName && promptText) {
     input.prompt = promptText.slice(0, 2000);
   }
+  // speakingRate: Chirp3-HD (and classic) voices honor audioConfig.speakingRate
+  // (0.25–2.0). Gemini-TTS voices follow the pace instruction in input.prompt
+  // instead, but the field is part of AudioConfig and harmless to send; keep it
+  // on both so a future model that honors it just works. 1.0/unset = omitted.
+  const rateInput = Number(options.speakingRate);
+  const speakingRate = Number.isFinite(rateInput) && rateInput > 0 && rateInput !== 1
+    ? Math.min(2, Math.max(0.25, rateInput))
+    : 0;
   const body = JSON.stringify({
     input,
     voice,
     audioConfig: {
       audioEncoding: "LINEAR16",
       sampleRateHertz: CLOUD_TTS_SAMPLE_RATE,
+      ...(speakingRate ? { speakingRate } : {}),
     },
   });
 

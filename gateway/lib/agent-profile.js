@@ -31,6 +31,8 @@ const PROFILE_FIELDS = [
   "voice_max_chars",
   "language",
   "voice",
+  "speaking_rate",
+  "voice_tone",
   "language_mode",
   "language_primary",
   "language_output",
@@ -708,7 +710,46 @@ function pickProfileFields(input) {
       out.voice = voice;
     }
   }
+  // Spoken delivery pace: 1.0 = the provider's normal speed. Values are clamped
+  // to 0.5–2.0 (the Chirp/Gemini-TTS supported band) instead of dropped, so
+  // "2.5x" persists the fastest supported rate rather than silently keeping the
+  // old one.
+  if (input.speaking_rate !== undefined && input.speaking_rate !== null && input.speaking_rate !== "") {
+    const rate = Number(input.speaking_rate);
+    if (Number.isFinite(rate) && rate > 0) {
+      out.speaking_rate = Math.min(2, Math.max(0.5, Math.round(rate * 100) / 100));
+    }
+  }
+  // Spoken delivery tone: a few free-text words fed to the expressive TTS style
+  // prompt ("warm, upbeat"). The reset words store "" (explicitly cleared) —
+  // the one field where a blank IS a valid persisted value.
+  if (typeof input.voice_tone === "string" && input.voice_tone.trim()) {
+    const tone = normalizeVoiceTone(input.voice_tone);
+    if (tone !== null) {
+      out.voice_tone = tone;
+    }
+  }
   return out;
+}
+
+const VOICE_TONE_RESET_WORDS = new Set(["none", "neutral", "default", "normal", "reset", "clear"]);
+
+// Sanitize a tone descriptor: strip control chars, collapse whitespace, cap
+// length. Returns "" for the reset words, null when nothing usable remains.
+function normalizeVoiceTone(value) {
+  const cleaned = String(value || "")
+    .replace(/[\x00-\x1F\x7F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160)
+    .trim();
+  if (!cleaned) {
+    return null;
+  }
+  if (VOICE_TONE_RESET_WORDS.has(cleaned.toLowerCase())) {
+    return "";
+  }
+  return cleaned;
 }
 
 // Build the baseline profile object from env-derived defaults, applying the
@@ -730,6 +771,10 @@ function normalizeProfile(defaults) {
     // Empty means "no profile override"; the voice provider falls back to its
     // env default (GEMINI_LIVE_VOICE) when the effective voice is unset.
     voice: picked.voice || "",
+    // Fast-by-default delivery: 1.5x normal speed unless the env default or a
+    // persisted change says otherwise.
+    speaking_rate: picked.speaking_rate !== undefined ? picked.speaking_rate : 1.5,
+    voice_tone: picked.voice_tone !== undefined ? picked.voice_tone : "",
     language_mode: picked.language_mode || "explicit",
     language_primary: languagePrimary,
     language_output: picked.language_output || "primary_only",

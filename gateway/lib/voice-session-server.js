@@ -1377,6 +1377,16 @@ function effectiveProfileForSession(profile, event) {
   if (modality === "speech" || modality === "text" || modality === "auto") {
     next.response_modality = modality;
   }
+  // Session-scoped delivery controls (a pet that talks fast, a slow-reader
+  // mode): same validation band as the profile store, never persisted.
+  const rate = Number(override.speaking_rate ?? override.speakingRate);
+  if (Number.isFinite(rate) && rate >= 0.5 && rate <= 2) {
+    next.speaking_rate = Math.round(rate * 100) / 100;
+  }
+  const tone = sanitizePersonaText(override.voice_tone ?? override.voiceTone ?? "", 160);
+  if (tone) {
+    next.voice_tone = tone;
+  }
   return next;
 }
 
