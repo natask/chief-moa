@@ -3615,24 +3615,35 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.id) return;
+  // Restricted pages (chrome://, the Web Store, the PDF viewer) cannot host
+  // the overlay; summon it on the nearest injectable tab instead of silently
+  // doing nothing.
+  if (!isInjectableOverlayUrl(tab.url)) {
+    summonOverlay(tab, "open");
+    return;
+  }
   try {
     await ensureContent(tab.id);
     await chrome.tabs.sendMessage(tab.id, { cmd: "open" });
   } catch {
-    // Restricted browser pages cannot receive content scripts.
+    summonOverlay(tab, "open");
   }
 });
 
 chrome.commands.onCommand.addListener(async (command, tab) => {
   if ((command !== "toggle-agee" && command !== "toggle-agee-voice") || !tab?.id) return;
+  const cmd = command === "toggle-agee-voice" ? "toggleVoice" : "open";
+  // Same restricted-page fallback as the toolbar click: never let the
+  // shortcut die silently on a page the overlay cannot inject into.
+  if (!isInjectableOverlayUrl(tab.url)) {
+    summonOverlay(tab, cmd);
+    return;
+  }
   try {
     await ensureContent(tab.id);
-    await chrome.tabs.sendMessage(tab.id, {
-      cmd: command === "toggle-agee-voice" ? "toggleVoice" : "open",
-      source: "command",
-    });
+    await chrome.tabs.sendMessage(tab.id, { cmd, source: "command" });
   } catch {
-    // Restricted browser pages cannot receive content scripts.
+    summonOverlay(tab, cmd);
   }
 });
 
@@ -3718,7 +3729,7 @@ async function resolveOverlayTargetTab(firedTab) {
   return created?.id != null ? await waitForTabComplete(created.id) : null;
 }
 
-async function summonOverlayFromAnywhere(firedTab) {
+async function summonOverlayFromAnywhere(firedTab, cmd = "open") {
   const target = await resolveOverlayTargetTab(firedTab);
   if (!target?.id) return;
   // Bring Chrome's window and the target tab forward so the overlay is visible
@@ -3733,7 +3744,7 @@ async function summonOverlayFromAnywhere(firedTab) {
   }
   try {
     await ensureContent(target.id);
-    await chrome.tabs.sendMessage(target.id, { cmd: "open", source: "command" });
+    await chrome.tabs.sendMessage(target.id, { cmd, source: "command" });
   } catch {
     // Restricted browser pages cannot receive content scripts.
   }
@@ -3741,15 +3752,21 @@ async function summonOverlayFromAnywhere(firedTab) {
 
 // A second summon while the first is still resolving (e.g. waiting on a created
 // fallback tab to load) would create a duplicate tab, because a still-loading
-// tab has no committed url for the query in step 4 to rematch.
+// tab has no committed url for the query in step 4 to rematch. The same guard
+// covers the restricted-page fallback used by the per-tab shortcuts and the
+// toolbar click above.
 let summonInFlight = false;
-chrome.commands.onCommand.addListener((command, tab) => {
-  if (command !== "open-agee-global") return;
+function summonOverlay(firedTab, cmd = "open") {
   if (summonInFlight) return;
   summonInFlight = true;
-  summonOverlayFromAnywhere(tab)
+  summonOverlayFromAnywhere(firedTab, cmd)
     .catch(() => {})
     .finally(() => {
       summonInFlight = false;
     });
+}
+
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command !== "open-agee-global") return;
+  summonOverlay(tab, "open");
 });

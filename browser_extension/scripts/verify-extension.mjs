@@ -267,13 +267,22 @@ if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
 
 if (
   !/command !== "toggle-agee" && command !== "toggle-agee-voice"/.test(backgroundSource) ||
-  !/cmd:\s*command === "toggle-agee-voice" \? "toggleVoice" : "open"/.test(backgroundSource) ||
+  !/const cmd = command === "toggle-agee-voice" \? "toggleVoice" : "open"/.test(backgroundSource) ||
   !/source:\s*"command"/.test(backgroundSource) ||
   !/case "toggleVoice":/.test(contentSource) ||
   !/function ensureContentOnOpenTabs/.test(backgroundSource) ||
   !/chrome\.runtime\.onStartup\.addListener/.test(backgroundSource)
 ) {
   throw new Error("Cmd/Ctrl+Period must be wired through command handling and startup/update content injection");
+}
+
+if (
+  !/function summonOverlay\(/.test(backgroundSource) ||
+  !/if \(!isInjectableOverlayUrl\(tab\.url\)\)/.test(backgroundSource) ||
+  !/summonOverlay\(tab, cmd\)/.test(backgroundSource) ||
+  !/summonOverlay\(tab, "open"\)/.test(backgroundSource)
+) {
+  throw new Error("per-tab shortcuts and the toolbar click must fall back to summonOverlay on restricted pages (chrome://, Web Store, PDF viewer) instead of failing silently");
 }
 
 if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {
