@@ -10,7 +10,8 @@ const {
   safeSystemPromptForProvider,
   withRequiredVoiceStyle,
 } = require("./lib/agent-profile");
-const { voiceProviderNames, createVoiceProvider } = require("./lib/voice-providers");
+const { voiceProviderNames, createVoiceProvider, reportVoiceStreamingFault } = require("./lib/voice-providers");
+const { createSpeakStreamSanitizer } = require("./lib/voice-chunker");
 const {
   livekitConfigured,
   livekitStatus,
@@ -150,6 +151,10 @@ const DEFAULT_SYSTEM_PROMPT = "You are A.G., a terse voice-first assistant. Your
 const SYSTEM_PROMPT = withRequiredVoiceStyle(process.env.SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT);
 const MODEL_TEMPERATURE = Number(process.env.MODEL_TEMPERATURE || 0.4);
 const VOICE_TTS_MAX_CHARS = Number(process.env.VOICE_TTS_MAX_CHARS || 280);
+// Streaming sanitizer ceiling (chunked pipeline only; the shared 280-char
+// VOICE_TTS_MAX_CHARS keeps governing every non-streaming consumer). Read per
+// turn inside streamingSpeakCap so an env flip needs no module reload.
+const VOICE_STREAM_MAX_CHARS_DEFAULT = 1600;
 const MODEL_LANGUAGE = String(process.env.MODEL_LANGUAGE || "").trim();
 const MAX_BODY_BYTES = 1024 * 1024;
 const AUDIO_NOTE_MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -2115,7 +2120,24 @@ async function handleChat(request, response) {
   if (utilityReply) {
     text = utilityReply;
   } else {
-    const toolTurn = await callModelToolLoop(modelMessages, profile, [buildContextManagementToolDef(contextCapture)]);
+    // Offer the same profile tools the voice path uses so a TYPED "speak
+    // English" can call update_agent_profile through the shared sanitizer
+    // (liveToolProfilePatch + applyAgentProfilePatch — no new mutation
+    // surface). Scope: profile update/revert/options only; the chat path has
+    // its own agent-run handling.
+    const chatToolCall = {
+      session_id: sessionId,
+      conversation_id: conversationId,
+      branch_id: callerBranchId,
+      turn_id: turnId,
+      device_id: deviceId,
+      profile_version: profileVersion,
+      source: body.source || "chat",
+      transcript: userText,
+    };
+    const chatToolDefs = cascadedVoiceProfileTools(chatToolCall)
+      .concat([buildContextManagementToolDef(contextCapture)]);
+    const toolTurn = await callModelToolLoop(modelMessages, profile, chatToolDefs);
     text = String(toolTurn.text || "");
   }
   const decision = resolveContextDecision({
@@ -7460,6 +7482,388 @@ async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
   return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
 }
 
+// Streaming twin of callModelToolLoop for cascaded voice turns. Same return
+// shape { text, tool_results, rounds } plus options.onTextDelta(delta) fires
+// as FINAL-ANSWER text streams. Per-round emission rule: text deltas forward
+// live until the round's first tool-call delta arrives; a tool round's text is
+// buffered (today lastText can come from a tool round) and, when the loop ends
+// with that buffered text as the returned text, it is flushed to onTextDelta
+// so streamed speech always equals the returned reply. Any SSE transport or
+// parse fault inside a round falls back to ONE non-streaming call for that
+// round; if that fallback itself fails the fault counts on the streaming
+// circuit breaker and the whole loop degrades to a plain reply, exactly like
+// callModelToolLoop's catch. The non-streaming loop stays untouched for
+// VOICE_STREAMING=0 and non-voice callers.
+async function callModelToolLoopStreaming(messages, profile, toolDefs, options = {}) {
+  const effective = profile || agentProfile.effective();
+  const maxRounds = Math.max(1, Math.min(Number(options.maxRounds || 2), 4));
+  const onTextDelta = typeof options.onTextDelta === "function" ? options.onTextDelta : () => {};
+  // Emission ledger: everything already forwarded. At loop end the returned
+  // text is reconciled against it — the unspoken suffix is flushed when the
+  // returned text extends what streamed; nothing extra is emitted when they
+  // diverged (spoken audio must never contain text absent from the record).
+  let emittedText = "";
+  const emit = (delta) => {
+    const text = String(delta || "");
+    if (!text) return;
+    emittedText += text;
+    try {
+      onTextDelta(text);
+    } catch {
+      // Delta consumers are best-effort; the turn continues.
+    }
+  };
+  const reconcile = (finalText) => {
+    const text = String(finalText || "");
+    if (!text) return;
+    if (!emittedText) {
+      emit(text);
+      return;
+    }
+    if (text.startsWith(emittedText)) {
+      emit(text.slice(emittedText.length));
+    }
+  };
+
+  const provider = resolveReasoningProvider(effective);
+  if (!Array.isArray(toolDefs) || toolDefs.length === 0 || !providerConfiguredFor(provider)) {
+    const text = await callModelOrFallback(messages, effective);
+    reconcile(text);
+    return { text, tool_results: [], rounds: 0 };
+  }
+  try {
+    const result = provider === "vertex"
+      ? await vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit)
+      : await openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit);
+    reconcile(result.text);
+    return result;
+  } catch (error) {
+    const text = await callModelOrFallback(messages, effective);
+    reconcile(text);
+    return { text, tool_results: [], rounds: 0, tool_error: cleanError(error) };
+  }
+}
+
+// Parse an SSE body ("data: {json}" lines, optional "data: [DONE]") into JSON
+// events. Works over any async-iterable body (Node fetch web streams and test
+// stubs alike). A parse fault throws and the caller falls back per round.
+async function* sseJsonEvents(body) {
+  if (!body) {
+    throw new Error("streaming response carried no body");
+  }
+  let buffer = "";
+  for await (const chunk of body) {
+    buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      if (data === "[DONE]") return;
+      yield JSON.parse(data);
+    }
+  }
+  const tail = buffer.trim();
+  if (tail.startsWith("data:")) {
+    const data = tail.slice(5).trim();
+    if (data && data !== "[DONE]") {
+      yield JSON.parse(data);
+    }
+  }
+}
+
+async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit) {
+  const tools = toolDefs.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description || "",
+      parameters: tool.parameters || { type: "object", properties: {} },
+    },
+  }));
+  const convo = [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
+  const toolResults = [];
+  let lastText = "";
+  for (let round = 0; round < maxRounds; round += 1) {
+    let roundOutcome;
+    try {
+      roundOutcome = await openAiStreamRound(convo, effective, tools, emit);
+    } catch (streamError) {
+      // SSE fault: one non-streaming call for this round (the existing shape).
+      try {
+        roundOutcome = await openAiPlainRound(convo, effective, tools);
+      } catch (fallbackError) {
+        reportVoiceStreamingFault(`openai_sse_fallback_failed: ${cleanError(streamError)} / ${cleanError(fallbackError)}`);
+        throw fallbackError;
+      }
+    }
+    if (roundOutcome.text) {
+      lastText = roundOutcome.text;
+    }
+    const calls = roundOutcome.toolCalls;
+    if (calls.length === 0) {
+      return { text: lastText, tool_results: toolResults, rounds: round + 1 };
+    }
+    convo.push({
+      role: "assistant",
+      content: roundOutcome.rawText || "",
+      tool_calls: calls.map((call, index) => ({
+        id: call.id || `call_${index}`,
+        type: "function",
+        function: { name: call.name, arguments: call.arguments || "{}" },
+      })),
+    });
+    for (const call of calls) {
+      const def = toolDefs.find((tool) => tool.name === call.name);
+      let args = {};
+      try {
+        args = JSON.parse(call.arguments || "{}");
+      } catch {
+        args = {};
+      }
+      const result = def ? await def.handler(args || {}) : { ok: false, error: `unsupported tool: ${call.name}` };
+      toolResults.push({ name: call.name, result });
+      convo.push({
+        role: "tool",
+        tool_call_id: call.id || "",
+        content: truncate(JSON.stringify(result || {}), 4000),
+      });
+    }
+  }
+  return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
+}
+
+// One streaming chat-completions round. Emission rule: forward text deltas via
+// emit until the round's first tool_calls delta; from then on the round is a
+// tool round and its text is buffered (returned, not forwarded).
+async function openAiStreamRound(convo, effective, tools, emit) {
+  const upstream = await fetchWithTimeout(`${MODEL_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: modelHeaders(),
+    body: JSON.stringify({
+      model: effective.model || MODEL_ID,
+      messages: convo,
+      temperature: effective.temperature,
+      tools,
+      tool_choice: "auto",
+      stream: true,
+    }),
+  }, MODEL_FETCH_TIMEOUT_MS);
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    throw new Error(`model HTTP ${upstream.status}: ${truncate(text, 400)}`);
+  }
+  let rawText = "";
+  let sawTool = false;
+  const toolCallsByIndex = new Map();
+  for await (const event of sseJsonEvents(upstream.body)) {
+    const delta = event.choices?.[0]?.delta || {};
+    if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
+      sawTool = true;
+      for (const fragment of delta.tool_calls) {
+        const key = Number(fragment.index ?? 0);
+        const current = toolCallsByIndex.get(key) || { id: "", name: "", arguments: "" };
+        if (fragment.id) current.id = fragment.id;
+        if (fragment.function?.name) current.name = fragment.function.name;
+        if (fragment.function?.arguments) current.arguments += fragment.function.arguments;
+        toolCallsByIndex.set(key, current);
+      }
+    }
+    const text = typeof delta.content === "string" ? delta.content : "";
+    if (text) {
+      rawText += text;
+      if (!sawTool) {
+        emit(text);
+      }
+    }
+  }
+  const toolCalls = [...toolCallsByIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, call]) => call)
+    .filter((call) => call.name);
+  return { text: rawText.trim(), rawText, toolCalls };
+}
+
+// The non-streaming per-round fallback, shaped like one openAiToolLoop round.
+async function openAiPlainRound(convo, effective, tools) {
+  const upstream = await fetchWithTimeout(`${MODEL_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: modelHeaders(),
+    body: JSON.stringify({
+      model: effective.model || MODEL_ID,
+      messages: convo,
+      temperature: effective.temperature,
+      tools,
+      tool_choice: "auto",
+      stream: false,
+    }),
+  }, MODEL_FETCH_TIMEOUT_MS);
+  const responseText = await upstream.text();
+  if (!upstream.ok) {
+    throw new Error(`model HTTP ${upstream.status}: ${truncate(responseText, 400)}`);
+  }
+  const json = JSON.parse(responseText);
+  const message = json.choices?.[0]?.message || {};
+  const rawText = String(message.content || json.output_text || "");
+  const toolCalls = (Array.isArray(message.tool_calls) ? message.tool_calls : [])
+    .filter((call) => call?.function?.name)
+    .map((call) => ({ id: call.id || "", name: call.function.name, arguments: call.function.arguments || "{}" }));
+  return { text: rawText.trim(), rawText, toolCalls };
+}
+
+async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit) {
+  const functionDeclarations = toolDefs.map((tool) => ({
+    name: tool.name,
+    description: tool.description || "",
+    parameters: toVertexFunctionSchema(tool.parameters),
+  }));
+  const { systemInstruction, contents } = vertexPayload(messages, effective);
+  const toolResults = [];
+  let lastText = "";
+  const accessToken = await vertexAccessToken();
+  for (let round = 0; round < maxRounds; round += 1) {
+    let roundOutcome;
+    try {
+      roundOutcome = await vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit);
+    } catch (streamError) {
+      try {
+        roundOutcome = await vertexPlainRound(contents, systemInstruction, effective, functionDeclarations, accessToken);
+      } catch (fallbackError) {
+        reportVoiceStreamingFault(`vertex_sse_fallback_failed: ${cleanError(streamError)} / ${cleanError(fallbackError)}`);
+        throw fallbackError;
+      }
+    }
+    if (roundOutcome.text) {
+      lastText = roundOutcome.text;
+    }
+    if (roundOutcome.fnCalls.length === 0) {
+      return { text: lastText, tool_results: toolResults, rounds: round + 1 };
+    }
+    // Replay the MERGED part list (consecutive text parts joined, functionCall
+    // parts preserved in order) so the model-turn replay matches what the
+    // non-streaming vertexToolLoop replays.
+    contents.push({ role: "model", parts: roundOutcome.mergedParts });
+    const responseParts = [];
+    for (const fnCall of roundOutcome.fnCalls) {
+      const name = String(fnCall.name || "");
+      const def = toolDefs.find((tool) => tool.name === name);
+      const args = fnCall.args && typeof fnCall.args === "object" && !Array.isArray(fnCall.args) ? fnCall.args : {};
+      const result = def ? await def.handler(args) : { ok: false, error: `unsupported tool: ${name}` };
+      toolResults.push({ name, result });
+      responseParts.push({
+        functionResponse: {
+          name,
+          response: result && typeof result === "object" && !Array.isArray(result) ? result : { result },
+        },
+      });
+    }
+    contents.push({ role: "function", parts: responseParts });
+  }
+  return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
+}
+
+function vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations) {
+  const body = {
+    contents,
+    tools: [{ functionDeclarations }],
+    generationConfig: {
+      temperature: effective.temperature,
+      maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 512),
+      thinkingConfig: { thinkingBudget: Number(process.env.VERTEX_THINKING_BUDGET || 0) },
+    },
+  };
+  const safetySettings = vertexSafetySettings();
+  if (safetySettings.length > 0) {
+    body.safetySettings = safetySettings;
+  }
+  if (systemInstruction) {
+    body.systemInstruction = { parts: [{ text: systemInstruction }] };
+  }
+  return body;
+}
+
+function vertexRoundHeaders(accessToken) {
+  const headers = {
+    "authorization": `Bearer ${accessToken}`,
+    "content-type": "application/json",
+  };
+  if (process.env.VERTEX_PRIORITY !== "0") {
+    headers["x-vertex-ai-llm-shared-request-type"] = "priority";
+  }
+  return headers;
+}
+
+// One streaming Vertex round over :streamGenerateContent?alt=sse. Each SSE
+// chunk parses as complete JSON with structured functionCall.args (never split
+// partial JSON); what spans chunks is the round's PART LIST, so consecutive
+// text parts are merged and functionCall parts collected for the replay.
+async function vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit) {
+  const url = `${vertexEndpoint(effective, "streamGenerateContent")}?alt=sse`;
+  const upstream = await fetchWithTimeout(url, {
+    method: "POST",
+    headers: vertexRoundHeaders(accessToken),
+    body: JSON.stringify(vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations)),
+  }, MODEL_FETCH_TIMEOUT_MS);
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    throw new Error(`vertex HTTP ${upstream.status}: ${truncate(text, 400)}`);
+  }
+  let roundText = "";
+  let sawTool = false;
+  const mergedParts = [];
+  const fnCalls = [];
+  for await (const event of sseJsonEvents(upstream.body)) {
+    const parts = event.candidates?.[0]?.content?.parts || [];
+    for (const part of parts) {
+      const fnCall = part.functionCall || part.function_call;
+      if (fnCall) {
+        sawTool = true;
+        fnCalls.push(fnCall);
+        mergedParts.push({ functionCall: fnCall });
+        continue;
+      }
+      const text = String(part.text || "");
+      if (!text) continue;
+      const last = mergedParts[mergedParts.length - 1];
+      if (last && typeof last.text === "string") {
+        last.text += text;
+      } else {
+        mergedParts.push({ text });
+      }
+      roundText += text;
+      if (!sawTool) {
+        emit(text);
+      }
+    }
+  }
+  return { text: roundText.trim(), mergedParts, fnCalls };
+}
+
+// The non-streaming per-round Vertex fallback, shaped like one vertexToolLoop round.
+async function vertexPlainRound(contents, systemInstruction, effective, functionDeclarations, accessToken) {
+  const upstream = await fetchWithTimeout(vertexEndpoint(effective), {
+    method: "POST",
+    headers: vertexRoundHeaders(accessToken),
+    body: JSON.stringify(vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations)),
+  }, MODEL_FETCH_TIMEOUT_MS);
+  const responseText = await upstream.text();
+  if (!upstream.ok) {
+    throw new Error(`vertex HTTP ${upstream.status}: ${truncate(responseText, 400)}`);
+  }
+  const json = JSON.parse(responseText);
+  const parts = json.candidates?.[0]?.content?.parts || [];
+  const textParts = parts.map((part) => String(part.text || "")).filter(Boolean).join("\n").trim();
+  const mergedParts = parts
+    .map((part) => (part.functionCall || part.function_call
+      ? { functionCall: part.functionCall || part.function_call }
+      : (part.text ? { text: part.text } : null)))
+    .filter(Boolean);
+  const fnCalls = parts.map((part) => part.functionCall || part.function_call).filter(Boolean);
+  return { text: textParts, mergedParts, fnCalls };
+}
+
 // Convert an OpenAI-style JSON schema (lowercase "object"/"string" types) into the
 // Vertex function-declaration schema, which uses uppercase OpenAPI type names.
 function toVertexFunctionSchema(schema) {
@@ -9525,7 +9929,33 @@ async function runCascadedVoiceReasoningInner(input) {
   if (voiceExecuteToolEnabled()) {
     toolDefs.push(cascadedExecuteToolDef(toolCall));
   }
-  const toolTurn = await callModelToolLoop(modelMessages, profile, toolDefs);
+  // Streaming: when the voice pipeline passes on_speak_delta, run the
+  // streaming twin of the tool loop and forward final-answer deltas through
+  // the incremental sanitizer (style-line strip, tag whitelist, capSpeakText
+  // compaction, stop at the streaming cap) so streamed speech stays a prefix
+  // of the stored capped reply. Callers without a delta consumer (HTTP chat,
+  // VOICE_STREAMING=0) keep the untouched non-streaming loop.
+  const wantsSpeakStream = typeof input?.on_speak_delta === "function";
+  const useExpressiveTtsForStream = String(input?.tts_provider_id || "") === "gemini-tts";
+  const speakSanitizer = wantsSpeakStream
+    ? createSpeakStreamSanitizer({
+      onDelta: input.on_speak_delta,
+      onStyle: typeof input?.on_speak_style === "function" ? input.on_speak_style : undefined,
+      keepTags: useExpressiveTtsForStream,
+      isAllowedTag: (inner) => EXPRESSIVE_TAG_WHITELIST.has(normalizeExpressiveTag(inner)),
+      // Lazy per-check read: a mid-turn voice_max_chars tool change tightens
+      // the remaining stream immediately.
+      maxChars: () => streamingSpeakCap(profileOptions),
+    })
+    : null;
+  const toolTurn = speakSanitizer
+    ? await callModelToolLoopStreaming(modelMessages, profile, toolDefs, {
+      onTextDelta: (delta) => speakSanitizer.push(delta),
+    })
+    : await callModelToolLoop(modelMessages, profile, toolDefs);
+  if (speakSanitizer) {
+    speakSanitizer.end();
+  }
   const text = String(toolTurn.text || "");
   const contextDecision = resolveContextDecision({
     text: transcript,
@@ -9558,6 +9988,18 @@ async function runCascadedVoiceReasoningInner(input) {
       contextDecision
     ),
   };
+}
+
+// The streaming sanitizer's cap: the profile's voice_max_chars first (so the
+// stored capped reply is never SHORTER than the streamed speech — the prefix
+// property), bounded by the VOICE_STREAM_MAX_CHARS ceiling (default 1600) that
+// exists to stop runaway cost on the chunked pipeline. The shared
+// VOICE_TTS_MAX_CHARS=280 keeps governing every non-streaming consumer.
+function streamingSpeakCap(profileOptions) {
+  const profileCap = Number(agentProfile.effective(profileOptions || {}).voice_max_chars);
+  const baseCap = Number.isFinite(profileCap) && profileCap > 0 ? profileCap : VOICE_TTS_MAX_CHARS;
+  const streamCeiling = positiveNumberFrom(process.env.VOICE_STREAM_MAX_CHARS, VOICE_STREAM_MAX_CHARS_DEFAULT);
+  return Math.min(baseCap, streamCeiling);
 }
 
 // The gateway-executed tools exposed to the cascaded reasoning model: profile
@@ -10982,7 +11424,7 @@ function providerConfigured() {
   return providerConfiguredFor(MODEL_PROVIDER);
 }
 
-function vertexEndpoint(profile) {
+function vertexEndpoint(profile, method = "generateContent") {
   const host = process.env.VERTEX_API_BASE_URL
     ? stripTrailingSlash(process.env.VERTEX_API_BASE_URL)
     : (VERTEX_LOCATION === "global"
@@ -10991,7 +11433,7 @@ function vertexEndpoint(profile) {
   const model = profile?.model || MODEL_ID;
   // gemini-3.x flash models are only served on the v1beta1 surface; v1 404s.
   const apiVersion = process.env.VERTEX_API_VERSION || "v1beta1";
-  return `${host}/${apiVersion}/projects/${encodeURIComponent(VERTEX_PROJECT)}/locations/${encodeURIComponent(VERTEX_LOCATION)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
+  return `${host}/${apiVersion}/projects/${encodeURIComponent(VERTEX_PROJECT)}/locations/${encodeURIComponent(VERTEX_LOCATION)}/publishers/google/models/${encodeURIComponent(model)}:${method}`;
 }
 
 function vertexSafetySettings() {

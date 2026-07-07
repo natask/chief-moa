@@ -7,6 +7,8 @@ const { execFileSync } = require("node:child_process");
 const { WebSocket } = require("ws");
 const { safeSystemPromptForProvider } = require("./agent-profile");
 const { voiceOptionsPayload } = require("./profile-options");
+const { createSttStage, createReasonerStage, createTtsStage } = require("./voice-stages");
+const { createSpeechChunker } = require("./voice-chunker");
 
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
@@ -54,6 +56,8 @@ const PROVIDER_CAPABILITY_FLAGS = [
   "mid_session_profile_update",
   "language_hints",
   "provider_session_resume",
+  "streaming_tts",
+  "streaming_reasoning",
 ];
 const PROVIDER_ALIASES = Object.freeze({
   test: "loopback",
@@ -71,6 +75,7 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         voice_output: true,
       },
       configured: () => true,
+      create: (options) => new LoopbackVoiceProvider(options),
     }),
     "gemini-live": providerRegistryEntry({
       id: "gemini-live",
@@ -85,6 +90,12 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         language_hints: true,
       },
       configured: (env) => Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY),
+      create: (options) => new GeminiLiveVoiceProvider(options, {
+        provider: "gemini-live",
+        defaultModel: DEFAULT_GEMINI_LIVE_MODEL,
+        defaultEndpoint: GEMINI_LIVE_ENDPOINT,
+        authMode: "google-ai-api-key",
+      }),
     }),
     "vertex-live": providerRegistryEntry({
       id: "vertex-live",
@@ -99,6 +110,12 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         language_hints: true,
       },
       configured: vertexLiveConfigured,
+      create: (options) => new GeminiLiveVoiceProvider(options, {
+        provider: "vertex-live",
+        defaultModel: DEFAULT_VERTEX_LIVE_MODEL,
+        defaultEndpoint: VERTEX_LIVE_EXPRESS_ENDPOINT,
+        authMode: "vertex",
+      }),
     }),
   }),
   stt: Object.freeze({
@@ -111,13 +128,18 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         language_hints: true,
       },
       configured: chirpConfigured,
+      // The chirp STT anchor instantiates the whole cascaded composition
+      // (STT -> injected gateway reasoner -> hosted TTS stages).
+      create: (options) => new CascadedVoiceProvider(options),
     }),
   }),
   reasoning: Object.freeze({
     gateway: providerRegistryEntry({
       id: "gateway",
       label: "A.G. gateway voice-turn router",
-      capabilities: {},
+      capabilities: {
+        streaming_reasoning: true,
+      },
       configured: () => true,
     }),
   }),
@@ -135,6 +157,7 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
       label: "Google Cloud Text-to-Speech (Chirp 3 HD where available)",
       capabilities: {
         voice_output: true,
+        streaming_tts: true,
       },
       configured: chirpConfigured,
     }),
@@ -144,6 +167,7 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
       capabilities: {
         voice_output: true,
         language_hints: true,
+        streaming_tts: true,
       },
       configured: chirpConfigured,
     }),
@@ -184,32 +208,82 @@ const PROVIDER_ALIASES_TTS = Object.freeze({
   "gemini-tts-preview": "gemini-tts",
 });
 
+// Thrown by the session server's audio hooks when a barge-in replaced the turn
+// mid-emission. The streaming pipeline catches it BY CLASS and aborts silently:
+// no tts_error, no client events for the dead turn, and it must never surface
+// as a turn error (the 2026-07-06 crash-loop rule: a voice-turn fault never
+// takes the process or the session down).
+class TurnSupersededError extends Error {
+  constructor(message) {
+    super(message || "voice turn superseded");
+    this.name = "TurnSupersededError";
+  }
+}
+
+function isTurnSupersededError(error) {
+  return error instanceof TurnSupersededError || error?.name === "TurnSupersededError";
+}
+
+// In-process streaming circuit breaker. The env kill switch (VOICE_STREAMING=0)
+// needs a container recreate on the droplet, so it is a rollback path, not a
+// fast breaker. This is the fast path: three streaming-path faults in one
+// process (an error escaping the pipeline guard, an SSE fallback that itself
+// failed, or a TurnSupersededError reaching the wrong layer) latch streaming
+// OFF for every later turn and the gateway serves the non-streaming path
+// instead of crash-looping.
+const VOICE_STREAMING_FAULT_LIMIT = 3;
+const voiceStreamingBreaker = { faults: 0, tripped: false };
+
+function reportVoiceStreamingFault(context) {
+  voiceStreamingBreaker.faults += 1;
+  if (!voiceStreamingBreaker.tripped && voiceStreamingBreaker.faults >= VOICE_STREAMING_FAULT_LIMIT) {
+    voiceStreamingBreaker.tripped = true;
+    console.error(JSON.stringify({
+      level: "error",
+      at: "voice_streaming_tripped",
+      faults: voiceStreamingBreaker.faults,
+      context: String(context || "").slice(0, 300),
+    }));
+  }
+}
+
+function voiceStreamingTripped() {
+  return voiceStreamingBreaker.tripped;
+}
+
+// Test-only: smokes exercise the latch without poisoning later cases.
+function resetVoiceStreamingBreakerForTests() {
+  voiceStreamingBreaker.faults = 0;
+  voiceStreamingBreaker.tripped = false;
+}
+
+// Registry-driven instantiation: resolve the selected provider names to one
+// registry entry and let its create() factory build the transport provider.
+// Adding a provider is now a registry entry (id, label, capabilities,
+// configured, create), not another if/else branch here.
 function createVoiceProvider(options) {
   const env = options?.env || process.env;
   const names = voiceProviderNames(env);
-  if (names.stt === "chirp") {
-    return new ChirpSttVoiceProvider(options);
-  }
-  if (allSameProvider(names, "loopback") || allSameProvider(names, "test")) {
-    return new LoopbackVoiceProvider(options);
-  }
-  if (allSameProvider(names, "gemini-live")) {
-    return new GeminiLiveVoiceProvider(options, {
-      provider: "gemini-live",
-      defaultModel: DEFAULT_GEMINI_LIVE_MODEL,
-      defaultEndpoint: GEMINI_LIVE_ENDPOINT,
-      authMode: "google-ai-api-key",
-    });
-  }
-  if (allSameProvider(names, "vertex-live")) {
-    return new GeminiLiveVoiceProvider(options, {
-      provider: "vertex-live",
-      defaultModel: DEFAULT_VERTEX_LIVE_MODEL,
-      defaultEndpoint: VERTEX_LIVE_EXPRESS_ENDPOINT,
-      authMode: "vertex",
-    });
+  const entry = resolveProviderEntry(names);
+  if (entry?.create) {
+    return entry.create(options);
   }
   return new UnsupportedVoiceProvider(options, names);
+}
+
+function resolveProviderEntry(names) {
+  // The chirp STT anchor selects the cascaded composition regardless of the
+  // reasoning/TTS stage selection (those are stages inside it).
+  if (names.stt === "chirp") {
+    return providerDefinition("stt", "chirp");
+  }
+  const stt = registryProviderId(names.stt);
+  const reasoning = registryProviderId(names.reasoning || names.llm);
+  const tts = registryProviderId(names.tts);
+  if (stt === reasoning && reasoning === tts) {
+    return providerDefinition("native_live", stt);
+  }
+  return null;
 }
 
 function voiceProviderNames(env) {
@@ -294,6 +368,10 @@ function providerRegistryEntry(entry) {
     provider_type: "native_live",
     capabilities: Object.freeze(capabilities(entry.capabilities || {})),
     configured: entry.configured,
+    // Optional instantiation factory: entries that can build a full transport
+    // provider (native_live bundles, or the cascaded STT anchor) define it, so
+    // adding a provider is one registry entry instead of an if/else branch.
+    create: typeof entry.create === "function" ? entry.create : null,
   });
 }
 
@@ -518,7 +596,9 @@ class UnsupportedVoiceProvider {
   }
 }
 
-class ChirpSttVoiceProvider {
+// The cascaded composition: Chirp STT stage -> injected gateway reasoner
+// stage -> hosted TTS stage (formerly ChirpSttVoiceProvider).
+class CascadedVoiceProvider {
   constructor(options) {
     const env = options?.env || process.env;
     this.env = env;
@@ -554,13 +634,39 @@ class ChirpSttVoiceProvider {
       this.ttsVoice = String(env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim();
       this.ttsModel = String(env.CHIRP_TTS_MODEL || "").trim();
     }
+    // Formal stage seam (lib/voice-stages.js): STT stage -> reasoner stage ->
+    // TTS stage. Stage bodies delegate to the provider methods so GCP auth and
+    // the token cache stay shared across stages.
+    this.sttStage = createSttStage({
+      id: "chirp",
+      capabilities: { partial_transcripts: false, language_hints: true },
+      transcribe: ({ turn, languageCodes }) => this.transcribePcmFile(turn, languageCodes),
+    });
+    this.reasonerStage = this.reasoner
+      ? createReasonerStage({
+        id: "gateway",
+        capabilities: { streaming_reasoning: true, tools: true },
+        run: (input) => this.reasoner(input),
+      })
+      : null;
+    this.ttsStage = this.ttsProviderId === "cloud-tts" || this.ttsProviderId === "gemini-tts"
+      ? createTtsStage({
+        id: this.ttsProviderId,
+        capabilities: {
+          streaming_tts: true,
+          expressive_tags: this.ttsProviderId === "gemini-tts",
+          language_pinning: this.ttsProviderId === "gemini-tts",
+        },
+        synthesize: ({ text, language, stylePrompt, signal }) => this.synthesizeSpeech(text, language, stylePrompt, signal),
+      })
+      : null;
   }
 
   // The cascaded pipeline is active when a reasoner is wired AND a hosted TTS
   // provider is selected. Otherwise the provider is STT-only (transcript back to
   // the gateway, device speaks the reply).
   cascaded() {
-    return Boolean(this.reasoner) && (this.ttsProviderId === "cloud-tts" || this.ttsProviderId === "gemini-tts");
+    return Boolean(this.reasonerStage) && Boolean(this.ttsStage);
   }
 
   configured() {
@@ -636,6 +742,12 @@ class ChirpSttVoiceProvider {
       tts_provider_id: this.ttsProviderId,
       tts_model: this.ttsModel || null,
       tts_voice: this.ttsVoice || null,
+      // Streaming posture for ops: the per-turn flag decision and whether the
+      // in-process circuit breaker has latched streaming off.
+      voice_streaming: {
+        enabled: this.streamingEnabledForTurn(),
+        tripped: voiceStreamingTripped(),
+      },
       input_audio_format: CLIENT_AUDIO_FORMAT,
       assistant_audio_format: CLIENT_AUDIO_FORMAT,
       // STT-only unless the cascaded pipeline is wired (reasoner + hosted TTS).
@@ -662,7 +774,7 @@ class ChirpSttVoiceProvider {
     }
 
     // Leg 1 — streaming Chirp 3 STT, restricted to the configured languages.
-    const transcription = await this.transcribePcmFile(turn, sttLanguageCodes);
+    const transcription = await this.sttStage.transcribe({ turn, languageCodes: sttLanguageCodes });
     const transcript = transcription.text;
     if (transcription.languageRejected) {
       turn.transcriptLanguageRejected = true;
@@ -694,6 +806,16 @@ class ChirpSttVoiceProvider {
       return this.cascadedResult(transcript, reasoning, false, transcription);
     }
     const modality = this.replyModality();
+    // Gate hoisting: the reply (OUTPUT) language and modality are pinned ONCE,
+    // BEFORE the LLM stream starts, so chunk 1 can synthesize mid-stream with
+    // the turn-pinned voice. A mid-turn profile language switch takes effect
+    // next turn; a post-stream language divergence is recorded as
+    // tts_language_mismatch instead of re-synthesizing.
+    const pinnedLanguage = this.replyLanguage();
+    const turnStartedAtMs = Date.now();
+    const pipeline = this.streamingEnabledForTurn() && modality !== "text" && this.canSynthesize(pinnedLanguage)
+      ? this.createStreamingReplyPipeline({ hooks, language: pinnedLanguage, turnStartedAtMs })
+      : null;
     // The reasoner (gateway LLM/tool turn) runs with no stream events until it
     // returns. Tell the session server to keep the client alive with turn_progress
     // ticks during the wait; the server owns the interval, this only reports the
@@ -702,7 +824,7 @@ class ChirpSttVoiceProvider {
       await hooks.onTurnProgress("reasoning");
     }
     try {
-      const result = await this.reasoner({
+      const result = await this.reasonerStage.run({
         transcript,
         session_id: turn.sessionId || turn.session_id || "",
         conversation_id: turn.conversationId || turn.conversation_id || "",
@@ -717,9 +839,26 @@ class ChirpSttVoiceProvider {
         tts_provider_id: this.ttsProviderId,
         tts_available: this.cascaded(),
         previous_tts_error: this.lastTtsError || "",
+        // Streaming taps: sanitized final-answer deltas feed the chunked TTS
+        // pipeline; the leading [style: ...] line arrives before any prose so
+        // every chunk can carry the style prompt.
+        ...(pipeline ? {
+          on_speak_delta: (delta) => pipeline.pushDelta(delta),
+          on_speak_style: (style) => pipeline.setStyle(style),
+        } : {}),
       });
       reasoning = { ...reasoning, ...(result && typeof result === "object" ? result : {}) };
     } catch (error) {
+      if (pipeline) {
+        pipeline.cancel();
+      }
+      if (isTurnSupersededError(error)) {
+        // Containment failure of the write guard would land here; count it on
+        // the breaker and end the superseded turn silently instead of
+        // rebranding it a reasoning failure.
+        reportVoiceStreamingFault(`turn_superseded_reached_reasoner_catch: ${cleanError(error)}`);
+        return this.cascadedResult(transcript, reasoning, false, transcription, { modality });
+      }
       throw new Error(`cascaded reasoning failed: ${cleanError(error)}`);
     }
 
@@ -731,14 +870,68 @@ class ChirpSttVoiceProvider {
     const ttsText = String(reasoning.tts_text || reasoning.speak || "").trim();
     const ttsStyle = String(reasoning.tts_style || "").trim();
     if (speak) {
+      // Sent when the LLM stream ends. On a multi-chunk streaming turn this
+      // deliberately lands BETWEEN binary frames (audio-before-text is the
+      // streaming contract); a one-chunk reply may still deliver text first.
       await hooks.onAssistantText(speak);
     }
 
-    // Leg 3 — hosted TTS reply audio. Respect the profile's response modality:
-    // "text" deliberately delivers the reply as text (no hosted audio), which is
-    // a distinct outcome from a synthesis failure. Otherwise synthesize when the
-    // reply language has a hosted voice; a language with no hosted voice (am-ET
-    // on cloud-tts) still returns reply text for the device to speak.
+    // Leg 3 (streaming) — the pipelined per-chunk TTS already synthesized and
+    // emitted audio while the reasoner streamed. Flush the tail, then fold the
+    // pipeline outcome into the result. finish() never throws: a mid-stream
+    // synthesis fault degrades to a text-only remainder with tts_error set and
+    // a superseded turn aborts silently.
+    if (pipeline) {
+      if (speak && pipeline.deltaCount() === 0 && ttsText) {
+        // The reasoner streamed no deltas (non-streaming provider or fallback
+        // path): push the final reply once so the turn still speaks, in the
+        // same text-before-audio order as the non-streaming path.
+        pipeline.setStyle(ttsStyle);
+        if (typeof hooks.onTurnProgress === "function") {
+          await hooks.onTurnProgress("tts");
+        }
+        pipeline.pushFinalText(ttsText);
+      }
+      let stream = null;
+      let streamError = "";
+      try {
+        stream = await pipeline.finish();
+      } catch (error) {
+        // finish() must never throw; if it does, that is a pipeline-guard
+        // escape: count it on the breaker and degrade to text-only.
+        reportVoiceStreamingFault(`streaming_pipeline_escape: ${cleanError(error)}`);
+        streamError = cleanError(error);
+      }
+      const streamSpoke = Boolean(stream?.spoke);
+      const streamTtsError = stream ? stream.ttsError : streamError;
+      const extras = {
+        modality,
+        ttsError: streamTtsError,
+        streaming: true,
+        firstAudioMs: stream?.firstAudioMs,
+        ttsSegments: stream ? stream.segments : 0,
+        reasonerFirstDeltaMs: stream?.firstDeltaMs,
+      };
+      const finalLanguage = String(reasoning.language || "").trim().toLowerCase();
+      if (streamSpoke && finalLanguage && finalLanguage !== String(pinnedLanguage || "").trim().toLowerCase()) {
+        // Audio already played in the pinned language; the reasoner's language
+        // stays authoritative in the stored record, and the divergence feeds
+        // the next turn's honesty context alongside lastTtsError.
+        extras.ttsLanguageMismatch = true;
+        this.lastTtsError = streamTtsError
+          || `previous reply audio was synthesized in ${pinnedLanguage} but the reply language was ${reasoning.language}`;
+      } else {
+        this.lastTtsError = streamTtsError;
+      }
+      return this.cascadedResult(transcript, reasoning, streamSpoke, transcription, extras);
+    }
+
+    // Leg 3 (non-streaming: VOICE_STREAMING=0, breaker tripped, text modality,
+    // or no hosted voice for the pinned language) — hosted TTS reply audio in
+    // one blocking call, exactly the pre-streaming behavior. "text" modality
+    // deliberately delivers the reply as text (no hosted audio), distinct from
+    // a synthesis failure; a language with no hosted voice (am-ET on cloud-tts)
+    // still returns reply text for the device to speak.
     let spoke = false;
     let ttsError = "";
     if (speak && modality === "text") {
@@ -750,7 +943,7 @@ class ChirpSttVoiceProvider {
         await hooks.onTurnProgress("tts");
       }
       try {
-        const pcm = await this.synthesizeSpeech(ttsText, reasoning.language, ttsStyle);
+        const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle });
         if (pcm && pcm.length) {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
           await hooks.sendAudio(pcm);
@@ -798,6 +991,281 @@ class ChirpSttVoiceProvider {
       tts_error: options.ttsError || "",
       transcript_language_rejected: transcription.languageRejected === true,
       classification: reasoning.classification || "chat",
+      // Additive streaming metadata (absent on non-streaming turns; old code
+      // reading new records ignores it, new code reading old records treats
+      // absence as the non-streaming default).
+      ...(options.streaming ? { streaming: true } : {}),
+      ...(Number.isFinite(options.firstAudioMs) ? { first_audio_ms: Math.max(0, Math.round(options.firstAudioMs)) } : {}),
+      ...(options.streaming && Number.isFinite(options.ttsSegments) ? { tts_segments: options.ttsSegments } : {}),
+      ...(Number.isFinite(options.reasonerFirstDeltaMs) ? { reasoner_first_delta_ms: Math.max(0, Math.round(options.reasonerFirstDeltaMs)) } : {}),
+      ...(options.ttsLanguageMismatch ? { tts_language_mismatch: true } : {}),
+    };
+  }
+
+  // VOICE_STREAMING is read PER TURN (an env lookup in the turn path, not a
+  // module-load const), so an in-process override can flip it without touching
+  // module state. Unset or "1" means on; the in-process circuit breaker latch
+  // is consulted first.
+  streamingEnabledForTurn() {
+    if (!this.cascaded()) {
+      return false;
+    }
+    if (voiceStreamingTripped()) {
+      return false;
+    }
+    return String(this.env.VOICE_STREAMING ?? "").trim() !== "0";
+  }
+
+  chunkerOptions() {
+    return {
+      firstChunkMaxChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_FIRST_MAX_CHARS, 60)),
+      minChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_MIN_CHARS, 60)),
+      maxChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_MAX_CHARS, 220)),
+      flushTimeoutMs: Math.max(50, numberFrom(this.env.VOICE_CHUNK_FLUSH_MS, 1200)),
+    };
+  }
+
+  ttsConcurrency() {
+    return Math.max(1, Math.min(4, numberFrom(this.env.VOICE_TTS_CONCURRENCY, 2)));
+  }
+
+  // The pipelined per-chunk TTS emitter. Sanitized reply deltas stream in; the
+  // chunker cuts sentence/clause chunks; at most `ttsConcurrency()` synthesize
+  // requests run concurrently while emission stays STRICTLY ordered through a
+  // promise chain (chunk n+1's PCM is held until chunk n's sendAudio resolves).
+  // Nothing here may throw out of finish(): a synthesis fault degrades the
+  // remainder to text-only with tts_error set, and a TurnSupersededError from
+  // the session-server write guard aborts silently (no tts_error, no events
+  // for the dead turn). One nulled stream crash-looped this gateway 24 times
+  // in a day; the guard lives on the write, not only in callers.
+  createStreamingReplyPipeline({ hooks, language, turnStartedAtMs }) {
+    const provider = this;
+    const chunker = createSpeechChunker(this.chunkerOptions());
+    const abortController = new AbortController();
+    const state = {
+      style: "",
+      deltaCount: 0,
+      firstDeltaAtMs: 0,
+      emitted: 0,
+      started: false,
+      failed: false,
+      superseded: false,
+      finished: false,
+      ttsError: "",
+      firstAudioAtMs: 0,
+    };
+    let emitChain = Promise.resolve();
+    let permits = this.ttsConcurrency();
+    const waiters = [];
+    let forceTimer = null;
+
+    const isActive = () => (typeof hooks.isTurnActive === "function" ? hooks.isTurnActive() !== false : true);
+    const acquire = () => {
+      if (permits > 0) {
+        permits -= 1;
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => waiters.push(resolve));
+    };
+    const release = () => {
+      const next = waiters.shift();
+      if (next) {
+        next();
+      } else {
+        permits += 1;
+      }
+    };
+    const clearForceTimer = () => {
+      if (forceTimer) {
+        clearTimeout(forceTimer);
+        forceTimer = null;
+      }
+    };
+    const markSuperseded = () => {
+      if (state.superseded) return;
+      state.superseded = true;
+      abortController.abort();
+      clearForceTimer();
+    };
+    const markFailed = (error) => {
+      if (state.superseded || state.failed) return;
+      state.failed = true;
+      state.ttsError = state.ttsError || cleanError(error);
+      abortController.abort();
+      clearForceTimer();
+      console.warn(JSON.stringify({
+        level: "warn",
+        at: "cascaded_tts_stream_failed",
+        tts_provider: provider.ttsProviderId,
+        reply_language: language || "",
+        error: state.ttsError,
+      }));
+    };
+
+    // Synthesis faults are caught HERE, at the source, so a failed chunk stops
+    // later chunks from ever issuing their requests (not merely from emitting).
+    const synthesizeChunk = async (text) => {
+      await acquire();
+      try {
+        if (state.superseded || state.failed) {
+          return null;
+        }
+        const pcm = await provider.ttsStage.synthesize({
+          text,
+          language,
+          stylePrompt: state.style,
+          signal: abortController.signal,
+        });
+        if (!pcm || !pcm.length) {
+          throw new Error("hosted TTS returned no audio");
+        }
+        return pcm;
+      } catch (error) {
+        if (state.superseded || state.failed || error?.name === "AbortError") {
+          return null;
+        }
+        markFailed(error);
+        return null;
+      } finally {
+        release();
+      }
+    };
+
+    const enqueue = (text) => {
+      if (state.superseded || state.failed) {
+        return;
+      }
+      const synthPromise = synthesizeChunk(text);
+      emitChain = emitChain.then(async () => {
+        const pcm = await synthPromise;
+        if (!pcm || state.superseded || state.failed) {
+          return;
+        }
+        if (!isActive()) {
+          throw new TurnSupersededError("voice turn superseded before chunk emission");
+        }
+        if (!state.started) {
+          await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { streaming: true });
+          state.started = true;
+        }
+        await hooks.sendAudio(pcm);
+        state.emitted += 1;
+        if (!state.firstAudioAtMs) {
+          state.firstAudioAtMs = Date.now();
+        }
+      }).catch((error) => {
+        if (isTurnSupersededError(error)) {
+          markSuperseded();
+          return;
+        }
+        markFailed(error);
+      });
+    };
+
+    const scheduleForceBreak = () => {
+      clearForceTimer();
+      if (state.superseded || state.failed || state.finished) {
+        return;
+      }
+      if (chunker.pendingLength() === 0) {
+        return;
+      }
+      const waitMs = Math.max(50, chunker.nextDeadline() - Date.now());
+      forceTimer = setTimeout(() => {
+        forceTimer = null;
+        if (state.superseded || state.failed || state.finished) {
+          return;
+        }
+        if (chunker.pendingLength() >= chunker.minChars) {
+          for (const chunk of chunker.forceBreak()) {
+            enqueue(chunk);
+          }
+        }
+        scheduleForceBreak();
+      }, waitMs);
+      forceTimer.unref?.();
+    };
+
+    return {
+      pushDelta(delta) {
+        if (state.superseded || state.failed || state.finished) {
+          return;
+        }
+        const text = String(delta ?? "");
+        if (!text) {
+          return;
+        }
+        state.deltaCount += 1;
+        if (!state.firstDeltaAtMs) {
+          state.firstDeltaAtMs = Date.now();
+        }
+        for (const chunk of chunker.push(text)) {
+          enqueue(chunk);
+        }
+        scheduleForceBreak();
+      },
+      setStyle(style) {
+        const value = String(style || "").trim();
+        if (value && !state.style) {
+          state.style = value;
+        }
+      },
+      // Zero-delta fallback: the reasoner returned a COMPLETE reply without
+      // streaming any deltas (non-streaming provider, fallback path, stubs).
+      // Speak it as ONE chunk — the pre-streaming single-call shape — instead
+      // of re-chunking text that is already fully known.
+      pushFinalText(text) {
+        if (state.superseded || state.failed || state.finished) {
+          return;
+        }
+        const value = String(text || "").trim();
+        if (!value) {
+          return;
+        }
+        state.deltaCount += 1;
+        if (!state.firstDeltaAtMs) {
+          state.firstDeltaAtMs = Date.now();
+        }
+        enqueue(value);
+      },
+      deltaCount() {
+        return state.deltaCount;
+      },
+      cancel() {
+        markSuperseded();
+      },
+      async finish() {
+        state.finished = true;
+        clearForceTimer();
+        if (!state.superseded && !state.failed) {
+          for (const chunk of chunker.flush()) {
+            enqueue(chunk);
+          }
+        }
+        await emitChain;
+        clearForceTimer();
+        if (state.started && !state.superseded) {
+          try {
+            await hooks.onAssistantAudioDone();
+          } catch (error) {
+            if (isTurnSupersededError(error)) {
+              markSuperseded();
+            } else {
+              markFailed(error);
+            }
+          }
+        }
+        return {
+          spoke: state.emitted > 0 && !state.superseded,
+          segments: state.emitted,
+          // A superseded turn is silent: no tts_error, no events for it.
+          ttsError: state.superseded ? "" : state.ttsError,
+          superseded: state.superseded,
+          started: state.started,
+          firstAudioMs: state.firstAudioAtMs ? state.firstAudioAtMs - turnStartedAtMs : null,
+          firstDeltaMs: state.firstDeltaAtMs ? state.firstDeltaAtMs - turnStartedAtMs : null,
+        };
+      },
     };
   }
 
@@ -836,7 +1304,7 @@ class ChirpSttVoiceProvider {
       await hooks.onTurnProgress("tts");
     }
     try {
-      const pcm = await this.synthesizeSpeech(speak, language);
+      const pcm = await this.ttsStage.synthesize({ text: speak, language });
       if (pcm && pcm.length) {
         await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
         await hooks.sendAudio(pcm);
@@ -900,10 +1368,11 @@ class ChirpSttVoiceProvider {
     return this.ttsVoice;
   }
 
-  async synthesizeSpeech(text, language, stylePrompt = "") {
+  async synthesizeSpeech(text, language, stylePrompt = "", signal = undefined) {
     const token = await this.accessToken();
     return synthesizeCloudTts({
       text,
+      signal,
       // The Gemini-TTS leg accepts a natural-language style prompt in
       // input.prompt; classic Cloud TTS voices do not, so only forward it there.
       prompt: this.ttsProviderId === "gemini-tts" ? String(stylePrompt || "") : "",
@@ -2364,6 +2833,7 @@ async function synthesizeCloudTts(options) {
       method: "POST",
       headers: ttsHeaders,
       body,
+      signal: options.signal,
     }, timeoutMs);
     if (response.ok) {
       break;
@@ -2581,10 +3051,27 @@ function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   timeout.unref?.();
+  // Merge an optional external signal (pipeline cancellation on interruption)
+  // with the timeout controller so either can abort the request.
+  const external = options?.signal;
+  let onExternalAbort = null;
+  if (external) {
+    if (external.aborted) {
+      controller.abort(external.reason);
+    } else {
+      onExternalAbort = () => controller.abort(external.reason);
+      external.addEventListener("abort", onExternalAbort, { once: true });
+    }
+  }
   return fetch(url, {
     ...options,
     signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
+  }).finally(() => {
+    clearTimeout(timeout);
+    if (external && onExternalAbort) {
+      external.removeEventListener("abort", onExternalAbort);
+    }
+  });
 }
 
 async function serviceAccountAccessToken(serviceAccountKeyJson) {
@@ -2849,12 +3336,17 @@ function cleanError(error) {
 
 module.exports = {
   CLIENT_AUDIO_FORMAT,
+  TurnSupersededError,
+  isTurnSupersededError,
   createTranscriptSettleGate,
   createVoiceProviderRegistry,
   createVoiceProvider,
   generatePcm16Tone,
+  reportVoiceStreamingFault,
+  resetVoiceStreamingBreakerForTests,
   resamplePcm16Mono,
   voiceProviderNames,
+  voiceStreamingTripped,
   cloudTtsVoiceFor,
   pcmFromWav,
 };

@@ -296,6 +296,86 @@ reasoner sees the delivery state (modality, TTS availability, the previous
 turn's `tts_error`) as a hint block, so "why did you answer in text?" gets a
 truthful answer and the model can change `response_modality` by tool call.
 
+### Streaming cascaded voice
+
+```text
+gateway LLM turn streams text deltas (Vertex SSE / OpenAI-compatible SSE)
+  -> a pure sentence/clause chunker (Latin + Ethiopic + Arabic + CJK
+     boundaries) slices deltas into speakable pieces as they arrive
+  -> pipelined hosted TTS synthesizes each piece (bounded concurrency, at
+     most 2 in flight) and emits PCM in strict chunk order
+  -> assistant_audio_start fires on chunk 1, mid-LLM-stream; assistant_text
+     (the full reply) follows once the stream ends; assistant_audio_done and
+     turn_done close the turn
+```
+
+Cascaded voice turns stream by default (`VOICE_STREAMING`, unset or `1`). The
+wire protocol keeps the event set used everywhere else: one
+`assistant_audio_start`, N binary PCM16 frames, one `assistant_audio_done`,
+one `turn_done`. Only the frame count and the ordering change for a
+multi-chunk reply: `assistant_text` now arrives after the first binary frame
+instead of before it, because both clients already read `assistant_text` and
+`assistant_audio_start` independently of order, proven first by the Gemini
+Live and loopback providers, which already stream many frames per turn.
+`assistant_audio_start` carries an additive `streaming: true` flag, and
+`turn_done` carries additive `first_audio_ms` and `tts_segments`; every other
+`turn_done` field is unchanged. `VOICE_STREAMING=0` reproduces the exact
+prior single-frame, text-before-audio sequence and is the slow rollback path:
+the droplet needs a container recreate to pick up the env change, so a faster
+in-process circuit breaker (below) covers the same failure class without an
+operator.
+
+A same-commit interruption guard makes streaming safe against barge-in: the
+session server re-checks turn identity and non-terminal status at hook entry,
+again immediately before every socket write, and again before
+`assistant_audio_done`; a closed-turn write to the assistant audio stream is
+dropped rather than reopening or truncating a finalized PCM file, mirroring
+the 2026-07-06 crash-loop fix for the equivalent user-audio write. A streaming
+fault trips a per-process circuit breaker after 3 failures, latching every
+later turn in that process onto the non-streaming path with no operator
+action, because the deploy gate's restore-check never drives a real voice
+turn.
+
+The chunker (`gateway/lib/voice-chunker.js`) is pure and timer-free: sentence
+enders (`. ! ? …` and Ethiopic `። ፧ ፨`) are the primary boundary, clause
+enders (`, ; :` and Ethiopic `፣ ፤ ፥`) apply once the pending text is already
+past a minimum length, and a hard split at the last whitespace applies past a
+maximum length. The first chunk of a reply uses tighter thresholds so the
+first sentence reaches TTS as fast as possible, and a bracketed
+expressive-speech tag (`[sigh]`, `[style: ...]`) always stays with the prose
+it modifies.
+
+`VOICE_TTS_MAX_CHARS` (280) is untouched and keeps bounding every
+non-streaming caller (browser-evidence speak caps, the profile default, and
+the `VOICE_STREAMING=0` path). A separate `VOICE_STREAM_MAX_CHARS` (1600)
+bounds only the streaming sanitizer; streamed speech is guaranteed to be a
+prefix of the stored capped reply, not necessarily byte-identical near the
+cap.
+
+Provider internals sit behind a formal seam, `gateway/lib/voice-stages.js`
+(`SttProvider`/`Reasoner`/`TtsProvider`, registry-driven `create(options)`
+factories), with `streaming_tts` and `streaming_reasoning` capability flags
+surfacing on `/health`. The outer contract does not move: `processTurn(turn,
+hooks)`, `status()`, and `synthesizeAssistantSpeech` are unchanged, so the
+session server, Android, browser, and the LiveKit worker's internal voice
+hooks never see the stage seam.
+
+Turn records stay additive-only. N TTS chunks still append into the same
+single `${turnId}.assistant.pcm` file used today, and `streaming`,
+`first_audio_ms`, and `tts_segments` are additive fields on the provider
+result and canonical record; no migration is required, and rollback to the
+previous ref or `VOICE_STREAMING=0` reproduces the prior record shape exactly.
+
+Rollout is gateway-first: merging and pushing promotes through the existing
+`Deploy VPS gateway` workflow and droplet auto-update timer, since old clients
+already tolerate the multi-frame wire behavior. Live QA on both the phone and
+the browser immediately after promotion is mandatory, not optional
+observation, because the shipped Android APK and packaged extension exercise
+the cascaded path only in its single-frame form in production; QA confirms
+`/health` reports `streaming_tts: true` and voice-provider-events carry
+`first_audio_ms`. Contract:
+`reference/openspec/changes/streaming-cascaded-voice/proposal.md`.
+
 ### LiveKit prototype (flag-gated)
 
 The default voice transport is the cascaded WebSocket pipeline above and is
