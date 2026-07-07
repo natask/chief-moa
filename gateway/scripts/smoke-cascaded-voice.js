@@ -26,7 +26,11 @@ const GATEWAY_DIR = path.resolve(__dirname, "..");
 const {
   createVoiceProvider,
   generatePcm16Tone,
+  reportVoiceStreamingFault,
+  resetVoiceStreamingBreakerForTests,
+  voiceStreamingTripped,
 } = require(path.join(GATEWAY_DIR, "lib", "voice-providers"));
+const { createSpeakStreamSanitizer } = require(path.join(GATEWAY_DIR, "lib", "voice-chunker"));
 const { VoiceSessionConnection } = require(path.join(GATEWAY_DIR, "lib", "voice-session-server"));
 
 main().catch((error) => {
@@ -54,6 +58,14 @@ async function main() {
     await turnProgressDuringStalledReasoner(tempDir);
     await turnProgressStopsAfterCancel(tempDir);
     await turnProgressStopsAfterClose(tempDir);
+    await streamingMultiFrameWireOrder(tempDir);
+    await streamingSynthesisBodiesInSentenceOrder(tempDir);
+    await streamingMidStreamTtsFailure(tempDir);
+    await streamingInterruptionGoesSilent(tempDir);
+    await streamingNullStreamGuard(tempDir);
+    await streamingCircuitBreakerLatches(tempDir);
+    await streamingCapPrefixProperty(tempDir);
+    await streamingKillSwitchReproducesOldSequence(tempDir);
     console.log("smoke-cascaded-voice: ok");
   } finally {
     global.fetch = previousFetch;
@@ -838,6 +850,376 @@ function makeProgressConnection(tempDir, tag, provider, turnProgressIntervalMs) 
 
 function delayMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(predicate, timeoutMs, label) {
+  const deadline = Date.now() + (timeoutMs || 5000);
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await delayMs(10);
+  }
+  throw new Error(`timed out waiting for ${label || "condition"}`);
+}
+
+function streamingProviderEnv(extra = {}) {
+  return {
+    VOICE_PROVIDER: "chirp",
+    VOICE_TTS_PROVIDER: "cloud-tts",
+    GCP_PROJECT_ID: "test-project",
+    CHIRP_ACCESS_TOKEN: "test-token",
+    CHIRP_MODEL: "chirp_3",
+    CHIRP_LANGUAGE_CODES: "en-US",
+    ...extra,
+  };
+}
+
+function makeStreamingConnection(tempDir, tag, provider, events) {
+  const dataDir = path.join(tempDir, `session-${tag}`);
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  return new VoiceSessionConnection(fakeWs(events), {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    onTurnCompleted: async (record) => record,
+  });
+}
+
+async function startStreamingTurn(connection, tag) {
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: `sess_${tag}`,
+    turn_id: `turn_${tag}`,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 80, frequencyHz: 240, sampleRate: 16000, volume: 0.2 }));
+}
+
+// Streaming contract on the wire (connection-level, real binary frames): one
+// assistant_audio_start {streaming:true}, >= 3 ordered binary frames for a
+// 3-sentence stubbed turn, assistant_text AFTER the first frame (audio before
+// text is the streaming contract), one assistant_audio_done, then turn_done
+// carrying the additive first_audio_ms and tts_segments fields.
+async function streamingMultiFrameWireOrder(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "tell me a story", calls });
+  const s1 = "Sure.";
+  const s2 = "Here is a much longer second sentence that clearly crosses the sixty character minimum mark.";
+  const s3 = "And the third sentence also runs far enough past sixty characters to form its own chunk.";
+  const speak = `${s1} ${s2} ${s3}`;
+  const events = [];
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      assert.equal(typeof input.on_speak_delta, "function", "streaming turns must offer on_speak_delta");
+      input.on_speak_delta(`${s1} `);
+      input.on_speak_delta(`${s2} `);
+      input.on_speak_delta(s3);
+      // Return only after the frames flowed, so assistant_text (sent at LLM
+      // stream end) deterministically lands after the first binary frame.
+      await waitFor(() => events.filter((e) => e.type === "binary").length >= 3, 5000, "three binary frames");
+      return { speak, display: speak, language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+  const connection = makeStreamingConnection(tempDir, "stream-wire", provider, events);
+  await startStreamingTurn(connection, "stream-wire");
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_stream-wire" });
+
+  const types = events.map((event) => event.type);
+  const startIndexes = types.map((t, i) => (t === "assistant_audio_start" ? i : -1)).filter((i) => i >= 0);
+  const doneIndexes = types.map((t, i) => (t === "assistant_audio_done" ? i : -1)).filter((i) => i >= 0);
+  const binaryIndexes = types.map((t, i) => (t === "binary" ? i : -1)).filter((i) => i >= 0);
+  assert.equal(startIndexes.length, 1, "exactly one assistant_audio_start");
+  assert.equal(doneIndexes.length, 1, "exactly one assistant_audio_done");
+  assert.ok(binaryIndexes.length >= 3, `>= 3 binary frames (got ${binaryIndexes.length})`);
+  assert.ok(startIndexes[0] < binaryIndexes[0], "assistant_audio_start precedes the first frame");
+  assert.ok(binaryIndexes[binaryIndexes.length - 1] < doneIndexes[0], "all frames precede assistant_audio_done");
+  assert.equal(events[startIndexes[0]].streaming, true, "assistant_audio_start must carry streaming:true");
+  const transcriptIndex = types.indexOf("transcript_final");
+  assert.ok(transcriptIndex >= 0 && transcriptIndex < startIndexes[0], "transcript_final precedes audio");
+  const textIndex = types.indexOf("assistant_text");
+  const turnDoneIndex = types.indexOf("turn_done");
+  assert.ok(textIndex > binaryIndexes[0], "assistant_text must arrive AFTER the first binary frame");
+  assert.ok(textIndex < turnDoneIndex, "assistant_text precedes turn_done");
+  assert.ok(doneIndexes[0] < turnDoneIndex, "assistant_audio_done precedes turn_done");
+  const done = events[turnDoneIndex];
+  assert.equal(done.status, "completed");
+  assert.equal(done.tts_spoke, true);
+  assert.equal(done.streaming, true, "turn_done must mark the streaming turn");
+  assert.ok(Number.isFinite(done.first_audio_ms), "turn_done must carry first_audio_ms");
+  assert.ok(done.tts_segments >= 3, `turn_done must carry tts_segments >= 3 (got ${done.tts_segments})`);
+}
+
+// Per-chunk synthesize request bodies arrive in sentence order (processTurn
+// level; the recordingHooks harness records TTS bodies, never a WS).
+async function streamingSynthesisBodiesInSentenceOrder(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "hello", calls });
+  const s1 = "Sure.";
+  const s2 = "Here is a much longer second sentence that clearly crosses the sixty character minimum mark.";
+  const s3 = "And the third sentence also runs far enough past sixty characters to form its own chunk.";
+  const speak = `${s1} ${s2} ${s3}`;
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      input.on_speak_delta(speak);
+      return { speak, display: speak, language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+  const events = [];
+  const result = await provider.processTurn(makeTurn(tempDir, "stream-order"), recordingHooks(events));
+  const bodies = calls.filter((c) => c.kind === "tts").map((c) => c.body.input.text);
+  assert.deepEqual(bodies, [s1, s2, s3], `synthesize bodies must be the sentences in order (got ${JSON.stringify(bodies)})`);
+  const audioCount = events.filter((e) => e.type === "audio").length;
+  assert.ok(audioCount >= 3, `>= 3 audio emissions (got ${audioCount})`);
+  assert.equal(result.streaming, true);
+  assert.equal(result.tts_segments, 3);
+  assert.equal(result.tts_spoke, true);
+  assert.ok(Number.isFinite(result.first_audio_ms), "the result must carry first_audio_ms");
+}
+
+// Mid-stream TTS fault: chunk 2's synthesize returns 500. Chunk 1's audio
+// stands, chunk 3 never issues a request, and the turn still completes with
+// tts_error set — never a crash, never a turn error.
+async function streamingMidStreamTtsFailure(tempDir) {
+  let ttsCalls = 0;
+  global.fetch = async (url, options = {}) => {
+    const u = String(url);
+    if (u.includes(":recognize")) {
+      return jsonResponse({ results: [{ alternatives: [{ transcript: "tell me more" }] }] });
+    }
+    if (u.includes("texttospeech.googleapis.com")) {
+      ttsCalls += 1;
+      if (ttsCalls === 1) {
+        return jsonResponse({ audioContent: wavBase64() });
+      }
+      await delayMs(40);
+      return { ok: false, status: 500, json: async () => ({}), text: async () => "synthesize exploded" };
+    }
+    throw new Error(`unexpected fetch to ${u}`);
+  };
+
+  const s1 = "First sentence leaves fast.";
+  const s2 = "Second sentence is long enough to pass the sixty character minimum and then fails to synthesize.";
+  const s3 = "Third sentence must never even issue a synthesize request after the fault.";
+  const events = [];
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      input.on_speak_delta(`${s1} `);
+      input.on_speak_delta(s2);
+      await waitFor(() => ttsCalls >= 2 && events.some((e) => e.type === "binary"), 5000, "chunk 1 emitted and chunk 2 attempted");
+      await delayMs(80); // let the 500 land and the pipeline latch the fault
+      input.on_speak_delta(` ${s3}`);
+      return { speak: `${s1} ${s2} ${s3}`, display: `${s1} ${s2} ${s3}`, language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+  const connection = makeStreamingConnection(tempDir, "stream-fault", provider, events);
+  await startStreamingTurn(connection, "stream-fault");
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_stream-fault" });
+
+  assert.equal(events.filter((e) => e.type === "binary").length, 1, "only chunk 1's audio may play");
+  assert.equal(ttsCalls, 2, "chunk 3 must not fire a synthesize request after the fault");
+  const done = events.find((e) => e.type === "turn_done");
+  assert.equal(done.status, "completed", "a mid-stream TTS fault still completes the turn");
+  assert.ok(done.tts_error && done.tts_error.length > 0, "turn_done must surface the tts_error");
+  assert.equal(done.tts_spoke, true, "at least one chunk played");
+  assert.ok(events.some((e) => e.type === "assistant_audio_done"), "assistant_audio_done still closes the audio window");
+}
+
+// Interruption: a new session_start replaces the turn between chunk emissions.
+// The superseded turn emits nothing further — no frames, no assistant_text, no
+// turn_done, no error — and TurnSupersededError never escapes as a turn error.
+async function streamingInterruptionGoesSilent(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "long story", calls });
+  const events = [];
+  let releaseReasoner;
+  const gate = new Promise((resolve) => {
+    releaseReasoner = resolve;
+  });
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      input.on_speak_delta("First sentence spoken early.");
+      await waitFor(() => events.some((e) => e.type === "binary"), 5000, "first frame before barge-in");
+      await gate;
+      input.on_speak_delta(" The rest of this reply must never reach the old turn after the barge-in lands, not one frame of it.");
+      return { speak: "full reply", display: "full reply", language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+  const connection = makeStreamingConnection(tempDir, "stream-interrupt", provider, events);
+  await startStreamingTurn(connection, "stream-interrupt");
+  const commitPromise = connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_stream-interrupt" }).catch((error) => {
+    throw new Error(`commit must not reject on interruption: ${error?.message || error}`);
+  });
+  await waitFor(() => events.some((e) => e.type === "binary"), 5000, "first frame at the connection level");
+
+  // Barge-in: a new session_start marks the old turn terminal mid-stream.
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: "sess_stream-interrupt-next",
+    turn_id: "turn_stream-interrupt-next",
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  const marker = events.length;
+  releaseReasoner();
+  await commitPromise;
+  await delayMs(120);
+
+  const after = events.slice(marker);
+  assert.ok(!after.some((e) => e.type === "binary"), "no binary frames after supersession");
+  const deadTurnEvents = after.filter((e) => e.turn_id === "turn_stream-interrupt"
+    && ["assistant_text", "assistant_audio_done", "turn_done", "error"].includes(e.type));
+  assert.deepEqual(deadTurnEvents, [], `no events for the dead turn (got ${JSON.stringify(deadTurnEvents)})`);
+  assert.ok(!events.some((e) => e.type === "error"), "TurnSupersededError must never surface as an error event");
+}
+
+// Null-stream race: the assistant audio stream is finalized (nulled + latched,
+// as closeAssistantAudioStream does) while a late chunk is still in flight.
+// The late chunk is dropped: no throw, no flags:"w" re-creation, and the
+// finalized audio record is not rewritten.
+async function streamingNullStreamGuard(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "keep talking", calls });
+  const events = [];
+  let releaseReasoner;
+  const gate = new Promise((resolve) => {
+    releaseReasoner = resolve;
+  });
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      input.on_speak_delta("First sentence flows to disk and socket.");
+      await waitFor(() => events.some((e) => e.type === "binary"), 5000, "first frame before the stream closes");
+      await gate;
+      input.on_speak_delta(" A late second sentence arrives after the assistant stream was finalized and must be dropped from disk.");
+      return { speak: "reply", display: "reply", language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+  const connection = makeStreamingConnection(tempDir, "stream-null", provider, events);
+  await startStreamingTurn(connection, "stream-null");
+  const commitPromise = connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_stream-null" });
+  await waitFor(() => events.some((e) => e.type === "binary"), 5000, "first frame at the connection level");
+
+  // Exactly what closeAssistantAudioStream does: null the stream + set the latch.
+  const turn = connection.turn;
+  assert.ok(turn, "the turn must still be active");
+  turn.assistantAudioStream = null;
+  turn.assistantAudioClosed = true;
+  const bytesBefore = turn.assistantAudioBytes;
+  const chunksBefore = turn.assistantAudioChunks;
+  releaseReasoner();
+  await commitPromise;
+
+  const done = events.find((e) => e.type === "turn_done");
+  assert.equal(done.status, "completed", "a dropped late chunk must not fail the turn");
+  assert.equal(turn.assistantAudioStream, null, "the finalized stream must never be re-created (flags:\"w\" reopen)");
+  assert.equal(turn.assistantAudioBytes, bytesBefore, "the finalized audio byte count must not be rewritten");
+  assert.equal(turn.assistantAudioChunks, chunksBefore, "the finalized audio chunk count must not be rewritten");
+}
+
+// Circuit breaker: three streaming faults latch streaming off for the process,
+// voice_streaming_tripped logs exactly once, and the next turn runs the
+// non-streaming single-frame path.
+async function streamingCircuitBreakerLatches(tempDir) {
+  resetVoiceStreamingBreakerForTests();
+  const errorLogs = [];
+  const previousConsoleError = console.error;
+  console.error = (message) => {
+    errorLogs.push(String(message));
+  };
+  try {
+    reportVoiceStreamingFault("smoke-fault-1");
+    reportVoiceStreamingFault("smoke-fault-2");
+    assert.equal(voiceStreamingTripped(), false, "two faults must not trip the breaker");
+    reportVoiceStreamingFault("smoke-fault-3");
+    assert.equal(voiceStreamingTripped(), true, "the third fault must trip the breaker");
+    reportVoiceStreamingFault("smoke-fault-4");
+    const tripLogs = errorLogs.filter((line) => line.includes("voice_streaming_tripped"));
+    assert.equal(tripLogs.length, 1, "voice_streaming_tripped must log exactly once");
+  } finally {
+    console.error = previousConsoleError;
+  }
+
+  try {
+    const calls = [];
+    stubFetch({ sttTranscript: "hello there", calls });
+    const provider = createVoiceProvider({
+      env: streamingProviderEnv(),
+      reasoner: async (input) => {
+        assert.equal(input.on_speak_delta, undefined, "a tripped breaker must serve the non-streaming path");
+        return { speak: "Old path reply.", display: "Old path reply.", language: "en-US", model: "test-model", classification: "chat" };
+      },
+    });
+    assert.equal(provider.status().voice_streaming.tripped, true, "status must expose the tripped latch");
+    assert.equal(provider.status().voice_streaming.enabled, false);
+    const events = [];
+    await provider.processTurn(makeTurn(tempDir, "stream-breaker"), recordingHooks(events));
+    assert.deepEqual(
+      events.map((e) => e.type),
+      ["transcript_final", "assistant_text", "assistant_audio_start", "audio", "assistant_audio_done"],
+      "a tripped breaker must reproduce the single-frame text-before-audio sequence",
+    );
+  } finally {
+    resetVoiceStreamingBreakerForTests();
+  }
+}
+
+// Cap prefix property near the streaming cap: streamed speech is a PREFIX of
+// the stored capped text — never byte equality, the spoken tail may be up to
+// one clause shorter. Uses the real sanitizer the gateway wires around
+// on_speak_delta, with a plain (compaction-identity) reply.
+async function streamingCapPrefixProperty(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "talk a lot", calls });
+  const cap = 140;
+  const fullText = "The quick brown fox jumps over the lazy dog and keeps going without a pause. ".repeat(5).trim();
+  const storedSpeak = fullText.length > cap ? `${fullText.slice(0, cap)}...` : fullText; // truncate() semantics
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      const sanitizer = createSpeakStreamSanitizer({ onDelta: input.on_speak_delta, maxChars: cap });
+      for (const piece of fullText.match(/.{1,23}/g)) {
+        sanitizer.push(piece);
+      }
+      sanitizer.end();
+      return { speak: storedSpeak, display: storedSpeak, language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+  const events = [];
+  const result = await provider.processTurn(makeTurn(tempDir, "stream-cap"), recordingHooks(events));
+  const spoken = calls.filter((c) => c.kind === "tts").map((c) => c.body.input.text).join(" ");
+  assert.ok(spoken.length > 0, "capped stream must still speak the head of the reply");
+  assert.ok(spoken.length <= cap, `spoken text must stay under the cap (got ${spoken.length})`);
+  assert.ok(result.assistant_text.startsWith(spoken), `streamed speech must be a PREFIX of the stored capped text (spoken=${JSON.stringify(spoken.slice(-40))} stored=${JSON.stringify(result.assistant_text.slice(0, 60))})`);
+  assert.notEqual(spoken, result.assistant_text, "byte equality is not required near the cap");
+}
+
+// Kill switch: VOICE_STREAMING=0 reproduces the exact pre-streaming event
+// sequence (text before a single audio frame), guarding the rollback path.
+async function streamingKillSwitchReproducesOldSequence(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "what time is it", calls });
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv({ VOICE_STREAMING: "0" }),
+    reasoner: async (input) => {
+      assert.equal(input.on_speak_delta, undefined, "VOICE_STREAMING=0 must not offer on_speak_delta");
+      return { speak: "You said: what time is it.", display: "You said: what time is it.", language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+  assert.equal(provider.status().voice_streaming.enabled, false, "status must reflect the kill switch");
+  const events = [];
+  const result = await provider.processTurn(makeTurn(tempDir, "stream-off"), recordingHooks(events));
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["transcript_final", "assistant_text", "assistant_audio_start", "audio", "assistant_audio_done"],
+    "VOICE_STREAMING=0 must reproduce the exact single-frame text-before-audio sequence",
+  );
+  assert.equal(result.streaming, undefined, "a kill-switched turn carries no streaming metadata");
+  assert.equal(result.tts_spoke, true);
 }
 
 function makeTurn(tempDir, tag) {
