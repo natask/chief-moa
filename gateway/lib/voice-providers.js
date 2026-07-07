@@ -7,6 +7,7 @@ const { execFileSync } = require("node:child_process");
 const { WebSocket } = require("ws");
 const { safeSystemPromptForProvider } = require("./agent-profile");
 const { voiceOptionsPayload } = require("./profile-options");
+const { createSttStage, createReasonerStage, createTtsStage } = require("./voice-stages");
 
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
@@ -54,6 +55,8 @@ const PROVIDER_CAPABILITY_FLAGS = [
   "mid_session_profile_update",
   "language_hints",
   "provider_session_resume",
+  "streaming_tts",
+  "streaming_reasoning",
 ];
 const PROVIDER_ALIASES = Object.freeze({
   test: "loopback",
@@ -71,6 +74,7 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         voice_output: true,
       },
       configured: () => true,
+      create: (options) => new LoopbackVoiceProvider(options),
     }),
     "gemini-live": providerRegistryEntry({
       id: "gemini-live",
@@ -85,6 +89,12 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         language_hints: true,
       },
       configured: (env) => Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY),
+      create: (options) => new GeminiLiveVoiceProvider(options, {
+        provider: "gemini-live",
+        defaultModel: DEFAULT_GEMINI_LIVE_MODEL,
+        defaultEndpoint: GEMINI_LIVE_ENDPOINT,
+        authMode: "google-ai-api-key",
+      }),
     }),
     "vertex-live": providerRegistryEntry({
       id: "vertex-live",
@@ -99,6 +109,12 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         language_hints: true,
       },
       configured: vertexLiveConfigured,
+      create: (options) => new GeminiLiveVoiceProvider(options, {
+        provider: "vertex-live",
+        defaultModel: DEFAULT_VERTEX_LIVE_MODEL,
+        defaultEndpoint: VERTEX_LIVE_EXPRESS_ENDPOINT,
+        authMode: "vertex",
+      }),
     }),
   }),
   stt: Object.freeze({
@@ -111,6 +127,9 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         language_hints: true,
       },
       configured: chirpConfigured,
+      // The chirp STT anchor instantiates the whole cascaded composition
+      // (STT -> injected gateway reasoner -> hosted TTS stages).
+      create: (options) => new CascadedVoiceProvider(options),
     }),
   }),
   reasoning: Object.freeze({
@@ -184,32 +203,33 @@ const PROVIDER_ALIASES_TTS = Object.freeze({
   "gemini-tts-preview": "gemini-tts",
 });
 
+// Registry-driven instantiation: resolve the selected provider names to one
+// registry entry and let its create() factory build the transport provider.
+// Adding a provider is now a registry entry (id, label, capabilities,
+// configured, create), not another if/else branch here.
 function createVoiceProvider(options) {
   const env = options?.env || process.env;
   const names = voiceProviderNames(env);
-  if (names.stt === "chirp") {
-    return new ChirpSttVoiceProvider(options);
-  }
-  if (allSameProvider(names, "loopback") || allSameProvider(names, "test")) {
-    return new LoopbackVoiceProvider(options);
-  }
-  if (allSameProvider(names, "gemini-live")) {
-    return new GeminiLiveVoiceProvider(options, {
-      provider: "gemini-live",
-      defaultModel: DEFAULT_GEMINI_LIVE_MODEL,
-      defaultEndpoint: GEMINI_LIVE_ENDPOINT,
-      authMode: "google-ai-api-key",
-    });
-  }
-  if (allSameProvider(names, "vertex-live")) {
-    return new GeminiLiveVoiceProvider(options, {
-      provider: "vertex-live",
-      defaultModel: DEFAULT_VERTEX_LIVE_MODEL,
-      defaultEndpoint: VERTEX_LIVE_EXPRESS_ENDPOINT,
-      authMode: "vertex",
-    });
+  const entry = resolveProviderEntry(names);
+  if (entry?.create) {
+    return entry.create(options);
   }
   return new UnsupportedVoiceProvider(options, names);
+}
+
+function resolveProviderEntry(names) {
+  // The chirp STT anchor selects the cascaded composition regardless of the
+  // reasoning/TTS stage selection (those are stages inside it).
+  if (names.stt === "chirp") {
+    return providerDefinition("stt", "chirp");
+  }
+  const stt = registryProviderId(names.stt);
+  const reasoning = registryProviderId(names.reasoning || names.llm);
+  const tts = registryProviderId(names.tts);
+  if (stt === reasoning && reasoning === tts) {
+    return providerDefinition("native_live", stt);
+  }
+  return null;
 }
 
 function voiceProviderNames(env) {
@@ -294,6 +314,10 @@ function providerRegistryEntry(entry) {
     provider_type: "native_live",
     capabilities: Object.freeze(capabilities(entry.capabilities || {})),
     configured: entry.configured,
+    // Optional instantiation factory: entries that can build a full transport
+    // provider (native_live bundles, or the cascaded STT anchor) define it, so
+    // adding a provider is one registry entry instead of an if/else branch.
+    create: typeof entry.create === "function" ? entry.create : null,
   });
 }
 
@@ -518,7 +542,9 @@ class UnsupportedVoiceProvider {
   }
 }
 
-class ChirpSttVoiceProvider {
+// The cascaded composition: Chirp STT stage -> injected gateway reasoner
+// stage -> hosted TTS stage (formerly ChirpSttVoiceProvider).
+class CascadedVoiceProvider {
   constructor(options) {
     const env = options?.env || process.env;
     this.env = env;
@@ -554,13 +580,39 @@ class ChirpSttVoiceProvider {
       this.ttsVoice = String(env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim();
       this.ttsModel = String(env.CHIRP_TTS_MODEL || "").trim();
     }
+    // Formal stage seam (lib/voice-stages.js): STT stage -> reasoner stage ->
+    // TTS stage. Stage bodies delegate to the provider methods so GCP auth and
+    // the token cache stay shared across stages.
+    this.sttStage = createSttStage({
+      id: "chirp",
+      capabilities: { partial_transcripts: false, language_hints: true },
+      transcribe: ({ turn, languageCodes }) => this.transcribePcmFile(turn, languageCodes),
+    });
+    this.reasonerStage = this.reasoner
+      ? createReasonerStage({
+        id: "gateway",
+        capabilities: { streaming_reasoning: false, tools: true },
+        run: (input) => this.reasoner(input),
+      })
+      : null;
+    this.ttsStage = this.ttsProviderId === "cloud-tts" || this.ttsProviderId === "gemini-tts"
+      ? createTtsStage({
+        id: this.ttsProviderId,
+        capabilities: {
+          streaming_tts: false,
+          expressive_tags: this.ttsProviderId === "gemini-tts",
+          language_pinning: this.ttsProviderId === "gemini-tts",
+        },
+        synthesize: ({ text, language, stylePrompt }) => this.synthesizeSpeech(text, language, stylePrompt),
+      })
+      : null;
   }
 
   // The cascaded pipeline is active when a reasoner is wired AND a hosted TTS
   // provider is selected. Otherwise the provider is STT-only (transcript back to
   // the gateway, device speaks the reply).
   cascaded() {
-    return Boolean(this.reasoner) && (this.ttsProviderId === "cloud-tts" || this.ttsProviderId === "gemini-tts");
+    return Boolean(this.reasonerStage) && Boolean(this.ttsStage);
   }
 
   configured() {
@@ -662,7 +714,7 @@ class ChirpSttVoiceProvider {
     }
 
     // Leg 1 — streaming Chirp 3 STT, restricted to the configured languages.
-    const transcription = await this.transcribePcmFile(turn, sttLanguageCodes);
+    const transcription = await this.sttStage.transcribe({ turn, languageCodes: sttLanguageCodes });
     const transcript = transcription.text;
     if (transcription.languageRejected) {
       turn.transcriptLanguageRejected = true;
@@ -702,7 +754,7 @@ class ChirpSttVoiceProvider {
       await hooks.onTurnProgress("reasoning");
     }
     try {
-      const result = await this.reasoner({
+      const result = await this.reasonerStage.run({
         transcript,
         session_id: turn.sessionId || turn.session_id || "",
         conversation_id: turn.conversationId || turn.conversation_id || "",
@@ -750,7 +802,7 @@ class ChirpSttVoiceProvider {
         await hooks.onTurnProgress("tts");
       }
       try {
-        const pcm = await this.synthesizeSpeech(ttsText, reasoning.language, ttsStyle);
+        const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle });
         if (pcm && pcm.length) {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
           await hooks.sendAudio(pcm);
@@ -836,7 +888,7 @@ class ChirpSttVoiceProvider {
       await hooks.onTurnProgress("tts");
     }
     try {
-      const pcm = await this.synthesizeSpeech(speak, language);
+      const pcm = await this.ttsStage.synthesize({ text: speak, language });
       if (pcm && pcm.length) {
         await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
         await hooks.sendAudio(pcm);

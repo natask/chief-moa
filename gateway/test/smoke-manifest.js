@@ -90,6 +90,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/livekit-transport.js",
   "scripts/smoke-livekit-transport.js",
   "lib/voice-chunker.js",
+  "lib/voice-stages.js",
   "scripts/test-voice-chunker.js",
 ];
 
