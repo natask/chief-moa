@@ -66,6 +66,12 @@ const {
   classificationFromActions,
 } = require("./lib/voice-router");
 const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
+const { createBrowserAgentLoopStore, buildAgentToolDefs } = require("./lib/browser-agent-loop");
+const {
+  resolveTurnSurface,
+  surfaceExecuteCapabilities,
+  surfaceClassicTools,
+} = require("./lib/surface-skills");
 
 // Deployment mode. One image, env-driven modes (see
 // reference/openspec/changes/remote-hosted-gateway):
@@ -340,6 +346,41 @@ function bridgeCredentialNotificationToDeviceHub(notification) {
     return null;
   }
 }
+// Browser agent-loop store: durable background browser-agent tasks the Chrome
+// extension claims and drives one bounded action at a time. The gateway plans
+// the next action (text-only model context with the act/finish tools, else a
+// deterministic keyless fallback); the extension validates and executes each
+// action against its own allowlist. Same store idioms as the browser-tasks CDP
+// store. planNext keeps the model-call machinery here and the lib pure.
+const browserAgentLoop = createBrowserAgentLoopStore({
+  dataDir: DATA_DIR,
+  planNext: planBrowserAgentStep,
+});
+
+// Plan the next browser-agent action with the reasoning model. Returns the RAW
+// captured action for the store to validate, or null when no provider is
+// configured or the model/transport fails, so the store drops to its
+// deterministic fallback. TEXT-ONLY: the context carries no screenshot.
+async function planBrowserAgentStep({ system, userText }) {
+  const effective = agentProfile.effective();
+  const provider = resolveReasoningProvider(effective);
+  if (!providerConfiguredFor(provider)) {
+    return null;
+  }
+  const capture = {};
+  const toolDefs = buildAgentToolDefs(capture);
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: userText },
+  ];
+  try {
+    await callModelToolLoop(messages, effective, toolDefs, { maxRounds: 1 });
+  } catch {
+    return null;
+  }
+  return capture.action || null;
+}
+
 // Periodic credential-health pass: refresh ahead of expiry where the provider
 // supports it, otherwise flag the user and queue a device notification. Set
 // ACCOUNT_HEALTH_INTERVAL_MS=0 to disable (tests drive it via
@@ -460,6 +501,14 @@ const server = http.createServer(async (request, response) => {
           tool_requests_dir: TOOL_REQUESTS_DIR,
           device_count: listDeviceClients().length,
           pending_tool_requests: listToolRequests({ status: "pending", limit: 100 }).length,
+        },
+        execute_tool: {
+          enabled: voiceExecuteToolEnabled(),
+          capability_count: Object.keys(cascadedExecuteCapabilities({})).length,
+        },
+        browser_agent_tasks: {
+          dir: browserAgentLoop.dir,
+          ...browserAgentLoop.healthCounts(),
         },
         account_connections: {
           ...accountConnections.status(),
@@ -993,6 +1042,81 @@ const server = http.createServer(async (request, response) => {
       }
       const id = url.pathname.slice("/v1/browser/tasks/".length, -"/receipts".length);
       await handleBrowserTaskReceipt(request, response, id);
+      return;
+    }
+
+    if (url.pathname === "/v1/browser/agent-tasks" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, {
+        tasks: browserAgentLoop.list({
+          status: url.searchParams.get("status") || "",
+          limit: Number(url.searchParams.get("limit") || 25),
+        }),
+      });
+      return;
+    }
+
+    if (url.pathname === "/v1/browser/agent-tasks" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCreateBrowserAgentTask(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/browser/agent-tasks/claim" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleClaimBrowserAgentTask(request, response);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/browser/agent-tasks/") &&
+      url.pathname.endsWith("/steps")
+    ) {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      const id = url.pathname.slice("/v1/browser/agent-tasks/".length, -"/steps".length);
+      await handleBrowserAgentTaskStep(request, response, id);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/v1/browser/agent-tasks/") &&
+      url.pathname.endsWith("/finish")
+    ) {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      const id = url.pathname.slice("/v1/browser/agent-tasks/".length, -"/finish".length);
+      await handleBrowserAgentTaskFinish(request, response, id);
+      return;
+    }
+
+    if (url.pathname.startsWith("/v1/browser/agent-tasks/") && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.slice("/v1/browser/agent-tasks/".length));
+      const task = browserAgentLoop.get(id);
+      if (!task) {
+        sendJson(response, 404, { error: "browser agent task not found" });
+        return;
+      }
+      sendJson(response, 200, { task });
       return;
     }
 
@@ -9316,9 +9440,10 @@ function liveToolRevertAgentProfile(call, args) {
 
 // Browser-sourced turns come from the agee extension. Only those may propose a
 // page tweak, since the tweak targets the browser page the user is looking at.
+// Delegates to the canonical surface resolver so surface detection lives in one
+// place; behavior for existing callers is unchanged.
 function isBrowserSourcedCall(call) {
-  const source = String(call?.source || "").toLowerCase();
-  return source.includes("agee-extension") || source.includes("browser");
+  return resolveTurnSurface(call) === "browser";
 }
 
 // The contract with the browser extension lane: the model proposes a page tweak
@@ -9531,6 +9656,139 @@ async function handleBrowserTaskReceipt(request, response, id) {
   }
   await recordBrowserTaskProductEvent(task, "receipt", receipt);
   sendJson(response, 200, { task: summarizeBrowserTask(task), receipt });
+}
+
+// Create a browser agent-loop task and link a non-blocking observability
+// agent_run (echo-harness style: a queued record + lifecycle events, never
+// spawned here), mirroring liveToolLaunchBrowserAgent. Shared by the HTTP create
+// route and the surface-skill capability. Returns { task, run }.
+function launchBrowserAgentTaskInternal(body = {}) {
+  const instruction = truncate(String(body.instruction || body.prompt || body.task || "").trim(), 20000);
+  if (!instruction) {
+    throw new Error("instruction is required");
+  }
+  const url = String(body.url || "").trim();
+  const sessionId = body.conversation_id ? sanitizeId(body.conversation_id) : (body.session_id ? sanitizeId(body.session_id) : "");
+  const branchId = body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default";
+  const prompt = [
+    "Background browser-agent task.",
+    "",
+    "The browser extension owns page-local execution and receipts; the gateway plans one bounded action per step and observes.",
+    "",
+    "Instruction:",
+    instruction,
+    url ? `\nStarting URL:\n${url}` : "",
+  ].filter(Boolean).join("\n");
+  // createAgentRun writes a queued observability record (+ "queued" event)
+  // without spawning a harness, so it never blocks and needs no model key.
+  const run = createAgentRun({
+    conversation_id: sessionId,
+    branch_id: branchId,
+    profile_version: body.profile_version || agentProfile.currentVersion(),
+    source: "browser-agent-loop",
+    harness: "echo",
+    prompt: agentPromptWithSessionContext(prompt, { sessionId, branchId }),
+  });
+  const task = browserAgentLoop.create({
+    instruction,
+    url,
+    source: String(body.source || "browser-agent-loop").slice(0, 80),
+    conversation_id: sessionId,
+    branch_id: branchId,
+    agent_run_id: run.id,
+    max_steps: body.max_steps,
+  });
+  appendAgentEvent(run.id, "browser_agent_task_queued", {
+    browser_agent_task_id: task.id,
+    instruction: truncate(instruction, 2000),
+    url,
+    max_steps: task.max_steps,
+  });
+  return { task, run };
+}
+
+async function handleCreateBrowserAgentTask(request, response) {
+  const body = await readJsonBody(request);
+  let created;
+  try {
+    created = launchBrowserAgentTaskInternal(body);
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+    return;
+  }
+  sendJson(response, 202, { task: browserAgentLoop.summarize(created.task, { includeSteps: true }) });
+}
+
+async function handleClaimBrowserAgentTask(request, response) {
+  const body = await readJsonBody(request);
+  const clientId = String(body.client_id || body.client || "agee-extension").trim().slice(0, 120);
+  const task = browserAgentLoop.claim(clientId);
+  if (!task) {
+    sendJson(response, 204, {});
+    return;
+  }
+  if (task.agent_run_id && fs.existsSync(agentRunPath(task.agent_run_id))) {
+    appendAgentEvent(task.agent_run_id, "browser_agent_task_claimed", {
+      browser_agent_task_id: task.id,
+      client_id: task.claimed_by,
+      lease_expires_at: task.lease_expires_at,
+    });
+  }
+  sendJson(response, 200, { task: browserAgentLoop.summarize(task, { includeSteps: true }) });
+}
+
+async function handleBrowserAgentTaskStep(request, response, id) {
+  const body = await readJsonBody(request);
+  let result;
+  try {
+    result = await browserAgentLoop.step(id, body);
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+    return;
+  }
+  if (result.error) {
+    sendJson(response, result.code || 400, { error: result.error });
+    return;
+  }
+  if (result.task && result.task.agent_run_id && fs.existsSync(agentRunPath(result.task.agent_run_id))) {
+    appendAgentEvent(result.task.agent_run_id, "browser_agent_task_step", {
+      browser_agent_task_id: result.task.id,
+      step: result.step,
+      action_kind: result.action.kind,
+      done: result.done,
+    });
+  }
+  sendJson(response, 200, { action: result.action, step: result.step, done: result.done });
+}
+
+async function handleBrowserAgentTaskFinish(request, response, id) {
+  const body = await readJsonBody(request);
+  const result = browserAgentLoop.finish(id, body);
+  if (result.error) {
+    sendJson(response, result.code || 400, { error: result.error });
+    return;
+  }
+  const now = new Date().toISOString();
+  if (result.agent_run_id && fs.existsSync(agentRunPath(result.agent_run_id))) {
+    appendAgentEvent(result.agent_run_id, "browser_agent_task_finished", {
+      browser_agent_task_id: result.task.id,
+      status: result.status,
+      summary: result.summary,
+    });
+    const run = readAgentRun(result.agent_run_id);
+    updateAgentRun(result.agent_run_id, {
+      status: result.status === "done" ? "completed" : "failed",
+      updated_at: now,
+      finished_at: now,
+      output: [
+        String(run.output || "").trim(),
+        result.status === "done"
+          ? `Browser agent task ${result.task.id} finished: ${result.summary || "done"}`
+          : `Browser agent task ${result.task.id} ${result.status}: ${result.summary || result.status}`,
+      ].filter(Boolean).join("\n\n"),
+    });
+  }
+  sendJson(response, 200, { task: result.task });
 }
 
 async function handleDeviceClientHeartbeat(request, response) {
@@ -9925,6 +10183,7 @@ async function runCascadedVoiceReasoningInner(input) {
   const contextCapture = {};
   const toolDefs = cascadedVoiceProfileTools(toolCall)
     .concat(cascadedAgentRunTools(toolCall))
+    .concat(surfaceClassicTools(toolCall, surfaceSkillDeps()))
     .concat([buildContextManagementToolDef(contextCapture)]);
   if (voiceExecuteToolEnabled()) {
     toolDefs.push(cascadedExecuteToolDef(toolCall));
@@ -10013,12 +10272,35 @@ function streamingSpeakCap(profileOptions) {
 // sanitized paths the classic tool defs use, so model output stays a proposal.
 // Gated by VOICE_EXECUTE_TOOL=1 while the classic tools remain the default.
 function voiceExecuteToolEnabled() {
-  return String(process.env.VOICE_EXECUTE_TOOL || "").trim() === "1";
+  return String(process.env.VOICE_EXECUTE_TOOL || "").trim() !== "0";
+}
+
+// Dependencies the surface-skills lib needs, kept here so that lib stays pure
+// and testable. createToolRequest/readToolRequest broker + poll cross-device
+// actions; launchBrowserAgentTask starts a background browser agent-loop task.
+function surfaceSkillDeps() {
+  return {
+    createToolRequest,
+    readToolRequest: (id) => (fs.existsSync(toolRequestPath(id)) ? readToolRequest(id) : null),
+    launchBrowserAgentTask: ({ instruction, url, call }) => {
+      const created = launchBrowserAgentTaskInternal({
+        instruction,
+        url,
+        source: (call && call.source) || "browser-agent-loop",
+        conversation_id: (call && (call.conversation_id || call.session_id)) || "",
+        branch_id: (call && call.branch_id) || "default",
+        profile_version: call && call.profile_version,
+      });
+      return { task_id: created.task.id, agent_run_id: created.run.id, task: created.task };
+    },
+    cleanError,
+  };
 }
 
 function cascadedExecuteCapabilities(call) {
   const profileOptions = call?.device_id ? { deviceId: call.device_id } : {};
   return {
+    ...surfaceExecuteCapabilities(call, surfaceSkillDeps()),
     profile_get: {
       description: "Read the effective agent profile: identity (assistant_name, user_name, user_nickname, user_address), languages, voice, modality, model.",
       run: () => ({ ok: true, profile: agentProfile.effective(profileOptions) }),
