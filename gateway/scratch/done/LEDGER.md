@@ -1,3 +1,4 @@
+- Voice delivery controls: speaking_rate (default 1.5x fast) + voice_tone profile fields -> Chirp audioConfig / Gemini-TTS pace prompt, spoken tool-call acks via onToolRound + pipeline pushImmediate, language switch confirmed out loud in the new language — agent: claude-code/fable-5 — 661eb2a
 - Per-session pet persona: session_start persona -> in-character cascaded replies, identity reads route to chat on persona sessions — agent: claude-code/fable-5 — 260017b
 - Fix empty streamed voice replies: sseJsonEvents Uint8Array decode + Gemini thoughtSignature replay on all vertex tool-loop rounds — agent: claude-code/fable-5 — 26da3a4
 - Per-session voice override on cascaded TTS (session_start voice -> Gemini TTS legs) + smoke scenario — agent: claude-code/fable-5 — 5f74178
