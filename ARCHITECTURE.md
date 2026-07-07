@@ -146,7 +146,20 @@ last change (`mode=previous`) or restore the gateway defaults (`mode=reset`),
 and `propose_page_tweak` on browser turns. On cascaded turns the tools run
 through a bounded gateway tool loop that works on both the Vertex and
 OpenAI-compatible providers and degrades to a plain reply when the model or
-provider cannot call tools. Language switching is exclusively model-owned: the
+provider cannot call tools. The same tool loop carries a per-surface skill
+registry (`gateway/lib/surface-skills.js`): `resolveTurnSurface` reads the
+turn's source to decide which code-mode capabilities `cascadedExecuteCapabilities`
+offers, so phone_* capabilities (`phone_open_app`, `phone_open_url`,
+`phone_dial`, `phone_open_contact`) and browser_* capabilities
+(`browser_agent_task`, `browser_open_tab`) are available cross-device from
+every surface, matching the cross-device tool hub's own reach. Classic
+(non-code-mode) fallback tools, `phone_action` and
+`launch_background_browser_task`, sit next to the profile tools in the same
+tool loop so the same phone/browser reach works even when the `execute`
+code-mode tool is off. The `execute` tool is on by default
+(`VOICE_EXECUTE_TOOL` defaults to enabled; set `VOICE_EXECUTE_TOOL=0` to
+disable it), and `/health` reports `execute_tool: { enabled,
+capability_count }`. Language switching is exclusively model-owned: the
 deterministic transcript matchers for language were removed, so understood and
 reply languages change only through `update_agent_profile` (or the
 `set_languages` code-mode skill on the execute path), and the Live safety gate
@@ -489,6 +502,39 @@ UI, and `userScripts` only for explicit opt-in page-acting code. The same
 extension package should work against a self-hosted or hosted engine by changing
 only the engine URL/session token.
 
+### Background browser agent loop
+
+```text
+model tool call or user instruction
+  -> gateway creates a browser agent-loop task (`browser_agent_task`) plus a
+     linked non-blocking agent run
+  -> extension claims the task, opens a background tab, never activates it
+  -> loop: extension posts an observation -> gateway plans one bounded
+     declarative action (model-planned, text-only context in v1; a
+     deterministic keyless fallback when no reasoning provider is configured)
+  -> extension validates the action locally and executes it
+  -> on finish, extension posts a summary; gateway records a finish receipt
+     on the task and the linked agent run
+```
+
+This is the background half of browser automation: an agent that can work on
+pages the user does not see, extracted from the agee action-loop prior art and
+run only through the extension's own local execution. The gateway proposes
+exactly one action per step from a closed vocabulary (click, type, clear,
+select, scroll, navigate, key, wait, screenshot, finish); the gateway never
+emits code strings, so no CSS or JS ever reaches privileged extension code.
+The extension validates every proposed action against its own local allowlist
+before executing it; an unknown kind is a hard reject, not a best-effort
+execute. The task's tab is never activated, so background work never steals
+focus from the user. A settings toggle, `ageeBackgroundAutomationEnabled`
+(default on), gates the whole background-automation poll, alongside the
+legacy batch `browser_task` poll. Model context in this first version is
+text-only (page title, url, a bounded element list, optional page text, and
+at most the latest screenshot); step history older than the last 8 steps is
+summarized to one line each so a long-running task stays inside the model's
+context budget. Contract:
+`reference/openspec/changes/per-surface-agent-skills/design.md`.
+
 ### Self-Extension Artifacts
 
 ```text
@@ -772,6 +818,18 @@ request browser work such as tab list/open/activate/close/reload, page snapshot,
 or bounded `chrome.debugger` CDP actions; the Chrome extension must still claim,
 validate, execute only its advertised local tool, and receipt it.
 
+The hub also carries phone automations reachable from any surface (chat, voice,
+or another device), serviced through code-mode `execute` capabilities and
+classic fallback tools alike. Three Android broker tools advertise, execute,
+and receipt through the same claim/validate/execute/receipt path as every
+other cross-device tool: `url.open` (`{ url }`, ACTION_VIEW, http/https only)
+opens a URL in the phone's browser; `phone.dial` (`{ number }`, ACTION_DIAL
+`tel:`) only pre-fills the dialer, since the app holds no `CALL_PHONE`
+permission and the user must press call; `contact.open` (`{ name }`) looks the
+contact up through ContactsContract and opens its card, requires
+`READ_CONTACTS`, and returns a clear "needs contacts permission" result
+instead of crashing when that permission is missing.
+
 ### Account Connection And Credential Health
 
 ```text
@@ -881,6 +939,13 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   can show passive status but must not capture voice or claim local cues.
 - `browser_task`: a gateway-created browser work request that a Chrome extension
   client must claim, execute locally with allowlisted actions, and receipt.
+- `browser_agent_task`: a gateway-created background agent-loop task
+  (instruction, optional start url, status, step history, a linked
+  `agent_run`) that a Chrome extension client claims, drives through
+  observe/step/act in a non-activated background tab, and finishes with a
+  status and summary. Unlike `browser_task`'s single claim/execute/receipt
+  request, a `browser_agent_task` is a multi-step, model-planned loop bounded
+  by `max_steps`.
 - `work_task`: the user-facing durable unit of intent in the work-history
   control plane, linking broker event, session, runs, and status events.
 - `repo_snapshot_ref`: a worker-recorded before/after/checkpoint codebase state
@@ -1000,6 +1065,15 @@ queues.
   JSON sidecars under `DATA_DIR/audio-notes/`), served by the
   `/v1/audio-notes` routes; deterministic smoke in
   `scripts/smoke-audio-notes.js` (`npm run smoke:audio-notes`).
+- `gateway/lib/browser-agent-loop.js`: background browser agent-loop task
+  store (`DATA_DIR/browser-agent-tasks/`), create/claim/step/finish logic,
+  the linked `agent_run` create, and the deterministic keyless step-planning
+  fallback; behind `/v1/browser/agent-tasks*`. Smoke:
+  `scripts/smoke-browser-agent-loop.js` (`npm run smoke:browser-agent-loop`).
+- `gateway/lib/surface-skills.js`: `resolveTurnSurface` and the per-surface
+  code-mode/classic tool registry (phone_* and browser_* capabilities,
+  `phone_action`/`launch_background_browser_task` fallback tools). Smoke:
+  `scripts/smoke-surface-skills.js` (`npm run smoke:surface-skills`).
 - `gateway/lib/voice-session-server.js`: WebSocket PCM voice
   transport, turn storage, transcript events, and assistant audio events.
 - `gateway/lib/voice-providers.js`: Swappable streaming voice
@@ -1007,7 +1081,10 @@ queues.
 - `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
 - `browser_extension/extension`: thin browser client for command,
-  voice, page context, settings, and engine-routed browser actions.
+  voice, page context, settings, and engine-routed browser actions, including
+  the background agent-loop poll (`pollBrowserAgentTasks`). Smoke:
+  `browser_extension/scripts/smoke-agent-loop.mjs`
+  (`npm run smoke:agent-loop`).
 - `scripts/deploy.sh`: shared deploy entrypoint for gateway, Android OTA,
   browser extension, and committed-change auto-deploy.
 - `.github/workflows/android-ota.yml`: commit-triggered Android OTA artifact
