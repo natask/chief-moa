@@ -88,6 +88,30 @@ if (voiceFirstGesturesEl) {
   });
 }
 
+// Background automation flag (on by default). Read by background.js before it
+// claims any gateway-queued browser work: it gates BOTH the legacy
+// pollBrowserTasks() batch path and the new pollBrowserAgentTasks() agent-loop.
+// When off, the extension claims no background browser tasks at all.
+const BACKGROUND_AUTOMATION_KEY = "ageeBackgroundAutomationEnabled";
+const backgroundAutomationEl = document.getElementById("backgroundAutomation");
+const backgroundAutomationStatusEl = document.getElementById("backgroundAutomationStatus");
+if (backgroundAutomationEl) {
+  chrome.storage.local.get({ [BACKGROUND_AUTOMATION_KEY]: true }).then((stored) => {
+    backgroundAutomationEl.checked = stored[BACKGROUND_AUTOMATION_KEY] !== false;
+    if (backgroundAutomationStatusEl) {
+      backgroundAutomationStatusEl.textContent = backgroundAutomationEl.checked ? "On" : "Off";
+      backgroundAutomationStatusEl.style.color = "#777";
+    }
+  });
+  backgroundAutomationEl.addEventListener("change", async () => {
+    await chrome.storage.local.set({ [BACKGROUND_AUTOMATION_KEY]: backgroundAutomationEl.checked === true });
+    if (backgroundAutomationStatusEl) {
+      backgroundAutomationStatusEl.textContent = backgroundAutomationEl.checked ? "On" : "Off";
+      backgroundAutomationStatusEl.style.color = "#777";
+    }
+  });
+}
+
 function flash(text, ok = true) {
   statusEl.textContent = text;
   statusEl.style.color = ok ? "#35a35a" : "#c0392b";

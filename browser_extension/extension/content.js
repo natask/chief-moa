@@ -3029,7 +3029,11 @@
     }
     try {
       if (el) el.scrollIntoView({ block: "center", behavior: "instant" });
-      if (needsConfirmation(el, req) && !(await askInlineConfirm(`Let A.G. ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
+      // Background automation drives an invisible tab the user cannot answer a
+      // confirm in. Those actions already passed the background's own local
+      // action validator (the trust boundary), so skip the inline confirm when
+      // req.background is set. Foreground actions keep the inline confirm.
+      if (!req.background && needsConfirmation(el, req) && !(await askInlineConfirm(`Let A.G. ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
         return { result: `user cancelled ${req.action}` };
       }
       switch (req.action) {

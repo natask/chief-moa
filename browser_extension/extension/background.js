@@ -408,16 +408,31 @@ function startBrowserTaskPolling() {
   browserTaskPollTimer = setInterval(() => {
     pollBrowserTasks().catch(() => {});
     pollBrowserToolRequests().catch(() => {});
+    pollBrowserAgentTasks().catch(() => {});
   }, BROWSER_TASK_POLL_MS);
   chrome.alarms.create("agee-browser-task-poll", { periodInMinutes: 0.5 });
   pollBrowserTasks().catch(() => {});
   pollBrowserToolRequests().catch(() => {});
+  pollBrowserAgentTasks().catch(() => {});
+}
+
+// Both the legacy batch path and the agent-loop path are gated by one setting:
+// the user opts into (or out of) letting the gateway run background browser work.
+async function isBackgroundAutomationEnabled() {
+  if (!chrome?.storage?.local) return true;
+  try {
+    const stored = await chrome.storage.local.get({ ageeBackgroundAutomationEnabled: true });
+    return stored.ageeBackgroundAutomationEnabled !== false;
+  } catch {
+    return true;
+  }
 }
 
 async function pollBrowserTasks() {
   if (browserTaskPollInFlight) return;
   browserTaskPollInFlight = true;
   try {
+    if (!(await isBackgroundAutomationEnabled())) return;
     const cfg = await getConfig();
     if (!cfg.gatewayUrl) return;
     const claimed = await callGateway(cfg, "/v1/browser/tasks/claim", {
@@ -808,6 +823,7 @@ if (chrome?.alarms?.onAlarm) {
     if (alarm.name === "agee-browser-task-poll") {
       pollBrowserTasks().catch(() => {});
       pollBrowserToolRequests().catch(() => {});
+      pollBrowserAgentTasks().catch(() => {});
     } else if (alarm.name === DEV_RELOAD_ALARM) {
       pollDevReloadVersion("alarm").catch(() => {});
     } else if (alarm.name === SELF_EXTENSION_RUNTIME_ALARM) {
@@ -874,6 +890,305 @@ function browserLocalToolManifest() {
     { tool: "browser.task.claim", risk: "browser_local", approval: "none" },
     { tool: "page.snapshot", risk: "read_only", approval: "none" },
   ];
+}
+
+// ---- Gateway browser agent-loop tasks -------------------------------------
+// The persistent-task upgrade over executeGatewayBrowserTask: the gateway drives
+// a MULTI-STEP autonomous browser agent. Each step the extension builds an
+// observation (content-script snapshot + optional screenshot), POSTs it, and the
+// gateway returns ONE bounded declarative action. The extension validates that
+// action against its own local vocabulary (no eval, no code strings, no CSS/JS
+// over the wire) before executing it in a persistent background tab that never
+// becomes active. Gated by the same ageeBackgroundAutomationEnabled setting as
+// the legacy batch path; only one agent-loop task runs at a time.
+const AGENT_LOOP_MAX_STEPS_CAP = 40;
+const AGENT_LOOP_DEFAULT_MAX_STEPS = 24;
+const AGENT_LOOP_MAX_TYPE_TEXT = 2000;
+const AGENT_LOOP_MAX_SELECT_TEXT = 200;
+const AGENT_LOOP_MAX_KEY_TEXT = 32;
+const AGENT_LOOP_MAX_SUMMARY = 2000;
+const AGENT_LOOP_MAX_PAGE_TEXT = 6000;
+const AGENT_LOOP_MAX_ACTION_RESULT = 500;
+let browserAgentTaskPollInFlight = false;
+let agentLoopTaskActive = false;
+
+function clampAgentLoopMaxSteps(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return AGENT_LOOP_DEFAULT_MAX_STEPS;
+  return Math.min(AGENT_LOOP_MAX_STEPS_CAP, Math.max(1, Math.floor(n)));
+}
+
+// Same 2s cadence/alarm structure as pollBrowserTasks. Claim one agent-loop task
+// and drive it to completion. While a task is active we do not claim another.
+async function pollBrowserAgentTasks() {
+  if (browserAgentTaskPollInFlight || agentLoopTaskActive) return;
+  browserAgentTaskPollInFlight = true;
+  try {
+    if (!(await isBackgroundAutomationEnabled())) return;
+    const cfg = await getConfig();
+    if (!cfg.gatewayUrl) return;
+    const claimed = await callGateway(cfg, "/v1/browser/agent-tasks/claim", {
+      body: { client_id: BROWSER_TASK_CLIENT_ID },
+    });
+    const task = claimed?.task;
+    if (!task?.id) return;
+    agentLoopTaskActive = true;
+    // Register a cue + AbortController so stop-intent can cancel the loop like
+    // any other task. The agentLoop marker keeps ownership changes
+    // (claimActiveAgentTab) from aborting this background task on ordinary user
+    // activity, while stop-intent still cancels it.
+    const cueId = nextCueId(`agent-loop-${task.id}`);
+    const controller = new AbortController();
+    tasks.set(cueId, { controller, tabId: null, agentLoop: true });
+    try {
+      await runAgentLoopTask(task, cfg, controller, cueId);
+    } finally {
+      if (tasks.get(cueId)?.controller === controller) tasks.delete(cueId);
+      agentLoopTaskActive = false;
+    }
+  } catch {
+    // Background polling stays quiet; a claimed task reports through finish.
+  } finally {
+    browserAgentTaskPollInFlight = false;
+  }
+}
+
+async function runAgentLoopTask(task, cfg, controller, cueId) {
+  const signal = controller.signal;
+  const taskId = String(task.id);
+  const maxSteps = clampAgentLoopMaxSteps(task.max_steps);
+  let bgTabId = null;
+  let lastAction = null;
+  let lastActionResult = "";
+  let captureNext = true; // step 0 always carries a screenshot
+  try {
+    const startUrl = allowedBrowserTaskUrl(task.url) || "about:blank";
+    // Persistent background tab: never activated, kept alive across every step.
+    const bgTab = await chrome.tabs.create({ url: startUrl, active: false });
+    bgTabId = bgTab.id;
+    const entry = tasks.get(cueId);
+    if (entry) entry.tabId = bgTabId;
+    if (allowedBrowserTaskUrl(task.url)) {
+      await waitForBackgroundTabLoad(bgTabId);
+    }
+    for (let step = 0; step < maxSteps; step += 1) {
+      throwIfAborted(signal);
+      const observation = await buildAgentLoopObservation(bgTabId, step, {
+        withScreenshot: captureNext,
+        lastAction,
+        lastActionResult,
+      });
+      captureNext = false;
+      throwIfAborted(signal);
+      const response = await callGateway(cfg, `/v1/browser/agent-tasks/${encodeURIComponent(taskId)}/steps`, {
+        signal,
+        body: { observation },
+      });
+      const validation = validateAgentLoopAction(response?.action);
+      if (!validation.ok) {
+        await finishAgentLoopTask(cfg, taskId, "failed", `rejected action ${validation.kind}`);
+        return;
+      }
+      const action = validation.action;
+      if (action.kind === "finish") {
+        // The finish action status is done|blocked; the finish endpoint status
+        // is done|failed|cancelled. A deliberate block did not achieve the goal,
+        // so it maps to failed with the summary carried through.
+        const status = action.status === "blocked" ? "failed" : "done";
+        await finishAgentLoopTask(cfg, taskId, status, action.summary || (status === "done" ? "task complete" : "agent blocked"));
+        return;
+      }
+      lastActionResult = await executeAgentLoopAction(bgTabId, action, signal);
+      lastAction = action;
+      if (action.kind === "screenshot") captureNext = true;
+      if (response?.done === true) {
+        await finishAgentLoopTask(cfg, taskId, "done", "task complete");
+        return;
+      }
+    }
+    await finishAgentLoopTask(cfg, taskId, "done", `reached the ${maxSteps}-step limit`);
+  } catch (error) {
+    const cancelled = signal.aborted;
+    await finishAgentLoopTask(
+      cfg,
+      taskId,
+      cancelled ? "cancelled" : "failed",
+      cancelled ? "cancelled by stop" : String(error?.message || error),
+    ).catch(() => {});
+  } finally {
+    if (bgTabId != null) {
+      try {
+        await chrome.tabs.remove(bgTabId);
+      } catch {
+        // already gone
+      }
+    }
+  }
+}
+
+// Best-effort content-script presence. On about:blank or a restricted page the
+// injection throws and the snapshot below falls back to {url,title}.
+async function ensureAgentLoopContent(tabId) {
+  try {
+    await ensureContent(tabId);
+  } catch {
+    // restricted/blank page
+  }
+}
+
+async function buildAgentLoopObservation(tabId, step, { withScreenshot, lastAction, lastActionResult }) {
+  await ensureAgentLoopContent(tabId);
+  const snapshot = await collectBrowserSnapshot(tabId);
+  const elements = (snapshot.elements || []).slice(0, MAX_ELEMENTS).map((element) => ({
+    i: element.i,
+    tag: String(element.tag || ""),
+    type: String(element.type || ""),
+    label: String(element.label || "").slice(0, 80),
+  }));
+  const observation = {
+    url: String(snapshot.url || ""),
+    title: String(snapshot.title || ""),
+    elements,
+    step,
+  };
+  const pageText = String(snapshot.pageText || "").trim();
+  if (pageText) observation.page_text = pageText.slice(0, AGENT_LOOP_MAX_PAGE_TEXT);
+  if (withScreenshot) {
+    const shot = await captureScreenshotViaDebugger(tabId);
+    observation.screenshot = agentLoopScreenshotObservation(shot);
+  }
+  if (lastAction) observation.last_action = lastAction;
+  if (lastActionResult) observation.last_action_result = String(lastActionResult).slice(0, AGENT_LOOP_MAX_ACTION_RESULT);
+  return observation;
+}
+
+// Reuse the existing 420KB base64 evidence cap; oversized shots are omitted.
+function agentLoopScreenshotObservation(base64) {
+  const data = String(base64 || "");
+  if (!data) return { encoding: "omitted", reason: "screenshot capture failed" };
+  if (data.length > MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS) {
+    return { encoding: "omitted", reason: "screenshot too large for gateway observation payload" };
+  }
+  return { encoding: "base64_jpeg", data };
+}
+
+// Local allowlist for gateway-proposed actions. Every field is data-validated;
+// nothing is eval'd, compiled, or executed as a code string. An unknown kind or
+// out-of-bounds params returns { ok:false } so the caller finishes failed.
+function validateAgentLoopAction(action) {
+  if (!action || typeof action !== "object") return { ok: false, kind: "(none)" };
+  const kind = String(action.kind || "");
+  const isIndex = (value) => Number.isInteger(value) && value >= 0;
+  switch (kind) {
+    case "click":
+    case "clear":
+      if (!isIndex(action.index)) return { ok: false, kind };
+      return { ok: true, kind, action: { kind, index: action.index } };
+    case "type":
+      if (!isIndex(action.index) || typeof action.text !== "string" || action.text.length > AGENT_LOOP_MAX_TYPE_TEXT) {
+        return { ok: false, kind };
+      }
+      return { ok: true, kind, action: { kind, index: action.index, text: action.text } };
+    case "select":
+      if (!isIndex(action.index) || typeof action.text !== "string" || action.text.length > AGENT_LOOP_MAX_SELECT_TEXT) {
+        return { ok: false, kind };
+      }
+      return { ok: true, kind, action: { kind, index: action.index, text: action.text } };
+    case "scroll": {
+      const direction = action.direction === "up" ? "up" : action.direction === "down" ? "down" : null;
+      if (!direction) return { ok: false, kind };
+      return { ok: true, kind, action: { kind, direction } };
+    }
+    case "navigate": {
+      const url = allowedBrowserTaskUrl(action.url);
+      if (!url) return { ok: false, kind };
+      return { ok: true, kind, action: { kind, url } };
+    }
+    case "key":
+      if (typeof action.text !== "string" || !action.text || action.text.length > AGENT_LOOP_MAX_KEY_TEXT) {
+        return { ok: false, kind };
+      }
+      return { ok: true, kind, action: { kind, text: action.text } };
+    case "wait":
+    case "screenshot":
+      return { ok: true, kind, action: { kind } };
+    case "finish": {
+      const status = action.status === "blocked" ? "blocked" : action.status === "done" ? "done" : null;
+      if (!status) return { ok: false, kind };
+      const summary = typeof action.summary === "string" ? action.summary.slice(0, AGENT_LOOP_MAX_SUMMARY) : "";
+      return { ok: true, kind, action: { kind, status, summary } };
+    }
+    default:
+      return { ok: false, kind: kind || "(unknown)" };
+  }
+}
+
+// Execute one validated action against the persistent background tab. Element
+// actions go through the content-script act path; navigate uses chrome.tabs
+// (http/https only, enforced by the validator); wait sleeps; screenshot is a
+// no-op that the next observation captures.
+async function executeAgentLoopAction(tabId, action, signal) {
+  throwIfAborted(signal);
+  switch (action.kind) {
+    case "navigate":
+      await chrome.tabs.update(tabId, { url: action.url });
+      await waitForBackgroundTabLoad(tabId);
+      return `navigated to ${action.url}`;
+    case "wait":
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      return "waited";
+    case "screenshot":
+      return "screenshot captured with next observation";
+    case "click":
+    case "type":
+    case "clear":
+    case "select":
+    case "scroll":
+    case "key": {
+      await ensureAgentLoopContent(tabId);
+      let result;
+      try {
+        result = await ask(tabId, {
+          cmd: "act",
+          action: action.kind,
+          index: action.index,
+          text: action.text,
+          direction: action.direction,
+          background: true,
+        });
+      } catch {
+        // Page likely navigated and tore down the content script.
+        await waitForBackgroundTabLoad(tabId);
+        return "action sent; page navigated";
+      }
+      // Settle: clicks/typing may trigger async updates or navigation.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      return (result && result.result) || "done";
+    }
+    default:
+      return `unhandled action ${action.kind}`;
+  }
+}
+
+async function finishAgentLoopTask(cfg, taskId, status, summary) {
+  return callGateway(cfg, `/v1/browser/agent-tasks/${encodeURIComponent(taskId)}/finish`, {
+    body: {
+      status,
+      summary: String(summary || "").slice(0, AGENT_LOOP_MAX_SUMMARY),
+    },
+  });
+}
+
+// Stop-intent path: abort every active agent-loop cue. runAgentLoopTask then
+// posts finish { status:"cancelled" } and disposes its background tab.
+function cancelAgentLoopCues() {
+  for (const [cueId, task] of [...tasks]) {
+    if (!task.agentLoop) continue;
+    try {
+      task.controller.abort();
+    } catch {}
+    tasks.delete(cueId);
+  }
 }
 
 // ---- Developer auto-reload -----------------------------------------------
@@ -1667,6 +1982,10 @@ function claimActiveAgentTab(tabId, reason = "another page became active", patch
   const revokedTabs = new Map();
 
   for (const [cueId, task] of [...tasks]) {
+    // Gateway-claimed background agent-loop tasks are not tab-owned foreground
+    // cues; ordinary ownership changes must not abort them. Stop-intent cancels
+    // them through cancelAgentLoopCues instead.
+    if (task.agentLoop) continue;
     if (task.tabId === tabId) continue;
     try {
       task.controller.abort();
@@ -2918,6 +3237,8 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
     // the overlay to stop playback and live turns; do not produce a reply.
     if (isStopCommand(instruction)) {
       send(tabId, { cmd: "stop", cueId });
+      // A spoken/typed stop also halts any autonomous background agent-loop.
+      cancelAgentLoopCues();
       send(tabId, { cmd: "done", cueId, summary: "", text: "" });
       return;
     }
@@ -3566,6 +3887,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       tasks.delete(msg.cueId);
     } else {
       cancelTabCues(tabId);
+      // A tab-wide stop also cancels any autonomous background agent-loop.
+      cancelAgentLoopCues();
     }
   }
   if (msg.cmd === "ambientStart" && sender.tab) {
