@@ -99,6 +99,18 @@ test("primary reorders to the front when the profile lists it out of order", asy
   assert.deepEqual(codes, ["am-ET", "en-US"]);
 });
 
+test("caps to two codes BEFORE reordering the primary, matching the gateway", () => {
+  // Gateway languageCodes() caps to 2 first, so a primary listed third or later
+  // is dropped by the cap instead of being pulled to the front of the full list.
+  const codes = normalizeSessionLanguageCodes("am-ET,fr-FR,en-US", "en-US");
+  assert.deepEqual(codes, ["am-ET", "fr-FR"]);
+});
+
+test("a lone \"auto\" passes through and a mixed \"auto\" is stripped", () => {
+  assert.deepEqual(normalizeSessionLanguageCodes("auto", ""), ["auto"]);
+  assert.deepEqual(normalizeSessionLanguageCodes("auto,en-US", ""), ["en-US"]);
+});
+
 test("profile fetch failure falls back to MOA_LIVEKIT_LANGS", async () => {
   await withEnvAsync(
     { MOA_GATEWAY_URL: "https://api.example.test", MOA_LIVEKIT_LANGS: "en-US" },

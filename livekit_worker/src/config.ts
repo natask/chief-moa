@@ -79,21 +79,29 @@ interface AgentProfileResponse {
   };
 }
 
-// Mirrors gateway/lib/voice-providers.js `sttLanguageCodes()`: dedupe the
-// configured set, move the primary code to the front when it is present in
-// that set, cap at two codes.
+// Mirrors gateway/lib/voice-providers.js `languageCodes()` + `sttLanguageCodes()`
+// exactly so both STT paths recognize the same set for a given profile:
+//   1. A lone literal "auto" passes through as ["auto"] (language-agnostic).
+//   2. Otherwise strip any "auto" tokens, dedupe, and cap to two codes FIRST —
+//      the cap is what keeps Chirp in restrict mode instead of auto-detect.
+//   3. Move the primary code to the front WITHIN that already-capped slice.
+// Returns [] (not the gateway's hardcoded ["en-US"]) when nothing usable
+// remains, so the caller degrades to the MOA_LIVEKIT_LANGS fallback instead.
 export function normalizeSessionLanguageCodes(rawList: string, primary: string): string[] {
-  const codes = Array.from(
-    new Set(
-      String(rawList || "")
-        .split(/[,\s]+/)
-        .map((entry) => entry.trim())
-        .filter(Boolean),
-    ),
+  const rawCodes = String(rawList || "")
+    .split(/[,\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (rawCodes.length === 1 && rawCodes[0].toLowerCase() === "auto") {
+    return ["auto"];
+  }
+  const restricted = Array.from(
+    new Set(rawCodes.filter((code) => code.toLowerCase() !== "auto")),
   );
-  if (!codes.length) {
+  if (!restricted.length) {
     return [];
   }
+  const codes = restricted.slice(0, MAX_SESSION_LANGUAGE_CODES);
   const primaryLower = String(primary || "").trim().toLowerCase();
   if (primaryLower && codes.length > 1) {
     const index = codes.findIndex((code) => code.toLowerCase() === primaryLower);
@@ -102,7 +110,7 @@ export function normalizeSessionLanguageCodes(rawList: string, primary: string):
       codes.unshift(lead as string);
     }
   }
-  return codes.slice(0, MAX_SESSION_LANGUAGE_CODES);
+  return codes;
 }
 
 // One fetch, at session start. Never throws: any failure (network error,
