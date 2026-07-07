@@ -392,10 +392,43 @@ public final class MainActivity extends Activity {
     private View gesturesCard() {
         LinearLayout card = card();
         addCardTitle(card, "Gestures");
-        gestureRow(card, "Tap", "Chat");
-        gestureRow(card, "Hold", "Move");
-        gestureRow(card, "Double-tap + hold", "Talk");
+
+        CheckBox voiceFirst = new CheckBox(this);
+        voiceFirst.setText("Voice-first orb gestures (experimental)");
+        voiceFirst.setTextColor(MoaColors.PAPER);
+        voiceFirst.setTextSize(15);
+        voiceFirst.setChecked(MoaPrefs.voiceFirstGestures(this));
+        voiceFirst.setPadding(0, dp(4), 0, dp(8));
+        card.addView(voiceFirst);
+
+        LinearLayout rows = new LinearLayout(this);
+        rows.setOrientation(LinearLayout.VERTICAL);
+        card.addView(rows);
+        populateGestureRows(rows, MoaPrefs.voiceFirstGestures(this));
+
+        // Persist immediately so the running overlay, which reads the flag live
+        // per gesture, picks up the change with no reboot; then re-render the
+        // legend to match the active contract.
+        voiceFirst.setOnCheckedChangeListener((button, checked) -> {
+            MoaPrefs.setVoiceFirstGestures(this, checked);
+            populateGestureRows(rows, checked);
+        });
         return card;
+    }
+
+    private void populateGestureRows(LinearLayout rows, boolean voiceFirst) {
+        rows.removeAllViews();
+        if (voiceFirst) {
+            gestureRow(rows, "Tap", "Interrupt");
+            gestureRow(rows, "Press + hold", "Talk");
+            gestureRow(rows, "Drag", "Move");
+            gestureRow(rows, "Double-tap", "Toggle talk");
+            gestureRow(rows, "Triple-tap", "Chat");
+        } else {
+            gestureRow(rows, "Tap", "Chat");
+            gestureRow(rows, "Hold", "Move");
+            gestureRow(rows, "Double-tap + hold", "Talk");
+        }
     }
 
     private void gestureRow(LinearLayout parent, String action, String meaning) {

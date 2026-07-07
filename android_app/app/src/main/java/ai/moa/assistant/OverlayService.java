@@ -524,7 +524,11 @@ public final class OverlayService extends Service {
                 this::handleOrbDoublePressStart,
                 this::handleOrbVoicePressRelease,
                 this::beginWarmMic,
-                this::discardWarmMic
+                this::discardWarmMic,
+                () -> MoaPrefs.voiceFirstGestures(this),
+                this::handleOrbInterruptTap,
+                this::handleOrbToggleTalk,
+                this::handleOrbTripleTap
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -1307,6 +1311,19 @@ public final class OverlayService extends Service {
         return row;
     }
 
+    // The empty-panel hint mirrors whichever gesture contract is active so the
+    // legend never contradicts the orb.
+    private String orbGestureHint() {
+        if (MoaPrefs.voiceFirstGestures(this)) {
+            return recordModeEnabled
+                    ? "Record mode: press and hold to record a note."
+                    : "Hold to talk. Double-tap to toggle. Triple-tap for chat.";
+        }
+        return recordModeEnabled
+                ? "Record mode: double-click and hold to record a note."
+                : "Tap for chat. Double-click and hold to talk.";
+    }
+
     private void renderMessages() {
         if (messageColumn == null) {
             return;
@@ -1314,9 +1331,7 @@ public final class OverlayService extends Service {
 
         messageColumn.removeAllViews();
         if (messages.isEmpty()) {
-            TextView empty = text(recordModeEnabled
-                    ? "Record mode: double-click and hold to record a note."
-                    : "Tap for chat. Double-click and hold to talk.", MoaColors.MUTED, 13, false);
+            TextView empty = text(orbGestureHint(), MoaColors.MUTED, 13, false);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(28), dp(8), dp(28));
             messageColumn.addView(empty);
@@ -2186,8 +2201,80 @@ public final class OverlayService extends Service {
     }
 
     // TAP the orb = chat menu. Voice is reserved for double-click-and-hold, so
-    // a normal click never commits, stops, or starts a spoken turn.
+    // a normal click never commits, stops, or starts a spoken turn. (Flag-off
+    // contract; the voice-first flag routes a tap to handleOrbInterruptTap.)
     private void handleOrbSingleTap() {
+        showPanel();
+    }
+
+    // VOICE-FIRST single tap = interrupt/dismiss. Stops assistant speech, clears
+    // the transient voice card, and folds away an open chat panel. It never
+    // opens chat and never cuts an actively listening mic (a PTT hold, a record
+    // capture, or a continuous loop mid-utterance): the user must never be cut
+    // off while speaking. An idle tap with nothing to interrupt is a no-op.
+    private void handleOrbInterruptTap() {
+        boolean listeningMicActive = pushToTalkVoiceTurn
+                || audioNoteActive
+                || voiceController.isCommandListening()
+                || (streamingVoiceActive()
+                        && voiceRuntimeState == VoiceRuntimeState.LISTENING
+                        && !streamingAssistantAudioPlaying);
+        if (listeningMicActive) {
+            // Leave the live capture running; only fold away a stray chat panel.
+            if (panelOpen) {
+                removePanel();
+            }
+            return;
+        }
+        boolean somethingToInterrupt = panelOpen
+                || transcriptView != null
+                || streamingVoiceActive()
+                || voiceController.isActive()
+                || voiceSamplePlayer != null
+                || continuousVoiceLoop
+                || pendingContinuousVoiceRestart != null;
+        if (!somethingToInterrupt) {
+            return;
+        }
+        dismissOverlayUi();
+    }
+
+    // VOICE-FIRST double tap = toggle the continuous voice loop. Off -> start it;
+    // on -> end it gracefully, committing an in-flight utterance so the last
+    // speech is answered, otherwise tearing the session down.
+    private void handleOrbToggleTalk() {
+        boolean loopActive = continuousVoiceLoop
+                || pendingContinuousVoiceRestart != null
+                || (streamingVoiceActive() && streamingTurnContinuous);
+        if (loopActive) {
+            endContinuousVoiceLoop();
+            return;
+        }
+        startContinuousStreamingVoiceTurn();
+    }
+
+    private void endContinuousVoiceLoop() {
+        continuousVoiceLoop = false;
+        cancelContinuousVoiceRestart();
+        boolean hasInFlightSpeech = streamingVoiceActive()
+                && streamingVoiceController != null
+                && !currentStreamingTurnCommitRequested
+                && !visibleVoiceContent(currentStreamingTranscript).isEmpty();
+        if (hasInFlightSpeech) {
+            commitStreamingVoiceTurnNow();
+            return;
+        }
+        if (streamingVoiceActive()) {
+            // cancelStreamingVoice already folds the transcript surface away.
+            cancelStreamingVoice();
+            return;
+        }
+        dismissOverlayUi();
+    }
+
+    // VOICE-FIRST triple tap = open the chat panel. Chat is demoted to the
+    // rarest gesture; the primitive gestures drive voice.
+    private void handleOrbTripleTap() {
         showPanel();
     }
 

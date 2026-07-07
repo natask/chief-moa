@@ -35,6 +35,9 @@ final class MoaPrefs {
     private static final String KEY_AGENT_PROFILE_JSON = "agent_profile_json";
     private static final String KEY_ACTIVE_COMPANION_JSON = "active_companion_json";
     private static final String KEY_ORB_SCALE_PERCENT = "orb_scale_percent";
+    // Experimental voice-first orb gestures. Off by default: the overlay keeps
+    // today's tap/double-click-and-hold contract until this is turned on.
+    private static final String KEY_VOICE_FIRST_GESTURES = "voice_first_gestures";
 
     // Orb scale contract shared by the overlay (applies it) and the main app
     // (exposes the slider). Percent of the 96dp base window; clamped 50-150.
@@ -53,6 +56,16 @@ final class MoaPrefs {
     static void setOrbScalePercent(Context context, int percent) {
         int clamped = Math.max(ORB_SCALE_MIN, Math.min(ORB_SCALE_MAX, percent));
         prefs(context).edit().putInt(KEY_ORB_SCALE_PERCENT, clamped).apply();
+    }
+
+    // Experimental voice-first orb gestures. Off by default. Read live by the
+    // overlay per gesture, so a toggle change is picked up without a reboot.
+    static boolean voiceFirstGestures(Context context) {
+        return prefs(context).getBoolean(KEY_VOICE_FIRST_GESTURES, false);
+    }
+
+    static void setVoiceFirstGestures(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_VOICE_FIRST_GESTURES, enabled).apply();
     }
 
     static String gatewayUrl(Context context) {

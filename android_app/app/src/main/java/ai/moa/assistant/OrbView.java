@@ -24,6 +24,12 @@ import android.view.animation.LinearInterpolator;
 // holds a steady gold tint on the mark, and ERROR holds a steady ember rim for
 // the short error window. The pulse animator only runs while THINKING, so the
 // idle orb never burns battery.
+//
+// LISTENING is separate: while the mic is open it holds a steady, slightly
+// thicker violet rim (no pulse), distinct from the THINKING pulse and the
+// RESPONDING gold, so "the orb is hearing me" reads at a glance. This matters
+// most for the voice-first toggle-talk loop, whose on/off states must be
+// obvious.
 final class OrbView extends View {
     // The lion mark fills its own square frame, so the animal centers on the box.
     private static final float GLYPH_VIEWPORT = 108f;
@@ -34,6 +40,10 @@ final class OrbView extends View {
     // SRC_ATOP tint the recording state uses. Softened alpha so the lion's form
     // still reads through the wash.
     private static final int RESPONDING_TINT = 0xCCFFD76A;
+    // Steady rim while the mic is listening. A bright violet, matching the "You"
+    // transcript label, so an open mic reads as the user's turn and stays clear
+    // of the gold response cue.
+    private static final int LISTENING_RIM = 0xFF9C8BFF;
     private static final long THINKING_PULSE_MS = 1400;
 
     // What the agent is doing, surfaced on the orb. Driven only from the single
@@ -49,6 +59,8 @@ final class OrbView extends View {
     private final Paint backingPaint;
     private final Paint rimPaint;
     private final float rimWidthPx;
+    // A touch thicker so the steady listening rim reads clearly against the disc.
+    private final float listeningRimWidthPx;
     private final ArgbEvaluator argb = new ArgbEvaluator();
     private boolean listening;
     private boolean held;
@@ -70,6 +82,7 @@ final class OrbView extends View {
         // A minimal hairline rim so the disc reads as a deliberate coin, not a
         // flat cutout. One physical pixel, the same faint white as card borders.
         rimWidthPx = Math.max(1f, context.getResources().getDisplayMetrics().density);
+        listeningRimWidthPx = Math.max(2f, context.getResources().getDisplayMetrics().density * 2f);
         rimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         rimPaint.setStyle(Paint.Style.STROKE);
         rimPaint.setStrokeWidth(rimWidthPx);
@@ -161,8 +174,12 @@ final class OrbView extends View {
         // stroke stays inside the view and is not clipped at the edge.
         float discRadius = Math.min(w, h) / 2f;
         canvas.drawCircle(cx, cy, discRadius, backingPaint);
+        // The steady listening rim is a touch thicker; every other state keeps
+        // the hairline. Inset by half the active stroke so it stays inside.
+        float rimStroke = listeningRimActive() ? listeningRimWidthPx : rimWidthPx;
+        rimPaint.setStrokeWidth(rimStroke);
         rimPaint.setColor(currentRimColor());
-        canvas.drawCircle(cx, cy, discRadius - rimWidthPx / 2f, rimPaint);
+        canvas.drawCircle(cx, cy, discRadius - rimStroke / 2f, rimPaint);
 
         if (recordingNote) {
             mark.setColorFilter(RECORDING_TINT, PorterDuff.Mode.SRC_ATOP);
@@ -187,7 +204,18 @@ final class OrbView extends View {
         if (responseState == ResponseState.ERROR) {
             return MoaColors.EMBER;
         }
+        if (listeningRimActive()) {
+            return LISTENING_RIM;
+        }
         return MoaColors.RAISED_BORDER;
+    }
+
+    // The listening rim shows whenever the mic is open, unless a THINKING pulse
+    // or an ERROR rim already owns the disc edge.
+    private boolean listeningRimActive() {
+        return listening
+                && responseState != ResponseState.THINKING
+                && responseState != ResponseState.ERROR;
     }
 
     private void setGlyphBounds(Drawable drawable, float cx, float cy, float size) {
