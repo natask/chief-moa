@@ -309,9 +309,10 @@ if (
   !/chrome\.runtime\.connect\(\{ name: "agee-panel" \}\)/.test(sidepanelSource) ||
   !/"extension-offscreen"/.test(sidepanelSource) ||
   !/text_turn/.test(sidepanelSource) ||
-  !/commit_turn/.test(sidepanelSource)
+  !/commit_turn/.test(sidepanelSource) ||
+  !/documentPictureInPicture/.test(sidepanelSource)
 ) {
-  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture, and support commit_turn + text_turn");
+  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture, support commit_turn + text_turn, and offer the document PiP float");
 }
 
 if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {

@@ -389,17 +389,75 @@ talkBtn.addEventListener("pointerdown", (e) => {
 talkBtn.addEventListener("pointerup", () => commitHold());
 talkBtn.addEventListener("pointercancel", () => commitHold());
 
-document.addEventListener("keydown", (e) => {
-  if (e.code !== "Space" || e.repeat) return;
-  if (document.activeElement === textInput) return;
-  e.preventDefault();
-  beginHold();
-});
-document.addEventListener("keyup", (e) => {
-  if (e.code !== "Space") return;
-  if (document.activeElement === textInput) return;
-  e.preventDefault();
-  commitHold();
+// Bound per-document so hold-to-talk keeps working after the UI moves into a
+// floating picture-in-picture window (key events go to that window's document).
+function attachHoldKeyHandlers(doc) {
+  doc.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || e.repeat) return;
+    if (doc.activeElement === textInput) return;
+    e.preventDefault();
+    beginHold();
+  });
+  doc.addEventListener("keyup", (e) => {
+    if (e.code !== "Space") return;
+    if (doc.activeElement === textInput) return;
+    e.preventDefault();
+    commitHold();
+  });
+}
+attachHoldKeyHandlers(document);
+
+// ---- Float: pop the surface out of the browser -------------------------------
+// Document picture-in-picture gives an always-on-top window that floats above
+// other applications, the closest an extension can get to rendering outside
+// the browser (the Gemini floating bar is native browser UI). The window is
+// owned by this panel page: the panel must stay open while floated, so leave a
+// note behind and move the UI back when the float closes.
+const floatBtn = document.getElementById("floatBtn");
+let pipWindow = null;
+
+function restoreFromFloat() {
+  if (!pipWindow) return;
+  const nodes = [...pipWindow.document.body.children].filter((node) => !node.classList?.contains("floating-note"));
+  document.body.querySelector(".floating-note")?.remove();
+  document.body.append(...nodes);
+  pipWindow = null;
+  floatBtn.textContent = "Float";
+}
+
+async function floatOut() {
+  if (pipWindow) {
+    pipWindow.close();
+    return;
+  }
+  if (!window.documentPictureInPicture?.requestWindow) {
+    setStatus("Floating window is not available in this Chrome.", "error");
+    return;
+  }
+  try {
+    pipWindow = await documentPictureInPicture.requestWindow({ width: 380, height: 560 });
+  } catch (error) {
+    pipWindow = null;
+    setStatus(`Could not float: ${String(error?.message || error)}`, "error");
+    return;
+  }
+  for (const style of document.querySelectorAll("style")) {
+    pipWindow.document.head.append(style.cloneNode(true));
+  }
+  pipWindow.document.title = "A.G.";
+  // Moving (adopting) the nodes keeps element references and listeners alive.
+  pipWindow.document.body.append(...document.body.children);
+  attachHoldKeyHandlers(pipWindow.document);
+  pipWindow.addEventListener("pagehide", restoreFromFloat);
+  const note = document.createElement("p");
+  note.className = "floating-note";
+  note.textContent = "A.G. is floating in an always-on-top window. Keep this panel open while it floats; close the floating window to bring A.G. back here.";
+  document.body.append(note);
+  floatBtn.textContent = "Unfloat";
+}
+
+floatBtn.addEventListener("click", () => {
+  floatOut();
 });
 
 // ---- Text turns over the same voice-session channel --------------------------

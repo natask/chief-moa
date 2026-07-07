@@ -67,6 +67,29 @@
       header .status[data-state="error"] {
         color: var(--error);
       }
+      header .spacer {
+        flex: 1;
+      }
+      #floatBtn {
+        background: #1b1d22;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        padding: 4px 10px;
+        white-space: nowrap;
+      }
+      #floatBtn:hover {
+        color: var(--text);
+      }
+      .floating-note {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+        padding: 14px;
+      }
       main {
         flex: 1;
         overflow-y: auto;
@@ -185,6 +208,8 @@
     <header>
       <div class="mark">A.G.</div>
       <div class="status" id="status">Ready.</div>
+      <div class="spacer"></div>
+      <button id="floatBtn" type="button" title="Pop A.G. out into an always-on-top floating window">Float</button>
     </header>
     <main id="log">
       <p class="hint">
