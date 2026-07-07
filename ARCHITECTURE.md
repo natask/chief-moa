@@ -98,12 +98,14 @@ gateway voice turn without stopping already queued assistant audio.
 
 An experimental voice-first gesture mode (off by default; browser flag
 `ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
-both surfaces to the same contract: a still first-press hold is push-to-talk
-(release commits), double-click toggles hands-free talk mode with a visible
-active state on the mark/orb, triple click opens the demoted chat surface, and
-single click interrupts (stops assistant speech, dismisses the panel) instead
-of opening chat. Drag and resize are unchanged, and the flag off keeps the
-default contract above. Contract:
+both surfaces to the same contract: single click toggles hands-free talk mode
+with barge-in (arming stops any playing assistant audio; a second click sends;
+a tap-armed turn with no captured speech disarms quietly, so a silent tap
+doubles as "shut up") with a visible active state on the mark/orb, a still
+first-press hold is push-to-talk (release commits; a large move after the hold
+confirms cancels the capture and escapes into a drag), and double-click opens
+the demoted chat surface. Drag and resize are unchanged, and the flag off
+keeps the default contract above. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface stays small: it shows the current intent/result and compact
