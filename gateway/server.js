@@ -2120,7 +2120,24 @@ async function handleChat(request, response) {
   if (utilityReply) {
     text = utilityReply;
   } else {
-    const toolTurn = await callModelToolLoop(modelMessages, profile, [buildContextManagementToolDef(contextCapture)]);
+    // Offer the same profile tools the voice path uses so a TYPED "speak
+    // English" can call update_agent_profile through the shared sanitizer
+    // (liveToolProfilePatch + applyAgentProfilePatch — no new mutation
+    // surface). Scope: profile update/revert/options only; the chat path has
+    // its own agent-run handling.
+    const chatToolCall = {
+      session_id: sessionId,
+      conversation_id: conversationId,
+      branch_id: callerBranchId,
+      turn_id: turnId,
+      device_id: deviceId,
+      profile_version: profileVersion,
+      source: body.source || "chat",
+      transcript: userText,
+    };
+    const chatToolDefs = cascadedVoiceProfileTools(chatToolCall)
+      .concat([buildContextManagementToolDef(contextCapture)]);
+    const toolTurn = await callModelToolLoop(modelMessages, profile, chatToolDefs);
     text = String(toolTurn.text || "");
   }
   const decision = resolveContextDecision({
