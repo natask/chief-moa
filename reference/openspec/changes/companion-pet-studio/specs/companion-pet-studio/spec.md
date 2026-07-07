@@ -99,3 +99,23 @@ controls.
 - **THEN** the page still renders built-in local pet previews
 - **AND** apply/generation actions report a gateway blocker instead of exposing
   credentials
+
+### Requirement: Pet voice agent
+The `/pets/` page SHALL let the user speak to the selected pet and hear it
+reply through the gateway voice session websocket, using a short-lived ticket
+minted by a same-origin Pages Function. The pet's selected voice SHALL ride on
+`session_start` as a per-session override that the cascaded TTS legs honor for
+that session only, without mutating the stored agent profile. The page SHALL
+NOT use browser-local speech synthesis: when hosted TTS does not speak, the
+reply stays text.
+
+#### Scenario: Talking to a pet in its own voice
+- **WHEN** the user holds the pet (or presses Talk), speaks, and releases
+- **THEN** the mic audio streams as pcm16@16k over the ticketed voice session
+- **AND** the reply audio streams back and plays in the pet's selected voice
+- **AND** the stored profile voice is unchanged after the session
+
+#### Scenario: Ticket mint stays server-side
+- **WHEN** the page requests `/api/voice/session-ticket`
+- **THEN** the Pages Function calls the gateway with its server-side token
+- **AND** the browser receives only the short-lived ticket and `wss://` URL

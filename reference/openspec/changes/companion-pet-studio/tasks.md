@@ -23,3 +23,22 @@
 - [x] 3.2 Run gateway syntax/smoke checks.
 - [x] 3.3 Run static website syntax checks and browser QA.
 - [ ] 3.4 Deployment is blocked until the user explicitly approves promotion.
+
+## 4. Pet Voice Agent (2026-07-06)
+
+- [x] 4.1 Honor the `session_start` per-session `voice` override on the
+      cascaded Gemini-TTS legs (streaming pipeline, blocking leg, confirmation
+      TTS), pinned once per turn, without mutating the stored profile.
+- [x] 4.2 Add a Pages Function (`/api/voice/session-ticket`) that mints
+      short-lived voice session tickets server-side so the gateway token never
+      reaches browser JS.
+- [x] 4.3 Make the `/pets/` pet a voice agent: hold the pet (or press Talk) to
+      speak, mic streams pcm16@16k over the ticketed voice websocket, the
+      streamed reply audio plays via Web Audio, and the pet animates
+      listening/thinking/speaking states.
+- [x] 4.4 Add a per-pet Voice picker (the 8 canonical gateway voices) sent as
+      the session voice override; a text-only reply stays text (no local
+      speech synthesis, per the no-local-TTS rule).
+- [x] 4.5 Add a cascaded-voice smoke scenario asserting the override reaches
+      every synthesize request and a no-override session keeps the profile
+      voice.

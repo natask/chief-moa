@@ -37,6 +37,10 @@ Website
   such as the companion pet studio. It may call same-origin Pages Functions that
   proxy to token-guarded gateway endpoints, but it must not hold provider API
   keys, raw gateway tokens, or local execution authority in browser JavaScript.
+  For voice, a Pages Function mints short-lived voice session tickets with its
+  server-side token; the browser connects the `wss://.../v1/voice/sessions`
+  socket with the ticket only, and may send a per-session `voice` override
+  (e.g. a pet speaking in its own voice) that never mutates the stored profile.
 
 Moa Gateway
   Owns: gateway auth, model/provider calls, voice routing, conversation storage,
