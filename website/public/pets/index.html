@@ -116,7 +116,14 @@
   @keyframes climb{50%{transform:translateY(-5px) rotate(-2deg)}}@keyframes wave{50%{transform:rotate(-48deg)}}
   @keyframes floaty{50%{transform:translateY(-8px)}}@keyframes tap{50%{transform:translateY(4px) scaleY(.96)}}
 
-  .console{border-top:1px solid var(--line);background:#fff;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:14px 18px}
+  .console{border-top:1px solid var(--line);background:#fff;display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;padding:14px 18px}
+  .talk-btn{width:76px;height:76px;border-radius:50%;border:1px solid var(--line);background:#fff;color:var(--ink);
+    font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;transition:background .15s,color .15s}
+  .talk-btn.listening{background:var(--signal);border-color:var(--signal);color:#fff;animation:talkpulse 1.2s ease-in-out infinite}
+  .talk-btn.thinking{background:var(--violet);border-color:var(--violet);color:#fff}
+  .talk-btn.speaking{background:var(--green);border-color:var(--green);color:#fff}
+  .talk-btn:disabled{opacity:.5;cursor:default}
+  @keyframes talkpulse{50%{box-shadow:0 0 0 12px rgba(229,72,43,.14)}}
   .console-text{min-width:0}
   .console-text strong{display:block;font-size:17px;font-weight:500;line-height:1.15}
   .console-text span{display:block;margin-top:6px;font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -207,7 +214,7 @@
       </div>
       <div class="stage" id="stage">
         <div class="edge top"></div><div class="edge left"></div><div class="edge right"></div><div class="floor"></div>
-        <div class="pet palette-blue mode-walk" id="pet" aria-label="Animated pet preview" role="img">
+        <div class="pet palette-blue mode-walk" id="pet" aria-label="Animated pet preview. Hold to talk, drag to move." role="img" title="Hold to talk, drag to move">
           <div class="pet-shadow"></div>
           <img class="pet-image" id="petImage" alt="" />
           <div class="pet-core">
@@ -220,9 +227,10 @@
         </div>
       </div>
       <div class="console">
+        <button class="talk-btn" id="talkBtn" type="button" aria-label="Talk to this pet">Talk</button>
         <div class="console-text">
           <strong id="consoleTitle">Ready</strong>
-          <span id="consoleLine">Local preview</span>
+          <span id="consoleLine">Hold the pet or press Talk to speak with it</span>
           <div class="share-line" id="shareLine">
             <input id="shareUrl" type="text" readonly aria-label="Share URL" />
           </div>
@@ -252,6 +260,10 @@
         <div class="field">
           <label>Motion</label>
           <div class="segments" id="motionControls"></div>
+        </div>
+        <div class="field">
+          <label>Voice</label>
+          <div class="segments" id="voiceControls"></div>
         </div>
         <div class="field">
           <label for="scaleInput">Scale</label>
@@ -290,7 +302,20 @@
     red:"#d84a39",amber:"#c57a1b",teal:"#0e7d85",mono:"#f6f3ea"
   };
   var motions=["walk","peek","climb","tap","trail","float","spark"];
+  // The gateway's canonical Gemini TTS voices (profile-options.js VOICE_OPTIONS);
+  // the id is sent as the per-session `voice` override on session_start.
+  var voices=[
+    {id:"Puck",hint:"Bright, quick, and upbeat"},
+    {id:"Charon",hint:"Lower, steady, and direct"},
+    {id:"Kore",hint:"Clear, measured, and composed"},
+    {id:"Fenrir",hint:"Firm, low, and grounded"},
+    {id:"Aoede",hint:"Warm, smooth, and expressive"},
+    {id:"Leda",hint:"Light, calm, and soft"},
+    {id:"Orus",hint:"Clear, formal, and controlled"},
+    {id:"Zephyr",hint:"Airy, gentle, and relaxed"}
+  ];
   var localAgentsKey="moa.petStudio.agents.v1";
+  var deviceIdKey="moa.petStudio.deviceId.v1";
   var fallbackPets=[
     petRecord("shigmi-steward","Shigmi Steward","Default operator","graphite","hover","steward"),
     petRecord("shigmi-scout","Shigmi Scout","Research and discovery","green","peek","scout"),
@@ -298,8 +323,17 @@
     petRecord("shigmi-scribe","Shigmi Scribe","Writing companion","violet","trail","scribe")
   ];
   var state={
-    pets:[],selected:null,query:"",palette:"green",motion:"peek",scale:1,
-    imageDataUrl:"",rules:[],x:120,y:120,vx:42,vy:0,dir:1,mode:"walk",drag:false,last:0,nextModeAt:0
+    pets:[],selected:null,query:"",palette:"green",motion:"peek",scale:1,voice:"Kore",
+    imageDataUrl:"",rules:[],x:120,y:120,vx:42,vy:0,dir:1,mode:"walk",drag:false,last:0,nextModeAt:0,
+    pointerStart:null,holdTimer:null,holdTalk:false
+  };
+
+  // Voice turn state: idle -> listening (mic streaming) -> thinking (committed,
+  // waiting on the gateway) -> speaking (reply audio playing) -> idle.
+  var voice={
+    state:"idle",ws:null,ctx:null,mediaStream:null,sourceNode:null,processor:null,
+    turnId:"",playHead:0,audioDone:false,gotReplyAudio:false,turnDone:false,
+    pending:[],commitQueued:false,finishTimer:null,replyText:""
   };
 
   var els={
@@ -321,6 +355,8 @@
     petPrompt:document.getElementById("petPrompt"),
     paletteControls:document.getElementById("paletteControls"),
     motionControls:document.getElementById("motionControls"),
+    voiceControls:document.getElementById("voiceControls"),
+    talkBtn:document.getElementById("talkBtn"),
     scaleInput:document.getElementById("scaleInput"),
     scaleOutput:document.getElementById("scaleOutput"),
     imageInput:document.getElementById("imageInput"),
@@ -369,6 +405,11 @@
       button.type="button";button.className="seg";button.textContent=key;button.dataset.motion=key;
       els.motionControls.appendChild(button);
     });
+    voices.forEach(function(item){
+      var button=document.createElement("button");
+      button.type="button";button.className="seg";button.textContent=item.id;button.title=item.hint;button.dataset.voice=item.id;
+      els.voiceControls.appendChild(button);
+    });
     refreshControlState();
   }
 
@@ -381,6 +422,15 @@
     els.motionControls.addEventListener("click",function(event){
       var button=event.target.closest("[data-motion]");if(!button)return;
       state.motion=button.dataset.motion;state.mode=motionMode(state.motion);applyControlsToPreview();refreshControlState();
+    });
+    els.voiceControls.addEventListener("click",function(event){
+      var button=event.target.closest("[data-voice]");if(!button)return;
+      state.voice=button.dataset.voice;applyControlsToPreview();refreshControlState();
+      setConsole("Voice: "+state.voice,(voices.filter(function(v){return v.id===state.voice;})[0]||{}).hint||"");
+    });
+    els.talkBtn.addEventListener("click",toggleTalk);
+    window.addEventListener("keydown",function(event){
+      if(event.key==="Escape"&&voice.state!=="idle")cancelVoiceTurn();
     });
     els.scaleInput.addEventListener("input",function(){
       state.scale=Number(els.scaleInput.value)||1;applyPetVisual();refreshControlState();
@@ -618,9 +668,11 @@
 
   function selectPet(item){
     if(!item)return;
+    if(voice.state!=="idle")cancelVoiceTurn();
     state.selected=item;
     state.palette=item.pet.palette||"blue";
     state.motion=item.pet.motion||"walk";
+    state.voice=canonicalVoiceId(item.voice)||"Kore";
     state.scale=Number(item.pet.scale)||1;
     state.mode=motionMode(state.motion);
     state.imageDataUrl=item.pet.sprite&&item.pet.sprite.image_data_url||"";
@@ -639,8 +691,15 @@
       state.selected.pet.palette=state.palette;
       state.selected.pet.motion=state.motion;
       state.selected.pet.scale=state.scale;
+      state.selected.voice=state.voice;
     }
     applyPetVisual();
+  }
+
+  function canonicalVoiceId(value){
+    var raw=String(value||"").trim().toLowerCase();
+    var match=voices.filter(function(item){return item.id.toLowerCase()===raw;})[0];
+    return match?match.id:"";
   }
 
   function applyPetVisual(){
@@ -677,6 +736,9 @@
     Array.prototype.forEach.call(els.motionControls.children,function(button){
       button.classList.toggle("active",button.dataset.motion===state.motion);
     });
+    Array.prototype.forEach.call(els.voiceControls.children,function(button){
+      button.classList.toggle("active",button.dataset.voice===state.voice);
+    });
     els.scaleOutput.textContent=(Number(els.scaleInput.value)||1).toFixed(2);
   }
 
@@ -693,6 +755,7 @@
     }catch(err){
       var local=petRecord("local-"+Date.now().toString(36),body.name,body.text,body.pet.palette,body.pet.motion,"custom");
       local.source="local";
+      local.voice=body.voice||local.voice;
       local.pet.scale=body.pet.scale;local.pet.sprite.image_data_url=state.imageDataUrl;local.rules=body.rules;
       saveLocalAgent(local);upsertPet(local);selectPet(local);setHint("Created locally", "ok");
     }
@@ -777,9 +840,10 @@
       text:els.petPrompt.value.trim(),
       palette:state.palette,
       motion:state.motion,
+      voice:state.voice,
       image_data_url:state.imageDataUrl,
       rules:rules,
-      companion:{name:els.petName.value.trim()||"Shigmi Companion",summary:els.petPrompt.value.trim()},
+      companion:{name:els.petName.value.trim()||"Shigmi Companion",summary:els.petPrompt.value.trim(),voice:state.voice},
       pet:{palette:state.palette,motion:state.motion,scale:state.scale,source_image:state.imageDataUrl}
     };
   }
@@ -799,12 +863,316 @@
     reader.readAsDataURL(file);
   }
 
+  // One pointer gesture, two meanings: hold still ~260ms = talk to the pet
+  // (release to send), move first = drag it around. Same split as the
+  // extension launcher's voice-first gestures.
   function startDrag(event){
-    state.drag=true;els.pet.classList.add("dragging");els.pet.setPointerCapture(event.pointerId);
-    moveToPointer(event);
+    state.pointerStart={x:event.clientX,y:event.clientY};
+    els.pet.setPointerCapture(event.pointerId);
+    if(voice.state==="idle"){
+      state.holdTimer=setTimeout(function(){
+        state.holdTimer=null;
+        state.holdTalk=true;
+        startTalk();
+      },260);
+    }
   }
-  function dragMove(event){if(!state.drag)return;moveToPointer(event);}
-  function endDrag(){if(!state.drag)return;state.drag=false;els.pet.classList.remove("dragging");state.mode=motionMode(state.motion);applyPetVisual();}
+  function dragMove(event){
+    if(state.holdTalk)return;
+    if(state.pointerStart&&!state.drag){
+      var dx=event.clientX-state.pointerStart.x,dy=event.clientY-state.pointerStart.y;
+      if(Math.sqrt(dx*dx+dy*dy)>8){
+        clearHoldTimer();
+        state.drag=true;els.pet.classList.add("dragging");
+      }
+    }
+    if(!state.drag)return;moveToPointer(event);
+  }
+  function endDrag(){
+    clearHoldTimer();
+    if(state.holdTalk){
+      state.holdTalk=false;state.pointerStart=null;
+      if(voice.state==="listening")stopTalk();
+      return;
+    }
+    state.pointerStart=null;
+    if(!state.drag)return;
+    state.drag=false;els.pet.classList.remove("dragging");state.mode=motionMode(state.motion);applyPetVisual();
+  }
+  function clearHoldTimer(){
+    if(state.holdTimer){clearTimeout(state.holdTimer);state.holdTimer=null;}
+  }
+
+  // ---- Voice agent: mic -> /api/voice/session-ticket -> wss voice session ->
+  // streamed pcm16 reply audio. The pet's selected voice rides on session_start
+  // as a per-session override; replies play through Web Audio only (no local
+  // speech synthesis — a text reply stays text).
+
+  function toggleTalk(){
+    if(voice.state==="idle"){startTalk();}
+    else if(voice.state==="listening"){stopTalk();}
+    else{cancelVoiceTurn();}
+  }
+
+  async function startTalk(){
+    if(voice.state!=="idle")return;
+    voice.turnId="turn_"+Math.random().toString(36).slice(2,14);
+    voice.pending=[];voice.commitQueued=false;voice.replyText="";
+    voice.audioDone=false;voice.gotReplyAudio=false;voice.turnDone=false;voice.playHead=0;
+    setVoiceState("listening");
+    setConsole("Listening","Speak, then release the pet or press Send");
+    try{
+      await startCapture();
+      var res=await fetch("/api/voice/session-ticket",{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({session_id:voiceSessionId(),device_id:voiceDeviceId()})
+      });
+      var ticket=await res.json().catch(function(){return {};});
+      if(!res.ok||!ticket.ws_url)throw new Error(ticket.error||"Voice ticket failed");
+      if(voice.state==="idle")return;
+      openVoiceSocket(ticket.ws_url);
+    }catch(err){
+      teardownVoice(true);
+      setConsole("Voice blocked",err&&err.message||"Microphone or gateway unavailable");
+    }
+  }
+
+  function openVoiceSocket(url){
+    var ws=new WebSocket(url);
+    ws.binaryType="arraybuffer";
+    voice.ws=ws;
+    ws.onopen=function(){
+      if(voice.ws!==ws)return;
+      if(voice.state==="idle"){try{ws.close();}catch(e){}return;}
+      ws.send(JSON.stringify({
+        type:"session_start",
+        session_id:voiceSessionId(),
+        conversation_id:voiceSessionId(),
+        turn_id:voice.turnId,
+        device_id:voiceDeviceId(),
+        source:"website-pet-studio",
+        voice:state.voice,
+        format:{encoding:"pcm16",sample_rate:16000,channels:1},
+        client:{surface:"website-pet-studio",pet_id:state.selected&&state.selected.id||""}
+      }));
+      flushPendingAudio();
+      if(voice.commitQueued){voice.commitQueued=false;commitVoiceTurn();}
+    };
+    ws.onmessage=function(event){
+      if(voice.ws!==ws)return;
+      if(typeof event.data==="string"){
+        var payload=null;
+        try{payload=JSON.parse(event.data);}catch(err){return;}
+        handleVoiceEvent(payload);
+      }else{
+        voice.gotReplyAudio=true;
+        playPcmChunk(event.data);
+      }
+    };
+    ws.onclose=function(){
+      if(voice.ws!==ws)return;
+      voice.ws=null;
+      if(voice.state==="listening"||voice.state==="thinking"){
+        teardownVoice(false);
+        setConsole("Voice disconnected","Try again");
+      }
+    };
+  }
+
+  function stopTalk(){
+    if(voice.state!=="listening")return;
+    stopCapture();
+    setVoiceState("thinking");
+    setConsole("Thinking","");
+    if(voice.ws&&voice.ws.readyState===1){commitVoiceTurn();}
+    else{voice.commitQueued=true;}
+  }
+
+  function commitVoiceTurn(){
+    try{voice.ws.send(JSON.stringify({type:"commit_turn",turn_id:voice.turnId}));}catch(err){}
+  }
+
+  function cancelVoiceTurn(){
+    if(voice.ws&&voice.ws.readyState===1){
+      try{voice.ws.send(JSON.stringify({type:"cancel_turn",turn_id:voice.turnId}));}catch(err){}
+    }
+    teardownVoice(true);
+    setConsole("Canceled","Hold the pet or press Talk to speak with it");
+  }
+
+  function handleVoiceEvent(event){
+    if(!event||typeof event!=="object")return;
+    if(event.type==="turn_progress"){
+      if(voice.state==="thinking")setConsole("Thinking",event.stage==="tts"?"Finding its voice":"Reasoning");
+    }else if(event.type==="transcript_partial"||event.type==="transcript_final"){
+      setConsole("You",event.text||"");
+    }else if(event.type==="assistant_text"){
+      voice.replyText=event.text||"";
+      setConsole(petDisplayName(),voice.replyText);
+    }else if(event.type==="assistant_audio_start"){
+      setVoiceState("speaking");
+      if(voice.replyText)setConsole(petDisplayName(),voice.replyText);
+    }else if(event.type==="assistant_audio_done"){
+      voice.audioDone=true;
+      scheduleVoiceFinish();
+    }else if(event.type==="turn_done"){
+      voice.turnDone=true;
+      handleVoiceTurnDone(event);
+    }else if(event.type==="error"){
+      teardownVoice(true);
+      setConsole("Voice error",event.message||"");
+    }
+  }
+
+  function handleVoiceTurnDone(event){
+    var status=String(event.status||"completed");
+    if(status==="no_speech"){
+      teardownVoice(true);
+      setConsole("Didn't catch that","Hold the pet, speak, then release");
+      return;
+    }
+    if(status!=="completed"){
+      teardownVoice(true);
+      setConsole("Voice "+status,event.reason||"");
+      return;
+    }
+    if(!voice.gotReplyAudio){
+      // Deliberate text delivery (modality text / no hosted voice for the
+      // language): the reply stays on screen, nothing speaks locally.
+      var line=voice.replyText;
+      teardownVoice(true);
+      if(line)setConsole(petDisplayName()+" (text)",line);
+      return;
+    }
+    voice.audioDone=true;
+    scheduleVoiceFinish();
+  }
+
+  function scheduleVoiceFinish(){
+    if(!voice.audioDone)return;
+    if(!voice.ctx){teardownVoice(true);return;}
+    var remainingMs=Math.max(0,(voice.playHead-voice.ctx.currentTime)*1000)+150;
+    if(voice.finishTimer)clearTimeout(voice.finishTimer);
+    voice.finishTimer=setTimeout(function(){
+      voice.finishTimer=null;
+      var line=voice.replyText;
+      teardownVoice(true);
+      if(line)setConsole(petDisplayName(),line);
+    },remainingMs);
+  }
+
+  async function startCapture(){
+    voice.ctx=new (window.AudioContext||window.webkitAudioContext)();
+    if(voice.ctx.state==="suspended")await voice.ctx.resume();
+    voice.mediaStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
+    voice.sourceNode=voice.ctx.createMediaStreamSource(voice.mediaStream);
+    voice.processor=voice.ctx.createScriptProcessor(4096,1,1);
+    voice.processor.onaudioprocess=function(event){
+      if(voice.state!=="listening")return;
+      var pcm=downsamplePcm16(event.inputBuffer.getChannelData(0),voice.ctx.sampleRate,16000);
+      if(!pcm)return;
+      if(voice.ws&&voice.ws.readyState===1){try{voice.ws.send(pcm);}catch(err){}}
+      else if(voice.pending.length<64){voice.pending.push(pcm);}
+    };
+    voice.sourceNode.connect(voice.processor);
+    voice.processor.connect(voice.ctx.destination);
+  }
+
+  function stopCapture(){
+    if(voice.processor){try{voice.processor.disconnect();}catch(err){}voice.processor.onaudioprocess=null;voice.processor=null;}
+    if(voice.sourceNode){try{voice.sourceNode.disconnect();}catch(err){}voice.sourceNode=null;}
+    if(voice.mediaStream){voice.mediaStream.getTracks().forEach(function(track){track.stop();});voice.mediaStream=null;}
+  }
+
+  function flushPendingAudio(){
+    if(!voice.ws||voice.ws.readyState!==1)return;
+    var chunks=voice.pending;
+    voice.pending=[];
+    chunks.forEach(function(chunk){try{voice.ws.send(chunk);}catch(err){}});
+  }
+
+  // Assistant audio is pcm16 mono @16k; schedule chunks back to back so the
+  // streamed reply plays gaplessly as frames arrive.
+  function playPcmChunk(arrayBuffer){
+    if(!voice.ctx||!arrayBuffer)return;
+    var byteLength=arrayBuffer.byteLength-(arrayBuffer.byteLength%2);
+    if(byteLength<=0)return;
+    var ints=new Int16Array(arrayBuffer,0,byteLength/2);
+    var floats=new Float32Array(ints.length);
+    for(var i=0;i<ints.length;i++)floats[i]=ints[i]/32768;
+    var buffer=voice.ctx.createBuffer(1,floats.length,16000);
+    buffer.getChannelData(0).set(floats);
+    var source=voice.ctx.createBufferSource();
+    source.buffer=buffer;
+    source.connect(voice.ctx.destination);
+    var at=Math.max(voice.ctx.currentTime+0.05,voice.playHead||0);
+    source.start(at);
+    voice.playHead=at+buffer.duration;
+  }
+
+  function downsamplePcm16(floats,fromRate,toRate){
+    if(!floats||!floats.length)return null;
+    var ratio=fromRate/toRate;
+    if(!(ratio>=1))ratio=1;
+    var outLength=Math.floor(floats.length/ratio);
+    if(outLength<=0)return null;
+    var out=new Int16Array(outLength);
+    var pos=0;
+    for(var i=0;i<outLength;i++){
+      var next=Math.min(floats.length,Math.floor((i+1)*ratio));
+      var sum=0,count=0;
+      for(var j=pos;j<next;j++){sum+=floats[j];count++;}
+      var sample=count?sum/count:0;
+      sample=Math.max(-1,Math.min(1,sample));
+      out[i]=sample<0?sample*0x8000:sample*0x7fff;
+      pos=next;
+    }
+    return out.buffer;
+  }
+
+  function teardownVoice(closeWs){
+    stopCapture();
+    if(voice.finishTimer){clearTimeout(voice.finishTimer);voice.finishTimer=null;}
+    if(closeWs&&voice.ws){try{voice.ws.close();}catch(err){}}
+    voice.ws=null;
+    if(voice.ctx){try{voice.ctx.close();}catch(err){}voice.ctx=null;}
+    voice.pending=[];voice.commitQueued=false;
+    voice.playHead=0;voice.audioDone=false;voice.gotReplyAudio=false;voice.turnDone=false;
+    setVoiceState("idle");
+  }
+
+  function setVoiceState(next){
+    voice.state=next;
+    els.talkBtn.className="talk-btn"+(next==="idle"?"":" "+next);
+    els.talkBtn.textContent=next==="idle"?"Talk":next==="listening"?"Send":next==="thinking"?"...":"Stop";
+    if(next==="listening"){state.mode="wave";}
+    else if(next==="thinking"){state.mode="float";}
+    else if(next==="speaking"){state.mode="tap";}
+    else{state.mode=motionMode(state.motion);state.nextModeAt=0;}
+    applyPetVisual();
+  }
+
+  function petDisplayName(){
+    return state.selected&&state.selected.companion_name||"Pet";
+  }
+
+  function voiceSessionId(){
+    var petId=String(state.selected&&state.selected.id||"studio").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,80);
+    return "petweb_"+petId;
+  }
+
+  function voiceDeviceId(){
+    try{
+      var existing=window.localStorage.getItem(deviceIdKey);
+      if(existing)return existing;
+      var next="petweb_"+Math.random().toString(36).slice(2,12);
+      window.localStorage.setItem(deviceIdKey,next);
+      return next;
+    }catch(err){
+      return "petweb_anon";
+    }
+  }
   function moveToPointer(event){
     var rect=els.stage.getBoundingClientRect();
     state.x=event.clientX-rect.left-48;state.y=event.clientY-rect.top-48;
@@ -815,7 +1183,7 @@
     var rect=els.stage.getBoundingClientRect();
     if(!state.last)state.last=time;
     var dt=Math.min((time-state.last)/1000,.04);state.last=time;
-    if(!state.drag&&rect.width>0&&rect.height>0){
+    if(!state.drag&&voice.state==="idle"&&rect.width>0&&rect.height>0){
       if(time>state.nextModeAt){
         state.mode=randomMode();
         state.nextModeAt=time+1800+Math.random()*2600;
