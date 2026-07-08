@@ -57,6 +57,7 @@ async function main() {
     await spokenProfileControlConfirmation(tempDir);
     await expressiveTtsRequestShape(tempDir);
     await deliveryRateAndToneRequestShape(tempDir);
+    await clientRateModeEmitsPlaybackRate(tempDir);
     await turnProgressDuringStalledReasoner(tempDir);
     await turnProgressStopsAfterCancel(tempDir);
     await turnProgressStopsAfterClose(tempDir);
@@ -777,6 +778,53 @@ async function expressiveTtsRequestShape(tempDir) {
   assert.equal(ttsCall.body.audioConfig.speakingRate, 1.5, "the pinned speaking rate must ride audioConfig.speakingRate");
   assert.match(String(ttsCall.body.input.text || ""), /\[whispering\]/, "whitelisted inline tags must ride input.text");
   assert.equal(ttsCall.body.voice.modelName, "gemini-3.1-flash-tts-preview", "gemini-tts model must be selected");
+}
+
+// Client-rate mode (VOICE_TTS_CLIENT_RATE=1) on the Gemini-TTS leg: the gateway
+// generates natural-speed audio (NO pace words in the prompt) and tells the
+// client to resample via a playback_rate on assistant_audio_start. Off mode
+// keeps the pace words and emits no playback_rate. Guards against double-apply.
+async function clientRateModeEmitsPlaybackRate(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "go fast", calls });
+
+  const provider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      VOICE_TTS_PROVIDER: "gemini-tts",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US",
+      VOICE_STREAMING: "0",
+      VOICE_SPEAKING_RATE: "1.75",
+      VOICE_TTS_CLIENT_RATE: "1",
+    },
+    reasoner: async () => ({
+      speak: "Zooming.",
+      display: "Zooming.",
+      language: "en-US",
+      model: "test-model",
+      classification: "chat",
+    }),
+  });
+
+  const starts = [];
+  const hooks = {
+    onTranscriptFinal: async () => {},
+    onAssistantText: async () => {},
+    onAssistantAudioStart: async (format, options) => starts.push(options || {}),
+    sendAudio: async () => {},
+    onAssistantAudioDone: async () => {},
+  };
+  const result = await provider.processTurn(makeTurn(tempDir, "clientrate"), hooks);
+
+  assert.equal(result.tts_spoke, true, "client-rate turn must speak");
+  assert.equal(starts.length, 1, "one assistant_audio_start");
+  assert.equal(starts[0].playbackRate, 1.75, "client-rate mode must ask the client to resample at the pinned rate");
+  const ttsCall = calls.find((c) => c.kind === "tts");
+  assert.ok(ttsCall, "synthesize must be called");
+  assert.doesNotMatch(String(ttsCall.body.input.prompt || ""), /fast|speed|pace/i, "client-rate mode must NOT bake pace words into the prompt");
 }
 
 // Delivery controls: speaking_rate and voice_tone reach the synthesize request.

@@ -648,6 +648,14 @@ class VoiceSessionConnection {
         assertTurnActive();
         providerEvents.assistantAudioStarted = true;
         const streaming = options?.streaming === true;
+        // The per-turn factor the client resamples this turn's PCM by. 1.0 (or
+        // absent) means the audio is already at the intended speed; > 1 asks the
+        // client to speed it up (Gemini-TTS client-rate mode). Only emitted when
+        // it differs from 1.0 so old records/clients are unaffected.
+        const rawRate = Number(options?.playbackRate);
+        const playbackRate = Number.isFinite(rawRate) && rawRate > 0 && rawRate !== 1
+          ? Math.min(2, Math.max(0.5, rawRate))
+          : 0;
         if (streaming) {
           // Pipelined multi-frame stream: KEEP the keepalive running. The
           // interval skips ticks while turn.lastAssistantAudioAt is fresh, so
@@ -663,6 +671,7 @@ class VoiceSessionConnection {
         await this.recordProviderEvent(turn, providerEvents, "assistant_audio_start", {
           format: format || ASSISTANT_AUDIO_FORMAT,
           ...(streaming ? { streaming: true } : {}),
+          ...(playbackRate ? { playback_rate: playbackRate } : {}),
         });
         assertTurnActive();
         await this.sendEvent({
@@ -672,6 +681,7 @@ class VoiceSessionConnection {
           turn_id: turn.turnId,
           format: format || ASSISTANT_AUDIO_FORMAT,
           ...(streaming ? { streaming: true } : {}),
+          ...(playbackRate ? { playback_rate: playbackRate } : {}),
         });
       },
       sendAudio: async (chunk) => {

@@ -750,6 +750,9 @@ class CascadedVoiceProvider {
       // Effective delivery controls (profile/env), for ops verification.
       tts_speaking_rate: this.speakingRate(),
       tts_tone: this.voiceTone() || null,
+      // When true, pace is applied by the client resampling the PCM (guaranteed
+      // speed for Gemini-TTS) instead of baked into the synthesized audio.
+      tts_client_rate_mode: this.clientRateModeEnabled(),
       // Streaming posture for ops: the per-turn flag decision and whether the
       // in-process circuit breaker has latched streaming off.
       voice_streaming: {
@@ -835,9 +838,11 @@ class CascadedVoiceProvider {
     // chunk speaks at one speed; a mid-turn change applies next turn.
     const pinnedRate = this.speakingRate(turn.effectiveProfile);
     const pinnedTone = this.voiceTone(turn.effectiveProfile);
+    // The factor the client resamples by (1.0 unless Gemini-TTS client-rate mode).
+    const clientRate = this.clientPlaybackRate(pinnedRate);
     const turnStartedAtMs = Date.now();
     const pipeline = this.streamingEnabledForTurn() && modality !== "text" && this.canSynthesize(pinnedLanguage)
-      ? this.createStreamingReplyPipeline({ hooks, language: pinnedLanguage, turnStartedAtMs, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone })
+      ? this.createStreamingReplyPipeline({ hooks, language: pinnedLanguage, turnStartedAtMs, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone, playbackRate: clientRate })
       : null;
     // The reasoner (gateway LLM/tool turn) runs with no stream events until it
     // returns. Tell the session server to keep the client alive with turn_progress
@@ -974,7 +979,7 @@ class CascadedVoiceProvider {
       try {
         const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone });
         if (pcm && pcm.length) {
-          await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
+          await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { playbackRate: clientRate });
           await hooks.sendAudio(pcm);
           await hooks.onAssistantAudioDone();
           spoke = true;
@@ -1067,7 +1072,7 @@ class CascadedVoiceProvider {
   // the session-server write guard aborts silently (no tts_error, no events
   // for the dead turn). One nulled stream crash-looped this gateway 24 times
   // in a day; the guard lives on the write, not only in callers.
-  createStreamingReplyPipeline({ hooks, language, turnStartedAtMs, voice, speakingRate, tone }) {
+  createStreamingReplyPipeline({ hooks, language, turnStartedAtMs, voice, speakingRate, tone, playbackRate }) {
     const provider = this;
     const chunker = createSpeechChunker(this.chunkerOptions());
     const abortController = new AbortController();
@@ -1177,7 +1182,7 @@ class CascadedVoiceProvider {
           throw new TurnSupersededError("voice turn superseded before chunk emission");
         }
         if (!state.started) {
-          await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { streaming: true });
+          await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { streaming: true, playbackRate });
           state.started = true;
         }
         await hooks.sendAudio(pcm);
@@ -1362,7 +1367,7 @@ class CascadedVoiceProvider {
         tone: this.voiceTone(options.profile),
       });
       if (pcm && pcm.length) {
-        await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT);
+        await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { playbackRate: this.clientPlaybackRate(this.speakingRate(options.profile)) });
         await hooks.sendAudio(pcm);
         await hooks.onAssistantAudioDone();
         this.lastTtsError = "";
@@ -1420,6 +1425,39 @@ class CascadedVoiceProvider {
       }
     }
     return "";
+  }
+
+  // Client-rate mode: when VOICE_TTS_CLIENT_RATE is set, the gateway stops
+  // baking pace into the Gemini-TTS style prompt (whose pace words are only
+  // approximate) and instead asks the CLIENT to resample the audio to the target
+  // speed. This gives a guaranteed speed knob for the provider that ignores
+  // audioConfig.speakingRate. Off by default so live behavior is unchanged and
+  // an un-updated client never gets slower-than-today audio.
+  clientRateModeEnabled() {
+    return String(this.env.VOICE_TTS_CLIENT_RATE ?? "").trim() !== ""
+      && String(this.env.VOICE_TTS_CLIENT_RATE).trim() !== "0";
+  }
+
+  // The playback-rate factor the CLIENT should apply to this turn's PCM. 1.0
+  // means "already at the right speed" (classic voices bake audioConfig
+  // speakingRate; Gemini keeps its pace prompt). It is the pinned rate ONLY for
+  // the Gemini-TTS leg in client-rate mode, where the gateway deliberately did
+  // not bake the pace.
+  clientPlaybackRate(rate) {
+    if (this.ttsProviderId === "gemini-tts" && this.clientRateModeEnabled()) {
+      const value = Number(rate);
+      if (Number.isFinite(value) && value > 0) {
+        return Math.min(2, Math.max(0.5, value));
+      }
+    }
+    return 1;
+  }
+
+  // Whether the Gemini-TTS style prompt should carry the pace instruction.
+  // False in client-rate mode (the client resamples instead), so the two paths
+  // never both speed up the same reply.
+  paceInPrompt() {
+    return !(this.ttsProviderId === "gemini-tts" && this.clientRateModeEnabled());
   }
 
   // The reply (OUTPUT) language from the effective agent profile, falling back to
@@ -1487,8 +1525,11 @@ class CascadedVoiceProvider {
       // input.prompt; classic Cloud TTS voices do not, so only forward it there.
       // Pace and tone ride the SAME prompt on Gemini-TTS (audioConfig
       // speakingRate is unreliable there); classic voices get audioConfig
-      // speakingRate below instead.
-      prompt: this.ttsProviderId === "gemini-tts" ? composeTtsStylePrompt(stylePrompt, tone, speakingRate) : "",
+      // speakingRate below instead. In client-rate mode the pace is dropped from
+      // the prompt (the client resamples) so speed is applied exactly once.
+      prompt: this.ttsProviderId === "gemini-tts"
+        ? composeTtsStylePrompt(stylePrompt, tone, this.paceInPrompt() ? speakingRate : 0)
+        : "",
       language: language || this.replyLanguage(),
       voice: (this.ttsProviderId === "gemini-tts" && String(voice || "").trim()) || this.ttsVoiceName(),
       modelName: this.ttsProviderId === "gemini-tts" ? this.ttsModel : "",
