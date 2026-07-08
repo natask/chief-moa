@@ -1,3 +1,6 @@
+- Guaranteed voice speed: VOICE_TTS_CLIENT_RATE mode emits playback_rate on assistant_audio_start; pet page + extension + Android resample PCM to the target rate (gemini-tts pace words dropped so speed applies once). Off by default, inert until flag flips — agent: claude-code/opus-4.8 — 5752fb0,ae3e300,bedcbbf
+- Streaming TTS researched + decision recorded: Chirp3-HD streamingSynthesize is gRPC-only (en-US, honors rate), Gemini SSE is multilingual but no rate + 60s cap; chunked pipeline already streams playback. Left as a user provider decision, not silently built — agent: claude-code/opus-4.8 — n/a
+
 - Voice delivery controls: speaking_rate (default 1.5x fast) + voice_tone profile fields -> Chirp audioConfig / Gemini-TTS pace prompt, spoken tool-call acks via onToolRound + pipeline pushImmediate, language switch confirmed out loud in the new language — agent: claude-code/fable-5 — 661eb2a
 - Per-session pet persona: session_start persona -> in-character cascaded replies, identity reads route to chat on persona sessions — agent: claude-code/fable-5 — 260017b
 - Fix empty streamed voice replies: sseJsonEvents Uint8Array decode + Gemini thoughtSignature replay on all vertex tool-loop rounds — agent: claude-code/fable-5 — 26da3a4
