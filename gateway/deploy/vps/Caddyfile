@@ -7,13 +7,15 @@
 }
 
 {$MOA_DOMAIN} {
-	# Ketera mezmur service (separate compose project on the shared
-	# network); handle_path strips the /ketera prefix.
-	handle_path /ketera/* {
-		reverse_proxy ketera:8790
-	}
+	reverse_proxy gateway:8787
+}
 
-	handle {
-		reverse_proxy gateway:8787
-	}
+# Ketera mezmur — a separate product with its own endpoint. Served directly
+# by this Caddy (no Cloudflare Worker in front), so video uploads have no
+# request-body cap. sslip.io resolves the hostname to the droplet IP, so
+# Let's Encrypt issues a cert with no DNS token needed. Swap this hostname
+# for a proxied A record (e.g. ketera.agee.app -> 143.198.226.83, DNS-only)
+# once a Cloudflare Zone:DNS:Edit token exists; the origin needs no change.
+ketera.143.198.226.83.sslip.io {
+	reverse_proxy ketera:8790
 }
