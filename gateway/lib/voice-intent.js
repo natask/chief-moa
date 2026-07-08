@@ -11,7 +11,9 @@
 const {
   canonicalVoice,
   canonicalPersona,
+  LANGUAGE_OPTIONS,
   mentionsSupportedLanguage,
+  normalizeSpeechKey,
 } = require("./profile-options");
 
 // Lowercase, strip punctuation, collapse whitespace. The matchers below assume
@@ -266,14 +268,10 @@ function parseProfileControlIntent(text) {
     };
   }
 
-  // Language switching is model-owned, not keyword-matched. A spoken/typed request
-  // to change which languages are understood or replied in falls through to a chat
-  // turn, where the model reasons about it and calls update_agent_profile /
-  // set_languages (same sanitizer). There is deliberately no transcript-level
-  // language matcher here: the previous parseLanguageIntent / matchedLanguages /
-  // wantsUnsupportedLanguageChange heuristic was removed. Read-only language
-  // QUERIES ("what language is active", "what languages can you speak") are still
-  // answered above as summaries; only the mutation heuristic is gone.
+  const language = languageUpdateFrom(raw, lower);
+  if (language) {
+    return { ...language, scope };
+  }
 
   const modality = modalityUpdateFrom(lower);
   if (modality) {
@@ -684,21 +682,113 @@ function needsVoiceChoice(lower) {
     || /\bvoice\b[^.]*\b(?:different|another|new)\b/.test(lower);
 }
 
-// ROUTING-ONLY language guard. Language switching is model-owned, so a spoken
-// request to change which languages are understood or replied in must reach the
-// model as a chat turn (where it calls update_agent_profile / set_languages),
-// never a harness launch. Without this, phrasings like "change your language to
-// Amharic" trip the agent-work heuristic ("change ...") and would launch an agent.
-// This does NOT decide or change any language — it only keeps a language request
-// on the conversational path. It requires a config/speaking verb next to a
-// language cue (the word "language" or a supported language name) so ordinary
-// speech is not swept in.
+// Explicit language-control fallback for non-streaming HTTP/profile turns.
+// Streaming cascaded turns still let the model use update_agent_profile /
+// set_languages, but /v1/voice/turns can run without a model key, so explicit
+// "reply in X" / "I only speak X" requests need a deterministic profile patch.
+// This is not auto-detection: it only handles user-authored configuration
+// requests and still writes through the gateway profile sanitizer.
+function languageUpdateFrom(raw, lower) {
+  if (!looksLikeLanguageControl(raw)) {
+    return null;
+  }
+  const matched = matchedLanguageMentions(raw);
+  if (matched.length === 0) {
+    return /\blanguages?\b/.test(lower)
+      ? { action: "clarify", subject: "language", summary: "language" }
+      : null;
+  }
+
+  const codes = matched.map((language) => language.code);
+  const labels = matched.map((language) => language.label);
+  const list = codes.join(",");
+  const labelList = labels.join(" + ");
+  const inputCue = /\b(?:understand|understands|understood|listen|listens|hear|hears|heard|recognize|recognise|process|input)\b/.test(lower)
+    || /\b(?:i|user)\s+(?:only\s+)?(?:speak|speaks|talk|talks|will speak|will talk|am going to speak|want to speak)\b/.test(lower);
+  const replyCue = /\b(?:reply|respond|answer|say)\b/.test(lower)
+    || /\byou\s+(?:only\s+)?(?:speak|speaks|talk|talks)\b/.test(lower)
+    || (/\b(?:speak|speaks|talk|talks)\b/.test(lower) && !inputCue);
+  const patch = {};
+  if (inputCue) {
+    patch.input_languages = list;
+    patch.input_language_primary = codes[0];
+  }
+  if (replyCue || !inputCue) {
+    patch.language = list;
+    patch.language_primary = codes[0];
+    patch.language_mode = "explicit";
+    patch.language_output = "primary_only";
+    patch.language_auto_switch = false;
+  }
+
+  const summary = [
+    patch.input_languages ? `understand ${labelList}` : "",
+    patch.language ? `reply in ${labelList}` : "",
+  ].filter(Boolean).join(" and ");
+  return {
+    action: "update",
+    patch,
+    subject: "language",
+    summary: summary || `language ${labelList}`,
+  };
+}
+
+function matchedLanguageMentions(raw) {
+  const rawText = String(raw || "");
+  const lowerRaw = rawText.toLowerCase();
+  const normalized = normalizeSpeechKey(rawText);
+  const padded = ` ${normalized} `;
+  const matches = [];
+  const seen = new Set();
+  const add = (language, index) => {
+    if (!language || seen.has(language.code) || index < 0) return;
+    seen.add(language.code);
+    matches.push({ code: language.code, label: language.label, index });
+  };
+  const phraseIndex = (value) => {
+    const key = normalizeSpeechKey(value);
+    if (!key) return -1;
+    const idx = padded.indexOf(` ${key} `);
+    return idx < 0 ? -1 : idx;
+  };
+  const codeIndex = (code) => {
+    if (!code) return -1;
+    const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(code.toLowerCase())}($|[^a-z0-9])`, "i");
+    const match = lowerRaw.match(pattern);
+    return match ? match.index : -1;
+  };
+
+  for (const language of LANGUAGE_OPTIONS) {
+    const matchedCodeIndex = codeIndex(language.code);
+    const labelIndex = phraseIndex(language.label);
+    const keyIndexes = (language.keys || []).map(phraseIndex).filter((index) => index >= 0);
+    const nativeIndexes = (language.native_names || [])
+      .map((native) => String(native || "").trim().toLowerCase())
+      .filter(Boolean)
+      .map((native) => lowerRaw.indexOf(native))
+      .filter((index) => index >= 0);
+    const indexes = [matchedCodeIndex, labelIndex, ...keyIndexes, ...nativeIndexes].filter((index) => index >= 0);
+    if (indexes.length > 0) {
+      add(language, Math.min(...indexes));
+    }
+  }
+
+  return matches.sort((a, b) => a.index - b.index).map(({ index, ...language }) => language);
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Routing guard for language-shaped turns that did not become an explicit
+// profile-control patch above. It keeps vague language requests conversational
+// instead of letting the agent-work heuristic ("change ...") launch a harness.
 function looksLikeLanguageControl(transcript) {
   const lower = normalizeSpeech(transcript);
   if (!lower) {
     return false;
   }
-  const verb = /\b(?:speak|speaking|talk|understand|understands|understood|reply|respond|answer|say|switch|change|set|use|make|adjust)\b/.test(lower);
+  const verb = /\b(?:speak|speaking|talk|understand|understands|understood|listen|hear|heard|recognize|recognise|process|reply|respond|answer|say|switch|change|set|use|make|adjust)\b/.test(lower);
   if (!verb) {
     return false;
   }

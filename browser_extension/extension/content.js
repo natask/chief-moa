@@ -1890,6 +1890,7 @@
       sessionReady: false,
       committed: false,
       playbackTime: 0,
+      playbackRate: 1,
       playbackSources: new Set(),
       assistantText: "",
       transcript: "",
@@ -2032,6 +2033,8 @@
         setVoiceState(false);
         setAgentState("speaking");
       }
+      const rate = Number(msg.playback_rate);
+      state.playbackRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
       state.playbackTime = Math.max(audioCtx?.currentTime || 0, state.playbackTime || 0) + 0.04;
       return;
     }
@@ -2098,6 +2101,8 @@
     for (let i = 0; i < pcm.length; i += 1) channel[i] = pcm[i] / 32768;
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
+    const rate = state.playbackRate || 1;
+    source.playbackRate.value = rate;
     source.connect(audioCtx.destination);
     state.playbackSources.add(source);
     assistantPlaybackSources.add(source);
@@ -2107,7 +2112,7 @@
     };
     const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
     source.start(startAt);
-    state.playbackTime = startAt + audioBuffer.duration;
+    state.playbackTime = startAt + audioBuffer.duration / rate;
   }
 
   async function commitLiveVoiceTurn() {

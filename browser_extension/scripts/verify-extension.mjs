@@ -210,6 +210,25 @@ if (/session\.ws\.send/.test(unsafeVoiceTransportBody)) {
   throw new Error("voice WebSocket sends must go through safe send helpers");
 }
 
+const voiceProxySetupBody = sourceBetween(
+  backgroundSource,
+  /async function startVoiceSessionProxyLocked\(/,
+  /return new Promise\(/,
+  "voice proxy setup"
+);
+const voiceStartBody = sourceBetween(
+  backgroundSource,
+  /async function startVoiceSessionProxy\(/,
+  /\/\/ Set the active thread/,
+  "voice proxy mutex wrapper"
+);
+if (voiceProxySetupBody.indexOf("startOffscreenVoiceCapture(id)") < 0) {
+  throw new Error("browser voice must start offscreen microphone capture during voice proxy setup");
+}
+if (voiceProxySetupBody.indexOf("createVoiceSessionTicket(cfg)") < voiceProxySetupBody.indexOf("startOffscreenVoiceCapture(id)")) {
+  throw new Error("browser voice must start offscreen capture before creating the gateway voice ticket");
+}
+
 if (
   !/MAX_QUEUED_VOICE_AUDIO_BYTES/.test(backgroundSource) ||
   !/function queueVoiceSessionAudio/.test(backgroundSource) ||
@@ -548,16 +567,21 @@ if (
 ) {
   throw new Error("record and voice sessions must be mutually exclusive: record start refuses while voice is live, and voice start refuses while recording");
 }
-// Capture mutex: the async voice-start window (ticket fetch -> voiceSessions
-// registration) must be closed on both sides. voiceStartPending is held across
-// the awaits, record start refuses while it is set, and the voice start
-// re-checks record state after its awaits before touching the socket or mic.
+// Capture mutex: the async voice-start window must be closed on both sides.
+// voiceStartPending is held across the awaits, record start refuses while it is
+// set, and the voice start re-checks record state after its awaits before
+// attaching a gateway socket. Voice-owned offscreen prebuffering may already be
+// running in this window; record mode is blocked from racing that single capture
+// slot.
 if (
   !/let voiceStartPending = 0;/.test(backgroundSource) ||
   !/voiceStartPending \+= 1;/.test(backgroundSource) ||
   !/voiceStartPending = Math\.max\(0, voiceStartPending - 1\);/.test(backgroundSource) ||
+  voiceStartBody.indexOf("if (activeRecordSession())") < 0 ||
+  voiceStartBody.indexOf("voiceStartPending += 1") < 0 ||
+  voiceStartBody.indexOf("if (activeRecordSession())") > voiceStartBody.indexOf("voiceStartPending += 1") ||
   !/voiceStartPending > 0 \|\| voiceSessions\.size > 0/.test(recordModeBody) ||
-  !/createVoiceSessionTicket\(cfg\);[\s\S]{0,340}if \(activeRecordSession\(\)\)/.test(backgroundSource)
+  !/createVoiceSessionTicket\(cfg\);[\s\S]{0,900}if \(activeRecordSession\(\)\)/.test(backgroundSource)
 ) {
   throw new Error("voice-start capture mutex missing: record start must refuse during a pending voice start and the voice start must re-check record state after its awaits");
 }

@@ -21,15 +21,15 @@ async function main() {
     { body: {}, transcript: "what is going on in this world", expected: "chat" },
     { body: {}, transcript: "what's going on in this world", expected: "chat" },
     { body: {}, transcript: "what is going on here, what does closing orders only mean?", expected: "chat" },
-    // Language switching is model-owned: these stay chat turns (the model calls
-    // the profile tool) instead of being keyword-matched into a profile write or
-    // misrouted to a harness. Read-only language queries stay profile_control.
-    { body: {}, transcript: "only speak English and Amharic; don't switch up", expected: "chat" },
-    { body: {}, transcript: "respond only in English", expected: "chat" },
-    { body: {}, transcript: "speak Amharic and English", expected: "chat" },
-    { body: {}, transcript: "only process English and Amharic", expected: "chat" },
-    { body: {}, transcript: "change your language to Amharic", expected: "chat" },
-    { body: {}, transcript: "right now I want to speak Amharic", expected: "chat" },
+    // Explicit language configuration is profile_control and writes through the
+    // gateway profile sanitizer/catalog. Read-only language queries stay
+    // profile_control too.
+    { body: {}, transcript: "only speak English and Amharic; don't switch up", expected: "profile_control" },
+    { body: {}, transcript: "respond only in English", expected: "profile_control" },
+    { body: {}, transcript: "speak Amharic and English", expected: "profile_control" },
+    { body: {}, transcript: "only process English and Amharic", expected: "profile_control" },
+    { body: {}, transcript: "change your language to Amharic", expected: "profile_control" },
+    { body: {}, transcript: "right now I want to speak Amharic", expected: "profile_control" },
     { body: {}, transcript: "your name is Moa", expected: "profile_control" },
     { body: {}, transcript: "you are Aggie", expected: "profile_control" },
     { body: {}, transcript: "call yourself The Steward", expected: "profile_control" },

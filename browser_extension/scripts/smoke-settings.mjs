@@ -410,7 +410,7 @@ async function main() {
         optionsCall && optionsCall.ok && optionsCall.status === 200 &&
         sysPrompt && maxChars > 0 &&
         catalogMetrics.voiceOptions >= 8 &&
-        catalogMetrics.languageOptions === 2
+        catalogMetrics.languageOptions > 2
       ) {
         pass(
           "settings surface populated from the gateway",

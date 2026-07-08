@@ -339,7 +339,7 @@
   var voice={
     state:"idle",ws:null,ctx:null,mediaStream:null,sourceNode:null,processor:null,
     turnId:"",playHead:0,audioDone:false,gotReplyAudio:false,turnDone:false,
-    pending:[],commitQueued:false,finishTimer:null,replyText:""
+    pending:[],commitQueued:false,finishTimer:null,replyText:"",playbackRate:1
   };
 
   var els={
@@ -965,6 +965,7 @@
     voice.turnId="turn_"+Math.random().toString(36).slice(2,14);
     voice.pending=[];voice.commitQueued=false;voice.replyText="";
     voice.audioDone=false;voice.gotReplyAudio=false;voice.turnDone=false;voice.playHead=0;
+    voice.playbackRate=1;
     setVoiceState("listening");
     setConsole("Listening","Speak, then release the pet or press Send");
     try{
@@ -1058,6 +1059,8 @@
       voice.replyText=event.text||"";
       setConsole(petDisplayName(),voice.replyText);
     }else if(event.type==="assistant_audio_start"){
+      var rate=Number(event.playback_rate);
+      voice.playbackRate=(isFinite(rate)&&rate>0)?rate:1;
       setVoiceState("speaking");
       if(voice.replyText)setConsole(petDisplayName(),voice.replyText);
     }else if(event.type==="assistant_audio_done"){
@@ -1152,10 +1155,12 @@
     buffer.getChannelData(0).set(floats);
     var source=voice.ctx.createBufferSource();
     source.buffer=buffer;
+    var rate=voice.playbackRate||1;
+    source.playbackRate.value=rate;
     source.connect(voice.ctx.destination);
     var at=Math.max(voice.ctx.currentTime+0.05,voice.playHead||0);
     source.start(at);
-    voice.playHead=at+buffer.duration;
+    voice.playHead=at+buffer.duration/rate;
   }
 
   function downsamplePcm16(floats,fromRate,toRate){

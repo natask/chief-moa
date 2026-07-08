@@ -10,6 +10,10 @@ function normalizeSpeechKey(value) {
     .trim();
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const VOICE_OPTIONS = Object.freeze([
   {
     id: "Puck",
@@ -421,8 +425,13 @@ function mentionsSupportedLanguage(text) {
     }
     return tokens.has(cleanKey);
   };
+  const containsCode = (code) => {
+    if (!code) return false;
+    const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(code.toLowerCase())}($|[^a-z0-9])`, "i");
+    return pattern.test(lowerRaw);
+  };
   for (const language of LANGUAGE_OPTIONS) {
-    if (language.code && lowerRaw.includes(language.code.toLowerCase())) {
+    if (containsCode(language.code)) {
       return true;
     }
     if (containsKey(language.label)) {

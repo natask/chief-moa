@@ -20,6 +20,7 @@ const pending = new Map();
 
 let audioCtx = null;
 let playbackTime = 0;
+let playbackRate = 1;
 const playbackSources = new Set();
 
 // One turn at a time. `turn` is null when idle.
@@ -137,6 +138,7 @@ function stopPlayback() {
     playbackSources.delete(source);
   }
   playbackTime = 0;
+  playbackRate = 1;
 }
 
 function base64ToBuffer(value) {
@@ -156,12 +158,13 @@ function playAssistantPcm(buffer) {
   for (let i = 0; i < pcm.length; i += 1) channel[i] = pcm[i] / 32768;
   const source = audioCtx.createBufferSource();
   source.buffer = audioBuffer;
+  source.playbackRate.value = playbackRate || 1;
   source.connect(audioCtx.destination);
   playbackSources.add(source);
   source.onended = () => playbackSources.delete(source);
   const startAt = Math.max(audioCtx.currentTime + 0.02, playbackTime || 0);
   source.start(startAt);
-  playbackTime = startAt + audioBuffer.duration;
+  playbackTime = startAt + audioBuffer.duration / (playbackRate || 1);
 }
 
 // ---- Turn lifecycle ---------------------------------------------------------
@@ -276,6 +279,8 @@ function handleVoiceEvent(payload) {
   }
   if (msg.type === "assistant_audio_start") {
     setStatus("A.G. is speaking.", "speaking");
+    const rate = Number(msg.playback_rate);
+    playbackRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
     playbackTime = Math.max(audioCtx?.currentTime || 0, playbackTime || 0) + 0.04;
     return;
   }

@@ -2053,6 +2053,9 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
   // record path can never race the single offscreen capture slot.
+  if (activeRecordSession()) {
+    throw new Error("An audio note recording is in progress. Stop recording before starting voice.");
+  }
   voiceStartPending += 1;
   try {
     return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel });
@@ -2080,39 +2083,92 @@ async function switchThreadBranch(cfg, action, label) {
 }
 
 async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel } = {}) {
-  const cfg = await getConfig();
-  // Resolve the thread branch for an incognito / new-thread voice turn before
-  // minting the ticket, so the WS session opens on the right branch. An incognito
-  // switch that fails must not fall back to a persisted branch — fail the start.
-  const action = String(contextAction || "").trim();
-  let branchForSession = cueId;
-  if (action === "incognito" || action === "new" || action === "fork") {
-    let resolvedBranch = "";
-    try {
-      resolvedBranch = await switchThreadBranch(cfg, action, String(threadLabel || "").trim());
-    } catch (error) {
-      if (action === "incognito") {
-        throw new Error(`Could not start a private voice turn: ${String(error?.message || error)}`);
-      }
-    }
-    if (resolvedBranch) {
-      branchForSession = resolvedBranch;
-    } else if (action === "incognito") {
-      throw new Error("Could not start a private voice turn: the gateway did not return an incognito branch.");
-    }
-  }
-  const ticket = await createVoiceSessionTicket(cfg);
-  // Re-check after the awaits above: a record session that slipped in before
-  // the mutex was visible must win. Abort this voice start cleanly instead of
-  // stealing the microphone from the in-flight audio note.
-  if (activeRecordSession()) {
-    throw new Error("An audio note recording is in progress. Stop recording before starting voice.");
-  }
-  if (!ticket?.ws_url) {
-    throw new Error(`Gateway reachable at ${cfg.gatewayUrl || "(unset)"}, but it did not return a voice session WebSocket URL.`);
+  const id = voiceSessionId();
+  const captureMode = capture || "content-script";
+  const session = {
+    id,
+    tabId,
+    ws: null,
+    turnId,
+    opened: false,
+    gatewayReady: false,
+    attached: false,
+    pendingEvents: [],
+    capture: captureMode,
+    captureStarted: false,
+    captureStartRequested: false,
+    pendingCommitMessage: null,
+    queuedAudio: [],
+    queuedAudioBytes: 0,
+    queuedAudioDroppedBytes: 0,
+    autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
+    audioStartedAt: 0,
+    lastSpeechAt: 0,
+    speechMs: 0,
+    recordingMs: 0,
+    committed: false,
+    autoCommitTimer: null,
+    maxCommitTimer: null,
+  };
+  voiceSessions.set(id, session);
+  if (session.capture === "extension-offscreen") {
+    session.captureStartRequested = true;
+    startOffscreenVoiceCapture(id)
+      .then(() => {
+        if (voiceSessions.get(id) === session && !session.closed) session.captureStarted = true;
+      })
+      .catch((error) => handleOffscreenVoiceError(id, error));
   }
 
-  const id = voiceSessionId();
+  const abortSetup = (message) => {
+    closeVoiceSession(id, message || "voice session setup failed");
+    return new Error(message || "Voice session setup failed.");
+  };
+
+  let cfg;
+  let branchForSession = cueId;
+  let ticket;
+  try {
+    cfg = await getConfig();
+    // Resolve the thread branch for an incognito / new-thread voice turn before
+    // minting the ticket, so the WS session opens on the right branch. An incognito
+    // switch that fails must not fall back to a persisted branch — fail the start.
+    const action = String(contextAction || "").trim();
+    if (action === "incognito" || action === "new" || action === "fork") {
+      let resolvedBranch = "";
+      try {
+        resolvedBranch = await switchThreadBranch(cfg, action, String(threadLabel || "").trim());
+      } catch (error) {
+        if (action === "incognito") {
+          throw abortSetup(`Could not start a private voice turn: ${String(error?.message || error)}`);
+        }
+      }
+      if (resolvedBranch) {
+        branchForSession = resolvedBranch;
+      } else if (action === "incognito") {
+        throw abortSetup("Could not start a private voice turn: the gateway did not return an incognito branch.");
+      }
+    }
+    ticket = await createVoiceSessionTicket(cfg);
+    if (voiceSessions.get(id) !== session || session.closed) {
+      throw new Error(session.setupErrorMessage || "Voice session closed during setup.");
+    }
+    // Re-check after the awaits above: a record session that slipped in before
+    // the mutex was visible must win. Abort this voice start cleanly instead of
+    // stealing the microphone from the in-flight audio note.
+    if (activeRecordSession()) {
+      throw abortSetup("An audio note recording is in progress. Stop recording before starting voice.");
+    }
+    if (!ticket?.ws_url) {
+      throw abortSetup(`Gateway reachable at ${cfg.gatewayUrl || "(unset)"}, but it did not return a voice session WebSocket URL.`);
+    }
+  } catch (error) {
+    if (voiceSessions.get(id) === session) {
+      closeVoiceSession(id, "voice session setup failed");
+    }
+    throw error;
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     let ws;
@@ -2120,44 +2176,20 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       ws = new WebSocket(ticket.ws_url);
     } catch (error) {
       settled = true;
+      closeVoiceSession(id, "voice socket constructor failed");
       reject(new Error(formatVoiceSocketNetworkError(cfg, ticket, String(error?.message || error))));
       return;
     }
-    const session = {
-      id,
-      tabId,
-      ws,
-      turnId,
-      opened: false,
-      gatewayReady: false,
-      attached: false,
-      pendingEvents: [],
-      capture: capture || "content-script",
-      captureStarted: false,
-      captureStartRequested: false,
-      pendingCommitMessage: null,
-      queuedAudio: [],
-      queuedAudioBytes: 0,
-      queuedAudioDroppedBytes: 0,
-      autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
-      audioStartedAt: 0,
-      lastSpeechAt: 0,
-      speechMs: 0,
-      recordingMs: 0,
-      committed: false,
-      autoCommitTimer: null,
-      maxCommitTimer: null,
-    };
-    voiceSessions.set(id, session);
-    ws.binaryType = "arraybuffer";
-    if (session.capture === "extension-offscreen") {
-      session.captureStartRequested = true;
-      startOffscreenVoiceCapture(id)
-        .then(() => {
-          if (voiceSessions.get(id) === session && !session.closed) session.captureStarted = true;
-        })
-        .catch((error) => handleOffscreenVoiceError(id, error));
+    if (voiceSessions.get(id) !== session || session.closed) {
+      settled = true;
+      try {
+        ws.close();
+      } catch {}
+      reject(new Error(session.setupErrorMessage || "Voice session closed during setup."));
+      return;
     }
+    session.ws = ws;
+    ws.binaryType = "arraybuffer";
 
     const failBeforeOpen = (message, { voiceSocket = true } = {}) => {
       voiceSessions.delete(id);
