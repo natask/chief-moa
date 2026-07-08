@@ -58,3 +58,28 @@ the switch even though the pinned TTS language updates on the next turn.
 - WHEN the user asks the assistant to answer in Amharic
 - THEN the model calls the profile tool to set the reply language to am-ET
 - AND its spoken confirmation for that turn is in Amharic.
+
+### Requirement: Speaking rate can be guaranteed via client-side resampling
+
+When `VOICE_TTS_CLIENT_RATE` is enabled, the gateway SHALL synthesize the
+Gemini-TTS reply at natural speed (no pace words in the style prompt) and
+SHALL emit a `playback_rate` field on `assistant_audio_start` equal to the
+turn's pinned speaking rate. Every client SHALL apply this factor to its PCM
+playback and advance its schedule cursor by `bufferDuration / rate`, applying
+the speed exactly once. When the mode is off, or the rate is 1.0, the field
+SHALL be absent and playback SHALL be unchanged.
+
+#### Scenario: gemini-tts at 1.75x with client-rate mode on
+
+- GIVEN `VOICE_TTS_CLIENT_RATE=1`, gemini-tts, and speaking_rate 1.75
+- WHEN a spoken reply is synthesized
+- THEN `assistant_audio_start` carries `playback_rate: 1.75`
+- AND the style prompt contains no pace words
+- AND the client (pet page, extension, or Android) plays the audio at 1.75x.
+
+#### Scenario: absent field is 1.0 for old and new clients
+
+- GIVEN the mode is off (default)
+- WHEN a spoken reply is synthesized
+- THEN `assistant_audio_start` has no `playback_rate` field
+- AND every client plays at normal speed, unchanged from before.

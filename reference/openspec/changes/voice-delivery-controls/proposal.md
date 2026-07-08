@@ -61,9 +61,47 @@ mute at the wrong moments:
 - The stage seam (`voice-stages.js`) keeps its shape; `synthesize()` gains
   optional `speakingRate`/`tone` fields.
 
+## Follow-up shipped: guaranteed client-side speed
+
+The Gemini-TTS leg (the live default) ignores `audioConfig.speakingRate` and
+only approximates pace from prompt words, so `speaking_rate` was not a hard
+guarantee there. Added `VOICE_TTS_CLIENT_RATE` mode (off by default):
+
+- When on, the gateway generates natural-speed Gemini-TTS audio (pace words
+  dropped from the style prompt) and emits `playback_rate` on
+  `assistant_audio_start`; the client resamples the PCM to the target speed
+  exactly once (`clientPlaybackRate`/`paceInPrompt` gate the double-apply).
+- When off, audio is baked at the target pace and `playback_rate` stays 1.0,
+  so live behavior and un-updated clients are unchanged.
+- All three surfaces apply it: pet page + browser extension set
+  `source.playbackRate` and advance their schedule cursor by
+  `bufferDuration / rate`; Android applies `AudioTrack.setPlaybackParams`
+  (`PlaybackParams.setSpeed`). Absent field = 1.0 everywhere.
+- Rollout is order-free: every surface is inert until the gateway flag flips,
+  so there is no old/new client hazard.
+- `/health voice_stream` reports `tts_client_rate_mode`.
+
+## Streaming TTS: decision (was point 6)
+
+Research verdict (primary sources): Chirp 3 HD `StreamingSynthesize` is
+**gRPC-bidi only** with no REST/WebSocket binding (the RPC carries no
+`google.api.http` annotation) and its HD voices do not speak Amharic, so it
+cannot be the default for a multilingual assistant without adding a gRPC
+dependency. The only no-gRPC streaming path is Gemini
+`:streamGenerateContent?alt=sse` on `generativelanguage.googleapis.com`, which
+needs a separate API-key auth, is 3.1+ only, does **not** honor
+`speaking_rate`, and has a reported >60s truncation bug. Meanwhile the shipped
+`streaming-cascaded-voice` pipeline already starts audible playback mid-reply
+by synthesizing per sentence chunk, so seamless start (the user's point 5) is
+already met. True streaming TTS is therefore a user decision with a real fork
+(add gRPC Chirp en-US streaming / build Gemini SSE with caveats / keep
+chunked), not a silent pick. Recorded, not built.
+
 ## Out of scope (recorded follow-ups)
 
-- True streaming TTS (`v1beta1 streamingSynthesize` bidi) for Chirp3-HD; the
-  current pipeline is many batch `text:synthesize` calls over sentence chunks.
+- True streaming TTS (`streamingSynthesize` bidi for Chirp3-HD, gRPC-only; or
+  Gemini `streamGenerateContent` SSE): pending the user's provider decision
+  above. The current pipeline is many batch `text:synthesize` calls over
+  sentence chunks and already streams playback.
 - End-to-end voice-model backends (native_live providers) honoring
   speaking_rate; Gemini/Vertex Live sessions have no equivalent knob today.
