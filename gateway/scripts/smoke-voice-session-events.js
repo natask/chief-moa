@@ -44,7 +44,17 @@ async function main() {
 
   try {
     const port = await listen(server);
-    const events = await runVoiceTurn(`ws://127.0.0.1:${port}${voiceServer.endpoint}`);
+    assert.deepEqual(voiceServer.activityStatus(), {
+      active_voice_connections: 0,
+      active_turns: 0,
+      active_recording_turns: 0,
+      active_committed_turns: 0,
+      active_responding_connections: 0,
+      drain_safe: true,
+      turn_statuses: {},
+    });
+    const events = await runVoiceTurn(`ws://127.0.0.1:${port}${voiceServer.endpoint}`, voiceServer);
+    await waitForDrain(voiceServer);
     assertStableTranscriptEvents(events);
     assertStableAssistantEvents(events);
     assertCanonicalCompletion(completedTurns);
@@ -57,7 +67,10 @@ async function main() {
         "transcript_final websocket event shape is stable",
         "assistant_text and turn_done websocket event shapes are stable",
         "canonical completed turn carries transcript, assistant text, and provider events",
+        "canonical completed turn carries bounded stage timing evidence",
         "provider event ledger keeps transcript/assistant events queryable by session and turn",
+        "provider event ledger keeps STT/reasoning/TTS/first-audio timing queryable",
+        "voice session activity status exposes active/drained counts for deploy safety",
       ],
     }, null, 2));
   } finally {
@@ -91,12 +104,18 @@ function fakeVoiceProvider() {
     },
     async processTurn(turn, hooks) {
       assert.equal(turn.sessionId, "shape_session");
+      await hooks.onStageStart("stt", { audio_bytes: turn.audioBytes });
       await hooks.onTranscriptPartial("partial transcript");
       await hooks.onTranscriptFinal("final transcript");
+      await hooks.onStageDone("stt", { duration_ms: 11, transcript_chars: "final transcript".length });
+      await hooks.onStageStart("reasoning", { transcript_chars: "final transcript".length });
       await hooks.onAssistantText("assistant event text");
+      await hooks.onStageDone("reasoning", { duration_ms: 17, speak_chars: "assistant event text".length });
+      await hooks.onStageStart("tts", { text_chars: "assistant event text".length });
       await hooks.onAssistantAudioStart(AUDIO_FORMAT);
       await hooks.sendAudio(Buffer.alloc(320));
       await hooks.onAssistantAudioDone();
+      await hooks.onStageDone("tts", { duration_ms: 23, audio_bytes: 320, segments: 1 });
       return {
         provider: "shape-test",
         model: "shape-model",
@@ -108,10 +127,11 @@ function fakeVoiceProvider() {
   };
 }
 
-function runVoiceTurn(target) {
+function runVoiceTurn(target, voiceServer) {
   const events = [];
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(target);
+    let sawTurnDone = false;
     const timeout = setTimeout(() => {
       closeWebSocketQuietly(ws);
       reject(new Error(`timed out waiting for ${target}`));
@@ -142,13 +162,18 @@ function runVoiceTurn(target) {
       }
       events.push(event);
       if (event.type === "session_ready") {
+        const activity = voiceServer.activityStatus();
+        assert.equal(activity.active_voice_connections, 1);
+        assert.equal(activity.active_turns, 1);
+        assert.equal(activity.active_recording_turns, 1);
+        assert.equal(activity.drain_safe, false);
         ws.send(Buffer.alloc(640));
         ws.send(JSON.stringify({ type: "commit_turn", turn_id: "shape_turn" }));
       }
       if (event.type === "turn_done") {
         clearTimeout(timeout);
+        sawTurnDone = true;
         closeWebSocketQuietly(ws);
-        resolve(events);
       }
     });
 
@@ -157,10 +182,12 @@ function runVoiceTurn(target) {
       reject(error);
     });
     ws.on("close", () => {
-      if (!events.some((event) => event.type === "turn_done")) {
+      if (!sawTurnDone) {
         clearTimeout(timeout);
         reject(new Error("voice websocket closed before turn_done"));
+        return;
       }
+      resolve(events);
     });
   });
 }
@@ -187,9 +214,10 @@ function assertStableAssistantEvents(events) {
   assert.equal(text.text, "assistant event text");
 
   const done = eventOfType(events, "turn_done");
-  assert.deepEqual(Object.keys(done).sort(), ["branch_id", "session_id", "status", "transcription_only", "turn_id", "type"]);
+  assert.deepEqual(Object.keys(done).sort(), ["branch_id", "first_audio_ms", "session_id", "status", "transcription_only", "turn_id", "type"]);
   assert.equal(done.status, "completed");
   assert.equal(done.transcription_only, false);
+  assert.ok(Number.isFinite(done.first_audio_ms), "turn_done must carry first_audio_ms after audio is emitted");
 }
 
 function assertCanonicalCompletion(completedTurns) {
@@ -207,6 +235,14 @@ function assertCanonicalCompletion(completedTurns) {
   assert.ok(turn.provider_events.some((event) => event.type === "transcript_partial"));
   assert.ok(turn.provider_events.some((event) => event.type === "transcript_final"));
   assert.ok(turn.provider_events.some((event) => event.type === "assistant_text"));
+  assert.ok(turn.provider_events.some((event) => event.type === "stage_done" && event.stage === "stt"));
+  assert.ok(turn.provider_events.some((event) => event.type === "stage_done" && event.stage === "reasoning"));
+  assert.ok(turn.provider_events.some((event) => event.type === "stage_done" && event.stage === "tts"));
+  assert.ok(turn.provider_events.some((event) => event.type === "stage_done" && event.stage === "first_audio"));
+  assert.equal(turn.stage_timings.stt_ms, 11);
+  assert.equal(turn.stage_timings.reasoning_ms, 17);
+  assert.equal(turn.stage_timings.tts_ms, 23);
+  assert.ok(Number.isFinite(turn.stage_timings.first_audio_ms));
 }
 
 function assertProviderEventLedger(dataDir) {
@@ -216,7 +252,7 @@ function assertProviderEventLedger(dataDir) {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-  for (const type of ["transcript_partial", "transcript_final", "assistant_text", "turn_completed"]) {
+  for (const type of ["transcript_partial", "transcript_final", "assistant_text", "stage_start", "stage_done", "turn_completed"]) {
     const event = events.find((candidate) => candidate.type === type);
     assert.ok(event, `provider ledger missing ${type}`);
     assert.equal(event.session_id, "shape_session");
@@ -225,6 +261,17 @@ function assertProviderEventLedger(dataDir) {
     assert.equal(event.provider, "shape-test");
     assert.equal(event.provider_ids.native_live, "shape-test");
   }
+  for (const stage of ["stt", "reasoning", "tts", "first_audio"]) {
+    const event = events.find((candidate) => candidate.type === "stage_done" && candidate.stage === stage);
+    assert.ok(event, `provider ledger missing stage_done ${stage}`);
+    assert.ok(Number.isFinite(event.duration_ms), `stage_done ${stage} must carry duration_ms`);
+  }
+  const completed = events.find((candidate) => candidate.type === "turn_completed");
+  assert.equal(completed.stage_timings.stt_ms, 11);
+  assert.equal(completed.stage_timings.reasoning_ms, 17);
+  assert.equal(completed.stage_timings.tts_ms, 23);
+  assert.ok(Number.isFinite(completed.stage_timings.first_audio_ms));
+  assert.ok(Number.isFinite(completed.stage_timings.completion_ms));
 }
 
 function eventOfType(events, type) {
@@ -256,4 +303,23 @@ function closeVoiceServer(voiceServer) {
 
 function closeHttpServer(server) {
   return new Promise((resolve) => server.close(resolve));
+}
+
+async function waitForDrain(voiceServer) {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (voiceServer.activityStatus().drain_safe) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(voiceServer.activityStatus(), {
+    active_voice_connections: 0,
+    active_turns: 0,
+    active_recording_turns: 0,
+    active_committed_turns: 0,
+    active_responding_connections: 0,
+    drain_safe: true,
+    turn_statuses: {},
+  });
 }

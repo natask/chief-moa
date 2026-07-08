@@ -28,11 +28,14 @@ const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "close
 // turn_progress keepalive on this cadence while a committed turn has no other
 // events flowing, so a client watchdog sees the turn is alive.
 const DEFAULT_TURN_PROGRESS_INTERVAL_MS = 5000;
+const PROVIDER_EVENT_ERROR_MAX_CHARS = 240;
+const PROVIDER_EVENT_VALUE_MAX_CHARS = 400;
 
 function createVoiceSessionServer(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
   const sessionsDir = path.join(dataDir, "voice-sessions");
   const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  const connections = new Set();
   const agentProfile = options?.agentProfile || null;
   const contextProvider = typeof options?.contextProvider === "function" ? options.contextProvider : null;
   const toolHandler = typeof options?.toolHandler === "function" ? options.toolHandler : null;
@@ -65,6 +68,10 @@ function createVoiceSessionServer(options) {
       turnProgressIntervalMs: options?.turnProgressIntervalMs,
       onTurnCompleted: typeof options?.onTurnCompleted === "function" ? options.onTurnCompleted : null,
     });
+    connections.add(connection);
+    ws.once("close", () => {
+      connections.delete(connection);
+    });
     connection.start();
   });
 
@@ -74,6 +81,9 @@ function createVoiceSessionServer(options) {
     providerEventsFile,
     status() {
       return voiceProvider.status();
+    },
+    activityStatus() {
+      return summarizeVoiceActivity(connections);
     },
     handleUpgrade(request, socket, head) {
       wss.handleUpgrade(request, socket, head, (ws) => {
@@ -356,6 +366,7 @@ class VoiceSessionConnection {
       audioChunks: 0,
       assistantAudioBytes: 0,
       assistantAudioChunks: 0,
+      firstAssistantAudioMs: null,
       metadata: {},
       audioStream: null,
       assistantAudioStream: null,
@@ -570,6 +581,10 @@ class VoiceSessionConnection {
       assistantTextSent: false,
       assistantAudioStarted: false,
       assistantAudioDone: false,
+      activeStage: "",
+      stageFailed: false,
+      stageStartedAt: {},
+      stageTimings: {},
       events: Array.isArray(turn?.providerEvents?.events) ? turn.providerEvents.events : [],
     };
   }
@@ -599,6 +614,59 @@ class VoiceSessionConnection {
       // stage is running.
       onTurnProgress: async (stage) => {
         this.startTurnProgress(turn, stage);
+      },
+      onStageStart: async (stage, details) => {
+        if (turnSuperseded()) return;
+        const stageName = normalizeStageName(stage);
+        providerEvents.activeStage = stageName;
+        providerEvents.stageStartedAt[stageName] = Date.now();
+        await this.recordProviderEvent(turn, providerEvents, "stage_start", {
+          stage: stageName,
+          ...sanitizeStageDetails(details),
+        });
+      },
+      onStageDone: async (stage, details) => {
+        if (turnSuperseded()) return;
+        const stageName = normalizeStageName(stage);
+        const sanitized = sanitizeStageDetails(details);
+        const durationMs = normalizeDurationMs(
+          sanitized.duration_ms,
+          providerEvents.stageStartedAt[stageName],
+        );
+        delete sanitized.duration_ms;
+        providerEvents.stageTimings[`${stageName}_ms`] = durationMs;
+        if (providerEvents.activeStage === stageName) {
+          providerEvents.activeStage = "";
+        }
+        await this.recordProviderEvent(turn, providerEvents, "stage_done", {
+          stage: stageName,
+          duration_ms: durationMs,
+          ...sanitized,
+        });
+      },
+      onStageError: async (stage, details) => {
+        if (turnSuperseded()) return;
+        const stageName = normalizeStageName(stage);
+        const sanitized = sanitizeStageDetails(details);
+        const durationMs = normalizeDurationMs(
+          sanitized.duration_ms,
+          providerEvents.stageStartedAt[stageName],
+        );
+        delete sanitized.duration_ms;
+        const errorSummary = cleanErrorSummary(sanitized.error_summary || sanitized.error || "stage failed");
+        delete sanitized.error;
+        delete sanitized.error_summary;
+        providerEvents.stageFailed = true;
+        providerEvents.stageTimings[`${stageName}_ms`] = durationMs;
+        if (providerEvents.activeStage === stageName) {
+          providerEvents.activeStage = "";
+        }
+        await this.recordProviderEvent(turn, providerEvents, "stage_error", {
+          stage: stageName,
+          duration_ms: durationMs,
+          error_summary: errorSummary,
+          ...sanitized,
+        });
       },
       onTranscriptPartial: async (text) => {
         if (turnSuperseded()) return;
@@ -686,7 +754,17 @@ class VoiceSessionConnection {
       },
       sendAudio: async (chunk) => {
         assertTurnActive();
-        await writeAssistantAudio(turn, chunk);
+        const wroteAudio = await writeAssistantAudio(turn, chunk);
+        assertTurnActive();
+        if (wroteAudio && !Number.isFinite(turn.firstAssistantAudioMs)) {
+          turn.firstAssistantAudioMs = Math.max(0, elapsedMsSince(turn.startedAt));
+          providerEvents.stageTimings.first_audio_ms = turn.firstAssistantAudioMs;
+          await this.recordProviderEvent(turn, providerEvents, "stage_done", {
+            stage: "first_audio",
+            duration_ms: turn.firstAssistantAudioMs,
+            audio_bytes: toBuffer(chunk).length,
+          });
+        }
         // Re-check synchronously right before the socket write: the disk write
         // above may have awaited a drain while a barge-in replaced the turn,
         // and a stale frame (or a stale assistant_audio_done) on the shared
@@ -913,21 +991,32 @@ class VoiceSessionConnection {
     if (providerEvents.assistantAudioStarted && !providerEvents.assistantAudioDone) {
       await providerHooks.onAssistantAudioDone();
     }
-    await this.recordProviderEvent(turn, providerEvents, "turn_completed", {
-      transcript,
-      assistant_text: assistantText,
-      gateway_assistant_text: profileControlText || "",
-      // Streaming latency observability: time to first PCM write and segment
-      // count land per turn in voice-provider-events.jsonl for moa-voice-qa.
-      ...(Number.isFinite(providerResult?.first_audio_ms) ? { first_audio_ms: providerResult.first_audio_ms } : {}),
-      ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
-      ...(Number.isFinite(providerResult?.reasoner_first_delta_ms) ? { reasoner_first_delta_ms: providerResult.reasoner_first_delta_ms } : {}),
-    });
+    const firstAudioMs = Number.isFinite(providerResult?.first_audio_ms)
+      ? Math.max(0, Math.round(providerResult.first_audio_ms))
+      : (Number.isFinite(turn.firstAssistantAudioMs) ? turn.firstAssistantAudioMs : null);
+    const completionMs = Math.max(0, elapsedMsSince(turn.startedAt));
+    providerEvents.stageTimings.completion_ms = completionMs;
+    if (Number.isFinite(firstAudioMs)) {
+      providerEvents.stageTimings.first_audio_ms = firstAudioMs;
+    }
     const doneModality = providerResult?.modality || confirmationTts?.modality || "";
     const doneTtsError = providerResult?.tts_error || confirmationTts?.tts_error || "";
     const doneTtsSpoke = confirmationTts && confirmationTts.spoke === true
       ? true
       : (typeof providerResult?.tts_spoke === "boolean" ? providerResult.tts_spoke : undefined);
+    await this.recordProviderEvent(turn, providerEvents, "turn_completed", {
+      transcript,
+      assistant_text: assistantText,
+      gateway_assistant_text: profileControlText || "",
+      duration_ms: completionMs,
+      stage_timings: sanitizeStageTimings(providerEvents.stageTimings),
+      // Streaming latency observability: time to first PCM write and segment
+      // count land per turn in voice-provider-events.jsonl for moa-voice-qa.
+      ...(Number.isFinite(firstAudioMs) ? { first_audio_ms: firstAudioMs } : {}),
+      ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
+      ...(Number.isFinite(providerResult?.reasoner_first_delta_ms) ? { reasoner_first_delta_ms: providerResult.reasoner_first_delta_ms } : {}),
+      ...(doneTtsError ? { tts_error: doneTtsError } : {}),
+    });
     // Terminal path: clear the keepalive before turn_done so no progress tick can
     // fire after the turn is done. Cleared synchronously (clearInterval) before
     // the awaited send, so the interval cannot slip a tick in on the yield.
@@ -947,7 +1036,7 @@ class VoiceSessionConnection {
       ...(doneTtsError ? { tts_error: doneTtsError } : {}),
       // Additive streaming fields; old clients ignore them.
       ...(providerResult?.streaming ? { streaming: true } : {}),
-      ...(Number.isFinite(providerResult?.first_audio_ms) ? { first_audio_ms: providerResult.first_audio_ms } : {}),
+      ...(Number.isFinite(firstAudioMs) ? { first_audio_ms: firstAudioMs } : {}),
       ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
     });
 
@@ -1014,6 +1103,7 @@ class VoiceSessionConnection {
         incomplete: true,
         status,
         error: errorMessage,
+        stage_timings: sanitizeStageTimings(providerEvents.stageTimings),
         transcript_language_rejected: turn.transcriptLanguageRejected === true,
         // Input languages the STT leg restricted to, so an interrupted turn's
         // stored PCM still carries its language for later audio analysis.
@@ -1078,9 +1168,12 @@ class VoiceSessionConnection {
         // reading new records ignores these; new code reading old records
         // treats absence as the non-streaming default.
         ...(providerResult?.streaming ? { streaming: true } : {}),
-        ...(Number.isFinite(providerResult?.first_audio_ms) ? { first_audio_ms: providerResult.first_audio_ms } : {}),
+        ...(Number.isFinite(providerResult?.first_audio_ms) ? { first_audio_ms: providerResult.first_audio_ms } : (
+          Number.isFinite(turn.firstAssistantAudioMs) ? { first_audio_ms: turn.firstAssistantAudioMs } : {}
+        )),
         ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
         ...(providerResult?.tts_language_mismatch ? { tts_language_mismatch: true } : {}),
+        stage_timings: sanitizeStageTimings(turn.providerEvents?.stageTimings),
         transcript_language_rejected: providerResult?.transcript_language_rejected === true || turn.transcriptLanguageRejected === true,
         // The restricted INPUT languages the STT leg recognized, captured at
         // session start. Recorded on the canonical turn so a later audio-analysis
@@ -1121,9 +1214,26 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
-    await this.recordProviderEvent(turn, providerEvents || this.createProviderEvents(turn), "turn_error", {
+    const events = providerEvents || this.createProviderEvents(turn);
+    const failedStage = events.activeStage
+      || normalizeProgressStage(this.turnProgressStage)
+      || "processing";
+    if (!events.stageFailed && !events.events.some((event) => event.type === "stage_error")) {
+      await this.recordProviderEvent(turn, events, "stage_error", {
+        stage: normalizeStageName(failedStage),
+        duration_ms: normalizeDurationMs(null, events.stageStartedAt?.[failedStage]),
+        error_summary: cleanErrorSummary(message),
+        reason: turnErrorReason(error),
+      });
+    }
+    const completionMs = Math.max(0, elapsedMsSince(turn.startedAt));
+    events.stageTimings.completion_ms = completionMs;
+    await this.recordProviderEvent(turn, events, "turn_error", {
       error: message,
+      error_summary: cleanErrorSummary(message),
       reason: turnErrorReason(error),
+      duration_ms: completionMs,
+      stage_timings: sanitizeStageTimings(events.stageTimings),
     });
     await this.recordIncompleteTurn(turn, "error", message);
     writeTurnMetadata(turn, {
@@ -1140,6 +1250,7 @@ class VoiceSessionConnection {
       turn_id: turn.turnId,
       status: "error",
       reason: turnErrorReason(error),
+      error_summary: cleanErrorSummary(message),
     });
     if (this.turn === turn) {
       this.turn = null;
@@ -1426,7 +1537,7 @@ async function commitLiveTextSession(turn, text) {
 async function writeAssistantAudio(turn, chunk) {
   const value = toBuffer(chunk);
   if (value.length === 0) {
-    return;
+    return false;
   }
   // Null-guard, mirroring the 2026-07-06 writeTurnAudio crash-loop fix: once
   // closeAssistantAudioStream finalized the stream (barge-in, cancel, close,
@@ -1434,7 +1545,7 @@ async function writeAssistantAudio(turn, chunk) {
   // the stream with flags:"w" here would silently wipe the stored PCM of a
   // finalized turn, and throwing would take the whole session down.
   if (turn.assistantAudioClosed || TERMINAL_TURN_STATUSES.has(turn.status)) {
-    return;
+    return false;
   }
   if (!turn.assistantAudioStream) {
     turn.assistantAudioStream = fs.createWriteStream(turn.assistantPcmPath, { flags: "w" });
@@ -1451,6 +1562,7 @@ async function writeAssistantAudio(turn, chunk) {
       turn.assistantAudioStream.once("drain", resolve);
     });
   }
+  return true;
 }
 
 async function closeAssistantAudioStream(turn) {
@@ -1555,6 +1667,134 @@ function sanitizeId(value, field) {
 
 function randomId(prefix) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+}
+
+function summarizeVoiceActivity(connections) {
+  const summary = {
+    active_voice_connections: 0,
+    active_turns: 0,
+    active_recording_turns: 0,
+    active_committed_turns: 0,
+    active_responding_connections: 0,
+    drain_safe: true,
+    turn_statuses: {},
+  };
+  for (const connection of connections || []) {
+    summary.active_voice_connections += 1;
+    if (connection?.responding) {
+      summary.active_responding_connections += 1;
+    }
+    const turn = connection?.turn;
+    if (!turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
+      continue;
+    }
+    const status = String(turn.status || "unknown");
+    summary.active_turns += 1;
+    summary.turn_statuses[status] = (summary.turn_statuses[status] || 0) + 1;
+    if (status === "recording") {
+      summary.active_recording_turns += 1;
+    } else {
+      summary.active_committed_turns += 1;
+    }
+  }
+  summary.drain_safe = summary.active_voice_connections === 0
+    && summary.active_turns === 0
+    && summary.active_responding_connections === 0;
+  return summary;
+}
+
+function normalizeStageName(stage) {
+  const value = String(stage || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.:-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+  return value || "unknown";
+}
+
+function sanitizeStageDetails(details) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return {};
+  }
+  const output = {};
+  for (const [rawKey, rawValue] of Object.entries(details)) {
+    const key = String(rawKey || "")
+      .trim()
+      .replace(/[^a-zA-Z0-9_.:-]+/g, "_")
+      .slice(0, 80);
+    if (!key || rawValue === undefined || typeof rawValue === "function") {
+      continue;
+    }
+    if (key === "error" || key === "error_summary") {
+      output[key] = cleanErrorSummary(rawValue);
+      continue;
+    }
+    if (typeof rawValue === "number") {
+      if (Number.isFinite(rawValue)) {
+        output[key] = Math.max(0, Math.round(rawValue));
+      }
+      continue;
+    }
+    if (typeof rawValue === "boolean") {
+      output[key] = rawValue;
+      continue;
+    }
+    if (Array.isArray(rawValue)) {
+      output[key] = rawValue
+        .slice(0, 8)
+        .map((item) => String(item || "").replace(/[\r\n]+/g, " ").slice(0, 80));
+      continue;
+    }
+    if (rawValue && typeof rawValue === "object") {
+      output[key] = JSON.stringify(rawValue).replace(/[\r\n]+/g, " ").slice(0, PROVIDER_EVENT_VALUE_MAX_CHARS);
+      continue;
+    }
+    output[key] = String(rawValue || "").replace(/[\r\n]+/g, " ").slice(0, PROVIDER_EVENT_VALUE_MAX_CHARS);
+  }
+  return output;
+}
+
+function normalizeDurationMs(value, startedAtMs) {
+  const explicit = Number(value);
+  if (Number.isFinite(explicit) && explicit >= 0) {
+    return Math.round(explicit);
+  }
+  const started = Number(startedAtMs);
+  if (Number.isFinite(started) && started > 0) {
+    return Math.max(0, Date.now() - started);
+  }
+  return 0;
+}
+
+function elapsedMsSince(iso) {
+  const started = Date.parse(iso || "");
+  if (!Number.isFinite(started)) {
+    return 0;
+  }
+  return Math.max(0, Date.now() - started);
+}
+
+function sanitizeStageTimings(timings) {
+  if (!timings || typeof timings !== "object" || Array.isArray(timings)) {
+    return {};
+  }
+  const output = {};
+  for (const [rawKey, rawValue] of Object.entries(timings)) {
+    const key = String(rawKey || "")
+      .trim()
+      .replace(/[^a-zA-Z0-9_.:-]+/g, "_")
+      .slice(0, 80);
+    const value = Number(rawValue);
+    if (key && Number.isFinite(value) && value >= 0) {
+      output[key] = Math.round(value);
+    }
+  }
+  return output;
+}
+
+function cleanErrorSummary(error) {
+  return cleanError(error).slice(0, PROVIDER_EVENT_ERROR_MAX_CHARS);
 }
 
 function cleanError(error) {

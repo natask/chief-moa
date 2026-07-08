@@ -29,6 +29,7 @@
 - [ ] 1.9 `scripts/smoke-cascaded-voice.js` additions (multi-chunk ordering,
       mid-stream TTS failure, interruption, null-stream guard, circuit
       breaker, cap prefix property, kill switch, tool-round-only text,
+      long-response ordered-segment fixture, first-audio latency budget,
       `turn_done` fields) and `scripts/test-voice-chunker.js`, both wired into
       `npm run check`.
 - [ ] 1.10 Second commit: expose profile language tools
@@ -36,8 +37,13 @@
       `POST /v1/chat` text turns via the same sanitizer path.
 - [ ] 1.11 Verification: `cd gateway && npm run check && node
       scripts/smoke-cascaded-voice.js && node scripts/test-voice-chunker.js &&
-      npm run eval:voice`.
-- [ ] 1.12 Merge to master and push; `Deploy VPS gateway` + droplet
+      npm run eval:voice`, asserting a long response produces ordered segments
+      and `first_audio_ms` stays within the configured launch-profile budget.
+- [ ] 1.12 Product diagnostics handoff: propagate `first_audio_ms`,
+      `tts_segments`, `tts_spoke`, `tts_error`, streaming trip state, and
+      mid-stream fault phase labels into the provider-agnostic voice diagnosis
+      records so "why did voice fail?" can be answered from self-hosted logs.
+- [ ] 1.13 Merge to master and push; `Deploy VPS gateway` + droplet
       auto-update timer promote behind the unchanged backup/restore-check
       gate.
 
@@ -93,3 +99,19 @@
       parity with sibling changes and run `openspec validate
       streaming-cascaded-voice --strict` if the CLI is initialized for this
       checkout. Ran clean: `Change 'streaming-cascaded-voice' is valid`.
+
+## 6. Product contract handoff (lane: workflow-docs)
+
+- [ ] 6.1 Link this streaming lane to
+      `provider-agnostic-voice-agent-runtime`: the streaming lane owns
+      long-response audio reliability, ordered segment emission,
+      first-audio timing, TTS degradation, and streaming diagnostics for the
+      cascaded LLM/TTS legs.
+- [ ] 6.2 Keep continuous partial STT out of this specific streaming lane unless
+      the implementation scope is widened; partial STT remains a
+      provider-agnostic runtime task because this change currently streams only
+      the LLM and TTS legs.
+- [ ] 6.3 Add the launch-demo evidence item after promotion: one long spoken
+      response on phone and one in browser must show first audio before the
+      full answer completes, finish playback, and leave queryable
+      `first_audio_ms`/`tts_segments` provider-event evidence.

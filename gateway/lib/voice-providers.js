@@ -789,8 +789,40 @@ class CascadedVoiceProvider {
 
     // Leg 1 — streaming Chirp 3 STT, restricted to the configured languages.
     let transcription = { text: typedText, languageRejected: false };
+    const sttStartedAtMs = Date.now();
+    await voiceStageStart(hooks, "stt", {
+      provider_id: this.sttProviderId,
+      model: this.model,
+      language_codes: sttLanguageCodes,
+      audio_bytes: turn.audioBytes || 0,
+      skipped: Boolean(typedText),
+    });
     if (!typedText) {
-      transcription = await this.sttStage.transcribe({ turn, languageCodes: sttLanguageCodes });
+      try {
+        transcription = await this.sttStage.transcribe({ turn, languageCodes: sttLanguageCodes });
+        await voiceStageDone(hooks, "stt", sttStartedAtMs, {
+          provider_id: this.sttProviderId,
+          model: this.model,
+          language_codes: sttLanguageCodes,
+          transcript_chars: String(transcription.text || "").length,
+          transcript_language_rejected: transcription.languageRejected === true,
+        });
+      } catch (error) {
+        await voiceStageError(hooks, "stt", sttStartedAtMs, error, {
+          provider_id: this.sttProviderId,
+          model: this.model,
+          language_codes: sttLanguageCodes,
+        });
+        throw error;
+      }
+    } else {
+      await voiceStageDone(hooks, "stt", sttStartedAtMs, {
+        provider_id: this.sttProviderId,
+        model: this.model,
+        skipped: true,
+        skip_reason: "typed_text_turn",
+        transcript_chars: typedText.length,
+      });
     }
     const transcript = transcription.text;
     if (transcription.languageRejected) {
@@ -844,6 +876,14 @@ class CascadedVoiceProvider {
     const pipeline = this.streamingEnabledForTurn() && modality !== "text" && this.canSynthesize(pinnedLanguage)
       ? this.createStreamingReplyPipeline({ hooks, language: pinnedLanguage, turnStartedAtMs, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone, playbackRate: clientRate })
       : null;
+    const streamingTtsStartedAtMs = pipeline ? Date.now() : 0;
+    if (pipeline) {
+      await voiceStageStart(hooks, "tts", {
+        provider_id: this.ttsProviderId,
+        language: pinnedLanguage,
+        streaming: true,
+      });
+    }
     // The reasoner (gateway LLM/tool turn) runs with no stream events until it
     // returns. Tell the session server to keep the client alive with turn_progress
     // ticks during the wait; the server owns the interval, this only reports the
@@ -851,6 +891,12 @@ class CascadedVoiceProvider {
     if (typeof hooks.onTurnProgress === "function") {
       await hooks.onTurnProgress("reasoning");
     }
+    const reasoningStartedAtMs = Date.now();
+    await voiceStageStart(hooks, "reasoning", {
+      provider_id: this.reasoningProviderId,
+      streaming: Boolean(pipeline),
+      transcript_chars: transcript.length,
+    });
     try {
       const result = await this.reasonerStage.run({
         transcript,
@@ -882,6 +928,14 @@ class CascadedVoiceProvider {
         } : {}),
       });
       reasoning = { ...reasoning, ...(result && typeof result === "object" ? result : {}) };
+      await voiceStageDone(hooks, "reasoning", reasoningStartedAtMs, {
+        provider_id: this.reasoningProviderId,
+        model: reasoning.model || this.model,
+        classification: reasoning.classification || "chat",
+        speak_chars: String(reasoning.speak || "").length,
+        display_chars: String(reasoning.display || "").length,
+        streaming_delta_count: pipeline ? pipeline.deltaCount() : 0,
+      });
     } catch (error) {
       if (pipeline) {
         pipeline.cancel();
@@ -893,6 +947,11 @@ class CascadedVoiceProvider {
         reportVoiceStreamingFault(`turn_superseded_reached_reasoner_catch: ${cleanError(error)}`);
         return this.cascadedResult(transcript, reasoning, false, transcription, { modality });
       }
+      await voiceStageError(hooks, "reasoning", reasoningStartedAtMs, error, {
+        provider_id: this.reasoningProviderId,
+        transcript_chars: transcript.length,
+        streaming: Boolean(pipeline),
+      });
       throw new Error(`cascaded reasoning failed: ${cleanError(error)}`);
     }
 
@@ -938,6 +997,24 @@ class CascadedVoiceProvider {
       }
       const streamSpoke = Boolean(stream?.spoke);
       const streamTtsError = stream ? stream.ttsError : streamError;
+      if (streamTtsError) {
+        await voiceStageError(hooks, "tts", streamingTtsStartedAtMs, streamTtsError, {
+          provider_id: this.ttsProviderId,
+          language: pinnedLanguage,
+          streaming: true,
+          segments: stream ? stream.segments : 0,
+          ...(Number.isFinite(stream?.firstAudioMs) ? { first_audio_ms: stream.firstAudioMs } : {}),
+        });
+      } else {
+        await voiceStageDone(hooks, "tts", streamingTtsStartedAtMs, {
+          provider_id: this.ttsProviderId,
+          language: pinnedLanguage,
+          streaming: true,
+          segments: stream ? stream.segments : 0,
+          spoke: streamSpoke,
+          ...(Number.isFinite(stream?.firstAudioMs) ? { first_audio_ms: stream.firstAudioMs } : {}),
+        });
+      }
       const extras = {
         modality,
         ttsError: streamTtsError,
@@ -970,12 +1047,44 @@ class CascadedVoiceProvider {
     let ttsError = "";
     if (speak && modality === "text") {
       // Deliberate text-only delivery, not a failure — leave spoke=false, no error.
+      await voiceStageStart(hooks, "tts", {
+        provider_id: this.ttsProviderId,
+        language: reasoning.language || "",
+        streaming: false,
+      });
+      await voiceStageDone(hooks, "tts", Date.now(), {
+        provider_id: this.ttsProviderId,
+        language: reasoning.language || "",
+        streaming: false,
+        skipped: true,
+        skip_reason: "response_modality_text",
+      });
+    } else if (speak && !this.canSynthesize(reasoning.language)) {
+      await voiceStageStart(hooks, "tts", {
+        provider_id: this.ttsProviderId,
+        language: reasoning.language || "",
+        streaming: false,
+      });
+      await voiceStageDone(hooks, "tts", Date.now(), {
+        provider_id: this.ttsProviderId,
+        language: reasoning.language || "",
+        streaming: false,
+        skipped: true,
+        skip_reason: "unsupported_language",
+      });
     } else if (speak && this.canSynthesize(reasoning.language)) {
       // Hosted TTS synthesis is another silent wait before audio starts flowing;
       // keep the keepalive going with the "tts" stage until the first audio frame.
       if (typeof hooks.onTurnProgress === "function") {
         await hooks.onTurnProgress("tts");
       }
+      const ttsStartedAtMs = Date.now();
+      await voiceStageStart(hooks, "tts", {
+        provider_id: this.ttsProviderId,
+        language: reasoning.language || "",
+        streaming: false,
+        text_chars: ttsText.length,
+      });
       try {
         const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone });
         if (pcm && pcm.length) {
@@ -983,14 +1092,34 @@ class CascadedVoiceProvider {
           await hooks.sendAudio(pcm);
           await hooks.onAssistantAudioDone();
           spoke = true;
+          await voiceStageDone(hooks, "tts", ttsStartedAtMs, {
+            provider_id: this.ttsProviderId,
+            language: reasoning.language || "",
+            streaming: false,
+            audio_bytes: pcm.length,
+            segments: 1,
+            spoke: true,
+          });
         } else {
           ttsError = "hosted TTS returned no audio";
+          await voiceStageError(hooks, "tts", ttsStartedAtMs, ttsError, {
+            provider_id: this.ttsProviderId,
+            language: reasoning.language || "",
+            streaming: false,
+            segments: 0,
+          });
         }
       } catch (error) {
         // TTS is best-effort: a synthesis failure must not drop the reply text.
         // Log the reason once, carry it on the turn so a client and the next
         // turn's modality hint can explain it; the device still speaks the text.
         ttsError = cleanError(error);
+        await voiceStageError(hooks, "tts", ttsStartedAtMs, error, {
+          provider_id: this.ttsProviderId,
+          language: reasoning.language || "",
+          streaming: false,
+          segments: 0,
+        });
         console.warn(JSON.stringify({
           level: "warn",
           at: "cascaded_tts_synthesis_failed",
@@ -3538,6 +3667,54 @@ function redactEndpoint(endpoint) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function voiceStageStart(hooks, stage, details = {}) {
+  if (!hooks || typeof hooks.onStageStart !== "function") {
+    return;
+  }
+  try {
+    await hooks.onStageStart(stage, details);
+  } catch {
+    // Stage diagnostics are observability only; never fail the voice turn.
+  }
+}
+
+async function voiceStageDone(hooks, stage, startedAtMs, details = {}) {
+  if (!hooks || typeof hooks.onStageDone !== "function") {
+    return;
+  }
+  try {
+    await hooks.onStageDone(stage, {
+      ...details,
+      duration_ms: stageDurationMs(startedAtMs),
+    });
+  } catch {
+    // Stage diagnostics are observability only; never fail the voice turn.
+  }
+}
+
+async function voiceStageError(hooks, stage, startedAtMs, error, details = {}) {
+  if (!hooks || typeof hooks.onStageError !== "function") {
+    return;
+  }
+  try {
+    await hooks.onStageError(stage, {
+      ...details,
+      duration_ms: stageDurationMs(startedAtMs),
+      error_summary: cleanError(error).slice(0, 240),
+    });
+  } catch {
+    // Stage diagnostics are observability only; never fail the voice turn.
+  }
+}
+
+function stageDurationMs(startedAtMs) {
+  const started = Number(startedAtMs);
+  if (!Number.isFinite(started) || started <= 0) {
+    return 0;
+  }
+  return Math.max(0, Date.now() - started);
 }
 
 function cleanError(error) {

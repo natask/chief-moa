@@ -476,6 +476,7 @@ const server = http.createServer(async (request, response) => {
           endpoint: voiceSessionServer.endpoint,
           ticket_endpoint: "/v1/voice/session-ticket",
           provider: voiceProvider,
+          activity: voiceSessionServer.activityStatus(),
           input_format: {
             encoding: "pcm16",
             sample_rate: 16000,
@@ -10760,6 +10761,9 @@ async function recordStreamingVoiceTurn(turn) {
       // a text-only delivery is never mistaken for a synthesis failure.
       modality: String(turn.modality || ""),
       tts_error: String(turn.tts_error || ""),
+      stage_timings: turn.stage_timings && typeof turn.stage_timings === "object" && !Array.isArray(turn.stage_timings)
+        ? turn.stage_timings
+        : {},
       transcript_language_rejected: turn.transcript_language_rejected === true,
       audio: turn.audio || null,
       assistant_audio: turn.assistant_audio || null,

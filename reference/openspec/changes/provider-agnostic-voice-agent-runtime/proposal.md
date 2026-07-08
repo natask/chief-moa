@@ -28,8 +28,40 @@ the user can inspect and change by voice.
 - Treat each user turn as a possible non-interrupting agent fork: a new message
   can launch a new run, route to existing active runs, or be dismissed by the
   gateway agent manager without stopping prior work.
+- Add a product voice contract for diagnosable failures, self-hostable logs,
+  long-response audio reliability, below-perceived-wait first audio,
+  continuous partial STT, interrupt context preservation, configurable
+  profiles/modes, voice-first gestures, browser shortcuts, repeatable demos,
+  and cache-friendly per-turn context packs.
 - Treat Gemini Live as the first high-quality live provider implementation, not
   the only architecture.
+
+## Product Success Criteria
+
+The change is not complete until the user can prove the voice loop from the
+phone and browser without provider-console guesswork:
+
+- A failed or degraded voice turn names the most likely failing phase: capture,
+  transport, STT, reasoning, TTS, playback, storage, context assembly, or
+  comparison.
+- The self-hosted gateway stores the normalized logs, provider events, turn
+  records, context-pack refs, audio refs, and replay verdicts required to debug
+  that failure.
+- Long replies stream or otherwise deliver audio reliably, record
+  `tts_segments`, `tts_spoke`, and `tts_error`, and fall back to visible text
+  instead of ending silently.
+- First assistant audio is measured as `first_audio_ms` and checked against a
+  configurable launch-profile budget intended to keep delay below the user's
+  perceived waiting threshold.
+- Speaking surfaces show continuous partial STT before final transcript
+  replacement, while the final stored transcript remains canonical.
+- Interrupting, canceling, or dropping a turn preserves partial user and
+  assistant context for the next turn.
+- Profile and mode changes are versioned gateway state that Android and browser
+  surfaces can display and use, not hidden provider/session state.
+- A repeatable voice demonstration covers partial STT, first audio, long
+  response playback, interruption, profile/mode switching, voice-first gestures,
+  browser shortcuts, and failure diagnosis.
 
 ## Capabilities
 
@@ -52,6 +84,15 @@ the user can inspect and change by voice.
   against expected criteria.
 - `forked-agent-session-routing`: User turns can fork independent agent runs
   while active runs continue and receive later relevant turns as evidence.
+- `voice-product-diagnostics`: Self-hostable voice failure diagnosis based on
+  normalized turn/provider events, phase labels, context-pack refs, and replay
+  verdicts.
+- `voice-first-control-surfaces`: Flag-gated Android orb gestures and browser
+  mark/keyboard shortcuts that make voice capture the primary interaction while
+  preserving existing drag, resize, and chat controls.
+- `cache-friendly-turn-context`: Bounded per-turn context packs keyed by stable
+  session, branch, turn, profile, summary, artifact, and route-decision refs so
+  retries, provider restarts, and agent routing reuse the same evidence.
 
 ### Modified Capabilities
 

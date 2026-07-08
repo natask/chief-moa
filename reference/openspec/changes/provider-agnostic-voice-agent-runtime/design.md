@@ -39,6 +39,11 @@ conversation storage, agent-run storage, and harness execution.
 - Provide recovery controls when the agent behaves badly: safe mode, prompt
   rollback, tool disable, provider switch, cancel active runs, and text-only
   fallback.
+- Make every voice failure diagnosable from self-hosted gateway records, not
+  only from provider dashboards or ad hoc logs.
+- Make long-response audio, first-audio latency, continuous partial STT,
+  interruption context, profile/mode switching, voice-first gestures, browser
+  shortcuts, and cache-friendly per-turn context explicit launch criteria.
 
 **Non-Goals:**
 
@@ -51,8 +56,130 @@ conversation storage, agent-run storage, and harness execution.
 - No full database migration in the first implementation slice unless a ticket
   explicitly chooses it; JSON/JSONL can remain an early backing store if the API
   contract is correct.
+- No provider-console-only observability as an acceptance path.
+- No unbounded full-history prompt stuffing as the per-turn context strategy.
 
 ## Decisions
+
+### Decision: Product Voice Success Is Measured At The Moa Boundary
+
+The provider-agnostic runtime has a product contract independent of the selected
+provider: the gateway records enough facts to answer "what failed?", "what did
+the user say?", "what did Moa answer?", "why was it not spoken?", "what context
+did the model see?", and "what should happen on retry?" without requiring the
+operator to inspect a provider console.
+
+Every voice turn can carry normalized phase diagnostics:
+
+```text
+capture -> transport -> STT -> context -> reasoning -> TTS -> playback -> store
+```
+
+When a phase is degraded or failed, the turn/provider events record the phase,
+surface, session, branch, turn, profile version, provider ids, mode, timing,
+artifact refs, and a user-facing summary. Provider-native events may be retained
+for debugging, but Moa-owned normalized events are the self-hostable source of
+truth. A "why did voice fail?" status path is a product requirement, not a log
+grep.
+
+Alternative considered: accept provider dashboards and server stdout as the
+diagnostic story. Rejected because self-hosted deployments need local evidence,
+and voice QA must compare capture, STT, reasoning, TTS, storage, and playback
+without vendor-specific tools.
+
+### Decision: First Audio And Long Replies Have Observable Budgets
+
+The cascaded and native-live runtimes both report first-audio timing when the
+provider can expose it. For cascaded streaming, `first_audio_ms` is measured
+from turn commit or final STT to the first assistant PCM frame. Launch profiles
+set the target budget; deterministic QA fails when the configured budget is
+missed, and live QA records percentile evidence instead of treating latency as
+an anecdote.
+
+Long replies must be reliable before they are polished. A long spoken answer
+streams or chunks ordered audio segments, records `tts_segments`, `tts_spoke`,
+and `tts_error`, and degrades to visible text with a clear not-spoken state
+instead of hanging, truncating silently, or letting a stale interrupted stream
+write into the next turn. This aligns with the
+`streaming-cascaded-voice` change, but the product contract applies to every
+future provider mode.
+
+Alternative considered: optimize only average response time. Rejected because
+the user's pain point is the perceptible gap before any audio and the
+reliability of longer spoken replies, not only total completion time.
+
+### Decision: Continuous Partial STT Is A Runtime Feature, Not A UI Guess
+
+Partial transcripts are provider-normalized voice runtime events. Android and
+the browser display provisional text continuously while the user speaks, then
+replace it with the final transcript that becomes the canonical turn input.
+The gateway stores the final transcript with its source and may retain partial
+events for diagnosis according to retention policy.
+
+Providers that cannot stream partial STT must report that capability honestly.
+The UI may still show capture/listening state, but it must not invent partial
+text from local heuristics as if it came from the speech recognizer.
+
+Alternative considered: show only final transcripts and treat partials as a
+client enhancement. Rejected because continuous partial STT is part of the
+voice-first product feel and is also a diagnostic signal for capture/STT
+failures.
+
+### Decision: Interruptions Preserve Context And Are Cache-Friendly
+
+An interrupted, canceled, or dropped turn is not discarded. The gateway stores
+whatever user transcript, assistant text/audio metadata, provider events, and
+phase diagnostics exist, marks the turn incomplete when appropriate, and
+includes a bounded summary of that partial turn in the next Moa-owned context
+pack.
+
+Each turn assembles a cache-friendly context pack from stable refs: session,
+branch, turn, active thread, profile version, mode overlay, recent summaries,
+voice evidence, provider events, route decisions, and relevant artifacts. The
+pack records a cache key/content hash so retries, provider reconnects, agent
+routing, and replay QA can reuse the same evidence instead of rebuilding an
+unbounded transcript prompt.
+
+Alternative considered: let each provider session keep the live conversation
+state. Rejected because interruption recovery, cross-device resume, replay QA,
+and provider swapping require Moa-owned context with stable identifiers.
+
+### Decision: Profiles And Modes Are Versioned Product State
+
+Modes such as reliable voice, low-latency voice, text-only, demo, safe mode, or
+voice-first gestures are named overlays on the versioned agent profile. They
+may adjust provider selection, response modality, language, tool policy,
+latency budget, TTS cap, retention policy, and client interaction hints, but
+they do not bypass the trust boundary: Android still owns phone UI/actions, the
+browser extension still owns browser shortcuts/page actions, and the gateway
+still owns provider credentials and storage.
+
+Mode/profile changes are visible and reversible. A spoken change updates the
+gateway profile, records a new version, reports whether the change applies
+immediately/next turn/reconnect, and exposes the effective state to Android and
+browser surfaces.
+
+Alternative considered: keep modes in environment variables or provider
+session configuration only. Rejected because the user needs to inspect, change,
+demo, and recover behavior by voice across devices.
+
+### Decision: Voice-First Controls Must Be Demonstrable On Both Surfaces
+
+The phone orb and browser mark/keyboard shortcuts are part of the voice
+runtime contract. Android owns orb gestures, visual state, microphone capture,
+playback stop, permissions, and action approvals. The browser extension owns
+the mark, shortcuts, offscreen microphone capture, queued playback, page
+context, and local page actions. The gateway owns only the shared session,
+profile, logs, context, and action proposals.
+
+The launch demonstration must prove the same user-visible contract from phone
+and browser: start voice, see partial STT, hear first audio within budget, play
+a longer response, interrupt and preserve context, switch a mode/profile,
+exercise voice-first gestures or shortcuts, and inspect a diagnosed failure.
+
+Alternative considered: treat gestures and shortcuts as separate client polish.
+Rejected because the voice product is not usable as a primary interface unless
+the capture/commit controls are predictable and testable.
 
 ### Decision: Voice Runtime Has Two Provider Modes
 

@@ -1219,6 +1219,21 @@ async function streamingMidStreamTtsFailure(tempDir) {
   assert.ok(done.tts_error && done.tts_error.length > 0, "turn_done must surface the tts_error");
   assert.equal(done.tts_spoke, true, "at least one chunk played");
   assert.ok(events.some((e) => e.type === "assistant_audio_done"), "assistant_audio_done still closes the audio window");
+
+  const providerEvents = readProviderEvents(connection.providerEventsFile);
+  const stageError = providerEvents.find((event) => event.type === "stage_error" && event.stage === "tts");
+  assert.ok(stageError, "mid-stream TTS fault must record a stage_error provider event");
+  assert.equal(stageError.session_id, "sess_stream-fault");
+  assert.equal(stageError.turn_id, "turn_stream-fault");
+  assert.equal(stageError.provider_ids.tts, "cloud-tts");
+  assert.ok(Number.isFinite(stageError.duration_ms), "stage_error must carry duration_ms");
+  assert.ok(stageError.error_summary, "stage_error must carry a bounded error_summary");
+  assert.ok(stageError.error_summary.length <= 240, "stage_error summary must be bounded");
+  const completed = providerEvents.find((event) => event.type === "turn_completed");
+  assert.ok(completed, "turn_completed provider event must be recorded after TTS fault");
+  assert.ok(completed.tts_error, "turn_completed must carry the TTS error summary");
+  assert.ok(Number.isFinite(completed.stage_timings.first_audio_ms), "stage timings must include first_audio_ms");
+  assert.ok(Number.isFinite(completed.stage_timings.tts_ms), "stage timings must include tts_ms");
 }
 
 // Interruption: a new session_start replaces the turn between chunk emissions.
@@ -1493,6 +1508,13 @@ function jsonResponse(payload) {
     json: async () => payload,
     text: async () => JSON.stringify(payload),
   };
+}
+
+function readProviderEvents(filePath) {
+  return fs.readFileSync(filePath, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
 // A minimal 24kHz mono LINEAR16 WAV (header + a few PCM samples) so pcmFromWav

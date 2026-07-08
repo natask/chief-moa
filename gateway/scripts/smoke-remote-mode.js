@@ -79,6 +79,7 @@ async function assertLocalHealthSurfacesMode() {
     assert.equal(health.gateway_mode.token_auth_configured, true);
     assert.equal(health.bind.host, "127.0.0.1");
     assert.equal(health.trust_proxy, false);
+    assertVoiceActivityHealth(health);
   } finally {
     await stopGateway(server);
   }
@@ -101,6 +102,7 @@ async function assertSelfHostHealthSurfacesRemoteDefaults() {
     assert.equal(health.bind.host, "0.0.0.0");
     assert.equal(health.trust_proxy, true);
     assert.equal(health.event_substrate.postgres_configured, true);
+    assertVoiceActivityHealth(health);
   } finally {
     await stopGateway(server);
   }
@@ -209,6 +211,14 @@ function writeOtaManifest(tempDir) {
     sha256: "0".repeat(64),
     size_bytes: 1,
   }, null, 2));
+}
+
+function assertVoiceActivityHealth(health) {
+  assert.equal(health.voice_stream?.activity?.active_voice_connections, 0);
+  assert.equal(health.voice_stream?.activity?.active_recording_turns, 0);
+  assert.equal(health.voice_stream?.activity?.active_committed_turns, 0);
+  assert.equal(health.voice_stream?.activity?.active_responding_connections, 0);
+  assert.equal(health.voice_stream?.activity?.drain_safe, true);
 }
 
 async function getJson(url) {
