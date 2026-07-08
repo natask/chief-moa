@@ -45,7 +45,11 @@ final class MoaVoiceGatewaySocket {
 
         void onAssistantText(String turnId, String text);
 
-        void onAssistantAudioStart(String turnId, JSONObject format);
+        // playbackRate is the per-turn speed from the event's optional
+        // playback_rate field, already defaulted to 1.0 and clamped to
+        // MoaAudioPlaybackController's [MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE]
+        // when absent/invalid/out of range.
+        void onAssistantAudioStart(String turnId, JSONObject format, double playbackRate);
 
         void onAssistantAudio(byte[] pcm);
 
@@ -264,7 +268,10 @@ final class MoaVoiceGatewaySocket {
                     assistantAudioOpen = true;
                 }
                 if (callback != null) {
-                    callback.onAssistantAudioStart(event.optString("turn_id", ""), event.optJSONObject("format"));
+                    callback.onAssistantAudioStart(
+                            event.optString("turn_id", ""),
+                            event.optJSONObject("format"),
+                            parsePlaybackRate(event));
                 }
                 break;
             case "assistant_audio_done":
@@ -323,6 +330,16 @@ final class MoaVoiceGatewaySocket {
         if (callback != null) {
             callback.onSocketFailure(message, error);
         }
+    }
+
+    // playback_rate is optional on assistant_audio_start; absent or invalid
+    // (non-numeric, NaN, <= 0) must fall back to 1.0 unchanged behavior.
+    // org.json's optDouble already returns the fallback for a missing key or
+    // a value it cannot coerce to a number, so this only needs to guard the
+    // numeric edge cases optDouble lets through.
+    private static double parsePlaybackRate(JSONObject event) {
+        double rate = event.optDouble("playback_rate", 1.0);
+        return MoaAudioPlaybackController.clampPlaybackRate(rate);
     }
 
     private static String safe(String value) {

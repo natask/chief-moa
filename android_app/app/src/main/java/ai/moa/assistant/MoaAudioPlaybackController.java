@@ -4,11 +4,20 @@ import android.media.AudioFormat;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.media.AudioTrack;
+import android.media.PlaybackParams;
+import android.util.Log;
 
 final class MoaAudioPlaybackController {
+    private static final String TAG = "MoaAudioPlayback";
     static final int SAMPLE_RATE_HZ = 16000;
     static final int CHANNEL_COUNT = 1;
     static final String ENCODING = "pcm16";
+    // Per-turn playback_rate from assistant_audio_start is clamped to this
+    // range before being handed to AudioTrack.setPlaybackParams(). setSpeed()
+    // resamples, so it changes pitch along with speed -- that is the intended
+    // "guaranteed speed" behavior for hosted voice playback, not a bug.
+    static final double MIN_PLAYBACK_RATE = 0.5;
+    static final double MAX_PLAYBACK_RATE = 2.0;
 
     private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO;
     private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
@@ -51,6 +60,14 @@ final class MoaAudioPlaybackController {
     }
 
     void start() {
+        start(1.0);
+    }
+
+    // playbackRate comes from the per-turn assistant_audio_start event's
+    // optional playback_rate field. Absent/invalid values must already have
+    // been normalized to 1.0 by the caller; this method clamps defensively
+    // again before touching the AudioTrack.
+    void start(double playbackRate) {
         synchronized (lock) {
             if (playing) {
                 return;
@@ -84,6 +101,7 @@ final class MoaAudioPlaybackController {
                 }
 
                 audioTrack.setVolume(AudioTrack.getMaxVolume());
+                applyPlaybackRateLocked(playbackRate);
                 audioTrack.play();
                 playing = true;
             } catch (RuntimeException error) {
@@ -95,6 +113,38 @@ final class MoaAudioPlaybackController {
         if (callback != null) {
             callback.onPlaybackStarted();
         }
+    }
+
+    // Caller must hold `lock` and audioTrack must be non-null/initialized.
+    // A rate of 1.0 (the default when a turn carries no playback_rate) skips
+    // setPlaybackParams entirely so playback matches pre-existing behavior
+    // exactly. setSpeed() resamples, so speed and pitch move together; that
+    // is the accepted trade-off for guaranteed up-to-2x playback speed.
+    private void applyPlaybackRateLocked(double playbackRate) {
+        double clamped = clampPlaybackRate(playbackRate);
+        if (clamped == 1.0) {
+            return;
+        }
+        try {
+            PlaybackParams params = audioTrack.getPlaybackParams();
+            params.setSpeed((float) clamped);
+            audioTrack.setPlaybackParams(params);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "setPlaybackParams(speed=" + clamped + ") failed: " + cleanError(error) + "; playing at 1.0x");
+        }
+    }
+
+    static double clampPlaybackRate(double rate) {
+        if (Double.isNaN(rate) || Double.isInfinite(rate) || rate <= 0) {
+            return 1.0;
+        }
+        if (rate < MIN_PLAYBACK_RATE) {
+            return MIN_PLAYBACK_RATE;
+        }
+        if (rate > MAX_PLAYBACK_RATE) {
+            return MAX_PLAYBACK_RATE;
+        }
+        return rate;
     }
 
     boolean write(byte[] pcm) {

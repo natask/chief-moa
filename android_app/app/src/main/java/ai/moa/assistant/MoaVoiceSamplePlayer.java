@@ -227,9 +227,9 @@ final class MoaVoiceSamplePlayer {
         }
 
         @Override
-        public void onAssistantAudioStart(String turnId, JSONObject format) {
+        public void onAssistantAudioStart(String turnId, JSONObject format, double playbackRate) {
             if (playback != null) {
-                playback.start();
+                playback.start(playbackRate);
             }
         }
 

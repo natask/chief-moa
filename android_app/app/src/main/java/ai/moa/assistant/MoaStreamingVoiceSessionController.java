@@ -753,15 +753,15 @@ final class MoaStreamingVoiceSessionController {
         }
 
         @Override
-        public void onAssistantAudioStart(String audioTurnId, JSONObject format) {
+        public void onAssistantAudioStart(String audioTurnId, JSONObject format, double playbackRate) {
             MoaAudioPlaybackController playback;
             synchronized (lock) {
                 playback = playbackController;
                 assistantAudioStarted = true;
             }
-            Log.i(TAG, "assistantAudioStart");
+            Log.i(TAG, "assistantAudioStart playbackRate=" + playbackRate);
             if (playback != null && playbackEnabled) {
-                playback.start();
+                playback.start(playbackRate);
             }
             post(() -> callback.onAssistantAudioStarted(audioTurnId));
         }
