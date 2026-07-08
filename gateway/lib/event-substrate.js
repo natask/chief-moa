@@ -98,49 +98,7 @@ function createPostgresEventSubstrateStore(options = {}) {
     if (existing) return existing;
 
     return withTransaction(pool, async (client) => {
-      const base = normalizeEvent(input, { originId, streamVersion: 0 });
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [`${base.origin_id}:${base.stream_id}`]);
-
-      const secondExisting = await findExistingPostgresEvent({ eventId: base.event_id, idempotencyKey: base.idempotency_key }, client);
-      if (secondExisting) return secondExisting;
-
-      const version = positiveInteger(input.stream_version || input.streamVersion, 0)
-        || await nextPostgresStreamVersion(client, base.origin_id, base.stream_id);
-      const event = { ...base, stream_version: version };
-      const result = await client.query(
-        `insert into product_events (
-           event_id, origin_id, stream_id, stream_version, event_type,
-           event_schema_version, occurred_at, recorded_at, actor, authority,
-           causation_id, correlation_id, idempotency_key, payload, blob_refs,
-           crdt_refs, signature
-         ) values (
-           $1, $2, $3, $4, $5,
-           $6, $7::timestamptz, $8::timestamptz, $9::jsonb, $10::jsonb,
-           $11, $12, $13, $14::jsonb, $15::jsonb,
-           $16::jsonb, $17
-         )
-         returning *`,
-        [
-          event.event_id,
-          event.origin_id,
-          event.stream_id,
-          event.stream_version,
-          event.event_type,
-          event.event_schema_version,
-          event.occurred_at,
-          event.recorded_at,
-          JSON.stringify(event.actor),
-          JSON.stringify(event.authority),
-          event.causation_id || null,
-          event.correlation_id || null,
-          event.idempotency_key || null,
-          JSON.stringify(event.payload),
-          JSON.stringify(event.blob_refs),
-          JSON.stringify(event.crdt_refs),
-          event.signature || null,
-        ],
-      );
-      return eventFromRow(result.rows[0]);
+      return appendEventOnClient(client, input, { originId });
     });
   }
 
@@ -191,6 +149,59 @@ function createPostgresEventSubstrateStore(options = {}) {
   }
 
   return { appendEvent, listEvents, getEvent, storageInfo };
+}
+
+async function appendEventOnClient(client, input = {}, options = {}) {
+  if (!client || typeof client.query !== "function") {
+    throw new Error("appendEventOnClient requires a pg client");
+  }
+  const originId = normalizeOriginId(options.originId);
+  const base = normalizeEvent(input, { originId, streamVersion: 0 });
+  await client.query("select pg_advisory_xact_lock(hashtext($1))", [`${base.origin_id}:${base.stream_id}`]);
+
+  const secondExisting = await findExistingPostgresEvent({
+    eventId: base.event_id,
+    idempotencyKey: base.idempotency_key,
+  }, client);
+  if (secondExisting) return secondExisting;
+
+  const version = positiveInteger(input.stream_version || input.streamVersion, 0)
+    || await nextPostgresStreamVersion(client, base.origin_id, base.stream_id);
+  const event = { ...base, stream_version: version };
+  const result = await client.query(
+    `insert into product_events (
+       event_id, origin_id, stream_id, stream_version, event_type,
+       event_schema_version, occurred_at, recorded_at, actor, authority,
+       causation_id, correlation_id, idempotency_key, payload, blob_refs,
+       crdt_refs, signature
+     ) values (
+       $1, $2, $3, $4, $5,
+       $6, $7::timestamptz, $8::timestamptz, $9::jsonb, $10::jsonb,
+       $11, $12, $13, $14::jsonb, $15::jsonb,
+       $16::jsonb, $17
+     )
+     returning *`,
+    [
+      event.event_id,
+      event.origin_id,
+      event.stream_id,
+      event.stream_version,
+      event.event_type,
+      event.event_schema_version,
+      event.occurred_at,
+      event.recorded_at,
+      JSON.stringify(event.actor),
+      JSON.stringify(event.authority),
+      event.causation_id || null,
+      event.correlation_id || null,
+      event.idempotency_key || null,
+      JSON.stringify(event.payload),
+      JSON.stringify(event.blob_refs),
+      JSON.stringify(event.crdt_refs),
+      event.signature || null,
+    ],
+  );
+  return eventFromRow(result.rows[0]);
 }
 
 function normalizeEvent(input = {}, defaults = {}) {
@@ -428,6 +439,8 @@ function clone(value) {
 }
 
 module.exports = {
+  appendEventOnClient,
   createEventSubstrateStore,
   normalizeEvent,
+  withTransaction,
 };

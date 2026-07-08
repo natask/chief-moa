@@ -88,18 +88,40 @@ Projection builders over the event log are no longer the read path.)
   container: migrate up idempotent on second run, relational tables present,
   `moa_app` isolation enforced — full `npm test` 133 pass / 0 fail.
 
-- [ ] 1.1 `[ready]` Dual-write each store: business row + `product_events`
+- [x] 1.1 `[ready]` Dual-write each store: business row + `product_events`
   append in one transaction, replacing the current fire-and-forget event
   mirror for migrated stores.
   Acceptance: a written voice turn produces exactly one row and one event, and
   a forced row-write failure rolls back the event append.
+  DONE 2026-07-08: `gateway/lib/relational-store.js` upserts each primitive
+  (session, branch, chat turn, voice turn, agent run, browser task, tool request)
+  and appends the matching `product_events` row in ONE transaction via the new
+  `appendEventOnClient(client, ...)` extracted from `event-substrate` (so the
+  business row and the audit event share a transaction and cannot diverge).
+  Idempotent on the existing event idempotency keys. The FK-failure rollback is
+  proven by `test/integration/relational-store.integration.test.js`
+  (`assertBusinessFailureRollsBackEvent`): a bad `user_id` rejects and leaves no
+  orphan row and no orphan event. NOTE: this ships the writer + transaction
+  contract only; wiring it into `server.js`'s live write paths (replacing the
+  fire-and-forget mirror) stays a SEPARATE staged change after migration 0002 is
+  applied to prod (see the promotion note below), so this unit does not touch the
+  live voice path.
 
-- [ ] 1.2 `[ready]` Add a one-time importer script that replays existing
+- [x] 1.2 `[ready]` Add a one-time importer script that replays existing
   `DATA_DIR` files into the relational tables + `product_events` with
   idempotency keys.
   Acceptance: running the importer twice against a sample `DATA_DIR` yields the
   same row and event counts the first run produced (no duplicates) and the table
   reads return every imported record.
+  DONE 2026-07-08: `gateway/scripts/import-datadir.js`
+  (`DATABASE_URL=... node scripts/import-datadir.js [--data-dir=]`) reads the
+  DATA_DIR subdirs and replays each record through `relational-store`, printing a
+  per-primitive `{files, rows, events}` summary. The integration test proves the
+  second run adds zero rows and zero events and that reads return every imported
+  record. Never mutates source files. Test isolation: each integration file
+  migrates its own database (`test/integration/isolated-db.js`), and migration
+  0002's `moa_app` role creation was made race-safe (catches `duplicate_object`
+  and `unique_violation`, since roles are cluster-global).
 
 - [ ] 1.3 `[blocked: voice-worktrees]` Switch `server.js` read paths to the
   relational tables in remote modes, keeping file reads as the `local`-only

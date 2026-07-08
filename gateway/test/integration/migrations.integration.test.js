@@ -3,13 +3,17 @@
 const assert = require("node:assert");
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
-const { after, describe, test } = require("node:test");
+const { after, before, describe, test } = require("node:test");
 const { Client } = require("pg");
 
 const { hasDatabaseUrl } = require("../smoke-manifest");
+const { createIsolatedDatabase, dropIsolatedDatabase } = require("./isolated-db");
 
 const gatewayRoot = path.resolve(__dirname, "../..");
-const env = { ...process.env };
+// Set per run to an isolated database so this file never races the other
+// integration file on the node-pg-migrate lock.
+let env = { ...process.env };
+let isolatedUrl = process.env.DATABASE_URL;
 const relationalTables = [
   "users",
   "identities",
@@ -54,11 +58,20 @@ function assertMigrateSucceeded(result) {
 
 describe("node-pg-migrate relational schema", { skip: !hasDatabaseUrl() }, () => {
   let client;
+  let isolatedDbName;
+
+  before(async () => {
+    const isolated = await createIsolatedDatabase("migrations");
+    isolatedDbName = isolated.dbName;
+    isolatedUrl = isolated.databaseUrl;
+    env = { ...process.env, DATABASE_URL: isolatedUrl };
+  });
 
   after(async () => {
     if (client) {
       await client.end();
     }
+    await dropIsolatedDatabase(isolatedDbName);
   });
 
   test("applies migrations and no-ops on a second run", () => {
@@ -71,7 +84,7 @@ describe("node-pg-migrate relational schema", { skip: !hasDatabaseUrl() }, () =>
   });
 
   test("creates relational tables", async () => {
-    client = new Client({ connectionString: process.env.DATABASE_URL });
+    client = new Client({ connectionString: isolatedUrl });
     await client.connect();
 
     const result = await client.query(
@@ -93,7 +106,7 @@ describe("node-pg-migrate relational schema", { skip: !hasDatabaseUrl() }, () =>
 
   test("enforces user isolation through moa_app role", async () => {
     if (!client) {
-      client = new Client({ connectionString: process.env.DATABASE_URL });
+      client = new Client({ connectionString: isolatedUrl });
       await client.connect();
     }
 

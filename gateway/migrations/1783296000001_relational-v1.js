@@ -198,10 +198,15 @@ exports.up = (pgm) => {
     create index if not exists tool_requests_user_status_idx
       on tool_requests(user_id, status);
 
+    -- Roles are cluster-global, so a check-then-create races when two
+    -- migrations run concurrently against different databases in one cluster
+    -- (and would also fail for a self-hoster whose cluster already has the
+    -- role). Create-and-swallow-duplicate is atomic and idempotent.
+    -- duplicate_object: role already existed before this tx.
+    -- unique_violation: another tx inserted the shared role row concurrently.
     do $$ begin
-      if not exists (select 1 from pg_roles where rolname='moa_app') then
-        create role moa_app nologin;
-      end if;
+      create role moa_app nologin;
+    exception when duplicate_object or unique_violation then null;
     end $$;
 
     grant usage on schema public to moa_app;
