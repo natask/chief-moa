@@ -58,6 +58,8 @@ const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
 const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
 const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
+const UI_SPEC_CACHE_KEY = "ageeUiSpec";
+const UI_SPEC_ALARM = "agee-ui-spec-refresh";
 const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
@@ -237,6 +239,95 @@ async function startSelfExtensionRuntimeRefresh() {
   await refreshSelfExtensionRuntime("startup");
   if (chrome?.alarms) {
     chrome.alarms.create(SELF_EXTENSION_RUNTIME_ALARM, { periodInMinutes: 0.5 });
+  }
+}
+
+const UI_SPEC_FALLBACK = Object.freeze({
+  spec: { version: 1, surfaces: [] },
+  is_customized: false,
+});
+
+function normalizeUiSpecPayload(payload) {
+  const spec = payload?.spec && typeof payload.spec === "object" ? payload.spec : payload;
+  if (!spec || typeof spec !== "object" || spec.version !== 1 || !Array.isArray(spec.surfaces)) {
+    return null;
+  }
+  return {
+    spec,
+    is_customized: payload?.is_customized === true,
+  };
+}
+
+async function fetchUiSpec() {
+  const cfg = await getConfig();
+  if (!cfg.gatewayUrl) throw new Error("No gateway URL set.");
+  const payload = normalizeUiSpecPayload(await callGateway(cfg, "/v1/ui/spec", { method: "GET" }));
+  if (!payload) throw new Error("Gateway returned an invalid UI spec.");
+  return payload;
+}
+
+async function cachedUiSpecRecord() {
+  if (!chrome?.storage?.local) return null;
+  const stored = await chrome.storage.local.get({ [UI_SPEC_CACHE_KEY]: null });
+  const record = stored[UI_SPEC_CACHE_KEY];
+  const payload = normalizeUiSpecPayload(record?.payload || record);
+  if (!payload) return null;
+  return {
+    payload,
+    reason: typeof record?.reason === "string" ? record.reason : "cache",
+    updated_at: typeof record?.updated_at === "string" ? record.updated_at : "",
+    stale: record?.stale === true,
+    stale_reason: typeof record?.stale_reason === "string" ? record.stale_reason : "",
+    stale_at: typeof record?.stale_at === "string" ? record.stale_at : "",
+  };
+}
+
+async function loadUiSpec() {
+  try {
+    return await fetchUiSpec();
+  } catch {
+    const cached = await cachedUiSpecRecord();
+    return cached?.payload || UI_SPEC_FALLBACK;
+  }
+}
+
+async function refreshUiSpec(reason = "refresh") {
+  try {
+    const payload = await fetchUiSpec();
+    if (chrome?.storage?.local) {
+      await chrome.storage.local.set({
+        [UI_SPEC_CACHE_KEY]: {
+          payload,
+          reason,
+          stale: false,
+          updated_at: new Date().toISOString(),
+        },
+      });
+    }
+    return payload;
+  } catch (error) {
+    const cached = await cachedUiSpecRecord();
+    if (cached && chrome?.storage?.local) {
+      await chrome.storage.local.set({
+        [UI_SPEC_CACHE_KEY]: {
+          ...cached,
+          reason,
+          stale: true,
+          stale_reason: String(error?.message || error).slice(0, 200),
+          stale_at: new Date().toISOString(),
+        },
+      });
+      return cached.payload;
+    }
+    return UI_SPEC_FALLBACK;
+  }
+}
+
+async function startUiSpecRefresh() {
+  if (!chrome?.storage?.local) return;
+  await refreshUiSpec("startup");
+  if (chrome?.alarms) {
+    chrome.alarms.create(UI_SPEC_ALARM, { periodInMinutes: 0.5 });
   }
 }
 
@@ -830,6 +921,8 @@ if (chrome?.alarms?.onAlarm) {
       pollDevReloadVersion("alarm").catch(() => {});
     } else if (alarm.name === SELF_EXTENSION_RUNTIME_ALARM) {
       refreshSelfExtensionRuntime("alarm").catch(() => {});
+    } else if (alarm.name === UI_SPEC_ALARM) {
+      refreshUiSpec("alarm").catch(() => {});
     }
   });
 }
@@ -837,6 +930,7 @@ startBrowserTaskPolling();
 startDevReloadPolling().catch(() => {});
 startDeviceClientHeartbeat().catch(() => {});
 startSelfExtensionRuntimeRefresh().catch(() => {});
+startUiSpecRefresh().catch(() => {});
 adoptSharedGatewaySession("startup").catch(() => {});
 reloadDevTabsAfterExtensionRestart().catch(() => {});
 
@@ -1784,6 +1878,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
   }
   send(tabId, { cmd: "done", cueId, summary, speak });
   refreshSelfExtensionRuntime("turn_complete").catch(() => {});
+  refreshUiSpec("turn_complete").catch(() => {});
   await saveTaskState(cueId, {
     status: "done",
     instruction,
@@ -3923,6 +4018,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     refreshSelfExtensionRuntime("content_request")
       .then((runtime) => sendResponse({ ok: true, runtime }))
       .catch(() => sendResponse({ ok: true, runtime: SELF_EXTENSION_RUNTIME_FALLBACK }));
+    return true;
+  }
+  if (msg.cmd === "uiSpec") {
+    refreshUiSpec("content_request")
+      .then((payload) => sendResponse({ ok: true, ...payload }))
+      .catch(() => sendResponse({ ok: true, ...UI_SPEC_FALLBACK }));
+    return true;
+  }
+  if (msg.cmd === "openOptions") {
+    chrome.runtime.openOptionsPage?.().catch(() => {});
+    sendResponse({ ok: true });
     return true;
   }
   if (msg.cmd === "activeCompanionPet") {

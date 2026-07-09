@@ -86,11 +86,31 @@ function assertStore(dir) {
 
   const custom = {
     surfaces: [
-      { id: "command-panel", title: "my Aggie", controls: [{ type: "button", id: "go", label: "Go", action: "agent.run" }] },
+      {
+        id: "command-panel",
+        title: "my Aggie",
+        components: [
+          { type: "card", id: "brief", title: "Next step", body: "Open the browser agent panel.", tone: "info" },
+          { type: "stat", id: "runs", label: "Runs", value: "2", delta: "+1", tone: "good" },
+          { type: "list", id: "apps", title: "Apps", items: [{ label: "Maps", detail: "Open a map workflow", action: "agent.run", prompt: "Open Maps" }] },
+          {
+            type: "map",
+            id: "nearby",
+            title: "Nearby",
+            center: { lat: 37.7749, lng: -122.4194, label: "San Francisco" },
+            zoom: 11,
+            markers: [{ lat: 37.7749, lng: -122.4194, label: "SF", detail: "Center" }],
+          },
+        ],
+        controls: [{ type: "button", id: "go", label: "Go", action: "agent.run", prompt: "Open the app manager" }],
+      },
     ],
   };
   const replaced = store.replace(custom);
   assert.equal(replaced.surfaces[0].title, "my Aggie", "replace must persist the new title");
+  assert.equal(replaced.surfaces[0].components.length, 4, "replace must persist known components");
+  assert.equal(replaced.surfaces[0].components.find((component) => component.type === "map").markers[0].label, "SF", "map markers must survive normalization");
+  assert.equal(replaced.surfaces[0].controls[0].prompt, "Open the app manager", "control prompts must survive normalization");
   assert.equal(store.isCustomized(), true, "store must report customized after replace");
 
   // Invalid: not a renderable document -> throws, surface stays customized.
@@ -124,8 +144,19 @@ async function assertRoundTrip(baseUrl) {
       {
         id: "command-panel",
         title: "Aggie — deployed",
+        components: [
+          { type: "card", id: "status", title: "Live UI", body: "Rendered by the extension from gateway data.", tone: "info" },
+          { type: "list", id: "targets", title: "Targets", items: [{ label: "Calendar", detail: "Open an app workflow", action: "agent.run", prompt: "Open Calendar" }] },
+          {
+            type: "map",
+            id: "meetup",
+            title: "Meetup map",
+            center: { lat: 40.7128, lng: -74.006, label: "NYC" },
+            markers: [{ lat: 40.7128, lng: -74.006, label: "Meet here" }],
+          },
+        ],
         controls: [
-          { type: "button", id: "talk", label: "Speak", action: "voice.toggle" },
+          { type: "button", id: "talk", label: "Speak", action: "voice.toggle", prompt: "Start voice" },
           { type: "text", id: "intent", label: "Do this:", action: "agent.run" },
         ],
       },
@@ -138,6 +169,9 @@ async function assertRoundTrip(baseUrl) {
   const after = await getJson(`${baseUrl}/v1/ui/spec`);
   assert.equal(after.spec.surfaces[0].title, "Aggie — deployed", "GET must reflect the deployed title");
   assert.equal(after.spec.surfaces[0].controls[0].label, "Speak", "GET must reflect the deployed control label");
+  assert.equal(after.spec.surfaces[0].controls[0].prompt, "Start voice", "GET must reflect bounded control prompts");
+  assert.equal(after.spec.surfaces[0].components.length, 3, "GET must reflect deployed known components");
+  assert.equal(after.spec.surfaces[0].components.find((component) => component.type === "map").markers[0].label, "Meet here", "GET must reflect deployed map markers");
 }
 
 async function assertInvalidRejected(baseUrl) {

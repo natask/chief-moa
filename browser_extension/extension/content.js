@@ -28,6 +28,7 @@
     recordButton,
     stopButton,
     log,
+    uiSpecSurfaceEl,
     pendingConfirm = null,
     open = false,
     voiceState,
@@ -96,6 +97,7 @@
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
   const DEV_RELOAD_POLL_MS = 900;
   const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
+  const UI_SPEC_CACHE_KEY = "ageeUiSpec";
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
   const PROFILE_CACHE_KEY = "ageeProfileCache";
   let devReloadTimer = null;
@@ -113,6 +115,9 @@
   const AVATAR_BEHAVIOR_DURATIONS = new Set(["while_active"]);
   const COMPANION_PET_PALETTES = new Set(["graphite", "green", "blue", "violet", "red", "amber", "teal", "mono"]);
   const COMPANION_PET_MOTIONS = new Set(["hover", "peek", "tap", "trail", "float", "walk", "climb", "spark"]);
+  const UI_SPEC_CONTROL_TYPES = new Set(["button", "text", "toggle", "select"]);
+  const UI_SPEC_COMPONENT_TYPES = new Set(["card", "list", "map", "stat"]);
+  const UI_SPEC_ACTIONS = new Set(["voice.toggle", "command.open", "agent.run", "page.describe", "settings.open", "noop"]);
   const COMPANION_PET_COLORS = {
     graphite: ["#555a62", "#262a30"],
     green: ["#208553", "#0f5534"],
@@ -326,6 +331,7 @@
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
         </div>
+        <div id="agee-ui-surface" aria-live="polite"></div>
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
@@ -343,6 +349,7 @@
     voiceButton = root.querySelector("#agee-voice");
     recordButton = root.querySelector("#agee-record");
     stopButton = root.querySelector("#agee-stop");
+    uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-log");
     voiceState = root.querySelector("#agee-voice-state");
     transcriptEl = root.querySelector("#agee-transcript");
@@ -354,6 +361,7 @@
     restoreUiChimePreference();
     restoreVoiceFirstGestures();
     loadAvatarBehaviorRuntime();
+    loadUiSpec();
     loadActiveCompanionPet();
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
@@ -1079,6 +1087,428 @@
     // with the panel closed.
     if (launcher) launcher.classList.toggle("agee-busy", anyActive());
     syncAvatarBehaviorTrigger();
+  }
+
+  function cleanUiToken(value) {
+    return String(value || "").trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 60);
+  }
+
+  function shortUiText(value, max = 160) {
+    return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+  }
+
+  function sanitizeUiAction(value) {
+    const action = String(value || "").trim();
+    return UI_SPEC_ACTIONS.has(action) ? action : "noop";
+  }
+
+  function sanitizeUiCoordinate(value) {
+    if (!value || typeof value !== "object") return null;
+    const lat = Number(value.lat ?? value.latitude);
+    const lng = Number(value.lng ?? value.lon ?? value.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    return {
+      lat,
+      lng,
+      label: shortUiText(value.label || value.name, 100),
+    };
+  }
+
+  function sanitizeUiControl(control) {
+    if (!control || typeof control !== "object") return null;
+    const type = UI_SPEC_CONTROL_TYPES.has(control.type) ? control.type : "";
+    const id = cleanUiToken(control.id);
+    if (!type || !id) return null;
+    const out = {
+      type,
+      id,
+      label: shortUiText(control.label || id, 80),
+      action: sanitizeUiAction(control.action),
+      prompt: shortUiText(control.prompt, 500),
+      value: shortUiText(control.value, 500),
+      checked: control.checked === true,
+    };
+    if (type === "select" && Array.isArray(control.options)) {
+      out.options = control.options.map((option) => shortUiText(option, 80)).filter(Boolean).slice(0, 50);
+    }
+    return out;
+  }
+
+  function sanitizeUiListItem(item) {
+    if (!item || typeof item !== "object") return null;
+    const label = shortUiText(item.label || item.title, 120);
+    if (!label) return null;
+    return {
+      label,
+      detail: shortUiText(item.detail || item.body || item.text, 300),
+      action: sanitizeUiAction(item.action),
+      prompt: shortUiText(item.prompt, 500),
+    };
+  }
+
+  function sanitizeUiMapMarker(marker) {
+    const coord = sanitizeUiCoordinate(marker);
+    if (!coord) return null;
+    return {
+      ...coord,
+      detail: shortUiText(marker.detail || marker.body, 220),
+    };
+  }
+
+  function sanitizeUiComponent(component) {
+    if (!component || typeof component !== "object") return null;
+    const type = UI_SPEC_COMPONENT_TYPES.has(component.type) ? component.type : "";
+    const id = cleanUiToken(component.id);
+    if (!type || !id) return null;
+    const base = {
+      type,
+      id,
+      title: shortUiText(component.title, 100),
+      tone: ["neutral", "good", "warn", "danger", "info"].includes(component.tone) ? component.tone : "neutral",
+    };
+    if (type === "card") {
+      return { ...base, body: shortUiText(component.body || component.text, 1200) };
+    }
+    if (type === "stat") {
+      return {
+        ...base,
+        label: shortUiText(component.label || component.title || id, 80),
+        value: shortUiText(component.value, 120),
+        delta: shortUiText(component.delta, 120),
+      };
+    }
+    if (type === "list") {
+      const items = Array.isArray(component.items)
+        ? component.items.map(sanitizeUiListItem).filter(Boolean).slice(0, 30)
+        : [];
+      return items.length ? { ...base, items } : null;
+    }
+    if (type === "map") {
+      const markers = Array.isArray(component.markers)
+        ? component.markers.map(sanitizeUiMapMarker).filter(Boolean).slice(0, 24)
+        : [];
+      const center = sanitizeUiCoordinate(component.center) || markers[0] || null;
+      if (!center && markers.length === 0) return null;
+      const zoom = Number(component.zoom);
+      return {
+        ...base,
+        center,
+        zoom: Number.isFinite(zoom) ? Math.max(1, Math.min(Math.round(zoom), 20)) : 12,
+        markers,
+      };
+    }
+    return null;
+  }
+
+  function sanitizeUiSurface(surface) {
+    if (!surface || typeof surface !== "object") return null;
+    const id = cleanUiToken(surface.id);
+    if (!id) return null;
+    return {
+      id,
+      title: shortUiText(surface.title || id, 80),
+      components: Array.isArray(surface.components)
+        ? surface.components.map(sanitizeUiComponent).filter(Boolean)
+        : [],
+      controls: Array.isArray(surface.controls)
+        ? surface.controls.map(sanitizeUiControl).filter(Boolean)
+        : [],
+    };
+  }
+
+  function sanitizeUiSpecPayload(payload) {
+    const source = payload?.payload && typeof payload.payload === "object" ? payload.payload : payload;
+    const spec = source?.spec && typeof source.spec === "object" ? source.spec : source;
+    if (!spec || typeof spec !== "object" || spec.version !== 1 || !Array.isArray(spec.surfaces)) {
+      return null;
+    }
+    const surfaces = spec.surfaces.map(sanitizeUiSurface).filter(Boolean);
+    if (surfaces.length === 0) return null;
+    return {
+      version: 1,
+      isCustomized: source?.is_customized === true || source?.isCustomized === true,
+      surfaces,
+    };
+  }
+
+  function loadUiSpec() {
+    safeStorageLocalGet({ [UI_SPEC_CACHE_KEY]: null })
+      .then((stored) => {
+        const cached = stored?.[UI_SPEC_CACHE_KEY];
+        if (cached) applyUiSpec(cached.payload || cached);
+      })
+      .catch(() => {});
+    safeRuntimeSendMessage({ cmd: "uiSpec" })
+      .then((response) => applyUiSpec(response))
+      .catch(() => applyUiSpec(null));
+  }
+
+  function applyUiSpec(payload) {
+    const spec = sanitizeUiSpecPayload(payload);
+    renderUiSpecSurface(spec);
+  }
+
+  function renderUiSpecSurface(spec) {
+    if (!uiSpecSurfaceEl || !root) return;
+    uiSpecSurfaceEl.replaceChildren();
+    root.classList.remove("agee-has-ui-spec");
+    if (!spec) return;
+    const surface = spec.surfaces[0];
+    const shouldRender = surface.components.length > 0 || spec.isCustomized;
+    if (!surface || !shouldRender) return;
+
+    const shell = document.createElement("section");
+    shell.className = "agee-ui-shell";
+    shell.dataset.surface = surface.id;
+
+    if (surface.title) {
+      const title = document.createElement("div");
+      title.className = "agee-ui-title";
+      title.textContent = surface.title;
+      shell.appendChild(title);
+    }
+
+    if (surface.components.length) {
+      const components = document.createElement("div");
+      components.className = "agee-ui-components";
+      for (const component of surface.components) {
+        const node = renderUiComponent(component);
+        if (node) components.appendChild(node);
+      }
+      if (components.children.length) shell.appendChild(components);
+    }
+
+    if (surface.controls.length) {
+      const controls = document.createElement("div");
+      controls.className = "agee-ui-controls";
+      for (const control of surface.controls) {
+        const node = renderUiControl(control);
+        if (node) controls.appendChild(node);
+      }
+      if (controls.children.length) shell.appendChild(controls);
+    }
+
+    if (shell.children.length <= 1 && !surface.controls.length && !surface.components.length) return;
+    uiSpecSurfaceEl.appendChild(shell);
+    root.classList.add("agee-has-ui-spec");
+    anchorPanel();
+  }
+
+  function renderUiComponent(component) {
+    if (component.type === "card") {
+      const card = document.createElement("article");
+      card.className = `agee-ui-card agee-ui-tone-${component.tone}`;
+      if (component.title) {
+        const title = document.createElement("div");
+        title.className = "agee-ui-card-title";
+        title.textContent = component.title;
+        card.appendChild(title);
+      }
+      if (component.body) {
+        const body = document.createElement("div");
+        body.className = "agee-ui-card-body";
+        body.textContent = component.body;
+        card.appendChild(body);
+      }
+      return card;
+    }
+    if (component.type === "stat") {
+      const stat = document.createElement("div");
+      stat.className = `agee-ui-stat agee-ui-tone-${component.tone}`;
+      const label = document.createElement("div");
+      label.className = "agee-ui-stat-label";
+      label.textContent = component.label;
+      const value = document.createElement("div");
+      value.className = "agee-ui-stat-value";
+      value.textContent = component.value || "-";
+      stat.append(label, value);
+      if (component.delta) {
+        const delta = document.createElement("div");
+        delta.className = "agee-ui-stat-delta";
+        delta.textContent = component.delta;
+        stat.appendChild(delta);
+      }
+      return stat;
+    }
+    if (component.type === "list") {
+      const wrap = document.createElement("div");
+      wrap.className = "agee-ui-list";
+      if (component.title) {
+        const title = document.createElement("div");
+        title.className = "agee-ui-list-title";
+        title.textContent = component.title;
+        wrap.appendChild(title);
+      }
+      for (const item of component.items) {
+        const row = document.createElement(item.action && item.action !== "noop" ? "button" : "div");
+        row.className = "agee-ui-list-row";
+        if (row.tagName === "BUTTON") row.type = "button";
+        const label = document.createElement("span");
+        label.className = "agee-ui-list-label";
+        label.textContent = item.label;
+        row.appendChild(label);
+        if (item.detail) {
+          const detail = document.createElement("span");
+          detail.className = "agee-ui-list-detail";
+          detail.textContent = item.detail;
+          row.appendChild(detail);
+        }
+        if (row.tagName === "BUTTON") {
+          row.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            runUiAction(item.action, item.prompt || item.label, item.label);
+          });
+        }
+        wrap.appendChild(row);
+      }
+      return wrap;
+    }
+    if (component.type === "map") {
+      return renderUiMap(component);
+    }
+    return null;
+  }
+
+  function renderUiMap(component) {
+    const wrap = document.createElement("div");
+    wrap.className = "agee-ui-map-card";
+    if (component.title) {
+      const title = document.createElement("div");
+      title.className = "agee-ui-map-title";
+      title.textContent = component.title;
+      wrap.appendChild(title);
+    }
+    const map = document.createElement("div");
+    map.className = "agee-ui-map";
+    const markers = component.markers.length ? component.markers : [component.center].filter(Boolean);
+    const lats = markers.map((marker) => marker.lat);
+    const lngs = markers.map((marker) => marker.lng);
+    const minLat = Math.min(...lats, component.center?.lat ?? lats[0]);
+    const maxLat = Math.max(...lats, component.center?.lat ?? lats[0]);
+    const minLng = Math.min(...lngs, component.center?.lng ?? lngs[0]);
+    const maxLng = Math.max(...lngs, component.center?.lng ?? lngs[0]);
+    const latSpan = Math.max(maxLat - minLat, 0.01);
+    const lngSpan = Math.max(maxLng - minLng, 0.01);
+    for (const marker of markers) {
+      const pin = document.createElement("span");
+      pin.className = "agee-ui-map-pin";
+      pin.style.left = `${10 + ((marker.lng - minLng) / lngSpan) * 80}%`;
+      pin.style.top = `${90 - ((marker.lat - minLat) / latSpan) * 80}%`;
+      pin.setAttribute("aria-label", marker.label || "map marker");
+      if (marker.label) {
+        const label = document.createElement("span");
+        label.className = "agee-ui-map-pin-label";
+        label.textContent = marker.label;
+        pin.appendChild(label);
+      }
+      map.appendChild(pin);
+    }
+    wrap.appendChild(map);
+    if (component.center?.label) {
+      const meta = document.createElement("div");
+      meta.className = "agee-ui-map-meta";
+      meta.textContent = component.center.label;
+      wrap.appendChild(meta);
+    }
+    return wrap;
+  }
+
+  function renderUiControl(control) {
+    if (control.type === "button") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "agee-ui-control agee-ui-button";
+      button.textContent = control.label;
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        runUiAction(control.action, control.prompt || control.value || control.label, control.label);
+      });
+      return button;
+    }
+    if (control.type === "text") {
+      const wrap = document.createElement("label");
+      wrap.className = "agee-ui-control agee-ui-text";
+      const inputEl = document.createElement("input");
+      inputEl.type = "text";
+      inputEl.placeholder = control.label || "Ask A.G.";
+      inputEl.value = control.value || "";
+      inputEl.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        const value = inputEl.value.trim();
+        if (!value) return;
+        runUiAction(control.action, control.prompt || value, control.label, value);
+      });
+      wrap.appendChild(inputEl);
+      return wrap;
+    }
+    if (control.type === "toggle") {
+      const wrap = document.createElement("label");
+      wrap.className = "agee-ui-control agee-ui-toggle";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = control.checked === true;
+      const text = document.createElement("span");
+      text.textContent = control.label;
+      checkbox.addEventListener("change", () => {
+        const value = checkbox.checked ? "on" : "off";
+        runUiAction(control.action, control.prompt || `${control.label}: ${value}`, control.label, value);
+      });
+      wrap.append(checkbox, text);
+      return wrap;
+    }
+    if (control.type === "select") {
+      const wrap = document.createElement("label");
+      wrap.className = "agee-ui-control agee-ui-select";
+      const label = document.createElement("span");
+      label.textContent = control.label;
+      const select = document.createElement("select");
+      for (const optionText of control.options || []) {
+        const option = document.createElement("option");
+        option.value = optionText;
+        option.textContent = optionText;
+        select.appendChild(option);
+      }
+      select.addEventListener("change", () => {
+        runUiAction(control.action, control.prompt || `${control.label}: ${select.value}`, control.label, select.value);
+      });
+      wrap.append(label, select);
+      return wrap;
+    }
+    return null;
+  }
+
+  function runUiAction(action, prompt, label, value = "") {
+    const resolvedPrompt = String(prompt || "").replace(/\{value\}/g, value).trim();
+    if (action === "voice.toggle") {
+      openTextSurface({ fresh: false });
+      primeAudio();
+      toggleVoice();
+      return;
+    }
+    if (action === "command.open") {
+      openTextSurface({ fresh: false });
+      if (input) {
+        if (resolvedPrompt) setInputText(resolvedPrompt, { select: true });
+        input.focus();
+      }
+      return;
+    }
+    if (action === "page.describe") {
+      describePage();
+      return;
+    }
+    if (action === "settings.open") {
+      safeRuntimeSendMessage({ cmd: "openOptions" });
+      return;
+    }
+    if (action === "agent.run") {
+      submitInstruction(resolvedPrompt || label || value);
+    }
   }
 
   function loadAvatarBehaviorRuntime() {
@@ -2818,6 +3248,10 @@
           if (changes[SELF_EXTENSION_RUNTIME_CACHE_KEY]) {
             const cached = changes[SELF_EXTENSION_RUNTIME_CACHE_KEY].newValue;
             applyAvatarBehaviorRuntime(cached?.runtime || cached);
+          }
+          if (changes[UI_SPEC_CACHE_KEY]) {
+            const cached = changes[UI_SPEC_CACHE_KEY].newValue;
+            applyUiSpec(cached?.payload || cached);
           }
           if (changes[ACTIVE_COMPANION_PET_CACHE_KEY]) {
             const cached = changes[ACTIVE_COMPANION_PET_CACHE_KEY].newValue;
