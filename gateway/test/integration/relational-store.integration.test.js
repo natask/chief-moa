@@ -114,6 +114,7 @@ describe("relational store DATA_DIR import", { skip: !hasDatabaseUrl() }, () => 
     await assertImportedCounts(pool, fixture);
 
     await assertBusinessFailureRollsBackEvent(pool, prefix);
+    await assertTwoPrincipalCollisionBlocked(pool, prefix);
   });
 });
 
@@ -237,16 +238,15 @@ async function eventCount(pool, idempotencyKeys) {
 }
 
 async function assertBusinessFailureRollsBackEvent(pool, prefix) {
-  const store = createRelationalStore({ pool, originId: "relational-store-test" });
   const badSessionId = `${prefix}_bad_session`;
   const badTurnId = `${prefix}_bad_turn`;
   const missingUserId = `${prefix}_missing_user`;
+  const store = createRelationalStore({ pool, userId: missingUserId, originId: "relational-store-test" });
   await assert.rejects(
     () => store.upsertChatTurn({
       id: badTurnId,
       session_id: badSessionId,
       turn_id: badTurnId,
-      user_id: missingUserId,
       messages: [
         { role: "user", content: "this row should fail" },
         { role: "assistant", content: "no event should survive" },
@@ -256,5 +256,28 @@ async function assertBusinessFailureRollsBackEvent(pool, prefix) {
   );
 
   assert.strictEqual(await rowCount(pool, "turns", [badTurnId]), 0);
-  assert.strictEqual(await eventCount(pool, [`chat:${badSessionId}:${badTurnId}:completed`]), 0);
+  assert.strictEqual(await eventCount(pool, [`user:${missingUserId}:chat:${badSessionId}:${badTurnId}:completed`]), 0);
+}
+
+async function assertTwoPrincipalCollisionBlocked(pool, prefix) {
+  const userA = `${prefix}_user_a`;
+  const userB = `${prefix}_user_b`;
+  const sharedId = `${prefix}_shared_id`;
+  await pool.query(
+    "insert into users (id, kind) values ($1, 'account'), ($2, 'account')",
+    [userA, userB],
+  );
+  const storeA = createRelationalStore({ pool, userId: userA, originId: "two-principal" });
+  const storeB = createRelationalStore({ pool, userId: userB, originId: "two-principal" });
+  await storeA.upsertSession({ id: sharedId, label: "principal A" });
+  await assert.rejects(
+    () => storeB.upsertSession({ id: sharedId, label: "principal B" }),
+    /already owned by another user/,
+  );
+  const row = await pool.query("select user_id, label from sessions where id = $1", [sharedId]);
+  assert.deepStrictEqual(row.rows, [{ user_id: userA, label: "principal A" }]);
+  assert.strictEqual(
+    await eventCount(pool, [`user:${userB}:session:${sharedId}:upserted`]),
+    0,
+  );
 }
