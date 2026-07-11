@@ -49,6 +49,26 @@ test("context artifact redacts secret-like text and omits deleted/incognito sour
   assert.equal(artifact.retrieval.source_count, 1);
 });
 
+test("context artifact redacts OAuth URL credentials and PAT-like tokens", () => {
+  const secrets = [
+    "https://callback.invalid/?access_token=oauth-secret-value&state=ok",
+    "https%3Faccess_token%3Dencoded-oauth-secret%26state%3Dok",
+    "refresh_token: refresh-secret-value",
+    "github_pat_abcdefghijklmnopqrstuvwxyz123456",
+    "ghp_abcdefghijklmnopqrstuvwxyz123456",
+    "glpat-abcdefghijklmnopqrstuvwxyz123456",
+    "pat_abcdefghijklmnopqrstuvwxyz123456",
+  ];
+  const artifact = buildContextArtifact({
+    session_id: "session-a",
+    sources: [{ source_id: "chat:secrets", section: "chat", lines: secrets }],
+  });
+  assert.equal(artifact.retrieval.redaction.count, secrets.length);
+  for (const secret of ["oauth-secret-value", "encoded-oauth-secret", "refresh-secret-value", "abcdefghijklmnopqrstuvwxyz123456"]) {
+    assert.doesNotMatch(artifact.text, new RegExp(secret));
+  }
+});
+
 test("context artifact cache identity is stable for equivalent inputs and changes on query or revision change", () => {
   const base = {
     session_id: "session-a",
@@ -116,6 +136,19 @@ test("context artifact dedupes adversarial duplicate snippets deterministically"
   );
 });
 
+test("duplicate source ids cannot make receipt provenance ambiguous", () => {
+  const artifact = buildContextArtifact({
+    session_id: "session-a",
+    sources: [
+      { source_id: "chat:same", section: "chat", dedupe_key: "first", lines: ["first"] },
+      { source_id: "chat:same", section: "chat", dedupe_key: "second", lines: ["second"] },
+    ],
+  });
+  assert.equal(artifact.retrieval.source_count, 1);
+  assert.equal(artifact.retrieval.omitted.duplicate, 1);
+  assert.deepEqual(artifact.sources.map((source) => source.source_id), ["chat:same"]);
+});
+
 test("context artifact receipt is bounded and exposes ranking rationale", () => {
   const artifact = buildContextArtifact({
     session_id: "session-a",
@@ -129,7 +162,7 @@ test("context artifact receipt is bounded and exposes ranking rationale", () => 
         bucket: "standing",
         reason: "standing_fact",
         sort_rank: 10,
-        lines: [`- [standing:1] ${"The user prefers concise plans. ".repeat(40).trim()}`],
+        lines: ["- [standing:1] user prefers concise plans", `  ${"Long detail. ".repeat(120).trim()}`],
       },
       {
         source_id: "chat:1",
@@ -148,4 +181,37 @@ test("context artifact receipt is bounded and exposes ranking rationale", () => 
   assert.equal(receipt.ranking.length, 1);
   assert.equal(receipt.ranking[0].reason, "standing_fact");
   assert.equal(artifact.retrieval.truncated, true);
+  assert.deepEqual(receipt.source_ids, ["standing:1"]);
+  assert.deepEqual(receipt.ranking.map((item) => item.source_id), ["standing:1"]);
+});
+
+test("receipt excludes accepted sources that did not render", () => {
+  const artifact = buildContextArtifact({
+    session_id: "session-a",
+    max_chars: 1000,
+    sources: [
+      { source_id: "chat:rendered", section: "chat", sort_rank: 1, lines: ["- [chat:rendered] visible"] },
+      { source_id: "chat:not-rendered", section: "chat", sort_rank: 2, lines: [`- [chat:not-rendered] ${"x".repeat(2000)}`] },
+    ],
+  });
+  const receipt = contextArtifactReceipt(artifact);
+  assert.deepEqual(receipt.source_ids, ["chat:rendered"]);
+  assert.deepEqual(receipt.ranking.map((item) => item.source_id), ["chat:rendered"]);
+  assert.equal(receipt.source_count, 1);
+  assert.equal(receipt.omitted.render_limit, 1);
+  assert.doesNotMatch(artifact.text, /chat:not-rendered/);
+});
+
+test("candidate and per-source work are bounded before sorting and redaction", () => {
+  let inspected = 0;
+  const manyLines = Array.from({ length: 1000 }, (__, line) => `line ${line}`);
+  const sources = Array.from({ length: 10000 }, (_, index) => ({
+    get sort_rank() { inspected += 1; return index; },
+    source_id: `chat:${index}`,
+    section: "chat",
+    lines: manyLines,
+  }));
+  const artifact = buildContextArtifact({ session_id: "session-a", max_sources: 2, sources });
+  assert.ok(inspected < 100, `sort inspected too many candidates: ${inspected}`);
+  assert.ok(artifact.retrieval.omitted.source_limit >= 9990);
 });

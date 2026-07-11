@@ -1834,6 +1834,9 @@ module.exports = {
   runCascadedVoiceReasoning,
   recordStreamingVoiceTurn,
   voiceDiagnosisPayload,
+  // Test-only collection seams for hostile session/branch isolation fixtures.
+  runsForSession,
+  browserTasksForSession,
   agentProfile,
 };
 
@@ -12106,16 +12109,15 @@ function browserTurnsForSession(sessionId, branchId = "", limit = 50) {
     }));
 }
 
-function runsForSession(sessionId, turns) {
-  const referenced = new Set();
-  for (const turn of turns) {
-    const ids = turn.references?.agent_run_ids;
-    if (Array.isArray(ids)) {
-      for (const id of ids) referenced.add(id);
-    }
-  }
+function runsForSession(sessionId, _turns, branchId = "") {
+  const safeSessionId = sanitizeOptionalId(sessionId, "default");
+  const safeBranchId = branchId ? sanitizeOptionalId(branchId, "default") : "";
   return listAllAgentRuns()
-    .filter((run) => run.conversation_id === sessionId || referenced.has(run.id))
+    .filter((run) => {
+      if (String(run.conversation_id || "") !== safeSessionId) return false;
+      if (safeBranchId && String(run.branch_id || "default") !== safeBranchId) return false;
+      return true;
+    })
     .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
 }
 
@@ -12180,7 +12182,7 @@ function durableSessionContextBlock(options = {}) {
     browserTurns = parentBrowser.concat(browserTurns).sort((a, b) => String(a.created_at || b.updated_at || "").localeCompare(String(b.created_at || b.updated_at || "")));
   }
   voiceTurns = voiceTurns.slice(-turnLimit);
-  const runs = runsForSession(sessionId, voiceTurns).slice(0, 5);
+  const runs = runsForSession(sessionId, voiceTurns, branchFilter).slice(0, 5);
   const browserTasks = browserTasksForSession(sessionId, branchFilter, 5);
 
   if (voiceTurns.length === 0 && chatTurns.length === 0 && browserTurns.length === 0 && runs.length === 0 && browserTasks.length === 0) {
@@ -12372,7 +12374,7 @@ function buildCanonicalContextArtifact(options = {}) {
     voiceTurns = voiceTurns.slice(-turnLimit);
     chatTurns = chatTurns.slice(-chatLimit);
     browserTurns = browserTurns.slice(-chatLimit);
-    const runs = runsForSession(sessionId, voiceTurns).slice(0, 5);
+    const runs = runsForSession(sessionId, voiceTurns, branchFilter).slice(0, 5);
     const browserTasks = browserTasksForSession(sessionId, branchFilter, 5);
 
     const sources = [];
