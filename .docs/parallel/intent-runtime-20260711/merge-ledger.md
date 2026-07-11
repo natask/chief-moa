@@ -78,11 +78,13 @@ voice/LLM trace correlation.
   selected before answering. The Android resolver-only branch adds no required
   behavior and will not be merged.
 - Live deployment and state-safety audit: pending integration.
-- Local reference-product resolution: complete. The forgotten software-factory
-  reference is Superset (`/projs/superset`), with Emdash (`/projs/emdash`) as
-  the direct local/YC competitor. Superlog and StarSling resolve the agentic
-  observability and self-driving CI references. These are recorded as separate
-  adapter/evidence nodes from canonical voice transactions and intent state.
+- Local reference-product resolution: complete. The recovered software-factory
+  pair is Emdash (`/projs/emdash`) and Superset (`/projs/superset`): Emdash
+  matches the literal open-source orchestrator clue, while Superset matches the
+  full-product-stack clue but is ELv2 source-available. Superlog and StarSling
+  resolve the agentic observability and self-driving CI references. These are
+  recorded as separate adapter/evidence nodes from canonical voice transactions
+  and intent state.
 - Voice telemetry reuse validation: complete. LiveKit Agents is the closest
   unified voice timeline but its Insights store is cloud-only; Pipecat is the
   strongest inspected OSS pipeline instrumentation reference; Langfuse and
@@ -155,6 +157,11 @@ voice/LLM trace correlation.
   separation, state-isolated previews, releases, upstream-fork lifecycle, and
   operational documentation. Explicitly rejected its workspace/task schema as
   Chief Moa's canonical intent model.
+- 2026-07-11: corrected the product/license map after inspecting controlling
+  local license files: Emdash is Apache-2.0; Superset's `LICENSE.md` is ELv2
+  despite Apache claims in its README/package metadata. The durable notes now
+  call Superset source-available and identify the recovered pair without
+  falsely assigning every spoken clue to one member.
 - 2026-07-11: consolidated the user's rapid spoken statements into
   `research/spoken-intent-map.md`, with ten bounded product nodes and explicit
   authority edges. This keeps capture, intent, canonical voice history,

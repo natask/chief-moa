@@ -6,21 +6,24 @@ code or send Chief Moa data to a third party.
 
 ## 1. Software-factory control plane
 
-### Superset — almost certainly the forgotten local reference
+### Superset — the broader full-product-stack reference
 
 - Local source: `/Users/natnaelkahssay/projs/superset`
 - Upstream: <https://github.com/superset-sh/superset>
-- Current positioning: open-source terminal/IDE for managing many coding agents
-  in parallel, worktree isolation, monitoring, diffs, presets, and remote
-  workspaces.
-- License: Apache-2.0.
+- Current positioning: source-available terminal/IDE for managing many coding
+  agents in parallel, worktree isolation, monitoring, diffs, presets, and
+  remote workspaces.
+- Controlling local license: Elastic License 2.0. The committed README and root
+  package metadata say Apache-2.0, but `LICENSE.md` contains ELv2 and therefore
+  controls the checked-out code. Treat it as source-available, not OSI open
+  source, and do not infer hosted-service rights from the inconsistent badge.
 - YC: Spring 2026: <https://www.ycombinator.com/companies/superset>
 
-Why it matches the spoken clues: it is running from local source, the team is
-Asian-led, it is an orchestration/control surface for coding agents, and its
-direct local competitor below is also YC-backed.
+Its breadth best matches the remembered “exceptional full-fledged product”
+association. The literal open-source clue does not match its controlling
+license.
 
-### Emdash — the remembered competitor
+### Emdash — likely the forgotten open-source orchestrator
 
 - Local source: `/Users/natnaelkahssay/projs/emdash`
 - Upstream: <https://github.com/generalaction/emdash>
@@ -29,6 +32,13 @@ direct local competitor below is also YC-backed.
   and remote projects over SSH.
 - License: Apache-2.0.
 - YC: Winter 2026: <https://www.ycombinator.com/companies/emdash>
+
+Why the pair matches: both are local, current YC-backed coding-agent
+orchestrators and direct product references. Emdash matches the literal
+open-source clue; Superset matches the unusually complete company/product stack
+clue. The phrase heard as “Asian orchestration” was likely “agent
+orchestration.” The recovered answer is therefore the Emdash/Superset pair;
+assigning only one side with certainty would overstate the evidence.
 
 Chief Moa boundary: borrow product lessons about workspaces, isolation, agent
 attention, review, and status—not their database as Chief Moa's canonical intent

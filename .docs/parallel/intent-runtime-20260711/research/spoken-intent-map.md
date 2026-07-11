@@ -86,9 +86,11 @@ repair outcome. This is neither a raw dashboard nor an ungrounded summary.
 **Need:** launch and supervise parallel coding agents in isolated worktrees,
 review their diffs, run verification, and manage attention across projects.
 
-**Reference:** Superset is the forgotten local reference; Emdash is its direct
-local/YC-backed competitor. Chief Moa should integrate with this category as an
-execution adapter. Their workspace/task database does not own Chief Moa intent.
+**Reference:** the recovered pair is Emdash and Superset. Emdash most directly
+matches the forgotten open-source orchestrator; Superset is the broader
+full-product-stack reference but its controlling license is ELv2. Chief Moa
+should integrate with this category as an execution adapter. Their
+workspace/task database does not own Chief Moa intent.
 
 ### G. CI execution and optimization
 
@@ -113,10 +115,11 @@ owned-data preference.
 **Need:** inspect LLM/tool traces, annotate failures, run evals, and compare
 releases without rebuilding commodity trace UI.
 
-**Candidates:** self-hosted Langfuse or Phoenix as optional projections. LiveKit
-is the best inspected voice-timeline product reference but its unified Insights
-store is cloud-only. Pipecat is the best inspected open voice-pipeline metrics
-reference. None becomes canonical voice or intent storage.
+**Candidates:** open/self-hosted Langfuse or self-hostable, source-available
+Phoenix as optional projections. LiveKit is the best inspected voice-timeline
+product reference but its unified Insights store is cloud-only. Pipecat is the
+best inspected open voice-pipeline metrics reference. None becomes canonical
+voice or intent storage.
 
 ### J. General dashboards and infrastructure telemetry
 

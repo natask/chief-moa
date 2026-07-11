@@ -8,7 +8,7 @@ changes to Superset and did not read environment files.
 ## Why this is the remembered exceptional reference
 
 Superset is not merely an agent launcher. Its committed repository contains the
-pieces required to ship and operate a full open-source software product:
+pieces required to ship and operate a full software product:
 
 - a Bun/Turborepo monorepo with shared TypeScript, UI, auth, database, agent,
   chat, MCP, filesystem, and host-service packages;
@@ -26,9 +26,15 @@ pieces required to ship and operate a full open-source software product:
 - a documented fork-and-bundle lifecycle for upstream agent infrastructure
   (`mastracode`), including deterministic versioned artifacts.
 
-That breadth is the important association: a credible open-source product is
-the product plus its migration, preview, release, rollback, documentation,
-contribution, dependency-fork, and operational systems.
+That breadth is the important association: a credible product is the product
+plus its migration, preview, release, rollback, documentation, contribution,
+dependency-fork, and operational systems.
+
+License boundary: the checkout's controlling `LICENSE.md` is Elastic License
+2.0 even though its README and package metadata say Apache-2.0. These notes
+extract architectural ideas only. Chief Moa must not copy Superset code or
+describe Superset as open source without a separate license/provenance review;
+Emdash is the Apache-2.0 member of the recovered pair.
 
 ## Patterns Chief Moa should adopt
 

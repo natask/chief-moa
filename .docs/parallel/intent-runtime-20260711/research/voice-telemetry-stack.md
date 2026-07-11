@@ -83,10 +83,12 @@ Official docs:
 - <https://arize.com/docs/phoenix>
 - <https://arize.com/docs/phoenix/tracing/how-to-tracing/advanced/masking-span-attributes>
 
-Phoenix is another credible open-source OTel/OpenInference trace/eval backend,
-with session/trace analysis, annotations, experiments, and explicit masking.
-It has the same boundary for this use: good projection/eval plane; not the
-inspected all-in-one voice audio transaction product.
+Phoenix is another credible self-hostable OTel/OpenInference trace/eval
+backend, with session/trace analysis, annotations, experiments, and explicit
+masking. Its current Phoenix server is Elastic License 2.0, so it is
+source-available rather than OSI open source. It has the same boundary for this
+use: good optional projection/eval plane; not the inspected all-in-one voice
+audio transaction product and not an open-core dependency to adopt casually.
 
 ## Validated conclusion
 
