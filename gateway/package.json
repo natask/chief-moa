@@ -9,6 +9,7 @@
     "check": "MOA_SKIP_SLOW=1 node --test \"test/**/*.test.js\"",
     "test": "node --test \"test/**/*.test.js\"",
     "test:billing": "node --test test/billing-domain.test.js",
+    "test:companion-package": "node --test test/companion-package.test.js",
     "migrate": "node-pg-migrate up",
     "migrate:up": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",

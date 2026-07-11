@@ -81,6 +81,26 @@ domain seam proves deterministic invariants, but Postgres migration/restore,
 cross-process atomic budget reservation and live-provider behavior require
 separate isolated evidence before the seam can become payment authority.
 
+## Companion package boundary
+
+Portable companions are canonical signed data and bounded image/audio assets,
+never executable extensions. The provider-neutral verifier requires a
+caller-owned Ed25519 trust store, accepted-license set, moderation-policy set,
+protocol version and revocation snapshot. All policies are empty and fail
+closed by default: a valid signature alone is not marketplace authority.
+
+The local package envelope is JSON rather than an extracted archive. Its initial
+portable-media profile accepts only fully parsed PNG and PCM-style WAV
+containers; broader formats require equally strict bounded parsers. It rejects
+unknown fields, traversal, polyglot/trailing or executable media, and undeclared profile fields;
+checks encoded, per-asset, total-byte, count and dimension limits; and verifies
+each content hash before returning an immutable value. Preview, apply and revert
+records are hash-chained non-mutating plans. They do not write a profile,
+publish a listing, fetch remote content or execute a capability. Hosted sharing
+and actual profile apply wait for identity and Aggie/MX protocol authority.
+Public trust roots, accepted licenses, moderation/appeals, offline revocation
+freshness and client rollback remain intentionally unwired.
+
 ## Telemetry and observability boundary
 
 Canonical product events remain the source of truth. Operational telemetry is a

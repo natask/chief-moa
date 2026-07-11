@@ -1,5 +1,48 @@
 ## ADDED Requirements
 
+### Requirement: Portable companion packages fail closed
+The gateway package boundary SHALL accept only canonical
+`moa-companion-package/v1` envelopes containing a signed manifest and bounded
+declared asset bodies. Verification SHALL require caller-owned signer trust,
+license acceptance, moderation-policy acceptance, compatibility and revocation
+policy. A signature SHALL NOT by itself confer publication or apply authority.
+
+#### Scenario: Verified local import
+- **WHEN** an Ed25519-signed manifest, all declared asset hashes, provenance,
+  license, compatibility, moderation and caller policies agree
+- **THEN** verification returns an immutable content-addressed package
+- **AND** performs no network request, publication, profile mutation or action
+
+#### Scenario: Trust or provenance is incomplete
+- **WHEN** the signer is unknown or revoked, the license/moderation policy is
+  not caller-approved, the package is revoked, or provenance is incomplete
+- **THEN** import fails closed
+- **AND** the artifact cannot be previewed or used to form an apply plan
+
+### Requirement: Companion resources and capabilities are bounded data
+Packages SHALL reject archives, traversal, unknown fields, executable media,
+dynamic-code capabilities and profile fields not explicitly declared by the
+manifest. Asset count, encoded size, decoded per-asset and aggregate size, and
+image dimensions SHALL have hard limits checked before acceptance.
+The initial portable-media profile SHALL accept only structurally parsed PNG
+and WAV containers and SHALL reject trailing/polyglot bytes; adding another
+format requires an equally strict bounded parser and hostile fixtures.
+
+#### Scenario: Hostile package payload
+- **WHEN** a package contains JavaScript/CSS/shell capability, an unsafe path,
+  undeclared profile field, hash mismatch or resource-limit violation
+- **THEN** import fails before returning a verified package
+
+### Requirement: Lifecycle evidence is reversible and non-executing
+Preview, apply-plan and revert-plan records SHALL form a digest chain over a
+verified package and its declared profile fields. The package seam SHALL mark
+these records as non-mutating and SHALL NOT itself write the active profile.
+
+#### Scenario: Apply plan follows preview
+- **WHEN** a caller creates an apply plan for a locally verified package
+- **THEN** it references the preview receipt digest and exact package digest
+- **AND** a later revert plan references the apply-plan digest
+
 ### Requirement: Gateway-owned companion manifests
 The gateway SHALL expose token-guarded companion manifests whose entries compile
 to runtime agent profile patches. A companion SHALL include id, version, name,
