@@ -45,6 +45,11 @@ must wait for stable surface, identity, receipt, preview, and rollback contracts
 7. **P6 — companion catalog and sharing.** Portable signed manifests/assets,
    compatibility metadata, moderation/provenance, and rollback.
 
+Every program also maps its work onto the cross-cutting responsibilities in
+`product-platform-stack.md`: product data, frontend, backend, telemetry,
+observability, identity/security, payments, operations, and product analytics.
+These are responsibilities, not necessarily separate services or vendors.
+
 ## Explicit non-goals for P1
 
 - No macOS, iOS, or Windows shell implementation.
