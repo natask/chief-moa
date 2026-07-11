@@ -6,11 +6,20 @@ turns: client overrides use `context_action`, the model tool name is
 `context_management`, and the only valid action names are `continue`, `new`,
 `fork`, and `incognito`.
 
+For cascaded voice without an explicit client action, the gateway SHALL run a
+dedicated context-free decision preflight that forces exactly one
+`context_management` call. It SHALL assemble the canonical artifact only after
+the decision and SHALL send the answer in a fresh request without that tool.
+The preflight SHALL receive no standing facts, prior messages, screen evidence,
+recency, semantic recall, run, or task content, and its prose SHALL never reach
+the user or TTS.
+
 #### Scenario: Explicit client action wins
 - **WHEN** a client sends `context_action`
 - **THEN** the gateway records that exact action as the turn's filing decision
 - **AND** the model cannot override it with a different `context_management`
   tool call
+- **AND** no decision preflight request is made
 
 #### Scenario: Model chooses incognito without a warrant
 - **WHEN** the model calls `context_management` with `action: "incognito"`

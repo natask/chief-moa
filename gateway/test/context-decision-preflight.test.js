@@ -1,0 +1,64 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const {
+  contextPreflightMessages,
+  contextPreflightTool,
+  parseOpenAiContextPreflight,
+  parseVertexContextPreflight,
+  buildCanonicalContextArtifact,
+  brain,
+} = require("../server");
+
+test("decision preflight contains only bounded instruction, current turn, and decision schema", () => {
+  const callerSecret = "CALLER_RECENCY_SECRET_SENTINEL";
+  const standingSecret = "STANDING_FACT_SECRET_SENTINEL";
+  const messages = contextPreflightMessages("current user turn");
+  const serialized = JSON.stringify({ messages, tools: [contextPreflightTool()] });
+  assert.equal(messages.length, 2);
+  assert.match(serialized, /current user turn/);
+  assert.match(serialized, /context_management/);
+  assert.doesNotMatch(serialized, new RegExp(callerSecret));
+  assert.doesNotMatch(serialized, new RegExp(standingSecret));
+  assert.deepEqual(contextPreflightTool().function.parameters.required, ["action", "retrieval_query"]);
+});
+
+test("OpenAI and Vertex parsers require exactly one valid context decision tool", () => {
+  const args = { action: "new", retrieval_query: "bounded query" };
+  const openAi = (calls) => ({ choices: [{ message: { content: "discard me", tool_calls: calls } }] });
+  const call = (name, value = args) => ({ function: { name, arguments: JSON.stringify(value) } });
+  assert.deepEqual(parseOpenAiContextPreflight(openAi([call("context_management")])), args);
+  assert.equal(parseOpenAiContextPreflight(openAi([])), null);
+  assert.equal(parseOpenAiContextPreflight(openAi([call("context_management"), call("context_management")])), null);
+  assert.equal(parseOpenAiContextPreflight(openAi([call("update_agent_profile")])), null);
+  assert.equal(parseOpenAiContextPreflight(openAi([{ function: { name: "context_management", arguments: "{" } }])), null);
+
+  const vertex = (parts) => ({ candidates: [{ content: { parts } }] });
+  const fn = (name, value = args) => ({ functionCall: { name, args: value } });
+  assert.deepEqual(parseVertexContextPreflight(vertex([fn("context_management")])), args);
+  assert.equal(parseVertexContextPreflight(vertex([{ text: "plain answer" }])), null);
+  assert.equal(parseVertexContextPreflight(vertex([fn("phone_action")])), null);
+  assert.equal(parseVertexContextPreflight(vertex([fn("context_management"), fn("context_management")])), null);
+});
+
+test("standing-only artifact excludes recency, semantic recall, runs, and tasks", () => {
+  const originalStanding = brain.recallStandingFacts;
+  const originalRecall = brain.recall;
+  brain.recallStandingFacts = () => [{ slug: "standing/test", snippet: "STANDING_ONLY_SENTINEL" }];
+  brain.recall = () => { throw new Error("semantic recall must not run for standing-only scope"); };
+  try {
+    const artifact = buildCanonicalContextArtifact({
+      sessionId: "standing-only-hostile",
+      branchId: "new-cold",
+      query: "CALLER_QUERY_SENTINEL",
+      standingOnly: true,
+    });
+    assert.match(artifact.text, /STANDING_ONLY_SENTINEL/);
+    assert.doesNotMatch(artifact.text, /CALLER_QUERY_SENTINEL/);
+    assert.ok(artifact.sources.every((source) => source.section === "standing"));
+  } finally {
+    brain.recallStandingFacts = originalStanding;
+    brain.recall = originalRecall;
+  }
+});

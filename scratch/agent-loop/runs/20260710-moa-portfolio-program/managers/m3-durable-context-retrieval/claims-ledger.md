@@ -86,6 +86,18 @@ local dependencies.
   the OpenSpec requirement that a new or incognito thread load standing facts
   without old-thread recency. Verdict: BLOCK; revised architecture contract
   required before repair.
+- Repair M3-1-R6: dedicated context-free, forced single-tool decision preflight
+  precedes one resolved-scope artifact and a fresh answer request. Explicit
+  client actions and local utilities skip preflight; answer tools exclude
+  `context_management`; new/incognito artifacts and their fail-soft legacy path
+  are standing-only; fork lineage and the cascaded recorder reuse the same
+  filing result.
+- R6 measured deterministic evidence: decision/artifact smokes pass; focused
+  preflight tests 3/3; both strict OpenSpec changes valid; full gateway 192
+  passed, 1 skipped, 0 failed; context-artifact quality maximum complexity 10
+  and maximum CRAP 11.896296. No live/paid provider call, latency benchmark,
+  external evaluation, preview, or deployment was run. Fresh independent audit
+  remains required.
 
 ## Commit / deploy status
 

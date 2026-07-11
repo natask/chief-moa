@@ -32,13 +32,24 @@ fresh branch and set it active.
 ### Requirement: The context_management decision
 The gateway SHALL decide where a user turn belongs (continue, new, fork, or
 incognito) before answering, on the text-chat path and the cascaded voice
-reasoner, via one `context_management` tool call. A deterministic prior SHALL run
+reasoner, via exactly one `context_management` tool call in a dedicated decision
+preflight. The preflight SHALL receive only the current user text and bounded
+decision instructions, SHALL force that tool, SHALL discard prose, and SHALL
+offer no mutation/action tools. The answer SHALL start as a fresh provider
+request after scope resolution and SHALL NOT offer `context_management`. A
+deterministic prior SHALL run
 first: an explicit client `context_action` SHALL always win; otherwise the prior
 SHALL default to continue, lift to new/fork by phrasing, and lift to incognito
 only on an explicit linguistic warrant. The model tool call MAY override the
 prior EXCEPT it MAY only choose incognito when the transcript carries that
 explicit warrant. Every decision SHALL be stored as an inspectable record and a
 product event, and a decision failure SHALL never fail the turn.
+
+An explicit valid client action SHALL skip preflight. A malformed, absent,
+unknown, duplicate, timed-out, or failed preflight tool result SHALL retain the
+prior without a preflight plain-answer fallback. The canonical artifact query
+SHALL use the valid decision `retrieval_query` when nonblank and otherwise the
+current user text.
 
 #### Scenario: Model overrides the prior
 - **WHEN** the model calls `context_management` with `action` = new on a turn
@@ -76,7 +87,9 @@ recency block. A new or incognito thread SHALL still load standing facts.
 
 ### Requirement: Canonical context artifact
 The gateway SHALL assemble the bounded chat and cascaded-voice retrieval inputs
-as a canonical context artifact before provider calls. That artifact SHALL carry
+as a canonical context artifact after any decision preflight and before the
+fresh answer provider call. No retrieval artifact or source content SHALL be
+assembled for or disclosed to the preflight. That artifact SHALL carry
 an artifact version, artifact id, deterministic cache identity, stable source
 ids, ranking rationale, truncation metadata, and secret-like-text redaction
 metadata. The user-visible response `context` block SHALL expose only a bounded

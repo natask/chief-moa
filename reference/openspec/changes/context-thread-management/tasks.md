@@ -10,8 +10,9 @@
 ## 2. context_management tool + guardrails
 
 - [x] 2.1 Add `lib/context-decision.js`: deterministic prior + double-gate resolver.
-- [x] 2.2 Offer `context_management` via `callModelToolLoop` on the chat path and
-      the cascaded voice reasoner.
+- [x] 2.2 Force `context_management` in a context-free decision preflight on the
+      chat and cascaded voice paths, then start a fresh scoped answer request
+      without the decision tool.
 - [x] 2.3 Resolve the filing thread (continue/new/fork/incognito) and store the
       decision as a record + `context.decision.recorded` product event.
 - [x] 2.4 Return a bounded `context` block on both paths.

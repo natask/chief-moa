@@ -55,12 +55,14 @@ const previousFetch = global.fetch;
 // When set, the model returns this context_management tool call on the first
 // round (no prior tool result), then plain text on the next round.
 let pendingContextCall = null;
+const modelRequests = [];
 global.fetch = async (url, options = {}) => {
   const u = String(url);
   if (u.includes("/chat/completions")) {
     const body = JSON.parse(String(options.body || "{}"));
-    const hasToolResult = Array.isArray(body.messages) && body.messages.some((m) => m.role === "tool");
-    if (pendingContextCall && !hasToolResult) {
+    modelRequests.push(body);
+    const isPreflight = body.tool_choice?.function?.name === "context_management";
+    if (pendingContextCall && isPreflight) {
       return jsonResponse({
         choices: [{
           message: {
@@ -154,6 +156,7 @@ function goldenTable() {
 }
 
 async function modelOverridesPrior() {
+  modelRequests.length = 0;
   pendingContextCall = { action: "new", retrieval_query: "grocery budget", thread_label: "Groceries" };
   try {
     const chat = await requestJson("POST", "/v1/chat", {
@@ -166,6 +169,13 @@ async function modelOverridesPrior() {
     assert.equal(chat.json.context.model_override, true, "the override must be reported");
     assert.ok(chat.json.branch_id.startsWith("thr-"), `a new thread must file on a thr- branch, got ${chat.json.branch_id}`);
     assert.equal(chat.json.context.thread_label, "Groceries", "the thread label must be carried");
+    assert.equal(modelRequests.length, 2, "an undecided turn must use one preflight and one answer request");
+    const [preflight, answer] = modelRequests;
+    assert.equal(preflight.tool_choice.function.name, "context_management", "preflight must force the decision tool");
+    assert.deepEqual(preflight.tools.map((tool) => tool.function.name), ["context_management"], "preflight must offer no mutation tools");
+    assert.ok(!JSON.stringify(preflight.messages).includes("grocery budget"), "preflight must not contain retrieval output");
+    assert.ok(!answer.tools?.some((tool) => tool.function?.name === "context_management"), "answer must not offer context_management again");
+    assert.ok(answer.messages.some((message) => message.role === "system"), "answer must receive the resolved canonical artifact");
   } finally {
     pendingContextCall = null;
   }
@@ -188,6 +198,7 @@ async function incognitoWarrantGate() {
 }
 
 async function clientActionBeatsModel() {
+  modelRequests.length = 0;
   pendingContextCall = { action: "new", retrieval_query: "x" };
   try {
     const chat = await requestJson("POST", "/v1/chat", {
@@ -202,6 +213,7 @@ async function clientActionBeatsModel() {
   } finally {
     pendingContextCall = null;
   }
+  assert.ok(modelRequests.every((request) => request.tool_choice?.function?.name !== "context_management"), "explicit client action must skip preflight");
 }
 
 async function chatContextBlockAndPersistence() {

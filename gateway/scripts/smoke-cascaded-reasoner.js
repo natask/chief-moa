@@ -96,7 +96,11 @@ global.fetch = async (url, options = {}) => {
   }
   if (u.includes("/chat/completions")) {
     const body = JSON.parse(String(options.body || "{}"));
-    fetchCalls.push({ kind: "openai", url: u, body });
+    const contextPreflight = body.tool_choice?.function?.name === "context_management";
+    fetchCalls.push({ kind: contextPreflight ? "context-preflight" : "openai", url: u, body });
+    if (contextPreflight) {
+      return jsonResponse({ choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "context_1", type: "function", function: { name: "context_management", arguments: JSON.stringify({ action: "continue", retrieval_query: "" }) } }] } }] });
+    }
     if (body.stream === true && Array.isArray(pendingStreamRounds) && pendingStreamRounds.length > 0) {
       return sseResponse(pendingStreamRounds.shift());
     }
@@ -121,7 +125,12 @@ global.fetch = async (url, options = {}) => {
     });
   }
   if (u.includes(":generateContent")) {
-    fetchCalls.push({ kind: "vertex", url: u, body: JSON.parse(String(options.body || "{}")) });
+    const body = JSON.parse(String(options.body || "{}"));
+    const contextPreflight = body.toolConfig?.functionCallingConfig?.allowedFunctionNames?.includes("context_management");
+    fetchCalls.push({ kind: contextPreflight ? "context-preflight" : "vertex", url: u, body });
+    if (contextPreflight) {
+      return jsonResponse({ candidates: [{ content: { parts: [{ functionCall: { name: "context_management", args: { action: "continue", retrieval_query: "" } } }] } }] });
+    }
     return jsonResponse({ candidates: [{ content: { parts: [{ text: "Understood, master." }] } }] });
   }
   throw new Error(`unexpected fetch to ${u}`);

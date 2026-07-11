@@ -765,12 +765,16 @@ to accomplish.
 user turn (chat or cascaded voice)
   -> deterministic prior: explicit client context_action wins; else continue,
      lifted to new/fork by phrasing, to incognito only on an explicit warrant
-  -> the model may call context_management (one tool call) to refine the choice,
-     and returns a retrieval_query for recall
+  -> unless the client made an explicit choice, a dedicated context-free model
+     preflight is forced to call only context_management exactly once; its text
+     is discarded and it returns a retrieval_query for recall
   -> double gate: the model may override the prior EXCEPT it may only choose
      incognito with the same explicit warrant
-  -> the turn is filed on the resolved branch and the decision is stored as a
-     record + product event
+  -> the gateway resolves one immutable filing/scope result, assembles one
+     canonical artifact for that scope, then starts a fresh answer request that
+     does not offer context_management
+  -> the turn is filed on that same resolved branch and the decision is stored
+     as a record + product event
 ```
 
 A thread is a `branch` inside the one shared session. The thread store adds the
@@ -795,7 +799,15 @@ The four actions:
   no broker event. The reply carries `context: { action: "incognito", persisted:
   false }`. This is the explicit carve-out to "no spoken intent is ephemeral".
 
-Every non-incognito turn gets per-query enrichment, assembled LLM-free at read
+The preflight receives only the bounded current user text and decision schema:
+no prior messages, standing facts, screen evidence, recency, recall, runs, or
+tasks. Failure, malformed output, an unsupported/duplicate tool, or a provider
+without tools leaves the deterministic prior in force and never triggers a
+preflight plain-answer fallback. Explicit client choices and local utility
+replies skip the preflight. New and incognito answer artifacts are standing-only;
+fork artifacts contain parent lineage only through the captured fork point.
+
+Every non-incognito continued/fork turn gets per-query enrichment, assembled LLM-free at read
 time within the existing char budgets, in priority order: (1) standing facts,
 (2) thread recency scoped to the active branch with fork-point inheritance, and
 (3) a bounded semantic recall block from `brain.recall` over rolling thread
@@ -804,7 +816,8 @@ recency block. Rolling per-thread summaries are regenerated asynchronously after
 the response is sent (never adding turn latency) on a turn-count cadence and when
 the user moves off the thread, and indexed into gbrain for later recall. The
 context decision, the thread store, and the enrichment blocks never fail a turn:
-any error falls back to continue on the caller branch with standing-facts recall.
+any error falls back to the resolved scope without injecting caller history into
+a new or incognito answer.
 
 ### Voice Work-History Control Plane
 
