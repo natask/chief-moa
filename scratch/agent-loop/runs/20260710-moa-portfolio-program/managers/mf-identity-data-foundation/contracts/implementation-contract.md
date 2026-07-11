@@ -17,15 +17,16 @@ context, without redesigning auth or applying a durable migration.
 - `createRelationalStore` requires `userId`.
 - Every method rejects a record whose optional `user_id` differs.
 - SQL receives only the trusted `userId`.
-- Events include tenant-prefixed streams/idempotency keys and tenant actor
-  authority metadata where the existing envelope permits it.
+- Events include versioned fixed-length tenant-scoped streams/idempotency keys
+  plus tenant authority metadata where the existing envelope permits it.
 - Importer explicitly supplies legacy owner identity.
 
 ## Forbidden shortcuts
 
 No request/body-derived tenant, no global mutable current user, no production
 DB, no destructive migration, no claim that RLS is end-to-end, no invented
-retention policy, and no benchmark/confidence conflation.
+retention policy, no cryptographic-proof claim, and no benchmark/confidence
+conflation.
 
 ## Gates
 

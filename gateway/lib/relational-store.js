@@ -1,6 +1,11 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 const { appendEventOnClient, withTransaction } = require("./event-substrate");
+
+const TENANT_EVENT_SCOPE_VERSION = "tenant-event-scope.v1";
+const MAX_EVENT_IDENTIFIER_LENGTH = 240;
 
 function createRelationalStore(options = {}) {
   if (!options.pool || typeof options.pool.connect !== "function") {
@@ -619,7 +624,7 @@ function trustedUserId(value) {
 function tenantEventInput(input, userId) {
   // Preserve the already-shipped single-owner event identity so re-running the
   // legacy importer remains idempotent across this staged change. `owner` is a
-  // reserved seeded principal; new hosted identities use encoded namespaces.
+  // reserved seeded principal; new hosted identities use derived namespaces.
   if (userId === "owner") {
     return {
       ...input,
@@ -629,19 +634,48 @@ function tenantEventInput(input, userId) {
       },
     };
   }
-  // URI encoding makes the tenant one unambiguous segment even when an auth
-  // provider uses ':' in its subject. Raw delimiter concatenation is not
-  // injective across (tenant, stream) pairs.
-  const prefix = `user:${encodeURIComponent(userId)}`;
   return {
     ...input,
-    stream_id: `${prefix}:${text(input.stream_id)}`,
-    idempotency_key: input.idempotency_key ? `${prefix}:${text(input.idempotency_key)}` : null,
+    stream_id: tenantEventIdentifier("stream", userId, input.stream_id),
+    idempotency_key: input.idempotency_key
+      ? tenantEventIdentifier("idempotency", userId, input.idempotency_key)
+      : null,
     authority: {
       ...(input.authority && typeof input.authority === "object" ? input.authority : {}),
       tenant_id: userId,
     },
   };
+}
+
+function tenantEventIdentifier(domain, userId, value) {
+  const rawValue = text(value);
+  const namespace = tenantEventNamespace(userId, domain);
+  const scoped = `${namespace}:${rawValue}`;
+  if (scoped.length <= MAX_EVENT_IDENTIFIER_LENGTH) return scoped;
+  const label = tenantEventLabel(rawValue, domain === "stream" ? "event" : "key");
+  const digest = tenantEventHash("value", domain, userId, rawValue);
+  return `${namespace}:${label}:h:${digest}`;
+}
+
+function tenantEventNamespace(userId, domain) {
+  return `tenant:v1:${domain}:${tenantEventHash("tenant", domain, userId)}`;
+}
+
+function tenantEventHash(kind, domain, userId, value = "") {
+  return crypto
+    .createHash("sha256")
+    .update([TENANT_EVENT_SCOPE_VERSION, kind, domain, userId, value].join("\u0000"))
+    .digest("hex");
+}
+
+function tenantEventLabel(value, fallback) {
+  const raw = text(String(value || "").split(":")[0], fallback).toLowerCase();
+  const normalized = raw
+    .replace(/[^a-z0-9_.-]/g, ".")
+    .replace(/\.+/g, ".")
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 24);
+  return normalized || fallback;
 }
 
 function text(value, fallback = "") {

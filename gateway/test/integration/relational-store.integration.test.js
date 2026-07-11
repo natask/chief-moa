@@ -237,6 +237,18 @@ async function eventCount(pool, idempotencyKeys) {
   return Number(result.rows[0]?.count || 0);
 }
 
+async function tenantEventCount(pool, eventType, correlationId, tenantId) {
+  const result = await pool.query(
+    `select count(*)::int as count
+       from product_events
+      where event_type = $1
+        and correlation_id = $2
+        and authority->>'tenant_id' = $3`,
+    [eventType, correlationId, tenantId],
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
 async function assertBusinessFailureRollsBackEvent(pool, prefix) {
   const badSessionId = `${prefix}_bad_session`;
   const badTurnId = `${prefix}_bad_turn`;
@@ -256,7 +268,7 @@ async function assertBusinessFailureRollsBackEvent(pool, prefix) {
   );
 
   assert.strictEqual(await rowCount(pool, "turns", [badTurnId]), 0);
-  assert.strictEqual(await eventCount(pool, [`user:${missingUserId}:chat:${badSessionId}:${badTurnId}:completed`]), 0);
+  assert.strictEqual(await tenantEventCount(pool, "chat.turn.completed", badTurnId, missingUserId), 0);
 }
 
 async function assertTwoPrincipalCollisionBlocked(pool, prefix) {
@@ -276,8 +288,5 @@ async function assertTwoPrincipalCollisionBlocked(pool, prefix) {
   );
   const row = await pool.query("select user_id, label from sessions where id = $1", [sharedId]);
   assert.deepStrictEqual(row.rows, [{ user_id: userA, label: "principal A" }]);
-  assert.strictEqual(
-    await eventCount(pool, [`user:${userB}:session:${sharedId}:upserted`]),
-    0,
-  );
+  assert.strictEqual(await tenantEventCount(pool, "session.upserted", sharedId, userB), 0);
 }
