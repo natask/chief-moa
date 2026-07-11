@@ -1837,6 +1837,8 @@ module.exports = {
   // Test-only collection seams for hostile session/branch isolation fixtures.
   runsForSession,
   browserTasksForSession,
+  buildCanonicalContextArtifact,
+  brain,
   agentProfile,
 };
 
@@ -12410,7 +12412,7 @@ function buildCanonicalContextArtifact(options = {}) {
         section: "standing",
         bucket: "standing",
         reason: "standing_fact",
-        branch_id: String(run.branch_id || "default"),
+        branch_id: "",
         revision: `${slug}:${snippet}`,
         dedupe_key: `standing:${snippet.toLowerCase()}`,
         sort_rank: sortRank,
@@ -12511,7 +12513,7 @@ function buildCanonicalContextArtifact(options = {}) {
         section: "runs",
         bucket: "operational",
         reason: "recent_agent_run",
-        branch_id: branchId,
+        branch_id: String(run.branch_id || "default"),
         created_at: String(run.updated_at || run.created_at || ""),
         revision: `${run.id || ""}:${run.updated_at || run.created_at || ""}`,
         dedupe_key: `${sourceId}:${run.status}:${run.output_preview || ""}`,

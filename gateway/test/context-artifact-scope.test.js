@@ -10,8 +10,10 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-context-scope-"));
 process.env.DATA_DIR = dataDir;
 process.env.MOA_MODE = "local";
 process.env.ALLOW_AGENT_WITHOUT_TOKEN = "1";
+process.env.GBRAIN_BIN = "__missing_gbrain_for_context_test__";
+process.env.BRAIN_STORE_DIR = dataDir;
 
-const { browserTasksForSession, runsForSession } = require("../server");
+const { brain, browserTasksForSession, buildCanonicalContextArtifact, runsForSession } = require("../server");
 
 test.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
 
@@ -71,6 +73,51 @@ test("all-branches operational collection still excludes deleted and incognito r
   assert.deepEqual(browserTasksForSession("session-all", "", 20).map((item) => [item.id, item.branch_id]), [["task-visible-all", "feature"]]);
 });
 
+test("assembly emits standing facts with global non-record provenance and never falls back", () => {
+  assert.equal(brain.remember("The user prefers tea.", {
+    kind: "standing",
+    tags: ["memory", "standing"],
+    title: "The user prefers tea.",
+    slug: "standing-tea",
+  }), true);
+  const artifact = buildCanonicalContextArtifact({ sessionId: "standing-session", branchId: "feature", query: "tea" });
+  assert.ok(artifact, "standing fact assembly must return the canonical artifact");
+  const standing = artifact.sources.find((source) => source.section === "standing");
+  assert.ok(standing, "standing fact source must be present");
+  assert.equal(standing.branch_id, "", "global standing facts must not borrow a record branch");
+});
+
+test("assembly preserves all-branches and fork-parent operational provenance", () => {
+  writeRecords("agent-runs", [
+    run("run-all-feature", "assembly-all", "feature"),
+    run("run-all-other", "assembly-all", "other"),
+    run("run-fork-child", "assembly-fork", "child"),
+    run("run-fork-parent", "assembly-fork", "parent"),
+  ]);
+  writeVoiceTurn("assembly-fork", {
+    id: "parent-turn",
+    branch_id: "parent",
+    transcript: "parent work",
+    response: { display: "done" },
+    references: { agent_run_ids: ["run-fork-parent"] },
+    created_at: "2026-07-10T00:00:00.000Z",
+  });
+  const allBranches = buildCanonicalContextArtifact({ sessionId: "assembly-all", branchId: "default", allBranches: true });
+  assert.deepEqual(
+    allBranches.sources.filter((source) => source.section === "runs").map((source) => source.branch_id).sort(),
+    ["feature", "other"],
+  );
+  const fork = buildCanonicalContextArtifact({
+    sessionId: "assembly-fork",
+    branchId: "child",
+    inheritFrom: { branchId: "parent", uptoCreatedAt: "2026-07-10T00:00:01.000Z" },
+  });
+  assert.deepEqual(
+    fork.sources.filter((source) => source.section === "runs").map((source) => [source.source_id, source.branch_id]).sort(),
+    [["run:run-fork-child", "child"], ["run:run-fork-parent", "parent"]],
+  );
+});
+
 function writeRecords(directory, records) {
   const target = path.join(dataDir, directory);
   fs.mkdirSync(target, { recursive: true });
@@ -100,4 +147,10 @@ function task(id, conversationId, branchId) {
     created_at: "2026-07-10T00:00:00.000Z",
     updated_at: "2026-07-10T00:00:00.000Z",
   };
+}
+
+function writeVoiceTurn(sessionId, record) {
+  const target = path.join(dataDir, "voice-turns", sessionId);
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, `${record.id}.json`), JSON.stringify(record));
 }

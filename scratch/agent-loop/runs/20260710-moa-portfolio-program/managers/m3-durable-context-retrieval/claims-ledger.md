@@ -10,8 +10,8 @@
 | Candidate work is bounded before full untrusted sort/copy/redaction | verified deterministically | 10,000-source hostile fixture observes fewer than 100 rank getter reads; hard 256 / 4x candidate, 8-line and 4,000-char bounds | pass; production latency unmeasured |
 | Encoded and metadata secrets stay behind the redaction boundary | verified for named hostile corpus | triple/malformed percent encoding; secret-shaped query, scope, IDs, labels, timestamp and revision fixture | pass for tested corpus; maximum three canonical decode rounds |
 | Operational context preserves provenance and excludes private lifecycle states | verified for file-store seam | stored branch assertions; deleted/incognito flag and incognito-branch fixtures under all-branches collection; fork parent-reference fixture | pass; hosted tenant authorization still unproven |
-| Complexity <=10 and CRAP <=15 | measured | ESLint complexity gate passes; c8 Istanbul + `crap-score` reports max complexity 10 and max CRAP 10.137174 (`normalizeSource`) | pass for `context-artifact.js` focused corpus |
-| Full gateway regression is green under repair verification | verified | dependency-complete worktree; `cd gateway && npm run check` -> 186 pass / 1 skip / 0 fail | pass |
+| Complexity <=10 and CRAP <=15 | measured reproducibly | locked-dependency `npm run check:context-quality` reports max complexity 10 and max CRAP 11.896296 (`normalizeSource`) | pass for `context-artifact.js` focused corpus |
+| Full gateway regression is green under repair verification | verified | dependency-complete worktree; `cd gateway && npm run check` -> 189 pass / 1 skip / 0 fail | pass |
 
 Measured results and architecture-confidence are recorded after verification and
 audit.
@@ -19,17 +19,16 @@ audit.
 ## Measured results
 
 - Focused unit + collection gate: `cd gateway && node --test
-  test/context-artifact.test.js test/context-artifact-scope.test.js` -> 14 passed,
+  test/context-artifact.test.js test/context-artifact-scope.test.js` -> 17 passed,
   0 failed.
 - Focused smoke gate: `cd gateway && node scripts/smoke-context-artifact.js`
   -> pass.
 - Focused syntax gate: `cd gateway && node --check server.js && node --check
   lib/context-artifact.js` -> pass.
 - Tier-0 full gateway gate with the repository's installed dependency tree:
-  `cd gateway && npm run check` -> 186 passed, 1 skipped, 0 failed.
-- Complexity gate: ESLint 9 with `complexity` maximum 10 -> pass, no findings.
-- CRAP gate: c8 JSON plus `crap-score` -> maximum complexity 10; maximum
-  function CRAP 10.137174 (`normalizeSource`), below 15.
+  `cd gateway && npm run check` -> 189 passed, 1 skipped, 0 failed.
+- Locked quality gate: `npm run check:context-quality` -> maximum complexity 10;
+  maximum function CRAP 11.896296 (`normalizeSource`), below 15.
 - Compatibility repair: the first full run found the established durable
   context header missing; restoring it made `smoke-session-history` and the full
   suite pass without weakening the artifact assertions.
@@ -74,6 +73,12 @@ local dependencies.
 - Repair M3-1-R4: canonical decode/redaction and metadata policy, stored
   lifecycle/provenance filtering, hostile all-branches fixtures, and quality
   refactor/gates. Fresh collaboration re-audit required before integration.
+- Cycle 7: collaboration audit BLOCK on an out-of-scope standing-fact `run`
+  reference, requested rather than stored run provenance, OAuth state leakage,
+  missing assembly-level provenance cases, and non-reproducible quality tooling.
+- Repair M3-1-R5: global standing provenance, stored run branch, canonical OAuth
+  state redaction, assembly-level standing/all-branches/fork tests, and durable
+  lockfile-compatible `check:context-quality` command/report.
 
 ## Commit / deploy status
 

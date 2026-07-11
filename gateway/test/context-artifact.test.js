@@ -64,7 +64,7 @@ test("context artifact redacts OAuth URL credentials and PAT-like tokens", () =>
     session_id: "session-a",
     sources: [{ source_id: "chat:secrets", section: "chat", lines: secrets }],
   });
-  assert.equal(artifact.retrieval.redaction.count, secrets.length);
+  assert.ok(artifact.retrieval.redaction.count >= secrets.length, "credential and OAuth state fields must be counted");
   for (const secret of ["oauth-secret-value", "encoded-oauth-secret", "double-encoded-secret", "refresh-secret-value", "abcdefghijklmnopqrstuvwxyz123456"]) {
     assert.doesNotMatch(artifact.text, new RegExp(secret));
   }
@@ -88,6 +88,26 @@ test("canonical redaction handles triple and malformed percent encodings", () =>
     assert.doesNotMatch(serialized, new RegExp(secret));
   }
   assert.match(artifact.text, /\[redacted\]/);
+});
+
+test("OAuth state is redacted across plain, double, triple and malformed-adjacent encodings", () => {
+  const artifact = buildContextArtifact({
+    session_id: "session-a",
+    sources: [{
+      source_id: "chat:state",
+      section: "chat",
+      lines: [
+        "https://callback.invalid/?state=plain-state-secret&code=code-secret",
+        "state%253Ddouble-state-secret%2526next%253Dok",
+        "state%25253Dtriple-state-secret%252526next%25253Dok",
+        "%ZZstate%3Dmalformed-state-secret%26next%3Dok",
+      ],
+    }],
+  });
+  const serialized = JSON.stringify(artifact);
+  for (const secret of ["plain-state-secret", "double-state-secret", "triple-state-secret", "malformed-state-secret", "code-secret"]) {
+    assert.doesNotMatch(serialized, new RegExp(secret));
+  }
 });
 
 test("all exposed metadata is validated, redacted, or irreversibly hashed", () => {

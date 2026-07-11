@@ -60,10 +60,10 @@ stale caches safely.
 - Full gateway gate: `cd gateway && npm run check`
 - Fresh hostile privacy/performance/anti-gaming audit recorded in the claims and
   merge ledgers.
-- Measured complexity: `npx --yes eslint@9 --no-config-lookup --rule
-  'complexity: [error, 10]' lib/context-artifact.js`.
-- Measured CRAP: c8 Istanbul JSON over the focused artifact tests, then
-  `crap-score`; every function must remain <=15.
+- Reproducible measured complexity/CRAP: `cd gateway && npm run
+  check:context-quality`. The checked-in script uses the lockfile-provided Babel
+  parser, Node's V8 coverage, documented McCabe decisions and statement coverage;
+  every function must remain complexity <=10 and CRAP <=15.
 
 ## Escalation
 
