@@ -116,3 +116,21 @@ authority/schema integration is serial in the order recorded there. These are
 planning proposals, not implementation, benchmark or production-readiness
 claims. Tier 0 selects the current base, launches lanes, integrates green
 commits, runs combined gates and alone evaluates preview/promotion authority.
+
+## P2 bounded UI-spec integration (2026-07-10)
+
+- Candidate plus three repair commits were integrated serially as `f08c93a`,
+  `4f7f038`, `2c174c8`, and `538d0fb`.
+- Auditor cycles: initial `BLOCK` (global scope, fake proof, fanout, untested
+  renderer); repair `BLOCK` (fake gateway, dispatch unproven, post-traversal
+  caps); repeatability `BLOCK` (1/3 timeout, nested traversal); final manager
+  repair diagnosed asynchronous config seeding as the race and added bounded
+  nested read-count canaries.
+- Combined integration evidence: gateway `npm run check` 155 pass, 1 skip, 0
+  fail; extension verify pass; actual isolated gateway + unpacked Chrome UI
+  smoke passed five consecutive times in the lane and three consecutive times
+  after integration; general real-extension smoke pass.
+- Artifact: `browser_extension/dist/A.G.-0.1.29.zip`, SHA-256
+  `783b2711c881c4e1f074e2df1040153f4e15da35cdff1ae67c03c1925c56b7f1`.
+- No active browser reload or gateway promotion was attempted. The package is a
+  rollbackable artifact; active-session/drain evidence remains absent.
