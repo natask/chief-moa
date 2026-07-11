@@ -105,3 +105,14 @@ no Android source change and active-phone interruption state was not proven.
 - No code merged.
 - No deployment or preview created; this unit is planning-only and
   non-deployable.
+
+## Remaining manager proposals (2026-07-10)
+
+Launch-ready packets and the dependency DAG are in `portfolio-managers.md`.
+Proposed managers are MF identity/data, MT telemetry/observability, M3 context,
+M4 control plane, MB billing, M5 protocol/native surfaces, M6 companion sharing,
+and MX final integration. Their research/contract passes may run concurrently;
+authority/schema integration is serial in the order recorded there. These are
+planning proposals, not implementation, benchmark or production-readiness
+claims. Tier 0 selects the current base, launches lanes, integrates green
+commits, runs combined gates and alone evaluates preview/promotion authority.
