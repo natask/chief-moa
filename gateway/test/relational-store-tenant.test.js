@@ -43,9 +43,9 @@ test("tenant event namespace is unambiguous when user ids contain delimiters", a
   const firstParams = productEventParams(firstPool);
   const secondParams = productEventParams(secondPool);
   assert.notStrictEqual(firstParams[2], secondParams[2]);
-  assert.match(firstParams[2], /^tenant:v1:stream:[a-f0-9]{64}:session:/);
-  assert.match(secondParams[2], /^tenant:v1:stream:[a-f0-9]{64}:session:/);
-  assert.match(secondParams[12], /^tenant:v1:idempotency:[a-f0-9]{64}:session:/);
+  assert.match(firstParams[2], /^tenant:v1:stream:[a-f0-9]{64}:session:h:[a-f0-9]{64}$/);
+  assert.match(secondParams[2], /^tenant:v1:stream:[a-f0-9]{64}:session:h:[a-f0-9]{64}$/);
+  assert.match(secondParams[12], /^tenant:v1:idempotency:[a-f0-9]{64}:session:h:[a-f0-9]{64}$/);
 });
 
 test("tenant event namespace uses the full trusted user id for hostile long ids", async () => {
@@ -66,6 +66,19 @@ test("tenant event namespace uses the full trusted user id for hostile long ids"
   assert.ok(firstParams[12].length <= 240);
   assert.ok(secondParams[2].length <= 240);
   assert.ok(secondParams[12].length <= 240);
+});
+
+test("derived identifiers cannot alias a caller-supplied digest-shaped id", async () => {
+  const userId = `u${"x".repeat(199)}`;
+  const longPool = fakePool({ returnBusinessRow: true });
+  await createRelationalStore({ pool: longPool, userId, originId: "test" })
+    .upsertSession({ id: `session-${"a".repeat(220)}` });
+  const derived = productEventParams(longPool)[2];
+  const forgedId = derived.slice(derived.indexOf(":session:h:") + ":session:".length);
+  const forgedPool = fakePool({ returnBusinessRow: true });
+  await createRelationalStore({ pool: forgedPool, userId, originId: "test" })
+    .upsertSession({ id: forgedId });
+  assert.notStrictEqual(productEventParams(forgedPool)[2], derived);
 });
 
 test("hostile long ids preserve session stream sharing and distinct event identities", async () => {
@@ -133,8 +146,8 @@ test("trusted tenant scopes row and event identities", async () => {
   assert.strictEqual(insert.params[1], "user-a");
   const eventInsert = productEventCalls(pool)[0];
   assert.ok(eventInsert, "expected event append");
-  assert.match(eventInsert.params[2], /^tenant:v1:stream:[a-f0-9]{64}:session:session-1$/);
-  assert.match(eventInsert.params[12], /^tenant:v1:idempotency:[a-f0-9]{64}:session:session-1:upserted$/);
+  assert.match(eventInsert.params[2], /^tenant:v1:stream:[a-f0-9]{64}:session:h:[a-f0-9]{64}$/);
+  assert.match(eventInsert.params[12], /^tenant:v1:idempotency:[a-f0-9]{64}:session:h:[a-f0-9]{64}$/);
   assert.match(JSON.stringify(eventInsert.params), /tenant_id/);
   assert.strictEqual(result.row.user_id, "user-a");
 });

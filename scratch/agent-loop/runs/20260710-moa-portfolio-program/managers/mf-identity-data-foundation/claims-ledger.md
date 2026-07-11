@@ -45,7 +45,8 @@ subject before enabling multi-user.
 - Cycle 3: BLOCK — encoded tenant segment can still truncate at 240 chars and
   collide for hostile long but allowed trusted user ids.
 - Repair MF-1-R2: replaced the encoded prefix with versioned fixed-length
-  tenant namespaces plus bounded fallback keys for overlong scoped values, while
-  preserving reserved-owner identities.
+  tenant namespaces and full-value domain-separated digests for every non-owner
+  event identifier, preventing raw values from aliasing a derived representation
+  while preserving reserved-owner identities.
 - Cycle 4 manager gates: focused 7/7 and full gateway 162 pass, 1 skip, 0 fail.
   Fresh audit remains required; real Postgres is still unmeasured.

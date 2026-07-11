@@ -5,7 +5,6 @@ const crypto = require("node:crypto");
 const { appendEventOnClient, withTransaction } = require("./event-substrate");
 
 const TENANT_EVENT_SCOPE_VERSION = "tenant-event-scope.v1";
-const MAX_EVENT_IDENTIFIER_LENGTH = 240;
 
 function createRelationalStore(options = {}) {
   if (!options.pool || typeof options.pool.connect !== "function") {
@@ -650,8 +649,6 @@ function tenantEventInput(input, userId) {
 function tenantEventIdentifier(domain, userId, value) {
   const rawValue = text(value);
   const namespace = tenantEventNamespace(userId, domain);
-  const scoped = `${namespace}:${rawValue}`;
-  if (scoped.length <= MAX_EVENT_IDENTIFIER_LENGTH) return scoped;
   const label = tenantEventLabel(rawValue, domain === "stream" ? "event" : "key");
   const digest = tenantEventHash("value", domain, userId, rawValue);
   return `${namespace}:${label}:h:${digest}`;
