@@ -83,6 +83,12 @@ voice/LLM trace correlation.
   the direct local/YC competitor. Superlog and StarSling resolve the agentic
   observability and self-driving CI references. These are recorded as separate
   adapter/evidence nodes from canonical voice transactions and intent state.
+- Voice telemetry reuse validation: complete. LiveKit Agents is the closest
+  unified voice timeline but its Insights store is cloud-only; Pipecat is the
+  strongest inspected OSS pipeline instrumentation reference; Langfuse and
+  Phoenix are suitable optional trace/eval projections. None of the inspected
+  mature/open packages supplies the complete owned audio + transaction + trace
+  + agent-brief outcome as one self-hosted product.
 
 ## Baseline evidence
 
@@ -139,3 +145,7 @@ voice/LLM trace correlation.
   from local source plus current official YC pages in
   `research/reference-product-graph.md`; no external product was installed,
   configured, or given repository/user data.
+- 2026-07-11: recorded the validated voice transaction/telemetry/evaluation
+  category model and current reuse map in `research/voice-telemetry-stack.md`.
+  This prevents OTel or an LLM trace backend from becoming a competing canonical
+  conversation/audio store.
