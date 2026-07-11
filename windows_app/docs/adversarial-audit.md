@@ -42,7 +42,10 @@ Auditor verdict -> BLOCK broader claim
   repaired: eligibility now accepts only an opaque `LocalApproval` minted by
   `approve_locally`, never a deserialized approval envelope. Repairs also added
   exact enum/ID/digest/time checks, complete-surface equality and recursive
-  fail-closed scanning.
+  fail-closed scanning. A follow-up attack constructed a public `Envelope`
+  directly to bypass byte parsing; repair `d7dad66` now reapplies size, depth,
+  credential and semantic validation at both approval and eligibility entry
+  points.
 - Anti-gaming/integration: compared proposal digest to the actual gateway JS
   implementation. A numeric-canonicalization risk was found and repaired with
   JS-compatible number rendering plus fixed gateway fixtures.
@@ -59,7 +62,7 @@ Auditor verdict -> BLOCK broader claim
 
 ## Measured evidence
 
-- `cargo test --locked`: 14 passed, 0 failed, 0 ignored.
+- `cargo test --locked`: 15 passed, 0 failed, 0 ignored.
 - `cargo clippy --all-targets -- -D warnings`: passed.
 - `cargo build --locked --target x86_64-pc-windows-msvc`: passed as a macOS
   cross-build after installing the Rust standard library target.
