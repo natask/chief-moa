@@ -144,7 +144,7 @@ export function createVoiceSamplerRuntime({ send, startSample, closeSession }) {
     }
   }
 
-  function handleSessionTerminal(sessionId, { failed = false, message = "", closeReason } = {}) {
+  function handleSessionTerminal(sessionId, { failed = false, cancelled = false, message = "", closeReason } = {}) {
     const id = String(sessionId || "").trim();
     const entry = samplersBySessionId.get(id);
     if (!entry) return false;
@@ -156,6 +156,10 @@ export function createVoiceSamplerRuntime({ send, startSample, closeSession }) {
       return true;
     }
     closeSamplerSession(sampler, id, closeReason || (failed ? "sample failed" : "sample complete"));
+    if (cancelled) {
+      finishSampler(sampler);
+      return true;
+    }
     if (failed) {
       failSampler(sampler, sampleFailureMessage(sampleIndex, message));
       return true;

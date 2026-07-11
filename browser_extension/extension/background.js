@@ -2335,6 +2335,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       stopOffscreenVoiceCapture(id).catch(() => {});
       if (voiceSamplerRuntime.handleSessionTerminal(session.id, {
         failed: !session.revoked,
+        cancelled: session.revoked,
         message: session.revoked ? "" : "Live voice connection closed.",
         closeReason: session.revoked ? session.closedReason || "revoked" : "sample failed",
       })) {

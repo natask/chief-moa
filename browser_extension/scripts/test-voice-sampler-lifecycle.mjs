@@ -147,6 +147,26 @@ test("socket close is terminal for the sampler", async () => {
   ]);
 });
 
+test("cross-tab revocation cancels the sampler instead of advancing", async () => {
+  const harness = createHarness();
+  const run = harness.runtime.start(12, "cue-revoked", [
+    { voice: "Kore", text: "one" },
+    { voice: "Puck", text: "two" },
+  ]);
+  harness.starts[0].onSessionCreated("session-revoked");
+  harness.starts[0].resolve({ voiceSessionId: "session-revoked" });
+  await run;
+
+  assert.equal(harness.runtime.handleSessionTerminal("session-revoked", {
+    cancelled: true,
+    closeReason: "another page voice session started",
+  }), true);
+  await settle();
+
+  assert.equal(harness.starts.length, 1);
+  assert.deepEqual(terminalMessages(harness.messages), []);
+});
+
 test("sampler starts the next sample only after the prior terminal event and emits one final cue", async () => {
   const harness = createHarness();
   const run = harness.runtime.start(9, "cue-serial", [
