@@ -79,6 +79,13 @@ local dependencies.
 - Repair M3-1-R5: global standing provenance, stored run branch, canonical OAuth
   state redaction, assembly-level standing/all-branches/fork tests, and durable
   lockfile-compatible `check:context-quality` command/report.
+- Cycle 8: fresh GPT-5.4/xhigh hostile audit refuted correct new/incognito
+  retrieval scoping. Chat and cascaded voice assemble caller-branch recency
+  before the model's final context decision; HTTP voice resolves its filing
+  decision first but still assembles from the caller branch. This conflicts with
+  the OpenSpec requirement that a new or incognito thread load standing facts
+  without old-thread recency. Verdict: BLOCK; revised architecture contract
+  required before repair.
 
 ## Commit / deploy status
 
