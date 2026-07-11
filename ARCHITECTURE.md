@@ -65,6 +65,21 @@ External APIs
   and SaaS tools. Use official APIs where possible.
 ```
 
+## Telemetry and observability boundary
+
+Canonical product events remain the source of truth. Operational telemetry is a
+derived, loss-tolerant projection and must never decide product state. Moa owns
+the versioned semantic envelope, redaction/allowlist policy, release metadata,
+and cross-surface correlation before any vendor translation occurs.
+
+The gateway telemetry foundation exposes a bounded asynchronous exporter seam.
+Exporter rejection, timeout, or queue overflow may drop telemetry and increment
+local counters, but cannot fail the product operation. User content, identity,
+credentials, financial data, and high-cardinality IDs are excluded by default;
+opaque correlation IDs are not metric dimensions. Client SDKs, consent-aware
+analytics, and a Collector/backend remain inactive until identity policy and an
+isolated preview satisfy the telemetry OpenSpec.
+
 The gateway may propose actions. The Android app decides whether an action is
 allowed, whether approval is required, and whether the current device state still
 matches the proposal.
