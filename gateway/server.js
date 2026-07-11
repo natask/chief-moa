@@ -10224,7 +10224,11 @@ function voiceDiagnosisPayload({ sessionId = "", turnId = "", limit = 10 } = {})
       ? [canonical]
       : (metadata ? [voiceDiagnosisRecordFromMetadata(metadata, safeSessionId, safeTurnId)] : []);
   } else {
-    records = listVoiceTurnRecordsForSession(safeSessionId, "").slice(-safeLimit).reverse();
+    const canonicalRecords = listVoiceTurnRecordsForSession(safeSessionId, "").slice(-safeLimit).reverse();
+    const canonicalIds = new Set(canonicalRecords.map((record) => String(record?.id || record?.turn_id || "")));
+    const metadataRecords = listVoiceDiagnosisMetadataForSession(safeSessionId, safeLimit)
+      .filter((record) => !canonicalIds.has(String(record?.id || record?.turn_id || "")));
+    records = canonicalRecords.concat(metadataRecords).slice(0, safeLimit);
   }
   return {
     generated_at: new Date().toISOString(),
@@ -10233,6 +10237,24 @@ function voiceDiagnosisPayload({ sessionId = "", turnId = "", limit = 10 } = {})
     limit: safeLimit,
     diagnoses: records.slice(0, safeLimit).map((record) => voiceTurnDiagnosis(record)),
   };
+}
+
+function listVoiceDiagnosisMetadataForSession(sessionId, limit) {
+  const safeSessionId = sanitizeOptionalId(sessionId, "");
+  if (!safeSessionId) return [];
+  const dir = path.join(DATA_DIR, "voice-sessions", safeSessionId);
+  if (!fs.existsSync(dir)) return [];
+  const max = Math.max(1, Math.min(Number(limit) || 10, VOICE_DIAGNOSIS_LIMIT_MAX));
+  return fs.readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .slice(-max)
+    .reverse()
+    .map((name) => {
+      const turnId = name.slice(0, -5);
+      const metadata = readVoiceSessionMetadata(safeSessionId, turnId);
+      return metadata ? voiceDiagnosisRecordFromMetadata(metadata, safeSessionId, turnId) : null;
+    })
+    .filter(Boolean);
 }
 
 function voiceDiagnosisRecordFromMetadata(metadata, sessionId, turnId) {

@@ -28,7 +28,9 @@ test("voiceDiagnosisPayload attributes reasoning, tts, storage, and unknown case
 
     const bounded = voiceDiagnosisPayload({ sessionId: SESSION_ID, limit: 99 });
     assert.equal(bounded.limit, 20);
-    assert.equal(bounded.diagnoses.length, 4);
+    assert.equal(bounded.diagnoses.length, 6);
+    assert.ok(bounded.diagnoses.some((diagnosis) => diagnosis.turn_id === "metadata_no_speech"));
+    assert.ok(bounded.diagnoses.some((diagnosis) => diagnosis.turn_id === "metadata_context_failure"));
 
     const reasoning = voiceDiagnosisPayload({ sessionId: SESSION_ID, turnId: "reasoning_fault" }).diagnoses[0];
     assert.equal(reasoning.primary_fault?.category, "reasoning");
