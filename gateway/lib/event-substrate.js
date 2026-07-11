@@ -8,6 +8,27 @@ const path = require("node:path");
 const EVENTS_FILENAME = "product-events.jsonl";
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
+const DEFAULT_JSON_LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_JSON_LOCK_RETRY_MS = 10;
+const DEFAULT_JSON_LOCK_STALE_MS = 30_000;
+const LOCK_OWNER_HOST = os.hostname() || "local";
+const LOCK_PROCESS_INSTANCE_ID = crypto.randomUUID();
+const LOCK_CLEANUP_ATTEMPTS = 3;
+const MAX_LOCK_ARTIFACT_SCAN = 256;
+const PROCESS_OWNED_JSON_LOCKS = new Map();
+
+class EventStreamVersionConflictError extends Error {
+  constructor({ originId, streamId, expectedVersion, actualVersion }) {
+    super(`event stream version conflict for ${originId}:${streamId}: expected ${expectedVersion}, actual ${actualVersion}`);
+    this.name = "EventStreamVersionConflictError";
+    this.code = "EVENT_STREAM_VERSION_CONFLICT";
+    this.statusCode = 409;
+    this.origin_id = originId;
+    this.stream_id = streamId;
+    this.expected_stream_version = expectedVersion;
+    this.actual_stream_version = actualVersion;
+  }
+}
 
 function createEventSubstrateStore(options = {}) {
   const databaseUrl = String(options.databaseUrl || process.env.DATABASE_URL || "").trim();
@@ -27,19 +48,23 @@ function createJsonEventSubstrateStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || "./data");
   const eventsPath = path.join(dataDir, EVENTS_FILENAME);
   const originId = normalizeOriginId(options.originId);
+  const lockOptions = normalizeJsonLockOptions(options);
   fs.mkdirSync(dataDir, { recursive: true });
 
   async function appendEvent(input = {}) {
-    const current = readJsonLines(eventsPath);
-    const existing = findExistingEvent(current, input);
-    if (existing) return clone(existing);
+    const expectedVersion = expectedStreamVersion(input);
+    const base = normalizeEvent(input, { originId, streamVersion: 1 });
+    return withJsonAppendLock(eventsPath, lockOptions, () => {
+      const current = readJsonLinesStrict(eventsPath);
+      const existing = findExistingEvent(current, input);
+      if (existing) return clone(existing);
 
-    const event = normalizeEvent(input, { originId, streamVersion: 1 });
-    if (!positiveInteger(input.stream_version || input.streamVersion, 0)) {
-      event.stream_version = nextJsonStreamVersion(current, event, event.origin_id);
-    }
-    appendJsonLine(eventsPath, event);
-    return clone(event);
+      const actualVersion = currentJsonStreamVersion(current, base.origin_id, base.stream_id);
+      assertExpectedStreamVersion(base, expectedVersion, actualVersion);
+      const event = { ...base, stream_version: actualVersion + 1 };
+      appendJsonLine(eventsPath, event);
+      return clone(event);
+    });
   }
 
   async function listEvents(filter = {}) {
@@ -161,6 +186,7 @@ async function appendEventOnClient(client, input = {}, options = {}) {
   }
   const originId = normalizeOriginId(options.originId);
   const base = normalizeEvent(input, { originId, streamVersion: 0 });
+  const expectedVersion = expectedStreamVersion(input);
   await client.query("select pg_advisory_xact_lock(hashtext($1))", [`${base.origin_id}:${base.stream_id}`]);
 
   const secondExisting = await findExistingPostgresEvent({
@@ -169,9 +195,9 @@ async function appendEventOnClient(client, input = {}, options = {}) {
   }, client);
   if (secondExisting) return secondExisting;
 
-  const version = positiveInteger(input.stream_version || input.streamVersion, 0)
-    || await nextPostgresStreamVersion(client, base.origin_id, base.stream_id);
-  const event = { ...base, stream_version: version };
+  const actualVersion = await currentPostgresStreamVersion(client, base.origin_id, base.stream_id);
+  assertExpectedStreamVersion(base, expectedVersion, actualVersion);
+  const event = { ...base, stream_version: actualVersion + 1 };
   const result = await client.query(
     `insert into product_events (
        event_id, origin_id, stream_id, stream_version, event_type,
@@ -318,19 +344,18 @@ async function findExistingPostgresEvent({ eventId, idempotencyKey }, clientOrPo
   return result.rows[0] ? eventFromRow(result.rows[0]) : null;
 }
 
-async function nextPostgresStreamVersion(client, originId, streamId) {
+async function currentPostgresStreamVersion(client, originId, streamId) {
   const result = await client.query(
-    "select coalesce(max(stream_version), 0) + 1 as next_version from product_events where origin_id = $1 and stream_id = $2",
+    "select coalesce(max(stream_version), 0) as current_version from product_events where origin_id = $1 and stream_id = $2",
     [originId, streamId],
   );
-  return Number(result.rows[0]?.next_version || 1);
+  return Number(result.rows[0]?.current_version || 0);
 }
 
-function nextJsonStreamVersion(events, input, originId) {
-  const streamId = normalizeOptionalText(input.stream_id || input.streamId, 240) || streamIdForEvent(input);
+function currentJsonStreamVersion(events, originId, streamId) {
   return events
     .filter((event) => event.origin_id === originId && event.stream_id === streamId)
-    .reduce((max, event) => Math.max(max, Number(event.stream_version || 0)), 0) + 1;
+    .reduce((max, event) => Math.max(max, Number(event.stream_version || 0)), 0);
 }
 
 function matchesFilter(event, filter = {}) {
@@ -429,34 +454,534 @@ async function withTransaction(pool, fn) {
 
 function appendJsonLine(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`);
+  const before = lstatRegularBoundary(filePath, "event file", { allowMissing: true });
+  const flags = fs.constants.O_APPEND
+    | fs.constants.O_CREAT
+    | fs.constants.O_WRONLY
+    | (fs.constants.O_NOFOLLOW || 0);
+  const handle = fs.openSync(filePath, flags, 0o600);
+  const line = Buffer.from(`${JSON.stringify(value)}\n`);
+  try {
+    verifyOpenedRegularBoundary(filePath, handle, before, "event file");
+    let offset = 0;
+    while (offset < line.length) {
+      const written = fs.writeSync(handle, line, offset, line.length - offset);
+      if (written <= 0) throw new Error(`failed to append event substrate record to ${filePath}`);
+      offset += written;
+    }
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function readJsonLinesStrict(filePath) {
+  const snapshot = readRegularFileSnapshot(filePath, "event file", { allowMissing: true });
+  if (!snapshot) return [];
+  const content = snapshot.content;
+  return content.split("\n").flatMap((line, index) => {
+    if (!line.trim()) return [];
+    try {
+      return [JSON.parse(line)];
+    } catch (cause) {
+      const error = new Error(`invalid JSONL event record at line ${index + 1}`);
+      error.code = "EVENT_SUBSTRATE_CORRUPT";
+      error.cause = cause;
+      throw error;
+    }
+  });
 }
 
 function readJsonLines(filePath) {
-  try {
-    return fs.readFileSync(filePath, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line);
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
+  const snapshot = readRegularFileSnapshot(filePath, "event file", { allowMissing: true });
+  if (!snapshot) return [];
+  return snapshot.content
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
 }
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function expectedStreamVersion(input = {}) {
+  const hasSnake = Object.prototype.hasOwnProperty.call(input, "expected_stream_version");
+  const hasCamel = Object.prototype.hasOwnProperty.call(input, "expectedStreamVersion");
+  if (!hasSnake && !hasCamel) return null;
+  const snake = hasSnake ? Number(input.expected_stream_version) : null;
+  const camel = hasCamel ? Number(input.expectedStreamVersion) : null;
+  if ((hasSnake && (!Number.isSafeInteger(snake) || snake < 0))
+    || (hasCamel && (!Number.isSafeInteger(camel) || camel < 0))
+    || (hasSnake && hasCamel && snake !== camel)) {
+    const error = new TypeError("expected_stream_version must be a non-negative safe integer");
+    error.code = "INVALID_EXPECTED_STREAM_VERSION";
+    error.statusCode = 400;
+    throw error;
+  }
+  return hasSnake ? snake : camel;
+}
+
+function assertExpectedStreamVersion(event, expectedVersion, actualVersion) {
+  if (expectedVersion === null || expectedVersion === actualVersion) return;
+  throw new EventStreamVersionConflictError({
+    originId: event.origin_id,
+    streamId: event.stream_id,
+    expectedVersion,
+    actualVersion,
+  });
+}
+
+function normalizeJsonLockOptions(options = {}) {
+  return {
+    timeoutMs: boundedPositiveInteger(options.jsonLockTimeoutMs, DEFAULT_JSON_LOCK_TIMEOUT_MS, 100, 60_000),
+    retryMs: boundedPositiveInteger(options.jsonLockRetryMs, DEFAULT_JSON_LOCK_RETRY_MS, 1, 1_000),
+    staleMs: boundedPositiveInteger(options.jsonLockStaleMs, DEFAULT_JSON_LOCK_STALE_MS, 100, 300_000),
+  };
+}
+
+function boundedPositiveInteger(value, fallback, minimum, maximum) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < minimum || number > maximum) return fallback;
+  return number;
+}
+
+async function withJsonAppendLock(eventsPath, options, task) {
+  const lock = await acquireJsonAppendLock(`${eventsPath}.append.lock`, options);
+  let result;
+  let taskError = null;
+  try {
+    result = await task();
+  } catch (error) {
+    taskError = error;
+  }
+  let releaseError = null;
+  try {
+    releaseJsonAppendLock(lock);
+  } catch (error) {
+    lock.active = false;
+    lock.abandoned = true;
+    releaseError = error;
+  }
+  if (taskError) {
+    if (releaseError) taskError.lock_release_error = releaseError;
+    throw taskError;
+  }
+  if (releaseError) throw releaseError;
+  return result;
+}
+
+async function acquireJsonAppendLock(lockPath, options) {
+  const deadline = Date.now() + options.timeoutMs;
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  reconcileProcessOwnedJsonLock(lockPath);
+  reconcileDetachedJsonLockArtifacts(lockPath, options);
+  while (true) {
+    reconcileProcessOwnedJsonLock(lockPath);
+    const ownerId = crypto.randomUUID();
+    const candidatePath = `${lockPath}.candidate-${ownerId}`;
+    const owner = {
+      owner_id: ownerId,
+      pid: process.pid,
+      host: LOCK_OWNER_HOST,
+      process_instance_id: LOCK_PROCESS_INSTANCE_ID,
+      acquired_at: new Date().toISOString(),
+    };
+    const candidateIdentity = writeDurableLockCandidate(candidatePath, owner);
+    let linked = false;
+    try {
+      fs.linkSync(candidatePath, lockPath);
+      linked = true;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+
+    if (linked) {
+      const lock = {
+        lockPath,
+        ownerId,
+        dev: candidateIdentity.dev,
+        ino: candidateIdentity.ino,
+        candidatePath,
+        active: true,
+        abandoned: false,
+        cleanupErrors: [],
+      };
+      PROCESS_OWNED_JSON_LOCKS.set(lockPath, lock);
+      const cleanupError = unlinkArtifactWithIdentity(candidatePath, lock);
+      if (cleanupError) lock.cleanupErrors.push(cleanupError);
+      return lock;
+    }
+
+    const candidateCleanupError = unlinkArtifactWithIdentity(candidatePath, candidateIdentity);
+    if (candidateCleanupError) throw candidateCleanupError;
+
+    const observed = inspectJsonAppendLock(lockPath);
+    if (observed && jsonAppendLockIsStale(observed, options)) {
+      try {
+        retireJsonAppendLock(observed, { requireStale: options });
+      } catch (error) {
+        const current = inspectJsonAppendLock(lockPath);
+        if (current) throw error;
+      }
+    }
+    if (Date.now() >= deadline) {
+      const error = new Error(`timed out acquiring event substrate append lock: ${lockPath}`);
+      error.code = "EVENT_SUBSTRATE_LOCK_TIMEOUT";
+      throw error;
+    }
+    await delay(options.retryMs);
+  }
+}
+
+function writeDurableLockCandidate(candidatePath, owner) {
+  const flags = fs.constants.O_CREAT
+    | fs.constants.O_EXCL
+    | fs.constants.O_WRONLY
+    | (fs.constants.O_NOFOLLOW || 0);
+  const handle = fs.openSync(candidatePath, flags, 0o600);
+  try {
+    fs.writeFileSync(handle, `${JSON.stringify(owner)}\n`, "utf8");
+    fs.fsyncSync(handle);
+    const identity = fs.fstatSync(handle);
+    if (!identity.isFile()) throw unsafeBoundaryError(candidatePath, "lock candidate");
+    return { dev: identity.dev, ino: identity.ino, mtimeMs: identity.mtimeMs };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function inspectJsonAppendLock(lockPath) {
+  const snapshot = readRegularFileSnapshot(lockPath, "append lock", { allowMissing: true });
+  if (!snapshot) return null;
+  return lockObservation(lockPath, snapshot);
+}
+
+function jsonAppendLockIsStale(observed, options) {
+  const ageMs = Math.max(0, Date.now() - Number(observed.mtimeMs || 0));
+  if (!observed.owner) return ageMs >= options.staleMs;
+  if (observed.owner.host !== LOCK_OWNER_HOST) return false;
+  const staleAgeReached = ageMs >= options.staleMs;
+  if (!staleAgeReached) return false;
+  const ownerInstanceId = typeof observed.owner.process_instance_id === "string"
+    ? observed.owner.process_instance_id
+    : "";
+  if (observed.owner.pid === process.pid && ownerInstanceId) {
+    return ownerInstanceId !== LOCK_PROCESS_INSTANCE_ID;
+  }
+  return !processIsAlive(observed.owner.pid);
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function releaseJsonAppendLock(lock) {
+  const observed = inspectJsonAppendLock(lock.lockPath);
+  if (!observed
+    || observed.dev !== lock.dev
+    || observed.ino !== lock.ino
+    || observed.owner?.owner_id !== lock.ownerId) {
+    const error = new Error(`event substrate append lock ownership changed before release: ${lock.lockPath}`);
+    error.code = "EVENT_SUBSTRATE_LOCK_OWNERSHIP_LOST";
+    throw error;
+  }
+  const identity = lockIdentity(observed);
+  const retiredPath = `${lock.lockPath}.retired-${lock.ownerId}-${crypto.randomUUID()}`;
+  const renameError = retrySync(() => fs.renameSync(lock.lockPath, retiredPath));
+  if (renameError) throw renameError;
+
+  lock.active = false;
+  lock.abandoned = false;
+  PROCESS_OWNED_JSON_LOCKS.delete(lock.lockPath);
+  const cleanupErrors = [];
+  const retiredCleanupError = unlinkArtifactWithIdentity(retiredPath, identity);
+  if (retiredCleanupError) cleanupErrors.push(retiredCleanupError);
+  const candidateCleanupError = unlinkArtifactWithIdentity(lock.candidatePath, identity);
+  if (candidateCleanupError) cleanupErrors.push(candidateCleanupError);
+  cleanupErrors.push(...cleanupJsonLockArtifactsForIdentity(lock.lockPath, identity));
+  if (cleanupErrors.length > 0) throw cleanupErrors[0];
+}
+
+function retireJsonAppendLock(observed, { requireStale = null } = {}) {
+  const identity = lockIdentity(observed);
+  const identityText = `${observed.owner?.owner_id || "partial"}-${observed.dev}-${observed.ino}`
+    .replace(/[^a-zA-Z0-9_.-]/g, "_");
+  const claimPath = `${observed.lockPath}.claim-${identityText}`;
+  const claim = acquireJsonReaperClaim(claimPath, observed, requireStale);
+  if (!claim) return false;
+  let canonicalRetired = false;
+  try {
+    const currentClaim = inspectJsonReaperClaim(claimPath, observed);
+    const current = inspectJsonAppendLock(observed.lockPath);
+    if (!currentClaim
+      || currentClaim.claimId !== claim.claimId
+      || !sameFileIdentity(currentClaim, claim)
+      || !current
+      || !sameFileIdentity(current, identity)
+      || (requireStale && !jsonAppendLockIsStale(current, requireStale))) {
+      return false;
+    }
+    const retiredPath = `${observed.lockPath}.retired-${identityText}-${crypto.randomUUID()}`;
+    const renameError = retrySync(() => fs.renameSync(observed.lockPath, retiredPath));
+    if (renameError) throw renameError;
+    canonicalRetired = true;
+
+    const cleanupErrors = [];
+    const retiredCleanupError = unlinkArtifactWithIdentity(retiredPath, identity);
+    if (retiredCleanupError) cleanupErrors.push(retiredCleanupError);
+    cleanupErrors.push(...cleanupJsonLockArtifactsForIdentity(observed.lockPath, identity));
+    const claimCleanupError = unlinkArtifactWithIdentity(claimPath, claim);
+    if (claimCleanupError) cleanupErrors.push(claimCleanupError);
+    if (cleanupErrors.length > 0) throw cleanupErrors[0];
+    return true;
+  } finally {
+    if (!canonicalRetired) unlinkArtifactWithIdentity(claimPath, claim);
+  }
+}
+
+function acquireJsonReaperClaim(claimPath, observed, options) {
+  for (let attempt = 0; attempt < LOCK_CLEANUP_ATTEMPTS; attempt += 1) {
+    const claimId = crypto.randomUUID();
+    const candidatePath = `${claimPath}.candidate-${claimId}`;
+    const record = {
+      owner_id: claimId,
+      pid: process.pid,
+      host: LOCK_OWNER_HOST,
+      process_instance_id: LOCK_PROCESS_INSTANCE_ID,
+      acquired_at: new Date().toISOString(),
+      observed_owner_id: observed.owner?.owner_id || "",
+      observed_dev: observed.dev,
+      observed_ino: observed.ino,
+    };
+    const candidate = writeDurableLockCandidate(candidatePath, record);
+    let created = false;
+    try {
+      fs.linkSync(candidatePath, claimPath);
+      created = true;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+    const candidateCleanupError = unlinkArtifactWithIdentity(candidatePath, candidate);
+    if (candidateCleanupError) throw candidateCleanupError;
+    if (created) return { ...candidate, claimId };
+
+    const existing = inspectJsonReaperClaim(claimPath, observed);
+    if (!existing) continue;
+    if (!jsonAppendLockIsStale(existing, options)) return null;
+
+    const movedPath = `${claimPath}.stale-${existing.claimId}-${crypto.randomUUID()}`;
+    const moveError = retrySync(() => fs.renameSync(claimPath, movedPath));
+    if (moveError) {
+      if (moveError.code === "ENOENT") continue;
+      throw moveError;
+    }
+    const moved = inspectJsonReaperClaim(movedPath, observed);
+    if (!moved || moved.claimId !== existing.claimId || !sameFileIdentity(moved, existing)) {
+      const restoreError = retrySync(() => fs.renameSync(movedPath, claimPath));
+      if (restoreError && restoreError.code !== "EEXIST") throw restoreError;
+      return null;
+    }
+    const staleCleanupError = unlinkArtifactWithIdentity(movedPath, moved);
+    if (staleCleanupError) throw staleCleanupError;
+  }
+  return null;
+}
+
+function inspectJsonReaperClaim(claimPath, observed) {
+  const snapshot = readRegularFileSnapshot(claimPath, "append lock claim", { allowMissing: true });
+  if (!snapshot) return null;
+  const claim = lockObservation(claimPath, snapshot);
+  const owner = claim.owner;
+  if (!owner
+    || owner.observed_dev !== observed.dev
+    || owner.observed_ino !== observed.ino
+    || String(owner.observed_owner_id || "") !== String(observed.owner?.owner_id || "")) {
+    throw unsafeBoundaryError(claimPath, "append lock claim authority");
+  }
+  return { ...claim, claimId: owner.owner_id };
+}
+
+function reconcileProcessOwnedJsonLock(lockPath) {
+  const lock = PROCESS_OWNED_JSON_LOCKS.get(lockPath);
+  if (!lock || lock.active || !lock.abandoned) return;
+  try {
+    releaseJsonAppendLock(lock);
+  } catch (error) {
+    const current = inspectJsonAppendLock(lockPath);
+    if (current) throw error;
+    PROCESS_OWNED_JSON_LOCKS.delete(lockPath);
+  }
+}
+
+function reconcileDetachedJsonLockArtifacts(lockPath, options) {
+  const canonical = inspectJsonAppendLock(lockPath);
+  for (const artifactPath of listJsonLockArtifacts(lockPath)) {
+    const snapshot = readRegularFileSnapshot(artifactPath, "append lock artifact", { allowMissing: true });
+    if (!snapshot) continue;
+    if (canonical && sameFileIdentity(snapshot.stat, canonical)) continue;
+    const artifact = lockObservation(artifactPath, snapshot);
+    if (!artifact.owner || !jsonAppendLockIsStale(artifact, options)) continue;
+    const cleanupError = unlinkArtifactWithIdentity(artifactPath, artifact);
+    if (cleanupError) throw cleanupError;
+  }
+}
+
+function cleanupJsonLockArtifactsForIdentity(lockPath, identity) {
+  const errors = [];
+  for (const artifactPath of listJsonLockArtifacts(lockPath)) {
+    let artifact;
+    try {
+      artifact = lstatRegularBoundary(artifactPath, "append lock artifact", { allowMissing: true });
+    } catch (error) {
+      errors.push(error);
+      continue;
+    }
+    if (!artifact || !sameFileIdentity(artifact, identity)) continue;
+    const cleanupError = unlinkArtifactWithIdentity(artifactPath, identity);
+    if (cleanupError) errors.push(cleanupError);
+  }
+  return errors;
+}
+
+function listJsonLockArtifacts(lockPath) {
+  const directory = path.dirname(lockPath);
+  const base = path.basename(lockPath);
+  let names;
+  try {
+    names = fs.readdirSync(directory);
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  return names
+    .filter((name) => name.startsWith(`${base}.candidate-`)
+      || name.startsWith(`${base}.claim-`)
+      || name.startsWith(`${base}.retired-`))
+    .slice(0, MAX_LOCK_ARTIFACT_SCAN)
+    .map((name) => path.join(directory, name));
+}
+
+function unlinkArtifactWithIdentity(artifactPath, identity) {
+  if (!artifactPath) return null;
+  let current;
+  try {
+    current = lstatRegularBoundary(artifactPath, "append lock artifact", { allowMissing: true });
+  } catch (error) {
+    return error;
+  }
+  if (!current || !sameFileIdentity(current, identity)) return null;
+  return retrySync(() => fs.unlinkSync(artifactPath), { ignoreMissing: true });
+}
+
+function retrySync(operation, { ignoreMissing = false } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt < LOCK_CLEANUP_ATTEMPTS; attempt += 1) {
+    try {
+      operation();
+      return null;
+    } catch (error) {
+      if (ignoreMissing && error?.code === "ENOENT") return null;
+      lastError = error;
+    }
+  }
+  return lastError;
+}
+
+function lockObservation(lockPath, snapshot) {
+  let owner = null;
+  try {
+    const parsed = JSON.parse(snapshot.content);
+    if (typeof parsed?.owner_id === "string"
+      && parsed.owner_id.length > 0
+      && Number.isSafeInteger(parsed?.pid)
+      && parsed.pid > 0
+      && typeof parsed?.host === "string"
+      && parsed.host.length > 0) {
+      owner = parsed;
+    }
+  } catch {}
+  return {
+    lockPath,
+    dev: snapshot.stat.dev,
+    ino: snapshot.stat.ino,
+    mtimeMs: snapshot.stat.mtimeMs,
+    owner,
+  };
+}
+
+function lockIdentity(value) {
+  return { dev: value.dev, ino: value.ino };
+}
+
+function sameFileIdentity(left, right) {
+  return Boolean(left) && Boolean(right) && left.dev === right.dev && left.ino === right.ino;
+}
+
+function readRegularFileSnapshot(filePath, label, { allowMissing = false } = {}) {
+  const before = lstatRegularBoundary(filePath, label, { allowMissing });
+  if (!before) return null;
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+  const handle = fs.openSync(filePath, flags);
+  try {
+    const after = verifyOpenedRegularBoundary(filePath, handle, before, label);
+    return { stat: after, content: fs.readFileSync(handle, "utf8") };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function lstatRegularBoundary(filePath, label, { allowMissing = false } = {}) {
+  let identity;
+  try {
+    identity = fs.lstatSync(filePath);
+  } catch (error) {
+    if (allowMissing && error?.code === "ENOENT") return null;
+    throw error;
+  }
+  if (identity.isSymbolicLink() || !identity.isFile()) {
+    throw unsafeBoundaryError(filePath, label);
+  }
+  return identity;
+}
+
+function verifyOpenedRegularBoundary(filePath, handle, before, label) {
+  const opened = fs.fstatSync(handle);
+  const current = lstatRegularBoundary(filePath, label, { allowMissing: false });
+  if (!opened.isFile()
+    || (before && !sameFileIdentity(opened, before))
+    || !sameFileIdentity(opened, current)) {
+    throw unsafeBoundaryError(filePath, `${label} changed during open`);
+  }
+  return opened;
+}
+
+function unsafeBoundaryError(filePath, label) {
+  const error = new Error(`unsafe ${label} boundary: ${filePath}`);
+  error.code = "EVENT_SUBSTRATE_UNSAFE_PATH";
+  return error;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 module.exports = {
   appendEventOnClient,
   createEventSubstrateStore,
+  EventStreamVersionConflictError,
   normalizeEvent,
   withTransaction,
 };
