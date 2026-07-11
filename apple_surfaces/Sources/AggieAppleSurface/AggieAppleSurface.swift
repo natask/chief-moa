@@ -74,7 +74,14 @@ public final class AtomicFileEffectJournal: EffectJournal, @unchecked Sendable {
                 let claim = claimURL(for: messageID)
                 let descriptor = open(claim.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
                 guard descriptor >= 0 else { throw AggieProtocolError.duplicateProposal }
+                guard fsync(descriptor) == 0 else { close(descriptor); throw AggieProtocolError.malformed("journal fsync") }
                 close(descriptor)
+                let parent = open(url.deletingLastPathComponent().path, O_RDONLY)
+                guard parent >= 0, fsync(parent) == 0 else {
+                    if parent >= 0 { close(parent) }
+                    throw AggieProtocolError.malformed("journal directory fsync")
+                }
+                close(parent)
             }
             guard records.count < AggieLimits.pendingProposals || records[messageID] != nil else {
                 throw AggieProtocolError.tooLarge

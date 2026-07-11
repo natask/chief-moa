@@ -48,7 +48,8 @@ function scan(value, depth) {
   else if (value && typeof value === "object") {
     const entries = Object.entries(value); if (entries.length > 64) throw new Error("too wide");
     for (const [key, item] of entries) {
-      if (EXECUTABLE_KEY.test(key) || SECRET_KEY.test(key.replace(/[^a-z0-9]/gi, ""))) throw new Error("executable or credential authority");
+      const compact = key.replace(/[^a-z0-9]/gi, "");
+      if (EXECUTABLE_KEY.test(compact) || SECRET_KEY.test(compact)) throw new Error("executable or credential authority");
       scan(item, depth + 1);
     }
   }

@@ -50,7 +50,7 @@ final class AggieProposalAdapter {
 
     static Proposal parse(JSONObject input) {
         if (input == null || input.toString().getBytes(StandardCharsets.UTF_8).length > MAX_ENVELOPE_BYTES) fail("invalid_envelope");
-        requireExactKeys(input, set("version", "type", "message_id", "session_id", "surface", "timestamp", "payload"));
+        requireRequiredKeys(input, set("version", "type", "message_id", "session_id", "surface", "timestamp", "payload"));
         rejectDangerous(input, "envelope", 0);
         int version = safeInt(input, "version");
         if (version != CURRENT_VERSION && version != PREVIOUS_VERSION) fail("unsupported_version");
@@ -60,7 +60,7 @@ final class AggieProposalAdapter {
         String timestamp = instant(input, "timestamp");
 
         JSONObject surface = object(input, "surface");
-        requireExactKeys(surface, set("id", "kind", "mode", "device_id"));
+        requireRequiredKeys(surface, set("id", "kind", "mode", "device_id"));
         id(surface, "id");
         if (!"android".equals(surface.optString("kind", null))) fail("surface_not_android");
         requireEnum(surface, "mode", MODES);
@@ -69,8 +69,7 @@ final class AggieProposalAdapter {
         JSONObject payload = object(input, "payload");
         Set<String> requiredPayload = set("proposal_id", "kind", "approval_class", "expires_at", "preconditions", "params");
         Set<String> payloadKeys = keys(payload);
-        if (!payloadKeys.containsAll(requiredPayload)
-                || !setWithOptional(requiredPayload, "proposed_by").containsAll(payloadKeys)) fail("invalid_payload_shape");
+        if (!payloadKeys.containsAll(requiredPayload)) fail("invalid_payload_shape");
         id(payload, "proposal_id");
         requireEnum(payload, "kind", ACTIONS);
         requireEnum(payload, "approval_class", APPROVALS);
@@ -79,6 +78,7 @@ final class AggieProposalAdapter {
         if (!preconditions.keys().hasNext()) fail("missing_preconditions");
         object(payload, "params");
         String proposedBy = payload.has("proposed_by") ? id(payload, "proposed_by") : "gateway";
+        if (!"gateway".equals(proposedBy)) fail("invalid_provenance");
 
         JSONObject normalizedPayload = copy(payload);
         put(normalizedPayload, "proposed_by", proposedBy);
@@ -94,14 +94,16 @@ final class AggieProposalAdapter {
         final int version;
         final String messageId;
         final String sessionId;
-        final JSONObject surface;
-        final JSONObject payload;
+        private final JSONObject surface;
+        private final JSONObject payload;
         final String digest;
 
         private Proposal(int version, String messageId, String sessionId, JSONObject surface, JSONObject payload, String digest) {
             this.version = version; this.messageId = messageId; this.sessionId = sessionId;
             this.surface = surface; this.payload = payload; this.digest = digest;
         }
+        JSONObject surface() { return copy(surface); }
+        JSONObject payload() { return copy(payload); }
     }
 
     static final class Rejected extends IllegalArgumentException {
@@ -115,7 +117,10 @@ final class AggieProposalAdapter {
         if (value instanceof Number) {
             double number = ((Number) value).doubleValue();
             if (!Double.isFinite(number) || (value instanceof Double || value instanceof Float) && Math.abs(number) > 9_007_199_254_740_991d) fail("unsafe_number");
-            if ((value instanceof Long || value instanceof Integer) && Math.abs(((Number) value).longValue()) > 9_007_199_254_740_991L) fail("unsafe_number");
+            if (value instanceof Long || value instanceof Integer) {
+                long integer = ((Number) value).longValue();
+                if (integer < -9_007_199_254_740_991L || integer > 9_007_199_254_740_991L) fail("unsafe_number");
+            }
             return;
         }
         if (value instanceof String) {
@@ -174,9 +179,8 @@ final class AggieProposalAdapter {
     private static String id(JSONObject value, String key) { String raw = value.optString(key, null); if (raw == null || !ID.matcher(raw).matches()) fail("invalid_id"); return raw; }
     private static String instant(JSONObject value, String key) { String raw = value.optString(key, null); try { Instant.parse(raw); } catch (DateTimeParseException | NullPointerException error) { fail("invalid_timestamp"); } return raw; }
     private static void requireEnum(JSONObject value, String key, Set<String> allowed) { if (!allowed.contains(value.optString(key, null))) fail("invalid_" + key); }
-    private static void requireExactKeys(JSONObject value, Set<String> expected) { if (!keys(value).equals(expected)) fail("invalid_shape"); }
+    private static void requireRequiredKeys(JSONObject value, Set<String> expected) { if (!keys(value).containsAll(expected)) fail("invalid_shape"); }
     private static Set<String> keys(JSONObject value) { Set<String> result = new HashSet<>(); value.keys().forEachRemaining(result::add); return result; }
     private static Set<String> set(String... values) { return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values))); }
-    private static Set<String> setWithOptional(Set<String> base, String optional) { Set<String> result = new HashSet<>(base); result.add(optional); return result; }
     private static void fail(String code) { throw new Rejected(code); }
 }

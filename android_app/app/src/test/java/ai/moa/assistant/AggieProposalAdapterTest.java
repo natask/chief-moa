@@ -21,18 +21,23 @@ public final class AggieProposalAdapterTest {
     }
 
     @Test public void rejectsUnknownCredentialExecutableAndUnsafeValuesRecursively() throws Exception {
-        JSONObject extra = valid(2).put("surprise", true); reject(extra, "invalid_shape");
+        JSONObject extra = valid(2).put("surprise", true);
+        assertEquals(2, AggieProposalAdapter.parse(extra).version);
         JSONObject token = valid(2); token.getJSONObject("payload").getJSONObject("params").put("oauth_token", "plain"); reject(token, "credential_payload");
         JSONObject url = valid(2); url.getJSONObject("payload").getJSONObject("params").put("url", "https://x.test/?code=oauth-secret-123456"); reject(url, "credential_payload");
         JSONObject script = valid(2); script.getJSONObject("payload").getJSONObject("params").put("java-script", "alert(1)"); reject(script, "executable_payload");
         JSONObject unsafe = valid(2); unsafe.getJSONObject("payload").getJSONObject("params").put("count", 9_007_199_254_740_992L); reject(unsafe, "unsafe_number");
+        JSONObject minimum = valid(2); minimum.getJSONObject("payload").getJSONObject("params").put("count", Long.MIN_VALUE); reject(minimum, "unsafe_number");
     }
 
     @Test public void adapterExposesNoExecutionDecision() throws Exception {
         AggieProposalAdapter.Proposal proposal = AggieProposalAdapter.parse(valid(2));
-        assertEquals("proposal_1", proposal.payload.getString("proposal_id"));
-        assertEquals("sess_1", proposal.payload.getString("session_id"));
-        assertEquals("gateway", proposal.payload.getString("proposed_by"));
+        JSONObject payload = proposal.payload();
+        assertEquals("proposal_1", payload.getString("proposal_id"));
+        assertEquals("sess_1", payload.getString("session_id"));
+        assertEquals("gateway", payload.getString("proposed_by"));
+        payload.put("proposal_id", "mutated");
+        assertEquals("proposal_1", proposal.payload().getString("proposal_id"));
     }
 
     private static JSONObject valid(int version) throws Exception {
