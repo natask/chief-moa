@@ -76,7 +76,7 @@ The gateway telemetry foundation exposes a bounded asynchronous exporter seam.
 Exporter rejection, timeout, or queue overflow may drop telemetry and increment
 local counters, but cannot fail the product operation. User content, identity,
 credentials, financial data, and high-cardinality IDs are excluded by default;
-opaque release/correlation identifiers use semver plus generated or validated
+opaque release/correlation identifiers use numeric `major.minor.patch` plus generated or validated
 `prefix_uuid` formats and are not metric dimensions. Export timeouts abort the
 adapter signal and quarantine new export starts until the timed-out underlying
 attempt settles, so a non-cooperative adapter cannot pile up unresolved export

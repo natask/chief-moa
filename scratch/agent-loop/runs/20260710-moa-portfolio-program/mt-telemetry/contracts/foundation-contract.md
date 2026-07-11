@@ -21,13 +21,17 @@ extension, canonical event storage, auth, or database schema.
 ## Required behavior and edges
 
 - Closed surface, event-name, and attribute-key vocabularies.
-- Release version/build and opaque trace/parent/canary correlation.
+- Release versions use semver; event/build/trace/parent/canary IDs use generated
+  or validated `prefix_uuid` opaque formats.
 - Correlation absent from metric dimensions.
 - Scalar/length/count bounds enforced without recursive payload traversal.
 - Token-shaped values rejected.
 - Fixed queue/batch bounds; exporter starts after the caller returns.
 - Invalid, overflowed, slow, and failed export paths stay failure-isolated and
   observable through bounded counters.
+- Timeout handling uses `AbortSignal` plus single-flight quarantine; if an
+  adapter ignores abort, unresolved exporter work stays bounded to one active
+  underlying batch.
 
 ## Forbidden shortcuts
 
@@ -48,7 +52,7 @@ cd gateway
 node --test test/semantic-telemetry.test.js
 npm run check
 cd ..
-npx --yes @fission-ai/openspec validate telemetry-observability-foundation --strict
+openspec validate telemetry-observability-foundation --strict --no-interactive
 ```
 
 Block on sensitive leakage, high-cardinality metric labels, synchronous export,

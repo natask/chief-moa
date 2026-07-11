@@ -18,6 +18,16 @@ The system SHALL use allowlisted scalar attributes and SHALL exclude raw audio,
 transcripts, prompts, page or screen content, credentials, financial details,
 user IDs, tenant IDs, session IDs, and turn IDs by default.
 
+#### Scenario: Token-like value
+
+- **WHEN** an allowlisted attribute contains a token-shaped value
+- **THEN** validation rejects the event before it reaches an exporter
+
+#### Scenario: Metric dimensions
+
+- **WHEN** dimensions are derived from a correlated event
+- **THEN** opaque correlation and event IDs are absent
+
 ### Requirement: Release and correlation identifiers are opaque
 
 The system SHALL accept release versions only in semver form and SHALL accept
@@ -36,16 +46,6 @@ tenant-like strings, and user-shaped values SHALL be rejected.
 - **WHEN** a caller provides `trace_id`, `parent_event_id`, or `canary_id` that
   is not an opaque `prefix_uuid`
 - **THEN** validation rejects the event before it reaches an exporter
-
-#### Scenario: Token-like value
-
-- **WHEN** an allowlisted attribute contains a token-shaped value
-- **THEN** validation rejects the event before it reaches an exporter
-
-#### Scenario: Metric dimensions
-
-- **WHEN** dimensions are derived from a correlated event
-- **THEN** opaque correlation and event IDs are absent
 
 #### Scenario: Identity-shaped correlation
 

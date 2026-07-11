@@ -15,7 +15,8 @@ generated or validated `prefix_uuid` formats such as `build_<uuid>`,
 fields correlate gateway, Android, extension, website, and worker observations
 without provider credentials or identity-shaped values.
 All opaque identifiers use field-specific prefixes plus UUIDs; release versions
-use semantic-version syntax. Identity-shaped free-form values are rejected.
+use numeric `major.minor.patch` syntax, with build correlation confined to the
+opaque `build_id`. Identity-shaped free-form values are rejected.
 
 ## Export behavior
 

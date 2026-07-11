@@ -9,7 +9,10 @@ const MAX_ATTRIBUTE_COUNT = 16;
 const MAX_ATTRIBUTE_VALUE_LENGTH = 96;
 const DEFAULT_EXPORT_TIMEOUT_MS = 2_000;
 const OPAQUE_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+// Keep release.version deliberately narrower than full SemVer. Free-form
+// prerelease/build metadata can smuggle identity or session material; build
+// correlation belongs in the separately validated opaque build_id.
+const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const ALLOWED_SURFACES = new Set(["gateway", "android", "browser_extension", "website", "worker"]);
 const ALLOWED_EVENT_NAMES = new Set([
   "canary.started",

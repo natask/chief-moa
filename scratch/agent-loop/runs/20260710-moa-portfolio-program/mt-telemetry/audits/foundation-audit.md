@@ -13,7 +13,8 @@ audited. It is not wired into runtime surfaces or a backend.
 
 ## Specialized findings
 
-- Correctness: PASS for envelope construction and bounded queue semantics.
+- Correctness: PASS for envelope construction, opaque ID validation, and bounded
+  queue/single-flight semantics.
 - Security/privacy: PASS for the explicit default-deny unit boundary. Residual
   unknown: no legal policy or representative scrubbed adversarial corpus.
 - Performance/resource: PASS architecture bounds; no measured CPU, RSS, network

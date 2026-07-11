@@ -39,6 +39,7 @@ test("semantic envelope correlates releases without putting IDs in metric dimens
 test("release and correlation ids require explicit opaque formats", () => {
   for (const input of [
     { release: { version: "alice@example.com", build_id: release.build_id } },
+    { release: { version: "0.1.0-session-123", build_id: release.build_id } },
     { release: { version: "0.1.0", build_id: "build_alice@example.com" } },
     { release: { version: "0.1.0", build_id: "build_session-123" } },
     { correlation: { trace_id: "trace_user-123" } },
