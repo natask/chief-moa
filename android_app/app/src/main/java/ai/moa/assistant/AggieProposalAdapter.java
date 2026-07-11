@@ -80,14 +80,23 @@ final class AggieProposalAdapter {
         String proposedBy = payload.has("proposed_by") ? id(payload, "proposed_by") : "gateway";
         if (!"gateway".equals(proposedBy)) fail("invalid_provenance");
 
-        JSONObject normalizedPayload = copy(payload);
+        JSONObject normalizedPayload = new JSONObject();
+        put(normalizedPayload, "proposal_id", payload.opt("proposal_id"));
+        put(normalizedPayload, "kind", payload.opt("kind"));
+        put(normalizedPayload, "approval_class", payload.opt("approval_class"));
+        put(normalizedPayload, "expires_at", payload.opt("expires_at"));
+        put(normalizedPayload, "preconditions", copy(preconditions));
+        put(normalizedPayload, "params", copy(object(payload, "params")));
         put(normalizedPayload, "proposed_by", proposedBy);
         put(normalizedPayload, "session_id", sessionId);
+        JSONObject normalizedSurface = new JSONObject();
+        put(normalizedSurface, "id", surface.opt("id")); put(normalizedSurface, "kind", surface.opt("kind"));
+        put(normalizedSurface, "mode", surface.opt("mode")); put(normalizedSurface, "device_id", surface.opt("device_id"));
         JSONObject normalized = new JSONObject();
         put(normalized, "version", version); put(normalized, "message_id", messageId);
-        put(normalized, "session_id", sessionId); put(normalized, "surface", copy(surface));
+        put(normalized, "session_id", sessionId); put(normalized, "surface", normalizedSurface);
         put(normalized, "timestamp", timestamp); put(normalized, "payload", normalizedPayload);
-        return new Proposal(version, messageId, sessionId, copy(surface), normalizedPayload, sha256(stableJson(normalized)));
+        return new Proposal(version, messageId, sessionId, normalizedSurface, normalizedPayload, sha256(stableJson(normalized)));
     }
 
     static final class Proposal {

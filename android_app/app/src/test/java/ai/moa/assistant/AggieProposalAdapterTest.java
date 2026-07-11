@@ -23,6 +23,11 @@ public final class AggieProposalAdapterTest {
     @Test public void rejectsUnknownCredentialExecutableAndUnsafeValuesRecursively() throws Exception {
         JSONObject extra = valid(2).put("surprise", true);
         assertEquals(2, AggieProposalAdapter.parse(extra).version);
+        JSONObject nested = valid(2);
+        nested.getJSONObject("surface").put("future_label", "benign");
+        nested.getJSONObject("payload").put("future_hint", true);
+        assertEquals("ad32370b60ef1be2b22fa8a98f31b76bdc1d65a75d30efb444c294c40d4624f6",
+                AggieProposalAdapter.parse(nested).digest);
         JSONObject token = valid(2); token.getJSONObject("payload").getJSONObject("params").put("oauth_token", "plain"); reject(token, "credential_payload");
         JSONObject url = valid(2); url.getJSONObject("payload").getJSONObject("params").put("url", "https://x.test/?code=oauth-secret-123456"); reject(url, "credential_payload");
         JSONObject script = valid(2); script.getJSONObject("payload").getJSONObject("params").put("java-script", "alert(1)"); reject(script, "executable_payload");
