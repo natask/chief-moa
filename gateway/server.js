@@ -80,6 +80,17 @@ const {
   validateProactiveTurnBody,
 } = require("./lib/proactive-turn");
 const {
+  MACOS_PROACTIVE_MAX_BODY_BYTES,
+  MACOS_PROACTIVE_MAX_RESPONSE_BYTES,
+  MacosProactiveValidationError,
+  buildMacosOpenAiPayload,
+  buildMacosVertexPayload,
+  macosOpenAiText,
+  macosProactiveResponse,
+  macosVertexText,
+  validateMacosProactiveBody,
+} = require("./lib/macos-proactive-turn");
+const {
   resolveTurnSurface,
   surfaceExecuteCapabilities,
   surfaceClassicTools,
@@ -1634,6 +1645,16 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/proactive/macos") {
+      response.setHeader("cache-control", "no-store");
+      if (!authorizedProactiveTurn(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleMacosProactiveTurn(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/audio-notes") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -2325,6 +2346,46 @@ function parseProactiveProviderJson(text, provider) {
 function proactiveProviderTimeoutMs() {
   const configured = positiveNumberFrom(process.env.PROACTIVE_PROVIDER_TIMEOUT_MS, Math.min(MODEL_FETCH_TIMEOUT_MS, 15000));
   return Math.max(250, Math.min(30000, configured));
+}
+
+async function handleMacosProactiveTurn(request, response) {
+  const contentType = String(request.headers["content-type"] || "").toLowerCase();
+  if (!/^application\/json(?:\s*;|$)/.test(contentType)) {
+    request.resume();
+    sendJson(response, 415, { error: "macOS proactive request rejected", code: "content_type_required" });
+    return;
+  }
+  let body;
+  try {
+    body = validateMacosProactiveBody(await readBoundedJsonBody(request, MACOS_PROACTIVE_MAX_BODY_BYTES, MacosProactiveValidationError));
+  } catch (error) {
+    if (error instanceof MacosProactiveValidationError) {
+      sendJson(response, error.statusCode, { error: "macOS proactive request rejected", code: error.code });
+      return;
+    }
+    throw error;
+  }
+  const provider = resolveReasoningProvider({ reasoning_provider: MODEL_PROVIDER });
+  let text;
+  if (!providerConfiguredFor(provider)) {
+    text = "Review the visible interface, confirm the intended outcome, and choose the smallest reversible next step.";
+  } else if (provider === "vertex") {
+    const result = await fetchBoundedResponseText(vertexEndpoint({ model: MODEL_ID }), {
+      method: "POST",
+      headers: { authorization: `Bearer ${await vertexAccessToken()}`, "content-type": "application/json" },
+      body: JSON.stringify(buildMacosVertexPayload(body, vertexSafetySettings())),
+      redirect: "error",
+    }, { timeoutMs: proactiveProviderTimeoutMs(), maxBytes: MACOS_PROACTIVE_MAX_RESPONSE_BYTES, label: "macOS proactive Vertex provider" });
+    if (!result.response.ok) throw new Error(`macOS proactive Vertex HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
+    text = macosVertexText(parseProactiveProviderJson(result.text, "Vertex"));
+  } else {
+    const result = await fetchBoundedResponseText(`${MODEL_BASE_URL}/chat/completions`, {
+      method: "POST", headers: modelHeaders(), body: JSON.stringify(buildMacosOpenAiPayload(body, MODEL_ID)), redirect: "error",
+    }, { timeoutMs: proactiveProviderTimeoutMs(), maxBytes: MACOS_PROACTIVE_MAX_RESPONSE_BYTES, label: "macOS proactive OpenAI-compatible provider" });
+    if (!result.response.ok) throw new Error(`macOS proactive model HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
+    text = macosOpenAiText(parseProactiveProviderJson(result.text, "OpenAI-compatible"));
+  }
+  sendJson(response, 200, macosProactiveResponse(text));
 }
 
 async function handleChat(request, response) {
@@ -13053,6 +13114,31 @@ function readProactiveJsonBody(request) {
       } catch {
         reject(new ProactiveTurnValidationError("invalid_json", 400));
       }
+    });
+    request.on("error", reject);
+  });
+}
+
+function readBoundedJsonBody(request, maxBytes, ErrorType) {
+  const declaredLength = Number(request.headers["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    request.resume();
+    return Promise.reject(new ErrorType("body_too_large", 413));
+  }
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let tooLarge = false;
+    const chunks = [];
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) { tooLarge = true; chunks.length = 0; return; }
+      if (!tooLarge) chunks.push(chunk);
+    });
+    request.on("end", () => {
+      if (tooLarge) { reject(new ErrorType("body_too_large", 413)); return; }
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!raw.trim()) { reject(new ErrorType("invalid_json", 400)); return; }
+      try { resolve(JSON.parse(raw)); } catch { reject(new ErrorType("invalid_json", 400)); }
     });
     request.on("error", reject);
   });
