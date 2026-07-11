@@ -38,6 +38,21 @@
 
 ## Draft WebSocket boundary
 
+- The one canonical wire shape is:
+  - health: `capabilities.voice_drafts_v1: true`;
+  - start/resume: `session_start` with
+    `voice_draft_mode:"voice_drafts_v1"`, optional draft ID/revision, exact
+    draft session/branch (which must equal the top-level authority), stable
+    idempotency key, and context action;
+  - readiness: only `voice_draft_ready`, action `create|resume`, exact
+    session/branch/turn, and `draft:{id,revision,state,session_id,branch_id}`;
+  - control: only `voice_draft_control`, action `pause|park|discard`, draft ID,
+    expected revision, idempotency key, and exact session/branch/turn;
+  - acknowledgement: only `voice_draft_control_ack` with the same action and
+    authority plus a strictly newer authoritative draft revision;
+  - SEND: draft-mode `commit_turn` with draft ID, expected revision, and
+    idempotency key; terminal `turn_done` carries the sent/retryable draft
+    receipt. No compatibility aliases are accepted in v1.
 - A draft-mode `session_start` is an admission/control session, not a canonical
   voice turn. It creates or resumes a draft with exact session/branch/revision
   authority and MUST NOT create a provider session, context prompt, turn file,
