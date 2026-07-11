@@ -152,6 +152,7 @@ pub fn evaluate(
     local_approval: Option<LocalApproval>,
     context: &LocalContext,
 ) -> Result<EligibleProposal, SurfaceError> {
+    validate_in_memory_envelope(&proposal_envelope)?;
     if proposal_envelope.kind != "action.proposed" {
         return Err(SurfaceError::InvalidEnvelope);
     }
@@ -204,6 +205,7 @@ pub fn approve_locally(
     actor_id: &str,
     decided_at: &str,
 ) -> Result<LocalApproval, SurfaceError> {
+    validate_in_memory_envelope(proposal_envelope)?;
     require_id(approval_message_id)?;
     require_id(actor_id)?;
     parse_time(decided_at)?;
@@ -380,6 +382,16 @@ fn validate_envelope_shape(envelope: &Envelope) -> Result<(), SurfaceError> {
         require_id(reply)?;
     }
     Ok(())
+}
+
+fn validate_in_memory_envelope(envelope: &Envelope) -> Result<(), SurfaceError> {
+    let value = serde_json::to_value(envelope).map_err(|_| SurfaceError::InvalidEnvelope)?;
+    let bytes = serde_json::to_vec(&value).map_err(|_| SurfaceError::InvalidEnvelope)?;
+    if bytes.len() > MAX_ENVELOPE_BYTES {
+        return Err(SurfaceError::TooLarge);
+    }
+    scan_safe(&value, 0)?;
+    validate_envelope_shape(envelope)
 }
 
 fn validate_surface(surface: &Surface) -> Result<(), SurfaceError> {

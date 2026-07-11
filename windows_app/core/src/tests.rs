@@ -257,3 +257,19 @@ fn size_and_collection_bounds_are_enforced_before_authority() {
         SurfaceError::InvalidEnvelope
     );
 }
+
+#[test]
+fn public_in_memory_envelopes_cannot_bypass_parse_security() {
+    let mut p = proposal();
+    p.version = 99;
+    assert_eq!(
+        evaluate(p, None, &context()).unwrap_err(),
+        SurfaceError::UnsupportedVersion
+    );
+    let mut p = proposal();
+    p.additive.insert("oauth_token".into(), json!("secret"));
+    assert_eq!(
+        evaluate(p, None, &context()).unwrap_err(),
+        SurfaceError::CredentialData
+    );
+}
