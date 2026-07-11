@@ -53,10 +53,10 @@ voice/LLM trace correlation.
 | Slice | Branch | Worktree | Ownership | State |
 |---|---|---|---|---|
 | S0 contract | staging | staging worktree | contracts, OpenSpec, architecture, ledger | contracted |
-| S1 intent domain | `agent/intent-domain-20260711` | `chief-moa-worktrees/intent-domain-20260711` | new event-backed intent module/tests | implementing |
-| S2 voice drafts | `agent/voice-drafts-20260711` | `chief-moa-worktrees/voice-drafts-20260711` | new draft store/tests/smoke | implementing |
-| S3 Android | `agent/android-draft-controls-20260711` | `chief-moa-worktrees/android-draft-controls-20260711` | Android capture state/gestures/tests | implementing |
-| S4 browser | `agent/browser-draft-controls-20260711` | `chief-moa-worktrees/browser-draft-controls-20260711` | extension capture state/gestures/tests | implementing |
+| S1 intent domain | `agent/intent-domain-20260711` | `chief-moa-worktrees/intent-domain-20260711` | new event-backed intent module/tests | CAS repaired; fresh audit pending |
+| S2 voice drafts | `agent/voice-drafts-20260711` | `chief-moa-worktrees/voice-drafts-20260711` | new draft store/tests/smoke | BLOCK; repair audit 3 implementing |
+| S3 Android | `agent/android-draft-controls-20260711` | `chief-moa-worktrees/android-draft-controls-20260711` | Android capture state/gestures/tests | BLOCK; repair audit 2 pending |
+| S4 browser | `agent/browser-draft-controls-20260711` | `chief-moa-worktrees/browser-draft-controls-20260711` | extension capture state/gestures/tests | BLOCK; repair audit 2 implementing |
 | S5 context/protocol | `agent/context-protocol-20260711` | `chief-moa-worktrees/context-protocol-20260711` | repaired M3 context + repaired M5 protocol | audit |
 | S6 gateway integration | `agent/intent-gateway-integration-20260711` | `chief-moa-worktrees/intent-gateway-integration-20260711` | HTTP/WS admission, routes, intent/trace bridges | contracted |
 | S7 verification | staging | staging worktree | integration gates, runtime QA, release evidence | pending |
@@ -177,3 +177,20 @@ voice/LLM trace correlation.
   contract 3 requiring an explicit compare-and-append contract shared by JSON
   and PostgreSQL. The intent slice remains BLOCK and uncommitted until the real
   substrate test is green and independently audited.
+- 2026-07-11: intent CAS repair now passes 17/17 focused tests, the event-
+  substrate smoke, and the old-base gateway gate; the main orchestrator reran
+  the focused suite and reproduced exactly one winner with versions `[1,2]`.
+  Commit remains blocked pending an independent process-lock/CAS audit.
+- 2026-07-11: independent voice-store audit returned BLOCK despite 22/22 tests:
+  missing create idempotency, lossy authority normalization, incomplete release
+  binding, PID-reuse locks, zero-limit coercion, privacy cleanup blocked by
+  history capacity, failed-create quota leaks, and fail-open persisted metadata.
+  Repair audit 3 is implementing.
+- 2026-07-11: cross-surface Android audit returned BLOCK after its 75-test green
+  handoff: SEND omitted mode/session/branch authority, terminal vocabulary
+  disagreed with the `sent` store state, and persisted authority tokens were not
+  exact. Repair audit 2 records the required protocol tests.
+- 2026-07-11: independent browser audit returned BLOCK despite deterministic
+  and real-Chrome gates: incomplete ready/terminal authority, coerced revisions,
+  wrong context action, stale capability reuse, mutable mid-gesture flags, and
+  swallowed offscreen PCM failure. Repair audit 2 is implementing.
