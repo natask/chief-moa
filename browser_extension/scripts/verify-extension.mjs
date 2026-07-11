@@ -13,6 +13,7 @@ const requiredFiles = [
   "extension/offscreen.js",
   "extension/offscreen-audio-worklet.js",
   "extension/livekit-voice.js",
+  "extension/voice-sampler.js",
   "extension/offscreen-livekit.html",
   "extension/offscreen-livekit.js",
   "extension/vendor/livekit-client.esm.js",
@@ -49,6 +50,7 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
@@ -58,6 +60,16 @@ const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel"];
 const requiredHostPermissions = ["http://*/*", "https://*/*", "wss://api.agee.app/*"];
+
+if (!/MAX_SAMPLES = 16/.test(voiceSamplerSource) || !/voice-sampler\/v1/.test(voiceSamplerSource)) {
+  throw new Error("voice sampler actions must be version-gated and capped");
+}
+if (!/capture: "none"/.test(backgroundSource) || !/profile_override: profileOverride/.test(backgroundSource)) {
+  throw new Error("voice sampler must use text-only sessions with a session-only profile override");
+}
+if (!/parsed\?\.type === "turn_done"/.test(backgroundSource) || !/sampler\.index \+= 1/.test(backgroundSource)) {
+  throw new Error("voice sampler must advance sequentially only after a terminal turn event");
+}
 
 if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");
