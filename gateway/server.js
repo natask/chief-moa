@@ -68,6 +68,15 @@ const {
 const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
 const { createBrowserAgentLoopStore, buildAgentToolDefs } = require("./lib/browser-agent-loop");
 const {
+  PROACTIVE_SYSTEM_PROMPT,
+  PROACTIVE_TURN_MAX_BODY_BYTES,
+  ProactiveTurnValidationError,
+  buildProactiveModelMessages,
+  proactiveFallbackReply,
+  proactiveTurnResponse,
+  validateProactiveTurnBody,
+} = require("./lib/proactive-turn");
+const {
   resolveTurnSurface,
   surfaceExecuteCapabilities,
   surfaceClassicTools,
@@ -1612,6 +1621,16 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/proactive/turns") {
+      response.setHeader("cache-control", "no-store");
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleProactiveTurn(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/audio-notes") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -2203,6 +2222,47 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// A deliberately separate intake path for the browser's accepted proactive
+// helper card. This route has no session id and never enters chat/voice
+// routing, tool loops, brokers, task stores, agent runs, or turn persistence.
+// The request validator returns only one of four packaged prompt strings; the
+// model/fallback call therefore receives no page-derived context.
+async function handleProactiveTurn(request, response) {
+  const contentType = String(request.headers["content-type"] || "").toLowerCase();
+  if (!/^application\/json(?:\s*;|$)/.test(contentType)) {
+    request.resume();
+    sendJson(response, 415, { error: "proactive request rejected", code: "content_type_required" });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readProactiveJsonBody(request);
+    body = validateProactiveTurnBody(body);
+  } catch (error) {
+    if (error instanceof ProactiveTurnValidationError) {
+      sendJson(response, error.statusCode, {
+        error: "proactive request rejected",
+        code: error.code,
+      });
+      return;
+    }
+    throw error;
+  }
+
+  const text = await callModelOrFallback(
+    buildProactiveModelMessages(body.transcript),
+    {
+      proactive_text_only: true,
+      system_prompt: PROACTIVE_SYSTEM_PROMPT,
+      model: MODEL_ID,
+      reasoning_provider: MODEL_PROVIDER,
+      temperature: 0.2,
+    },
+  );
+  sendJson(response, 200, proactiveTurnResponse(text));
 }
 
 async function handleChat(request, response) {
@@ -8170,6 +8230,10 @@ function gatewayTimeZone() {
 }
 
 function gatewayFallbackReply(prompt) {
+  const proactiveReply = proactiveFallbackReply(prompt);
+  if (proactiveReply) {
+    return proactiveReply;
+  }
   const lower = normalizeSpeech(prompt);
   if (lower.includes("gateway") || lower.includes("server")) {
     return "Yes. The gateway is running. Hey, I would like to answer with the model too, but I need you to give me access to a configured model provider.";
@@ -12568,6 +12632,13 @@ function vertexPayload(messages, profile) {
 }
 
 function profileSystemInstruction(profile) {
+  // This fixed server-only profile deliberately excludes the user's stored
+  // identity, persona, memory/language settings, and mission-agent policy. The
+  // proactive route has no need for them and discloses only its packaged
+  // category prompt to the configured reasoning provider.
+  if (profile?.proactive_text_only === true) {
+    return String(profile.system_prompt || PROACTIVE_SYSTEM_PROMPT);
+  }
   return [
     safeSystemPromptForProvider(profile, SYSTEM_PROMPT),
     profileIdentityInstruction(profile),
@@ -12833,6 +12904,46 @@ function readJsonBody(request) {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
       } catch (error) {
         reject(new Error("request body must be valid JSON"));
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function readProactiveJsonBody(request) {
+  const declaredLength = Number(request.headers["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > PROACTIVE_TURN_MAX_BODY_BYTES) {
+    request.resume();
+    return Promise.reject(new ProactiveTurnValidationError("body_too_large", 413));
+  }
+
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let tooLarge = false;
+    const chunks = [];
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > PROACTIVE_TURN_MAX_BODY_BYTES) {
+        tooLarge = true;
+        chunks.length = 0;
+        return;
+      }
+      if (!tooLarge) chunks.push(chunk);
+    });
+    request.on("end", () => {
+      if (tooLarge) {
+        reject(new ProactiveTurnValidationError("body_too_large", 413));
+        return;
+      }
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!raw.trim()) {
+        reject(new ProactiveTurnValidationError("invalid_json", 400));
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(new ProactiveTurnValidationError("invalid_json", 400));
       }
     });
     request.on("error", reject);

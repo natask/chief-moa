@@ -59,6 +59,7 @@
     "smoke:voice-audio-storage": "node scripts/smoke-voice-audio-storage.js",
     "smoke:audio-notes": "node scripts/smoke-audio-notes.js",
     "smoke:browser-agent-routing": "node scripts/smoke-browser-agent-routing.js",
+    "smoke:proactive-turn": "node scripts/smoke-proactive-turn.js",
     "smoke:threads": "node scripts/smoke-threads.js",
     "smoke:context-decision": "node scripts/smoke-context-decision.js",
     "smoke:thread-enrichment": "node scripts/smoke-thread-enrichment.js",
