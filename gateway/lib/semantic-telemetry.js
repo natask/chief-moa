@@ -8,6 +8,8 @@ const MAX_BATCH_SIZE = 32;
 const MAX_ATTRIBUTE_COUNT = 16;
 const MAX_ATTRIBUTE_VALUE_LENGTH = 96;
 const DEFAULT_EXPORT_TIMEOUT_MS = 2_000;
+const OPAQUE_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const ALLOWED_SURFACES = new Set(["gateway", "android", "browser_extension", "website", "worker"]);
 const ALLOWED_EVENT_NAMES = new Set([
   "canary.started",
@@ -41,6 +43,13 @@ const ALLOWED_ATTRIBUTE_VALUES = Object.freeze({
 });
 const FORBIDDEN_KEY_PATTERN = /(audio|transcript|prompt|content|screen|page|token|secret|authorization|cookie|financial|card|email|phone|user.?id|tenant.?id|session.?id|turn.?id)/i;
 const TOKEN_LIKE_VALUE_PATTERN = /(?:bearer\s+|(?:api|access|refresh|session)[_-]?token\s*[:=]|sk-[a-z0-9_-]{12,}|eyJ[a-zA-Z0-9_-]{12,}\.)/i;
+const OPAQUE_ID_PREFIXES = Object.freeze({
+  build_id: "build",
+  canary_id: "canary",
+  event_id: "tel",
+  parent_event_id: "tel",
+  trace_id: "trace",
+});
 
 function createSemanticEnvelope(input = {}, options = {}) {
   const name = normalizeEnum(input.name, ALLOWED_EVENT_NAMES, "event name");
@@ -49,7 +58,7 @@ function createSemanticEnvelope(input = {}, options = {}) {
   return Object.freeze({
     schema: "moa.semantic_telemetry",
     schema_version: ENVELOPE_VERSION,
-    event_id: normalizeOpaqueId(input.event_id) || `tel_${crypto.randomUUID()}`,
+    event_id: normalizeOpaqueId(input.event_id, "event_id", OPAQUE_ID_PREFIXES.event_id, { generateWhenMissing: true }),
     occurred_at: normalizeTimestamp(input.occurred_at, now),
     name,
     surface,
@@ -70,7 +79,9 @@ function createAsyncTelemetryExporter(options = {}) {
   const maxBatchSize = boundedInteger(options.maxBatchSize, 1, 256, MAX_BATCH_SIZE);
   const exportTimeoutMs = boundedInteger(options.exportTimeoutMs, 1, 60_000, DEFAULT_EXPORT_TIMEOUT_MS);
   const queue = [];
-  let exporting = false;
+  let activeExport = null;
+  let circuitOpen = false;
+  let pumping = false;
   let scheduled = false;
   let accepted = 0;
   let dropped = 0;
@@ -95,7 +106,7 @@ function createAsyncTelemetryExporter(options = {}) {
   }
 
   function schedule() {
-    if (scheduled || exporting) return;
+    if (scheduled || pumping || activeExport || circuitOpen) return;
     scheduled = true;
     setImmediate(() => {
       scheduled = false;
@@ -104,25 +115,46 @@ function createAsyncTelemetryExporter(options = {}) {
   }
 
   async function pump() {
-    if (exporting) return;
-    exporting = true;
+    if (pumping || activeExport || circuitOpen) return;
+    pumping = true;
     try {
       while (queue.length) {
         const batch = queue.splice(0, maxBatchSize);
+        const attempt = startExportBatch(options.exportBatch, batch);
+        activeExport = attempt;
         try {
-          await withTimeout(options.exportBatch(batch), exportTimeoutMs);
-        } catch {
+          await awaitExportAttempt(attempt, exportTimeoutMs);
+        } catch (error) {
           exportFailures += 1;
+          if (error?.code === "TELEMETRY_EXPORT_TIMEOUT") {
+            circuitOpen = true;
+            attempt.settled.finally(() => {
+              if (activeExport === attempt) activeExport = null;
+              circuitOpen = false;
+              schedule();
+            });
+            break;
+          }
+        } finally {
+          if (!circuitOpen && activeExport === attempt) activeExport = null;
         }
       }
     } finally {
-      exporting = false;
+      pumping = false;
       if (queue.length) schedule();
     }
   }
 
   function stats() {
-    return Object.freeze({ accepted, dropped, export_failures: exportFailures, queued: queue.length, exporting });
+    return Object.freeze({
+      accepted,
+      active_exports: activeExport ? 1 : 0,
+      circuit_open: circuitOpen,
+      dropped,
+      export_failures: exportFailures,
+      exporting: Boolean(activeExport),
+      queued: queue.length,
+    });
   }
 
   return { emit, stats };
@@ -151,8 +183,8 @@ function normalizeAttributes(value) {
 function normalizeRelease(value) {
   if (!isPlainObject(value)) throw new TypeError("release is required");
   return Object.freeze({
-    version: boundedText(value.version, 64, "release.version"),
-    build_id: boundedText(value.build_id || value.buildId, 96, "release.build_id"),
+    version: normalizeReleaseVersion(value.version),
+    build_id: normalizeOpaqueId(value.build_id || value.buildId, "release.build_id", OPAQUE_ID_PREFIXES.build_id, { generateWhenMissing: true }),
   });
 }
 
@@ -160,26 +192,47 @@ function normalizeCorrelation(value) {
   if (value === undefined) return Object.freeze({});
   if (!isPlainObject(value)) throw new TypeError("correlation must be an object");
   const output = {};
-  for (const key of ["trace_id", "parent_event_id", "canary_id"]) {
-    const normalized = normalizeOpaqueId(value[key]);
+  for (const [key, prefix] of Object.entries({
+    trace_id: OPAQUE_ID_PREFIXES.trace_id,
+    parent_event_id: OPAQUE_ID_PREFIXES.parent_event_id,
+    canary_id: OPAQUE_ID_PREFIXES.canary_id,
+  })) {
+    const normalized = normalizeOpaqueId(value[key], key, prefix);
     if (normalized) output[key] = normalized;
   }
   return Object.freeze(output);
 }
 
-function normalizeOpaqueId(value) {
+function normalizeOpaqueId(value, label, prefix, options = {}) {
   const text = String(value || "").trim();
-  if (!text) return "";
-  if (text.length > 128 || !/^[a-zA-Z0-9._:-]+$/.test(text) || TOKEN_LIKE_VALUE_PATTERN.test(text)) {
-    throw new TypeError("invalid opaque correlation id");
+  if (!text) {
+    if (options.generateWhenMissing) return generateOpaqueId(prefix);
+    return "";
   }
-  return text;
+  const expectedPrefix = `${prefix}_`;
+  if (
+    text.length > 96
+    || !text.startsWith(expectedPrefix)
+    || TOKEN_LIKE_VALUE_PATTERN.test(text)
+    || !OPAQUE_UUID_PATTERN.test(text.slice(expectedPrefix.length))
+  ) {
+    throw new TypeError(`invalid ${label}; expected ${prefix}_<uuid>`);
+  }
+  return text.toLowerCase();
 }
 
 function normalizeTimestamp(value, fallback) {
   const parsed = value ? new Date(value) : fallback;
   if (Number.isNaN(parsed.getTime())) throw new TypeError("invalid telemetry timestamp");
   return parsed.toISOString();
+}
+
+function normalizeReleaseVersion(value) {
+  const text = String(value || "").trim();
+  if (!SEMVER_PATTERN.test(text) || TOKEN_LIKE_VALUE_PATTERN.test(text)) {
+    throw new TypeError("invalid release.version; expected semver");
+  }
+  return text;
 }
 
 function normalizeEnum(value, allowed, label) {
@@ -203,15 +256,57 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 }
 
-function withTimeout(value, timeoutMs) {
+function generateOpaqueId(prefix) {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function startExportBatch(exportBatch, batch) {
+  const controller = new AbortController();
+  const promise = Promise.resolve().then(() => exportBatch(batch, { signal: controller.signal }));
+  const settled = promise.then(
+    () => undefined,
+    () => undefined,
+  );
+  return { controller, promise, settled };
+}
+
+function awaitExportAttempt(attempt, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("telemetry export timed out")), timeoutMs);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      attempt.controller.abort(createAbortError("telemetry export timed out"));
+      reject(createTimeoutError());
+    }, timeoutMs);
     timer.unref?.();
-    Promise.resolve(value).then(
-      (result) => { clearTimeout(timer); resolve(result); },
-      (error) => { clearTimeout(timer); reject(error); },
+    attempt.promise.then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
     );
   });
+}
+
+function createAbortError(message) {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function createTimeoutError() {
+  const error = new Error("telemetry export timed out");
+  error.code = "TELEMETRY_EXPORT_TIMEOUT";
+  return error;
 }
 
 module.exports = {
@@ -221,5 +316,6 @@ module.exports = {
   MAX_ATTRIBUTE_COUNT,
   createAsyncTelemetryExporter,
   createSemanticEnvelope,
+  generateOpaqueId,
   metricDimensions,
 };

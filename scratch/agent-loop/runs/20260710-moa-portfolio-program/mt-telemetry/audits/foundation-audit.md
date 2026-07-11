@@ -4,10 +4,12 @@ Date: 2026-07-10
 
 ## Verdict
 
-**PASS for the isolated foundation unit. BLOCK for the complete MT manager
-outcome.** The core has closed event/key/value vocabularies, correlation-label
-separation, constant memory bounds, exporter timeout/failure isolation, and
-focused hostile tests. It is not wired into runtime surfaces or a backend.
+**REPAIR REQUIRED / fresh verdict pending for the isolated unit. BLOCK for the
+complete MT manager outcome.** An independent Tier 0 audit refuted the original
+PASS because release/correlation fields admitted identity-shaped values and a
+timed-out non-cooperative adapter could accumulate unresolved work. The current
+repair adds strict formats and a single-flight quarantine, but must be freshly
+audited. It is not wired into runtime surfaces or a backend.
 
 ## Specialized findings
 

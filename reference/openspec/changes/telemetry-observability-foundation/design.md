@@ -9,8 +9,13 @@ product payloads are never recursively scrubbed and forwarded.
 
 Opaque trace, parent-event, and canary IDs support debugging but are excluded
 from metric dimensions. User and tenant IDs are neither attributes nor metric
-labels. Release `{version, build_id}` fields correlate gateway, Android,
-extension, website, and worker observations without provider credentials.
+labels. Release versions use semver; release build IDs and correlation IDs use
+generated or validated `prefix_uuid` formats such as `build_<uuid>`,
+`trace_<uuid>`, `canary_<uuid>`, and `tel_<uuid>`. Release `{version, build_id}`
+fields correlate gateway, Android, extension, website, and worker observations
+without provider credentials or identity-shaped values.
+All opaque identifiers use field-specific prefixes plus UUIDs; release versions
+use semantic-version syntax. Identity-shaped free-form values are rejected.
 
 ## Export behavior
 
@@ -18,6 +23,14 @@ extension, website, and worker observations without provider credentials.
 capacity queue, and starts export on a later event-loop turn. Queue overflow,
 validation failure, exporter rejection, and exporter outage increment local
 counters; they do not throw into the product request path. Batches are bounded.
+The adapter contract receives an `AbortSignal`. On timeout the seam aborts that
+signal, counts a local failure, and quarantines new export starts until the
+timed-out underlying attempt settles. This avoids pretending JavaScript has
+canceled a promise when the adapter ignores abort and keeps unresolved exporter
+work bounded to one active batch per process.
+An export receives an `AbortSignal`. After timeout, no later underlying export
+starts until that attempt settles; a non-cooperative adapter therefore opens a
+bounded circuit instead of accumulating unresolved promises.
 
 This seam is transport-neutral. A future adapter may translate envelopes to
 OTLP or another protocol only after a Collector/backend preview proves field
@@ -41,6 +54,8 @@ Architecture-confidence targets, not measured results:
   characters and constrained to a finite per-key vocabulary;
 - exporter wait: at most 2 seconds per batch by default, configurable only
   within 1 millisecond to 60 seconds;
+- unresolved exporter work: at most 1 active batch per process, even if an
+  adapter ignores abort after timeout;
 - request path: no await on exporter I/O;
 - correlation IDs: never metric dimensions.
 
