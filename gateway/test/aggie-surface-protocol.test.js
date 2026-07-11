@@ -88,6 +88,28 @@ describe("Aggie surface protocol", () => {
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "x".repeat(17 * 1024) } })), { code: "invalid_string" });
     assert.throws(() => validateEnvelope(envelope({ message_id: "bad id" })), { code: "invalid_id" });
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: { shell: "rm -rf /" } } })), { code: "executable_payload" });
+    for (const key of [
+      "java_script", "shell_command", "source_code", "css_text", "java_script_payload",
+      "script_body", "shell_command_text", "source_code_body", "css_text_value", "command_text",
+      "javaScriptPayload", "payload_java_script", "executable_script", "text_shell_command",
+      "payloadjavascript", "bodyscript", "textshellcommand", "csspayload", "CSSPayload",
+      "scripts_payload", "commands_payload", "scriptcommand", "commandscript", "shell_script",
+      "command_script", "javascript_code", "unsafesourcecode", "javascript_url", "script_src",
+      "command_line", "inline_script", "css_rules", "startupscript", "rawscript", "scriptpath",
+      "shellargs", "systemcommand", "sourcecoderesourcecode", "executable", "executable_path",
+      "exec", "cmdline", "cmd_line", "cmdLine", "tool_call", "function_call", "tool_calls",
+      "toolCalls", "function_calls", "functionCalls",
+    ]) {
+      assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: { [key]: "hostile" } } })), { code: "executable_payload" });
+    }
+    for (const key of [
+      "codec_name", "codecs", "source_codec", "sourcecodecs", "decoder", "timecode", "time_code",
+      "subscription", "subscriptions", "resource_code", "context_code", "language_script",
+      "language_code_confidence", "status_code_description", "language_script_direction",
+      "scripture_reference", "shellfish_count", "commander_name", "description", "transcript", "status_code",
+    ]) {
+      assert.doesNotThrow(() => validateEnvelope(envelope({ payload: { text: "ok", context: { [key]: "benign" } } })));
+    }
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: { nested: { api_key: "secret" } } } })), { code: "secret_payload" });
     assert.throws(() => validateEnvelope(envelope({ harmless_future: { authorization: "future-secret" } })), { code: "secret_payload" });
     for (const key of ["token", "oauth_token", "oauth-token", "OAuth.Token", "private_key", "private-key", "signing_private_key", "futureAccessToken", "refresh__token", "client-secret", "provider.key", "db_password"]) {

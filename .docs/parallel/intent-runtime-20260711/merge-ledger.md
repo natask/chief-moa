@@ -28,10 +28,14 @@ voice/LLM trace correlation.
 
 ## Base and staging
 
-- Base ref: `f08e48923026019c648e3296f91efae742f86c52`
-- Staging branch: `agent/intent-runtime-20260711`
+- Original base ref: `f08e48923026019c648e3296f91efae742f86c52`
+- Rebased integration base: `caba6a1` (`feat: add Apple Aggie surface authority seam`)
+- Staging branch: `agent/intent-runtime-20260711-v2`
 - Staging worktree:
-  `/Users/natnaelkahssay/projs/chief-moa-worktrees/intent-runtime-20260711`
+  `/Users/natnaelkahssay/projs/chief-moa-worktrees/intent-runtime-20260711-v2`
+- Original staging is retained unchanged at
+  `/Users/natnaelkahssay/projs/chief-moa-worktrees/intent-runtime-20260711` as
+  rollback and comparison evidence.
 - Active source worktree remains untouched.
 
 ## Verification contract
@@ -105,3 +109,18 @@ voice/LLM trace correlation.
   worktree.
 - 2026-07-11: completed Tier-2 topology audits and started two Tier-3 contracts:
   product-events-backed intent runtime and a distinct voice-draft lifecycle.
+- 2026-07-11: the active source advanced by 19 commits during the isolated run.
+  Created `agent/intent-runtime-20260711-v2` at `caba6a1` and cherry-picked only
+  the two run contract/OpenSpec commits. A wholesale context-lane cherry-pick
+  conflicted with the newer M3/M5/Apple/Windows/companion work and was aborted
+  cleanly.
+- 2026-07-11: manually ported only the three independently audited context
+  repairs still absent at `caba6a1`: clean-slate answer-message admission,
+  a strict 500-entry decision-stash bound, and exhaustive executable-authority
+  field rejection. The newer full surface/device authority comparison was
+  retained unchanged. Focused protocol tests pass 13/13 and context preflight
+  tests pass 9/9. A first full check proved its 22 failures were exclusively
+  missing worktree-local dependencies in child smoke processes; `npm ci` then
+  installed the lockfile in this isolated worktree (reporting the same two
+  existing high-severity audit findings), and `npm run check` passed 237,
+  failed 0, skipped 1. No live state was used or mutated.

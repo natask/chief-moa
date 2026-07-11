@@ -1839,11 +1839,15 @@ module.exports = {
   runsForSession,
   browserTasksForSession,
   buildCanonicalContextArtifact,
+  buildAdmittedAnswerMessages,
   contextPreflightMessages,
   contextPreflightTool,
   parseOpenAiContextPreflight,
   parseVertexContextPreflight,
   prepareContextDecision,
+  scopeClientMessagesForAdmission,
+  stashContextDecision,
+  takeContextDecision,
   planTurnFilingThread,
   commitTurnFilingThread,
   setContextLifecycleTestHook,
@@ -2287,9 +2291,12 @@ async function handleChat(request, response) {
     !contextArtifact ? legacyRecallContext : "",
     screenContext,
   ].filter(Boolean);
-  const modelMessages = systemBlocks.length
-    ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
-    : messages;
+  const modelMessages = buildAdmittedAnswerMessages({
+    systemBlocks,
+    messages,
+    action: decision.action,
+    fallbackText: userText,
+  });
 
   let text;
   if (utilityReply) {
@@ -6604,9 +6611,12 @@ async function handleVoiceTurn(request, response) {
       !contextArtifact ? legacyRecallContext : "",
       screenContext ? voiceSystemContext(screenContext) : "",
     ].filter(Boolean);
-    const modelMessages = systemBlocks.length
-      ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
-      : messages;
+    const modelMessages = buildAdmittedAnswerMessages({
+      systemBlocks,
+      messages,
+      action: voiceEffectiveAction,
+      fallbackText: transcript,
+    });
     // Browser-sourced turns get one bounded tool round so "hide the sidebar" or
     // "make the text bigger" can propose a page_tweak action; every other source
     // (and Vertex/unconfigured providers) gets a plain chat reply.
@@ -8868,6 +8878,28 @@ function voiceMessages(body, transcript, limit) {
     messages.push({ role: "user", content: transcript });
   }
   return messages.slice(-safeLimit);
+}
+
+function currentUserTurnOnly(messages, fallbackText = "") {
+  const lastUser = [...(Array.isArray(messages) ? messages : [])].reverse().find((message) => message.role === "user");
+  const content = String(lastUser?.content || fallbackText || "").trim();
+  return content ? [{ role: "user", content }] : [];
+}
+
+function scopeClientMessagesForAdmission(messages, action, fallbackText = "") {
+  return normalizeContextAction(action) === "continue"
+    ? (Array.isArray(messages) ? messages.slice() : [])
+    : currentUserTurnOnly(messages, fallbackText);
+}
+
+function buildAdmittedAnswerMessages({ systemBlocks = [], messages = [], action = "continue", fallbackText = "" } = {}) {
+  const scopedMessages = scopeClientMessagesForAdmission(messages, action, fallbackText);
+  const admittedSystemBlocks = Array.isArray(systemBlocks)
+    ? systemBlocks.filter((content) => typeof content === "string" && content.length > 0)
+    : [];
+  return admittedSystemBlocks.length
+    ? admittedSystemBlocks.map((content) => ({ role: "system", content })).concat(scopedMessages)
+    : scopedMessages;
 }
 
 // Resolve the per-request context turn limit. Accepts an optional requested
@@ -14156,13 +14188,7 @@ function runContextLifecycleTestHook(event) {
 function stashContextDecision(sessionId, turnId, decision) {
   const key = `${sanitizeOptionalId(sessionId, "default")}:${String(turnId || "")}`;
   contextDecisionStash.set(key, { decision, at: Date.now() });
-  // Bound the stash so a dropped turn can never leak memory.
-  if (contextDecisionStash.size > 500) {
-    const cutoff = Date.now() - 5 * 60_000;
-    for (const [existingKey, value] of contextDecisionStash) {
-      if (value.at < cutoff) contextDecisionStash.delete(existingKey);
-    }
-  }
+  pruneContextDecisionStash();
 }
 function takeContextDecision(sessionId, turnId) {
   const key = `${sanitizeOptionalId(sessionId, "default")}:${String(turnId || "")}`;
@@ -14170,6 +14196,17 @@ function takeContextDecision(sessionId, turnId) {
   if (!entry) return null;
   contextDecisionStash.delete(key);
   return entry.decision;
+}
+function pruneContextDecisionStash(now = Date.now()) {
+  const cutoff = now - 5 * 60_000;
+  for (const [existingKey, value] of contextDecisionStash) {
+    if (!value || value.at < cutoff) contextDecisionStash.delete(existingKey);
+  }
+  while (contextDecisionStash.size > 500) {
+    const oldestKey = contextDecisionStash.keys().next().value;
+    if (!oldestKey) break;
+    contextDecisionStash.delete(oldestKey);
+  }
 }
 
 // Pure filing plan. It captures the exact identity and fork cutoff used for
