@@ -36,6 +36,17 @@
   auditor ring, repair cycle, manager rerun of all commands, committed unit,
   isolated preview/artifact, then promotion gate evaluation.
 
+## Active wave 1 lanes (2026-07-10)
+
+| Lane | Branch/worktree | Ownership | State |
+|---|---|---|---|
+| voice observability | `agent/voice-observability`; `chief-moa-worktrees/voice-observability` | gateway diagnostics, phase evidence, fault tests | active; pre-existing uncommitted work preserved |
+| voice product contract | `agent/voice-product-contract`; `chief-moa-worktrees/voice-product-contract` | voice OpenSpec reconciliation and switching semantics | active; pre-existing uncommitted work preserved |
+| browser voice sampler | `agent/browser-voice-sampler`; `chief-moa-worktrees/browser-voice-sampler` | extension-only sampler consumption and focused verification | active; manager creates lane from `c9af02a` |
+
+The main orchestrator owns serial integration. Section managers may commit their
+lanes but may not merge, deploy, reload the extension, or restart active services.
+
 ## Integration status
 
 - No implementation branch created.
