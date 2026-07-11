@@ -65,6 +65,9 @@ const CONTROL_ACTIONS = Object.freeze(["cancel", "pause", "redirect"]);
 const DEPLOYMENT_TARGETS = Object.freeze(["gateway", "android", "browser_extension", "website", "all", "other"]);
 const DEPLOYMENT_MODES = Object.freeze(["preview", "applied", "artifact_only"]);
 const DEPLOYMENT_STATUSES = Object.freeze(["requested", "building", "available", "applied", "failed", "superseded"]);
+const DEPLOYMENT_REVIEW_DECISIONS = Object.freeze(["approved", "rejected"]);
+const DEPLOYMENT_OPERATIONS = Object.freeze(["preview", "apply", "rollback"]);
+const DEPLOYMENT_GUARD_STATUSES = Object.freeze(["pending", "ready", "blocked"]);
 const UI_ROUTE_KINDS = Object.freeze(["task", "run", "diff", "verification", "deployment", "feedback"]);
 
 const EVENT_LIST_LIMIT = 500;
@@ -551,7 +554,12 @@ function createWorkHistoryStore({ events }) {
       branch: text(input.branch, 200),
       commit_sha: text(input.commit_sha, 80),
       reason: text(input.reason, 2000),
+      adapter_kind: text(input.adapter_kind, 80) || "deterministic_fake",
+      candidate_refs: deploymentCandidateRefs(input.candidate_refs || input.candidates),
+      artifact_refs: refs(input.artifact_refs),
+      provenance_ref: text(input.provenance_ref, 400),
       source_turn_id: text(input.source_turn_id, 160),
+      review_status: "pending",
       status: "requested",
       created_at: now,
     };
@@ -578,6 +586,247 @@ function createWorkHistoryStore({ events }) {
     return storedRequest;
   }
 
+  async function reviewDeploymentRequest(input = {}) {
+    const requestId = requireText(input.request_id, "request_id");
+    const decision = DEPLOYMENT_REVIEW_DECISIONS.includes(input.decision) ? input.decision : "rejected";
+    const state = await collectState();
+    const entry = state.deploymentRequests.get(requestId);
+    if (!entry) {
+      throw new Error(`deployment request not found: ${requestId}`);
+    }
+    const existing = entry.review;
+    if (existing && existing.decision && existing.decision !== decision) {
+      throw new Error(`deployment request ${requestId} already reviewed as ${existing.decision}`);
+    }
+    const now = new Date().toISOString();
+    const event = await append({
+      event_type: "deployment.reviewed",
+      stream_id: `deployment:${requestId}`,
+      occurred_at: now,
+      actor: actor(input.actor, "user"),
+      correlation_id: requestId,
+      idempotency_key: idem(input.idempotency_key, requestId, "deployment.reviewed"),
+      payload: {
+        request_id: requestId,
+        decision,
+        reason: text(input.reason, 2000),
+        reviewed_by_actor: text(input.reviewed_by_actor || input.actor?.id, 200),
+        reviewed_at: now,
+      },
+    });
+    if (event.payload?.decision && event.payload.decision !== decision) {
+      throw new Error(`deployment request ${requestId} was already reviewed as ${event.payload.decision}`);
+    }
+    return deploymentRequestDetail(requestId);
+  }
+
+  async function claimDeploymentRequest(input = {}) {
+    const requestId = requireText(input.request_id, "request_id");
+    const worker = requireText(input.worker_id, "worker_id");
+    const operation = DEPLOYMENT_OPERATIONS.includes(input.operation) ? input.operation : "preview";
+    const state = await collectState();
+    const entry = state.deploymentRequests.get(requestId);
+    if (!entry) {
+      throw new Error(`deployment request not found: ${requestId}`);
+    }
+    assertDeploymentOperationClaimable(entry, operation);
+    const now = new Date().toISOString();
+    const claimId = text(input.claim_id, 160) || id("dclm");
+    const event = await append({
+      event_type: "deployment.claimed",
+      stream_id: `deployment:${requestId}`,
+      occurred_at: now,
+      actor: { kind: "worker", id: worker },
+      correlation_id: requestId,
+      idempotency_key: idem(input.idempotency_key, claimId, "deployment.claimed"),
+      payload: {
+        request_id: requestId,
+        operation,
+        worker_id: worker,
+        claim_id: claimId,
+        claimed_at: now,
+        lease_expires_at: iso(input.lease_expires_at || input.leaseExpiresAt, ""),
+      },
+    });
+    if (event.payload?.worker_id && event.payload.worker_id !== worker) {
+      throw new Error(`deployment request ${requestId} ${operation} already claimed by ${event.payload.worker_id}`);
+    }
+    return event.payload;
+  }
+
+  async function recordDeploymentVerification(input = {}) {
+    const requestId = requireText(input.request_id, "request_id");
+    const state = await collectState();
+    const entry = state.deploymentRequests.get(requestId);
+    if (!entry) {
+      throw new Error(`deployment request not found: ${requestId}`);
+    }
+    const now = new Date().toISOString();
+    const verification = {
+      verification_id: id("dver"),
+      request_id: requestId,
+      deployment_id: text(input.deployment_id, 160),
+      operation: DEPLOYMENT_OPERATIONS.includes(input.operation) ? input.operation : "preview",
+      surface: VERIFICATION_SURFACES.includes(input.surface) ? input.surface : "deploy",
+      command: text(input.command || input.check_name, 800),
+      started_at: iso(input.started_at || input.startedAt, now) || now,
+      finished_at: iso(input.finished_at || input.finishedAt, now) || now,
+      exit_code: Number.isInteger(input.exit_code) ? input.exit_code : null,
+      status: VERIFICATION_STATUSES.includes(input.status) ? input.status : (input.exit_code === 0 ? "passed" : "failed"),
+      summary: text(input.summary, 2000),
+      stdout_ref: text(input.stdout_ref, 400),
+      stderr_ref: text(input.stderr_ref, 400),
+      extra_refs: refs(input.extra_refs),
+      created_by_worker_id: text(input.created_by_worker_id || input.worker_id, 160),
+    };
+    await append({
+      event_type: "deployment.verification_recorded",
+      stream_id: `deployment:${requestId}`,
+      occurred_at: verification.finished_at,
+      actor: { kind: "worker", id: verification.created_by_worker_id || "worker" },
+      correlation_id: requestId,
+      idempotency_key: idem(input.idempotency_key, verification.verification_id, "deployment.verification_recorded"),
+      payload: verification,
+    });
+    return verification;
+  }
+
+  async function observeDeploymentOperationEffect(input = {}) {
+    const requestId = requireText(input.request_id, "request_id");
+    const operation = DEPLOYMENT_OPERATIONS.includes(input.operation) ? input.operation : "apply";
+    const worker = requireText(input.worker_id, "worker_id");
+    const effectId = requireText(input.effect_id, "effect_id");
+    const claimId = requireText(input.claim_id, "claim_id");
+    const state = await collectState();
+    const entry = state.deploymentRequests.get(requestId);
+    if (!entry) {
+      throw new Error(`deployment request not found: ${requestId}`);
+    }
+    const claim = currentDeploymentClaim(entry, operation);
+    assertDeploymentOperationClaim(entry, { operation, worker, claim_id: claimId, claim, require_fresh: true });
+    assertDeploymentEffectAllowed(entry, operation);
+    const now = new Date().toISOString();
+    const latestApplied = latestAppliedRecord(entry);
+    const observed = {
+      effect_id: effectId,
+      request_id: requestId,
+      operation,
+      worker_id: worker,
+      claim_id: claimId,
+      deployment_id: text(input.deployment_id, 160) || latestApplied?.deployment_id || id("dep"),
+      target: DEPLOYMENT_TARGETS.includes(input.target) ? input.target : entry.request.target || "other",
+      candidate_id: text(input.candidate_id, 160),
+      preview_url: text(input.preview_url, 800),
+      active_url: text(input.active_url, 800),
+      artifact_refs: refs(input.artifact_refs),
+      backup_record_ref: text(input.backup_record_ref, 400),
+      restore_check_ref: text(input.restore_check_ref, 400),
+      smoke_artifact_ref: text(input.smoke_artifact_ref, 400),
+      rollback_ref: text(input.rollback_ref || input.rollback_to_ref, 400),
+      drain_status: text(input.drain_status, 80),
+      compatibility_status: text(input.compatibility_status, 80),
+      summary: text(input.summary, 2000),
+      observed_at: now,
+    };
+    assertDeploymentObservedEffect(entry, observed);
+    const event = await append({
+      event_type: "deployment.effect_observed",
+      stream_id: `deployment:${requestId}`,
+      occurred_at: now,
+      actor: { kind: "worker", id: worker },
+      correlation_id: requestId,
+      idempotency_key: idem(effectId, "", ""),
+      payload: observed,
+    });
+    return event.payload || observed;
+  }
+
+  async function receiptDeploymentOperation(input = {}) {
+    const requestId = requireText(input.request_id, "request_id");
+    const operation = DEPLOYMENT_OPERATIONS.includes(input.operation) ? input.operation : "apply";
+    const worker = requireText(input.worker_id, "worker_id");
+    const claimId = requireText(input.claim_id, "claim_id");
+    const effectId = requireText(input.effect_id, "effect_id");
+    const state = await collectState();
+    const entry = state.deploymentRequests.get(requestId);
+    if (!entry) {
+      throw new Error(`deployment request not found: ${requestId}`);
+    }
+    const claim = currentDeploymentClaim(entry, operation);
+    assertDeploymentOperationClaim(entry, { operation, worker, claim_id: claimId, claim, require_fresh: false });
+    const observed = currentDeploymentEffect(entry, operation, effectId);
+    if (!observed) {
+      throw new Error(`deployment ${operation} effect ${effectId} not observed for request ${requestId}`);
+    }
+    const now = new Date().toISOString();
+    const decision = operation === "rollback" ? "rolled_back" : "applied";
+    const receiptEvent = await append({
+      event_type: "deployment.receipted",
+      stream_id: `deployment:${requestId}`,
+      occurred_at: now,
+      actor: { kind: "worker", id: worker },
+      correlation_id: requestId,
+      idempotency_key: idem(input.idempotency_key, `${requestId}:${operation}`, "deployment.receipted"),
+      payload: {
+        receipt_id: text(input.receipt_id, 160) || id("drct"),
+        request_id: requestId,
+        operation,
+        worker_id: worker,
+        claim_id: claimId,
+        effect_id: effectId,
+        decision,
+        deployment_id: observed.deployment_id,
+        reason: text(input.reason, 2000),
+        receipted_at: now,
+      },
+    });
+    if (receiptEvent.payload?.effect_id && receiptEvent.payload.effect_id !== effectId) {
+      throw new Error(`deployment request ${requestId} ${operation} already receipted for a different effect`);
+    }
+    if (operation === "apply") {
+      await recordDeployment({
+        deployment_id: observed.deployment_id,
+        request_id: requestId,
+        target: observed.target || entry.request.target,
+        mode: "applied",
+        status: "applied",
+        commit_sha: entry.request.commit_sha || "",
+        artifact_refs: observed.artifact_refs,
+        active_url: observed.active_url,
+        deployment_control_plane: entry.request.adapter_kind || "deterministic_fake",
+        backup_record_ref: observed.backup_record_ref,
+        restore_check_ref: observed.restore_check_ref,
+        smoke_artifact_ref: observed.smoke_artifact_ref,
+        smoke_status: observed.smoke_artifact_ref ? "passed" : "",
+        applied_by_actor: worker,
+        applied_at: now,
+        explicit_promotion: true,
+        from_receipt: true,
+        actor: { kind: "worker", id: worker },
+        idempotency_key: idem("", `${requestId}:${operation}`, "deployment.recorded"),
+      });
+    } else if (operation === "rollback") {
+      await recordDeployment({
+        deployment_id: observed.deployment_id,
+        request_id: requestId,
+        target: observed.target || entry.request.target,
+        mode: "applied",
+        status: "superseded",
+        commit_sha: entry.request.commit_sha || "",
+        artifact_refs: observed.artifact_refs,
+        active_url: observed.active_url,
+        deployment_control_plane: entry.request.adapter_kind || "deterministic_fake",
+        smoke_artifact_ref: observed.smoke_artifact_ref,
+        smoke_status: observed.smoke_artifact_ref ? "passed" : "",
+        applied_by_actor: worker,
+        applied_at: latestAppliedRecord(entry)?.applied_at || "",
+        actor: { kind: "worker", id: worker },
+        idempotency_key: idem("", `${requestId}:${operation}`, "deployment.recorded"),
+      });
+    }
+    return deploymentRequestDetail(requestId);
+  }
+
   // Deployment state is a record posted by the owning deploy worker/control
   // plane. Preview availability is not promotion: an applied record demands the
   // explicit promotion marker plus backup + restore-check evidence refs.
@@ -585,9 +834,23 @@ function createWorkHistoryStore({ events }) {
     const now = new Date().toISOString();
     const mode = DEPLOYMENT_MODES.includes(input.mode) ? input.mode : "preview";
     const status = DEPLOYMENT_STATUSES.includes(input.status) ? input.status : "available";
+    const requestId = text(input.request_id, 160);
+    if (requestId) {
+      const state = await collectState();
+      const entry = state.deploymentRequests.get(requestId);
+      if (!entry) {
+        throw new Error(`deployment request not found: ${requestId}`);
+      }
+      if (mode === "preview" && !currentDeploymentClaim(entry, "preview")) {
+        throw new Error(`deployment request ${requestId} preview must be claimed before recording a preview`);
+      }
+      if (status === "applied" && input.from_receipt !== true) {
+        throw new Error(`deployment request ${requestId} applied state must be recorded through an immutable receipt`);
+      }
+    }
     const record = {
       deployment_id: text(input.deployment_id, 160) || id("dep"),
-      request_id: text(input.request_id, 160),
+      request_id: requestId,
       target: DEPLOYMENT_TARGETS.includes(input.target) ? input.target : "other",
       mode,
       status,
@@ -602,11 +865,15 @@ function createWorkHistoryStore({ events }) {
       restore_check_ref: text(input.restore_check_ref, 400),
       smoke_artifact_ref: text(input.smoke_artifact_ref, 400),
       smoke_status: text(input.smoke_status, 80),
+      candidate_id: text(input.candidate_id, 160),
+      provenance_ref: text(input.provenance_ref, 400),
+      rollback_ref: text(input.rollback_ref, 400),
+      receipt_id: text(input.receipt_id, 160),
       applied_by_actor: text(input.applied_by_actor, 200),
       applied_at: text(input.applied_at, 40),
       recorded_at: now,
     };
-    if (mode === "applied" || status === "applied") {
+    if (status === "applied") {
       if (input.explicit_promotion !== true) {
         throw new Error("an applied deployment record requires explicit_promotion: true from a current-turn user promotion");
       }
@@ -654,6 +921,22 @@ function createWorkHistoryStore({ events }) {
         });
       }
       return runs.get(runId);
+    };
+
+    const ensureDeploymentRequest = (requestId) => {
+      if (!deploymentRequests.has(requestId)) {
+        deploymentRequests.set(requestId, {
+          request: { request_id: requestId },
+          review: null,
+          claims: new Map(),
+          verifications: [],
+          effects: new Map(),
+          receipts: new Map(),
+          records: [],
+          latest_event_at: "",
+        });
+      }
+      return deploymentRequests.get(requestId);
     };
 
     for (const event of all) {
@@ -747,11 +1030,48 @@ function createWorkHistoryStore({ events }) {
         continue;
       }
       if (type === "deployment.requested") {
-        deploymentRequests.set(payload.request_id, payload);
+        const entry = ensureDeploymentRequest(payload.request_id);
+        entry.request = payload;
+        entry.latest_event_at = event.recorded_at;
+        continue;
+      }
+      if (type === "deployment.reviewed") {
+        const entry = ensureDeploymentRequest(payload.request_id);
+        entry.review = payload;
+        entry.latest_event_at = event.recorded_at;
+        continue;
+      }
+      if (type === "deployment.claimed") {
+        const entry = ensureDeploymentRequest(payload.request_id);
+        entry.claims.set(payload.operation || "preview", payload);
+        entry.latest_event_at = event.recorded_at;
+        continue;
+      }
+      if (type === "deployment.verification_recorded") {
+        const entry = ensureDeploymentRequest(payload.request_id);
+        entry.verifications.push(payload);
+        entry.latest_event_at = event.recorded_at;
+        continue;
+      }
+      if (type === "deployment.effect_observed") {
+        const entry = ensureDeploymentRequest(payload.request_id);
+        entry.effects.set(payload.operation || "apply", payload);
+        entry.latest_event_at = event.recorded_at;
+        continue;
+      }
+      if (type === "deployment.receipted") {
+        const entry = ensureDeploymentRequest(payload.request_id);
+        entry.receipts.set(payload.operation || "apply", payload);
+        entry.latest_event_at = event.recorded_at;
         continue;
       }
       if (type === "deployment.recorded") {
         deployments.set(payload.deployment_id, payload);
+        if (payload.request_id) {
+          const entry = ensureDeploymentRequest(payload.request_id);
+          entry.records.push(payload);
+          entry.latest_event_at = event.recorded_at;
+        }
         continue;
       }
     }
@@ -874,6 +1194,31 @@ function createWorkHistoryStore({ events }) {
     };
   }
 
+  async function deploymentRequestDetail(requestId) {
+    const state = await collectState();
+    const entry = state.deploymentRequests.get(text(requestId, 160));
+    if (!entry) return null;
+    const latestPreview = latestPreviewRecord(entry);
+    const latestApplied = latestAppliedRecord(entry);
+    const latestVerification = latestDeploymentVerification(entry);
+    const applyGuard = deploymentApplyGuard(entry);
+    return {
+      request: entry.request,
+      review: entry.review,
+      claims: [...entry.claims.values()],
+      verifications: entry.verifications,
+      latest_verification: latestVerification,
+      preview_records: entry.records.filter((record) => record.mode === "preview"),
+      latest_preview: latestPreview,
+      latest_applied: latestApplied,
+      effects: [...entry.effects.values()],
+      receipts: [...entry.receipts.values()],
+      apply_guard: applyGuard,
+      status: deploymentRequestStatus(entry),
+      blocking_reason: deploymentRequestBlockingReason(entry),
+    };
+  }
+
   async function deploymentLinks({ target } = {}) {
     const state = await collectState();
     const wanted = text(target, 80);
@@ -883,8 +1228,17 @@ function createWorkHistoryStore({ events }) {
     const previews = records.filter((record) => record.mode === "preview" && ["available", "building", "requested"].includes(record.status));
     const applied = records.filter((record) => record.status === "applied");
     const requests = [...state.deploymentRequests.values()]
-      .filter((request) => !wanted || request.target === wanted)
-      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+      .filter((entry) => !wanted || entry.request.target === wanted)
+      .sort((a, b) => String(b.request.created_at || "").localeCompare(String(a.request.created_at || "")))
+      .map((entry) => ({
+        ...entry.request,
+        derived_status: deploymentRequestStatus(entry),
+        review_decision: entry.review?.decision || "",
+        latest_preview_url: latestPreviewRecord(entry)?.preview_url || "",
+        latest_verification_status: latestDeploymentVerification(entry)?.status || "",
+        apply_allowed: deploymentApplyGuard(entry).status === "ready",
+        blocking_reason: deploymentRequestBlockingReason(entry),
+      }));
     return {
       latest_preview: previews[0] || null,
       latest_applied: applied[0] || null,
@@ -961,11 +1315,17 @@ function createWorkHistoryStore({ events }) {
     claimControlRequest,
     receiptControlRequest,
     requestDeployment,
+    reviewDeploymentRequest,
+    claimDeploymentRequest,
+    recordDeploymentVerification,
+    observeDeploymentOperationEffect,
+    receiptDeploymentOperation,
     recordDeployment,
     collectState,
     statusSummary,
     runDetail,
     taskDetail,
+    deploymentRequestDetail,
     deploymentLinks,
     resolveUiRoute,
   };
@@ -1101,6 +1461,226 @@ function refs(value) {
     .slice(0, 50);
 }
 
+function deploymentCandidateRefs(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return { candidate_id: text(item, 160) };
+      }
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const candidate = {
+        candidate_id: text(item.candidate_id || item.candidateId || item.id, 160),
+        target: text(item.target, 120),
+        artifact_ref: text(item.artifact_ref || item.artifactRef, 400),
+        provenance_ref: text(item.provenance_ref || item.provenanceRef, 400),
+      };
+      return candidate.candidate_id || candidate.target || candidate.artifact_ref ? candidate : null;
+    })
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function iso(value, fallback) {
+  const safe = text(value, 80);
+  if (!safe) return fallback;
+  const date = new Date(safe);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : fallback;
+}
+
+function latestPreviewRecord(entry) {
+  return entry.records
+    .filter((record) => record.mode === "preview")
+    .sort((a, b) => String(b.recorded_at || "").localeCompare(String(a.recorded_at || "")))[0] || null;
+}
+
+function latestAppliedRecord(entry) {
+  return entry.records
+    .filter((record) => record.status === "applied")
+    .sort((a, b) => String(b.recorded_at || "").localeCompare(String(a.recorded_at || "")))[0] || null;
+}
+
+function latestDeploymentVerification(entry) {
+  return entry.verifications
+    .sort((a, b) => String(a.finished_at || "").localeCompare(String(b.finished_at || "")))
+    .slice(-1)[0] || null;
+}
+
+function currentDeploymentClaim(entry, operation) {
+  return entry.claims.get(operation) || null;
+}
+
+function currentDeploymentEffect(entry, operation, effectId) {
+  const observed = entry.effects.get(operation) || null;
+  if (!observed) return null;
+  if (effectId && observed.effect_id !== effectId) return null;
+  return observed;
+}
+
+function isClaimExpired(claim) {
+  if (!claim?.lease_expires_at) return false;
+  const expiry = new Date(claim.lease_expires_at);
+  return Number.isFinite(expiry.getTime()) && expiry.getTime() <= Date.now();
+}
+
+function deploymentApplyGuard(entry) {
+  if (entry.review?.decision !== "approved") {
+    return { status: "blocked", reason: "awaiting review approval" };
+  }
+  const preview = latestPreviewRecord(entry);
+  if (!preview || preview.status !== "available") {
+    return { status: "blocked", reason: "preview is not available yet" };
+  }
+  const verification = latestDeploymentVerification(entry);
+  if (!verification || verification.status !== "passed") {
+    return { status: "blocked", reason: "preview verification has not passed" };
+  }
+  if (entry.receipts.get("apply")) {
+    return { status: "blocked", reason: "apply already receipted" };
+  }
+  return { status: "ready", reason: "" };
+}
+
+function deploymentRollbackGuard(entry) {
+  if (!latestAppliedRecord(entry) || !entry.receipts.get("apply")) {
+    return { status: "blocked", reason: "no applied deployment receipt exists yet" };
+  }
+  if (entry.receipts.get("rollback")) {
+    return { status: "blocked", reason: "rollback already receipted" };
+  }
+  return { status: "ready", reason: "" };
+}
+
+function deploymentRequestStatus(entry) {
+  if (entry.receipts.get("rollback")) return "rolled_back";
+  if (entry.receipts.get("apply")) return "applied";
+  const guard = deploymentApplyGuard(entry);
+  if (guard.status === "ready") return "verified";
+  if (latestDeploymentVerification(entry)?.status === "failed") return "verification_failed";
+  if (latestPreviewRecord(entry)?.status === "available") return "preview_available";
+  if (entry.claims.get("apply")) return "apply_claimed";
+  if (entry.claims.get("preview")) return "preview_claimed";
+  if (entry.review?.decision === "rejected") return "rejected";
+  if (entry.review?.decision === "approved") return "approved";
+  return entry.request.status || "requested";
+}
+
+function deploymentRequestBlockingReason(entry) {
+  if (entry.receipts.get("rollback")) return "";
+  const rollback = deploymentRollbackGuard(entry);
+  if (entry.claims.get("rollback") && !entry.receipts.get("rollback")) {
+    const effect = entry.effects.get("rollback");
+    return effect
+      ? "rollback effect observed; waiting for immutable receipt"
+      : "rollback claimed; waiting for adapter effect";
+  }
+  if (entry.claims.get("apply") && !entry.receipts.get("apply")) {
+    const effect = entry.effects.get("apply");
+    return effect
+      ? "apply effect observed; waiting for immutable receipt"
+      : "apply claimed; waiting for adapter effect";
+  }
+  const apply = deploymentApplyGuard(entry);
+  if (apply.status === "blocked") return apply.reason;
+  if (rollback.status === "blocked" && deploymentRequestStatus(entry) === "applied") return rollback.reason;
+  return "";
+}
+
+function assertDeploymentOperationClaimable(entry, operation) {
+  if (!entry?.request?.request_id) {
+    throw new Error("deployment request not found");
+  }
+  const currentClaim = currentDeploymentClaim(entry, operation);
+  if (currentClaim && !isClaimExpired(currentClaim) && !entry.receipts.get(operation)) {
+    throw new Error(`deployment request ${entry.request.request_id} ${operation} is already claimed by ${currentClaim.worker_id}`);
+  }
+  if (operation === "preview") {
+    if (entry.review?.decision !== "approved") {
+      throw new Error(`deployment request ${entry.request.request_id} is awaiting review approval`);
+    }
+    if (latestPreviewRecord(entry)?.status === "available") {
+      throw new Error(`deployment request ${entry.request.request_id} already has an available preview`);
+    }
+    return;
+  }
+  if (operation === "apply") {
+    const guard = deploymentApplyGuard(entry);
+    if (guard.status !== "ready") {
+      throw new Error(`deployment request ${entry.request.request_id} cannot apply: ${guard.reason}`);
+    }
+    return;
+  }
+  if (operation === "rollback") {
+    const guard = deploymentRollbackGuard(entry);
+    if (guard.status !== "ready") {
+      throw new Error(`deployment request ${entry.request.request_id} cannot roll back: ${guard.reason}`);
+    }
+  }
+}
+
+function assertDeploymentOperationClaim(entry, { operation, worker, claim_id: claimId, claim, require_fresh: requireFresh }) {
+  if (!claim) {
+    throw new Error(`deployment request ${entry.request.request_id} has no ${operation} claim`);
+  }
+  if (claim.worker_id !== worker) {
+    throw new Error(`deployment request ${entry.request.request_id} ${operation} is claimed by ${claim.worker_id}`);
+  }
+  if (claim.claim_id !== claimId) {
+    throw new Error(`deployment request ${entry.request.request_id} ${operation} claim is stale`);
+  }
+  if (requireFresh && claim.lease_expires_at) {
+    if (isClaimExpired(claim)) {
+      throw new Error(`deployment request ${entry.request.request_id} ${operation} claim lease expired`);
+    }
+  }
+}
+
+function assertDeploymentEffectAllowed(entry, operation) {
+  if (entry.effects.get(operation) || entry.receipts.get(operation)) {
+    throw new Error(`deployment request ${entry.request.request_id} already has a recorded ${operation} effect`);
+  }
+  if (operation === "apply") {
+    const guard = deploymentApplyGuard(entry);
+    if (guard.status !== "ready") {
+      throw new Error(`deployment request ${entry.request.request_id} cannot apply: ${guard.reason}`);
+    }
+    return;
+  }
+  if (operation === "rollback") {
+    const guard = deploymentRollbackGuard(entry);
+    if (guard.status !== "ready") {
+      throw new Error(`deployment request ${entry.request.request_id} cannot roll back: ${guard.reason}`);
+    }
+  }
+}
+
+function assertDeploymentObservedEffect(entry, observed) {
+  if (observed.operation === "apply") {
+    if (!observed.backup_record_ref || !observed.restore_check_ref) {
+      throw new Error("apply effect requires backup_record_ref and restore_check_ref");
+    }
+    if (!observed.smoke_artifact_ref) {
+      throw new Error("apply effect requires smoke_artifact_ref");
+    }
+    if (!["drained", "not_needed"].includes(observed.drain_status)) {
+      throw new Error("apply effect requires drain_status of drained or not_needed");
+    }
+    if (observed.compatibility_status !== "compatible") {
+      throw new Error("apply effect requires compatibility_status=compatible");
+    }
+    if (!observed.rollback_ref) {
+      throw new Error("apply effect requires rollback_ref");
+    }
+  } else if (observed.operation === "rollback") {
+    if (!observed.rollback_ref) {
+      throw new Error("rollback effect requires rollback_ref");
+    }
+    if (!observed.smoke_artifact_ref) {
+      throw new Error("rollback effect requires smoke_artifact_ref");
+    }
+  }
+}
+
 module.exports = {
   createWorkHistoryStore,
   RUN_EVENT_TYPES,
@@ -1111,5 +1691,8 @@ module.exports = {
   FEEDBACK_INTENTS,
   DEPLOYMENT_MODES,
   DEPLOYMENT_STATUSES,
+  DEPLOYMENT_REVIEW_DECISIONS,
+  DEPLOYMENT_OPERATIONS,
+  DEPLOYMENT_GUARD_STATUSES,
   UI_ROUTE_KINDS,
 };
