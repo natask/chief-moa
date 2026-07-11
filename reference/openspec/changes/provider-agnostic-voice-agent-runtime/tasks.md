@@ -109,7 +109,35 @@
 
 - [ ] 14.1 Add named mode overlays on the versioned agent profile for at least reliable voice, low-latency voice, text-only, demo, safe mode, and voice-first gestures. Each mode records its provider/profile deltas, latency budget, retention policy, and client interaction hints.
 - [ ] 14.2 Make spoken and UI profile/mode changes reversible, visible, and scoped global or device-specific, with the response reporting whether the change applies immediately, next turn, or after reconnect.
+- [ ] 14.2a Enforce segmented next-utterance switching: pin one immutable
+      effective profile snapshot at turn admission; a mid-turn write cannot
+      change that turn's STT/reasoning/TTS/chunks, and the next admitted turn
+      resolves the committed version. Add concurrent-turn and mid-stream tests.
+- [ ] 14.2b Keep sample/preview voice overrides session-only: prove they do not
+      advance durable profile version, cannot leak into concurrent ordinary
+      turns, and are cleared at sample termination. A retry gets a new turn id
+      and resolves current profile unless explicitly requested as exact replay.
 - [ ] 14.3 Android: implement and QA the flag-gated voice-first orb gesture contract while preserving default drag, chat, and push-to-talk behavior when the flag is off.
 - [ ] 14.4 Browser extension: implement and QA the mark gesture plus keyboard shortcut contract: Cmd+, or Ctrl+, opens text intent; Cmd+. or Ctrl+. toggles/commits voice on tap and uses push-to-talk while held.
 - [ ] 14.5 Build a repeatable voice demonstration checklist and fixture set covering partial STT, first-audio latency, long-response playback, interruption/context preservation, profile/mode switching, voice-first gestures, browser shortcuts, and diagnosed failure.
 - [ ] 14.6 Verification: Android build, browser verify/smoke, gateway check, deterministic voice demo smoke, one phone live voice turn, one browser live voice turn, and `openspec validate provider-agnostic-voice-agent-runtime --strict`.
+
+## 15. Evidence And Anti-Gaming Gate
+
+- [ ] 15.1 Publish a claims ledger mapping each implementation claim to exact
+      files, focused tests, command output, and `verified`, `refuted`, or
+      `unproven`; an existing field/comment/test name is not proof by itself.
+- [ ] 15.2 Separate deterministic measured results, live-provider measured
+      results, real-surface measured results, and architecture-confidence
+      ratings. Never present a confidence target (including 95+ or BEAM 85+) as
+      a benchmark result without the benchmark/sample evidence.
+- [ ] 15.3 Run correctness, security/trust-boundary, performance/resource,
+      quality/complexity, and anti-gaming audits. Each returns PASS or BLOCK
+      with file:line and command evidence; every BLOCK gets a repair contract
+      and re-audit.
+- [ ] 15.4 Exact contract acceptance commands: `cd gateway && npm run check`;
+      named switching, diagnostics, fault-injection, and demo smokes introduced
+      by the implementation; `cd browser_extension && npm run verify && npm run
+      smoke`; `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk"
+      ./gradlew assembleDebug`; and both strict OpenSpec validations. Paid/live
+      eval and phone/browser QA remain explicitly NOT MEASURED until run.
