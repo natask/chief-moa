@@ -1702,7 +1702,6 @@ function summarizeVoiceActivity(connections) {
     && summary.active_responding_connections === 0;
   return summary;
 }
-
 function normalizeStageName(stage) {
   const value = String(stage || "")
     .trim()
