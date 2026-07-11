@@ -124,6 +124,27 @@ The gateway may propose actions. The Android app decides whether an action is
 allowed, whether approval is required, and whether the current device state still
 matches the proposal.
 
+## Aggie surface protocol boundary
+
+Aggie is the gateway-owned personal-agent session contract; Moa browser,
+Android and future native clients are thin compatible surfaces. Protocol
+versions N and N-1 share bounded typed envelopes for turns, events, action
+proposals, approvals and local receipts. Unknown additive fields are ignored,
+but unknown semantic types, executable/credential-shaped payloads, cross-session
+replay, sequence conflicts, expired actions and stale state fail closed.
+
+The protocol library is transport- and provider-neutral. Its echo adapter has
+no external I/O and proves deterministic contract behavior before any backend
+adapter or native shell is added. It does not create a second session database:
+the existing gateway event, voice, broker and work stores remain authoritative.
+Local clients alone validate current device state, request required approval,
+execute allowed local effects and upload receipts. Platform UX, secure storage,
+signing, updates and device behavior require separate per-OS evidence.
+This protocol slice binds approvals to a canonical proposal digest and receipts
+to proposal-message correlation. It does not authenticate a device or actor;
+transport authentication, device signing and native execution remain outside
+this module and must not be inferred from those correlation checks.
+
 ## Runtime Flows
 
 ### Voice Chat
