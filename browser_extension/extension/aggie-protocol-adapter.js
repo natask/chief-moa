@@ -2,7 +2,7 @@ const VERSIONS = new Set([1, 2]);
 const KINDS = new Set(["open_url", "open_app", "dial", "browser_task", "page_tweak", "file_export"]);
 const APPROVALS = new Set(["confirm", "none", "sensitive"]);
 const MODES = new Set(["text", "voice"]);
-const SECRET_KEY = /(token|api.?key|private.?key|client.?secret|provider.?secret|authorization|password)$/i;
+const SECRET_KEY = /(token|apikey|privatekey|clientsecret|providersecret|authorization|password)/i;
 const SECRET_VALUE = /(bearer\s+\S+|github_pat_|ghp_|sk-[a-z0-9]|[?&]code=)/i;
 const EXECUTABLE_KEY = /^(eval|script|javascript|shell|command|code)$/i;
 const ID = /^[A-Za-z0-9_.:-]{1,160}$/;

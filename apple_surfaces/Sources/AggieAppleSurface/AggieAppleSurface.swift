@@ -254,7 +254,7 @@ public enum AggieEnvelopeDecoder {
             for (key, child) in object {
                 let lower = key.lowercased()
                 let compact = lower.filter(\.isLetter)
-                if forbiddenKeys.contains(lower) || credentialSuffixes.contains(where: { compact == $0 || compact.hasSuffix($0) }) {
+                if forbiddenKeys.contains(lower) || credentialSuffixes.contains(where: { compact.contains($0) }) {
                     throw AggieProtocolError.dangerousPayload
                 }
                 try scan(child, depth: depth + 1)

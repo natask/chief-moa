@@ -29,6 +29,9 @@ public final class AggieProposalAdapterTest {
         assertEquals("ad32370b60ef1be2b22fa8a98f31b76bdc1d65a75d30efb444c294c40d4624f6",
                 AggieProposalAdapter.parse(nested).digest);
         JSONObject token = valid(2); token.getJSONObject("payload").getJSONObject("params").put("oauth_token", "plain"); reject(token, "credential_payload");
+        for (String key : new String[] {"token_value", "authorization_hint", "client_secret_material"}) {
+            JSONObject family = valid(2); family.getJSONObject("payload").getJSONObject("params").put(key, "innocuous"); reject(family, "credential_payload");
+        }
         JSONObject url = valid(2); url.getJSONObject("payload").getJSONObject("params").put("url", "https://x.test/?code=oauth-secret-123456"); reject(url, "credential_payload");
         JSONObject script = valid(2); script.getJSONObject("payload").getJSONObject("params").put("java-script", "alert(1)"); reject(script, "executable_payload");
         JSONObject unsafe = valid(2); unsafe.getJSONObject("payload").getJSONObject("params").put("count", 9_007_199_254_740_992L); reject(unsafe, "unsafe_number");

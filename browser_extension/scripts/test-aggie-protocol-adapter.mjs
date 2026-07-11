@@ -14,6 +14,9 @@ assert.throws(() => validateAggieProposal({ ...base, version: 3 }, surface));
 assert.throws(() => validateAggieProposal({ ...base, version: 2, surface: { ...surface, device_id: "other" } }, surface));
 assert.throws(() => validateAggieProposal({ ...base, version: 2, payload: { ...base.payload, kind: "future_effect" } }, surface));
 assert.throws(() => validateAggieProposal({ ...base, version: 2, future: { oauth_token: "secret" } }, surface));
+for (const key of ["token_value", "authorization_hint", "client_secret_material"]) {
+  assert.throws(() => validateAggieProposal({ ...base, version: 2, future: { [key]: "innocuous" } }, surface));
+}
 assert.throws(() => validateAggieProposal({ ...base, version: 2, future: { shell: "rm -rf /" } }, surface));
 assert.throws(() => validateAggieProposal({ ...base, version: 2, future: { "java-script": "alert(1)" } }, surface));
 assert.throws(() => validateAggieProposal({ ...base, version: 2, future: { s_h_e_l_l: "rm" } }, surface));

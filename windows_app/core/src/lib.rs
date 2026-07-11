@@ -449,7 +449,7 @@ fn scan_safe(value: &Value, depth: usize) -> Result<(), SurfaceError> {
                     "password",
                 ]
                 .iter()
-                .any(|suffix| compact == *suffix || compact.ends_with(suffix))
+                .any(|family| compact.contains(family))
                 {
                     return Err(SurfaceError::CredentialData);
                 }

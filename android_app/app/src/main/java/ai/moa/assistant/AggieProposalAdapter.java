@@ -147,7 +147,7 @@ final class AggieProposalAdapter {
             String key = it.next();
             String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
             if (EXECUTABLE_KEYS.contains(normalized)) fail("executable_payload");
-            if (SECRET_KEYS.contains(key.toLowerCase(Locale.ROOT)) || SECRET_SUFFIXES.stream().anyMatch(normalized::endsWith)) fail("credential_payload");
+            if (SECRET_KEYS.contains(key.toLowerCase(Locale.ROOT)) || SECRET_SUFFIXES.stream().anyMatch(normalized::contains)) fail("credential_payload");
             rejectDangerous(object.opt(key), field + "." + key, depth + 1);
         }
     }

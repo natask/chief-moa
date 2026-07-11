@@ -45,6 +45,9 @@ private struct Approver: LocalApprovalPrompt {
                    "preconditions": [:], "params": ["oauth_token": "secret"]] as [String: Any]
     #expect(throws: AggieProtocolError.dangerousPayload) { try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["payload": payload])) }
     #expect(throws: AggieProtocolError.dangerousPayload) { try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["future": ["shell": "echo bad"]])) }
+    for key in ["token_value", "authorization_hint", "client_secret_material"] {
+        #expect(throws: AggieProtocolError.dangerousPayload) { try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["future": [key: "innocuous"]])) }
+    }
     #expect(throws: AggieProtocolError.dangerousPayload) { try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["future": "Bearer abcdefghijklmnopqrstuvwxyz"])) }
     #expect(throws: AggieProtocolError.dangerousPayload) { try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["future": "github_pat_abcdefghijklmnopqrstuvwxyz123456"])) }
     #expect(throws: AggieProtocolError.tooLarge) { try AggieEnvelopeDecoder.decodeProposal(Data(repeating: 0x20, count: AggieLimits.envelopeBytes + 1)) }
