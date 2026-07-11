@@ -1,11 +1,13 @@
 # Chief Moa
 
-Chief Moa is a cross-platform assistant for delegated work. The phone is the
-control surface. The browser extension brings the same command surface to web
-pages. The gateway routes model calls, voice turns, memory, and agent runs.
+Chief Moa is the cross-platform product and family of user-owned surfaces for
+delegated work. **Aggie** is the canonical personal-agent identity and
+cross-surface session/routing contract; **A.G.** is a presentation/spoken alias.
+Android, browser, and future macOS/Windows/iOS clients are permission-scoped Moa
+surfaces. The gateway routes Aggie turns, model calls, memory, and agent runs.
 
-Chief Moa treats model output as a proposal. The device or browser checks the
-proposal before any local action runs.
+Chief Moa treats model output as a proposal. The owning Surface checks the
+proposal before any platform-local action runs.
 
 ## Start here
 

@@ -254,6 +254,14 @@ async function main() {
     // proves the real content script auto-injected on the localhost match.
     workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
     await workerCdp.send("Runtime.enable");
+    // Fresh installs intentionally have no implicit hosted gateway. This smoke
+    // explicitly configures a fake origin before exercising intercepted voice
+    // transport; no real request is expected to succeed at this hostname.
+    await evaluate(workerCdp, `chrome.storage.local.set({
+      ageeGatewayUrl: "http://agee-smoke.local",
+      ageeGatewayToken: "",
+      ageeGatewayUserSet: true
+    })`);
 
     const commands = await evaluate(workerCdp, "chrome.commands.getAll()");
     const textCommand = commands.find((command) => command.name === "toggle-agee");

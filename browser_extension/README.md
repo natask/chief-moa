@@ -14,9 +14,48 @@ An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or single-cli
 
 MVP - a Chrome (Manifest V3) extension you can load unpacked today.
 
-**Works now:** Cmd+, text intent field · Cmd+. gateway Live voice tap/hold with live transcript/reply feedback above the input · on-page Moa mark · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · one-current-intent overlay state with no visible scrollback.
+**Works now:** Cmd+, text intent field · Cmd+. gateway Live voice tap/hold with live transcript/reply feedback above the input · on-page Moa mark · explicit per-tab local suggestion cards · a controlled localhost dev page · a developer-only reload bridge for unpacked-extension work · gateway-routed command/describe turns · runtime profile settings that read/write through the gateway · constrained browser actions on low-risk pages · one-current-intent overlay state with no visible scrollback.
 
 **Next:** engine-served declarative UI spec · userScripts opt-in walkthrough · richer voice mode · cross-navigation task continuity · MOA integration · hosted/self-hosted engine switching.
+
+## Privacy defaults
+
+By default, loading a fresh or migrated extension does not contact a gateway. A
+persisted, current background-automation opt-in intentionally starts claim
+polling and heartbeat when the service worker loads. A fresh install does not
+silently save or contact the packaged hosted destination, and background task,
+agent-task, tool-request polling, and device heartbeat are off until you accept
+the current background-automation disclosure in Options. If enabled, heartbeat
+contains operational client identity and a bounded tool manifest—not the active
+tab URL/title or browser-owner metadata.
+
+**Local suggestions for this tab** is a separate, explicit grant lasting at
+most ten minutes. Its deterministic classifier sees only bounded structural
+counts, never page body/title/selection, form values, screenshots, accessibility
+data, or cross-tab history. A closed set of password, credential/payment
+autocomplete, form-metadata, and recognized sensitive-route markers suppresses
+matching pages; it is defense in depth, not perfect semantic detection.
+Observing, dismissing, expiring, or revoking a card makes no network request.
+
+The card shown inside a website is a non-authoritative preview. Every proactive
+page control ignores synthetic clicks, and **Review before sending** can only
+open `proactive-confirm.html`; it cannot send anything. The extension-owned
+window is the final authority. It shows the exact request URL, `POST`, JSON
+content type, bearer-header presence (never its value), `redirect: error`, exact
+body and SHA-256 digest, retention boundary, provider-processing warning, data
+exclusions, and separate `enabled`/`disabled` background-connectivity state.
+Only its trusted **Allow one text request** activation can proceed.
+
+Allow rechecks the exact original document/frame, sensitivity, expiry,
+destination, and body, atomically consumes the grant, and sends at most one
+`POST /v1/proactive/turns` request. That endpoint strictly accepts a packaged
+generic prompt, calls the configured model provider directly for text, and does
+not route to tools/agents or persist a Chief Moa conversation, task, workflow,
+broker event, or agent run. The configured provider still processes the prompt
+under its own data policy. No page snapshot, page identity/content, observed
+count, or executable action is included. The UI says **page observation stays
+local**; it does not claim that all extension connectivity is offline when you
+have separately enabled it.
 
 ## Develop it (quiet by default)
 
@@ -143,7 +182,9 @@ Run:
 npm run doctor
 npm run verify
 npm run smoke
-cd ../gateway && node scripts/smoke-browser-voice-ticket.js
+npm run smoke:proactive
+(cd ../gateway && npm run smoke:proactive-turn)
+(cd ../gateway && node scripts/smoke-browser-voice-ticket.js)
 ```
 
 `doctor` is the fast operational test for the default gateway setup. It checks
@@ -166,6 +207,23 @@ message path (`snapshot`, `type`, `click`) against the demo page and captures a
 screenshot — no window shown, no focus taken. It exercises the **real** extension;
 if the resolved Chrome ever refuses `--load-extension`, smoke fails loudly rather
 than falling back to a content-script harness.
+
+`smoke:proactive` loads a copied real extension against a loopback fixture and
+stub gateway. It proves fresh startup and observe/dismiss are network-silent,
+structural signals cannot contain fixture text or page identity, sensitive
+pages are suppressed, grants revoke across lifecycle changes, opted-in
+heartbeat is redacted, and a page can neither synthesize authorization nor alter
+the extension-owned canonical disclosure. It also compares the disclosure to
+the captured request, rejects stale document/frame and redirect paths, revokes
+on normal workflows, and proves concurrent trusted confirmation produces one
+bounded text-only `/v1/proactive/turns` request. Network-attempt capture ensures
+DNS or connection failure cannot hide passive egress.
+
+The matching gateway proactive smoke runs on an isolated port and data directory.
+It accepts only the exact packaged request, rejects extra/context/action fields
+and unrecognized prompts, exercises the direct text-only provider/fallback path,
+and proves conversation/turn, task, workflow, broker-event, and agent-run stores
+do not change.
 
 `smoke-browser-voice-ticket` proves the browser Live voice path at the gateway
 boundary: the extension-style client mints a short-lived ticket over authenticated
@@ -226,6 +284,8 @@ absent.
 
 - [extension/manifest.json](extension/manifest.json) — MV3 manifest, no build step.
 - [extension/content.js](extension/content.js) — the Cmd+, overlay, page perception, and action execution (the only part touching the DOM).
+- [extension/proactive-helper.js](extension/proactive-helper.js) — pure structural signal bounding, sensitive-page suppression, and deterministic local suggestion classification.
+- [extension/proactive-confirm.html](extension/proactive-confirm.html) / [proactive-confirm.js](extension/proactive-confirm.js) — extension-owned immutable request disclosure and trusted final authorization.
 - [extension/background.js](extension/background.js) — routes turns to the configured gateway, captures screenshots, validates brokered page actions, and handles extension commands.
 - [extension/options.html](extension/options.html) / [options.js](extension/options.js) — gateway URL/token and runtime profile settings that read/write through gateway profile endpoints.
 - [extension/dev.html](extension/dev.html) / [dev.js](extension/dev.js) — developer-only in-page reload bridge for the manual visible dev session.

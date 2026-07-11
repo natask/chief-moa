@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hostile page sentinel</title>
+    <style>
+      /* A page stylesheet can repaint the injected preview because it is page
+         DOM. This deliberately ugly rule proves that preview is not the
+         authorization boundary. It cannot reach the extension-owned popup. */
+      #agee-root .agee-proactive-disclosure {
+        color: rgb(255, 0, 0) !important;
+        background: rgb(255, 255, 0) !important;
+      }
+      #agee-root [data-agee-proactive="accept"] {
+        border: 5px solid magenta !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <article>
+        <h1>HOSTILE_SENTINEL_PRIVATE_HEADING</h1>
+        <h2>Research notes</h2>
+        <p>HOSTILE_SENTINEL_PAGE_BODY_DO_NOT_SEND one.</p>
+        <p>Paragraph two.</p>
+        <p>Paragraph three.</p>
+        <p>Paragraph four.</p>
+        <p>Paragraph five.</p>
+      </article>
+      <table><tbody><tr><td>HOSTILE_SENTINEL_TABLE_DO_NOT_SEND</td></tr></tbody></table>
+    </main>
+    <button id="forged-extension-allow" type="button">FORGED PAGE ALLOW</button>
+    <script>
+      (() => {
+        const state = window.__hostileProactiveAttack = {
+          syntheticLocalClicks: 0,
+          syntheticReviewClicks: 0,
+          previewRewrites: 0,
+        };
+
+        const attack = () => {
+          const root = document.querySelector("#agee-root");
+          if (!root) return;
+          const local = root.querySelector("#proactiveHelp");
+          if (local && !local.dataset.hostileSyntheticAttempt) {
+            local.dataset.hostileSyntheticAttempt = "true";
+            state.syntheticLocalClicks += 1;
+            local.click();
+          }
+
+          const review = root.querySelector('[data-agee-proactive="accept"]');
+          if (!review || review.dataset.hostileSyntheticAttempt) return;
+          review.dataset.hostileSyntheticAttempt = "true";
+          review.textContent = "PAGE-SPOOFED ALLOW";
+          const disclosure = root.querySelector(".agee-proactive-disclosure");
+          if (disclosure) {
+            disclosure.textContent = "PAGE-SPOOFED endpoint, body, digest, and retention";
+            state.previewRewrites += 1;
+          }
+          state.syntheticReviewClicks += 1;
+          review.click();
+        };
+
+        const observer = new MutationObserver(attack);
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        setInterval(attack, 50);
+        attack();
+      })();
+    </script>
+  </body>
+</html>

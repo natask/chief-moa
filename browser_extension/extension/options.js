@@ -1,4 +1,4 @@
-import { gatewayUrlDiagnostic, getEffectiveGatewayConfig, normalizeGatewayUrl, seedGatewayConfig } from "./config.js";
+import { DEFAULT_GATEWAY_URL, gatewayUrlDiagnostic, getEffectiveGatewayConfig, normalizeGatewayUrl } from "./config.js";
 import { parseSettingsIntent, PROFILE_FIELDS } from "./settings-intent.js";
 
 const gatewayUrlEl = document.getElementById("gatewayUrl");
@@ -39,15 +39,12 @@ const companionStatusEl = document.getElementById("companionStatus");
 const PROFILE_CACHE_KEY = "ageeProfileCache";
 
 chrome.storage.local
-  .get(["ageeGatewayUrl"])
-  .then(async () => {
-    await seedGatewayConfig();
-    return getEffectiveGatewayConfig();
-  })
-  .then(({ gatewayUrl, gatewayToken }) => {
-    if (gatewayUrl) gatewayUrlEl.value = gatewayUrl;
+  .get(["ageeGatewayUrl", "ageeGatewayUserSet"])
+  .then(async (stored) => ({ stored, ...(await getEffectiveGatewayConfig()) }))
+  .then(({ stored, gatewayUrl, gatewayToken }) => {
+    gatewayUrlEl.value = stored.ageeGatewayUserSet === true ? gatewayUrl : (gatewayUrl || DEFAULT_GATEWAY_URL);
     if (gatewayToken) gatewayTokenEl.value = gatewayToken;
-    loadProfile();
+    if (gatewayUrl) loadProfile();
   });
 
 // Experimental LiveKit voice flag (off by default). Stored in chrome.storage.local
@@ -88,23 +85,34 @@ if (voiceFirstGesturesEl) {
   });
 }
 
-// Background automation flag (on by default). Read by background.js before it
+// Background automation is off by default and version-consented. Read by background.js before it
 // claims any gateway-queued browser work: it gates BOTH the legacy
 // pollBrowserTasks() batch path and the new pollBrowserAgentTasks() agent-loop.
 // When off, the extension claims no background browser tasks at all.
 const BACKGROUND_AUTOMATION_KEY = "ageeBackgroundAutomationEnabled";
+const BACKGROUND_AUTOMATION_CONSENT_KEY = "ageeBackgroundAutomationConsentVersion";
+const BACKGROUND_AUTOMATION_CONSENT_VERSION = 1;
 const backgroundAutomationEl = document.getElementById("backgroundAutomation");
 const backgroundAutomationStatusEl = document.getElementById("backgroundAutomationStatus");
 if (backgroundAutomationEl) {
-  chrome.storage.local.get({ [BACKGROUND_AUTOMATION_KEY]: true }).then((stored) => {
-    backgroundAutomationEl.checked = stored[BACKGROUND_AUTOMATION_KEY] !== false;
+  chrome.storage.local.get({
+    [BACKGROUND_AUTOMATION_KEY]: false,
+    [BACKGROUND_AUTOMATION_CONSENT_KEY]: 0,
+  }).then((stored) => {
+    backgroundAutomationEl.checked =
+      stored[BACKGROUND_AUTOMATION_KEY] === true &&
+      stored[BACKGROUND_AUTOMATION_CONSENT_KEY] === BACKGROUND_AUTOMATION_CONSENT_VERSION;
     if (backgroundAutomationStatusEl) {
       backgroundAutomationStatusEl.textContent = backgroundAutomationEl.checked ? "On" : "Off";
       backgroundAutomationStatusEl.style.color = "#777";
     }
   });
   backgroundAutomationEl.addEventListener("change", async () => {
-    await chrome.storage.local.set({ [BACKGROUND_AUTOMATION_KEY]: backgroundAutomationEl.checked === true });
+    const enabled = backgroundAutomationEl.checked === true;
+    await chrome.storage.local.set({
+      [BACKGROUND_AUTOMATION_KEY]: enabled,
+      [BACKGROUND_AUTOMATION_CONSENT_KEY]: enabled ? BACKGROUND_AUTOMATION_CONSENT_VERSION : 0,
+    });
     if (backgroundAutomationStatusEl) {
       backgroundAutomationStatusEl.textContent = backgroundAutomationEl.checked ? "On" : "Off";
       backgroundAutomationStatusEl.style.color = "#777";
@@ -181,14 +189,25 @@ async function profileQuery() {
 }
 
 document.getElementById("save").addEventListener("click", async () => {
+  const url = normalizeGatewayUrl(gatewayUrlEl.value);
+  if (url) {
+    const diagnostic = gatewayUrlDiagnostic(url);
+    if (!diagnostic.ok) {
+      flash(diagnostic.message, false);
+      return;
+    }
+  }
+  const disconnected = !url;
   await chrome.storage.local.set({
-    ageeGatewayUrl: normalizeGatewayUrl(gatewayUrlEl.value),
-    ageeGatewayToken: gatewayTokenEl.value.trim(),
+    ageeGatewayUrl: url,
+    ageeGatewayToken: disconnected ? "" : gatewayTokenEl.value.trim(),
     // Mark the URL as user-owned so seeding stops overwriting it with the
-    // baked default on the next startup.
+    // baked default on the next startup. A blank user-owned URL is an explicit
+    // disconnect, not a request to restore the packaged suggestion.
     ageeGatewayUserSet: true,
   });
-  flash("Saved ✓");
+  if (disconnected) gatewayTokenEl.value = "";
+  flash(disconnected ? "Disconnected ✓" : "Saved ✓");
   setTimeout(() => (statusEl.textContent = ""), 1500);
 });
 

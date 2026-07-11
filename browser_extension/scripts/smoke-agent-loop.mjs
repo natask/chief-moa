@@ -323,6 +323,7 @@ async function main() {
       ageeGatewayUrl: stubBase,
       ageeGatewayToken: TOKEN,
       ageeBackgroundAutomationEnabled: true,
+      ageeBackgroundAutomationConsentVersion: 1,
     })}).then(() => true)`);
 
     // The 2s poll claims the task and drives the loop. Wait for the finish POST.
