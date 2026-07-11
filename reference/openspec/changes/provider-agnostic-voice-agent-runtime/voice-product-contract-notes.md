@@ -22,8 +22,11 @@ phone and browser surfaces.
   segments, record segment counts and TTS errors, and degrade to visible text
   instead of hanging or silently ending.
 - Below-perceived-wait first audio: every streamed voice turn records
-  `first_audio_ms` from turn commit or final STT to first assistant PCM, and QA
-  gates the value against a configured launch profile budget.
+  `first_audio_ms` from one canonical gateway-side reply-pipeline clock. In the
+  current cascaded implementation that clock starts immediately after transcript
+  resolution and before reasoning/TTS begin; every exposed copy reuses that
+  same value, and providers that do not compute it omit the field. QA gates the
+  value against a configured launch profile budget.
 - Continuous partial STT: speaking surfaces show provider-normalized partial
   transcripts continuously before the final transcript, with final transcript
   replacement and storage remaining canonical.
@@ -74,10 +77,10 @@ provider callback, socket frame, or reconnect:
 2. A voice/profile update accepted while turn N is capturing, reasoning, or
    speaking creates a new profile version but MUST NOT alter any STT, reasoning,
    TTS, playback-rate, or chunking choice already pinned to turn N.
-3. Turn N reports `applies=next_turn`. Turn N+1 admitted after the write commits
-   resolves the new profile. Reconnect is an internal detail and MUST NOT be
-   required unless a capability explicitly reports `requires_reconnect`; then
-   the response and normalized event say so.
+3. A control-plane read may see the new version immediately. Turn N+1 admitted
+   after the write commits resolves the new profile. Reconnect is an internal
+   detail and MUST NOT be required unless a capability explicitly reports
+   `requires_reconnect`; then the response and normalized event say so.
 4. An authorized session-only sample/preview override is pinned only to its
    sample turn/session, MUST NOT advance the durable profile version, and MUST
    disappear when that sample ends. Concurrent ordinary turns use independently

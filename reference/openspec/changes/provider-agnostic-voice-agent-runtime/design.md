@@ -90,11 +90,14 @@ without vendor-specific tools.
 ### Decision: First Audio And Long Replies Have Observable Budgets
 
 The cascaded and native-live runtimes both report first-audio timing when the
-provider can expose it. For cascaded streaming, `first_audio_ms` is measured
-from turn commit or final STT to the first assistant PCM frame. Launch profiles
-set the target budget; deterministic QA fails when the configured budget is
-missed, and live QA records percentile evidence instead of treating latency as
-an anecdote.
+provider can expose it. For the current cascaded implementation,
+`first_audio_ms` uses one gateway-local reply-pipeline clock that starts
+immediately after transcript resolution and before reasoning/TTS begin; every
+exposed copy of the metric reuses that same clock, and provider modes that do
+not compute it omit the field instead of inventing a different clock. Launch
+profiles set the target budget; deterministic QA fails when the configured
+budget is missed, and live QA records percentile evidence instead of treating
+latency as an anecdote.
 
 Long replies must be reliable before they are polished. A long spoken answer
 streams or chunks ordered audio segments, records `tts_segments`, `tts_spoke`,
@@ -157,7 +160,9 @@ still owns provider credentials and storage.
 Mode/profile changes are visible and reversible. A spoken change updates the
 gateway profile, records a new version, reports whether the change applies
 immediately/next turn/reconnect, and exposes the effective state to Android and
-browser surfaces.
+browser surfaces. In current code "immediate" means control-plane visibility and
+later turn resolution, not retroactive mutation of a turn that was already
+admitted and pinned to an effective profile snapshot.
 
 Alternative considered: keep modes in environment variables or provider
 session configuration only. Rejected because the user needs to inspect, change,
@@ -278,6 +283,8 @@ back agent configuration. Every turn records the profile version used. Profile
 changes can update provider setup for future turns, and native live providers
 that support mid-session instruction updates can receive changes immediately.
 Providers that do not support this are restarted or updated on the next turn.
+An admitted turn keeps the snapshot it resolved at admission even when the new
+profile version becomes visible to read models or later turns immediately.
 
 The profile includes assistant name/identity, system prompt, required voice
 style, language settings, model/reasoning provider, STT provider, TTS provider,

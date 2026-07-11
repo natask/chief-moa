@@ -26,6 +26,20 @@ additive `first_audio_ms` and `tts_segments` fields with every other
   blocking synthesize call, emits exactly one binary audio frame, and sends
   `assistant_text` before that frame, matching today's pre-streaming behavior
 
+### Requirement: `first_audio_ms` uses one canonical gateway clock
+For turns that report `first_audio_ms`, the gateway SHALL start one turn-local
+clock immediately before the cascaded reasoning/TTS reply pipeline begins for
+that admitted turn and SHALL reuse that same value unchanged in `turn_done`,
+normalized provider events, and the canonical stored turn record. Providers
+that do not compute this metric SHALL omit it instead of mixing clocks.
+
+#### Scenario: One streamed turn reports the same latency everywhere
+- **WHEN** a cascaded streaming turn emits first audio and later completes
+- **THEN** every exposed copy of `first_audio_ms` for that turn is derived from
+  the same gateway-local start point
+- **AND** the value is not recomputed from a provider-native timestamp or a
+  later chunk boundary
+
 ### Requirement: A turn-identity interruption guard prevents cross-turn audio corruption
 The gateway SHALL re-check turn identity and non-terminal status before every
 `sendAudio` call, immediately before the socket write inside `sendAudio`, and
