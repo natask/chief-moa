@@ -47,6 +47,22 @@
 The main orchestrator owns serial integration. Section managers may commit their
 lanes but may not merge, deploy, reload the extension, or restart active services.
 
+## Wave 1 repair cycle 1
+
+Initial specialized auditors returned `BLOCK` on all three candidates. Repairs
+used CLI-native Codex with `gpt-5.4`, `xhigh` reasoning, in the existing isolated
+worktrees. The configured `gpt-5.6-sol` launch was attempted first but rejected
+by the installed CLI as requiring a newer Codex version; it performed no work.
+
+| Lane | Initial commit | Auditor blocker | Repair commit | Manager verification |
+|---|---|---|---|---|
+| voice observability | `3c1c553` | incomplete phase model/query/fault matrix and unsafe error evidence | `587479e` | `gateway npm run check`: 155 pass, 1 skip, 0 fail |
+| voice contract | `ce682eb` | missing normative specs, ambiguous clock/auth/retention and false semantic confidence | `c8200d5` | both strict OpenSpec validations pass |
+| browser sampler | `3830c1e` | socket terminal handling and async cancel/supersession races | `b16d642` | verify + 6 lifecycle tests + focused sampler smoke + real headless extension smoke pass |
+
+Fresh read-only re-audits are active. No repair is eligible for integration until
+those auditors return `PASS` or a subsequent repair cycle clears every blocker.
+
 ## Integration status
 
 - No implementation branch created.
