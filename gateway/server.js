@@ -3502,6 +3502,26 @@ async function routeWorkHistory(request, response, url) {
       sendJson(response, 202, { request: await workHistory.requestDeployment(body) });
       return true;
     }
+    const deploymentRequestMatch = pathname.match(/^\/v1\/work-history\/deployments\/requests\/([^/]+)(?:\/(review|claim|verification|effect|receipt))?$/);
+    if (deploymentRequestMatch) {
+      const requestId = decodeURIComponent(deploymentRequestMatch[1]);
+      const action = deploymentRequestMatch[2] || "";
+      if (method === "GET" && !action) {
+        const detail = await workHistory.deploymentRequestDetail(requestId);
+        if (!detail) sendJson(response, 404, { error: "deployment request not found" });
+        else sendJson(response, 200, detail);
+        return true;
+      }
+      if (method === "POST" && action) {
+        const body = { ...(await readJsonBody(request)), request_id: requestId };
+        if (action === "review") sendJson(response, 200, await workHistory.reviewDeploymentRequest(body));
+        else if (action === "claim") sendJson(response, 200, await workHistory.claimDeploymentRequest(body));
+        else if (action === "verification") sendJson(response, 201, await workHistory.recordDeploymentVerification(body));
+        else if (action === "effect") sendJson(response, 201, await workHistory.observeDeploymentOperationEffect(body));
+        else sendJson(response, 200, await workHistory.receiptDeploymentOperation(body));
+        return true;
+      }
+    }
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
     return true;
