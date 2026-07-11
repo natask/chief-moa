@@ -43,12 +43,14 @@ function createJsonEventSubstrateStore(options = {}) {
   }
 
   async function listEvents(filter = {}) {
+    const offset = clampOffset(filter.offset);
+    const order = filter.order === "asc" ? "asc" : "desc";
     const events = readJsonLines(eventsPath)
       .filter((event) => matchesFilter(event, filter))
-      .sort(compareEventsDesc)
-      .slice(0, clampLimit(filter.limit))
+      .sort(order === "asc" ? compareEventsAsc : compareEventsDesc)
+      .slice(offset, offset + clampLimit(filter.limit))
       .map(clone);
-    return filter.order === "asc" ? events.reverse() : events;
+    return events;
   }
 
   async function getEvent(eventId) {
@@ -117,12 +119,14 @@ function createPostgresEventSubstrateStore(options = {}) {
       where.push(`event_type like $${params.length}`);
     }
     const limit = clampLimit(filter.limit);
+    const offset = clampOffset(filter.offset);
     params.push(limit);
+    params.push(offset);
     const order = filter.order === "asc" ? "asc" : "desc";
     const result = await pool.query(
       `select * from product_events${where.length ? ` where ${where.join(" and ")}` : ""}
-       order by recorded_at ${order}, stream_version ${order}
-       limit $${params.length}`,
+       order by recorded_at ${order}, stream_version ${order}, event_id ${order}
+       limit $${params.length - 1} offset $${params.length}`,
       params,
     );
     return result.rows.map(eventFromRow);
@@ -348,12 +352,24 @@ function matchesFilter(event, filter = {}) {
 
 function compareEventsDesc(a, b) {
   return String(b.recorded_at || "").localeCompare(String(a.recorded_at || ""))
-    || Number(b.stream_version || 0) - Number(a.stream_version || 0);
+    || Number(b.stream_version || 0) - Number(a.stream_version || 0)
+    || String(b.event_id || "").localeCompare(String(a.event_id || ""));
+}
+
+function compareEventsAsc(a, b) {
+  return String(a.recorded_at || "").localeCompare(String(b.recorded_at || ""))
+    || Number(a.stream_version || 0) - Number(b.stream_version || 0)
+    || String(a.event_id || "").localeCompare(String(b.event_id || ""));
 }
 
 function clampLimit(limit) {
   const value = Number(limit || DEFAULT_LIMIT);
   return Math.max(1, Math.min(Number.isFinite(value) ? value : DEFAULT_LIMIT, MAX_LIMIT));
+}
+
+function clampOffset(offset) {
+  const value = Number(offset);
+  return Number.isInteger(value) && value >= 0 ? Math.min(value, 10_000_000) : 0;
 }
 
 function addWhere(where, params, column, value) {

@@ -71,6 +71,7 @@ const DEPLOYMENT_GUARD_STATUSES = Object.freeze(["pending", "ready", "blocked"])
 const UI_ROUTE_KINDS = Object.freeze(["task", "run", "diff", "verification", "deployment", "feedback"]);
 
 const EVENT_LIST_LIMIT = 500;
+const EVENT_REBUILD_LIMIT = 100_000;
 
 function createWorkHistoryStore({ events }) {
   if (!events || typeof events.appendEvent !== "function" || typeof events.listEvents !== "function") {
@@ -551,28 +552,47 @@ function createWorkHistoryStore({ events }) {
       mode: input.mode === "artifact_only" ? "artifact_only" : "preview",
       run_id: text(input.run_id, 160),
       task_id: text(input.task_id, 160),
-      branch: text(input.branch, 200),
-      commit_sha: text(input.commit_sha, 80),
+      branch: deploymentString(input.branch, "branch", 200),
+      commit_sha: deploymentString(input.commit_sha, "commit_sha", 80),
       reason: text(input.reason, 2000),
       adapter_kind: text(input.adapter_kind, 80) || "deterministic_fake",
       candidate_refs: deploymentCandidateRefs(input.candidate_refs || input.candidates),
-      artifact_refs: refs(input.artifact_refs),
-      provenance_ref: text(input.provenance_ref, 400),
+      artifact_refs: deploymentRefs(input.artifact_refs, "artifact_refs"),
+      provenance_ref: deploymentRef(input.provenance_ref, "provenance_ref"),
       source_turn_id: text(input.source_turn_id, 160),
       review_status: "pending",
       status: "requested",
       created_at: now,
     };
+    request.request_fingerprint = deploymentPayloadDigest("request", {
+      target: request.target,
+      mode: request.mode,
+      run_id: request.run_id,
+      task_id: request.task_id,
+      branch: request.branch,
+      commit_sha: request.commit_sha,
+      reason: request.reason,
+      adapter_kind: request.adapter_kind,
+      candidate_refs: request.candidate_refs,
+      artifact_refs: request.artifact_refs,
+      provenance_ref: request.provenance_ref,
+      source_turn_id: request.source_turn_id,
+    });
     const requestEvent = await append({
       event_type: "deployment.requested",
       stream_id: `deployment:${request.request_id}`,
       occurred_at: now,
       actor: actor(input.actor, "user"),
       correlation_id: request.source_turn_id || request.request_id,
-      idempotency_key: idem(input.idempotency_key, request.source_turn_id, "deployment.requested"),
+      idempotency_key: deploymentIdem("requested", request.source_turn_id || request.request_id),
       payload: request,
     });
     const storedRequest = requestEvent.payload || request;
+    assertDeploymentReturnedEvent(requestEvent, "deployment.requested", {
+      source_turn_id: request.source_turn_id,
+      target: request.target,
+      request_fingerprint: request.request_fingerprint,
+    });
     if (storedRequest.run_id) {
       await append({
         event_type: "run.deployment_requested",
@@ -605,7 +625,7 @@ function createWorkHistoryStore({ events }) {
       occurred_at: now,
       actor: actor(input.actor, "user"),
       correlation_id: requestId,
-      idempotency_key: idem(input.idempotency_key, requestId, "deployment.reviewed"),
+      idempotency_key: deploymentIdem("reviewed", requestId),
       payload: {
         request_id: requestId,
         decision,
@@ -617,6 +637,7 @@ function createWorkHistoryStore({ events }) {
     if (event.payload?.decision && event.payload.decision !== decision) {
       throw new Error(`deployment request ${requestId} was already reviewed as ${event.payload.decision}`);
     }
+    assertDeploymentReturnedEvent(event, "deployment.reviewed", { request_id: requestId, decision });
     return deploymentRequestDetail(requestId);
   }
 
@@ -638,7 +659,7 @@ function createWorkHistoryStore({ events }) {
       occurred_at: now,
       actor: { kind: "worker", id: worker },
       correlation_id: requestId,
-      idempotency_key: idem(input.idempotency_key, claimId, "deployment.claimed"),
+      idempotency_key: deploymentIdem("claimed", requestId, operation, claimId),
       payload: {
         request_id: requestId,
         operation,
@@ -651,7 +672,90 @@ function createWorkHistoryStore({ events }) {
     if (event.payload?.worker_id && event.payload.worker_id !== worker) {
       throw new Error(`deployment request ${requestId} ${operation} already claimed by ${event.payload.worker_id}`);
     }
+    assertDeploymentReturnedEvent(event, "deployment.claimed", { request_id: requestId, operation, claim_id: claimId, worker_id: worker });
     return event.payload;
+  }
+
+  async function adoptDeploymentOperationEffect(input = {}) {
+    const requestId = requireText(input.request_id, "request_id");
+    const operation = DEPLOYMENT_OPERATIONS.includes(input.operation) ? input.operation : "apply";
+    const worker = requireText(input.worker_id, "worker_id");
+    const effectId = requireText(input.effect_id, "effect_id");
+    const claimId = requireText(input.claim_id, "claim_id");
+    const state = await collectState();
+    const entry = state.deploymentRequests.get(requestId);
+    if (!entry) {
+      throw new Error(`deployment request not found: ${requestId}`);
+    }
+    const observed = currentDeploymentEffect(entry, operation, effectId);
+    if (!observed) {
+      throw new Error(`deployment ${operation} effect ${effectId} not observed for request ${requestId}`);
+    }
+    if (entry.receipts.get(operation)) {
+      throw new Error(`deployment request ${requestId} ${operation} already has an immutable receipt`);
+    }
+    let claim = currentDeploymentClaim(entry, operation);
+    if (claim && !isClaimExpired(claim) && (claim.worker_id !== worker || claim.claim_id !== claimId)) {
+      throw new Error(`deployment request ${requestId} ${operation} original effect claim is still active`);
+    }
+    if (!claim || claim.worker_id !== worker || claim.claim_id !== claimId) {
+      const claimedAt = new Date().toISOString();
+      const claimEvent = await append({
+        event_type: "deployment.claimed",
+        stream_id: `deployment:${requestId}`,
+        occurred_at: claimedAt,
+        actor: { kind: "worker", id: worker },
+        correlation_id: requestId,
+        idempotency_key: deploymentIdem("claimed.recovery", requestId, operation, effectId, claimId),
+        payload: {
+          request_id: requestId,
+          operation,
+          worker_id: worker,
+          claim_id: claimId,
+          claimed_at: claimedAt,
+          lease_expires_at: iso(input.lease_expires_at || input.leaseExpiresAt, ""),
+        },
+      });
+      assertDeploymentReturnedEvent(claimEvent, "deployment.claimed", {
+        request_id: requestId,
+        operation,
+        worker_id: worker,
+        claim_id: claimId,
+      });
+      claim = claimEvent.payload || claimEvent;
+    }
+    assertDeploymentOperationClaim(entry, { operation, worker, claim_id: claimId, claim, require_fresh: true });
+    if (observed.worker_id === worker && observed.claim_id === claimId) {
+      throw new Error(`deployment ${operation} effect ${effectId} already belongs to the active claim`);
+    }
+    const now = new Date().toISOString();
+    const event = await append({
+      event_type: "deployment.effect_adopted",
+      stream_id: `deployment:${requestId}`,
+      occurred_at: now,
+      actor: { kind: "worker", id: worker },
+      correlation_id: requestId,
+      idempotency_key: deploymentIdem("effect_adopted", requestId, operation, effectId, claimId),
+      payload: {
+        request_id: requestId,
+        operation,
+        effect_id: effectId,
+        observed_worker_id: observed.worker_id,
+        observed_claim_id: observed.claim_id,
+        adopted_by_worker_id: worker,
+        adopted_claim_id: claimId,
+        reason: text(input.reason, 2000),
+        adopted_at: now,
+      },
+    });
+    assertDeploymentReturnedEvent(event, "deployment.effect_adopted", {
+      request_id: requestId,
+      operation,
+      effect_id: effectId,
+      adopted_by_worker_id: worker,
+      adopted_claim_id: claimId,
+    });
+    return deploymentRequestDetail(requestId);
   }
 
   async function recordDeploymentVerification(input = {}) {
@@ -661,12 +765,28 @@ function createWorkHistoryStore({ events }) {
     if (!entry) {
       throw new Error(`deployment request not found: ${requestId}`);
     }
+    const operation = DEPLOYMENT_OPERATIONS.includes(input.operation) ? input.operation : "preview";
+    const worker = deploymentString(input.created_by_worker_id || input.worker_id, "worker_id", 160, true);
+    const claimId = deploymentString(input.claim_id, "claim_id", 160, true);
+    const claim = currentDeploymentClaim(entry, operation);
+    assertDeploymentOperationClaim(entry, { operation, worker, claim_id: claimId, claim, require_fresh: true });
+    const deploymentId = deploymentString(input.deployment_id, "deployment_id", 160, true);
+    if (operation === "preview") {
+      const preview = latestPreviewRecord(entry);
+      if (!preview || preview.deployment_id !== deploymentId) {
+        throw new Error(`deployment verification must target the current preview deployment ${preview?.deployment_id || "(missing)"}`);
+      }
+      if (preview.claim_id !== claimId || preview.worker_id !== worker) {
+        throw new Error(`deployment verification must match the current preview claim and worker`);
+      }
+    }
     const now = new Date().toISOString();
+    const verificationId = deploymentString(input.verification_id, "verification_id", 160) || id("dver");
     const verification = {
-      verification_id: id("dver"),
+      verification_id: verificationId,
       request_id: requestId,
-      deployment_id: text(input.deployment_id, 160),
-      operation: DEPLOYMENT_OPERATIONS.includes(input.operation) ? input.operation : "preview",
+      deployment_id: deploymentId,
+      operation,
       surface: VERIFICATION_SURFACES.includes(input.surface) ? input.surface : "deploy",
       command: text(input.command || input.check_name, 800),
       started_at: iso(input.started_at || input.startedAt, now) || now,
@@ -674,21 +794,23 @@ function createWorkHistoryStore({ events }) {
       exit_code: Number.isInteger(input.exit_code) ? input.exit_code : null,
       status: VERIFICATION_STATUSES.includes(input.status) ? input.status : (input.exit_code === 0 ? "passed" : "failed"),
       summary: text(input.summary, 2000),
-      stdout_ref: text(input.stdout_ref, 400),
-      stderr_ref: text(input.stderr_ref, 400),
-      extra_refs: refs(input.extra_refs),
-      created_by_worker_id: text(input.created_by_worker_id || input.worker_id, 160),
+      stdout_ref: deploymentRef(input.stdout_ref, "stdout_ref"),
+      stderr_ref: deploymentRef(input.stderr_ref, "stderr_ref"),
+      extra_refs: deploymentRefs(input.extra_refs, "extra_refs"),
+      created_by_worker_id: worker,
+      claim_id: claimId,
     };
-    await append({
+    const event = await append({
       event_type: "deployment.verification_recorded",
       stream_id: `deployment:${requestId}`,
       occurred_at: verification.finished_at,
       actor: { kind: "worker", id: verification.created_by_worker_id || "worker" },
       correlation_id: requestId,
-      idempotency_key: idem(input.idempotency_key, verification.verification_id, "deployment.verification_recorded"),
+      idempotency_key: deploymentIdem("verification", requestId, operation, deploymentId, claimId, verificationId),
       payload: verification,
     });
-    return verification;
+    assertDeploymentReturnedEvent(event, "deployment.verification_recorded", { request_id: requestId, operation, deployment_id: deploymentId, claim_id: claimId, created_by_worker_id: worker, status: verification.status });
+    return event.payload || verification;
   }
 
   async function observeDeploymentOperationEffect(input = {}) {
@@ -716,13 +838,13 @@ function createWorkHistoryStore({ events }) {
       deployment_id: text(input.deployment_id, 160) || latestApplied?.deployment_id || id("dep"),
       target: DEPLOYMENT_TARGETS.includes(input.target) ? input.target : entry.request.target || "other",
       candidate_id: text(input.candidate_id, 160),
-      preview_url: text(input.preview_url, 800),
-      active_url: text(input.active_url, 800),
-      artifact_refs: refs(input.artifact_refs),
-      backup_record_ref: text(input.backup_record_ref, 400),
-      restore_check_ref: text(input.restore_check_ref, 400),
-      smoke_artifact_ref: text(input.smoke_artifact_ref, 400),
-      rollback_ref: text(input.rollback_ref || input.rollback_to_ref, 400),
+      preview_url: deploymentUrl(input.preview_url, "preview_url"),
+      active_url: deploymentUrl(input.active_url, "active_url"),
+      artifact_refs: deploymentRefs(input.artifact_refs, "artifact_refs"),
+      backup_record_ref: deploymentRef(input.backup_record_ref, "backup_record_ref"),
+      restore_check_ref: deploymentRef(input.restore_check_ref, "restore_check_ref"),
+      smoke_artifact_ref: deploymentRef(input.smoke_artifact_ref, "smoke_artifact_ref"),
+      rollback_ref: deploymentRef(input.rollback_ref || input.rollback_to_ref, "rollback_ref"),
       drain_status: text(input.drain_status, 80),
       compatibility_status: text(input.compatibility_status, 80),
       summary: text(input.summary, 2000),
@@ -735,9 +857,10 @@ function createWorkHistoryStore({ events }) {
       occurred_at: now,
       actor: { kind: "worker", id: worker },
       correlation_id: requestId,
-      idempotency_key: idem(effectId, "", ""),
+      idempotency_key: deploymentIdem("effect", requestId, operation, effectId),
       payload: observed,
     });
+    assertDeploymentReturnedEvent(event, "deployment.effect_observed", { request_id: requestId, operation, effect_id: effectId, claim_id: claimId, worker_id: worker });
     return event.payload || observed;
   }
 
@@ -752,12 +875,12 @@ function createWorkHistoryStore({ events }) {
     if (!entry) {
       throw new Error(`deployment request not found: ${requestId}`);
     }
-    const claim = currentDeploymentClaim(entry, operation);
-    assertDeploymentOperationClaim(entry, { operation, worker, claim_id: claimId, claim, require_fresh: false });
     const observed = currentDeploymentEffect(entry, operation, effectId);
     if (!observed) {
       throw new Error(`deployment ${operation} effect ${effectId} not observed for request ${requestId}`);
     }
+    const claim = currentDeploymentClaim(entry, operation);
+    assertDeploymentReceiptAuthority(entry, { operation, worker, claimId, claim, observed });
     const now = new Date().toISOString();
     const decision = operation === "rollback" ? "rolled_back" : "applied";
     const receiptEvent = await append({
@@ -766,7 +889,7 @@ function createWorkHistoryStore({ events }) {
       occurred_at: now,
       actor: { kind: "worker", id: worker },
       correlation_id: requestId,
-      idempotency_key: idem(input.idempotency_key, `${requestId}:${operation}`, "deployment.receipted"),
+      idempotency_key: deploymentIdem("receipt", requestId, operation),
       payload: {
         receipt_id: text(input.receipt_id, 160) || id("drct"),
         request_id: requestId,
@@ -783,6 +906,7 @@ function createWorkHistoryStore({ events }) {
     if (receiptEvent.payload?.effect_id && receiptEvent.payload.effect_id !== effectId) {
       throw new Error(`deployment request ${requestId} ${operation} already receipted for a different effect`);
     }
+    assertDeploymentReturnedEvent(receiptEvent, "deployment.receipted", { request_id: requestId, operation, effect_id: effectId });
     if (operation === "apply") {
       await recordDeployment({
         deployment_id: observed.deployment_id,
@@ -799,11 +923,14 @@ function createWorkHistoryStore({ events }) {
         smoke_artifact_ref: observed.smoke_artifact_ref,
         smoke_status: observed.smoke_artifact_ref ? "passed" : "",
         applied_by_actor: worker,
+        worker_id: worker,
+        claim_id: claimId,
         applied_at: now,
         explicit_promotion: true,
         from_receipt: true,
+        receipt_id: receiptEvent.payload.receipt_id,
         actor: { kind: "worker", id: worker },
-        idempotency_key: idem("", `${requestId}:${operation}`, "deployment.recorded"),
+        idempotency_key: deploymentIdem("recorded", requestId, operation),
       });
     } else if (operation === "rollback") {
       await recordDeployment({
@@ -819,9 +946,12 @@ function createWorkHistoryStore({ events }) {
         smoke_artifact_ref: observed.smoke_artifact_ref,
         smoke_status: observed.smoke_artifact_ref ? "passed" : "",
         applied_by_actor: worker,
+        worker_id: worker,
+        claim_id: claimId,
         applied_at: latestAppliedRecord(entry)?.applied_at || "",
         actor: { kind: "worker", id: worker },
-        idempotency_key: idem("", `${requestId}:${operation}`, "deployment.recorded"),
+        receipt_id: receiptEvent.payload.receipt_id,
+        idempotency_key: deploymentIdem("recorded", requestId, operation),
       });
     }
     return deploymentRequestDetail(requestId);
@@ -835,14 +965,19 @@ function createWorkHistoryStore({ events }) {
     const mode = DEPLOYMENT_MODES.includes(input.mode) ? input.mode : "preview";
     const status = DEPLOYMENT_STATUSES.includes(input.status) ? input.status : "available";
     const requestId = text(input.request_id, 160);
+    if ((mode === "applied" || status === "applied") && !requestId) {
+      throw new Error("applied deployment records require a guarded request_id");
+    }
     if (requestId) {
       const state = await collectState();
       const entry = state.deploymentRequests.get(requestId);
       if (!entry) {
         throw new Error(`deployment request not found: ${requestId}`);
       }
-      if (mode === "preview" && !currentDeploymentClaim(entry, "preview")) {
-        throw new Error(`deployment request ${requestId} preview must be claimed before recording a preview`);
+      if (mode === "preview") {
+        const worker = deploymentString(input.worker_id || input.applied_by_actor, "worker_id", 160, true);
+        const claimId = deploymentString(input.claim_id, "claim_id", 160, true);
+        assertDeploymentOperationClaim(entry, { operation: "preview", worker, claim_id: claimId, claim: currentDeploymentClaim(entry, "preview"), require_fresh: true });
       }
       if (status === "applied" && input.from_receipt !== true) {
         throw new Error(`deployment request ${requestId} applied state must be recorded through an immutable receipt`);
@@ -856,19 +991,21 @@ function createWorkHistoryStore({ events }) {
       status,
       run_id: text(input.run_id, 160),
       commit_sha: text(input.commit_sha, 80),
-      artifact_refs: refs(input.artifact_refs),
-      preview_url: text(input.preview_url, 800),
-      active_url: text(input.active_url, 800),
+      artifact_refs: deploymentRefs(input.artifact_refs, "artifact_refs"),
+      preview_url: deploymentUrl(input.preview_url, "preview_url"),
+      active_url: deploymentUrl(input.active_url, "active_url"),
       build_id: text(input.build_id, 200),
       deployment_control_plane: text(input.deployment_control_plane, 80) || "script",
-      backup_record_ref: text(input.backup_record_ref, 400),
-      restore_check_ref: text(input.restore_check_ref, 400),
-      smoke_artifact_ref: text(input.smoke_artifact_ref, 400),
+      backup_record_ref: deploymentRef(input.backup_record_ref, "backup_record_ref"),
+      restore_check_ref: deploymentRef(input.restore_check_ref, "restore_check_ref"),
+      smoke_artifact_ref: deploymentRef(input.smoke_artifact_ref, "smoke_artifact_ref"),
       smoke_status: text(input.smoke_status, 80),
       candidate_id: text(input.candidate_id, 160),
-      provenance_ref: text(input.provenance_ref, 400),
-      rollback_ref: text(input.rollback_ref, 400),
+      provenance_ref: deploymentRef(input.provenance_ref, "provenance_ref"),
+      rollback_ref: deploymentRef(input.rollback_ref, "rollback_ref"),
       receipt_id: text(input.receipt_id, 160),
+      claim_id: deploymentString(input.claim_id, "claim_id", 160),
+      worker_id: deploymentString(input.worker_id || input.applied_by_actor, "worker_id", 160),
       applied_by_actor: text(input.applied_by_actor, 200),
       applied_at: text(input.applied_at, 40),
       recorded_at: now,
@@ -881,16 +1018,33 @@ function createWorkHistoryStore({ events }) {
         throw new Error("an applied deployment record requires backup_record_ref and restore_check_ref evidence");
       }
     }
-    await append({
+    const event = await append({
       event_type: "deployment.recorded",
       stream_id: `deployment:${record.deployment_id}`,
       occurred_at: now,
       actor: actor(input.actor, "worker"),
       correlation_id: record.request_id || record.deployment_id,
-      idempotency_key: idem(input.idempotency_key, "", ""),
+      idempotency_key: deploymentIdem(
+        "recorded",
+        record.request_id || "standalone",
+        record.mode,
+        record.status,
+        record.deployment_id,
+        record.receipt_id || "none",
+        record.claim_id || "none",
+        record.worker_id || "none",
+      ),
       payload: record,
     });
-    return record;
+    assertDeploymentReturnedEvent(event, "deployment.recorded", {
+      deployment_id: record.deployment_id,
+      request_id: record.request_id,
+      status: record.status,
+      receipt_id: record.receipt_id,
+      claim_id: record.claim_id,
+      worker_id: record.worker_id,
+    });
+    return event.payload || record;
   }
 
   // --- read side: projections folded from the event log --------------------
@@ -931,6 +1085,7 @@ function createWorkHistoryStore({ events }) {
           claims: new Map(),
           verifications: [],
           effects: new Map(),
+          effect_adoptions: [],
           receipts: new Map(),
           records: [],
           latest_event_at: "",
@@ -1059,6 +1214,12 @@ function createWorkHistoryStore({ events }) {
         entry.latest_event_at = event.recorded_at;
         continue;
       }
+      if (type === "deployment.effect_adopted") {
+        const entry = ensureDeploymentRequest(payload.request_id);
+        entry.effect_adoptions.push(payload);
+        entry.latest_event_at = event.recorded_at;
+        continue;
+      }
       if (type === "deployment.receipted") {
         const entry = ensureDeploymentRequest(payload.request_id);
         entry.receipts.set(payload.operation || "apply", payload);
@@ -1083,16 +1244,26 @@ function createWorkHistoryStore({ events }) {
     const prefixes = ["work.task.", "run.", "repo.", "user_feedback.", "deployment."];
     const merged = [];
     for (const prefix of prefixes) {
-      const chunk = await events.listEvents({
-        event_type_prefix: prefix,
-        order: "asc",
-        limit: EVENT_LIST_LIMIT,
-      });
-      merged.push(...chunk);
+      let offset = 0;
+      while (offset < EVENT_REBUILD_LIMIT) {
+        const chunk = await events.listEvents({
+          event_type_prefix: prefix,
+          order: "asc",
+          limit: EVENT_LIST_LIMIT,
+          offset,
+        });
+        merged.push(...chunk);
+        if (chunk.length < EVENT_LIST_LIMIT) break;
+        offset += chunk.length;
+      }
+      if (offset >= EVENT_REBUILD_LIMIT) {
+        throw new Error(`work-history rebuild exceeded ${EVENT_REBUILD_LIMIT} ${prefix} events`);
+      }
     }
     return merged.sort((a, b) =>
       String(a.recorded_at).localeCompare(String(b.recorded_at))
-      || Number(a.stream_version || 0) - Number(b.stream_version || 0));
+      || Number(a.stream_version || 0) - Number(b.stream_version || 0)
+      || String(a.event_id || "").localeCompare(String(b.event_id || "")));
   }
 
   function runBlockingReason(run) {
@@ -1201,6 +1372,7 @@ function createWorkHistoryStore({ events }) {
     const latestPreview = latestPreviewRecord(entry);
     const latestApplied = latestAppliedRecord(entry);
     const latestVerification = latestDeploymentVerification(entry);
+    const latestPreviewVerification = matchingPreviewVerification(entry, latestPreview);
     const applyGuard = deploymentApplyGuard(entry);
     return {
       request: entry.request,
@@ -1208,10 +1380,12 @@ function createWorkHistoryStore({ events }) {
       claims: [...entry.claims.values()],
       verifications: entry.verifications,
       latest_verification: latestVerification,
+      latest_preview_verification: latestPreviewVerification,
       preview_records: entry.records.filter((record) => record.mode === "preview"),
       latest_preview: latestPreview,
       latest_applied: latestApplied,
       effects: [...entry.effects.values()],
+      effect_adoptions: entry.effect_adoptions,
       receipts: [...entry.receipts.values()],
       apply_guard: applyGuard,
       status: deploymentRequestStatus(entry),
@@ -1226,7 +1400,11 @@ function createWorkHistoryStore({ events }) {
       .filter((record) => !wanted || record.target === wanted)
       .sort((a, b) => String(b.recorded_at).localeCompare(String(a.recorded_at)));
     const previews = records.filter((record) => record.mode === "preview" && ["available", "building", "requested"].includes(record.status));
-    const applied = records.filter((record) => record.status === "applied");
+    const applied = records.filter((record) => {
+      if (record.status !== "applied") return false;
+      const request = record.request_id ? state.deploymentRequests.get(record.request_id) : null;
+      return !request?.receipts.get("rollback");
+    });
     const requests = [...state.deploymentRequests.values()]
       .filter((entry) => !wanted || entry.request.target === wanted)
       .sort((a, b) => String(b.request.created_at || "").localeCompare(String(a.request.created_at || "")))
@@ -1235,7 +1413,7 @@ function createWorkHistoryStore({ events }) {
         derived_status: deploymentRequestStatus(entry),
         review_decision: entry.review?.decision || "",
         latest_preview_url: latestPreviewRecord(entry)?.preview_url || "",
-        latest_verification_status: latestDeploymentVerification(entry)?.status || "",
+        latest_verification_status: matchingPreviewVerification(entry, latestPreviewRecord(entry))?.status || "",
         apply_allowed: deploymentApplyGuard(entry).status === "ready",
         blocking_reason: deploymentRequestBlockingReason(entry),
       }));
@@ -1317,6 +1495,7 @@ function createWorkHistoryStore({ events }) {
     requestDeployment,
     reviewDeploymentRequest,
     claimDeploymentRequest,
+    adoptDeploymentOperationEffect,
     recordDeploymentVerification,
     observeDeploymentOperationEffect,
     receiptDeploymentOperation,
@@ -1420,6 +1599,38 @@ function idem(explicit, scope, operation) {
   return `wh:${safeScope}:${operation}`;
 }
 
+function deploymentIdem(domain, ...parts) {
+  const safeDomain = deploymentString(domain, "idempotency domain", 80, true);
+  const body = parts.map((part) => deploymentString(part, "idempotency component", 200, true)).join("\u001f");
+  const digest = crypto.createHash("sha256").update(`moa.deployment.v1\u001f${safeDomain}\u001f${body}`).digest("hex");
+  return `wh:deployment:${safeDomain}:${digest}`;
+}
+
+function deploymentPayloadDigest(domain, value) {
+  return crypto.createHash("sha256")
+    .update(`moa.deployment.payload.v1\u001f${domain}\u001f${canonicalJson(value)}`)
+    .digest("hex");
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function assertDeploymentReturnedEvent(event, eventType, expected = {}) {
+  if (!event || event.event_type !== eventType || !event.payload || typeof event.payload !== "object") {
+    throw new Error(`idempotency collision returned an invalid ${eventType} event`);
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (event.payload[key] !== value) {
+      throw new Error(`idempotency collision returned mismatched ${eventType} ${key}`);
+    }
+  }
+}
+
 function actor(value, fallbackKind, fallbackId) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return { kind: text(value.kind, 80) || fallbackKind || "user", id: text(value.id, 160) || fallbackId || fallbackKind || "user" };
@@ -1450,15 +1661,64 @@ function plain(value) {
 }
 
 function refs(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (typeof item === "string") return text(item, 400);
-      if (item && typeof item === "object") return item;
-      return null;
-    })
-    .filter(Boolean)
-    .slice(0, 50);
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("refs must be an array of typed string references");
+  if (value.length > 50) throw new Error("refs exceeds 50 references");
+  return value.map((item, index) => workHistoryRef(item, `refs[${index}]`)).filter(Boolean);
+}
+
+function deploymentString(value, name, max, required = false) {
+  if (value === undefined || value === null || value === "") {
+    if (required) throw new Error(`${name} is required`);
+    return "";
+  }
+  if (typeof value !== "string") throw new Error(`${name} must be a string`);
+  const output = value.trim();
+  if (!output && required) throw new Error(`${name} is required`);
+  if (output.length > max) throw new Error(`${name} exceeds ${max} characters`);
+  if (/\r|\n|\0|`|\|\||&&|[$;&|<>\\]/.test(output)) {
+    throw new Error(`${name} contains shell or control syntax`);
+  }
+  if (/(?:bearer\s+|api[_-]?key\s*[:=]|token\s*[:=]|password\s*[:=]|secret\s*[:=]|(?:^|[:/])(sk|pk|rk|ghp|github_pat|xox[baprs])-?[_A-Za-z0-9-]{8,})/i.test(output)) {
+    throw new Error(`${name} contains secret-like material`);
+  }
+  return output;
+}
+
+function workHistoryRef(value, name) {
+  const ref = deploymentString(value, name, 400, false);
+  if (!ref) return "";
+  if (!/^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/[A-Za-z0-9][A-Za-z0-9._~:/?#[\]@!$'()*+,=%-]*|[A-Za-z0-9][A-Za-z0-9._~:/?#[\]@!$'()*+,=%-]*)$/.test(ref)) {
+    throw new Error(`${name} must be a typed bounded string reference`);
+  }
+  return ref;
+}
+
+function deploymentRef(value, name) {
+  const ref = deploymentString(value, name, 400, false);
+  if (!ref) return "";
+  if (!/^(?:artifact|provenance|backup|restore|smoke|rollback|log|verification):\/\/[A-Za-z0-9][A-Za-z0-9._~:/?#[\]@!$&'()*+,=%-]*$/.test(ref)) {
+    throw new Error(`${name} must be a typed non-secret reference`);
+  }
+  return ref;
+}
+
+function deploymentUrl(value, name) {
+  const url = deploymentString(value, name, 800, false);
+  if (!url) return "";
+  let parsed;
+  try { parsed = new URL(url); } catch { throw new Error(`${name} must be an https URL`); }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw new Error(`${name} must be an https URL without credentials`);
+  }
+  return url;
+}
+
+function deploymentRefs(value, name) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error(`${name} must be an array of typed string references`);
+  if (value.length > 50) throw new Error(`${name} exceeds 50 references`);
+  return value.map((item, index) => deploymentRef(item, `${name}[${index}]`)).filter(Boolean);
 }
 
 function deploymentCandidateRefs(value) {
@@ -1466,14 +1726,14 @@ function deploymentCandidateRefs(value) {
   return value
     .map((item) => {
       if (typeof item === "string") {
-        return { candidate_id: text(item, 160) };
+        return { candidate_id: deploymentString(item, "candidate_id", 160, true) };
       }
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const candidate = {
-        candidate_id: text(item.candidate_id || item.candidateId || item.id, 160),
-        target: text(item.target, 120),
-        artifact_ref: text(item.artifact_ref || item.artifactRef, 400),
-        provenance_ref: text(item.provenance_ref || item.provenanceRef, 400),
+        candidate_id: deploymentString(item.candidate_id || item.candidateId || item.id, "candidate_id", 160),
+        target: deploymentString(item.target, "candidate target", 120),
+        artifact_ref: deploymentRef(item.artifact_ref || item.artifactRef, "candidate artifact_ref"),
+        provenance_ref: deploymentRef(item.provenance_ref || item.provenanceRef, "candidate provenance_ref"),
       };
       return candidate.candidate_id || candidate.target || candidate.artifact_ref ? candidate : null;
     })
@@ -1495,6 +1755,7 @@ function latestPreviewRecord(entry) {
 }
 
 function latestAppliedRecord(entry) {
+  if (entry.receipts.get("rollback")) return null;
   return entry.records
     .filter((record) => record.status === "applied")
     .sort((a, b) => String(b.recorded_at || "").localeCompare(String(a.recorded_at || "")))[0] || null;
@@ -1503,6 +1764,24 @@ function latestAppliedRecord(entry) {
 function latestDeploymentVerification(entry) {
   return entry.verifications
     .sort((a, b) => String(a.finished_at || "").localeCompare(String(b.finished_at || "")))
+    .slice(-1)[0] || null;
+}
+
+function matchingPreviewVerification(entry, preview) {
+  if (!preview) return null;
+  return entry.verifications
+    .filter((item) => item.operation === "preview"
+      && item.deployment_id === preview.deployment_id
+      && item.claim_id === preview.claim_id
+      && item.created_by_worker_id === preview.worker_id)
+    .sort((a, b) => String(a.finished_at || "").localeCompare(String(b.finished_at || "")))
+    .slice(-1)[0] || null;
+}
+
+function currentEffectAdoption(entry, operation, effectId) {
+  return entry.effect_adoptions
+    .filter((item) => item.operation === operation && item.effect_id === effectId)
+    .sort((a, b) => String(a.adopted_at || "").localeCompare(String(b.adopted_at || "")))
     .slice(-1)[0] || null;
 }
 
@@ -1531,7 +1810,7 @@ function deploymentApplyGuard(entry) {
   if (!preview || preview.status !== "available") {
     return { status: "blocked", reason: "preview is not available yet" };
   }
-  const verification = latestDeploymentVerification(entry);
+  const verification = matchingPreviewVerification(entry, preview);
   if (!verification || verification.status !== "passed") {
     return { status: "blocked", reason: "preview verification has not passed" };
   }
@@ -1556,7 +1835,8 @@ function deploymentRequestStatus(entry) {
   if (entry.receipts.get("apply")) return "applied";
   const guard = deploymentApplyGuard(entry);
   if (guard.status === "ready") return "verified";
-  if (latestDeploymentVerification(entry)?.status === "failed") return "verification_failed";
+  const previewVerification = matchingPreviewVerification(entry, latestPreviewRecord(entry));
+  if (previewVerification?.status === "failed") return "verification_failed";
   if (latestPreviewRecord(entry)?.status === "available") return "preview_available";
   if (entry.claims.get("apply")) return "apply_claimed";
   if (entry.claims.get("preview")) return "preview_claimed";
@@ -1577,7 +1857,7 @@ function deploymentRequestBlockingReason(entry) {
   if (entry.claims.get("apply") && !entry.receipts.get("apply")) {
     const effect = entry.effects.get("apply");
     return effect
-      ? "apply effect observed; waiting for immutable receipt"
+      ? "apply effect observed; waiting for immutable receipt or audited adoption"
       : "apply claimed; waiting for adapter effect";
   }
   const apply = deploymentApplyGuard(entry);
@@ -1590,6 +1870,9 @@ function assertDeploymentOperationClaimable(entry, operation) {
   if (!entry?.request?.request_id) {
     throw new Error("deployment request not found");
   }
+  if (entry.effects.get(operation) && !entry.receipts.get(operation)) {
+    throw new Error(`deployment request ${entry.request.request_id} ${operation} effect is already observed; use explicit adoption before receipt`);
+  }
   const currentClaim = currentDeploymentClaim(entry, operation);
   if (currentClaim && !isClaimExpired(currentClaim) && !entry.receipts.get(operation)) {
     throw new Error(`deployment request ${entry.request.request_id} ${operation} is already claimed by ${currentClaim.worker_id}`);
@@ -1598,8 +1881,9 @@ function assertDeploymentOperationClaimable(entry, operation) {
     if (entry.review?.decision !== "approved") {
       throw new Error(`deployment request ${entry.request.request_id} is awaiting review approval`);
     }
-    if (latestPreviewRecord(entry)?.status === "available") {
-      throw new Error(`deployment request ${entry.request.request_id} already has an available preview`);
+    const preview = latestPreviewRecord(entry);
+    if (preview?.status === "available" && matchingPreviewVerification(entry, preview)?.status === "passed") {
+      throw new Error(`deployment request ${entry.request.request_id} already has a verified available preview`);
     }
     return;
   }
@@ -1632,6 +1916,21 @@ function assertDeploymentOperationClaim(entry, { operation, worker, claim_id: cl
     if (isClaimExpired(claim)) {
       throw new Error(`deployment request ${entry.request.request_id} ${operation} claim lease expired`);
     }
+  }
+}
+
+function assertDeploymentReceiptAuthority(entry, { operation, worker, claimId, claim, observed }) {
+  if (observed.worker_id === worker && observed.claim_id === claimId) {
+    assertDeploymentOperationClaim(entry, { operation, worker, claim_id: claimId, claim, require_fresh: false });
+    return;
+  }
+  assertDeploymentOperationClaim(entry, { operation, worker, claim_id: claimId, claim, require_fresh: true });
+  const adoption = currentEffectAdoption(entry, operation, observed.effect_id);
+  if (!adoption) {
+    throw new Error(`deployment ${operation} receipt must match the effect claim and worker or a recorded adoption`);
+  }
+  if (adoption.adopted_by_worker_id !== worker || adoption.adopted_claim_id !== claimId) {
+    throw new Error(`deployment ${operation} receipt must use the adopted claim and worker`);
   }
 }
 

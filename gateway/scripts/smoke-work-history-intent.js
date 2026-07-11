@@ -36,7 +36,7 @@ async function main() {
       "queued run stays inert until a worker claims it",
       "before/after snapshots + diff + verification reconstruct the run story",
       "feedback attaches without cancellation; cancel needs a worker receipt",
-      "applied deployment records demand explicit promotion + backup evidence",
+      "requestless records cannot claim an applied deployment",
       "projections rebuild from the product-event log alone",
     ],
   }, null, 2));
@@ -211,8 +211,8 @@ async function testStore() {
     activeDetail = await store.runDetail(activeRun.run_id);
     assert.strictEqual(activeDetail.status, "canceled");
 
-    // Deployments: preview and applied stay distinct; applied demands explicit
-    // promotion plus backup/restore evidence.
+    // Requestless records may describe inert previews, but can never assert an
+    // applied effect. Applied state only comes from the guarded request flow.
     await store.recordDeployment({
       target: "gateway",
       mode: "preview",
@@ -222,22 +222,11 @@ async function testStore() {
     });
     await assert.rejects(
       store.recordDeployment({ target: "gateway", mode: "applied", status: "applied", active_url: "https://app.example.test" }),
-      /explicit_promotion/,
+      /guarded request_id/,
     );
-    await store.recordDeployment({
-      target: "gateway",
-      mode: "applied",
-      status: "applied",
-      active_url: "https://app.example.test",
-      explicit_promotion: true,
-      backup_record_ref: "backup://smoke-1",
-      restore_check_ref: "restore-check://smoke-1",
-      applied_by_actor: "user",
-    });
     const links = await store.deploymentLinks({ target: "gateway" });
     assert.strictEqual(links.latest_preview.preview_url, "https://preview.example.test/build-1");
-    assert.strictEqual(links.latest_applied.active_url, "https://app.example.test");
-    assert.notStrictEqual(links.latest_preview.deployment_id, links.latest_applied.deployment_id);
+    assert.strictEqual(links.latest_applied, null);
 
     // UI routes resolve from durable records only.
     const route = await store.resolveUiRoute({ route_kind: "diff", target: run.run_id });
