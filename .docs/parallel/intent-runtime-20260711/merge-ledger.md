@@ -161,6 +161,10 @@ voice/LLM trace correlation.
   telemetry, agent-generated operations knowledge, software-factory execution,
   CI optimization, instrumentation, trace/eval backends, and infrastructure
   dashboards related without collapsing them into “observability.”
+- 2026-07-11: ran the repository's strict OpenSpec gate after the contracts and
+  product map were frozen. Both `canonical-intent-runtime` and
+  `voice-capture-draft-controls` validate successfully with
+  `openspec validate <change> --strict`.
 - 2026-07-11: intent focused repair passed 16/16, but the main orchestrator then
   reproduced a real-adapter race with two independent runtimes over JSONL: both
   commands fulfilled and persisted stream versions `[1,2,2]`. Added repair
