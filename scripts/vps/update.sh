@@ -63,6 +63,14 @@ fi
 # single untracked file that the new ref tracks wedges every update.
 old_full_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
 old_sha="${old_full_sha:0:12}"
+rollback_gateway() {
+  echo "Rolling gateway back to $old_full_sha" >&2
+  git -C "$APP_DIR" checkout --force --detach "$old_full_sha"
+  compose build gateway
+  compose up -d --no-deps gateway
+  wait_for_gateway_health "http://127.0.0.1:$port/health" 45
+  echo "Rollback restored $old_full_sha; apply remains failed and unreceipted" >&2
+}
 git -C "$APP_DIR" checkout --force --detach "origin/$REF" 2>/dev/null \
   || git -C "$APP_DIR" checkout --force --detach "$REF"
 new_sha="$(git -C "$APP_DIR" rev-parse --short HEAD)"
@@ -79,37 +87,35 @@ compose up -d --no-deps gateway
 port="$(env_value GATEWAY_PORT)"
 port="${port:-8787}"
 if ! wait_for_gateway_health "http://127.0.0.1:$port/health" 45; then
-  echo "Post-apply smoke failed; rolling back to $old_full_sha" >&2
-  git -C "$APP_DIR" checkout --force --detach "$old_full_sha"
-  compose build gateway
-  compose up -d --no-deps gateway
-  wait_for_gateway_health "http://127.0.0.1:$port/health" 45
-  echo "Rollback restored $old_full_sha; apply remains failed and unreceipted" >&2
+  echo "Post-apply smoke failed" >&2
+  rollback_gateway
   exit 1
 fi
 
+# 4. If the Caddyfile changed in this update, apply it with a validated
+# graceful reload. Requires the directory mount (docker-compose.vps.yml);
+# reload keeps the old config on validation failure, so the front never
+# drops. An edge-config failure rolls the candidate gateway back and cannot be
+# receipted as a successful apply.
+if ! git -C "$APP_DIR" diff --quiet "$old_sha" "$new_sha" -- gateway/deploy/vps/Caddyfile; then
+  caddy_container="$(compose ps -q caddy)"
+  if [ -z "$caddy_container" ] \
+    || ! docker exec "$caddy_container" caddy validate --config /etc/caddy/Caddyfile \
+    || ! docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile; then
+    echo "Caddy candidate validation/reload failed" >&2
+    rollback_gateway
+    exit 1
+  fi
+  echo "Caddyfile changed: validated and reloaded caddy."
+fi
+
+# 5. Only after the complete edge-visible smoke succeeds, record the M4
+# observed effect and immutable receipt, then write the local receipt mirror.
 receipt_file="${MOA_PROMOTION_RECEIPT_FILE:-$APP_DIR/.deploy-markers/gateway-promotion-receipt.json}"
 node "$SCRIPT_DIR/record-promotion-receipt.js" \
   --evidence "$EVIDENCE_FILE" --commit "$candidate_sha" --previous "$old_full_sha" \
   --receipt "$receipt_file" --health-url "http://127.0.0.1:$port/health" \
   --control-plane-url "${MOA_CONTROL_PLANE_URL:-}"
-
-# 4. If the Caddyfile changed in this update, apply it with a validated
-# graceful reload. Requires the directory mount (docker-compose.vps.yml);
-# reload keeps the old config on validation failure, so the front never
-# drops. Non-fatal: a reload failure leaves the previous routes serving.
-if ! git -C "$APP_DIR" diff --quiet "$old_sha" "$new_sha" -- gateway/deploy/vps/Caddyfile; then
-  caddy_container="$(compose ps -q caddy)"
-  if [ -n "$caddy_container" ]; then
-    if docker exec "$caddy_container" caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
-      docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile \
-        && echo "Caddyfile changed: reloaded caddy." \
-        || echo "WARNING: caddy reload failed; previous routes still serving." >&2
-    else
-      echo "WARNING: new Caddyfile failed validation; caddy keeps the old config." >&2
-    fi
-  fi
-fi
 
 domain="$(env_value MOA_DOMAIN)"
 echo "Updated gateway $old_sha -> $new_sha"
