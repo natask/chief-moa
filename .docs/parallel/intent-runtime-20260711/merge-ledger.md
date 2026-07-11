@@ -124,6 +124,19 @@ voice/LLM trace correlation.
   worktree.
 - 2026-07-11: completed Tier-2 topology audits and started two Tier-3 contracts:
   product-events-backed intent runtime and a distinct voice-draft lifecycle.
+- 2026-07-11: context/protocol audit returned five blockers: caller-history
+  leakage after clean-slate admission, partial surface binding, executable-key
+  smuggling, an unbounded decision stash, and shallow final-payload tests.
+- 2026-07-11: repaired and repeatedly re-audited the context/protocol lane.
+  The final independent audit returned `PASS`; focused context/protocol tests,
+  smokes, and quality gates passed, and full gateway `npm run check` passed with
+  224 tests, 0 failures, and 1 existing skip.
+- 2026-07-11: committed context/protocol repair as `b158856` and merged the
+  audited lane into staging at `9b5bcf8`.
+- 2026-07-11: initial intent and voice-draft domain implementations were both
+  blocked by independent hostile audits despite green narrow tests. Repair
+  contracts now cover authoritative replay/idempotency/focus bounds and
+  crash-safe revisioned PCM storage/leases/privacy cleanup respectively.
 - 2026-07-11: the active source advanced by 19 commits during the isolated run.
   Created `agent/intent-runtime-20260711-v2` at `caba6a1` and cherry-picked only
   the two run contract/OpenSpec commits. A wholesale context-lane cherry-pick
