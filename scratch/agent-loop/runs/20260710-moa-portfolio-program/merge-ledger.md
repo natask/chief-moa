@@ -63,6 +63,42 @@ by the installed CLI as requiring a newer Codex version; it performed no work.
 Fresh read-only re-audits are active. No repair is eligible for integration until
 those auditors return `PASS` or a subsequent repair cycle clears every blocker.
 
+## Wave 1 integration result
+
+- Gateway repaired head: `6ff4725`; final focused blockers cleared, then
+  cherry-picked as `346d508`, `18bdf91`, `a6321a3`, and `b840249`.
+- Voice contract repaired head: `28f4367`; target/current semantics and exact
+  command names cleared, then cherry-picked as `49a73d9`, `712f967`, `bca6a6a`,
+  and `6d2e9ad`.
+- Browser sampler repaired head: `b539074`; cross-tab revocation audit `PASS`,
+  then cherry-picked as `fc0574b`, `8f11baf`, and `7a6d573`.
+- Integration conflicts were limited to preserving existing voice drain-status
+  assertions/functions alongside the new diagnostics assertions/functions.
+
+Combined verification on the integration branch:
+
+- `cd gateway && npm run check`: 155 pass, 1 intentional skip, 0 fail.
+- `cd browser_extension && npm run verify && node
+  scripts/smoke-voice-sampler.mjs && npm run smoke`: pass, including seven
+  lifecycle cases and real headless Chrome extension smoke.
+- `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew
+  assembleDebug`: build successful.
+- Both strict voice OpenSpec validations: pass.
+
+Artifacts:
+
+- Extension: `browser_extension/dist/A.G.-0.1.28.zip`, SHA-256
+  `d21484f8b411028608001d8d08f473e73c559331403ac1afab1e770fe3e70d57`.
+- Android debug APK: `android_app/app/build/outputs/apk/debug/app-debug.apk`,
+  SHA-256 `1dd4e077ac81400750b7dba2808183e61405ca9e97078761c8dbb933800270ff`.
+
+Active promotion remains gated. The extension package was created without
+reloading the user's active browser. Gateway active apply was not attempted:
+this run does not yet contain an isolated preview URL/state store plus fresh VPS
+backup/restore, drain/no-active-turn, compatibility, and rollback evidence for
+the integrated commit. Android OTA was not published because this Wave contains
+no Android source change and active-phone interruption state was not proven.
+
 ## Integration status
 
 - No implementation branch created.
