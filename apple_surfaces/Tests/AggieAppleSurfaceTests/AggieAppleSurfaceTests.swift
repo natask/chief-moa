@@ -151,3 +151,13 @@ func denialPathsNeverInvokeExecutor(kind: String) async throws {
     }
     #expect(await effects.value == 1)
 }
+
+@Test func effectClaimIsExclusiveAcrossJournalInstances() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let url = directory.appendingPathComponent("effect-journal.json")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = AtomicFileEffectJournal(url: url), second = AtomicFileEffectJournal(url: url)
+    try first.record(.unknownEffect, for: "msg-claim")
+    #expect(throws: AggieProtocolError.duplicateProposal) { try second.record(.unknownEffect, for: "msg-claim") }
+    #expect(try second.status(for: "msg-claim") == .unknownEffect)
+}

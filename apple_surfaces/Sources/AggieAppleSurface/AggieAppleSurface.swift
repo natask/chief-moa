@@ -1,5 +1,6 @@
 import CryptoKit
 import CoreFoundation
+import Darwin
 import Foundation
 
 public enum AggieLimits {
@@ -59,11 +60,22 @@ public final class AtomicFileEffectJournal: EffectJournal, @unchecked Sendable {
     private let lock = NSLock()
     public init(url: URL) { self.url = url }
     public func status(for messageID: String) throws -> RecoveryStatus {
-        try lock.withLock { try read()[messageID] ?? .notStarted }
+        try lock.withLock {
+            if let status = try read()[messageID] { return status }
+            return FileManager.default.fileExists(atPath: claimURL(for: messageID).path) ? .unknownEffect : .notStarted
+        }
     }
     public func record(_ status: RecoveryStatus, for messageID: String) throws {
         try lock.withLock {
             var records = try read()
+            if status == .unknownEffect && records[messageID] != nil { throw AggieProtocolError.duplicateProposal }
+            if status == .unknownEffect {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let claim = claimURL(for: messageID)
+                let descriptor = open(claim.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
+                guard descriptor >= 0 else { throw AggieProtocolError.duplicateProposal }
+                close(descriptor)
+            }
             guard records.count < AggieLimits.pendingProposals || records[messageID] != nil else {
                 throw AggieProtocolError.tooLarge
             }
@@ -73,6 +85,9 @@ public final class AtomicFileEffectJournal: EffectJournal, @unchecked Sendable {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: [.atomic, .completeFileProtection])
         }
+    }
+    private func claimURL(for messageID: String) -> URL {
+        url.deletingPathExtension().appendingPathExtension("\(messageID).effect-claim")
     }
     private func read() throws -> [String: RecoveryStatus] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [:] }

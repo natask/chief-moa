@@ -55,6 +55,11 @@ struct ApprovalSurfaceView: View {
                 .accessibilityIdentifier("aggie.approval.status")
             Text(state.detail).fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("aggie.approval.detail")
+            Picker("Preview safety state", selection: $state) {
+                ForEach(ApprovalUXState.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .accessibilityHint("Demonstrates unsigned shell states without performing a local effect")
+            .accessibilityIdentifier("aggie.approval.demo-state")
             if state == .awaitingApproval {
                 HStack {
                     Button("Deny") { state = .denied }
@@ -66,12 +71,16 @@ struct ApprovalSurfaceView: View {
                         .accessibilityHint("Approves this proposal for final local checks; it does not bypass permissions")
                         .accessibilityIdentifier("aggie.approval.approve")
                 }
+            } else if state == .unknownEffect {
+                Button("I verified the outcome") { state = .awaitingProposal }
+                    .accessibilityHint("Acknowledges this demo outcome; automatic retry remains disabled")
+                    .accessibilityIdentifier("aggie.approval.verify-unknown")
             } else {
                 Button("Return to proposals") { state = .awaitingProposal }
                     .accessibilityIdentifier("aggie.approval.recover")
             }
             Divider()
-            Text("Demo shell: no network, OS action, signing, or provider credential authority.")
+            Text("Static demo shell: not connected to transport or the authority coordinator; no network, OS action, signing, or provider credential authority.")
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("aggie.approval.boundary")
         }

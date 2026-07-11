@@ -4,6 +4,8 @@ const APPROVALS = new Set(["confirm", "none", "sensitive"]);
 const MODES = new Set(["text", "voice"]);
 const SECRET_KEY = /(token|api.?key|private.?key|client.?secret|provider.?secret|authorization|password)$/i;
 const SECRET_VALUE = /(bearer\s+\S+|github_pat_|ghp_|sk-[a-z0-9]|[?&]code=)/i;
+const EXECUTABLE_KEY = /^(eval|script|javascript|shell|command|code)$/i;
+const ID = /^[A-Za-z0-9_.:-]{1,160}$/;
 
 export function validateAggieProposal(input, expectedSurface) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid envelope");
@@ -11,8 +13,16 @@ export function validateAggieProposal(input, expectedSurface) {
   if (!VERSIONS.has(input.version) || input.type !== "action.proposed") throw new Error("unsupported protocol semantics");
   if (!sameSurface(input.surface, expectedSurface)) throw new Error("surface scope mismatch");
   if (!KINDS.has(input.payload?.kind) || !APPROVALS.has(input.payload?.approval_class)) throw new Error("unknown action semantics");
+  for (const id of [input.message_id, input.session_id, input.payload?.proposal_id]) if (!ID.test(id || "")) throw new Error("invalid id");
+  if (input.payload?.session_id !== input.session_id || input.payload?.proposed_by !== "gateway") throw new Error("payload provenance mismatch");
+  const created = Date.parse(input.timestamp), expires = Date.parse(input.payload?.expires_at);
+  if (!Number.isFinite(created) || !Number.isFinite(expires) || expires <= created) throw new Error("invalid time range");
   if (!input.payload.preconditions || Object.keys(input.payload.preconditions).length === 0) throw new Error("missing preconditions");
-  return Object.freeze(structuredClone(input));
+  if (input.payload.kind === "open_url") {
+    const url = new URL(input.payload.params?.url);
+    if (!new Set(["https:", "http:"]).has(url.protocol)) throw new Error("unsafe URL scheme");
+  }
+  return deepFreeze(structuredClone(input));
 }
 
 export async function proposalDigest(input) {
@@ -37,8 +47,18 @@ function scan(value, depth) {
   if (Array.isArray(value)) { if (value.length > 64) throw new Error("too wide"); value.forEach((item) => scan(item, depth + 1)); }
   else if (value && typeof value === "object") {
     const entries = Object.entries(value); if (entries.length > 64) throw new Error("too wide");
-    for (const [key, item] of entries) { if (SECRET_KEY.test(key.replace(/[^a-z0-9]/gi, ""))) throw new Error("credential authority"); scan(item, depth + 1); }
+    for (const [key, item] of entries) {
+      if (EXECUTABLE_KEY.test(key) || SECRET_KEY.test(key.replace(/[^a-z0-9]/gi, ""))) throw new Error("executable or credential authority");
+      scan(item, depth + 1);
+    }
   }
+}
+
+function deepFreeze(value) {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value); Object.values(value).forEach(deepFreeze);
+  }
+  return value;
 }
 
 function stableJson(value) {
