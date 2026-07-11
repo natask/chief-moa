@@ -149,6 +149,12 @@ voice/LLM trace correlation.
   category model and current reuse map in `research/voice-telemetry-stack.md`.
   This prevents OTel or an LLM trace backend from becoming a competing canonical
   conversation/audio store.
+- 2026-07-11: inspected the committed Superset architecture without modifying
+  its dirty local checkout and recorded reusable product-completeness patterns
+  in `research/superset-stack-lessons.md`: module boundaries, local/hosted state
+  separation, state-isolated previews, releases, upstream-fork lifecycle, and
+  operational documentation. Explicitly rejected its workspace/task schema as
+  Chief Moa's canonical intent model.
 - 2026-07-11: intent focused repair passed 16/16, but the main orchestrator then
   reproduced a real-adapter race with two independent runtimes over JSONL: both
   commands fulfilled and persisted stream versions `[1,2,2]`. Added repair
