@@ -28,6 +28,20 @@ test("run collection never lets a referenced cross-session or cross-branch run b
   );
 });
 
+test("fork collection admits only referenced runs from the declared parent branch", () => {
+  writeRecords("agent-runs", [
+    run("run-current-fork", "session-fork", "child"),
+    run("run-parent-referenced", "session-fork", "parent"),
+    run("run-parent-unreferenced", "session-fork", "parent"),
+    run("run-unrelated", "session-fork", "unrelated"),
+  ]);
+  const inheritedTurns = [{ references: { agent_run_ids: ["run-parent-referenced", "run-unrelated"] } }];
+  assert.deepEqual(
+    runsForSession("session-fork", inheritedTurns, "child", "parent").map((item) => item.id).sort(),
+    ["run-current-fork", "run-parent-referenced"],
+  );
+});
+
 test("browser task collection enforces session and branch before returning records", () => {
   writeRecords("browser-tasks", [
     task("task-current", "session-a", "branch-a"),

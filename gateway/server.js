@@ -12109,14 +12109,23 @@ function browserTurnsForSession(sessionId, branchId = "", limit = 50) {
     }));
 }
 
-function runsForSession(sessionId, _turns, branchId = "") {
+function runsForSession(sessionId, turns, branchId = "", inheritedBranchId = "") {
   const safeSessionId = sanitizeOptionalId(sessionId, "default");
   const safeBranchId = branchId ? sanitizeOptionalId(branchId, "default") : "";
+  const safeInheritedBranchId = inheritedBranchId ? sanitizeOptionalId(inheritedBranchId, "") : "";
+  const referenced = new Set();
+  for (const turn of Array.isArray(turns) ? turns : []) {
+    for (const id of Array.isArray(turn?.references?.agent_run_ids) ? turn.references.agent_run_ids : []) {
+      referenced.add(String(id || ""));
+    }
+  }
   return listAllAgentRuns()
     .filter((run) => {
       if (String(run.conversation_id || "") !== safeSessionId) return false;
-      if (safeBranchId && String(run.branch_id || "default") !== safeBranchId) return false;
-      return true;
+      if (!safeBranchId) return true;
+      const runBranchId = String(run.branch_id || "default");
+      if (runBranchId === safeBranchId) return true;
+      return Boolean(safeInheritedBranchId && runBranchId === safeInheritedBranchId && referenced.has(String(run.id || "")));
     })
     .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
 }
@@ -12182,7 +12191,7 @@ function durableSessionContextBlock(options = {}) {
     browserTurns = parentBrowser.concat(browserTurns).sort((a, b) => String(a.created_at || b.updated_at || "").localeCompare(String(b.created_at || b.updated_at || "")));
   }
   voiceTurns = voiceTurns.slice(-turnLimit);
-  const runs = runsForSession(sessionId, voiceTurns, branchFilter).slice(0, 5);
+  const runs = runsForSession(sessionId, voiceTurns, branchFilter, inheritBranch).slice(0, 5);
   const browserTasks = browserTasksForSession(sessionId, branchFilter, 5);
 
   if (voiceTurns.length === 0 && chatTurns.length === 0 && browserTurns.length === 0 && runs.length === 0 && browserTasks.length === 0) {
@@ -12374,7 +12383,7 @@ function buildCanonicalContextArtifact(options = {}) {
     voiceTurns = voiceTurns.slice(-turnLimit);
     chatTurns = chatTurns.slice(-chatLimit);
     browserTurns = browserTurns.slice(-chatLimit);
-    const runs = runsForSession(sessionId, voiceTurns, branchFilter).slice(0, 5);
+    const runs = runsForSession(sessionId, voiceTurns, branchFilter, inheritBranch).slice(0, 5);
     const browserTasks = browserTasksForSession(sessionId, branchFilter, 5);
 
     const sources = [];

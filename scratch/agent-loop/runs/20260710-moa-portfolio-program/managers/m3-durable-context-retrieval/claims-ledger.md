@@ -8,7 +8,7 @@
 | Cache identity changes on query/source revision change and stays stable for equivalent inputs | verified | focused unit test assertions on `cache_identity.key` | pass for M3-1 |
 | Run/task operational context is session/branch scoped | verified for file-store collection seam | forged cross-session reference and cross-branch run/task fixtures | pass; hosted tenant authorization remains unproven |
 | Candidate work is bounded before full untrusted sort/copy/redaction | verified deterministically | 10,000-source hostile fixture observes fewer than 100 rank getter reads; hard 256 / 4x candidate, 8-line and 4,000-char bounds | pass; production latency unmeasured |
-| Full gateway regression is green under repair verification | verified | dependency-complete worktree; `cd gateway && npm run check` -> 182 pass / 1 skip / 0 fail | pass |
+| Full gateway regression is green under repair verification | verified | dependency-complete worktree; `cd gateway && npm run check` -> 183 pass / 1 skip / 0 fail | pass |
 
 Measured results and architecture-confidence are recorded after verification and
 audit.
@@ -16,14 +16,14 @@ audit.
 ## Measured results
 
 - Focused unit + collection gate: `cd gateway && node --test
-  test/context-artifact.test.js test/context-artifact-scope.test.js` -> 10 passed,
+  test/context-artifact.test.js test/context-artifact-scope.test.js` -> 11 passed,
   0 failed.
 - Focused smoke gate: `cd gateway && node scripts/smoke-context-artifact.js`
   -> pass.
 - Focused syntax gate: `cd gateway && node --check server.js && node --check
   lib/context-artifact.js` -> pass.
 - Tier-0 full gateway gate with the repository's installed dependency tree:
-  `cd gateway && npm run check` -> 182 passed, 1 skipped, 0 failed.
+  `cd gateway && npm run check` -> 183 passed, 1 skipped, 0 failed.
 - Compatibility repair: the first full run found the established durable
   context header missing; restoring it made `smoke-session-history` and the full
   suite pass without weakening the artifact assertions.
@@ -53,6 +53,8 @@ local dependencies.
 - Repair M3-1-R2: added named hostile secret formats, rendered-only provenance,
   stored session/branch filtering, fixed candidate/line bounds, and linear text
   length accounting.
+- Repair M3-1-R3: retained only explicitly referenced parent-branch runs for
+  fork continuity and covered single/double percent-encoded OAuth credentials.
 - Cycle 5: fresh independent audit pending; no PASS claim until recorded.
 
 ## Commit / deploy status

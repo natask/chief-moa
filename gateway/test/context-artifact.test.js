@@ -53,6 +53,7 @@ test("context artifact redacts OAuth URL credentials and PAT-like tokens", () =>
   const secrets = [
     "https://callback.invalid/?access_token=oauth-secret-value&state=ok",
     "https%3Faccess_token%3Dencoded-oauth-secret%26state%3Dok",
+    "https%253Frefresh_token%253Ddouble-encoded-secret%2526state%253Dok",
     "refresh_token: refresh-secret-value",
     "github_pat_abcdefghijklmnopqrstuvwxyz123456",
     "ghp_abcdefghijklmnopqrstuvwxyz123456",
@@ -64,7 +65,7 @@ test("context artifact redacts OAuth URL credentials and PAT-like tokens", () =>
     sources: [{ source_id: "chat:secrets", section: "chat", lines: secrets }],
   });
   assert.equal(artifact.retrieval.redaction.count, secrets.length);
-  for (const secret of ["oauth-secret-value", "encoded-oauth-secret", "refresh-secret-value", "abcdefghijklmnopqrstuvwxyz123456"]) {
+  for (const secret of ["oauth-secret-value", "encoded-oauth-secret", "double-encoded-secret", "refresh-secret-value", "abcdefghijklmnopqrstuvwxyz123456"]) {
     assert.doesNotMatch(artifact.text, new RegExp(secret));
   }
 });
