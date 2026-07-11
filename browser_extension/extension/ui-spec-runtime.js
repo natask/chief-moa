@@ -28,7 +28,7 @@
     const id = token(value.id);
     if (!type || !id) return null;
     const out = { type, id, label: text(value.label || id, 80), action: action(value.action), prompt: text(value.prompt, 500), value: text(value.value, 500), checked: value.checked === true };
-    if (type === "select" && Array.isArray(value.options)) out.options = value.options.map((item) => text(item, 80)).filter(Boolean).slice(0, 50);
+    if (type === "select" && Array.isArray(value.options)) out.options = value.options.slice(0, 50).map((item) => text(item, 80)).filter(Boolean);
     return out;
   }
   function listItem(value) {
@@ -49,10 +49,10 @@
     if (type === "card") return { ...base, body: text(value.body || value.text, 1200) };
     if (type === "stat") return { ...base, label: text(value.label || value.title || id, 80), value: text(value.value, 120), delta: text(value.delta, 120) };
     if (type === "list") {
-      const items = Array.isArray(value.items) ? value.items.map(listItem).filter(Boolean).slice(0, 30) : [];
+      const items = Array.isArray(value.items) ? value.items.slice(0, 30).map(listItem).filter(Boolean) : [];
       return items.length ? { ...base, items } : null;
     }
-    const markers = Array.isArray(value.markers) ? value.markers.map(marker).filter(Boolean).slice(0, 24) : [];
+    const markers = Array.isArray(value.markers) ? value.markers.slice(0, 24).map(marker).filter(Boolean) : [];
     const center = coordinate(value.center) || markers[0] || null;
     if (!center && !markers.length) return null;
     const zoom = Number(value.zoom);

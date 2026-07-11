@@ -171,6 +171,29 @@ function assertDocumentBounds() {
   assert.equal(normalized.surfaces.length, 8);
   assert.equal(normalized.surfaces[0].components.length, 40);
   assert.equal(normalized.surfaces[0].controls.length, 24);
+
+  const bounded = (length, makeValue) => {
+    let reads = 0;
+    return {
+      values: new Proxy(Array.from({ length }, (_, index) => makeValue(index)), {
+        get(target, key, receiver) {
+          if (/^\d+$/.test(String(key))) reads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      }),
+      reads: () => reads,
+    };
+  };
+  const options = bounded(1000, (index) => `option-${index}`);
+  const items = bounded(1000, (index) => ({ label: `item-${index}` }));
+  const markers = bounded(1000, (index) => ({ lat: 10, lng: 20, label: `marker-${index}` }));
+  normalizeSpec({ surfaces: [{ id: "nested-bounds", components: [
+    { type: "list", id: "list", items: items.values },
+    { type: "map", id: "map", markers: markers.values },
+  ], controls: [{ type: "select", id: "select", options: options.values }] }] });
+  assert.equal(options.reads(), 50, "normalizer must cap option reads before traversal");
+  assert.equal(items.reads(), 30, "normalizer must cap list item reads before traversal");
+  assert.equal(markers.reads(), 24, "normalizer must cap marker reads before traversal");
 }
 
 async function assertAuthRequired(baseUrl) {

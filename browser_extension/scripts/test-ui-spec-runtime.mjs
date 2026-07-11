@@ -25,4 +25,25 @@ const oversizedSurfaces = new Proxy(Array.from({ length: 1000 }, (_, i) => ({ id
 runtime.sanitize({ spec: { version: 1, surfaces: oversizedSurfaces } });
 assert.equal(surfaceReads, 8, "sanitizer must not traverse beyond the surface input cap");
 
+function readBoundedArray(length, makeValue) {
+  let reads = 0;
+  const values = new Proxy(Array.from({ length }, (_, index) => makeValue(index)), {
+    get(target, key, receiver) {
+      if (/^\d+$/.test(String(key))) reads += 1;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  return { values, reads: () => reads };
+}
+const options = readBoundedArray(1000, (index) => `option-${index}`);
+const items = readBoundedArray(1000, (index) => ({ label: `item-${index}` }));
+const markers = readBoundedArray(1000, (index) => ({ lat: 10, lng: 20, label: `marker-${index}` }));
+runtime.sanitize({ spec: { version: 1, surfaces: [{ id: "bounded", components: [
+  { type: "list", id: "list", items: items.values },
+  { type: "map", id: "map", markers: markers.values },
+], controls: [{ type: "select", id: "select", options: options.values }] }] } });
+assert.equal(options.reads(), 50, "select sanitizer must not traverse beyond the option cap");
+assert.equal(items.reads(), 30, "list sanitizer must not traverse beyond the item cap");
+assert.equal(markers.reads(), 24, "map sanitizer must not traverse beyond the marker cap");
+
 console.log("ui-spec runtime tests passed");

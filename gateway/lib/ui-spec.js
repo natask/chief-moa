@@ -186,9 +186,9 @@ function normalizeControl(control) {
   // select carries its options as plain string data (config, not code).
   if (type === "select" && Array.isArray(control.options)) {
     out.options = control.options
+      .slice(0, 50)
       .map((opt) => (typeof opt === "string" ? opt.slice(0, 80) : ""))
-      .filter(Boolean)
-      .slice(0, 50);
+      .filter(Boolean);
   }
   return out;
 }
@@ -225,15 +225,15 @@ function normalizeComponent(component) {
   }
   if (type === "list") {
     const items = Array.isArray(component.items)
-      ? component.items.map(normalizeListItem).filter(Boolean).slice(0, 30)
+      ? component.items.slice(0, 30).map(normalizeListItem).filter(Boolean)
       : [];
     if (items.length === 0) return null;
     return { ...base, items };
   }
   if (type === "map") {
-    const center = normalizeCoordinate(component.center) || normalizeCoordinate(component.markers && component.markers[0]);
+    const center = normalizeCoordinate(component.center);
     const markers = Array.isArray(component.markers)
-      ? component.markers.map(normalizeMapMarker).filter(Boolean).slice(0, 24)
+      ? component.markers.slice(0, 24).map(normalizeMapMarker).filter(Boolean)
       : [];
     if (!center && markers.length === 0) return null;
     const zoom = Number(component.zoom);
