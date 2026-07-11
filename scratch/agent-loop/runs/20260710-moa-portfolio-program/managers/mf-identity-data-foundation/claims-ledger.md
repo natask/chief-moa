@@ -47,6 +47,5 @@ subject before enabling multi-user.
 - Repair MF-1-R2: replaced the encoded prefix with versioned fixed-length
   tenant namespaces plus bounded fallback keys for overlong scoped values, while
   preserving reserved-owner identities.
-- Cycle 4: PASS for focused source tests; full gateway suite remains blocked in
-  this sandbox by localhost `listen EPERM`, and real Postgres is still
-  unmeasured.
+- Cycle 4 manager gates: focused 7/7 and full gateway 162 pass, 1 skip, 0 fail.
+  Fresh audit remains required; real Postgres is still unmeasured.
