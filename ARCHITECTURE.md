@@ -65,6 +65,22 @@ External APIs
   and SaaS tools. Use official APIs where possible.
 ```
 
+## Billing and entitlement boundary
+
+Billing facts are gateway-owned, tenant-scoped and append-only. Price and budget
+authority is versioned; usage and reservations reference an immutable version,
+and money is represented only as safe integer minor units plus a three-letter
+currency code. Provider webhook input is evidence until its raw-body signature,
+timestamp, event identity and payload digest pass verification; even then it is
+stored as `verified_unapplied` and cannot directly mutate an entitlement.
+
+The provider-neutral sandbox adapter has no charging effect. Real provider,
+pricing, tax, refund, dispute and grace policy remain intentionally unwired.
+Billing tables use FORCE RLS and deny application-role update/delete. The local
+domain seam proves deterministic invariants, but Postgres migration/restore,
+cross-process atomic budget reservation and live-provider behavior require
+separate isolated evidence before the seam can become payment authority.
+
 ## Telemetry and observability boundary
 
 Canonical product events remain the source of truth. Operational telemetry is a

@@ -8,6 +8,7 @@
     "dev": "node --env-file-if-exists=.env server.js",
     "check": "MOA_SKIP_SLOW=1 node --test \"test/**/*.test.js\"",
     "test": "node --test \"test/**/*.test.js\"",
+    "test:billing": "node --test test/billing-domain.test.js",
     "migrate": "node-pg-migrate up",
     "migrate:up": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
