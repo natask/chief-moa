@@ -149,3 +149,9 @@ voice/LLM trace correlation.
   category model and current reuse map in `research/voice-telemetry-stack.md`.
   This prevents OTel or an LLM trace backend from becoming a competing canonical
   conversation/audio store.
+- 2026-07-11: intent focused repair passed 16/16, but the main orchestrator then
+  reproduced a real-adapter race with two independent runtimes over JSONL: both
+  commands fulfilled and persisted stream versions `[1,2,2]`. Added repair
+  contract 3 requiring an explicit compare-and-append contract shared by JSON
+  and PostgreSQL. The intent slice remains BLOCK and uncommitted until the real
+  substrate test is green and independently audited.
