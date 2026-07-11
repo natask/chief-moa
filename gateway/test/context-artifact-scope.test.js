@@ -54,6 +54,23 @@ test("browser task collection enforces session and branch before returning recor
   );
 });
 
+test("all-branches operational collection still excludes deleted and incognito records", () => {
+  writeRecords("agent-runs", [
+    run("run-visible-all", "session-all", "feature"),
+    { ...run("run-incognito-branch", "session-all", "inc-secret"), incognito: false },
+    { ...run("run-incognito-flag", "session-all", "feature"), incognito: true },
+    { ...run("run-deleted", "session-all", "feature"), deleted_at: "2026-07-10T01:00:00.000Z" },
+  ]);
+  writeRecords("browser-tasks", [
+    task("task-visible-all", "session-all", "feature"),
+    task("task-incognito-branch", "session-all", "inc-task"),
+    { ...task("task-incognito-flag", "session-all", "feature"), incognito: true },
+    { ...task("task-deleted", "session-all", "feature"), deleted: true },
+  ]);
+  assert.deepEqual(runsForSession("session-all", [], "").map((item) => [item.id, item.branch_id]), [["run-visible-all", "feature"]]);
+  assert.deepEqual(browserTasksForSession("session-all", "", 20).map((item) => [item.id, item.branch_id]), [["task-visible-all", "feature"]]);
+});
+
 function writeRecords(directory, records) {
   const target = path.join(dataDir, directory);
   fs.mkdirSync(target, { recursive: true });

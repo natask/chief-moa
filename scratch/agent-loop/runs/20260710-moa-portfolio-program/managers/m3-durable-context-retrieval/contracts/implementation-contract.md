@@ -20,7 +20,12 @@ stale caches safely.
 - Collect standing facts, recency, semantic recall, and operational context into
   normalized source items with stable source ids.
 - Redact bearer/API credentials, OAuth URL/query credentials (including encoded
-  callback forms), and common PAT-like tokens before artifact rendering.
+  callback forms), and common PAT-like tokens before artifact rendering. Decode
+  valid percent runs for at most three canonicalization rounds and tolerate
+  malformed neighboring escapes without skipping recognizable secret fields.
+- Apply the same boundary to exposed query/scope/source metadata: opaque IDs are
+  validated, categorical fields use closed vocabularies, timestamps are parsed,
+  and revisions/dedupe material are one-way hashed.
 - Omit incognito and deleted items; treat unauthorized filtering as future MF
   work and do not fabricate it.
 - Produce deterministic `artifact_id` and `cache_identity.key` from version,
@@ -30,6 +35,9 @@ stale caches safely.
   expose raw full-text source payloads there.
 - Enforce session and branch scope while collecting run/task candidates. A
   turn-supplied run reference never overrides the run's own stored scope.
+- Preserve stored run/task branch provenance and omit stored deleted/incognito
+  records even for explicit all-branches collection. Forks may inherit only
+  explicitly referenced runs from their declared parent branch.
 - Inspect at most 256 or `max_sources * 4` candidate sources (whichever is
   smaller), eight lines per source, and 4,000 input characters per line before
   sorting/redaction. Record omitted prefixes honestly.
@@ -52,6 +60,10 @@ stale caches safely.
 - Full gateway gate: `cd gateway && npm run check`
 - Fresh hostile privacy/performance/anti-gaming audit recorded in the claims and
   merge ledgers.
+- Measured complexity: `npx --yes eslint@9 --no-config-lookup --rule
+  'complexity: [error, 10]' lib/context-artifact.js`.
+- Measured CRAP: c8 Istanbul JSON over the focused artifact tests, then
+  `crap-score`; every function must remain <=15.
 
 ## Escalation
 

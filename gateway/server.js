@@ -12080,6 +12080,7 @@ function browserTasksForSession(sessionId, branchId = "", limit = 50) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
   return listAllBrowserTasks()
     .filter((task) => {
+      if (operationalContextExcluded(task)) return false;
       const taskSessionId = String(task.conversation_id || "");
       if (taskSessionId !== safeSessionId) return false;
       if (!branchId) return true;
@@ -12121,6 +12122,7 @@ function runsForSession(sessionId, turns, branchId = "", inheritedBranchId = "")
   }
   return listAllAgentRuns()
     .filter((run) => {
+      if (operationalContextExcluded(run)) return false;
       if (String(run.conversation_id || "") !== safeSessionId) return false;
       if (!safeBranchId) return true;
       const runBranchId = String(run.branch_id || "default");
@@ -12128,6 +12130,15 @@ function runsForSession(sessionId, turns, branchId = "", inheritedBranchId = "")
       return Boolean(safeInheritedBranchId && runBranchId === safeInheritedBranchId && referenced.has(String(run.id || "")));
     })
     .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+}
+
+function operationalContextExcluded(record) {
+  return Boolean(
+    record?.deleted === true
+    || record?.deleted_at
+    || record?.incognito === true
+    || isIncognitoBranch(record?.branch_id || ""),
+  );
 }
 
 function readProviderEventLedger({ sessionId = "", branchId = "", limit = 100 } = {}) {
@@ -12399,7 +12410,7 @@ function buildCanonicalContextArtifact(options = {}) {
         section: "standing",
         bucket: "standing",
         reason: "standing_fact",
-        branch_id: branchId,
+        branch_id: String(run.branch_id || "default"),
         revision: `${slug}:${snippet}`,
         dedupe_key: `standing:${snippet.toLowerCase()}`,
         sort_rank: sortRank,
@@ -12504,6 +12515,8 @@ function buildCanonicalContextArtifact(options = {}) {
         created_at: String(run.updated_at || run.created_at || ""),
         revision: `${run.id || ""}:${run.updated_at || run.created_at || ""}`,
         dedupe_key: `${sourceId}:${run.status}:${run.output_preview || ""}`,
+        deleted_at: run.deleted_at,
+        incognito: run.incognito === true || isIncognitoBranch(run.branch_id || ""),
         sort_rank: sortRank,
         lines,
       });
@@ -12526,6 +12539,8 @@ function buildCanonicalContextArtifact(options = {}) {
         created_at: String(task.updated_at || task.created_at || ""),
         revision: `${task.id || ""}:${task.updated_at || task.created_at || ""}`,
         dedupe_key: `${sourceId}:${task.status}:${task.latest_receipt?.summary || ""}`,
+        deleted_at: task.deleted_at,
+        incognito: task.incognito === true || isIncognitoBranch(task.branch_id || ""),
         sort_rank: sortRank,
         lines,
       });
@@ -13379,6 +13394,8 @@ function summarizeBrowserTask(task, options = {}) {
     created_at: task.created_at,
     updated_at: task.updated_at,
     finished_at: task.finished_at || "",
+    deleted_at: task.deleted_at || "",
+    incognito: task.incognito === true || isIncognitoBranch(task.branch_id || ""),
   };
 }
 
@@ -14288,6 +14305,8 @@ function summarizeAgentRun(run) {
     finished_at: run.finished_at,
     exit_code: run.exit_code,
     signal: run.signal,
+    deleted_at: run.deleted_at || "",
+    incognito: run.incognito === true || isIncognitoBranch(run.branch_id || ""),
     prompt_preview: truncate(String(run.prompt || ""), 160),
     output_preview: truncate(String(run.output || run.stderr || ""), 240),
     active: activeRuns.has(run.id),

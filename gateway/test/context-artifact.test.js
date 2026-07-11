@@ -70,6 +70,55 @@ test("context artifact redacts OAuth URL credentials and PAT-like tokens", () =>
   }
 });
 
+test("canonical redaction handles triple and malformed percent encodings", () => {
+  const artifact = buildContextArtifact({
+    session_id: "session-a",
+    query: "access_token%25253Dquery-triple-secret",
+    sources: [{
+      source_id: "chat:encoded",
+      section: "chat",
+      lines: [
+        "https%25253Frefresh_token%25253Dtriple-secret%252526state%25253Dok",
+        "%ZZclient_secret%3Dmalformed-prefix-secret%26state%3Dok",
+      ],
+    }],
+  });
+  const serialized = JSON.stringify(artifact);
+  for (const secret of ["query-triple-secret", "triple-secret", "malformed-prefix-secret"]) {
+    assert.doesNotMatch(serialized, new RegExp(secret));
+  }
+  assert.match(artifact.text, /\[redacted\]/);
+});
+
+test("all exposed metadata is validated, redacted, or irreversibly hashed", () => {
+  const artifact = buildContextArtifact({
+    version: "Bearer version-secret-token",
+    session_id: "access_token=session-secret",
+    branch_id: "Bearer branch-secret-token",
+    profile_version: "github_pat_abcdefghijklmnopqrstuvwxyz123456",
+    query: "client_secret=query-secret",
+    sources: [{
+      source_id: "ghp_abcdefghijklmnopqrstuvwxyz123456",
+      section: "access_token=section-secret",
+      bucket: "Bearer bucket-secret-token",
+      reason: "client_secret=reason-secret",
+      branch_id: "refresh_token=source-branch-secret",
+      revision: "pat_abcdefghijklmnopqrstuvwxyz123456",
+      created_at: "access_token=timestamp-secret",
+      lines: ["safe rendered line"],
+    }],
+  });
+  const serialized = JSON.stringify(artifact);
+  for (const secret of ["version-secret", "session-secret", "branch-secret", "query-secret", "section-secret", "bucket-secret", "reason-secret", "source-branch-secret", "timestamp-secret", "abcdefghijklmnopqrstuvwxyz123456"]) {
+    assert.doesNotMatch(serialized, new RegExp(secret));
+  }
+  assert.equal(artifact.version, CONTEXT_ARTIFACT_VERSION);
+  assert.equal(artifact.scope.session_id, "");
+  assert.equal(artifact.scope.branch_id, "default");
+  assert.equal(artifact.sources[0].reason, "context");
+  assert.match(artifact.sources[0].revision, /^rev_[a-f0-9]{16}$/);
+});
+
 test("context artifact cache identity is stable for equivalent inputs and changes on query or revision change", () => {
   const base = {
     session_id: "session-a",
