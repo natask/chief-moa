@@ -27,6 +27,9 @@
 - [ ] Render known tier-A controls in the browser overlay.
 - [ ] Keep richer generated surfaces in sandboxed iframes and reserve
       page-acting code for explicit `userScripts` opt-in.
+- [ ] Implement Tier B and Tier C only against the hard trust-boundary contract
+      in `browser-generated-surface-contract.md`; keep the two approval and
+      execution paths separate.
 
 ### 4. Later Capability Expansion
 
