@@ -122,7 +122,8 @@ public enum AggieEnvelopeDecoder {
     private static let forbiddenKeys: Set<String> = ["eval", "script", "javascript", "shell", "command", "code", "authorization", "password"]
     private static let credentialSuffixes = ["token", "apikey", "privatekey", "clientsecret", "providerkey", "dbpassword", "password", "authorization"]
     private static let surfaceKinds: Set<String> = ["macos", "ios"]
-    private static let actionKinds: Set<String> = ["open_url", "open_app", "dial", "browser_task", "page_tweak", "file_export"]
+    private static let actionKinds: Set<String> = ["open_url", "open_app", "dial", "browser_task", "page_tweak", "file_export",
+        "ui.press", "ui.confirm", "ui.cancel", "ui.increment", "ui.decrement", "ui.show_menu", "ui.pick", "ui.set_value"]
 
     public static func negotiate(_ offered: [Int]) throws -> Int {
         if offered.contains(2) { return 2 }
