@@ -51,3 +51,18 @@ to a current or default thread.
 - **WHEN** a client connects to a gateway without `voice_drafts_v1`
 - **THEN** pause/park controls are disabled and legacy voice remains available
 - **AND** the client does not claim a draft was parked
+
+### Requirement: Draft authority and terminal vocabulary are exact
+Every draft protocol message SHALL bind exact authority and state. Starts,
+ready events, controls, acknowledgements, SEND, and terminal receipts bind the
+same session, branch, turn, draft ID, and positive integer revision. Successful
+SEND SHALL terminate as `sent`; privacy deletion SHALL terminate as
+`discarded`. Clients and the gateway SHALL NOT translate these states into
+compatibility aliases such as `consumed`.
+
+#### Scenario: Stale or cross-authority receipt
+- **WHEN** a client receives a receipt with a missing or different session,
+  branch, turn, draft ID, non-integer revision, or non-advancing revision
+- **THEN** it rejects the receipt and retains its prior authoritative pointer
+- **AND** it does not start capture, clear content, claim SEND success, or emit
+  a follow-on control from the untrusted receipt

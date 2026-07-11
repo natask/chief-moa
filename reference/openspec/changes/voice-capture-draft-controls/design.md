@@ -6,21 +6,23 @@ STT, reasoning, tool, TTS, broker, memory, or canonical turn writer.
 ```text
 capturing -> paused -> capturing
 capturing|paused -> parked -> capturing
-capturing|paused -> committing -> consumed
-capturing|paused|parked -> discarded
+capturing|paused|parked -> send_ready -> sent
+capturing|paused|parked|send_ready -> discarded
 ```
 
 Revisioned transitions reject stale writers. Boot recovery parks orphaned
-capturing/paused records. Consumed and discarded tombstones contain no audio or
+capturing/paused records. Sent and discarded tombstones contain no audio or
 transcript.
 
 ## Gateway capture path
 
 A draft-mode `session_start` opens only a bounded draft PCM stream. Binary
 frames never reach a provider. Pause/resume/park/discard are additive controls.
-Existing `commit_turn` is SEND: it atomically closes/copies the PCM into the
-ordinary turn path and continues through existing provider orchestration exactly
-once. Failures after SEND use existing failed-turn semantics.
+Existing `commit_turn` is SEND: it moves the draft to `send_ready`, claims exact
+turn authority, and feeds the verified PCM into the ordinary turn path and
+existing provider orchestration exactly once. It marks the draft `sent` and
+deletes content only after canonical acceptance. A pre-acceptance failure keeps
+the exact audio retryable; a successful sent receipt cannot be double-run.
 
 ## Gesture contract
 
