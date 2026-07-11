@@ -11,6 +11,9 @@ semantic types for which no supported meaning exists. Additive fields whose
 names represent executable or credential authority, or whose values match
 credential-token or OAuth callback-code shapes, SHALL fail closed. Forward
 compatibility does not permit smuggling authority through ignored data.
+Credential-authority names include bounded case/separator-normalized token,
+OAuth token, private-key, API-key, client/provider-secret, authorization and
+password families.
 
 #### Scenario: Previous-version surface reconnects
 
@@ -56,6 +59,8 @@ SHALL fall between proposal creation and the eligibility check. A local receipt
 SHALL identify both the proposal ID and proposal message, and its `reply_to`
 SHALL match that proposal message. These bindings provide protocol correlation;
 they do not claim device identity, signing, or native executor proof.
+Approval scope SHALL additionally match the complete canonical surface object:
+ID, kind, mode, and the same presence/value semantics for optional device ID.
 
 #### Scenario: Proposal is stale
 

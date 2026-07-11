@@ -30,6 +30,7 @@ const RECEIPT_OUTCOMES = new Set(["executed", "rejected", "expired", "stale", "f
 const RUN_STATUSES = new Set(["queued", "running", "needs_approval", "completed", "failed"]);
 const EXECUTABLE_KEYS = new Set(["script", "javascript", "shell", "command", "css", "code"]);
 const SECRET_KEYS = new Set(["api_key", "apikey", "access_token", "refresh_token", "client_secret", "provider_key", "authorization"]);
+const SECRET_KEY_SUFFIXES = ["token", "privatekey", "apikey", "clientsecret", "providerkey", "authorization", "password"];
 const SERVER_REPLAY_TYPES = new Set([
   "hello.accepted", "route.selected", "run.queued", "run.running",
   "run.needs_approval", "run.completed", "run.failed", "artifact.created",
@@ -274,7 +275,7 @@ function approvalMismatch(proposal, approval, context) {
 function approvalScopeMismatch(proposal, approval) {
   if (approval.version !== proposal.version) return "approval_version_mismatch";
   if (approval.session_id !== proposal.session_id) return "approval_session_mismatch";
-  if (approval.surface.id !== proposal.surface.id) return "approval_surface_mismatch";
+  if (stableJson(approval.surface) !== stableJson(proposal.surface)) return "approval_surface_mismatch";
   return null;
 }
 
@@ -418,7 +419,12 @@ function requireBoundedString(value, maxBytes, field) { if (typeof value !== "st
 function requireDigest(value, field) { if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw protocolError("invalid_digest", `${field} must be lowercase sha256 hex`); return value; }
 function assertBoundedJson(value, maxBytes, field) { let size; try { size = jsonBytes(value); } catch { throw protocolError("invalid_json", `${field} must be JSON serializable`); } if (size > maxBytes) throw protocolError("too_large", `${field} exceeds ${maxBytes} bytes`); }
 function assertSafeData(value, field, depth = 0) { if (depth > 8) throw protocolError("too_deep", `${field} exceeds depth 8`); if (value === null || typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return; if (Array.isArray(value)) { if (value.length > 64) throw protocolError("too_many_items", `${field} exceeds 64 items`); value.forEach((item, index) => assertSafeData(item, `${field}[${index}]`, depth + 1)); return; } if (!isRecord(value)) throw protocolError("unsafe_value", `${field} contains a non-data value`); if (Object.keys(value).length > 64) throw protocolError("too_many_fields", `${field} exceeds 64 fields`); assertNoExecutableKeys(value, field); for (const [key, item] of Object.entries(value)) { if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(key)) throw protocolError("invalid_field", `${field} contains invalid field name`); assertSafeData(item, `${field}.${key}`, depth + 1); } }
-function assertNoExecutableKeys(value, field) { for (const key of Object.keys(value)) { const normalized = key.toLowerCase(); if (EXECUTABLE_KEYS.has(normalized)) throw protocolError("executable_payload", `${field} contains forbidden executable field ${key}`); if (SECRET_KEYS.has(normalized)) throw protocolError("secret_payload", `${field} contains forbidden credential field ${key}`); } }
+function assertNoExecutableKeys(value, field) { for (const key of Object.keys(value)) { const normalized = key.toLowerCase(); if (EXECUTABLE_KEYS.has(normalized)) throw protocolError("executable_payload", `${field} contains forbidden executable field ${key}`); if (isCredentialAuthorityKey(normalized)) throw protocolError("secret_payload", `${field} contains forbidden credential field ${key}`); } }
+function isCredentialAuthorityKey(key) {
+  if (SECRET_KEYS.has(key)) return true;
+  const compact = key.replace(/[^a-z0-9]/g, "");
+  return compact.length <= 80 && SECRET_KEY_SUFFIXES.some((suffix) => compact === suffix || compact.endsWith(suffix));
+}
 function assertNoDangerousData(value, field, depth = 0) {
   if (depth > 12) throw protocolError("too_deep", `${field} exceeds security scan depth 12`);
   if (typeof value === "string") {

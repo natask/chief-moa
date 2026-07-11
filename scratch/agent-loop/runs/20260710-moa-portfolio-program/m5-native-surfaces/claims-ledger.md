@@ -15,3 +15,7 @@ tests or production traffic were used in this lane.
 | Repair 2 closes those audit reproductions | verified by implementer, auditor pending | focused 13/13; quality gate max cyclomatic 9 and max CRAP 9.47; echo retention/replay/security hostile tests | fresh independent audit required |
 | Repair 2 preserves the gateway gate | verified | `npm run check`: 194 pass, 1 skip, 0 fail; strict OpenSpec PASS | fresh independent audit required |
 | Dependency audit is clean | refuted / not claimed | package-lock-only install reported 2 existing high-severity dependency advisories; no `audit fix --force` attempted | residual repo dependency risk outside this repair |
+| Fresh final audit at `21536c9` | refuted/block | credential-authority key families incomplete; approval checked only surface ID; quality script allowed CRAP 30 rather than contract 15 | repair required |
+| Repair 3 closes final-audit reproductions | implementer verification pending | normalized hostile credential corpus; full surface mismatch matrix; CRAP threshold 15 | fresh audit required |
+| Repair 3 verification is green | verified by implementer | focused 13/13; quality PASS max cyclomatic 9 / CRAP 9.47 against <=10/<=15; echo smoke PASS; strict OpenSpec PASS; full gateway 194 pass, 1 skip | fresh audit required |
+| Adjacent voice-audio-storage failure persists | refuted in writable lane | `node scripts/smoke-voice-audio-storage.js` passed twice consecutively; full gateway instance also passed | prior failure not reproduced; no concealment or code change |

@@ -90,9 +90,13 @@ describe("Aggie surface protocol", () => {
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: { shell: "rm -rf /" } } })), { code: "executable_payload" });
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: { nested: { api_key: "secret" } } } })), { code: "secret_payload" });
     assert.throws(() => validateEnvelope(envelope({ harmless_future: { authorization: "future-secret" } })), { code: "secret_payload" });
+    for (const key of ["token", "oauth_token", "oauth-token", "OAuth.Token", "private_key", "private-key", "signing_private_key", "futureAccessToken", "refresh__token", "client-secret", "provider.key", "db_password"]) {
+      assert.throws(() => validateEnvelope(envelope({ harmless_future: { [key]: "credential-authority" } })), { code: "secret_payload" });
+    }
     assert.throws(() => validateEnvelope(envelope({ harmless_future: "Bearer abcdefghijklmnopqrstuvwxyz" })), { code: "secret_payload" });
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "https://example.test/callback?code=oauthsecret123456" } })), { code: "secret_payload" });
-    assert.doesNotThrow(() => validateEnvelope(envelope({ harmless_future: { theme: "purple", count: 2 } })));
+    const benign = validateEnvelope(envelope({ future_flag: true, harmless_future: { theme: "purple", count: 2 } }));
+    assert.equal(benign.future_flag, undefined);
     let nested = "end"; for (let i = 0; i < 10; i += 1) nested = { next: nested };
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: nested } })), { code: "too_deep" });
   });
@@ -107,6 +111,10 @@ describe("Aggie surface protocol", () => {
     assert.deepEqual(canExecuteProposal(proposal({ javascript: "alert(1)" }), context), { allowed: false, reason: "executable_payload" });
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval({ session_id: "sess_other" }) }), { allowed: false, reason: "approval_session_mismatch" });
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval({ surface: { id: "other", kind: "browser", mode: "text" } }) }), { allowed: false, reason: "approval_surface_mismatch" });
+    assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval({ surface: { id: "moa-browser", kind: "android", mode: "text", device_id: "dev_1" } }) }), { allowed: false, reason: "approval_surface_mismatch" });
+    assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval({ surface: { id: "moa-browser", kind: "browser", mode: "voice", device_id: "dev_1" } }) }), { allowed: false, reason: "approval_surface_mismatch" });
+    assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval({ surface: { id: "moa-browser", kind: "browser", mode: "text", device_id: "dev_other" } }) }), { allowed: false, reason: "approval_surface_mismatch" });
+    assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval({ surface: { id: "moa-browser", kind: "browser", mode: "text" } }) }), { allowed: false, reason: "approval_surface_mismatch" });
     const approvalPayload = approval().payload;
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval({ timestamp: "2026-07-10T11:59:00.000Z", payload: { ...approvalPayload, decided_at: "2026-07-10T11:59:00.000Z" } }) }), { allowed: false, reason: "approval_time_invalid" });
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: { proposal_id: "proposal_1", decision: "approved" } }), { allowed: false, reason: "approval_required" });
