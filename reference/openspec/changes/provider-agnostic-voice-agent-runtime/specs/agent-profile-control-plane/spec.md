@@ -47,7 +47,9 @@ next turn, or after provider session restart.
 The gateway SHALL NOT let an accepted profile write mutate an already admitted
 turn's pinned effective profile snapshot. The write MAY become immediately
 visible in control-plane reads or to later turns in the same long-lived voice
-session.
+session. This is target behavior governed by task 14.2a; it MUST NOT be reported
+as implemented until the current post-admission reply-setting reads are removed
+and the concurrent-turn gate passes.
 
 #### Scenario: A new version is visible right away
 - **WHEN** a profile write is accepted through `PUT /v1/agent/profile`,

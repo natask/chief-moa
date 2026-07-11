@@ -137,9 +137,10 @@
       and re-audit.
 - [ ] 15.4 Exact contract acceptance commands: `cd gateway && npm run check &&
       npm run smoke:voice-profile && npm run smoke:live-browser-continuity &&
-      npm run smoke:live-interrupt-handoff` plus the exact diagnostics,
-      context-pack, fault-injection, and demo smokes introduced by the
-      implementation (for example `npm run smoke:voice-diagnostics`);
+      npm run smoke:live-interrupt-handoff && node
+      scripts/smoke-voice-diagnosis.js && node scripts/smoke-context-decision.js
+      && node scripts/smoke-thread-enrichment.js && node
+      scripts/smoke-cascaded-voice.js && npm run eval:voice`;
       `cd browser_extension && npm run verify && npm run smoke`; `cd
       android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew
       assembleDebug`; and both strict OpenSpec validations. Paid/live eval and

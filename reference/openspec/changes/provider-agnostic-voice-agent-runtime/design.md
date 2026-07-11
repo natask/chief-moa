@@ -160,9 +160,11 @@ still owns provider credentials and storage.
 Mode/profile changes are visible and reversible. A spoken change updates the
 gateway profile, records a new version, reports whether the change applies
 immediately/next turn/reconnect, and exposes the effective state to Android and
-browser surfaces. In current code "immediate" means control-plane visibility and
-later turn resolution, not retroactive mutation of a turn that was already
-admitted and pinned to an effective profile snapshot.
+browser surfaces. The target contract defines "immediate" as control-plane
+visibility and later turn resolution, not retroactive mutation of an admitted
+turn. Current cascaded code does not yet fully meet that target because some
+reply settings are read after session admission; task 14.2a is the implementation
+and concurrency-test gate that closes the gap.
 
 Alternative considered: keep modes in environment variables or provider
 session configuration only. Rejected because the user needs to inspect, change,
