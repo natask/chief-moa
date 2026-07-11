@@ -1658,6 +1658,19 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/v1/voice/diagnosis") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendJson(response, 200, voiceDiagnosisPayload({
+        sessionId: url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || "",
+        turnId: url.searchParams.get("turn_id") || "",
+        limit: Number(url.searchParams.get("limit") || 10),
+      }));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname.startsWith("/v1/voice/audio/")) {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -1811,6 +1824,7 @@ module.exports = {
   // model-tool loop directly. Not part of the runtime HTTP surface.
   runCascadedVoiceReasoning,
   recordStreamingVoiceTurn,
+  voiceDiagnosisPayload,
   agentProfile,
 };
 
@@ -10132,6 +10146,521 @@ function handleVoiceTurnGet(response, turnId, sessionId) {
   });
 }
 
+const VOICE_DIAGNOSIS_LIMIT_MAX = 20;
+const VOICE_DIAGNOSIS_EVENT_LIMIT = 12;
+const VOICE_DIAGNOSIS_FAULT_ORDER = Object.freeze([
+  "capture",
+  "transport",
+  "context",
+  "stt",
+  "reasoning",
+  "tts",
+  "playback",
+  "storage",
+]);
+const VOICE_DIAGNOSIS_EVENT_FIELDS = Object.freeze(new Set([
+  "type",
+  "ts",
+  "stage",
+  "status",
+  "reason",
+  "application",
+  "duration_ms",
+  "provider",
+  "provider_ids",
+  "model",
+  "classification",
+  "streaming",
+  "spoke",
+  "segments",
+  "first_audio_ms",
+  "audio_bytes",
+  "audio_chunks",
+  "text_chars",
+  "transcript_chars",
+  "display_chars",
+  "speak_chars",
+  "language",
+  "language_codes",
+  "skipped",
+  "skip_reason",
+  "transcript_language_rejected",
+  "tts_error",
+  "error_summary",
+  "input_kind",
+  "transport",
+  "committed",
+  "enabled",
+  "chars",
+  "all_branches_context",
+  "stage_timings",
+]));
+
+function voiceDiagnosisPayload({ sessionId = "", turnId = "", limit = 10 } = {}) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 10, VOICE_DIAGNOSIS_LIMIT_MAX));
+  const safeSessionId = sessionId ? sanitizeOptionalId(sessionId, "") : "";
+  const safeTurnId = turnId ? sanitizeOptionalId(turnId, "") : "";
+  let records = [];
+  if (safeTurnId) {
+    const record = findVoiceTurnRecordById(safeTurnId, safeSessionId);
+    if (record) {
+      records = [record];
+    }
+  } else if (safeSessionId) {
+    records = listVoiceTurnRecordsForSession(safeSessionId, "").slice(-safeLimit).reverse();
+  } else {
+    records = listAllVoiceTurnRecords().slice(-safeLimit).reverse();
+  }
+  return {
+    generated_at: new Date().toISOString(),
+    session_id: safeSessionId,
+    turn_id: safeTurnId,
+    limit: safeLimit,
+    diagnoses: records.slice(0, safeLimit).map((record) => voiceTurnDiagnosis(record)),
+  };
+}
+
+function voiceTurnDiagnosis(record) {
+  const sessionId = String(record?.session_id || record?.conversation_id || "");
+  const turnId = String(record?.id || record?.turn_id || "");
+  const voiceSession = plainObject(record?.references?.voice_session);
+  const metadata = readVoiceSessionMetadata(sessionId, turnId);
+  const providerEvents = voiceDiagnosisProviderEvents(voiceSession, metadata);
+  const stageTimings = voiceDiagnosisStageTimings(voiceSession.stage_timings || metadata?.stage_timings || {});
+  const audio = voiceTurnAudioRefs(record);
+  const capture = voiceCaptureDiagnosis(record, voiceSession, metadata, audio);
+  const transport = voiceTransportDiagnosis(voiceSession, metadata, providerEvents);
+  const context = voiceContextDiagnosis(voiceSession, metadata, providerEvents);
+  const stt = voiceStageDiagnosis(providerEvents, "stt", {
+    transcriptLanguageRejected: voiceSession.transcript_language_rejected === true,
+  });
+  const reasoning = voiceStageDiagnosis(providerEvents, "reasoning");
+  const tts = voiceStageDiagnosis(providerEvents, "tts", {
+    modality: voiceSession.modality,
+    ttsError: voiceSession.tts_error,
+    ttsSpoke: voiceSession.tts_spoke === true,
+  });
+  const playback = voicePlaybackDiagnosis(voiceSession, metadata, audio, tts);
+  const storage = voiceStorageDiagnosis(record, voiceSession, metadata, audio);
+  const attributions = { capture, transport, context, stt, reasoning, tts, playback, storage };
+  const primaryFault = selectVoiceDiagnosisFault(attributions);
+  return {
+    turn_id: turnId,
+    session_id: sessionId,
+    conversation_id: String(record?.conversation_id || sessionId),
+    branch_id: String(record?.branch_id || "default"),
+    profile_version: String(record?.profile_version || ""),
+    source: String(record?.source || ""),
+    classification: String(record?.classification || ""),
+    status: String(voiceSession.status || metadata?.status || ""),
+    incomplete: voiceSession.incomplete === true || metadata?.incomplete === true,
+    created_at: String(record?.created_at || ""),
+    updated_at: String(record?.updated_at || record?.created_at || ""),
+    provider: voiceDiagnosisProviderInfo(voiceSession, metadata, providerEvents),
+    primary_fault: primaryFault,
+    evidence_gaps: Object.entries(attributions)
+      .filter(([, attribution]) => attribution.status === "unknown")
+      .map(([category]) => category),
+    attributions,
+    stage_timings: stageTimings,
+    audio,
+    diagnosis_events: redactVoiceDiagnosisEvents(providerEvents),
+  };
+}
+
+function voiceDiagnosisProviderInfo(voiceSession, metadata, providerEvents) {
+  const tail = providerEvents.length > 0 ? plainObject(providerEvents[providerEvents.length - 1]) : {};
+  return {
+    provider: sanitizeDiagnosisText(voiceSession.provider || metadata?.provider || tail.provider || "", 80),
+    model: sanitizeDiagnosisText(voiceSession.model || metadata?.model || tail.model || "", 120),
+    provider_ids: sanitizeDiagnosisProviderIds(tail.provider_ids || metadata?.provider_ids || {}),
+  };
+}
+
+function voiceDiagnosisProviderEvents(voiceSession, metadata) {
+  if (Array.isArray(voiceSession.provider_events) && voiceSession.provider_events.length > 0) {
+    return voiceSession.provider_events;
+  }
+  if (Array.isArray(metadata?.provider_events) && metadata.provider_events.length > 0) {
+    return metadata.provider_events;
+  }
+  return [];
+}
+
+function voiceCaptureDiagnosis(record, voiceSession, metadata, audio) {
+  const capture = plainObject(voiceSession.capture || metadata?.capture);
+  const transcriptSource = String(record?.transcript_source || "").trim().toLowerCase();
+  const audioBytes = firstFiniteNumber(
+    capture.audio_bytes,
+    voiceSession.audio?.bytes,
+    metadata?.audio?.bytes,
+    audio.user?.bytes,
+  );
+  const audioChunks = firstFiniteNumber(capture.audio_chunks, metadata?.audio?.chunks, voiceSession.audio?.chunks);
+  const textChars = firstFiniteNumber(capture.text_chars, 0);
+  if (capture.input_kind === "text" || transcriptSource === "text") {
+    return {
+      status: "text",
+      summary: textChars > 0
+        ? `typed text turn bypassed microphone capture (${textChars} chars)`
+        : "typed text turn bypassed microphone capture",
+      ...(textChars > 0 ? { text_chars: textChars } : {}),
+    };
+  }
+  if (audioBytes > 0) {
+    return {
+      status: "ok",
+      summary: `gateway stored ${audioBytes} bytes of user capture`,
+      audio_bytes: audioBytes,
+      ...(audioChunks > 0 ? { audio_chunks: audioChunks } : {}),
+    };
+  }
+  if (String(voiceSession.status || metadata?.status || "") === "no_speech") {
+    return {
+      status: "fault",
+      summary: "turn committed without user audio or transcript",
+    };
+  }
+  return {
+    status: "unknown",
+    summary: "no committed capture evidence was recorded",
+  };
+}
+
+function voiceTransportDiagnosis(voiceSession, metadata, providerEvents) {
+  const transport = plainObject(voiceSession.transport || metadata?.transport);
+  const committed = providerEvents.find((event) => event?.type === "transport_committed");
+  const name = sanitizeDiagnosisText(transport.transport || committed?.transport || "", 80);
+  const inputKind = sanitizeDiagnosisText(transport.input_kind || committed?.input_kind || "", 20);
+  if (transport.committed === true || committed) {
+    return {
+      status: "ok",
+      summary: `gateway accepted the ${inputKind || "voice"} turn over ${name || "the session transport"}`,
+      ...(name ? { transport: name } : {}),
+      ...(inputKind ? { input_kind: inputKind } : {}),
+    };
+  }
+  return {
+    status: "unknown",
+    summary: "no explicit transport-commit evidence was recorded",
+  };
+}
+
+function voiceContextDiagnosis(voiceSession, metadata, providerEvents) {
+  const context = plainObject(voiceSession.context || metadata?.context);
+  const attached = providerEvents.find((event) => event?.type === "context_attached");
+  const enabled = typeof context.enabled === "boolean"
+    ? context.enabled
+    : (typeof attached?.enabled === "boolean" ? attached.enabled : null);
+  const chars = firstFiniteNumber(context.chars, attached?.chars);
+  const allBranches = context.all_branches_context === true || attached?.all_branches_context === true;
+  if (enabled === true) {
+    return {
+      status: "ok",
+      summary: chars > 0
+        ? `attached ${chars} chars of durable context`
+        : "attached an empty durable context pack",
+      chars: chars > 0 ? chars : 0,
+      all_branches_context: allBranches,
+    };
+  }
+  if (enabled === false) {
+    return {
+      status: "disabled",
+      summary: "no durable context provider was configured for this turn",
+    };
+  }
+  return {
+    status: "unknown",
+    summary: "no durable context attribution was recorded",
+  };
+}
+
+function voiceStageDiagnosis(providerEvents, stage, options = {}) {
+  const stageName = String(stage || "");
+  const stageEvents = providerEvents.filter((event) => event?.stage === stageName);
+  const stageError = [...stageEvents].reverse().find((event) => event?.type === "stage_error");
+  const stageDone = [...stageEvents].reverse().find((event) => event?.type === "stage_done");
+  if (stageName === "tts" && String(options.modality || "") === "text") {
+    return {
+      status: "skipped",
+      summary: "reply was intentionally text-only; hosted TTS was not attempted",
+    };
+  }
+  if (stageError) {
+    return {
+      status: "fault",
+      summary: sanitizeDiagnosisText(stageError.error_summary || `${stageName} failed`, 200),
+      ...(Number.isFinite(Number(stageError.duration_ms)) ? { duration_ms: Math.max(0, Math.round(Number(stageError.duration_ms))) } : {}),
+      error_summary: sanitizeDiagnosisText(stageError.error_summary || "", 200),
+    };
+  }
+  if (stageDone) {
+    if (stageDone.skipped === true) {
+      return {
+        status: "skipped",
+        summary: stageDone.skip_reason
+          ? `stage skipped: ${sanitizeDiagnosisText(stageDone.skip_reason, 80)}`
+          : "stage skipped",
+        ...(Number.isFinite(Number(stageDone.duration_ms)) ? { duration_ms: Math.max(0, Math.round(Number(stageDone.duration_ms))) } : {}),
+      };
+    }
+    if (stageName === "stt" && options.transcriptLanguageRejected === true) {
+      return {
+        status: "fault",
+        summary: "STT rejected the configured language set for this turn",
+        ...(Number.isFinite(Number(stageDone.duration_ms)) ? { duration_ms: Math.max(0, Math.round(Number(stageDone.duration_ms))) } : {}),
+      };
+    }
+    return {
+      status: "ok",
+      summary: `${stageName} completed`,
+      ...(Number.isFinite(Number(stageDone.duration_ms)) ? { duration_ms: Math.max(0, Math.round(Number(stageDone.duration_ms))) } : {}),
+    };
+  }
+  if (stageName === "tts" && String(options.ttsError || "").trim()) {
+    return {
+      status: "fault",
+      summary: sanitizeDiagnosisText(options.ttsError, 200),
+    };
+  }
+  return {
+    status: "unknown",
+    summary: `no ${stageName} stage evidence was recorded`,
+  };
+}
+
+function voicePlaybackDiagnosis(voiceSession, metadata, audio, tts) {
+  const modality = String(voiceSession.modality || "").trim().toLowerCase();
+  const assistantBytes = firstFiniteNumber(
+    voiceSession.assistant_audio?.bytes,
+    metadata?.assistant_audio?.bytes,
+    audio.assistant?.bytes,
+  );
+  const firstAudioMs = firstFiniteNumber(
+    voiceSession.first_audio_ms,
+    voiceSession.stage_timings?.first_audio_ms,
+    metadata?.first_audio_ms,
+    metadata?.stage_timings?.first_audio_ms,
+  );
+  if (modality === "text") {
+    return {
+      status: "text_only",
+      summary: "reply was intentionally text-only; no assistant audio was emitted",
+    };
+  }
+  if (assistantBytes > 0 || audio.assistant) {
+    return {
+      status: "emitted",
+      summary: "gateway emitted assistant PCM; client playback is not observed server-side",
+      audio_bytes: assistantBytes > 0 ? assistantBytes : 0,
+      ...(firstAudioMs > 0 ? { first_audio_ms: firstAudioMs } : {}),
+    };
+  }
+  if (tts.status === "fault" || String(voiceSession.tts_error || "").trim()) {
+    return {
+      status: "fault",
+      summary: tts.status === "fault"
+        ? tts.summary
+        : sanitizeDiagnosisText(voiceSession.tts_error || "assistant audio was never emitted", 200),
+    };
+  }
+  return {
+    status: "unknown",
+    summary: "no assistant playback evidence was recorded",
+  };
+}
+
+function voiceStorageDiagnosis(record, voiceSession, metadata, audio) {
+  const sessionId = String(record?.session_id || record?.conversation_id || "");
+  const turnId = String(record?.id || record?.turn_id || "");
+  const canonicalPath = voiceTurnPath(sessionId, turnId);
+  const metadataPath = voiceSessionMetadataPath(sessionId, turnId);
+  const canonicalExists = Boolean(canonicalPath && fs.existsSync(canonicalPath));
+  const metadataExists = Boolean(metadataPath && fs.existsSync(metadataPath));
+  const problems = [];
+  if (!canonicalExists) {
+    problems.push("canonical turn file missing");
+  }
+  const userBytes = firstFiniteNumber(voiceSession.audio?.bytes, metadata?.audio?.bytes, audio.user?.bytes);
+  const assistantBytes = firstFiniteNumber(voiceSession.assistant_audio?.bytes, metadata?.assistant_audio?.bytes, audio.assistant?.bytes);
+  if ((userBytes > 0 || assistantBytes > 0 || Object.keys(voiceSession).length > 0) && !metadataExists) {
+    problems.push("voice-session metadata missing");
+  }
+  if (userBytes > 0) {
+    const check = voiceStorageFileProblem(sessionId, turnId, "user", userBytes);
+    if (check) problems.push(check);
+  }
+  if (assistantBytes > 0) {
+    const check = voiceStorageFileProblem(sessionId, turnId, "assistant", assistantBytes);
+    if (check) problems.push(check);
+  }
+  if (problems.length > 0) {
+    return {
+      status: "fault",
+      summary: sanitizeDiagnosisText(problems.join("; "), 240),
+      canonical_record: canonicalExists,
+      metadata: metadataExists,
+    };
+  }
+  return {
+    status: "ok",
+    summary: metadataExists
+      ? "canonical turn JSON and archived voice artifacts are present"
+      : "canonical turn record is present",
+    canonical_record: canonicalExists,
+    metadata: metadataExists,
+  };
+}
+
+function voiceStorageFileProblem(sessionId, turnId, kind, expectedBytes) {
+  const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
+  if (!filePath || !fs.existsSync(filePath)) {
+    return `${kind} audio archive missing`;
+  }
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) {
+    return `${kind} audio archive is not a file`;
+  }
+  if (stat.size !== expectedBytes) {
+    return `${kind} audio archive size mismatch (${stat.size} != ${expectedBytes})`;
+  }
+  return "";
+}
+
+function voiceSessionMetadataPath(sessionId, turnId) {
+  const safeSessionId = sanitizeOptionalId(sessionId, "default");
+  const safeTurnId = sanitizeOptionalId(turnId, "");
+  if (!safeTurnId) {
+    return "";
+  }
+  return path.join(DATA_DIR, "voice-sessions", safeSessionId, `${safeTurnId}.json`);
+}
+
+function readVoiceSessionMetadata(sessionId, turnId) {
+  const filePath = voiceSessionMetadataPath(sessionId, turnId);
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function selectVoiceDiagnosisFault(attributions) {
+  for (const category of VOICE_DIAGNOSIS_FAULT_ORDER) {
+    if (attributions?.[category]?.status === "fault") {
+      return {
+        category,
+        summary: attributions[category].summary,
+      };
+    }
+  }
+  return null;
+}
+
+function redactVoiceDiagnosisEvents(providerEvents) {
+  return providerEvents
+    .slice(-VOICE_DIAGNOSIS_EVENT_LIMIT)
+    .map((event) => redactVoiceDiagnosisEvent(event))
+    .filter((event) => Object.keys(event).length > 0);
+}
+
+function redactVoiceDiagnosisEvent(event) {
+  const output = {};
+  const source = plainObject(event);
+  for (const key of VOICE_DIAGNOSIS_EVENT_FIELDS) {
+    if (!(key in source) || source[key] === undefined) {
+      continue;
+    }
+    if (key === "provider_ids") {
+      output[key] = sanitizeDiagnosisProviderIds(source[key]);
+      continue;
+    }
+    if (key === "stage_timings") {
+      output[key] = voiceDiagnosisStageTimings(source[key]);
+      continue;
+    }
+    if (typeof source[key] === "number") {
+      if (Number.isFinite(source[key])) {
+        output[key] = Math.max(0, Math.round(source[key]));
+      }
+      continue;
+    }
+    if (typeof source[key] === "boolean") {
+      output[key] = source[key];
+      continue;
+    }
+    if (Array.isArray(source[key])) {
+      output[key] = source[key]
+        .slice(0, 8)
+        .map((value) => sanitizeDiagnosisText(value, 80))
+        .filter(Boolean);
+      continue;
+    }
+    output[key] = sanitizeDiagnosisText(source[key], key === "error_summary" ? 200 : 120);
+  }
+  if (source.text !== undefined || source.transcript !== undefined || source.assistant_text !== undefined || source.gateway_assistant_text !== undefined) {
+    output.redaction = "allowlist";
+  }
+  return output;
+}
+
+function sanitizeDiagnosisProviderIds(value) {
+  const input = plainObject(value);
+  const output = {};
+  for (const [key, raw] of Object.entries(input)) {
+    const safeKey = sanitizeDiagnosisText(key, 40);
+    const safeValue = sanitizeDiagnosisText(raw, 80);
+    if (safeKey && safeValue) {
+      output[safeKey] = safeValue;
+    }
+  }
+  return output;
+}
+
+function voiceDiagnosisStageTimings(value) {
+  const input = plainObject(value);
+  const output = {};
+  for (const [key, raw] of Object.entries(input)) {
+    const safeKey = sanitizeDiagnosisText(key, 40);
+    const number = Number(raw);
+    if (safeKey && Number.isFinite(number) && number >= 0) {
+      output[safeKey] = Math.round(number);
+    }
+  }
+  return output;
+}
+
+function sanitizeDiagnosisText(value, max = 200) {
+  let text = String(value || "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  text = text
+    .replace(/\bBearer\s+[A-Za-z0-9._-]{8,}\b/gi, "Bearer [redacted]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[redacted]")
+    .replace(/\bAIza[0-9A-Za-z_-]{8,}\b/g, "[redacted]")
+    .replace(/\bya29\.[0-9A-Za-z._-]{8,}\b/g, "[redacted]");
+  return truncate(text, max);
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) {
+      return Math.round(number);
+    }
+  }
+  return 0;
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 function writeVoiceTurnRecord(record) {
   // Incognito branch: never write a turn file or append to the ledger.
   if (isIncognitoBranch(record?.branch_id)) {
@@ -10767,6 +11296,15 @@ async function recordStreamingVoiceTurn(turn) {
       transcript_language_rejected: turn.transcript_language_rejected === true,
       audio: turn.audio || null,
       assistant_audio: turn.assistant_audio || null,
+      context: turn.context && typeof turn.context === "object" && !Array.isArray(turn.context)
+        ? turn.context
+        : {},
+      capture: turn.capture && typeof turn.capture === "object" && !Array.isArray(turn.capture)
+        ? turn.capture
+        : {},
+      transport: turn.transport && typeof turn.transport === "object" && !Array.isArray(turn.transport)
+        ? turn.transport
+        : {},
       playback_policy: turn.playback_policy || {},
       provider_events: Array.isArray(turn.provider_events) ? turn.provider_events : [],
       transcription_only: turn.transcription_only === true,

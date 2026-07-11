@@ -34,6 +34,7 @@
     "smoke:language-allowlist": "node scripts/smoke-language-allowlist.js",
     "smoke:voice-native-audio-turn": "node scripts/smoke-voice-native-audio-turn.js",
     "smoke:voice-turn-storage": "node scripts/smoke-voice-turn-storage.js",
+    "smoke:voice-diagnosis": "node scripts/smoke-voice-diagnosis.js",
     "smoke:voice-teardown-race": "node scripts/smoke-voice-teardown-race.js",
     "eval:voice": "node scripts/eval-voice-roundtrip.js",
     "eval:voice:e2e": "node scripts/eval-voice-e2e.js",
