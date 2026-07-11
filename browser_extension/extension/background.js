@@ -60,6 +60,9 @@ const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
 const UI_SPEC_CACHE_KEY = "ageeUiSpec";
 const UI_SPEC_ALARM = "agee-ui-spec-refresh";
+const UI_SPEC_REFRESH_MIN_MS = 2000;
+let uiSpecRefreshInFlight = null;
+let uiSpecLastRefreshAt = 0;
 const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
@@ -292,6 +295,22 @@ async function loadUiSpec() {
 }
 
 async function refreshUiSpec(reason = "refresh") {
+  const now = Date.now();
+  if (uiSpecRefreshInFlight) return uiSpecRefreshInFlight;
+  if (now - uiSpecLastRefreshAt < UI_SPEC_REFRESH_MIN_MS) {
+    const cached = await cachedUiSpecRecord();
+    return cached?.payload || UI_SPEC_FALLBACK;
+  }
+  uiSpecLastRefreshAt = now;
+  uiSpecRefreshInFlight = refreshUiSpecOnce(reason);
+  try {
+    return await uiSpecRefreshInFlight;
+  } finally {
+    uiSpecRefreshInFlight = null;
+  }
+}
+
+async function refreshUiSpecOnce(reason = "refresh") {
   try {
     const payload = await fetchUiSpec();
     if (chrome?.storage?.local) {
@@ -322,6 +341,10 @@ async function refreshUiSpec(reason = "refresh") {
     return UI_SPEC_FALLBACK;
   }
 }
+
+// Narrow diagnostic hook for the extension's own worker QA. This object is not
+// web-accessible and exposes no gateway response beyond the normal refresh path.
+globalThis.AgeeUiSpecRefresh = Object.freeze({ refresh: refreshUiSpec });
 
 async function startUiSpecRefresh() {
   if (!chrome?.storage?.local) return;
@@ -1999,7 +2022,7 @@ async function ensureContent(tabId) {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "content.js"] });
   }
 }
 

@@ -1218,6 +1218,7 @@
   }
 
   function sanitizeUiSpecPayload(payload) {
+    if (globalThis.AgeeUiSpecRuntime?.sanitize) return globalThis.AgeeUiSpecRuntime.sanitize(payload);
     const source = payload?.payload && typeof payload.payload === "object" ? payload.payload : payload;
     const spec = source?.spec && typeof source.spec === "object" ? source.spec : source;
     if (!spec || typeof spec !== "object" || spec.version !== 1 || !Array.isArray(spec.surfaces)) {
@@ -1483,7 +1484,11 @@
   }
 
   function runUiAction(action, prompt, label, value = "") {
-    const resolvedPrompt = String(prompt || "").replace(/\{value\}/g, value).trim();
+    const resolved = globalThis.AgeeUiSpecRuntime?.resolveAction
+      ? globalThis.AgeeUiSpecRuntime.resolveAction(action, prompt, label, value)
+      : { action, prompt: String(prompt || "").replace(/\{value\}/g, value).trim() };
+    action = resolved.action;
+    const resolvedPrompt = resolved.prompt;
     if (action === "voice.toggle") {
       openTextSurface({ fresh: false });
       primeAudio();

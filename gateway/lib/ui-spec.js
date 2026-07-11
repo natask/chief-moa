@@ -22,6 +22,9 @@ const SPEC_VERSION = 1;
 // never ships executable code here, only data and binding names.
 const CONTROL_TYPES = ["button", "text", "toggle", "select"];
 const COMPONENT_TYPES = ["card", "list", "map", "stat"];
+const MAX_SURFACES = 8;
+const MAX_COMPONENTS_PER_SURFACE = 40;
+const MAX_CONTROLS_PER_SURFACE = 24;
 const KNOWN_ACTIONS = [
   "voice.toggle",
   "command.open",
@@ -124,6 +127,7 @@ function normalizeSpec(input) {
     return null;
   }
   const surfaces = input.surfaces
+    .slice(0, MAX_SURFACES)
     .map(normalizeSurface)
     .filter(Boolean);
   if (surfaces.length === 0) {
@@ -141,10 +145,10 @@ function normalizeSurface(surface) {
     return null;
   }
   const components = Array.isArray(surface.components)
-    ? surface.components.map(normalizeComponent).filter(Boolean)
+    ? surface.components.slice(0, MAX_COMPONENTS_PER_SURFACE).map(normalizeComponent).filter(Boolean)
     : [];
   const controls = Array.isArray(surface.controls)
-    ? surface.controls.map(normalizeControl).filter(Boolean)
+    ? surface.controls.slice(0, MAX_CONTROLS_PER_SURFACE).map(normalizeControl).filter(Boolean)
     : [];
   return {
     id,

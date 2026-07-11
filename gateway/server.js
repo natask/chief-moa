@@ -264,7 +264,7 @@ const companionCatalog = createCompanionCatalogStore({
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
 // surfaces from this; a "deployment" is a spec change here, not new extension
 // code. The client live-refreshes on change (storage.onChanged pattern).
-const uiSpec = createUiSpecStore({ dataDir: DATA_DIR });
+const uiSpecStores = new Map();
 const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_DIR });
 
 // The Brain: a fail-soft memory layer over the installed gbrain CLI. The
@@ -797,7 +797,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, agentAuthError());
         return;
       }
-      sendJson(response, 200, uiSpecPayload());
+      sendJson(response, 200, uiSpecPayload(accountUserId()));
       return;
     }
 
@@ -806,7 +806,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, agentAuthError());
         return;
       }
-      await handleUiSpecPut(request, response);
+      await handleUiSpecPut(request, response, accountUserId());
       return;
     }
 
@@ -815,8 +815,8 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, agentAuthError());
         return;
       }
-      uiSpec.reset();
-      sendJson(response, 200, uiSpecPayload());
+      uiSpecForUser(accountUserId()).reset();
+      sendJson(response, 200, uiSpecPayload(accountUserId()));
       return;
     }
 
@@ -4723,7 +4723,33 @@ function profileApplicationSemantics() {
   };
 }
 
-function uiSpecPayload() {
+function uiSpecForUser(userId = accountUserId()) {
+  const safeUserId = sanitizeOptionalId(userId, "usr_local");
+  if (!uiSpecStores.has(safeUserId)) {
+    const scopedDir = path.join(DATA_DIR, "ui-specs", safeUserId);
+    const scopedPath = path.join(scopedDir, "ui-spec.json");
+    const legacyPath = path.join(DATA_DIR, "ui-spec.json");
+    if (!fs.existsSync(scopedPath) && fs.existsSync(legacyPath)) {
+      fs.mkdirSync(scopedDir, { recursive: true });
+      // Consume the legacy single-account file exactly once. Copying it would
+      // seed every subsequently observed identity with another user's spec.
+      try {
+        fs.renameSync(legacyPath, scopedPath);
+      } catch (error) {
+        if (error?.code !== "EXDEV") throw error;
+        fs.copyFileSync(legacyPath, scopedPath, fs.constants.COPYFILE_EXCL);
+        fs.rmSync(legacyPath, { force: true });
+      }
+    }
+    uiSpecStores.set(safeUserId, createUiSpecStore({
+      dataDir: scopedDir,
+    }));
+  }
+  return uiSpecStores.get(safeUserId);
+}
+
+function uiSpecPayload(userId = accountUserId()) {
+  const uiSpec = uiSpecForUser(userId);
   return {
     spec: uiSpec.effective(),
     defaults: uiSpec.defaults(),
@@ -5281,13 +5307,13 @@ function cleanModel(value) {
   return String(value || "").replace(/[^A-Za-z0-9._@:-]+/g, "").trim();
 }
 
-async function handleUiSpecPut(request, response) {
+async function handleUiSpecPut(request, response, userId = accountUserId()) {
   const body = await readJsonBody(request);
   // Accept either a bare spec or { spec: {...} }.
   const incoming = body && typeof body === "object" ? (body.spec || body) : {};
   try {
-    uiSpec.replace(incoming);
-    sendJson(response, 200, uiSpecPayload());
+    uiSpecForUser(userId).replace(incoming);
+    sendJson(response, 200, uiSpecPayload(userId));
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
   }

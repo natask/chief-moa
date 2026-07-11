@@ -54,7 +54,7 @@ for (const action of ["voice.toggle", "command.open", "agent.run", "page.describ
   }
 }
 
-if (!/function sanitizeUiSpecPayload/.test(contentSource) || !/function renderUiSpecSurface/.test(contentSource)) {
+if (!/AgeeUiSpecRuntime\?\.sanitize/.test(contentSource) || !/function renderUiSpecSurface/.test(contentSource)) {
   throw new Error("content.js must sanitize and render UI specs");
 }
 if (!/safeRuntimeSendMessage\(\{\s*cmd:\s*"uiSpec"/.test(contentSource)) {
@@ -92,16 +92,21 @@ for (const cssToken of [
   }
 }
 
-if (packageJson.scripts?.["smoke:ui-spec"] !== "node scripts/smoke-ui-spec.mjs") {
+if (!packageJson.scripts?.["smoke:ui-spec"]?.includes("node scripts/smoke-ui-spec.mjs")) {
   throw new Error("package.json must expose npm run smoke:ui-spec");
 }
 
 for (const file of [
+  "extension/ui-spec-runtime.js",
   "extension/background.js",
   "extension/content.js",
   "scripts/smoke-ui-spec.mjs",
 ]) {
   execFileSync(process.execPath, ["--check", file], { stdio: "inherit" });
+}
+
+if (!/UI_SPEC_REFRESH_MIN_MS/.test(backgroundSource) || !/uiSpecRefreshInFlight/.test(backgroundSource) || !/now - uiSpecLastRefreshAt < UI_SPEC_REFRESH_MIN_MS/.test(backgroundSource)) {
+  throw new Error("background.js must coalesce concurrent refreshes and rate-bound sequential refreshes");
 }
 
 console.log("ui-spec smoke passed");

@@ -24,7 +24,7 @@ const { spawn } = require("node:child_process");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "ui-spec-smoke-token";
-const { createUiSpecStore, defaultSpec } = require(path.join(GATEWAY_DIR, "lib", "ui-spec"));
+const { createUiSpecStore, defaultSpec, normalizeSpec } = require(path.join(GATEWAY_DIR, "lib", "ui-spec"));
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -41,6 +41,8 @@ async function main() {
 
   try {
     await step("store: default, replace, reject, persist, reset", () => assertStore(storeDir));
+    await step("store: account directories remain isolated", () => assertAccountIsolation(path.join(tempDir, "accounts")));
+    await step("normalizer: document fanout is bounded", assertDocumentBounds);
 
     server = await startGateway({ port, dataDir });
     await step("GET requires a token", () => assertAuthRequired(baseUrl));
@@ -56,7 +58,8 @@ async function main() {
         "store: default spec, replace persists, invalid rejected, reload sees persisted, reset clears",
         "GET /v1/ui/spec requires a token",
         "GET returns the default command-panel spec when uncustomized",
-        "PUT a changed spec; GET reflects it (engine -> client round-trip, package unchanged)",
+        "PUT a changed spec; GET reflects it at the authenticated gateway boundary",
+        "separate account store directories cannot overwrite one another",
         "invalid spec PUT -> 400; the live spec is left unchanged (never blanked)",
         "POST /v1/ui/spec/reset returns to the default spec",
       ],
@@ -125,6 +128,35 @@ function assertStore(dir) {
   reopened.reset();
   assert.equal(reopened.isCustomized(), false, "reset must clear customization");
   assert.deepEqual(reopened.effective(), defaultSpec(), "reset must return the default spec");
+}
+
+function assertAccountIsolation(rootDir) {
+  const first = createUiSpecStore({ dataDir: path.join(rootDir, "usr_first") });
+  const second = createUiSpecStore({ dataDir: path.join(rootDir, "usr_second") });
+  const firstSpec = defaultSpec();
+  firstSpec.surfaces[0].title = "First account";
+  const secondSpec = defaultSpec();
+  secondSpec.surfaces[0].title = "Second account";
+
+  first.replace(firstSpec);
+  second.replace(secondSpec);
+
+  assert.equal(first.effective().surfaces[0].title, "First account");
+  assert.equal(second.effective().surfaces[0].title, "Second account");
+  first.reset();
+  assert.equal(second.effective().surfaces[0].title, "Second account", "resetting one account must not alter another");
+}
+
+function assertDocumentBounds() {
+  const surfaces = Array.from({ length: 20 }, (_, surfaceIndex) => ({
+    id: `surface-${surfaceIndex}`,
+    components: Array.from({ length: 100 }, (_, index) => ({ type: "card", id: `card-${index}`, body: "bounded" })),
+    controls: Array.from({ length: 100 }, (_, index) => ({ type: "button", id: `button-${index}`, action: "noop" })),
+  }));
+  const normalized = normalizeSpec({ surfaces });
+  assert.equal(normalized.surfaces.length, 8);
+  assert.equal(normalized.surfaces[0].components.length, 40);
+  assert.equal(normalized.surfaces[0].controls.length, 24);
 }
 
 async function assertAuthRequired(baseUrl) {
