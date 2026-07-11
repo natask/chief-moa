@@ -8,5 +8,5 @@
 | iOS Simulator shell | unsigned generic Simulator build succeeded | compilation only |
 | Windows artifact | `d2da14a`; Rust 15 tests/clippy/MSVC cross-build | WinUI host build unproven |
 | Android/browser adapters | `4a94577`, `23de694`; focused tests/build/verify/smoke | protocol artifacts; no runtime ingress exists |
-| Auditor ring | cycle 1 BLOCK, repair `23de694`, fresh re-audit | active |
+| Auditor ring | cycle 1 BLOCK; repairs `23de694`, `2f960a1`, `676e678`, `9314586`; security + UX/quality re-audits | PASS scoped; runtime/Windows blockers explicit |
 | Tier-0 integration | pending | pending |
