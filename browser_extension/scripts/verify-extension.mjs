@@ -14,6 +14,7 @@ const requiredFiles = [
   "extension/offscreen-audio-worklet.js",
   "extension/livekit-voice.js",
   "extension/voice-sampler.js",
+  "extension/voice-sampler-runtime.js",
   "extension/offscreen-livekit.html",
   "extension/offscreen-livekit.js",
   "extension/vendor/livekit-client.esm.js",
@@ -41,6 +42,7 @@ const requiredFiles = [
   "scripts/smoke-settings.mjs",
   "scripts/smoke-live-voice-main.mjs",
   "scripts/smoke-unified-browser-agent.mjs",
+  "scripts/test-voice-sampler-lifecycle.mjs",
 ];
 
 for (const file of requiredFiles) {
@@ -51,6 +53,7 @@ const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
+const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
@@ -67,8 +70,15 @@ if (!/MAX_SAMPLES = 16/.test(voiceSamplerSource) || !/voice-sampler\/v1/.test(vo
 if (!/capture: "none"/.test(backgroundSource) || !/profile_override: profileOverride/.test(backgroundSource)) {
   throw new Error("voice sampler must use text-only sessions with a session-only profile override");
 }
-if (!/parsed\?\.type === "turn_done"/.test(backgroundSource) || !/sampler\.index \+= 1/.test(backgroundSource)) {
+if (!/function handleSessionTerminal/.test(voiceSamplerRuntimeSource) || !/sampler\.index \+= 1/.test(voiceSamplerRuntimeSource)) {
   throw new Error("voice sampler must advance sequentially only after a terminal turn event");
+}
+if (
+  !/handleSessionTerminal\(session\.id,\s*\{[\s\S]{0,220}closeReason:\s*failed \? "sample failed" : "sample complete"/.test(backgroundSource) ||
+  !/Live voice connection failed\./.test(backgroundSource) ||
+  !/Live voice connection closed\./.test(backgroundSource)
+) {
+  throw new Error("voice sampler must treat socket error and close as terminal sampler events");
 }
 
 if (manifest.manifest_version !== 3) {
@@ -874,6 +884,7 @@ for (const file of [
   "extension/offscreen.js",
   "extension/offscreen-audio-worklet.js",
   "extension/livekit-voice.js",
+  "extension/voice-sampler-runtime.js",
   "extension/offscreen-livekit.js",
   "extension/tweaks.js",
   "extension/options.js",
@@ -893,10 +904,13 @@ for (const file of [
   "scripts/smoke-cdp.mjs",
   "scripts/smoke-integration.mjs",
   "scripts/smoke-history.mjs",
+  "scripts/test-voice-sampler-lifecycle.mjs",
   "scripts/chrome-for-testing.mjs",
 ]) {
   execFileSync(process.execPath, ["--check", file], { stdio: "inherit" });
 }
+
+execFileSync(process.execPath, ["--test", "scripts/test-voice-sampler-lifecycle.mjs"], { stdio: "inherit" });
 
 const { parseSettingsIntent, looksLikeGatewayProfileControlIntent } = await import("../extension/settings-intent.js");
 const { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } = await import("../extension/browser-task-intent.js");

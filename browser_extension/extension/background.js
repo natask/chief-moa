@@ -9,6 +9,7 @@ import { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestio
 import { isStopCommand } from "./stop-intent.js";
 import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice.js";
 import { parseVoiceSamplerAction } from "./voice-sampler.js";
+import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
@@ -28,7 +29,6 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 // can cancel one cue or all cues on a tab without blocking new ones.
 const tasks = new Map();
 const voiceSessions = new Map();
-const voiceSamplers = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
 const MAX_QUEUED_VOICE_AUDIO_BYTES = 16000 * 2 * 20;
 // Record mode buffers raw PCM16 in the worker until the user stops; cap the
@@ -1855,51 +1855,33 @@ async function maybeApplyTurnActions(tabId, data, signal, cueId) {
   return true;
 }
 
+const voiceSamplerRuntime = createVoiceSamplerRuntime({
+  send,
+  closeSession: closeVoiceSession,
+  async startSample({ sampler, sample, sampleIndex, onSessionCreated }) {
+    const session = await startVoiceSessionProxy(sampler.tabId, {
+      cueId: sampler.cueId,
+      turnId: `voice_sample_${Date.now().toString(36)}_${sampleIndex}`,
+      capture: "none",
+      autoCommit: false,
+      profileOverride: { voice: sample.voice, response_modality: "speech" },
+      sampleText: sample.text,
+      onSessionCreated,
+    });
+    attachVoiceSession(session.voiceSessionId, sampler.tabId);
+    return session;
+  },
+});
+
 async function startVoiceSampler(tabId, cueId, action, signal) {
   const samples = parseVoiceSamplerAction(action);
   if (!samples.length) throw new Error("The gateway returned an invalid or empty voice sampler plan.");
-  cancelVoiceSampler(tabId, "superseded");
-  const sampler = { tabId, cueId, samples, index: 0, activeSessionId: null, cancelled: false };
-  voiceSamplers.set(tabId, sampler);
   send(tabId, { cmd: "progress", cueId, text: `sampling 1 of ${samples.length}…` });
-  const abort = () => cancelVoiceSampler(tabId, "cancelled");
-  signal?.addEventListener?.("abort", abort, { once: true });
-  try {
-    await playNextVoiceSample(sampler);
-  } catch (error) {
-    cancelVoiceSampler(tabId, "failed");
-    send(tabId, { cmd: "error", cueId, text: `Voice sampler failed: ${String(error?.message || error)}` });
-  }
-}
-
-async function playNextVoiceSample(sampler) {
-  if (sampler.cancelled || voiceSamplers.get(sampler.tabId) !== sampler) return;
-  if (sampler.index >= sampler.samples.length) {
-    voiceSamplers.delete(sampler.tabId);
-    send(sampler.tabId, { cmd: "done", cueId: sampler.cueId, summary: `Finished ${sampler.samples.length} voice samples.`, speak: "" });
-    return;
-  }
-  const sample = sampler.samples[sampler.index];
-  send(sampler.tabId, { cmd: "progress", cueId: sampler.cueId, text: `sampling ${sample.voice} (${sampler.index + 1} of ${sampler.samples.length})…` });
-  const session = await startVoiceSessionProxy(sampler.tabId, {
-    cueId: sampler.cueId,
-    turnId: `voice_sample_${Date.now().toString(36)}_${sampler.index}`,
-    capture: "none",
-    autoCommit: false,
-    profileOverride: { voice: sample.voice, response_modality: "speech" },
-    sampleText: sample.text,
-    sampler,
-  });
-  sampler.activeSessionId = session.voiceSessionId;
-  attachVoiceSession(session.voiceSessionId, sampler.tabId);
+  await voiceSamplerRuntime.start(tabId, cueId, samples, { signal });
 }
 
 function cancelVoiceSampler(tabId, reason) {
-  const sampler = voiceSamplers.get(tabId);
-  if (!sampler) return;
-  sampler.cancelled = true;
-  voiceSamplers.delete(tabId);
-  if (sampler.activeSessionId) closeVoiceSession(sampler.activeSessionId, reason);
+  voiceSamplerRuntime.cancel(tabId, reason);
 }
 
 function send(tabId, msg) {
@@ -2102,7 +2084,7 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   return startVoiceSessionProxy(tabId, opts);
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, sampler } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
   // Hold the capture mutex across the async setup window. recordSessionStart
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
@@ -2112,7 +2094,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, sampler });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
@@ -2136,7 +2118,7 @@ async function switchThreadBranch(cfg, action, label) {
   return String(data?.thread?.branch_id || data?.active?.branch_id || data?.branch_id || "").trim();
 }
 
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, sampler } = {}) {
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
   const session = {
@@ -2165,9 +2147,12 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     maxCommitTimer: null,
     profileOverride,
     sampleText,
-    sampler,
   };
   voiceSessions.set(id, session);
+  onSessionCreated?.(id);
+  if (voiceSessions.get(id) !== session || session.closed) {
+    throw new Error(session.setupErrorMessage || "Voice session closed during setup.");
+  }
   if (session.capture === "extension-offscreen") {
     session.captureStartRequested = true;
     startOffscreenVoiceCapture(id)
@@ -2312,6 +2297,13 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         failBeforeOpen("Live voice connection failed.");
         return;
       }
+      if (voiceSamplerRuntime.handleSessionTerminal(session.id, {
+        failed: true,
+        message: "Live voice connection failed.",
+        closeReason: "sample failed",
+      })) {
+        return;
+      }
       deliverVoiceSessionEvent(session, {
         event: { type: "error", message: "Live voice connection failed." },
       });
@@ -2341,6 +2333,15 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       clearVoiceAutoCommit(session);
       clearQueuedVoiceSessionMedia(session);
       stopOffscreenVoiceCapture(id).catch(() => {});
+      if (voiceSamplerRuntime.handleSessionTerminal(session.id, {
+        failed: !session.revoked,
+        message: session.revoked ? "" : "Live voice connection closed.",
+        closeReason: session.revoked ? session.closedReason || "revoked" : "sample failed",
+      })) {
+        if (session.attached) voiceSessions.delete(id);
+        else setTimeout(() => voiceSessions.delete(id), 5000);
+        return;
+      }
       deliverVoiceSessionEvent(session, {
         event: session.revoked
           ? { type: "revoked", reason: session.closedReason || "revoked" }
@@ -2504,22 +2505,14 @@ async function forwardVoiceSessionEvent(session, event) {
         .catch((error) => handleOffscreenVoiceError(session.id, error));
     }
   }
-  if (session.sampler && (parsed?.type === "turn_done" || parsed?.type === "error")) {
-    const sampler = session.sampler;
-    const failed = parsed.type === "error" || String(parsed.status || "").toLowerCase() === "error";
-    session.sampler = null;
-    closeVoiceSession(session.id, failed ? "sample failed" : "sample complete");
-    sampler.activeSessionId = null;
-    if (failed) {
-      cancelVoiceSampler(sampler.tabId, "sample failed");
-      send(sampler.tabId, { cmd: "error", cueId: sampler.cueId, text: `Voice sample ${sampler.index + 1} failed.` });
-    } else {
-      sampler.index += 1;
-      playNextVoiceSample(sampler).catch((error) => {
-        cancelVoiceSampler(sampler.tabId, "sample failed");
-        send(sampler.tabId, { cmd: "error", cueId: sampler.cueId, text: `Voice sampler failed: ${String(error?.message || error)}` });
-      });
+  if (parsed?.type === "turn_done" || parsed?.type === "error" || String(parsed?.status || "").toLowerCase() === "error") {
+    const failed = parsed?.type === "error" || String(parsed?.status || "").toLowerCase() === "error";
+    if (voiceSamplerRuntime.handleSessionTerminal(session.id, { failed, closeReason: failed ? "sample failed" : "sample complete" })) {
+      return;
     }
+  }
+  if (parsed?.type === "error") {
+    deliverVoiceSessionEvent(session, { event: parsed });
     return;
   }
   if (parsed?.type === "turn_progress") {
@@ -2579,6 +2572,7 @@ async function sendVoiceSessionControl(id, message) {
 function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   const session = voiceSessions.get(id);
   if (!session) return;
+  session.closed = true;
   session.closedReason = reason;
   session.revoked = revoked === true;
   voiceSessions.delete(id);
