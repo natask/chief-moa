@@ -55,7 +55,13 @@ local dependencies.
   length accounting.
 - Repair M3-1-R3: retained only explicitly referenced parent-branch runs for
   fork continuity and covered single/double percent-encoded OAuth credentials.
-- Cycle 5: fresh independent audit pending; no PASS claim until recorded.
+- Cycle 5: three fresh independent CLI audit paths were attempted after the
+  repair, but none produced a verdict: Codex GPT-5.4/high completed read phases
+  without a final message (including explicit last-message capture), Gemini
+  exited 41 for missing configured Vertex/API-key authority, and Claude
+  Opus/high exited without output. Independent PASS remains unproven; the
+  manager's direct specialized audit is recorded separately and is not
+  substituted for independence.
 
 ## Commit / deploy status
 
