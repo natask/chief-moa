@@ -68,12 +68,15 @@ const {
 const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
 const { createBrowserAgentLoopStore, buildAgentToolDefs } = require("./lib/browser-agent-loop");
 const {
-  PROACTIVE_SYSTEM_PROMPT,
+  PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
   PROACTIVE_TURN_MAX_BODY_BYTES,
   ProactiveTurnValidationError,
-  buildProactiveModelMessages,
+  buildProactiveOpenAiPayload,
+  buildProactiveVertexPayload,
+  proactiveOpenAiText,
   proactiveFallbackReply,
   proactiveTurnResponse,
+  proactiveVertexText,
   validateProactiveTurnBody,
 } = require("./lib/proactive-turn");
 const {
@@ -1623,7 +1626,7 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/v1/proactive/turns") {
       response.setHeader("cache-control", "no-store");
-      if (!authorized(request)) {
+      if (!authorizedProactiveTurn(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
         return;
       }
@@ -2252,17 +2255,76 @@ async function handleProactiveTurn(request, response) {
     throw error;
   }
 
-  const text = await callModelOrFallback(
-    buildProactiveModelMessages(body.transcript),
+  const text = await callProactiveModelOrFallback(body.transcript);
+  sendJson(response, 200, proactiveTurnResponse(text));
+}
+
+async function callProactiveModelOrFallback(transcript) {
+  const provider = resolveReasoningProvider({ reasoning_provider: MODEL_PROVIDER });
+  if (!providerConfiguredFor(provider)) return proactiveFallbackReply(transcript);
+  if (provider === "vertex") return callProactiveVertexModel(transcript);
+  return callProactiveOpenAiModel(transcript);
+}
+
+async function callProactiveOpenAiModel(transcript) {
+  const result = await fetchBoundedResponseText(
+    `${MODEL_BASE_URL}/chat/completions`,
     {
-      proactive_text_only: true,
-      system_prompt: PROACTIVE_SYSTEM_PROMPT,
-      model: MODEL_ID,
-      reasoning_provider: MODEL_PROVIDER,
-      temperature: 0.2,
+      method: "POST",
+      headers: modelHeaders(),
+      body: JSON.stringify(buildProactiveOpenAiPayload(transcript, MODEL_ID)),
+    },
+    {
+      timeoutMs: proactiveProviderTimeoutMs(),
+      maxBytes: PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
+      label: "proactive OpenAI-compatible provider",
     },
   );
-  sendJson(response, 200, proactiveTurnResponse(text));
+  if (!result.response.ok) {
+    throw new Error(`proactive model HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
+  }
+  return proactiveOpenAiText(parseProactiveProviderJson(result.text, "OpenAI-compatible"));
+}
+
+async function callProactiveVertexModel(transcript) {
+  const accessToken = await vertexAccessToken();
+  const headers = {
+    authorization: `Bearer ${accessToken}`,
+    "content-type": "application/json",
+  };
+  if (process.env.VERTEX_PRIORITY !== "0") {
+    headers["x-vertex-ai-llm-shared-request-type"] = "priority";
+  }
+  const result = await fetchBoundedResponseText(
+    vertexEndpoint({ model: MODEL_ID }),
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(buildProactiveVertexPayload(transcript, vertexSafetySettings())),
+    },
+    {
+      timeoutMs: proactiveProviderTimeoutMs(),
+      maxBytes: PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
+      label: "proactive Vertex provider",
+    },
+  );
+  if (!result.response.ok) {
+    throw new Error(`proactive vertex HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
+  }
+  return proactiveVertexText(parseProactiveProviderJson(result.text, "Vertex"));
+}
+
+function parseProactiveProviderJson(text, provider) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`proactive ${provider} provider returned non-JSON`);
+  }
+}
+
+function proactiveProviderTimeoutMs() {
+  const configured = positiveNumberFrom(process.env.PROACTIVE_PROVIDER_TIMEOUT_MS, Math.min(MODEL_FETCH_TIMEOUT_MS, 15000));
+  return Math.max(250, Math.min(30000, configured));
 }
 
 async function handleChat(request, response) {
@@ -8230,10 +8292,6 @@ function gatewayTimeZone() {
 }
 
 function gatewayFallbackReply(prompt) {
-  const proactiveReply = proactiveFallbackReply(prompt);
-  if (proactiveReply) {
-    return proactiveReply;
-  }
   const lower = normalizeSpeech(prompt);
   if (lower.includes("gateway") || lower.includes("server")) {
     return "Yes. The gateway is running. Hey, I would like to answer with the model too, but I need you to give me access to a configured model provider.";
@@ -12539,6 +12597,49 @@ function fetchWithTimeout(url, options, timeoutMs) {
   }).finally(() => clearTimeout(timeout));
 }
 
+async function fetchBoundedResponseText(url, options, { timeoutMs, maxBytes, label }) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error(`${label} timeout after ${timeoutMs}ms`));
+  }, timeoutMs);
+  timeout.unref?.();
+  let reader = null;
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      const error = new Error(`${label} response exceeded ${maxBytes} bytes`);
+      controller.abort(error);
+      throw error;
+    }
+    if (!response.body) return { response, text: "" };
+    reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      size += chunk.length;
+      if (size > maxBytes) {
+        const error = new Error(`${label} response exceeded ${maxBytes} bytes`);
+        controller.abort(error);
+        throw error;
+      }
+      chunks.push(chunk);
+    }
+    return { response, text: Buffer.concat(chunks, size).toString("utf8") };
+  } catch (error) {
+    if (timedOut) throw new Error(`${label} timeout after ${timeoutMs}ms`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    try { reader?.releaseLock(); } catch {}
+  }
+}
+
 function withTimeout(promise, timeoutMs, label) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -12632,13 +12733,6 @@ function vertexPayload(messages, profile) {
 }
 
 function profileSystemInstruction(profile) {
-  // This fixed server-only profile deliberately excludes the user's stored
-  // identity, persona, memory/language settings, and mission-agent policy. The
-  // proactive route has no need for them and discloses only its packaged
-  // category prompt to the configured reasoning provider.
-  if (profile?.proactive_text_only === true) {
-    return String(profile.system_prompt || PROACTIVE_SYSTEM_PROMPT);
-  }
   return [
     safeSystemPromptForProvider(profile, SYSTEM_PROMPT),
     profileIdentityInstruction(profile),
@@ -12813,15 +12907,19 @@ async function serviceAccountAccessToken(serviceAccount) {
   const unsigned = `${base64urlJson(header)}.${base64urlJson(payload)}`;
   const signature = crypto.sign("RSA-SHA256", Buffer.from(unsigned), serviceAccount.private_key);
   const assertion = `${unsigned}.${base64url(signature)}`;
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion,
-    }),
-  });
-  return parseGoogleTokenResponse(response, "service account token exchange");
+  const result = await fetchBoundedResponseText(
+    googleOauthTokenUrl(),
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion,
+      }),
+    },
+    { timeoutMs: 10000, maxBytes: 64 * 1024, label: "service account token exchange" },
+  );
+  return parseGoogleTokenResponse(result.response, result.text, "service account token exchange");
 }
 
 async function authorizedUserAccessToken(credential) {
@@ -12829,21 +12927,24 @@ async function authorizedUserAccessToken(credential) {
   if (missing.length > 0) {
     throw new Error(`authorized-user ADC is missing ${missing.join(", ")}`);
   }
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: credential.client_id,
-      client_secret: credential.client_secret,
-      refresh_token: credential.refresh_token,
-      grant_type: "refresh_token",
-    }),
-  });
-  return parseGoogleTokenResponse(response, "authorized-user token refresh");
+  const result = await fetchBoundedResponseText(
+    googleOauthTokenUrl(),
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: credential.client_id,
+        client_secret: credential.client_secret,
+        refresh_token: credential.refresh_token,
+        grant_type: "refresh_token",
+      }),
+    },
+    { timeoutMs: 10000, maxBytes: 64 * 1024, label: "authorized-user token refresh" },
+  );
+  return parseGoogleTokenResponse(result.response, result.text, "authorized-user token refresh");
 }
 
-async function parseGoogleTokenResponse(response, label) {
-  const text = await response.text();
+function parseGoogleTokenResponse(response, text, label) {
   if (!response.ok) {
     throw new Error(`${label} failed (${response.status}): ${truncate(text, 400)}`);
   }
@@ -12861,6 +12962,13 @@ async function parseGoogleTokenResponse(response, label) {
     value,
     expiresAt: Date.now() + Math.max(1, Number(token.expires_in || 3600) - 300) * 1000,
   };
+}
+
+function googleOauthTokenUrl() {
+  if (process.env.NODE_ENV === "test" && process.env.MOA_TEST_GOOGLE_OAUTH_TOKEN_URL) {
+    return String(process.env.MOA_TEST_GOOGLE_OAUTH_TOKEN_URL);
+  }
+  return "https://oauth2.googleapis.com/token";
 }
 
 function base64urlJson(value) {
@@ -14469,6 +14577,14 @@ function authorized(request) {
     return runtimeMode.protectedRoutesOpenWithoutToken;
   }
   return request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
+}
+
+// Unlike legacy local-mode routes, proactive turns can create provider cost
+// from a browser origin. They are always closed unless an exact bearer token is
+// configured and presented, including on loopback/local gateways.
+function authorizedProactiveTurn(request) {
+  return Boolean(MOA_GATEWAY_TOKEN)
+    && request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
 }
 
 function authorizedVoiceSessionUpgrade(request, url) {

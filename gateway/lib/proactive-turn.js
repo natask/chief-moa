@@ -1,6 +1,8 @@
 "use strict";
 
 const PROACTIVE_TURN_MAX_BODY_BYTES = 2048;
+const PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES = 64 * 1024;
+const PROACTIVE_PROVIDER_MAX_OUTPUT_TOKENS = 512;
 
 const PROACTIVE_ACCEPTED_PROMPTS = Object.freeze([
   "Help me make a checklist for reviewing this form's structure.",
@@ -85,10 +87,73 @@ function buildProactiveModelMessages(transcript) {
   if (!PROACTIVE_PROMPT_SET.has(transcript)) {
     throw new ProactiveTurnValidationError("unrecognized_prompt");
   }
-  return [
-    { role: "system", content: PROACTIVE_SYSTEM_PROMPT },
-    { role: "user", content: transcript },
-  ];
+  return [{ role: "user", content: transcript }];
+}
+
+function buildProactiveOpenAiPayload(transcript, model) {
+  return {
+    model: String(model || ""),
+    messages: [
+      { role: "system", content: PROACTIVE_SYSTEM_PROMPT },
+      ...buildProactiveModelMessages(transcript),
+    ],
+    temperature: 0.2,
+    max_tokens: PROACTIVE_PROVIDER_MAX_OUTPUT_TOKENS,
+    stream: false,
+  };
+}
+
+function buildProactiveVertexPayload(transcript, safetySettings = []) {
+  const payload = {
+    systemInstruction: { parts: [{ text: PROACTIVE_SYSTEM_PROMPT }] },
+    contents: [{ role: "user", parts: [{ text: validateProactiveTranscript(transcript) }] }],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: PROACTIVE_PROVIDER_MAX_OUTPUT_TOKENS,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  };
+  if (Array.isArray(safetySettings) && safetySettings.length > 0) {
+    payload.safetySettings = safetySettings.map((setting) => ({
+      category: String(setting?.category || ""),
+      threshold: String(setting?.threshold || ""),
+    }));
+  }
+  return payload;
+}
+
+function validateProactiveTranscript(transcript) {
+  if (!PROACTIVE_PROMPT_SET.has(transcript)) {
+    throw new ProactiveTurnValidationError("unrecognized_prompt");
+  }
+  return transcript;
+}
+
+function proactiveOpenAiText(payload) {
+  const message = payload?.choices?.[0]?.message;
+  if (!message || message.tool_calls != null || message.function_call != null) {
+    throw new Error("proactive provider returned executable output");
+  }
+  if (typeof message.content !== "string") {
+    throw new Error("proactive provider returned an empty reply");
+  }
+  return message.content;
+}
+
+function proactiveVertexText(payload) {
+  const parts = payload?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts) || parts.length === 0) {
+    throw new Error("proactive provider returned an empty reply");
+  }
+  const text = [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object" || Object.keys(part).some((key) => key !== "text")) {
+      throw new Error("proactive provider returned executable output");
+    }
+    if (typeof part.text !== "string") throw new Error("proactive provider returned an empty reply");
+    text.push(part.text);
+  }
+  return text.join("\n");
 }
 
 function proactiveTurnResponse(text) {
@@ -116,11 +181,17 @@ function proactiveFallbackReply(transcript) {
 
 module.exports = {
   PROACTIVE_ACCEPTED_PROMPTS,
+  PROACTIVE_PROVIDER_MAX_OUTPUT_TOKENS,
+  PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
   PROACTIVE_SYSTEM_PROMPT,
   PROACTIVE_TURN_MAX_BODY_BYTES,
   ProactiveTurnValidationError,
+  buildProactiveOpenAiPayload,
   buildProactiveModelMessages,
+  buildProactiveVertexPayload,
+  proactiveOpenAiText,
   proactiveFallbackReply,
   proactiveTurnResponse,
+  proactiveVertexText,
   validateProactiveTurnBody,
 };

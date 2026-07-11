@@ -12,6 +12,7 @@ const { spawn } = require("node:child_process");
 
 const {
   PROACTIVE_ACCEPTED_PROMPTS,
+  PROACTIVE_PROVIDER_MAX_OUTPUT_TOKENS,
   PROACTIVE_SYSTEM_PROMPT,
   proactiveFallbackReply,
 } = require("../lib/proactive-turn");
@@ -39,13 +40,17 @@ async function main() {
   for (const prompt of EXPECTED_PROMPTS) {
     assert.ok(proactiveFallbackReply(prompt), `missing deterministic fallback for: ${prompt}`);
   }
+  assertBrowserPromptParity();
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-proactive-turn-smoke-"));
   const homeDir = path.join(tempDir, "home");
   fs.mkdirSync(homeDir, { recursive: true });
   let gateway;
+  let tokenlessGateway;
+  let vertexGateway;
   let fallbackGateway;
   let fakeModel;
+  let fakeVertex;
 
   try {
     fakeModel = await startFakeModelServer();
@@ -76,6 +81,38 @@ async function main() {
     );
     assertProviderRequests(fakeModel.requests);
 
+    fakeModel.mode = "tool_calls";
+    const toolOutput = await postJson(`${gateway.baseUrl}/v1/proactive/turns`, validBody(EXPECTED_PROMPTS[0]));
+    assert.equal(toolOutput.status, 500, "provider tool_calls must fail closed");
+    fakeModel.mode = "oversize";
+    const oversizedProvider = await postJson(`${gateway.baseUrl}/v1/proactive/turns`, validBody(EXPECTED_PROMPTS[0]));
+    assert.equal(oversizedProvider.status, 500, "oversized provider response must fail closed");
+    fakeModel.mode = "stall";
+    const stallStartedAt = Date.now();
+    const stalledProvider = await postJson(`${gateway.baseUrl}/v1/proactive/turns`, validBody(EXPECTED_PROMPTS[0]));
+    assert.equal(stalledProvider.status, 500, "headers-then-stall provider must time out");
+    assert.ok(Date.now() - stallStartedAt < 2000, "proactive timeout must cover body consumption");
+    fakeModel.mode = "normal";
+
+    const tokenlessDataDir = path.join(tempDir, "tokenless-data");
+    const providerCountBeforeTokenless = fakeModel.requests.length;
+    tokenlessGateway = await startGateway({
+      dataDir: tokenlessDataDir,
+      homeDir,
+      modelBaseUrl: `${fakeModel.baseUrl}/v1`,
+      modelApiKey: "fake-model-key",
+      gatewayToken: "",
+    });
+    const tokenless = await postJson(
+      `${tokenlessGateway.baseUrl}/v1/proactive/turns`,
+      validBody(EXPECTED_PROMPTS[0]),
+      { auth: false },
+    );
+    assert.equal(tokenless.status, 401, "tokenless local gateway must fail closed for proactive turns");
+    assert.equal(fakeModel.requests.length, providerCountBeforeTokenless, "tokenless request must never reach provider");
+    await stopChild(tokenlessGateway.child);
+    tokenlessGateway = null;
+
     const after = await captureAuthorityState(gateway.baseUrl, modelDataDir);
     assert.deepEqual(
       after,
@@ -87,6 +124,46 @@ async function main() {
     gateway = null;
     await closeServer(fakeModel.server);
     fakeModel = null;
+
+    fakeVertex = await startFakeVertexServer();
+    const vertexDataDir = path.join(tempDir, "vertex-data");
+    const adcPath = path.join(homeDir, ".config", "gcloud", "application_default_credentials.json");
+    fs.mkdirSync(path.dirname(adcPath), { recursive: true });
+    fs.writeFileSync(adcPath, JSON.stringify({
+      type: "authorized_user",
+      client_id: "PROFILE_USER_CANARY_CLIENT",
+      client_secret: "PROFILE_USER_CANARY_SECRET",
+      refresh_token: "PROFILE_USER_CANARY_REFRESH",
+    }));
+    vertexGateway = await startGateway({
+      dataDir: vertexDataDir,
+      homeDir,
+      provider: "vertex",
+      vertexBaseUrl: fakeVertex.baseUrl,
+      googleCredentialsPath: adcPath,
+      testGoogleOauthTokenUrl: `${fakeVertex.baseUrl}/token`,
+    });
+    const vertexBefore = await captureAuthorityState(vertexGateway.baseUrl, vertexDataDir);
+    const vertexTurn = await postJson(
+      `${vertexGateway.baseUrl}/v1/proactive/turns`,
+      validBody(EXPECTED_PROMPTS[1]),
+    );
+    assert.equal(vertexTurn.status, 200, `Vertex proactive request failed: ${vertexTurn.text}`);
+    assertProactiveResponse(vertexTurn.json, "VERTEX_PROACTIVE_TEXT_ONLY");
+    assert.equal(fakeVertex.tokenRequests.length, 1, "Vertex ADC exchange must use the bounded test token endpoint once");
+    assertVertexProviderRequest(fakeVertex.requests[0], EXPECTED_PROMPTS[1]);
+    fakeVertex.mode = "function_call";
+    const functionCall = await postJson(
+      `${vertexGateway.baseUrl}/v1/proactive/turns`,
+      validBody(EXPECTED_PROMPTS[1]),
+    );
+    assert.equal(functionCall.status, 500, "Vertex functionCall output must fail closed");
+    const vertexAfter = await captureAuthorityState(vertexGateway.baseUrl, vertexDataDir);
+    assert.deepEqual(vertexAfter, vertexBefore, "Vertex proactive turns must leave DATA_DIR unchanged");
+    await stopChild(vertexGateway.child);
+    vertexGateway = null;
+    await closeServer(fakeVertex.server);
+    fakeVertex = null;
 
     const fallbackDataDir = path.join(tempDir, "fallback-data");
     fallbackGateway = await startGateway({
@@ -112,14 +189,19 @@ async function main() {
         "all four packaged prompts reach the no-tools model primitive and return inert text with actions:[]",
         "unknown, extra, sensitive-context, malformed, wrong-client, and oversized requests are rejected before model access",
         "provider payload contains only fixed proactive system text plus the allowlisted prompt and no tools",
+        "OpenAI-compatible and Vertex envelopes are exact and executable provider outputs fail closed",
+        "provider response bytes and body-consumption time are bounded",
         "agent-run, conversation, turn, broker, task, event, and complete DATA_DIR state remain unchanged",
         "the no-provider path uses the deterministic text-only fallback without persistence",
       ],
     }, null, 2));
   } finally {
     if (gateway) await stopChild(gateway.child);
+    if (tokenlessGateway) await stopChild(tokenlessGateway.child);
+    if (vertexGateway) await stopChild(vertexGateway.child);
     if (fallbackGateway) await stopChild(fallbackGateway.child);
     if (fakeModel) await closeServer(fakeModel.server);
+    if (fakeVertex) await closeServer(fakeVertex.server);
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
@@ -241,23 +323,20 @@ function assertProviderRequests(requests) {
   requests.forEach((request, index) => {
     assert.deepEqual(
       Object.keys(request).sort(),
-      ["messages", "model", "stream", "temperature"],
+      ["max_tokens", "messages", "model", "stream", "temperature"],
       "proactive model call must not include tools or execution metadata",
     );
     assert.equal(request.model, "proactive-turn-smoke-model");
     assert.equal(request.temperature, 0.2);
+    assert.equal(request.max_tokens, PROACTIVE_PROVIDER_MAX_OUTPUT_TOKENS);
     assert.equal(request.stream, false);
     assert.ok(!Object.hasOwn(request, "tools"));
     assert.ok(!Object.hasOwn(request, "tool_choice"));
     assert.ok(!Object.hasOwn(request, "functions"));
-    assert.ok(Array.isArray(request.messages));
-    const userMessages = request.messages.filter((message) => message.role === "user");
-    const systemMessages = request.messages.filter((message) => message.role === "system");
-    assert.deepEqual(userMessages, [{ role: "user", content: EXPECTED_PROMPTS[index] }]);
-    assert.ok(systemMessages.length >= 1);
-    for (const message of systemMessages) {
-      assert.equal(message.content, PROACTIVE_SYSTEM_PROMPT, "stored profile/persona must not enter the provider request");
-    }
+    assert.deepEqual(request.messages, [
+      { role: "system", content: PROACTIVE_SYSTEM_PROMPT },
+      { role: "user", content: EXPECTED_PROMPTS[index] },
+    ], "provider must receive exactly one fixed system contract and one allowlisted user prompt");
     const serialized = JSON.stringify(request);
     for (const forbidden of [
       "accessibility_context",
@@ -266,10 +345,47 @@ function assertProviderRequests(requests) {
       "conversation_id",
       "User identity profile",
       "Mission-agent access policy",
+      "PROFILE_SYSTEM_CANARY",
+      "PROFILE_USER_CANARY",
     ]) {
       assert.ok(!serialized.includes(forbidden), `provider request leaked forbidden context marker: ${forbidden}`);
     }
   });
+}
+
+function assertVertexProviderRequest(request, transcript) {
+  assert.ok(request, "Vertex provider did not receive a request");
+  assert.deepEqual(Object.keys(request).sort(), ["contents", "generationConfig", "safetySettings", "systemInstruction"]);
+  assert.deepEqual(request.systemInstruction, { parts: [{ text: PROACTIVE_SYSTEM_PROMPT }] });
+  assert.deepEqual(request.contents, [{ role: "user", parts: [{ text: transcript }] }]);
+  assert.deepEqual(request.generationConfig, {
+    temperature: 0.2,
+    maxOutputTokens: PROACTIVE_PROVIDER_MAX_OUTPUT_TOKENS,
+    thinkingConfig: { thinkingBudget: 0 },
+  });
+  assert.ok(Array.isArray(request.safetySettings));
+  assert.ok(!Object.hasOwn(request, "tools"));
+  assert.ok(!Object.hasOwn(request, "toolConfig"));
+  assert.ok(!Object.hasOwn(request, "functionDeclarations"));
+  const serialized = JSON.stringify(request);
+  for (const forbidden of ["PROFILE_SYSTEM_CANARY", "PROFILE_USER_CANARY"]) {
+    assert.ok(!serialized.includes(forbidden), `Vertex request leaked forbidden marker: ${forbidden}`);
+  }
+}
+
+function assertBrowserPromptParity() {
+  const browserPath = process.env.MOA_BROWSER_PROACTIVE_HELPER_PATH
+    || path.resolve(GATEWAY_DIR, "..", "browser_extension", "extension", "proactive-helper.js");
+  if (!fs.existsSync(browserPath)) {
+    if (process.env.MOA_REQUIRE_BROWSER_PROMPT_MATCH === "1") {
+      throw new Error(`browser proactive helper not found: ${browserPath}`);
+    }
+    return;
+  }
+  const source = fs.readFileSync(browserPath, "utf8");
+  const prompts = [...source.matchAll(/instruction:\s*("(?:[^"\\]|\\.)*")/g)]
+    .map((match) => JSON.parse(match[1]));
+  assert.deepEqual(prompts, EXPECTED_PROMPTS, "browser and gateway packaged prompt allowlists drifted");
 }
 
 async function captureAuthorityState(baseUrl, dataDir) {
@@ -308,6 +424,7 @@ function snapshotTree(root) {
 
 async function startFakeModelServer() {
   const requests = [];
+  const state = { mode: "normal" };
   const server = http.createServer(async (request, response) => {
     if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
       response.writeHead(404, { "content-type": "application/json" });
@@ -317,9 +434,23 @@ async function startFakeModelServer() {
     try {
       const body = await readRequestJson(request, 64 * 1024);
       requests.push(body);
+      if (state.mode === "oversize") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ choices: [{ message: { content: "X".repeat(70 * 1024) } }] }));
+        return;
+      }
+      if (state.mode === "stall") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"choices":');
+        const timer = setTimeout(() => response.end("[]}"), 1500);
+        timer.unref?.();
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({
-        choices: [{ message: { content: `MODEL_PROACTIVE_TEXT_ONLY_${requests.length}: inert guidance only.` } }],
+        choices: [{ message: state.mode === "tool_calls"
+          ? { content: "must be rejected", tool_calls: [{ id: "call_1", type: "function", function: { name: "run", arguments: "{}" } }] }
+          : { content: `MODEL_PROACTIVE_TEXT_ONLY_${requests.length}: inert guidance only.` } }],
       }));
     } catch (error) {
       response.writeHead(400, { "content-type": "application/json" });
@@ -328,19 +459,74 @@ async function startFakeModelServer() {
   });
   await listen(server, 0);
   const address = server.address();
-  return {
+  const result = {
     server,
     requests,
     baseUrl: `http://127.0.0.1:${address.port}`,
   };
+  Object.defineProperty(result, "mode", {
+    get: () => state.mode,
+    set: (value) => { state.mode = String(value || "normal"); },
+  });
+  return result;
 }
 
-async function startGateway({ dataDir, homeDir, modelBaseUrl, modelApiKey }) {
+async function startFakeVertexServer() {
+  const requests = [];
+  const tokenRequests = [];
+  const state = { mode: "normal" };
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "POST" && request.url === "/token") {
+      tokenRequests.push(await readRequestText(request, 16 * 1024));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ access_token: "fake-vertex-token", expires_in: 3600 }));
+      return;
+    }
+    if (request.method !== "POST" || !String(request.url || "").endsWith(":generateContent")) {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    const body = await readRequestJson(request, 64 * 1024);
+    requests.push(body);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      candidates: [{ content: { parts: state.mode === "function_call"
+        ? [{ functionCall: { name: "run", args: {} } }]
+        : [{ text: "VERTEX_PROACTIVE_TEXT_ONLY: inert guidance only." }] } }],
+    }));
+  });
+  await listen(server, 0);
+  const address = server.address();
+  const result = { server, requests, tokenRequests, baseUrl: `http://127.0.0.1:${address.port}` };
+  Object.defineProperty(result, "mode", {
+    get: () => state.mode,
+    set: (value) => { state.mode = String(value || "normal"); },
+  });
+  return result;
+}
+
+async function startGateway({
+  dataDir,
+  homeDir,
+  modelBaseUrl = "https://api.openai.com/v1",
+  modelApiKey = "",
+  gatewayToken = TOKEN,
+  provider = "openai-compatible",
+  vertexBaseUrl = "",
+  vertexAccessToken = "",
+  googleCredentialsPath = "",
+  testGoogleOauthTokenUrl = "",
+}) {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ["server.js"], {
     cwd: GATEWAY_DIR,
-    env: gatewayEnv({ port, dataDir, homeDir, modelBaseUrl, modelApiKey }),
+    env: gatewayEnv({
+      port, dataDir, homeDir, modelBaseUrl, modelApiKey, gatewayToken,
+      provider, vertexBaseUrl, vertexAccessToken,
+      googleCredentialsPath, testGoogleOauthTokenUrl,
+    }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const logs = collectLogs(child);
@@ -349,7 +535,11 @@ async function startGateway({ dataDir, homeDir, modelBaseUrl, modelApiKey }) {
   return { baseUrl, child };
 }
 
-function gatewayEnv({ port, dataDir, homeDir, modelBaseUrl, modelApiKey }) {
+function gatewayEnv({
+  port, dataDir, homeDir, modelBaseUrl, modelApiKey, gatewayToken,
+  provider, vertexBaseUrl, vertexAccessToken,
+  googleCredentialsPath, testGoogleOauthTokenUrl,
+}) {
   return {
     PATH: process.env.PATH || "",
     HOME: homeDir,
@@ -362,18 +552,26 @@ function gatewayEnv({ port, dataDir, homeDir, modelBaseUrl, modelApiKey }) {
     ANDROID_OTA_DIR: path.join(dataDir, "android-ota"),
     HARNESS_WORKDIR: GATEWAY_DIR,
     DEFAULT_AGENT_HARNESS: "echo",
-    MOA_GATEWAY_TOKEN: TOKEN,
-    MODEL_PROVIDER: "openai-compatible",
+    MOA_GATEWAY_TOKEN: gatewayToken,
+    MODEL_PROVIDER: provider,
     MODEL_BASE_URL: modelBaseUrl,
     MODEL_ID: "proactive-turn-smoke-model",
     MODEL_API_KEY: modelApiKey,
     OPENAI_API_KEY: "",
     GOOGLE_API_KEY: "",
     GEMINI_API_KEY: "",
-    VERTEX_PROJECT: "",
-    GOOGLE_CLOUD_PROJECT: "",
-    GOOGLE_APPLICATION_CREDENTIALS: "",
-    VERTEX_ACCESS_TOKEN: "",
+    SYSTEM_PROMPT: "PROFILE_SYSTEM_CANARY",
+    MOA_USER_NAME: "PROFILE_USER_CANARY",
+    MOA_USER_NICKNAME: "PROFILE_USER_CANARY",
+    MOA_USER_ADDRESS: "PROFILE_USER_CANARY",
+    PROACTIVE_PROVIDER_TIMEOUT_MS: "400",
+    VERTEX_PROJECT: provider === "vertex" ? "proactive-smoke-project" : "",
+    GOOGLE_CLOUD_PROJECT: provider === "vertex" ? "proactive-smoke-project" : "",
+    VERTEX_LOCATION: "global",
+    VERTEX_API_BASE_URL: vertexBaseUrl,
+    GOOGLE_APPLICATION_CREDENTIALS: googleCredentialsPath,
+    MOA_TEST_GOOGLE_OAUTH_TOKEN_URL: testGoogleOauthTokenUrl,
+    VERTEX_ACCESS_TOKEN: vertexAccessToken,
     VOICE_PROVIDER: "loopback",
     VOICE_STT_PROVIDER: "loopback",
     VOICE_LLM_PROVIDER: "loopback",
@@ -443,6 +641,10 @@ async function responsePayload(response) {
 }
 
 async function readRequestJson(request, maxBytes) {
+  return JSON.parse((await readRequestText(request, maxBytes)) || "{}");
+}
+
+async function readRequestText(request, maxBytes) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -450,7 +652,7 @@ async function readRequestJson(request, maxBytes) {
     if (size > maxBytes) throw new Error("fake model request too large");
     chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function collectLogs(child) {
