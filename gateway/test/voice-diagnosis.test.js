@@ -59,6 +59,18 @@ test("voiceDiagnosisPayload attributes reasoning, tts, storage, and unknown case
     assert.equal(unknown.attributions.transport.status, "unknown");
     assert.equal(unknown.attributions.context.status, "unknown");
     assert.equal(unknown.attributions.playback.status, "unknown");
+
+    const noSpeech = voiceDiagnosisPayload({ sessionId: SESSION_ID, turnId: "metadata_no_speech" }).diagnoses[0];
+    assert.equal(noSpeech.status, "no_speech");
+    assert.equal(noSpeech.attributions.capture.status, "fault");
+
+    const contextFailure = voiceDiagnosisPayload({ sessionId: SESSION_ID, turnId: "metadata_context_failure" }).diagnoses[0];
+    assert.equal(contextFailure.status, "error");
+    assert.equal(contextFailure.attributions.context.status, "fault");
+
+    const unfiltered = voiceDiagnosisPayload({ limit: 20 });
+    assert.match(unfiltered.error, /session_id is required/);
+    assert.deepEqual(unfiltered.diagnoses, []);
   } finally {
     if (previousDataDir === undefined) {
       delete process.env.DATA_DIR;
@@ -75,6 +87,25 @@ function seedFixtures(dataDir) {
   writeFixture(dataDir, fixtureTtsFault());
   writeFixture(dataDir, fixtureStorageFault());
   writeFixture(dataDir, fixtureAntiGaming());
+  writeMetadataOnlyFixture(dataDir, {
+    ...fixtureAntiGaming(),
+    turnId: "metadata_no_speech",
+    status: "no_speech",
+    providerEvents: [event("metadata_no_speech", "turn_no_speech", { status: "no_speech" })],
+  });
+  writeMetadataOnlyFixture(dataDir, {
+    ...fixtureAntiGaming(),
+    turnId: "metadata_context_failure",
+    status: "error",
+    context: { enabled: true, build_failed: true, chars: 0 },
+    providerEvents: [event("metadata_context_failure", "context_attached", { enabled: true, build_failed: true, chars: 0 })],
+  });
+}
+
+function writeMetadataOnlyFixture(dataDir, fixture) {
+  const voiceSessionsDir = path.join(dataDir, "voice-sessions", SESSION_ID);
+  fs.mkdirSync(voiceSessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(voiceSessionsDir, `${fixture.turnId}.json`), JSON.stringify(metadataRecord(fixture), null, 2));
 }
 
 function fixtureReasoningFault() {

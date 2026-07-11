@@ -1663,9 +1663,15 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
         return;
       }
+      const diagnosisSessionId = url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || "";
+      const diagnosisTurnId = url.searchParams.get("turn_id") || "";
+      if (!diagnosisSessionId) {
+        sendJson(response, 400, { error: "session_id is required for a bounded voice diagnosis query" });
+        return;
+      }
       sendJson(response, 200, voiceDiagnosisPayload({
-        sessionId: url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || "",
-        turnId: url.searchParams.get("turn_id") || "",
+        sessionId: diagnosisSessionId,
+        turnId: diagnosisTurnId,
         limit: Number(url.searchParams.get("limit") || 10),
       }));
       return;
@@ -10200,16 +10206,25 @@ function voiceDiagnosisPayload({ sessionId = "", turnId = "", limit = 10 } = {})
   const safeLimit = Math.max(1, Math.min(Number(limit) || 10, VOICE_DIAGNOSIS_LIMIT_MAX));
   const safeSessionId = sessionId ? sanitizeOptionalId(sessionId, "") : "";
   const safeTurnId = turnId ? sanitizeOptionalId(turnId, "") : "";
-  let records = [];
+  if (!safeSessionId) {
+    return {
+      generated_at: new Date().toISOString(),
+      session_id: safeSessionId,
+      turn_id: safeTurnId,
+      limit: safeLimit,
+      error: "session_id is required for a bounded voice diagnosis query",
+      diagnoses: [],
+    };
+  }
+  let records;
   if (safeTurnId) {
-    const record = findVoiceTurnRecordById(safeTurnId, safeSessionId);
-    if (record) {
-      records = [record];
-    }
-  } else if (safeSessionId) {
-    records = listVoiceTurnRecordsForSession(safeSessionId, "").slice(-safeLimit).reverse();
+    const canonical = readVoiceTurnRecord(safeSessionId, safeTurnId);
+    const metadata = readVoiceSessionMetadata(safeSessionId, safeTurnId);
+    records = canonical
+      ? [canonical]
+      : (metadata ? [voiceDiagnosisRecordFromMetadata(metadata, safeSessionId, safeTurnId)] : []);
   } else {
-    records = listAllVoiceTurnRecords().slice(-safeLimit).reverse();
+    records = listVoiceTurnRecordsForSession(safeSessionId, "").slice(-safeLimit).reverse();
   }
   return {
     generated_at: new Date().toISOString(),
@@ -10217,6 +10232,26 @@ function voiceDiagnosisPayload({ sessionId = "", turnId = "", limit = 10 } = {})
     turn_id: safeTurnId,
     limit: safeLimit,
     diagnoses: records.slice(0, safeLimit).map((record) => voiceTurnDiagnosis(record)),
+  };
+}
+
+function voiceDiagnosisRecordFromMetadata(metadata, sessionId, turnId) {
+  const safe = plainObject(metadata);
+  return {
+    id: turnId,
+    turn_id: turnId,
+    session_id: sessionId,
+    conversation_id: String(safe.conversation_id || sessionId),
+    branch_id: String(safe.branch_id || "default"),
+    profile_version: String(safe.profile_version || ""),
+    source: String(safe.source || ""),
+    classification: String(safe.status || "voice_session"),
+    transcript: "",
+    transcript_source: "",
+    created_at: String(safe.started_at || safe.updated_at || ""),
+    updated_at: String(safe.updated_at || safe.started_at || ""),
+    response: {},
+    references: { voice_session: safe },
   };
 }
 
@@ -10354,6 +10389,12 @@ function voiceContextDiagnosis(voiceSession, metadata, providerEvents) {
     : (typeof attached?.enabled === "boolean" ? attached.enabled : null);
   const chars = firstFiniteNumber(context.chars, attached?.chars);
   const allBranches = context.all_branches_context === true || attached?.all_branches_context === true;
+  if (context.build_failed === true || attached?.build_failed === true) {
+    return {
+      status: "fault",
+      summary: "durable context assembly failed; no context pack was attached",
+    };
+  }
   if (enabled === true) {
     return {
       status: "ok",

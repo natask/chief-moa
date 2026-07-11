@@ -383,6 +383,7 @@ class VoiceSessionConnection {
       completing: false,
       recordedCanonical: false,
       contextPrompt: "",
+      contextBuildFailed: false,
       contextSummary: {},
       captureSummary: {},
       transportSummary: {},
@@ -472,6 +473,7 @@ class VoiceSessionConnection {
         device_id: turn.deviceId || "",
       }) || "").slice(0, 12000);
     } catch {
+      turn.contextBuildFailed = true;
       return "";
     }
   }
@@ -1479,6 +1481,7 @@ function normalizePlaybackPolicy(policy) {
 function contextSummaryForTurn(turn, contextProvider) {
   return {
     enabled: typeof contextProvider === "function",
+    build_failed: turn?.contextBuildFailed === true,
     chars: String(turn?.contextPrompt || "").length,
     all_branches_context: turn?.allBranchesContext === true,
   };
