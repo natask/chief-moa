@@ -27,6 +27,9 @@
       gbrain under `moa/memory/thread/*`.
 - [x] 3.4 `scripts/smoke-thread-enrichment.js` (recall block + bound, cadence
       summary + gbrain index, fork inheritance).
+- [x] 3.5 Add a canonical context artifact envelope with version/cache identity,
+      ranking rationale, redaction metadata, and a bounded response receipt for
+      chat and cascaded voice retrieval.
 
 ## 4. Incognito persistence skips
 

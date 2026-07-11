@@ -199,9 +199,12 @@ available, shows partial/final user transcript feedback above it, and streams
 assistant text into the result stack above the input. The gateway still stores
 durable session, branch, turn, transcript, provider-event, and agent-run
 history. Realtime providers receive a bounded Moa-owned context pack at session
-start so provider memory is not the product database. If the user wants history,
-they ask Moa for it through the same intent surface instead of browsing visible
-scrollback.
+start so provider memory is not the product database. The gateway's chat and
+cascaded voice paths assemble that pack through a canonical context-artifact
+envelope with versioned cache identity, stable source ids, ranking rationale,
+and secret-like-text redaction before any provider call. If the user wants
+history, they ask Moa for it through the same intent surface instead of
+browsing visible scrollback.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript

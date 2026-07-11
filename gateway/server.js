@@ -30,6 +30,7 @@ const { createUiSpecStore } = require("./lib/ui-spec");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createBrain } = require("./lib/brain");
 const { createThreadStore, isIncognitoBranch, newBranchId } = require("./lib/thread-store");
+const { buildContextArtifact, contextArtifactReceipt } = require("./lib/context-artifact");
 const {
   resolveContextDecision,
   buildContextManagementToolDef,
@@ -184,6 +185,8 @@ const BRAIN_CONTEXT_MAX_CHARS = Number(process.env.BRAIN_CONTEXT_MAX_CHARS || 12
 // The bounded semantic-recall block: brain.recall over rolling thread summaries
 // and intent memories, injected per query alongside standing facts + recency.
 const THREAD_RECALL_MAX_CHARS = Number(process.env.THREAD_RECALL_MAX_CHARS || 1200);
+const CONTEXT_ARTIFACTS_ENABLED = process.env.CONTEXT_ARTIFACTS_ENABLED !== "0";
+const CONTEXT_ARTIFACT_MAX_SOURCES = Math.max(8, Number(process.env.CONTEXT_ARTIFACT_MAX_SOURCES || 32));
 // Regenerate a thread's rolling summary every Nth persisted turn on the branch.
 const THREAD_SUMMARY_EVERY_TURNS = Math.max(1, Number(process.env.THREAD_SUMMARY_EVERY_TURNS || 6));
 const SESSION_CONTEXT_MAX_CHARS = Number(process.env.SESSION_CONTEXT_MAX_CHARS || 5000);
@@ -2233,31 +2236,39 @@ async function handleChat(request, response) {
   const profileVersion = agentProfile.currentVersion(profileOptions);
   const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
   const screenContext = formatScreenContext(body.screen);
-  // Recall the user's facts/persona from the Brain before answering, keyed off
-  // the latest user message, and prepend it as a bounded system-context block
-  // alongside the system prompt + screen context so the model always knows the
-  // user.
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const userText = lastUser?.content || "";
-  const memoryContext = recallMemoryContext(userText);
   // Fork-point inheritance: continuing on a fork branch reads the parent's
   // history up to the fork point plus the fork's own turns.
   const callerThread = threadStore.getThread(sessionId, callerBranchId);
   const inheritFrom = callerThread?.kind === "fork" && callerThread.parent_branch_id && callerThread.fork_point
     ? { branchId: callerThread.parent_branch_id, uptoCreatedAt: callerThread.fork_point.created_at }
     : null;
-  const sessionContext = durableSessionContextBlock({
+  const contextArtifact = buildCanonicalContextArtifact({
+    sessionId,
+    branchId: callerBranchId,
+    query: userText,
+    profileVersion,
+    excludeTurnId: turnId,
+    allBranches: body.all_branches_context === true,
+    inheritFrom,
+  });
+  const legacyMemoryContext = contextArtifact ? "" : recallMemoryContext(userText);
+  const legacySessionContext = contextArtifact ? "" : durableSessionContextBlock({
     sessionId,
     branchId: callerBranchId,
     excludeTurnId: turnId,
     allBranches: body.all_branches_context === true,
     inheritFrom,
   });
-  // Per-query semantic recall over rolling thread summaries + intent memories,
-  // deduped against the recency block. retrieval_query is produced by the tool
-  // during the answer, so at read time the raw user text is the recall query.
-  const recallContext = threadRecallContext(userText, sessionContext);
-  const systemBlocks = [memoryContext, sessionContext, recallContext, screenContext].filter(Boolean);
+  const legacyRecallContext = contextArtifact ? "" : threadRecallContext(userText, legacySessionContext);
+  const systemBlocks = [
+    contextArtifact?.text || "",
+    !contextArtifact ? legacyMemoryContext : "",
+    !contextArtifact ? legacySessionContext : "",
+    !contextArtifact ? legacyRecallContext : "",
+    screenContext,
+  ].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -2375,7 +2386,7 @@ async function handleChat(request, response) {
     turn_id: turnId,
     profile_version: profileVersion,
     text,
-    context: contextResponseBlock(thread, decision),
+    context: contextResponseBlock(thread, decision, contextArtifact),
   });
 }
 
@@ -2956,6 +2967,7 @@ function summarizeBrowserTurn(record) {
     created_at: record.created_at,
     updated_at: record.updated_at,
     completed_at: record.completed_at || "",
+    deleted_at: record.deleted_at || "",
   };
 }
 
@@ -6339,7 +6351,6 @@ async function handleVoiceTurn(request, response) {
   });
   const filingBranchId = voiceThread.branch_id;
   const incognitoTurn = voiceThread.persisted === false;
-  const voiceContextBlock = contextResponseBlock(voiceThread, { ...voiceDecision, action: voiceEffectiveAction });
   const screen = summarizeScreen(body.screen || body.context?.screen);
   const profileVersion = agentProfile.currentVersion(profileOptions);
   const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
@@ -6556,19 +6567,27 @@ async function handleVoiceTurn(request, response) {
   try {
     const messages = voiceMessages(body, transcript, body.context_turn_limit);
     const screenContext = formatScreenContext(body.screen || body.context?.screen);
-    // Recall the user's facts/persona from the Brain (keyed off this turn's
-    // transcript) and inject it as a bounded system block so the spoken answer
-    // always reflects what we know about the user.
-    const memoryContext = recallMemoryContext(transcript);
-    const sessionContext = durableSessionContextBlock({
+    const contextArtifact = buildCanonicalContextArtifact({
+      sessionId,
+      branchId,
+      query: transcript,
+      profileVersion,
+      excludeTurnId: turnId,
+      allBranches: body.all_branches_context === true,
+    });
+    const legacyMemoryContext = contextArtifact ? "" : recallMemoryContext(transcript);
+    const legacySessionContext = contextArtifact ? "" : durableSessionContextBlock({
       sessionId,
       branchId,
       excludeTurnId: turnId,
       allBranches: body.all_branches_context === true,
     });
+    const legacyRecallContext = contextArtifact ? "" : threadRecallContext(transcript, legacySessionContext);
     const systemBlocks = [
-      memoryContext,
-      sessionContext,
+      contextArtifact?.text || "",
+      !contextArtifact ? legacyMemoryContext : "",
+      !contextArtifact ? legacySessionContext : "",
+      !contextArtifact ? legacyRecallContext : "",
       screenContext ? voiceSystemContext(screenContext) : "",
     ].filter(Boolean);
     const modelMessages = systemBlocks.length
@@ -6619,7 +6638,7 @@ async function handleVoiceTurn(request, response) {
         actions: turnActions,
         follow_up_expected: false,
       }),
-      context: voiceContextBlock,
+      context: contextResponseBlock(voiceThread, { ...voiceDecision, action: voiceEffectiveAction }, contextArtifact),
     };
     await writeCompletedVoiceTurnRecord({
       ...baseRecord,
@@ -10822,16 +10841,24 @@ async function runCascadedVoiceReasoningInner(input) {
   const reasonInheritFrom = reasonThread?.kind === "fork" && reasonThread.parent_branch_id && reasonThread.fork_point
     ? { branchId: reasonThread.parent_branch_id, uptoCreatedAt: reasonThread.fork_point.created_at }
     : null;
-  const sessionContext = durableSessionContextBlock({
+  const contextArtifact = buildCanonicalContextArtifact({
+    sessionId: reasonSessionId,
+    branchId: reasonBranchId,
+    query: transcript,
+    profileVersion: agentProfile.currentVersion(profileOptions),
+    excludeTurnId: input?.turn_id || "",
+    allBranches: input?.all_branches_context === true || input?.allBranchesContext === true,
+    inheritFrom: reasonInheritFrom,
+  });
+  const legacySessionContext = contextArtifact ? "" : durableSessionContextBlock({
     sessionId: reasonSessionId,
     branchId: reasonBranchId,
     excludeTurnId: input?.turn_id || "",
     allBranches: input?.all_branches_context === true || input?.allBranchesContext === true,
     inheritFrom: reasonInheritFrom,
   });
-  const memoryContext = recallMemoryContext(transcript);
-  // Per-query semantic recall over rolling thread summaries + intent memories.
-  const recallContext = threadRecallContext(transcript, sessionContext);
+  const legacyMemoryContext = contextArtifact ? "" : recallMemoryContext(transcript);
+  const legacyRecallContext = contextArtifact ? "" : threadRecallContext(transcript, legacySessionContext);
   const languageDirective = replyLanguageDirective(profile);
   const languageControl = languageControlDirective(profile);
   const deliveryDirective = voiceDeliveryDirective(profile);
@@ -10840,7 +10867,19 @@ async function runCascadedVoiceReasoningInner(input) {
   const expressiveDirective = voiceExpressiveDirective(input);
   const personaBlock = sessionPersonaBlock(input?.persona);
   const messages = [{ role: "user", content: transcript }];
-  const systemBlocks = [memoryContext, sessionContext, recallContext, modalityHint, expressiveDirective, personaBlock, languageControl, deliveryDirective, toolAckDirective, languageDirective].filter(Boolean);
+  const systemBlocks = [
+    contextArtifact?.text || "",
+    !contextArtifact ? legacyMemoryContext : "",
+    !contextArtifact ? legacySessionContext : "",
+    !contextArtifact ? legacyRecallContext : "",
+    modalityHint,
+    expressiveDirective,
+    personaBlock,
+    languageControl,
+    deliveryDirective,
+    toolAckDirective,
+    languageDirective,
+  ].filter(Boolean);
   const modelMessages = systemBlocks.length
     ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
     : messages;
@@ -10952,7 +10991,8 @@ async function runCascadedVoiceReasoningInner(input) {
     classification: "chat",
     context: contextResponseBlock(
       { branch_id: input?.branch_id || "default", persisted: contextDecision.action !== "incognito", label: contextDecision.thread_label },
-      contextDecision
+      contextDecision,
+      contextArtifact
     ),
   };
 }
@@ -11507,14 +11547,28 @@ async function recordStreamingVoiceTurn(turn) {
     const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
     const profile = agentProfile.effective(profileOptions);
     const messages = voiceMessages({}, transcript);
-    const memoryContext = recallMemoryContext(transcript);
-    const sessionContext = durableSessionContextBlock({
+    const contextArtifact = buildCanonicalContextArtifact({
+      sessionId,
+      branchId,
+      query: transcript,
+      profileVersion,
+      excludeTurnId: turnId,
+      allBranches: turn.all_branches_context === true || turn.allBranchesContext === true,
+    });
+    const legacyMemoryContext = contextArtifact ? "" : recallMemoryContext(transcript);
+    const legacySessionContext = contextArtifact ? "" : durableSessionContextBlock({
       sessionId,
       branchId,
       excludeTurnId: turnId,
       allBranches: turn.all_branches_context === true || turn.allBranchesContext === true,
     });
-    const systemBlocks = [memoryContext, sessionContext].filter(Boolean);
+    const legacyRecallContext = contextArtifact ? "" : threadRecallContext(transcript, legacySessionContext);
+    const systemBlocks = [
+      contextArtifact?.text || "",
+      !contextArtifact ? legacyMemoryContext : "",
+      !contextArtifact ? legacySessionContext : "",
+      !contextArtifact ? legacyRecallContext : "",
+    ].filter(Boolean);
     const modelMessages = systemBlocks.length
       ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
       : messages;
@@ -12001,6 +12055,7 @@ function summarizeChatTurnRecord(record) {
     user_text: truncate(String(userText || ""), 2000),
     response_text: truncate(String(record.response_text || ""), 2000),
     created_at: String(record.ts || record.created_at || ""),
+    deleted_at: String(record.deleted_at || ""),
   };
 }
 
@@ -12270,6 +12325,255 @@ function threadRecallContext(query, excludeText = "") {
     ...bullets,
   ].join("\n");
   return truncate(block, THREAD_RECALL_MAX_CHARS);
+}
+
+function buildCanonicalContextArtifact(options = {}) {
+  if (!CONTEXT_ARTIFACTS_ENABLED) {
+    return null;
+  }
+  try {
+    const sessionId = sanitizeOptionalId(options.sessionId || options.session_id, defaultSessionId());
+    const branchId = sanitizeOptionalId(options.branchId || options.branch_id, "default");
+    const excludeTurnId = String(options.excludeTurnId || options.exclude_turn_id || "");
+    const allBranches = options.allBranches === true || options.all_branches === true;
+    const turnLimit = Math.max(1, Math.min(Number(options.maxVoiceTurns || SESSION_CONTEXT_TURN_LIMIT), 25));
+    const chatLimit = Math.max(1, Math.min(Number(options.maxChatTurns || SESSION_CONTEXT_TURN_LIMIT), 25));
+    const maxChars = Math.max(1000, Math.min(Number(options.maxChars || SESSION_CONTEXT_MAX_CHARS), 12000));
+    const query = String(options.query || "").trim();
+    const inheritFrom = options.inheritFrom && !allBranches ? options.inheritFrom : null;
+    const inheritBranch = inheritFrom ? sanitizeOptionalId(inheritFrom.branchId || inheritFrom.branch_id, "") : "";
+    const inheritUpto = inheritFrom ? String(inheritFrom.uptoCreatedAt || inheritFrom.upto_created_at || "") : "";
+    const branchFilter = allBranches ? "" : branchId;
+    const withinForkPoint = (createdAt) => !inheritUpto || String(createdAt || "") <= inheritUpto;
+
+    let voiceTurns = listVoiceTurnRecordsForSession(sessionId, branchFilter)
+      .filter((turn) => String(turn.id || "") !== excludeTurnId);
+    let chatTurns = listChatTurnRecordsForSession(sessionId, branchFilter, chatLimit)
+      .filter((turn) => String(turn.turn_id || "") !== excludeTurnId);
+    let browserTurns = browserTurnsForSession(sessionId, branchFilter, chatLimit)
+      .filter((turn) => String(turn.turn_id || "") !== excludeTurnId);
+    const inheritedVoiceIds = new Set();
+    const inheritedChatIds = new Set();
+    const inheritedBrowserIds = new Set();
+    if (inheritBranch && inheritBranch !== branchFilter) {
+      const parentVoice = listVoiceTurnRecordsForSession(sessionId, inheritBranch)
+        .filter((turn) => String(turn.id || "") !== excludeTurnId && withinForkPoint(turn.created_at));
+      const parentChat = listChatTurnRecordsForSession(sessionId, inheritBranch, chatLimit)
+        .filter((turn) => String(turn.turn_id || "") !== excludeTurnId && withinForkPoint(turn.created_at));
+      const parentBrowser = browserTurnsForSession(sessionId, inheritBranch, chatLimit)
+        .filter((turn) => String(turn.turn_id || "") !== excludeTurnId && withinForkPoint(turn.created_at || turn.updated_at));
+      for (const turn of parentVoice) inheritedVoiceIds.add(String(turn.id || ""));
+      for (const turn of parentChat) inheritedChatIds.add(String(turn.turn_id || ""));
+      for (const turn of parentBrowser) inheritedBrowserIds.add(String(turn.turn_id || turn.id || ""));
+      voiceTurns = parentVoice.concat(voiceTurns).sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+      chatTurns = parentChat.concat(chatTurns).sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+      browserTurns = parentBrowser.concat(browserTurns).sort((a, b) => String(a.created_at || a.updated_at || "").localeCompare(String(b.created_at || b.updated_at || "")));
+    }
+    voiceTurns = voiceTurns.slice(-turnLimit);
+    chatTurns = chatTurns.slice(-chatLimit);
+    browserTurns = browserTurns.slice(-chatLimit);
+    const runs = runsForSession(sessionId, voiceTurns).slice(0, 5);
+    const browserTasks = browserTasksForSession(sessionId, branchFilter, 5);
+
+    const sources = [];
+    let sortRank = 10;
+
+    for (const memory of brain.recallStandingFacts(BRAIN_RECALL_LIMIT)) {
+      const snippet = truncate(String(memory?.snippet || "").trim(), 400);
+      if (!snippet) continue;
+      const slug = String(memory?.slug || "");
+      const sourceId = brainContextSourceId("standing", slug || snippet);
+      sources.push({
+        source_id: sourceId,
+        section: "standing",
+        bucket: "standing",
+        reason: "standing_fact",
+        branch_id: branchId,
+        revision: `${slug}:${snippet}`,
+        dedupe_key: `standing:${snippet.toLowerCase()}`,
+        sort_rank: sortRank,
+        lines: [`- [${sourceId}] ${snippet}`],
+      });
+      sortRank += 1;
+    }
+
+    const recencyLines = [];
+    for (const turn of voiceTurns) {
+      const sourceId = `voice:${sanitizeLooseId(turn.id || turn.turn_id || "turn")}`;
+      const user = truncate(contextUserTranscript(turn.transcript, turn.transcript_source), 500);
+      const assistant = truncate(String(turn.response?.display || turn.response?.text || turn.response?.speak || ""), 500);
+      const interrupted = turn.references?.voice_session?.incomplete === true || turn.classification === "interrupted";
+      const lines = [`- [${sourceId}] user (${turn.classification || "turn"}, branch=${turn.branch_id || "default"}): ${user || "(empty)"}`];
+      if (assistant) {
+        lines.push(`  assistant${interrupted ? " (interrupted, partial)" : ""}: ${assistant}`);
+      }
+      sources.push({
+        source_id: sourceId,
+        section: "voice",
+        bucket: "recency",
+        reason: inheritedVoiceIds.has(String(turn.id || "")) ? "fork_inherited_voice_turn" : "recent_voice_turn",
+        branch_id: String(turn.branch_id || "default"),
+        created_at: String(turn.created_at || ""),
+        revision: `${turn.id || ""}:${turn.updated_at || turn.created_at || ""}`,
+        dedupe_key: `${sourceId}:${user}:${assistant}`,
+        deleted_at: turn.deleted_at,
+        incognito: isIncognitoBranch(turn.branch_id || ""),
+        sort_rank: sortRank,
+        lines,
+      });
+      recencyLines.push(lines.join("\n"));
+      sortRank += 1;
+    }
+
+    for (const turn of chatTurns) {
+      const sourceId = `chat:${sanitizeLooseId(turn.turn_id || "turn")}`;
+      const user = truncate(String(turn.user_text || ""), 500) || "(empty)";
+      const assistant = truncate(String(turn.response_text || ""), 500);
+      const lines = [`- [${sourceId}] user (${turn.source || "chat"}, branch=${turn.branch_id || "default"}): ${user}`];
+      if (assistant) {
+        lines.push(`  assistant: ${assistant}`);
+      }
+      sources.push({
+        source_id: sourceId,
+        section: "chat",
+        bucket: "recency",
+        reason: inheritedChatIds.has(String(turn.turn_id || "")) ? "fork_inherited_chat_turn" : "recent_chat_turn",
+        branch_id: String(turn.branch_id || "default"),
+        created_at: String(turn.created_at || ""),
+        revision: `${turn.turn_id || ""}:${turn.created_at || ""}`,
+        dedupe_key: `${sourceId}:${user}:${assistant}`,
+        deleted_at: turn.deleted_at,
+        incognito: isIncognitoBranch(turn.branch_id || ""),
+        sort_rank: sortRank,
+        lines,
+      });
+      recencyLines.push(lines.join("\n"));
+      sortRank += 1;
+    }
+
+    for (const turn of browserTurns) {
+      const sourceId = `browser:${sanitizeLooseId(turn.turn_id || turn.id || "turn")}`;
+      const page = turn.page_ref?.title || turn.page_ref?.url || "";
+      const user = truncate(String(turn.user_text || ""), 500) || "(empty)";
+      const assistant = truncate(String(turn.response_text || ""), 500);
+      const lines = [`- [${sourceId}] user (${turn.status}, branch=${turn.branch_id || "default"}${page ? `, page=${truncate(String(page), 160)}` : ""}): ${user}`];
+      if (assistant) {
+        lines.push(`  assistant: ${assistant}`);
+      }
+      sources.push({
+        source_id: sourceId,
+        section: "browser",
+        bucket: "recency",
+        reason: inheritedBrowserIds.has(String(turn.turn_id || turn.id || "")) ? "fork_inherited_browser_turn" : "recent_browser_turn",
+        branch_id: String(turn.branch_id || "default"),
+        created_at: String(turn.created_at || turn.updated_at || ""),
+        revision: `${turn.turn_id || turn.id || ""}:${turn.updated_at || turn.created_at || ""}`,
+        dedupe_key: `${sourceId}:${user}:${assistant}`,
+        deleted_at: turn.deleted_at,
+        incognito: isIncognitoBranch(turn.branch_id || ""),
+        sort_rank: sortRank,
+        lines,
+      });
+      recencyLines.push(lines.join("\n"));
+      sortRank += 1;
+    }
+
+    for (const run of runs) {
+      const sourceId = `run:${sanitizeLooseId(run.id || "run")}`;
+      const lines = [`- [${sourceId}] ${run.id}: ${run.status} harness=${run.harness || ""} prompt=${truncate(String(run.prompt_preview || run.prompt || ""), 260)}`];
+      if (run.output_preview) {
+        lines.push(`  output: ${truncate(String(run.output_preview || ""), 260)}`);
+      }
+      sources.push({
+        source_id: sourceId,
+        section: "runs",
+        bucket: "operational",
+        reason: "recent_agent_run",
+        branch_id: branchId,
+        created_at: String(run.updated_at || run.created_at || ""),
+        revision: `${run.id || ""}:${run.updated_at || run.created_at || ""}`,
+        dedupe_key: `${sourceId}:${run.status}:${run.output_preview || ""}`,
+        sort_rank: sortRank,
+        lines,
+      });
+      recencyLines.push(lines.join("\n"));
+      sortRank += 1;
+    }
+
+    for (const task of browserTasks) {
+      const sourceId = `task:${sanitizeLooseId(task.id || "task")}`;
+      const lines = [`- [${sourceId}] ${task.id}: ${task.status} url=${task.url || "(current tab)"} instruction=${truncate(String(task.instruction || ""), 260)}`];
+      if (task.latest_receipt?.summary) {
+        lines.push(`  receipt: ${truncate(String(task.latest_receipt.summary || ""), 260)}`);
+      }
+      sources.push({
+        source_id: sourceId,
+        section: "tasks",
+        bucket: "operational",
+        reason: "recent_browser_task",
+        branch_id: String(task.branch_id || branchId),
+        created_at: String(task.updated_at || task.created_at || ""),
+        revision: `${task.id || ""}:${task.updated_at || task.created_at || ""}`,
+        dedupe_key: `${sourceId}:${task.status}:${task.latest_receipt?.summary || ""}`,
+        sort_rank: sortRank,
+        lines,
+      });
+      recencyLines.push(lines.join("\n"));
+      sortRank += 1;
+    }
+
+    const recallQuestion = query || String(options.fallbackQuery || "").trim();
+    if (recallQuestion) {
+      const recallHits = brain.recall(recallQuestion, Math.max(BRAIN_RECALL_LIMIT, 8));
+      const threadPrefix = `${brain.slugPrefix}/thread/`;
+      const intentPrefix = `${brain.slugPrefix}/intent/`;
+      const recencyLower = recencyLines.join("\n").toLowerCase();
+      const seenRecall = new Set();
+      for (const hit of Array.isArray(recallHits) ? recallHits : []) {
+        const slug = String(hit?.slug || "");
+        const snippet = String(hit?.snippet || "").trim();
+        if (!snippet) continue;
+        if (!slug.startsWith(threadPrefix) && !slug.startsWith(intentPrefix)) continue;
+        const key = snippet.toLowerCase();
+        if (seenRecall.has(key)) continue;
+        if (recencyLower && recencyLower.includes(key.slice(0, 80))) continue;
+        seenRecall.add(key);
+        const kind = slug.startsWith(threadPrefix) ? "thread" : "intent";
+        const sourceId = brainContextSourceId(kind, slug || snippet);
+        sources.push({
+          source_id: sourceId,
+          section: "recall",
+          bucket: "semantic_recall",
+          reason: kind === "thread" ? "semantic_thread_summary" : "semantic_intent_memory",
+          branch_id: branchId,
+          revision: `${slug}:${snippet}`,
+          dedupe_key: `recall:${key}`,
+          sort_rank: sortRank,
+          lines: [`- [${sourceId}] (${kind}) ${truncate(snippet, 400)}`],
+        });
+        sortRank += 1;
+        if (seenRecall.size >= 6) break;
+      }
+    }
+
+    return buildContextArtifact({
+      session_id: sessionId,
+      branch_id: branchId,
+      all_branches: allBranches,
+      profile_version: options.profileVersion || options.profile_version || "",
+      query,
+      max_chars: maxChars,
+      max_sources: CONTEXT_ARTIFACT_MAX_SOURCES,
+      sources,
+    });
+  } catch (error) {
+    console.warn(`context artifact build failed (${cleanError(error)})`);
+    return null;
+  }
+}
+
+function brainContextSourceId(kind, input) {
+  return `brain:${kind}:${crypto.createHash("sha256").update(String(input || ""), "utf8").digest("hex").slice(0, 12)}`;
 }
 
 // Schedule an asynchronous rolling-summary regeneration for a thread. Runs AFTER
@@ -13701,8 +14005,8 @@ function resolveTurnFilingThread({ sessionId, callerBranchId, decision, surface 
 
 // The bounded `context` block returned to clients so they can show where a turn
 // landed and whether it was saved (incognito shows persisted:false).
-function contextResponseBlock(thread, decision) {
-  return {
+function contextResponseBlock(thread, decision, artifact = null) {
+  const response = {
     action: decision?.action || "continue",
     branch_id: thread?.branch_id || "default",
     thread_label: thread?.label || decision?.thread_label || "",
@@ -13711,6 +14015,11 @@ function contextResponseBlock(thread, decision) {
     model_override: Boolean(decision?.model_override),
     retrieval_query: decision?.retrieval_query || "",
   };
+  const receipt = contextArtifactReceipt(artifact);
+  if (receipt) {
+    response.artifact = receipt;
+  }
+  return response;
 }
 
 // Store the decision as a product event so every routing choice is inspectable

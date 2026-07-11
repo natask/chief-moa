@@ -74,6 +74,27 @@ recency block. A new or incognito thread SHALL still load standing facts.
 - **THEN** a bounded "Related past threads" block is injected into the model
   messages
 
+### Requirement: Canonical context artifact
+The gateway SHALL assemble the bounded chat and cascaded-voice retrieval inputs
+as a canonical context artifact before provider calls. That artifact SHALL carry
+an artifact version, artifact id, deterministic cache identity, stable source
+ids, ranking rationale, truncation metadata, and secret-like-text redaction
+metadata. The user-visible response `context` block SHALL expose only a bounded
+receipt of that artifact rather than the full raw context payload.
+
+#### Scenario: Query or source revision invalidates the cache identity
+- **WHEN** the retrieval query changes or any cited source revision changes
+- **THEN** the artifact cache identity changes
+- **AND** an equivalent query over the same cited source revisions keeps the
+  same cache identity
+
+#### Scenario: Deleted or incognito content is excluded from the artifact
+- **WHEN** a candidate retrieval item is marked deleted or belongs to an
+  incognito branch
+- **THEN** the gateway omits it from the context artifact
+- **AND** the artifact receipt records the omission without surfacing the hidden
+  content
+
 ### Requirement: Rolling per-thread summaries
 The gateway SHALL maintain a rolling summary per thread, regenerated
 asynchronously after the response is sent (never adding turn latency) on a

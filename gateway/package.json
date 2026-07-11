@@ -65,6 +65,7 @@
     "smoke:browser-agent-routing": "node scripts/smoke-browser-agent-routing.js",
     "smoke:threads": "node scripts/smoke-threads.js",
     "smoke:context-decision": "node scripts/smoke-context-decision.js",
+    "smoke:context-artifact": "node scripts/smoke-context-artifact.js",
     "smoke:thread-enrichment": "node scripts/smoke-thread-enrichment.js",
     "smoke:incognito": "node scripts/smoke-incognito.js",
     "smoke:execute-engine": "node scripts/smoke-execute-engine.js",
