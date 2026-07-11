@@ -165,6 +165,12 @@ voice/LLM trace correlation.
   product map were frozen. Both `canonical-intent-runtime` and
   `voice-capture-draft-controls` validate successfully with
   `openspec validate <change> --strict`.
+- 2026-07-11: found and audited the existing authenticated, bounded voice
+  diagnosis endpoint rather than proposing a duplicate. Recorded in
+  `research/existing-voice-diagnosis.md` that conservative per-turn attribution,
+  evidence gaps, redaction, storage checks, and anti-gaming tests already exist;
+  the missing product is cross-session temporal grouping, tail regression,
+  intent/release/code/CI correlation, a durable brief, and delivery.
 - 2026-07-11: intent focused repair passed 16/16, but the main orchestrator then
   reproduced a real-adapter race with two independent runtimes over JSONL: both
   commands fulfilled and persisted stream versions `[1,2,2]`. Added repair
