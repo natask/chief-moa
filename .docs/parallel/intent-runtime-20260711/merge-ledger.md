@@ -78,6 +78,11 @@ voice/LLM trace correlation.
   selected before answering. The Android resolver-only branch adds no required
   behavior and will not be merged.
 - Live deployment and state-safety audit: pending integration.
+- Local reference-product resolution: complete. The forgotten software-factory
+  reference is Superset (`/projs/superset`), with Emdash (`/projs/emdash`) as
+  the direct local/YC competitor. Superlog and StarSling resolve the agentic
+  observability and self-driving CI references. These are recorded as separate
+  adapter/evidence nodes from canonical voice transactions and intent state.
 
 ## Baseline evidence
 
@@ -130,3 +135,7 @@ voice/LLM trace correlation.
   controls, bounded PCM coalescing, retryable failed SEND claims, and capability
   advertisement only after the full path is active. The worktree will be
   created only after the audited intent/store slices are merged into staging.
+- 2026-07-11: resolved and recorded the user's forgotten product references
+  from local source plus current official YC pages in
+  `research/reference-product-graph.md`; no external product was installed,
+  configured, or given repository/user data.
