@@ -21,15 +21,26 @@ before reading AX context.
       verified signing identity
 - **THEN** the observation grant is revoked before another AX event is accepted
 
-### Requirement: V1 observation uses public semantic AX only
-The macOS surface SHALL use public `AXUIElement` and `AXObserver` APIs and SHALL
-NOT require Screen Recording, synthetic input, Apple Events, or private
-frameworks in v1.
+### Requirement: Observation and optional visual context use public APIs
+The macOS surface SHALL use public `AXUIElement` and `AXObserver` APIs for
+semantic context and SHALL offer an independently enabled public
+ScreenCaptureKit focused-window attachment. It SHALL NOT use synthetic input,
+Apple Events, or private frameworks.
 
 #### Scenario: Scoped app changes
 - **WHEN** a relevant AX notification occurs inside the active grant
 - **THEN** the app may update a bounded semantic snapshot
-- **AND** no periodic pixel capture or whole-desktop polling occurs
+- **AND** no ungranted pixel capture or whole-desktop polling occurs
+
+#### Scenario: User enables visual context
+- **WHEN** the user explicitly enables screenshots for the active one-app grant
+- **THEN** only the same verified process's focused window may be captured
+- **AND** the window identity is revalidated before and after capture
+- **AND** the re-encoded JPEG is at most 1 MiB with longest edge at most 1280
+
+#### Scenario: Screenshot option remains off
+- **WHEN** an AX observation grant is active without screenshot authority
+- **THEN** no ScreenCaptureKit enumeration or capture occurs
 
 ### Requirement: AX context is bounded and redacted locally
 The macOS surface SHALL suppress secure/sensitive windows and SHALL apply node,
@@ -45,19 +56,36 @@ depth, string, byte, and lifetime limits before context can be previewed.
       16 KiB outbound context
 - **THEN** traversal/output is deterministically truncated with local counts
 
-### Requirement: Observe and dismiss are network silent
-AX observation, suggestion generation, expiry, revocation, and dismissal SHALL
-not contact the gateway or any analytics/update endpoint.
+### Requirement: Network release mode is explicit
+The macOS surface SHALL expose `local_only`, `ask_each_time`, and
+`trusted_server_15m` modes. It SHALL contain no packaged gateway destination and
+SHALL contact only the canonical user-configured Chief Moa origin while a
+matching network release grant is active.
 
-#### Scenario: Proactive grant expires without acceptance
-- **WHEN** the grant expires or the user dismisses it
+#### Scenario: Local or ask-each-time grant expires without acceptance
+- **WHEN** a local-only or ask-each-time grant expires or the user dismisses it
 - **THEN** all AX references and derived context are purged
 - **AND** zero network requests have occurred
 
+#### Scenario: User grants trusted-server release
+- **WHEN** the user confirms the exact gateway origin, evidence classes,
+      screenshot state, and expiry
+- **THEN** bounded event-driven context may be released to that origin until the
+      grant expires or is revoked
+- **AND** no other host, redirect destination, analytics, or update endpoint is
+      contacted
+
+#### Scenario: Trusted-server grant is revoked
+- **WHEN** Stop, expiry, app/process identity change, permission loss, sleep,
+      lock, or destination change occurs
+- **THEN** queued observations are invalidated before another request is sent
+
 ### Requirement: Outbound AX context matches an exact request preview
-No AX context SHALL leave the Mac until the user approves the immutable
-serialized/redacted body, HTTP method, full canonical HTTPS URL including path,
-selected headers/content type, and redirect policy.
+In ask-each-time mode no AX or screenshot context SHALL leave the Mac until the
+user approves the immutable serialized/redacted body, HTTP method, full
+canonical HTTPS URL including path, selected headers/content type, and redirect
+policy. Trusted-server mode SHALL bind the same request schema and destination
+to its visible time-bounded release grant.
 
 #### Scenario: Destination or payload changes after preview
 - **WHEN** any previewed byte, method, full URL, selected header, or redirect

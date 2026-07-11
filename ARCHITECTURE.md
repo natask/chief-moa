@@ -38,7 +38,9 @@ Native desktop surfaces
   grants, local redaction, outbound preview, native action validation and
   approval, semantic execution, and canonical local receipts. macOS and Windows
   use separate supported platform adapters and never inherit authority merely
-  from sharing an Aggie session.
+  from sharing an Aggie session. `MoaMac` may release bounded AX context and an
+  independently enabled focused-window screenshot only to the user's configured
+  Aggie gateway during an explicit visible grant.
 
 Website
   Owns: the public marketing surface and static account/customization tools
@@ -133,20 +135,46 @@ to proposal-message correlation. It does not authenticate a device or actor;
 transport authentication, device signing and native execution remain outside
 this module and must not be inferred from those correlation checks.
 
-### Apple native surface seam
+### Apple native surface and authority seam
 
-`apple_surfaces` is a shared macOS/iOS Swift library that consumes the same
-bounded Aggie N/N-1 proposal contract. It owns only local decoding, explicit
+`apple_surfaces` retains a portable macOS/iOS Swift authority library that
+consumes the bounded Aggie N/N-1 proposal contract. It owns local decoding,
 approval coordination, final expiry/state revalidation, bounded replay and
-local receipt formation. Stateful authority is actor-isolated and any effect is
-available only through an injected executor after all local checks pass.
+receipt formation. The macOS-only `MoaMac` product adds the native surface:
 
-This seam has no transport, provider credential, canonical conversation store,
-Keychain policy, OS action implementation, SwiftUI product shell, signing,
-update or distribution authority. An unsigned macOS or iOS Simulator build is
-compilation evidence only; it does not establish device behavior, security,
-accessibility, energy use, signing or production readiness. Permanent companion
-versus seamless-assistant UX remains an explicit product decision.
+```text
+Paused launch (no AX read, screen capture, or network)
+  -> user selects the verified frontmost process
+  -> user chooses local_only, ask_each_time, or trusted_server_15m
+  -> optional focused-window screenshot is enabled separately
+  -> visible 15-minute grant starts scoped AX observation
+  -> bounded/redacted observation becomes a local suggestion or an immutable
+     POST /v1/proactive/macos request to the configured Aggie origin
+  -> bounded inert suggestion card; no action executes from that response
+```
+
+The grant is memory-only and binds bundle id, PID, launch date/process
+generation, and verified signing identity. Pause/Stop, expiry, app/process
+change, permission loss, or asynchronous generation change invalidates queued
+work. AX traversal is bounded to 128 nodes/depth 8/16 KiB and suppresses secure
+subtrees/editable values. ScreenCaptureKit is off by default and may capture
+only the same process's focused window, re-encoded and size-bounded. Neither
+macOS permission alone starts observation or release.
+
+There is no packaged gateway destination. Network modes require a canonical
+user-configured HTTPS origin (HTTP only on loopback) and a Keychain bearer token.
+Ask mode binds exact serialized bytes and SHA-256 to a final approval;
+trusted-server mode displays the origin/evidence/screenshot scope and expiry.
+The gateway route requires exact bearer authentication, treats AX/pixels as
+untrusted evidence, exposes no tools, returns `{version,suggestion,actions:[]}`
+only, and does not persist a conversation, task, run, or broker event.
+
+The public semantic AX action vocabulary and Aggie approval coordinator compile,
+but live native mutation remains disabled until gateway proposal ingestion,
+element/state fingerprint binding, and fsync-backed pending/terminal receipts
+are wired and audited. The current ad-hoc-signed QA bundle is compilation and
+package evidence only; it has not been launched or TCC-tested and is not a
+production signing/notarization artifact.
 
 ## Runtime Flows
 

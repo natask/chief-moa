@@ -19,10 +19,11 @@ sees only an already previewed/redacted body.
 ## Permissions and product grant
 
 - Accessibility is requested only from **Enable Mac control**.
-- Screen Recording, Input Monitoring, Apple Events, and login item/LaunchAgent
-  authority are absent in v1. The unsandboxed app has no macOS network
-  permission gate, so v1 ships no updater, analytics, or unsolicited network
-  request code; only an approved immutable release may use networking.
+- Screen Recording is a separate optional capability requested only from
+  **Attach focused-window screenshot**. Input Monitoring, Apple Events, and
+  login item/LaunchAgent authority are absent. The unsandboxed app has no macOS
+  network permission gate, so it ships no updater, analytics, vendor endpoint,
+  or request outside an active release grant.
 - Microphone belongs to a separate explicit voice flow.
 - OS Accessibility trust is capability, not consent to observe, upload, or act.
 
@@ -37,7 +38,9 @@ purpose
 mode: single_snapshot | proactive_15m
 allowed_fields
 issued_at / expires_at
-network_release: per_card
+network_release: local_only | ask_each_time | trusted_server_15m
+include_screenshot: Bool
+destination_origin
 ```
 
 It is memory-only, limited to one verified application process and at most 15
@@ -47,7 +50,7 @@ Expiry, scope change, process exit/replacement/PID reuse/signature mismatch,
 screen lock, sleep, permission loss, app restart, or dismissal revokes it.
 Observe/dismiss sends no network request.
 
-## AX observation and redaction
+## AX observation, focused-window capture, and redaction
 
 Use scoped `AXObserver` notifications instead of screenshot timers or whole-
 desktop polling. A snapshot is limited to 128 nodes, depth 8, 256 characters per
@@ -61,15 +64,30 @@ token patterns, payment identifiers, email/phone identifiers, URL path/query/
 fragment, and home-directory identity. Hard-suppress authentication,
 password-manager, payment, and security-settings windows with no v1 override.
 
+Screen capture is independent of AX observation and off by default. During an
+active grant the user may enable focused-window capture for the same verified
+process. Use public ScreenCaptureKit to capture only the matched foreground
+window, revalidate the window/PID/bundle before and after capture, scale the
+longest edge to at most 1280 pixels, strip metadata by re-encoding JPEG, and cap
+the encoded image at 1 MiB. Never capture the whole desktop or use a screenshot
+timer outside the visible grant.
+
 ## Release preview
 
-Before any network release, show the exact canonical HTTPS URL including path,
+Ask-each-time mode shows the exact canonical HTTPS URL including path,
 HTTP method, selected headers/content type, redirect policy, exact redacted JSON
 values, redacted/dropped/truncated counts, operational session/device ids,
-retention statement, and explicit exclusions. Serialize the immutable request
-buffer once and bind approval to its SHA-256 digest plus method, full URL,
-selected headers, and `redirect: error`. Any change invalidates approval;
-redirects are rejected rather than followed.
+optional image presence/byte count/digest, retention statement, and explicit
+exclusions. Serialize the immutable request buffer once and bind approval to its
+SHA-256 digest plus method, full URL, selected headers, and `redirect: error`.
+Any change invalidates approval; redirects are rejected rather than followed.
+
+Trusted-server mode requires a separate confirmation that names the canonical
+user-configured origin, included evidence classes, screenshot state, and expiry.
+It may release event-driven snapshots without per-card confirmation only while
+that visible grant remains valid. Stop, expiry, destination/configuration
+change, app identity change, sleep/lock, or permission loss cancels queued work
+before another request. There is no packaged destination or third-party route.
 
 ## Semantic action broker
 
@@ -112,5 +130,6 @@ plus App Intents/Shortcuts. iOS must not advertise arbitrary cross-app control.
 
 Do not copy vendor routes/credentials, proprietary prompts/assets, background
 activity-timeline persistence, PostHog/Sentry telemetry, Sparkle auto-update
-behavior, private SkyLight/SLS/SLPS symbols, same-ID helper strategy, periodic
-screenshots, or closed binary implementation.
+behavior, private SkyLight/SLS/SLPS symbols, same-ID helper strategy, unscoped
+desktop screenshot polling, or closed binary implementation. Narrow mechanisms
+from MIT-licensed OpenClicky may be clean-room adapted with attribution.

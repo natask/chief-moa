@@ -10,11 +10,13 @@ or transcript was printed into this report.
 
 ## Executive finding
 
-Clicky's retained local evidence proves ambient accessibility/activity capture
-and server-side proactive suggestion processing. It does **not** prove periodic
-proactive screenshot upload or the vendor's internal generation method.
+Clicky's retained local evidence proves ambient accessibility/activity capture,
+server-side proactive suggestion processing, and screenshot-bearing upload on a
+separate chat-tool route. It does **not** prove periodic proactive screenshot
+upload or the vendor's internal generation method.
 
-Three retained POSTs target vendor-worker proactive routes:
+Three retained POSTs target vendor-worker proactive routes. These are CFURL
+cache-row timestamps, not authoritative server receipt times:
 
 - 2026-07-06 11:54:24 UTC: `/proactive-agents`
 - 2026-07-10 09:17:02 UTC: `/proactive-agents/resolution`
@@ -31,16 +33,23 @@ or image field. A retained `/proactive-agents` response contains two suggestion
 objects, establishing a contextual request/response relationship without
 exposing their content or inferring how the server produced them.
 
-Separate app/helper code imports ScreenCaptureKit, JPEG/image handling, and an
-AX-plus-screenshot computer-use mode. Those are real capabilities used by
-explicit help/agent paths, but capability is not transaction evidence. The
-accurate conclusion is:
+A separate retained cache entry (`141`) is direct screenshot transaction
+evidence: an authenticated 458,171-byte JSON `POST /chat-tool-call` to the same
+vendor worker received HTTP 200 with archived server date 2026-06-19 05:36:53
+UTC. Its `screenshots` array has two populated base64 values that decode in
+memory as 87,238-byte and 157,142-byte JPEGs; `screenshotBase64` duplicates the
+first image. No encoded value or image pixel was printed or persisted by the
+audit. App/helper code independently imports ScreenCaptureKit, JPEG/image
+handling, and an AX-plus-screenshot computer-use mode.
+
+The accurate conclusion is:
 
 > Clicky records detailed foreground app/site/window/accessibility context and
 > uploads it to proactive suggestion endpoints. The retained proactive samples
-> were text/metadata requests, not screenshot requests. Screenshot upload may
-> occur on other invoked routes, but periodic proactive screenshot upload was
-> not observed.
+> were text/metadata requests, not screenshot requests. A retained
+> `/chat-tool-call` proves that two screenshots were uploaded on another route.
+> Periodic proactive screenshot upload, the trigger for that chat transaction,
+> and informed consent were not established by the retained cache.
 
 ## Installed artifact
 
@@ -54,10 +63,11 @@ accurate conclusion is:
 - Bundled helper: `Contents/Helpers/ClickyComputerUseRuntime`, signed by the
   same team and identifier family
 
-The login/background registry reports Clicky as enabled/allowed/notified. No
-Clicky process, live socket, active `launchctl` label, or standalone LaunchAgent
-was present at the inspection moment. This means it can be permitted to start
-at login, not that it was running continuously during the audit.
+An earlier login/background-registry snapshot reported Clicky as
+enabled/allowed/notified; the later independent recheck did not reproduce that
+record. No Clicky process, live socket, active `launchctl` label, or standalone
+LaunchAgent was present at either inspection moment. The retained evidence does
+not establish continuous background execution.
 
 The installed commit is not resolvable in the public `farzaa/clicky` history;
 that repository explicitly says newer development moved private. The public
@@ -94,11 +104,15 @@ values, authorization material, activity values, accessibility text, and
 suggestion text were not emitted.
 
 The cache is retained evidence, not a complete packet capture: it proves the
-listed calls and payload schemas occurred, but absence from cache cannot prove a
-different call never occurred. A future controlled packet capture should use a
-fresh macOS account/profile, a local TLS interception proxy trusted only in that
-test profile, deterministic app actions, and before/after network ledgers. It
-must not run against the user's live working account.
+listed calls and payload schemas occurred, but cache-row timestamps can outlive
+and differ from the currently archived request/response blobs. The archived
+HTTP response dates for entries `161`, `180`, and `187` are respectively
+2026-07-11 07:00:43, 2026-07-11 07:01:31, and 2026-07-11 03:31:19 GMT. Absence
+from cache cannot prove a different call never occurred. A future controlled
+packet capture should use a fresh macOS account/profile, a local TLS
+interception proxy trusted only in that test profile, deterministic app actions,
+and before/after network ledgers. It must not run against the user's live
+working account.
 
 ## Accessibility and computer-use mechanisms
 
@@ -146,8 +160,9 @@ buildable on this machine; it does not make it the source of installed Clicky
 ## Public disclosure mismatch
 
 The vendor privacy page describes screenshots/voice captured locally in
-response to push-to-talk and sent through its backend. The retained proactive
-routes and recent-activity/accessibility schema are not explained by that narrow
+response to push-to-talk and sent through its backend, which may cover the
+screenshot-bearing chat-tool request. The retained proactive routes and
+recent-activity/accessibility schema are not explained by that narrow
 push-to-talk description, and the public page contains no proactive/ambient
 disclosure found during this audit. The product UI may contain additional
 disclosure, but the observed proactive data boundary should be considered

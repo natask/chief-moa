@@ -28,6 +28,8 @@ proposal before any platform-local action runs.
 - `browser_extension`: Chrome extension thin client.
 - `gateway`: self-hosted gateway for model routing, storage, voice, and agent
   runs.
+- `apple_surfaces`: shared Aggie authority library plus the native `MoaMac`
+  observation/suggestion surface and unsigned QA bundle tooling.
 
 ## Common commands
 
@@ -75,6 +77,19 @@ Browser extension local deploy:
 ```sh
 bash scripts/deploy.sh extension
 ```
+
+macOS surface check and unsigned QA artifact:
+
+```sh
+cd apple_surfaces
+swift test
+swift build --product MoaMac
+bash scripts/package-moa-mac.sh
+```
+
+Packaging does not launch the application or request Accessibility/Screen
+Recording. Real TCC QA and production distribution require an isolated account,
+stable Developer ID signing, notarization, and rollback evidence.
 
 Extension deploys package the version in
 `browser_extension/extension/manifest.json`; bump that version for changed
