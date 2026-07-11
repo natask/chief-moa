@@ -102,11 +102,15 @@ describe("Aggie surface protocol", () => {
   });
 
   test("proposal eligibility fails closed on expiry, scope, state and approval", () => {
-    const context = { now: NOW, session_id: "sess_1", surface_id: "moa-browser", state: { active_tab: "tab_1" } };
+    const context = { now: NOW, session_id: "sess_1", surface: { id: "moa-browser", kind: "browser", mode: "text", device_id: "dev_1" }, state: { active_tab: "tab_1" } };
     assert.deepEqual(canExecuteProposal(proposal(), context), { allowed: false, reason: "approval_required" });
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval() }), { allowed: true, reason: "eligible" });
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, now: "2026-07-10T12:02:00.000Z" }), { allowed: false, reason: "expired" });
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, session_id: "sess_other" }), { allowed: false, reason: "session_mismatch" });
+    assert.deepEqual(canExecuteProposal(proposal(), { ...context, surface: undefined, surface_id: "moa-browser" }), { allowed: false, reason: "surface_required" });
+    assert.deepEqual(canExecuteProposal(proposal(), { ...context, surface: { id: "moa-browser", kind: "browser", mode: "voice", device_id: "dev_other" }, surface_id: "moa-browser" }), { allowed: false, reason: "surface_mismatch" });
+    assert.deepEqual(canExecuteProposal(proposal(), { ...context, surface: { id: "moa-browser", kind: "android", mode: "text", device_id: "dev_1" } }), { allowed: false, reason: "surface_mismatch" });
+    assert.deepEqual(canExecuteProposal(proposal(), { ...context, surface: { id: "moa-browser", kind: "browser", mode: "text" } }), { allowed: false, reason: "surface_mismatch" });
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, state: { active_tab: "tab_2" } }), { allowed: false, reason: "stale_state" });
     assert.deepEqual(canExecuteProposal(proposal({ javascript: "alert(1)" }), context), { allowed: false, reason: "executable_payload" });
     assert.deepEqual(canExecuteProposal(proposal(), { ...context, approval: approval({ session_id: "sess_other" }) }), { allowed: false, reason: "approval_session_mismatch" });
@@ -121,7 +125,7 @@ describe("Aggie surface protocol", () => {
   });
 
   test("approval binds the complete canonical proposal and cannot be replayed after mutation", () => {
-    const context = { now: NOW, session_id: "sess_1", surface_id: "moa-browser", state: { active_tab: "tab_1" } };
+    const context = { now: NOW, session_id: "sess_1", surface: { id: "moa-browser", kind: "browser", mode: "text", device_id: "dev_1" }, state: { active_tab: "tab_1" } };
     const approved = approval();
     assert.equal(canExecuteProposal(proposal(), { ...context, approval: approved }).allowed, true);
     assert.equal(canExecuteProposal(proposal({ params: { url: "https://attacker.example" } }), { ...context, approval: approved }).reason, "approval_proposal_digest_mismatch");

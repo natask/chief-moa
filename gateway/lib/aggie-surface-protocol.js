@@ -254,9 +254,17 @@ function proposalContextFailure(envelope, context) {
   if (!Number.isFinite(now)) return "invalid_clock";
   if (Date.parse(envelope.payload.expires_at) <= now) return "expired";
   if (context.session_id !== envelope.session_id) return "session_mismatch";
-  if (context.surface_id !== envelope.surface.id) return "surface_mismatch";
+  const surfaceFailure = currentSurfaceMismatch(envelope.surface, context.surface);
+  if (surfaceFailure) return surfaceFailure;
   if (!preconditionsMatch(envelope.payload.preconditions, context.state || {})) return "stale_state";
   return null;
+}
+
+function currentSurfaceMismatch(proposalSurface, contextSurface) {
+  let current;
+  try { current = validateSurface(contextSurface); }
+  catch { return "surface_required"; }
+  return stableJson(current) === stableJson(proposalSurface) ? null : "surface_mismatch";
 }
 
 function validateApprovalForProposal(envelope, context) {
