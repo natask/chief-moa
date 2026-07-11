@@ -53,13 +53,14 @@ voice/LLM trace correlation.
 | Slice | Branch | Worktree | Ownership | State |
 |---|---|---|---|---|
 | S0 contract | staging | staging worktree | contracts, OpenSpec, architecture, ledger | contracted |
-| S1 intent domain | `agent/intent-domain-20260711` | `chief-moa-worktrees/intent-domain-20260711` | new event-backed intent module/tests | CAS repaired; fresh audit pending |
-| S2 voice drafts | `agent/voice-drafts-20260711` | `chief-moa-worktrees/voice-drafts-20260711` | new draft store/tests/smoke | BLOCK; repair audit 3 implementing |
-| S3 Android | `agent/android-draft-controls-20260711` | `chief-moa-worktrees/android-draft-controls-20260711` | Android capture state/gestures/tests | BLOCK; repair audit 2 pending |
-| S4 browser | `agent/browser-draft-controls-20260711` | `chief-moa-worktrees/browser-draft-controls-20260711` | extension capture state/gestures/tests | BLOCK; repair audit 2 implementing |
-| S5 context/protocol | `agent/context-protocol-20260711` | `chief-moa-worktrees/context-protocol-20260711` | repaired M3 context + repaired M5 protocol | audit |
+| S1 intent domain | `agent/intent-domain-20260711` | `chief-moa-worktrees/intent-domain-20260711` | new event-backed intent module/tests | independently PASS; committed and merged into staging |
+| S2 voice drafts | `agent/voice-drafts-20260711` | `chief-moa-worktrees/voice-drafts-20260711` | new draft store/tests/smoke | repair audit 10 PASS; fresh independent audit queued |
+| S3 Android | `agent/android-draft-controls-20260711` | `chief-moa-worktrees/android-draft-controls-20260711` | Android capture state/gestures/tests | repair audit 5 PASS; fresh independent audit active |
+| S4 browser | `agent/browser-draft-controls-20260711` | `chief-moa-worktrees/browser-draft-controls-20260711` | extension capture state/gestures/tests | repair audit 13 PASS; fresh independent audit active |
+| S5 context/protocol | `agent/context-protocol-20260711` | `chief-moa-worktrees/context-protocol-20260711` | repaired M3 context + repaired M5 protocol | focused and integrated gates PASS in staging |
 | S6 gateway integration | `agent/intent-gateway-integration-20260711` | `chief-moa-worktrees/intent-gateway-integration-20260711` | HTTP/WS admission, routes, intent/trace bridges | contracted |
 | S7 verification | staging | staging worktree | integration gates, runtime QA, release evidence | pending |
+| S8 voice reliability | `agent/voice-reliability-mvp-20260711` | `chief-moa-worktrees/voice-reliability-mvp-20260711` | pure bounded diagnosis/timeline projection | repair audit 4 implementing |
 
 ## Research passes
 
@@ -208,3 +209,8 @@ voice/LLM trace correlation.
   pair. Committed as `41e987c`, merged serially into staging as `fbd3e15`, then
   reran 25 combined lock/intent tests plus the event-substrate smoke in staging;
   all passed and the staging tree remained isolated from the active app.
+- 2026-07-11: froze `deployment-preview-contract.md`: unique URL/state/worker
+  preview, provider-free draft smoke, separate browser/Android artifacts, and
+  explicit backup/restore, compatibility, drain, rollback, and sensitive-audio
+  promotion gates. Committed in staging as `4f2e3cd`; no preview or active
+  target was changed.
