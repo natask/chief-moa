@@ -60,7 +60,7 @@ async function main() {
     checks: [
       "defaultSessionId() and GET /v1/sessions/default return the deterministic per-account default session id",
       "chat prompt assembly includes the user_address directive after the identity block by default",
-      "companion apply leaves user_address intact and the prompt directive remains after identity",
+      "unverified legacy companion apply is rejected and leaves user_address/profile version intact",
       "profile reset restores user_address to master and the prompt directive remains after identity",
       "Live voice effectiveSystemPrompt includes the same durable address directive after identity",
       "chat, voice, and browser turns with omitted session ids store under the shared session id",
@@ -86,16 +86,15 @@ async function assertDefaultProfilePrompt() {
 }
 
 async function assertCompanionKeepsAddress() {
+  const before = await getJson("/v1/agent/profile");
   const apply = await requestJson("POST", "/v1/agent/companions/apply", {
     companion_id: "shigmi-scout",
     source: "shared-session-profile-smoke",
   });
-  assert.equal(apply.status, 200, `companion apply must succeed: ${JSON.stringify(apply.json)}`);
-  assert.equal(apply.json.profile.active_companion_id, "shigmi-scout");
-  assert.equal(apply.json.profile.user_address, "master", "companion apply must not clear user_address");
-  const prompt = profileSystemInstruction(apply.json.profile);
-  assert.match(prompt, /You are Shigmi Scout/);
-  assertAddressAfterIdentity(prompt, "Assistant identity profile:");
+  assert.equal(apply.status, 409, `unverified companion apply must fail closed: ${JSON.stringify(apply.json)}`);
+  const after = await getJson("/v1/agent/profile");
+  assert.equal(after.profile_version, before.profile_version, "rejected legacy apply must not mutate profile");
+  assert.equal(after.profile.user_address, "master", "rejected apply must not clear user_address");
 }
 
 async function assertResetKeepsAddress() {

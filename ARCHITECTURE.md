@@ -101,6 +101,24 @@ and actual profile apply wait for identity and Aggie/MX protocol authority.
 Public trust roots, accepted licenses, moderation/appeals, offline revocation
 freshness and client rollback remain intentionally unwired.
 
+Gateway runtime companion mutation now sits behind an additional authority
+boundary. Preview accepts only a verified package under an operator-owned trust,
+license, moderation, compatibility and revocation policy. Apply requires an
+Ed25519 approval from an operator-configured device/approver key and binds that
+approval to the package digest, preview receipt, exact profile version and
+global/device scope. Apply and rollback require profile-effect receipts and are
+idempotent. The older catalog/pet identifiers remain useful for discovery and
+drafting but cannot directly mutate the active profile. With no operator policy,
+the runtime boundary denies all package apply operations.
+
+The billing runtime seam likewise defaults to deny. When an operator supplies
+tenant-owned immutable sandbox facts, authorization requires the latest active
+entitlement and a budget reservation against an exact version; usage must match
+the immutable price calculation before it is recorded. These routes always
+report `sandbox_no_charge` and never invoke a payment provider. JSONL receipts
+are operational audit evidence, not a substitute for the existing relational
+billing migration or proof of cross-process transactional authority.
+
 ## Telemetry and observability boundary
 
 Canonical product events remain the source of truth. Operational telemetry is a

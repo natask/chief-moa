@@ -26,6 +26,8 @@ const {
   languageControlPatch,
 } = require("./lib/profile-options");
 const { createCompanionCatalogStore } = require("./lib/companion-catalog");
+const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
+const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createBrain } = require("./lib/brain");
@@ -264,6 +266,15 @@ const companionCatalog = createCompanionCatalogStore({
   dataDir: DATA_DIR,
   voiceBinding: companionVoiceBindingOptions(),
 });
+const companionRuntimeAuthority = createCompanionRuntimeAuthority({
+  policy: loadCompanionRuntimePolicy(),
+  applyProfile: applyVerifiedCompanionPatch,
+  restoreProfile: restoreVerifiedCompanionPatch,
+  appendReceipt: appendCompanionRuntimeReceipt,
+  loadState: loadCompanionRuntimeState,
+  saveState: saveCompanionRuntimeState,
+});
+const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
 // surfaces from this; a "deployment" is a spec change here, not new extension
@@ -600,6 +611,27 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       await handleCompanionApply(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/companions/rollback" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCompanionRollback(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/billing/runtime/authorize" && request.method === "POST") {
+      if (!authorizedAgent(request)) { sendJson(response, 401, agentAuthError()); return; }
+      await handleBillingRuntime(request, response, false);
+      return;
+    }
+
+    if (url.pathname === "/v1/billing/runtime/usage" && request.method === "POST") {
+      if (!authorizedAgent(request)) { sendJson(response, 401, agentAuthError()); return; }
+      await handleBillingRuntime(request, response, true);
       return;
     }
 
@@ -4986,18 +5018,13 @@ async function handleCreatePetBookmark(request, response) {
 async function handleCompanionPreview(request, response) {
   const body = await readJsonBody(request);
   try {
-    const preview = companionCatalog.preview(body || {});
     const profileOptions = profileOptionsFromBody(body, "global");
-    const base = agentProfile.effective(profileOptions);
-    const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
-    sendJson(response, 200, {
-      ...preview,
-      profile_version: agentProfile.currentVersion(profileOptions),
-      profile_before: agentProfileRuntimeStatus(profileOptions),
-      profile_preview: summarizePreviewProfile(base, merged),
-    });
+    const expected = String(body?.expected_profile_version || "");
+    if (expected !== String(agentProfile.currentVersion(profileOptions))) throw new Error("expected_profile_version is stale");
+    sendJson(response, 200, companionRuntimeAuthority.preview({ ...body, scope: profileOptions.scope,
+      device_id: profileOptions.deviceId, expected_profile_version: expected }));
   } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
+    sendJson(response, 400, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
   }
 }
 
@@ -5008,11 +5035,17 @@ async function handleCompanionApply(request, response) {
     return;
   }
   try {
-    const result = applyCompanionToProfile(body || {}, profileOptions, body?.source || "api");
-    sendJson(response, 200, result);
+    sendJson(response, 200, companionRuntimeAuthority.apply({ ...body, scope: profileOptions.scope,
+      device_id: profileOptions.deviceId }));
   } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
+    sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
   }
+}
+
+async function handleCompanionRollback(request, response) {
+  const body = await readJsonBody(request);
+  try { sendJson(response, 200, companionRuntimeAuthority.rollback(body || {})); }
+  catch (error) { sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" }); }
 }
 
 async function handlePetPreview(request, response) {
@@ -5106,6 +5139,9 @@ async function handlePetGenerate(request, response) {
 }
 
 function applyCompanionToProfile(input, profileOptions, source = "api") {
+  if (!input?.verified_runtime_authority) {
+    throw new Error("verified companion package approval is required");
+  }
   const preview = companionCatalog.preview(input || {});
   const before = agentProfile.effective(profileOptions);
   const beforeVersion = agentProfile.currentVersion(profileOptions);
@@ -5129,6 +5165,124 @@ function applyCompanionToProfile(input, profileOptions, source = "api") {
     companion_applied: beforeVersion !== afterVersion,
     from_profile_version: beforeVersion,
   }, profileOptions);
+}
+
+function loadCompanionRuntimePolicy() {
+  const policyPath = path.join(DATA_DIR, "companion-trust-policy.json");
+  if (!fs.existsSync(policyPath)) return {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+    const trustStore = new Map();
+    for (const [keyId, pem] of Object.entries(raw.trust_store || {})) {
+      if (typeof keyId !== "string" || typeof pem !== "string" || pem.length > 8192) throw new Error("invalid trust key");
+      trustStore.set(keyId, crypto.createPublicKey(pem));
+    }
+    const approvalTrustStore = new Map();
+    for (const [keyId, pem] of Object.entries(raw.approval_trust_store || {})) {
+      if (typeof keyId !== "string" || typeof pem !== "string" || pem.length > 8192) throw new Error("invalid approval trust key");
+      approvalTrustStore.set(keyId, crypto.createPublicKey(pem));
+    }
+    return { trustStore, approvalTrustStore, acceptedLicenses: boundedPolicyList(raw.accepted_licenses),
+      acceptedModerationPolicies: boundedPolicyList(raw.accepted_moderation_policies),
+      currentProtocolVersion: String(raw.current_protocol_version || ""),
+      revokedSignerIds: boundedPolicyList(raw.revoked_signer_ids),
+      revokedPackageDigests: boundedPolicyList(raw.revoked_package_digests) };
+  } catch (error) {
+    console.warn(`Companion trust policy rejected; package authority remains fail-closed: ${cleanError(error)}`);
+    return {};
+  }
+}
+
+function boundedPolicyList(value) {
+  if (!Array.isArray(value) || value.length > 1000 || value.some((item) => typeof item !== "string" || item.length > 200)) {
+    throw new Error("invalid bounded policy list");
+  }
+  return [...value];
+}
+
+function profileOptionsFromAuthorityScope(scope) {
+  const [kind, deviceId = ""] = String(scope).split(":", 2);
+  return { scope: kind === "device" ? "device" : "global", deviceId: kind === "device" ? normalizeDeviceId(deviceId) : "" };
+}
+
+function applyVerifiedCompanionPatch(patch, scope) {
+  const options = profileOptionsFromAuthorityScope(scope);
+  const effective = agentProfile.effective(options);
+  const before = { version: agentProfile.currentVersion(options),
+    values: Object.fromEntries(Object.keys(patch).map((key) => [key, effective[key]])) };
+  agentProfile.patch(patch, { source: "verified-companion-package", reason: "verified-package-apply",
+    scope: options.scope, deviceId: options.deviceId });
+  const after = { version: agentProfile.currentVersion(options), values: agentProfile.effective(options) };
+  return { before, after, receipt_id: randomId("companion_effect") };
+}
+
+function restoreVerifiedCompanionPatch(before, scope, expectedAfter) {
+  const options = profileOptionsFromAuthorityScope(scope);
+  if (String(agentProfile.currentVersion(options)) !== String(expectedAfter.version)) {
+    throw new Error("profile changed after companion apply; rollback requires review");
+  }
+  agentProfile.patch(before.values, { source: "verified-companion-package", reason: "verified-package-rollback",
+    scope: options.scope, deviceId: options.deviceId });
+  return { receipt_id: randomId("companion_rollback"), version: agentProfile.currentVersion(options) };
+}
+
+function appendCompanionRuntimeReceipt(record) {
+  const target = path.join(DATA_DIR, "companion-runtime-receipts.jsonl");
+  fs.appendFileSync(target, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+function loadCompanionRuntimeState(key) {
+  const file = path.join(DATA_DIR, "companion-runtime-state.json");
+  try { return JSON.parse(fs.readFileSync(file, "utf8"))[key] || null; } catch { return null; }
+}
+
+function saveCompanionRuntimeState(key, state) {
+  const file = path.join(DATA_DIR, "companion-runtime-state.json");
+  let all = {};
+  try { all = JSON.parse(fs.readFileSync(file, "utf8")); } catch { all = {}; }
+  all[key] = state;
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(all)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporary, file);
+}
+
+function loadBillingRuntimeAuthority() {
+  const policyPath = path.join(DATA_DIR, "billing-runtime-policy.json");
+  if (!fs.existsSync(policyPath)) return null;
+  try {
+    const input = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+    const domain = createBillingDomain({ tenantId: String(input.tenant_id || "") });
+    for (const fact of input.price_versions || []) domain.appendPriceVersion(fact);
+    for (const fact of input.budget_versions || []) domain.appendBudgetVersion(fact);
+    for (const fact of input.entitlements || []) domain.appendEntitlement(fact);
+    return createBillingRuntimeAuthority({ domain, entitlementId: input.runtime?.entitlement_id,
+      budgetId: input.runtime?.budget_id, budgetVersion: input.runtime?.budget_version,
+      priceId: input.runtime?.price_id, priceVersion: input.runtime?.price_version,
+      meter: input.runtime?.meter });
+  } catch (error) {
+    console.warn(`Billing runtime policy rejected; resource authority remains fail-closed: ${cleanError(error)}`);
+    return null;
+  }
+}
+
+async function handleBillingRuntime(request, response, recordUsage) {
+  if (!billingRuntimeAuthority) {
+    sendJson(response, 503, { allowed: false, reason: "billing_runtime_unconfigured", charged: false });
+    return;
+  }
+  try {
+    const body = await readJsonBody(request);
+    const result = recordUsage ? billingRuntimeAuthority.recordUsage(body || {}) : billingRuntimeAuthority.authorize(body || {});
+    appendBillingRuntimeReceipt({ operation: recordUsage ? "usage" : "authorize", result });
+    sendJson(response, result.allowed ? 200 : 402, { ...result, charged: false, mode: billingRuntimeAuthority.mode });
+  } catch (error) {
+    sendJson(response, 400, { allowed: false, reason: "billing_authority_rejected", charged: false, error: cleanError(error) });
+  }
+}
+
+function appendBillingRuntimeReceipt(record) {
+  fs.appendFileSync(path.join(DATA_DIR, "billing-runtime-receipts.jsonl"), `${JSON.stringify({ recorded_at: new Date().toISOString(), ...record })}\n`,
+    { encoding: "utf8", mode: 0o600 });
 }
 
 function summarizePreviewProfile(before, after) {
