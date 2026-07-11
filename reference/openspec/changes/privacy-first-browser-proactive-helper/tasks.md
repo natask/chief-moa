@@ -29,15 +29,15 @@
 
 ## 3. Text-only gateway capability
 
-- [ ] 3.1 Add authenticated `POST /v1/proactive/turns` with an exact top-level
+- [x] 3.1 Add authenticated `POST /v1/proactive/turns` with an exact top-level
       shape, fixed client object, packaged transcript allowlist, bounded body,
       and unknown/page/action field rejection.
-- [ ] 3.2 Invoke the configured provider through a direct text-only model call;
+- [x] 3.2 Invoke the configured provider through a direct text-only model call;
       do not enter voice/browser routing, expose tools, start an agent/task or
       workflow, publish broker events, or persist conversations/turns.
-- [ ] 3.3 Return only bounded text metadata and an empty action capability. Add
+- [x] 3.3 Return only bounded text metadata and an empty action capability. Add
       focused tests for valid requests and every rejected field class.
-- [ ] 3.4 Add an isolated-port/isolated-data gateway smoke that proves one valid
+- [x] 3.4 Add an isolated-port/isolated-data gateway smoke that proves one valid
       provider-backed or deterministic-fallback reply and proves conversation,
       broker-event, task, workflow, and agent-run stores remain unchanged.
 
@@ -58,7 +58,7 @@
       connection failures cannot hide passive egress.
 - [x] 4.4 Run browser focused/static verification and the existing extension,
       agent-loop, ambient, and unified-browser-agent smoke gates.
-- [ ] 4.5 Run the focused gateway check and proactive endpoint smoke in its
+- [x] 4.5 Run the focused gateway check and proactive endpoint smoke in its
       isolated preview environment.
-- [ ] 4.6 Bump the manifest patch version and create a package artifact without
+- [x] 4.6 Bump the manifest patch version and create a package artifact without
       reloading the user's active extension.

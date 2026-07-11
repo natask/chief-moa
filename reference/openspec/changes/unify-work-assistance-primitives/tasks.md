@@ -9,7 +9,7 @@
 
 ## 2. Suggestion promotion
 
-- [ ] 2.1 Ship the browser local-observation/suggestion lifecycle.
+- [x] 2.1 Ship the browser local-observation/suggestion lifecycle.
 - [ ] 2.2 Add one inspectable suggestion-acceptance to broker-event mapping.
 - [ ] 2.3 Prove dismissal/expiry never creates intent/task/run records.
 
