@@ -61,6 +61,9 @@ SHALL match that proposal message. These bindings provide protocol correlation;
 they do not claim device identity, signing, or native executor proof.
 Approval scope SHALL additionally match the complete canonical surface object:
 ID, kind, mode, and the same presence/value semantics for optional device ID.
+Eligibility SHALL require the local execution context to supply that same full
+canonical surface object and SHALL fail closed when it is missing or malformed.
+A legacy surface ID alone is not execution authority.
 
 #### Scenario: Proposal is stale
 

@@ -19,3 +19,6 @@ tests or production traffic were used in this lane.
 | Repair 3 closes final-audit reproductions | implementer verification pending | normalized hostile credential corpus; full surface mismatch matrix; CRAP threshold 15 | fresh audit required |
 | Repair 3 verification is green | verified by implementer | focused 13/13; quality PASS max cyclomatic 9 / CRAP 9.47 against <=10/<=15; echo smoke PASS; strict OpenSpec PASS; full gateway 194 pass, 1 skip | fresh audit required |
 | Adjacent voice-audio-storage failure persists | refuted in writable lane | `node scripts/smoke-voice-audio-storage.js` passed twice consecutively; full gateway instance also passed | prior failure not reproduced; no concealment or code change |
+| Fresh audit at `5869ff9` | refuted/block | current execution context checked only `surface_id`, permitting same-ID wrong mode/device | repair required |
+| Repair 4 binds current execution surface | implementer verification pending | full canonical context surface validation/match; missing/wrong kind/mode/device hostile tests | fresh audit required |
+| Repair 4 verification is green | verified by implementer | focused 13/13; quality max cyclomatic 9 / CRAP 9.15 under 10/15; echo/audio-storage/OpenSpec PASS; full gateway 194 pass, 1 skip | fresh audit required |

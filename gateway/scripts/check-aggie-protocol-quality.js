@@ -11,6 +11,7 @@ const source = fs.readFileSync(target, "utf8");
 const ast = parser.parse(source, { sourceType: "script" });
 const qualityFunctions = new Set([
   "canExecuteProposal", "proposalContextFailure",
+  "currentSurfaceMismatch",
   "validateApprovalForProposal", "approvalMismatch", "approvalScopeMismatch",
   "approvalBindingMismatch", "approvalDecisionMismatch",
 ]);

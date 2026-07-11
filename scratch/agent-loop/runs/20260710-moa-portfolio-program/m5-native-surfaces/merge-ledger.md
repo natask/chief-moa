@@ -12,3 +12,6 @@
 | 2026-07-11 | Fresh audit cycle 3 | block | normalized credential families, complete surface identity, CRAP contract mismatch |
 | 2026-07-11 | Repair 3 implemented | verification active | hostile corpus/full-surface tests; CRAP threshold corrected to 15 |
 | 2026-07-11 | Repair 3 verification | pass | focused 13/13; quality/echo/OpenSpec PASS; voice-audio-storage passed twice; full gateway 194 pass, 1 skip |
+| 2026-07-11 | Fresh audit cycle 4 | block | execution context only ID-bound despite full proposal/approval surface binding |
+| 2026-07-11 | Repair 4 implemented | verification active | mandatory full current surface and hostile mixed-mode/device tests |
+| 2026-07-11 | Repair 4 verification | pass | focused/quality/echo/audio-storage/OpenSpec PASS; full gateway 194 pass, 1 skip |
