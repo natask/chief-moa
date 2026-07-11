@@ -23,10 +23,26 @@ fresh local-state and expiry check immediately before any injected effect.
 
 The Apple adapter SHALL enforce hard bounds for envelopes, nesting, arrays,
 replay history, pending proposals and reconnect delay. It SHALL reject executable or credential-shaped
-authority even in unknown additive fields. It SHALL perform no network, disk,
-provider, OS action, signing or canonical-history operation.
+authority even in unknown additive fields. It SHALL perform no network,
+provider, OS action, signing or canonical-history operation. Its only durable
+write authority is a bounded local effect journal used to prevent retry after a
+crash or uncertain executor result.
 
 #### Scenario: Additive credential field arrives
 
 - **WHEN** an otherwise unknown field carries token or executable authority
 - **THEN** decoding fails closed before approval or execution
+
+### Requirement: Apple effects recover conservatively across restart
+
+The Apple adapter SHALL durably record the effect boundary before invoking a
+local executor. A restart or untyped executor failure after that boundary SHALL
+recover as `unknown_effect`, prevent automatic retry, and direct the product
+surface to request user verification. Closed protocol enums and finite,
+JavaScript-safe canonical numbers SHALL fail before approval when unknown or
+ambiguous.
+
+#### Scenario: Process stops across the effect boundary
+
+- **WHEN** the adapter restarts without a typed terminal executor result
+- **THEN** the proposal remains consumed as `unknown_effect` and cannot run again

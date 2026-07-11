@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AggieAppleSurface
 
-private let surface = SurfaceIdentity(id: "moa-apple", kind: "macos", mode: "text", deviceID: "dev-1")
+private let surface = SurfaceIdentity(id: "moa-apple", kind: .macOS, mode: .text, deviceID: "dev-1")
 private let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
 
 private func proposalData(overrides: [String: Any] = [:]) throws -> Data {
@@ -58,7 +58,22 @@ private struct Approver: LocalApprovalPrompt {
     #expect(throws: AggieProtocolError.malformed("missing preconditions")) { try AggieEnvelopeDecoder.decodeProposal(JSONSerialization.data(withJSONObject: raw)) }
     var wrongSurface = raw; wrongSurface["payload"] = (try JSONSerialization.jsonObject(with: proposalData()) as! [String: Any])["payload"]
     wrongSurface["surface"] = ["id": "moa-apple", "kind": "apple", "mode": "text", "device_id": "dev-1"]
-    #expect(throws: AggieProtocolError.malformed("surface kind")) { try AggieEnvelopeDecoder.decodeProposal(JSONSerialization.data(withJSONObject: wrongSurface)) }
+    #expect(throws: (any Error).self) { try AggieEnvelopeDecoder.decodeProposal(JSONSerialization.data(withJSONObject: wrongSurface)) }
+    var unknownAction = try JSONSerialization.jsonObject(with: proposalData()) as! [String: Any]
+    var unknownPayload = unknownAction["payload"] as! [String: Any]
+    unknownPayload["kind"] = "future_effect"; unknownAction["payload"] = unknownPayload
+    #expect(throws: (any Error).self) { try AggieEnvelopeDecoder.decodeProposal(JSONSerialization.data(withJSONObject: unknownAction)) }
+}
+
+@Test func rejectsUnsafeCanonicalNumbers() throws {
+    for number in [9_007_199_254_740_992.0, -0.0] {
+        var raw = try JSONSerialization.jsonObject(with: proposalData()) as! [String: Any]
+        var payload = raw["payload"] as! [String: Any]
+        payload["params"] = ["unsafe": number]; raw["payload"] = payload
+        #expect(throws: (any Error).self) {
+            try AggieEnvelopeDecoder.decodeProposal(JSONSerialization.data(withJSONObject: raw))
+        }
+    }
 }
 
 @Test func explicitApprovalExecutesOnceAndReceiptsBindings() async throws {
@@ -80,7 +95,7 @@ private struct Approver: LocalApprovalPrompt {
 func denialPathsNeverInvokeExecutor(kind: String) async throws {
     let proposal = try AggieEnvelopeDecoder.decodeProposal(proposalData())
     let effects = Counter(); let stateCounter = Counter(); let coordinator = AppleActionCoordinator()
-    let approvalSurface = kind == "scope" ? SurfaceIdentity(id: "moa-apple", kind: "macos", mode: "voice", deviceID: "dev-1") : surface
+    let approvalSurface = kind == "scope" ? SurfaceIdentity(id: "moa-apple", kind: .macOS, mode: .voice, deviceID: "dev-1") : surface
     let states: [[String: JSONValue]] = kind == "stale" ? [["screen": .string("home")], ["screen": .string("changed")]] : [["screen": .string("home")]]
     await #expect(throws: (any Error).self) {
         try await coordinator.handle(proposal, expectedSession: "sess-1", expectedSurface: surface,
@@ -108,5 +123,31 @@ func denialPathsNeverInvokeExecutor(kind: String) async throws {
     }
     await #expect(throws: (any Error).self) { try await call() }
     await #expect(throws: AggieProtocolError.duplicateProposal) { try await call() }
+    #expect(await effects.value == 1)
+}
+
+@Test func uncertainEffectCannotBeRetriedAfterRestart() async throws {
+    let proposal = try AggieEnvelopeDecoder.decodeProposal(proposalData())
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let url = directory.appendingPathComponent("effect-journal.json")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let effects = Counter()
+    let first = AppleActionCoordinator(journal: AtomicFileEffectJournal(url: url))
+    await #expect(throws: (any Error).self) {
+        try await first.handle(proposal, expectedSession: "sess-1", expectedSurface: surface,
+            now: { timestamp.addingTimeInterval(30) },
+            approver: Approver(approved: true, surface: surface, session: "sess-1", time: timestamp.addingTimeInterval(10)),
+            state: State(values: [["screen": .string("home")]], counter: Counter()),
+            executor: FailingExecutor(counter: effects))
+    }
+    let restarted = AppleActionCoordinator(journal: AtomicFileEffectJournal(url: url))
+    #expect(try await restarted.recoveryStatus(for: proposal.messageID) == .unknownEffect)
+    await #expect(throws: AggieProtocolError.duplicateProposal) {
+        try await restarted.handle(proposal, expectedSession: "sess-1", expectedSurface: surface,
+            now: { timestamp.addingTimeInterval(30) },
+            approver: Approver(approved: true, surface: surface, session: "sess-1", time: timestamp.addingTimeInterval(10)),
+            state: State(values: [["screen": .string("home")]], counter: Counter()),
+            executor: Executor(counter: effects))
+    }
     #expect(await effects.value == 1)
 }

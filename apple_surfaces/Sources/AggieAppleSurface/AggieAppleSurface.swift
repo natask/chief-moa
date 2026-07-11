@@ -1,4 +1,5 @@
 import CryptoKit
+import CoreFoundation
 import Foundation
 
 public enum AggieLimits {
@@ -14,6 +15,73 @@ public enum AggieProtocolError: Error, Equatable, Sendable {
     case duplicateProposal, sequenceConflict, messageConflict, sequenceGap
 }
 
+public enum SurfaceKind: String, Codable, Hashable, Sendable { case macOS = "macos", iOS = "ios" }
+public enum SurfaceMode: String, Codable, Hashable, Sendable { case text, voice }
+public enum ActionKind: String, Codable, Hashable, Sendable {
+    case openURL = "open_url", openApp = "open_app", dial
+    case browserTask = "browser_task", pageTweak = "page_tweak", fileExport = "file_export"
+}
+public enum ApprovalClass: String, Codable, Hashable, Sendable { case confirm, none, sensitive }
+public enum ReceiptOutcome: String, Codable, Hashable, Sendable {
+    case executed, failed, unknownEffect = "unknown_effect"
+}
+public enum RecoveryStatus: String, Codable, Hashable, Sendable {
+    case notStarted = "not_started", knownFailed = "known_failed"
+    case knownSucceeded = "known_succeeded", unknownEffect = "unknown_effect"
+}
+
+public protocol EffectJournal: Sendable {
+    func status(for messageID: String) throws -> RecoveryStatus
+    func record(_ status: RecoveryStatus, for messageID: String) throws
+}
+
+public final class InMemoryEffectJournal: EffectJournal, @unchecked Sendable {
+    private let lock = NSLock()
+    private var records: [String: RecoveryStatus] = [:]
+    public init() {}
+    public func status(for messageID: String) throws -> RecoveryStatus {
+        lock.withLock { records[messageID] ?? .notStarted }
+    }
+    public func record(_ status: RecoveryStatus, for messageID: String) throws {
+        try lock.withLock {
+            guard records[messageID] == nil || records[messageID] == .notStarted || status != .notStarted
+            else { throw AggieProtocolError.duplicateProposal }
+            guard records.count < AggieLimits.pendingProposals || records[messageID] != nil else {
+                throw AggieProtocolError.tooLarge
+            }
+            records[messageID] = status
+        }
+    }
+}
+
+public final class AtomicFileEffectJournal: EffectJournal, @unchecked Sendable {
+    private let url: URL
+    private let lock = NSLock()
+    public init(url: URL) { self.url = url }
+    public func status(for messageID: String) throws -> RecoveryStatus {
+        try lock.withLock { try read()[messageID] ?? .notStarted }
+    }
+    public func record(_ status: RecoveryStatus, for messageID: String) throws {
+        try lock.withLock {
+            var records = try read()
+            guard records.count < AggieLimits.pendingProposals || records[messageID] != nil else {
+                throw AggieProtocolError.tooLarge
+            }
+            records[messageID] = status
+            let data = try JSONEncoder().encode(records)
+            guard data.count <= AggieLimits.replayBytes else { throw AggieProtocolError.tooLarge }
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+        }
+    }
+    private func read() throws -> [String: RecoveryStatus] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        guard data.count <= AggieLimits.replayBytes else { throw AggieProtocolError.tooLarge }
+        return try JSONDecoder().decode([String: RecoveryStatus].self, from: data)
+    }
+}
+
 public enum JSONValue: Codable, Hashable, Sendable {
     case string(String), number(Double), bool(Bool), object([String: JSONValue]), array([JSONValue]), null
 
@@ -21,7 +89,12 @@ public enum JSONValue: Codable, Hashable, Sendable {
         let value = try decoder.singleValueContainer()
         if value.decodeNil() { self = .null }
         else if let item = try? value.decode(Bool.self) { self = .bool(item) }
-        else if let item = try? value.decode(Double.self) { self = .number(item) }
+        else if let item = try? value.decode(Double.self) {
+            guard item.isFinite, !(item == 0 && item.sign == .minus),
+                  item.rounded() != item || abs(item) <= 9_007_199_254_740_991
+            else { throw AggieProtocolError.malformed("unsafe number") }
+            self = .number(item)
+        }
         else if let item = try? value.decode(String.self) { self = .string(item) }
         else if let item = try? value.decode([String: JSONValue].self) { self = .object(item) }
         else if let item = try? value.decode([JSONValue].self) { self = .array(item) }
@@ -43,19 +116,19 @@ public enum JSONValue: Codable, Hashable, Sendable {
 
 public struct SurfaceIdentity: Codable, Hashable, Sendable {
     public let id: String
-    public let kind: String
-    public let mode: String
+    public let kind: SurfaceKind
+    public let mode: SurfaceMode
     public let deviceID: String?
     enum CodingKeys: String, CodingKey { case id, kind, mode; case deviceID = "device_id" }
-    public init(id: String, kind: String, mode: String, deviceID: String? = nil) {
+    public init(id: String, kind: SurfaceKind, mode: SurfaceMode, deviceID: String? = nil) {
         self.id = id; self.kind = kind; self.mode = mode; self.deviceID = deviceID
     }
 }
 
 public struct ActionProposal: Codable, Hashable, Sendable {
     public let proposalID: String
-    public let kind: String
-    public let approvalClass: String
+    public let kind: ActionKind
+    public let approvalClass: ApprovalClass
     public let expiresAt: Date
     public let preconditions: [String: JSONValue]
     public let params: [String: JSONValue]
@@ -107,7 +180,7 @@ public struct LocalActionReceipt: Codable, Hashable, Sendable {
     public let approvalID: String
     public let sessionID: String
     public let surface: SurfaceIdentity
-    public let outcome: String
+    public let outcome: ReceiptOutcome
     public let observedAt: Date
     public let stateDigest: String
 }
@@ -121,8 +194,6 @@ public enum AggieEnvelopeDecoder {
     ]
     private static let forbiddenKeys: Set<String> = ["eval", "script", "javascript", "shell", "command", "code", "authorization", "password"]
     private static let credentialSuffixes = ["token", "apikey", "privatekey", "clientsecret", "providerkey", "dbpassword", "password", "authorization"]
-    private static let surfaceKinds: Set<String> = ["macos", "ios"]
-    private static let actionKinds: Set<String> = ["open_url", "open_app", "dial", "browser_task", "page_tweak", "file_export"]
 
     public static func negotiate(_ offered: [Int]) throws -> Int {
         if offered.contains(2) { return 2 }
@@ -141,12 +212,9 @@ public enum AggieEnvelopeDecoder {
         guard [1, 2].contains(result.version) else { throw AggieProtocolError.unsupportedVersion }
         guard supportedTypes.contains(result.type), result.type == "action.proposed" else { throw AggieProtocolError.unsupportedType }
         try validateID(result.messageID); try validateID(result.sessionID)
-        try validateID(result.surface.id); try validateID(result.surface.kind); try validateID(result.surface.mode)
-        guard surfaceKinds.contains(result.surface.kind) else { throw AggieProtocolError.malformed("surface kind") }
+        try validateID(result.surface.id)
         if let device = result.surface.deviceID { try validateID(device) }
         try validateID(result.payload.proposalID)
-        guard actionKinds.contains(result.payload.kind) else { throw AggieProtocolError.malformed("action kind") }
-        guard ["confirm", "none", "sensitive"].contains(result.payload.approvalClass) else { throw AggieProtocolError.malformed("approval class") }
         guard !result.payload.preconditions.isEmpty else { throw AggieProtocolError.malformed("missing preconditions") }
         return result
     }
@@ -182,6 +250,11 @@ public enum AggieEnvelopeDecoder {
                 lower.contains("github_pat_") || lower.contains("ghp_") || lower.contains("aiza") || lower.contains("ya29.") {
                 throw AggieProtocolError.dangerousPayload
             }
+        } else if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            let item = number.doubleValue
+            guard item.isFinite, !(item == 0 && item.sign == .minus),
+                  item.rounded() != item || abs(item) <= 9_007_199_254_740_991
+            else { throw AggieProtocolError.malformed("unsafe number") }
         }
     }
 }
@@ -189,16 +262,16 @@ public enum AggieEnvelopeDecoder {
 public enum AggieDigest {
     public static func proposal(_ proposal: ProposalEnvelope) throws -> String {
         let payload: JSONValue = .object([
-            "approval_class": .string(proposal.payload.approvalClass),
+            "approval_class": .string(proposal.payload.approvalClass.rawValue),
             "expires_at": .string(timestamp(proposal.payload.expiresAt)),
-            "kind": .string(proposal.payload.kind),
+            "kind": .string(proposal.payload.kind.rawValue),
             "params": .object(proposal.payload.params),
             "preconditions": .object(proposal.payload.preconditions),
             "proposal_id": .string(proposal.payload.proposalID),
             "proposed_by": .string("gateway"),
             "session_id": .string(proposal.sessionID),
         ])
-        var surface: [String: JSONValue] = ["id": .string(proposal.surface.id), "kind": .string(proposal.surface.kind), "mode": .string(proposal.surface.mode)]
+        var surface: [String: JSONValue] = ["id": .string(proposal.surface.id), "kind": .string(proposal.surface.kind.rawValue), "mode": .string(proposal.surface.mode.rawValue)]
         if let deviceID = proposal.surface.deviceID { surface["device_id"] = .string(deviceID) }
         let canonical: JSONValue = .object([
             "message_id": .string(proposal.messageID), "payload": payload,
@@ -221,7 +294,10 @@ public enum AggieDigest {
         switch value {
         case .null: return "null"
         case .bool(let item): return item ? "true" : "false"
-        case .number(let item): return item.rounded() == item ? String(Int(item)) : String(item)
+        case .number(let item):
+            precondition(item.isFinite && !(item == 0 && item.sign == .minus))
+            if item.rounded() == item && abs(item) <= Double(Int.max) { return String(Int(item)) }
+            return String(item)
         case .string(let item):
             let escaped = item.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
@@ -242,14 +318,21 @@ public protocol LocalActionExecutor: Sendable { func execute(_ proposal: Proposa
 public actor AppleActionCoordinator {
     private var consumed = Set<String>()
     private var pending = Set<String>()
-    public init() {}
+    private let journal: EffectJournal
+    public init(journal: EffectJournal = InMemoryEffectJournal()) { self.journal = journal }
+
+    public func recoveryStatus(for messageID: String) throws -> RecoveryStatus {
+        try journal.status(for: messageID)
+    }
 
     public func handle(_ proposal: ProposalEnvelope, expectedSession: String, expectedSurface: SurfaceIdentity,
                        now: @Sendable () -> Date, approver: LocalApprovalPrompt,
                        state: LocalStateProvider, executor: LocalActionExecutor) async throws -> LocalActionReceipt {
         guard proposal.sessionID == expectedSession, proposal.surface == expectedSurface else { throw AggieProtocolError.scopeMismatch }
         guard pending.count < AggieLimits.pendingProposals else { throw AggieProtocolError.tooLarge }
-        guard !consumed.contains(proposal.messageID), !pending.contains(proposal.messageID) else { throw AggieProtocolError.duplicateProposal }
+        guard !consumed.contains(proposal.messageID), !pending.contains(proposal.messageID),
+              try journal.status(for: proposal.messageID) == .notStarted
+        else { throw AggieProtocolError.duplicateProposal }
         guard now() <= proposal.payload.expiresAt else { throw AggieProtocolError.expired }
         let before = try await state.currentState()
         guard matches(proposal.payload.preconditions, before) else { throw AggieProtocolError.staleState }
@@ -266,11 +349,19 @@ public actor AppleActionCoordinator {
         guard now() <= proposal.payload.expiresAt else { throw AggieProtocolError.expired }
         let finalState = try await state.currentState()
         guard matches(proposal.payload.preconditions, finalState) else { throw AggieProtocolError.staleState }
+        // Persist the uncertainty boundary before invoking an effect. A crash
+        // between this write and a typed terminal result must never enable retry.
+        try journal.record(.unknownEffect, for: proposal.messageID)
         consumed.insert(proposal.messageID)
-        try await executor.execute(proposal)
+        do { try await executor.execute(proposal) }
+        catch {
+            try? journal.record(.unknownEffect, for: proposal.messageID)
+            throw error
+        }
+        try journal.record(.knownSucceeded, for: proposal.messageID)
         return LocalActionReceipt(receiptID: "receipt_\(UUID().uuidString.lowercased())", proposalID: proposal.payload.proposalID,
             proposalMessageID: proposal.messageID, approvalID: approval.approvalID, sessionID: proposal.sessionID,
-            surface: proposal.surface, outcome: "executed", observedAt: now(), stateDigest: try AggieDigest.state(finalState))
+            surface: proposal.surface, outcome: .executed, observedAt: now(), stateDigest: try AggieDigest.state(finalState))
     }
 
     private func matches(_ expected: [String: JSONValue], _ actual: [String: JSONValue]) -> Bool {
