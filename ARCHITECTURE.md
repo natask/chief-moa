@@ -145,6 +145,21 @@ to proposal-message correlation. It does not authenticate a device or actor;
 transport authentication, device signing and native execution remain outside
 this module and must not be inferred from those correlation checks.
 
+### Apple native surface seam
+
+`apple_surfaces` is a shared macOS/iOS Swift library that consumes the same
+bounded Aggie N/N-1 proposal contract. It owns only local decoding, explicit
+approval coordination, final expiry/state revalidation, bounded replay and
+local receipt formation. Stateful authority is actor-isolated and any effect is
+available only through an injected executor after all local checks pass.
+
+This seam has no transport, provider credential, canonical conversation store,
+Keychain policy, OS action implementation, SwiftUI product shell, signing,
+update or distribution authority. An unsigned macOS or iOS Simulator build is
+compilation evidence only; it does not establish device behavior, security,
+accessibility, energy use, signing or production readiness. Permanent companion
+versus seamless-assistant UX remains an explicit product decision.
+
 ## Runtime Flows
 
 ### Voice Chat
