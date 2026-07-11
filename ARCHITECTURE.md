@@ -773,7 +773,10 @@ user turn (chat or cascaded voice)
   -> the gateway resolves one immutable filing/scope result, assembles one
      canonical artifact for that scope, then starts a fresh answer request that
      does not offer context_management
-  -> the turn is filed on that same resolved branch and the decision is stored
+  -> only after the answer succeeds, the exact plan is committed and the turn
+     is filed on that same resolved branch; completed turn-id retries replay the
+     stored response without another preflight or branch mint
+  -> the decision is stored
      as a record + product event
 ```
 

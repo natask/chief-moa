@@ -51,6 +51,21 @@ prior without a preflight plain-answer fallback. The canonical artifact query
 SHALL use the valid decision `retrieval_query` when nonblank and otherwise the
 current user text.
 
+The gateway SHALL represent the resolved filing identity and fork cutoff as one
+immutable plan used by both retrieval and persistence. It SHALL NOT create,
+switch, touch, or seed a durable branch before the answer succeeds. A completed
+chat or cascaded-voice `turn_id` retry SHALL return the stored response before
+preflight and SHALL NOT mint a new branch or repeat a provider request.
+
+#### Scenario: Failed answer leaves no planned branch
+- **WHEN** a new or fork filing plan is resolved but the answer does not succeed
+- **THEN** no durable branch, active-thread switch, or fork summary seed is written
+
+#### Scenario: Completed retry replays exact filing
+- **WHEN** a completed chat or cascaded-voice turn is retried with the same turn id
+- **THEN** the stored response and filing branch are returned without preflight
+- **AND** no additional branch is minted
+
 #### Scenario: Model overrides the prior
 - **WHEN** the model calls `context_management` with `action` = new on a turn
   whose prior was continue

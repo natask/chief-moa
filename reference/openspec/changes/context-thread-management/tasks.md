@@ -17,6 +17,9 @@
       decision as a record + `context.decision.recorded` product event.
 - [x] 2.4 Return a bounded `context` block on both paths.
 - [x] 2.5 `scripts/smoke-context-decision.js` (golden table + wired chat path).
+- [x] 2.6 Plan filing identity/fork cutoff without durable mutation, commit the
+      exact plan only after answer success, and replay completed chat/cascaded
+      turn ids before preflight.
 
 ## 3. Enrichment + rolling summaries
 

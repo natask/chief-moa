@@ -98,6 +98,28 @@ local dependencies.
   and maximum CRAP 11.896296. No live/paid provider call, latency benchmark,
   external evaluation, preview, or deployment was run. Fresh independent audit
   remains required.
+- Cycle 9: R6 fresh audit BLOCKED cascaded pre-classification privacy, durable
+  branch mutation before answer success, completed-turn replay, answer-tool
+  branch attribution, and missing hostile lifecycle coverage.
+- Repair M3-1-R7: cascaded turns now resolve explicit/warranted privacy before
+  classification; chat and cascaded filing use one frozen plan whose branch and
+  fork cutoff feed retrieval and are committed only after answer success;
+  answer tools use that planned branch; completed chat and cascaded turn ids
+  replay before preflight; an incognito non-chat classification is prevented
+  from launching actions or creating durable state. Deterministic failure fixtures cover absent,
+  malformed, unknown, duplicate, and thrown preflight results, and retry
+  fixtures prove no repeat provider requests or new branch ids.
+- R7 deterministic evidence now has an explicit twelve-row claims map in
+  `hostile-matrix-r7.md`. It includes captured OpenAI/Vertex preflight shapes,
+  new/fork/incognito payload sentinels, cascaded stream ordering, HTTP scope,
+  failure/mutation cases, completed replay, direct answer-transport failure with
+  before/after thread-store inspection, and forced artifact failure for new and
+  incognito. Focused context-decision tests are 5/5 and the decision, artifact,
+  cascaded-reasoner, and incognito smokes pass. Final full-gateway and strict
+  spec results: full gateway 194 passed, 1 skipped, 0 failed; both strict
+  OpenSpec validations pass; context-artifact quality maximum complexity 10 and
+  maximum CRAP 11.896296. No paid/live provider call, benchmark, preview, or
+  deployment was run.
 
 ## Commit / deploy status
 

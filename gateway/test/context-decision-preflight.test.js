@@ -8,6 +8,8 @@ const {
   parseOpenAiContextPreflight,
   parseVertexContextPreflight,
   buildCanonicalContextArtifact,
+  planTurnFilingThread,
+  prepareContextDecision,
   brain,
 } = require("../server");
 
@@ -22,6 +24,33 @@ test("decision preflight contains only bounded instruction, current turn, and de
   assert.doesNotMatch(serialized, new RegExp(callerSecret));
   assert.doesNotMatch(serialized, new RegExp(standingSecret));
   assert.deepEqual(contextPreflightTool().function.parameters.required, ["action", "retrieval_query"]);
+});
+
+test("unsupported provider retains the deterministic prior without preflight", async () => {
+  const prepared = await prepareContextDecision({
+    text: "continue this work",
+    contextAction: "",
+    profile: { model: "unconfigured-test-model", reasoning_provider: "openai-compatible" },
+  });
+  assert.equal(prepared.decision.action, "continue");
+  assert.deepEqual(prepared.preflight, {
+    attempted: false,
+    tool_called: false,
+    fallback_reason: "unsupported_provider",
+  });
+});
+
+test("filing resolution is an immutable plan shared by retrieval and commit", () => {
+  const planned = planTurnFilingThread({
+    sessionId: "pure-plan-session",
+    callerBranchId: "default",
+    decision: { action: "new", thread_label: "Cold work" },
+  });
+  assert.equal(Object.isFrozen(planned), true);
+  assert.match(planned.branch_id, /^thr-/);
+  assert.equal(planned.kind, "new");
+  assert.equal(planned.persisted, true);
+  assert.throws(() => { planned.branch_id = "mutated"; }, TypeError);
 });
 
 test("OpenAI and Vertex parsers require exactly one valid context decision tool", () => {

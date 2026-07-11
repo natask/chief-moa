@@ -62,6 +62,7 @@ const fetchCalls = [];
 let pendingToolCall = null;
 // When set, the model returns this exact text as its plain reply content.
 let pendingReply = null;
+let pendingContextDecision = null;
 // When set, streaming (stream:true or :streamGenerateContent) requests consume
 // one round of SSE events per request. The literal "__fault__" makes the body
 // throw mid-stream, exercising the per-round non-streaming fallback.
@@ -99,7 +100,8 @@ global.fetch = async (url, options = {}) => {
     const contextPreflight = body.tool_choice?.function?.name === "context_management";
     fetchCalls.push({ kind: contextPreflight ? "context-preflight" : "openai", url: u, body });
     if (contextPreflight) {
-      return jsonResponse({ choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "context_1", type: "function", function: { name: "context_management", arguments: JSON.stringify({ action: "continue", retrieval_query: "" }) } }] } }] });
+      const decision = pendingContextDecision || { action: "continue", retrieval_query: "" };
+      return jsonResponse({ choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "context_1", type: "function", function: { name: "context_management", arguments: JSON.stringify(decision) } }] } }] });
     }
     if (body.stream === true && Array.isArray(pendingStreamRounds) && pendingStreamRounds.length > 0) {
       return sseResponse(pendingStreamRounds.shift());
@@ -129,7 +131,8 @@ global.fetch = async (url, options = {}) => {
     const contextPreflight = body.toolConfig?.functionCallingConfig?.allowedFunctionNames?.includes("context_management");
     fetchCalls.push({ kind: contextPreflight ? "context-preflight" : "vertex", url: u, body });
     if (contextPreflight) {
-      return jsonResponse({ candidates: [{ content: { parts: [{ functionCall: { name: "context_management", args: { action: "continue", retrieval_query: "" } } }] } }] });
+      const decision = pendingContextDecision || { action: "continue", retrieval_query: "" };
+      return jsonResponse({ candidates: [{ content: { parts: [{ functionCall: { name: "context_management", args: decision } }] } }] });
     }
     return jsonResponse({ candidates: [{ content: { parts: [{ text: "Understood, master." }] } }] });
   }
@@ -139,6 +142,7 @@ global.fetch = async (url, options = {}) => {
 const {
   server,
   runCascadedVoiceReasoning,
+  recordStreamingVoiceTurn,
   agentProfile,
 } = require(path.join(GATEWAY_DIR, "server"));
 
@@ -164,6 +168,9 @@ async function main() {
   await streamingVertexReplaysThoughtSignature();
   await streamingSseFaultFallsBackPerRound();
   await sessionPersonaReachesTheModel();
+  await completedCascadedRetryIsIdempotent();
+  await incognitoClassificationHasNoDurableEffects();
+  await modelSelectedColdScopesAreCaptured();
 
   console.log(JSON.stringify({
     ok: true,
@@ -181,8 +188,131 @@ async function main() {
       "a signed vertex functionCall part replays with its thoughtSignature on the next round",
       "an SSE transport fault falls back to one non-streaming call for that round and the reply is still spoken",
       "a session persona (pet name/character) becomes a system block for that turn and is absent without one",
+      "a completed cascaded turn replay skips preflight and preserves its filing branch",
+      "an incognito agent classification launches no action and stores no voice turn",
+      "model-selected new/incognito cascaded answers are standing-only and stream only after preflight",
     ],
   }, null, 2));
+}
+
+async function modelSelectedColdScopesAreCaptured() {
+  const callerSentinel = "CASCADED_CALLER_RECENCY_SENTINEL";
+  const standingSentinel = "CASCADED_STANDING_FACT_SENTINEL";
+  await recordStreamingVoiceTurn({
+    session_id: SESSION_ID,
+    conversation_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "cascaded-cold-scope-seed",
+    source: "voice-cascaded",
+    transcript: callerSentinel,
+    assistant_text: "seeded",
+  });
+  const originalStanding = require(path.join(GATEWAY_DIR, "server")).brain.recallStandingFacts;
+  require(path.join(GATEWAY_DIR, "server")).brain.recallStandingFacts = () => [{ slug: "standing/cascaded", snippet: standingSentinel }];
+  try {
+    fetchCalls.length = 0;
+    const deltas = [];
+    pendingContextDecision = { action: "new", retrieval_query: "cold scope" };
+    const fresh = await runCascadedVoiceReasoning({
+      session_id: SESSION_ID,
+      conversation_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "cascaded-model-new",
+      source: "voice-cascaded",
+      transcript: "draft an unrelated quarterly plan",
+      on_speak_delta: (delta) => deltas.push(delta),
+    });
+    assert.equal(fresh.context.action, "new");
+    assert.ok(deltas.length > 0, "streamed answer must emit after decision phase");
+    const preflightIndex = fetchCalls.findIndex((call) => call.kind === "context-preflight");
+    const answerIndex = fetchCalls.findIndex((call) => call.kind === "openai");
+    assert.ok(preflightIndex >= 0 && answerIndex > preflightIndex, "answer request must follow preflight");
+    const preflight = fetchCalls[preflightIndex].body;
+    const answer = fetchCalls[answerIndex].body;
+    assert.doesNotMatch(JSON.stringify(preflight), new RegExp(`${callerSentinel}|${standingSentinel}`));
+    assert.match(JSON.stringify(answer.messages), new RegExp(standingSentinel));
+    assert.doesNotMatch(JSON.stringify(answer.messages), new RegExp(callerSentinel));
+
+    fetchCalls.length = 0;
+    pendingContextDecision = { action: "incognito", retrieval_query: "private scope" };
+    const privateTurn = await runCascadedVoiceReasoning({
+      session_id: SESSION_ID,
+      conversation_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "cascaded-model-incognito",
+      source: "voice-cascaded",
+      transcript: "keep this off the record while you answer privately",
+    });
+    assert.equal(privateTurn.context.action, "incognito");
+    const privateAnswer = fetchCalls.find((call) => call.kind === "openai").body;
+    assert.match(JSON.stringify(privateAnswer.messages), new RegExp(standingSentinel));
+    assert.doesNotMatch(JSON.stringify(privateAnswer.messages), new RegExp(callerSentinel));
+    await recordStreamingVoiceTurn({
+      session_id: SESSION_ID,
+      conversation_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "cascaded-model-incognito",
+      source: "voice-cascaded",
+      transcript: "keep this off the record while you answer privately",
+      assistant_text: privateTurn.display,
+      context: privateTurn.context,
+    });
+    assert.equal(fs.existsSync(path.join(dataDir, "voice-turns", SESSION_ID, "cascaded-model-incognito.json")), false);
+  } finally {
+    pendingContextDecision = null;
+    require(path.join(GATEWAY_DIR, "server")).brain.recallStandingFacts = originalStanding;
+  }
+}
+
+async function incognitoClassificationHasNoDurableEffects() {
+  const turnId = "cascaded-incognito-agent-turn";
+  const input = {
+    session_id: SESSION_ID,
+    conversation_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: turnId,
+    source: "voice-cascaded",
+    context_action: "incognito",
+    transcript: "fix the bug",
+  };
+  fetchCalls.length = 0;
+  const reasoning = await runCascadedVoiceReasoning(input);
+  assert.equal(reasoning.classification, "agent_run");
+  const record = await recordStreamingVoiceTurn({ ...input, assistant_text: reasoning.display, context: reasoning.context });
+  assert.deepEqual(record.response.actions, [], "incognito classification must execute no action");
+  const stored = path.join(dataDir, "voice-turns", SESSION_ID, `${turnId}.json`);
+  assert.equal(fs.existsSync(stored), false, "incognito classified turn must not persist");
+  assert.equal(fetchCalls.length, 0, "explicit incognito non-chat turn must not call a provider");
+}
+
+async function completedCascadedRetryIsIdempotent() {
+  const turnId = "cascaded-retry-stable-turn";
+  const input = {
+    session_id: SESSION_ID,
+    conversation_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: turnId,
+    source: "voice-cascaded",
+    context_action: "new",
+    transcript: "draft quarterly budget options",
+  };
+  fetchCalls.length = 0;
+  const first = await runCascadedVoiceReasoning(input);
+  assert.equal(first.classification, "chat");
+  assert.ok(first.context.branch_id.startsWith("thr-"));
+  assert.equal(fetchCalls.filter((call) => call.kind === "context-preflight").length, 0, "explicit new skips preflight");
+  await recordStreamingVoiceTurn({
+    ...input,
+    assistant_text: first.display,
+    reply_language: first.language,
+    context: first.context,
+    completed_at: new Date().toISOString(),
+  });
+  fetchCalls.length = 0;
+  const replay = await runCascadedVoiceReasoning(input);
+  assert.equal(replay.replayed, true, "completed voice turn must be replayed from storage");
+  assert.equal(replay.context.branch_id, first.context.branch_id, "replay must preserve filing branch");
+  assert.equal(fetchCalls.length, 0, "completed replay must make no provider request");
 }
 
 async function modelToolCallLaunchesAgentRun() {
@@ -344,6 +474,10 @@ async function modelAndReasoningProviderRoute() {
   });
   assert.ok(fetchCalls.some((c) => c.kind === "openai"), "an unset reasoning_provider must route to the boot openai-compatible provider");
   assert.ok(!fetchCalls.some((c) => c.kind === "vertex"), "the default turn must not call Vertex");
+  const openAiPreflight = fetchCalls.find((c) => c.kind === "context-preflight");
+  assert.deepEqual(openAiPreflight.body.tools.map((tool) => tool.function.name), ["context_management"]);
+  assert.equal(openAiPreflight.body.tool_choice.function.name, "context_management");
+  assert.equal(openAiPreflight.body.messages.length, 2, "OpenAI preflight shape contains only instruction and current turn");
 
   // Swap reasoning_provider to vertex and model to a custom id: the next reasoning
   // call must route to Vertex generateContent for that model, no restart required.
@@ -360,7 +494,11 @@ async function modelAndReasoningProviderRoute() {
     turn_id: "reasoner-route-vertex",
   });
   const vertexCall = fetchCalls.find((c) => c.kind === "vertex");
+  const vertexPreflight = fetchCalls.find((c) => c.kind === "context-preflight");
   assert.ok(vertexCall, "reasoning_provider=vertex must route the next call to Vertex");
+  assert.deepEqual(vertexPreflight.body.toolConfig.functionCallingConfig.allowedFunctionNames, ["context_management"]);
+  assert.equal(vertexPreflight.body.toolConfig.functionCallingConfig.mode, "ANY");
+  assert.equal(vertexPreflight.body.contents.length, 1, "Vertex preflight shape contains only current-turn contents");
   assert.match(vertexCall.url, /\/models\/gemini-smoke-custom:generateContent/, `profile.model must select the Vertex model in the URL: ${vertexCall.url}`);
   assert.ok(!fetchCalls.some((c) => c.kind === "openai"), "a vertex-routed turn must not also call the openai-compatible endpoint");
 

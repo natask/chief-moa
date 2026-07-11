@@ -1844,6 +1844,9 @@ module.exports = {
   parseOpenAiContextPreflight,
   parseVertexContextPreflight,
   prepareContextDecision,
+  planTurnFilingThread,
+  commitTurnFilingThread,
+  setContextLifecycleTestHook,
   brain,
   agentProfile,
 };
@@ -2236,6 +2239,11 @@ async function handleChat(request, response) {
     ? sanitizeOptionalId(body.branch_id, "default")
     : sanitizeOptionalId(threadStore.getActive(sessionId, surface).branch_id, "default");
   const turnId = sanitizeOptionalId(body.turn_id, randomId("chat"));
+  const completedTurn = readChatTurnRecord(sessionId, turnId);
+  if (completedTurn?.response) {
+    sendJson(response, 200, completedTurn.response);
+    return;
+  }
   const deviceId = profileDeviceIdFromBody(body);
   const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
   const messages = normalizeMessages(body.messages, body.context_turn_limit);
@@ -2255,7 +2263,8 @@ async function handleChat(request, response) {
     : await prepareContextDecision({ text: userText, contextAction: body.context_action, profile });
   const decision = prepared.decision;
   if (!decision.thread_label && body.thread_label) decision.thread_label = String(body.thread_label).slice(0, 120);
-  const thread = resolveTurnFilingThread({ sessionId, callerBranchId, decision, surface, deviceId });
+  const thread = planTurnFilingThread({ sessionId, callerBranchId, decision });
+  runContextLifecycleTestHook({ phase: "planned", sessionId, callerBranchId, turnId, thread, decision });
   const branchId = thread.branch_id;
   const inheritFrom = thread.kind === "fork" && thread.parent_branch_id && thread.fork_point
     ? { branchId: thread.parent_branch_id, uptoCreatedAt: thread.fork_point.created_at }
@@ -2294,7 +2303,7 @@ async function handleChat(request, response) {
     const chatToolCall = {
       session_id: sessionId,
       conversation_id: conversationId,
-      branch_id: callerBranchId,
+      branch_id: branchId,
       turn_id: turnId,
       device_id: deviceId,
       profile_version: profileVersion,
@@ -2307,6 +2316,7 @@ async function handleChat(request, response) {
   }
 
   const savedMessages = messages.concat([{ role: "assistant", content: text }]);
+  commitTurnFilingThread({ sessionId, thread, surface, deviceId });
   const saved = {
     id: conversationId,
     session_id: sessionId,
@@ -2343,6 +2353,15 @@ async function handleChat(request, response) {
     fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify(ledgerEntry) + "\n");
     // Per-session record for fast, O(1) session-scoped reads. Parallel to how
     // voice turns are stored under voice-turns/<session_id>/<turn_id>.json.
+    const responsePayload = {
+      conversation_id: conversationId,
+      session_id: sessionId,
+      branch_id: branchId,
+      turn_id: turnId,
+      profile_version: profileVersion,
+      text,
+      context: contextResponseBlock(thread, decision, contextArtifact),
+    };
     writeChatTurnRecord({
       turn_id: turnId,
       conversation_id: conversationId,
@@ -2358,6 +2377,7 @@ async function handleChat(request, response) {
       screen: saved.screen,
       request_messages: modelMessages,
       response_text: text,
+      response: responsePayload,
     });
     await recordChatTurnProductEvent(saved, userText, text);
     threadStore.touchThread(sessionId, branchId);
@@ -10229,6 +10249,16 @@ function writeChatTurnRecord(record) {
   fs.renameSync(tmpPath, filePath);
 }
 
+function readChatTurnRecord(sessionId, turnId) {
+  const filePath = chatTurnPath(sessionId, turnId);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function readVoiceTurnRecord(sessionId, turnId) {
   const filePath = voiceTurnPath(sessionId, turnId);
   if (!fs.existsSync(filePath)) {
@@ -10920,12 +10950,38 @@ async function runCascadedVoiceReasoningInner(input) {
     return { speak: "", display: "", language: replyLanguage, model: profile.model || MODEL_ID, classification: "empty" };
   }
 
+  const reasonSessionId = input?.session_id || input?.conversation_id || "";
+  const reasonBranchId = input?.branch_id || "default";
+  const turnId = input?.turn_id || "";
+  const completed = turnId ? readVoiceTurnRecord(reasonSessionId, turnId) : null;
+  if (completed?.response) {
+    const response = completed.response;
+    return {
+      speak: String(response.speak || response.text || ""),
+      display: String(response.display || response.text || ""),
+      language: response.language || replyLanguage,
+      model: response.model || profile.model || MODEL_ID,
+      classification: completed.classification || "chat",
+      context: response.context || completed.references?.voice_session?.context || completed.references?.context || null,
+      replayed: true,
+    };
+  }
+
+  // Resolve privacy and filing scope before classification. Control and agent
+  // turns must honor explicit/warranted incognito just as chat turns do.
+  const prepared = await prepareContextDecision({ text: transcript, contextAction: input?.context_action, profile });
+  const contextDecision = prepared.decision;
+  const filingThread = planTurnFilingThread({
+    sessionId: reasonSessionId, callerBranchId: reasonBranchId, decision: contextDecision,
+  });
+
   // Reuse the same classifier as the HTTP path. Only chat turns produce a spoken
   // chat reply here; control and agent-run turns are recorded by the caller, and
   // a profile-control turn is applied AND its confirmation spoken by the
   // streaming turn recorder, so none of them are answered as a chat turn here.
   const classification = classifyVoiceTurnWithPersona(input?.persona, {}, transcript);
   if (classification !== "chat") {
+    stashContextDecision(reasonSessionId, turnId, { decision: contextDecision, thread: filingThread });
     return { speak: "", display: transcript, language: replyLanguage, model: profile.model || MODEL_ID, classification };
   }
 
@@ -10933,14 +10989,6 @@ async function runCascadedVoiceReasoningInner(input) {
   // inject recent turns; the cascaded reasoner did not, so a spoken turn had no
   // memory of what was just said. The ids arrive threaded through the streaming
   // provider's reasoner call.
-  const reasonSessionId = input?.session_id || input?.conversation_id || "";
-  const reasonBranchId = input?.branch_id || "default";
-  const prepared = await prepareContextDecision({ text: transcript, contextAction: input?.context_action, profile });
-  const contextDecision = prepared.decision;
-  const filingThread = resolveTurnFilingThread({
-    sessionId: reasonSessionId, callerBranchId: reasonBranchId, decision: contextDecision,
-    surface: input?.source || "voice-cascaded", deviceId,
-  });
   const answerBranchId = filingThread.branch_id;
   const reasonInheritFrom = filingThread.kind === "fork" && filingThread.parent_branch_id && filingThread.fork_point
     ? { branchId: filingThread.parent_branch_id, uptoCreatedAt: filingThread.fork_point.created_at }
@@ -11502,6 +11550,17 @@ async function recordStreamingVoiceTurn(turn) {
     response: null,
     references: {},
   };
+  // The reasoner planned this identity before answering. Materialize it only
+  // now, after the cascaded answer/classification completed successfully and
+  // immediately before the canonical recorder performs durable writes.
+  if (stashedContext?.thread) {
+    commitTurnFilingThread({
+      sessionId,
+      thread: stashedContext.thread,
+      surface: baseRecord.source,
+      deviceId,
+    });
+  }
   const voiceSessionReferences = {
     voice_session: {
       provider: turn.provider || "",
@@ -11540,6 +11599,20 @@ async function recordStreamingVoiceTurn(turn) {
       error: String(turn.error || ""),
     },
   };
+  // Incognito is a no-durable-effects boundary, not merely a storage filter.
+  // A control/profile/agent classification must not turn an unsaved turn into
+  // a profile write, launched run, broker action, or other durable mutation.
+  if (incognito && !incomplete && classification !== "chat") {
+    const payload = voiceTurnPayload(baseRecord, {
+      speak: "",
+      display: transcript,
+      actions: [],
+      follow_up_expected: false,
+    });
+    const canonicalRecord = { ...baseRecord, response: payload, references: voiceSessionReferences };
+    await writeCompletedVoiceTurnRecord(canonicalRecord);
+    return canonicalRecord;
+  }
   await recordVoiceTurnAcceptedProductEvent(baseRecord);
   if (!incomplete && classification === "control") {
     const payload = voiceTurnPayload(baseRecord, {
@@ -12386,7 +12459,12 @@ function formatKnownFacts(memories) {
 }
 
 function recallStandingMemoryContext() {
-  return formatKnownFacts(brain.recallStandingFacts(BRAIN_RECALL_LIMIT));
+  try {
+    return formatKnownFacts(brain.recallStandingFacts(BRAIN_RECALL_LIMIT));
+  } catch (error) {
+    console.warn(`standing context recall failed (${cleanError(error)})`);
+    return "";
+  }
 }
 
 function recallMemoryContext(query) {
@@ -14067,6 +14145,14 @@ async function handleThreadSwitch(request, response) {
 // in a later onTurnCompleted call. Stash the decision keyed by session:turn so
 // the recorder can pick it up; entries are one-shot and time-boxed.
 const contextDecisionStash = new Map();
+let contextLifecycleTestHook = null;
+function setContextLifecycleTestHook(hook) {
+  if (MOA_MODE !== "local") throw new Error("context lifecycle test hook is local-only");
+  contextLifecycleTestHook = typeof hook === "function" ? hook : null;
+}
+function runContextLifecycleTestHook(event) {
+  if (MOA_MODE === "local" && contextLifecycleTestHook) contextLifecycleTestHook(event);
+}
 function stashContextDecision(sessionId, turnId, decision) {
   const key = `${sanitizeOptionalId(sessionId, "default")}:${String(turnId || "")}`;
   contextDecisionStash.set(key, { decision, at: Date.now() });
@@ -14086,55 +14172,65 @@ function takeContextDecision(sessionId, turnId) {
   return entry.decision;
 }
 
-// Resolve where a turn is filed given its final context action. continue stays on
-// the caller branch; new mints a fresh cold branch; fork branches off the caller
-// keeping its history (records the fork point + seeds the child summary from the
-// parent); incognito rides an ephemeral inc- branch that is never persisted.
-function resolveTurnFilingThread({ sessionId, callerBranchId, decision, surface = "", deviceId = "" }) {
+// Pure filing plan. It captures the exact identity and fork cutoff used for
+// retrieval without mutating durable thread state before an answer succeeds.
+function planTurnFilingThread({ sessionId, callerBranchId, decision }) {
   const safeSession = sanitizeOptionalId(sessionId, defaultSessionId());
   const caller = sanitizeOptionalId(callerBranchId, "default");
   const action = decision?.action || "continue";
 
   if (action === "incognito") {
     const branchId = isIncognitoBranch(caller) ? caller : newBranchId("incognito");
-    return { branch_id: branchId, kind: "incognito", parent_branch_id: "", fork_point: null, persisted: false, label: "Incognito" };
+    return Object.freeze({ branch_id: branchId, kind: "incognito", parent_branch_id: "", fork_point: null, persisted: false, label: "Incognito" });
   }
   if (action === "new") {
     const branchId = newBranchId("new");
-    const meta = threadStore.ensureThread(safeSession, branchId, { kind: "new", label: decision?.thread_label || "" });
-    threadStore.recordSwitch(safeSession, { branch_id: branchId, surface, device_id: deviceId });
-    return { branch_id: branchId, kind: "new", parent_branch_id: "", fork_point: null, persisted: true, label: meta.label };
+    return Object.freeze({ branch_id: branchId, kind: "new", parent_branch_id: "", fork_point: null, persisted: true, label: decision?.thread_label || "" });
   }
   if (action === "fork") {
     const parent = isIncognitoBranch(caller) ? "default" : caller;
     const forkPoint = branchLatestTurn(safeSession, parent);
     const branchId = newBranchId("fork");
-    const meta = threadStore.ensureThread(safeSession, branchId, {
-      kind: "fork",
-      label: decision?.thread_label || "",
-      parent_branch_id: parent,
-      fork_point: forkPoint,
-    });
-    const parentSummary = threadStore.readSummary(safeSession, parent);
-    if (parentSummary?.summary && !threadStore.readSummary(safeSession, branchId)) {
-      threadStore.writeSummary(safeSession, branchId, parentSummary.summary, { source: "fork-seed" });
-    }
-    threadStore.recordSwitch(safeSession, { branch_id: branchId, surface, device_id: deviceId });
-    return { branch_id: branchId, kind: "fork", parent_branch_id: parent, fork_point: forkPoint, persisted: true, label: meta.label };
+    return Object.freeze({ branch_id: branchId, kind: "fork", parent_branch_id: parent, fork_point: forkPoint, persisted: true, label: decision?.thread_label || "" });
   }
   // continue
   const existing = threadStore.getThread(safeSession, caller);
-  if (!isIncognitoBranch(caller)) {
-    threadStore.ensureThread(safeSession, caller, {});
-  }
-  return {
+  return Object.freeze({
     branch_id: caller,
     kind: existing?.kind || (caller === "default" ? "default" : "new"),
     parent_branch_id: existing?.parent_branch_id || "",
     fork_point: existing?.fork_point || null,
     persisted: true,
     label: existing?.label || "",
-  };
+  });
+}
+
+function commitTurnFilingThread({ sessionId, thread, surface = "", deviceId = "" }) {
+  if (!thread || thread.persisted === false) return thread;
+  const safeSession = sanitizeOptionalId(sessionId, defaultSessionId());
+  const meta = threadStore.ensureThread(safeSession, thread.branch_id, {
+    kind: thread.kind,
+    label: thread.label || "",
+    parent_branch_id: thread.parent_branch_id || "",
+    fork_point: thread.fork_point || null,
+  });
+  if (thread.kind === "fork" && thread.parent_branch_id) {
+    const parentSummary = threadStore.readSummary(safeSession, thread.parent_branch_id);
+    if (parentSummary?.summary && !threadStore.readSummary(safeSession, thread.branch_id)) {
+      threadStore.writeSummary(safeSession, thread.branch_id, parentSummary.summary, { source: "fork-seed" });
+    }
+  }
+  if (thread.kind === "new" || thread.kind === "fork") {
+    threadStore.recordSwitch(safeSession, { branch_id: thread.branch_id, surface, device_id: deviceId });
+  }
+  return Object.freeze({ ...thread, label: meta.label || thread.label });
+}
+
+// Compatibility wrapper for the deterministic HTTP voice path. Its existing
+// lifecycle commits immediately; chat/cascaded use plan + post-answer commit.
+function resolveTurnFilingThread(input) {
+  const thread = planTurnFilingThread(input);
+  return commitTurnFilingThread({ ...input, thread });
 }
 
 // The bounded `context` block returned to clients so they can show where a turn
