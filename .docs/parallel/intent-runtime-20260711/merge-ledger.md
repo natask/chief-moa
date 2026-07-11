@@ -58,7 +58,8 @@ voice/LLM trace correlation.
 | S3 Android | `agent/android-draft-controls-20260711` | `chief-moa-worktrees/android-draft-controls-20260711` | Android capture state/gestures/tests | implementing |
 | S4 browser | `agent/browser-draft-controls-20260711` | `chief-moa-worktrees/browser-draft-controls-20260711` | extension capture state/gestures/tests | implementing |
 | S5 context/protocol | `agent/context-protocol-20260711` | `chief-moa-worktrees/context-protocol-20260711` | repaired M3 context + repaired M5 protocol | audit |
-| S6 verification | staging | staging worktree | integration gates, runtime QA, release evidence | pending |
+| S6 gateway integration | `agent/intent-gateway-integration-20260711` | `chief-moa-worktrees/intent-gateway-integration-20260711` | HTTP/WS admission, routes, intent/trace bridges | contracted |
+| S7 verification | staging | staging worktree | integration gates, runtime QA, release evidence | pending |
 
 ## Research passes
 
@@ -124,3 +125,8 @@ voice/LLM trace correlation.
   installed the lockfile in this isolated worktree (reporting the same two
   existing high-severity audit findings), and `npm run check` passed 237,
   failed 0, skipped 1. No live state was used or mutated.
+- 2026-07-11: contracted the serial gateway integration lane, including exact
+  route-before-work ordering, transactional profile focus, zero-provider draft
+  controls, bounded PCM coalescing, retryable failed SEND claims, and capability
+  advertisement only after the full path is active. The worktree will be
+  created only after the audited intent/store slices are merged into staging.
