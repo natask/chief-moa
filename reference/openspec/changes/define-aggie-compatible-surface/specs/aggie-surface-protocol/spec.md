@@ -6,8 +6,11 @@
 
 The gateway and compatible surfaces SHALL exchange versioned envelopes bounded
 to 64 KiB. The implementation SHALL support current version N and previous
-version N-1, ignore unknown additive fields, and reject versions or semantic
-types for which no supported meaning exists.
+version N-1, ignore benign unknown additive fields, and reject versions or
+semantic types for which no supported meaning exists. Additive fields whose
+names represent executable or credential authority, or whose values match
+credential-token or OAuth callback-code shapes, SHALL fail closed. Forward
+compatibility does not permit smuggling authority through ignored data.
 
 #### Scenario: Previous-version surface reconnects
 
@@ -27,6 +30,10 @@ Exact duplicates SHALL be harmless. Conflicting sequence or message-ID reuse
 and cross-session replay SHALL fail. A cursor older than the bounded replay
 window SHALL receive a snapshot-required result. Reconnect delay SHALL use
 bounded full-jitter exponential backoff.
+
+The replay accumulator SHALL accept only gateway-originated event families.
+Client turns, approvals, receipts, hello and resume commands are not replay
+events even when a caller adds a sequence field.
 
 #### Scenario: Client resumes behind retained history
 
@@ -66,7 +73,8 @@ they do not claim device identity, signing, or native executor proof.
 
 The protocol SHALL provide a deterministic, provider-neutral echo backend with
 metadata, health, text turn, run, resume, cancel and artifact operations and no
-external I/O.
+external I/O. Run and artifact retention SHALL be bounded and SHALL evict the
+oldest run and its artifacts as one unit.
 
 #### Scenario: Echo run completes
 
