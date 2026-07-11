@@ -134,3 +134,17 @@ commits, runs combined gates and alone evaluates preview/promotion authority.
   `783b2711c881c4e1f074e2df1040153f4e15da35cdff1ae67c03c1925c56b7f1`.
 - No active browser reload or gateway promotion was attempted. The package is a
   rollbackable artifact; active-session/drain evidence remains absent.
+
+## MF/MT prerequisite integration (2026-07-10)
+
+- MF identity/data integrated serially as `a594d60`, `c15fdef`, `b7905df`, and
+  `95e1b81` after hostile audits found and repairs closed both 240-character
+  truncation and digest-representation alias attacks.
+- MT telemetry integrated as `8fe2fac`, `655a2c4`, `9e13a38`, and `c55d83d`
+  after hostile audits found identity-shaped release/correlation leakage,
+  accumulating timed-out exporter promises, and free-form SemVer metadata.
+- Combined gateway integration gate: 172 pass, 1 intentional skip, 0 fail.
+- Strict telemetry OpenSpec: valid. No Collector/backend, paid vendor, client
+  adapters, disposable Postgres, live deployment, or production benchmark ran.
+- M3 durable context and M4 deployment control-plane manager worktrees were
+  created from verified integration head `c55d83d` and launched in parallel.
