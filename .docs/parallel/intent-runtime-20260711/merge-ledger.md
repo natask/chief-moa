@@ -201,3 +201,10 @@ voice/LLM trace correlation.
   and real-Chrome gates: incomplete ready/terminal authority, coerced revisions,
   wrong context action, stale capability reuse, mutable mid-gesture flags, and
   swallowed offscreen PCM failure. Repair audit 2 is implementing.
+- 2026-07-11: canonical intent slice passed its final independent auditor after
+  six repair rounds. Evidence includes process-shared JSON compare-and-append,
+  exact configured stale-lock age, exact-live-process non-reaping, PostgreSQL
+  parity, and deterministic compensation of an interrupted cross-stream focus
+  pair. Committed as `41e987c`, merged serially into staging as `fbd3e15`, then
+  reran 25 combined lock/intent tests plus the event-substrate smoke in staging;
+  all passed and the staging tree remained isolated from the active app.
