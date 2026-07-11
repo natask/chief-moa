@@ -12,6 +12,7 @@ const MAX_REPLAY_EVENTS = 256;
 const MAX_REPLAY_BYTES = 1024 * 1024;
 const MAX_PENDING_EVENTS = 128;
 const MAX_PENDING_BYTES = 512 * 1024;
+const MAX_ECHO_RUNS = 256;
 const ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
 
 const TYPES = new Set([
@@ -29,6 +30,16 @@ const RECEIPT_OUTCOMES = new Set(["executed", "rejected", "expired", "stale", "f
 const RUN_STATUSES = new Set(["queued", "running", "needs_approval", "completed", "failed"]);
 const EXECUTABLE_KEYS = new Set(["script", "javascript", "shell", "command", "css", "code"]);
 const SECRET_KEYS = new Set(["api_key", "apikey", "access_token", "refresh_token", "client_secret", "provider_key", "authorization"]);
+const SERVER_REPLAY_TYPES = new Set([
+  "hello.accepted", "route.selected", "run.queued", "run.running",
+  "run.needs_approval", "run.completed", "run.failed", "artifact.created",
+  "message.created", "action.proposed", "session.snapshot_required",
+]);
+const CREDENTIAL_VALUE_PATTERNS = [
+  /\bBearer\s+[A-Za-z0-9._~+\/-]{12,}/i,
+  /\b(?:sk|github_pat|ghp|AIza|ya29)[-_A-Za-z0-9.]{12,}\b/,
+  /[?&](?:code|access_token|refresh_token|api_key)=[^&#\s]{8,}/i,
+];
 
 function negotiateVersion(hello = {}) {
   const offered = Array.isArray(hello.supported_versions) ? hello.supported_versions : [];
@@ -41,6 +52,7 @@ function negotiateVersion(hello = {}) {
 function validateEnvelope(input, options = {}) {
   if (!isRecord(input)) throw protocolError("invalid_envelope", "envelope must be an object");
   assertBoundedJson(input, MAX_ENVELOPE_BYTES, "envelope");
+  assertNoDangerousData(input, "envelope");
   const version = requireVersion(input.version);
   const type = requireEnum(input.type, TYPES, "type");
   const envelope = {
@@ -61,7 +73,7 @@ function validateEnvelope(input, options = {}) {
   else if (type === "route.selected") envelope.payload = validateRoute(input.payload);
   else if (type.startsWith("run.")) envelope.payload = validateRunEvent(input.payload, type);
   else if (type === "action.proposed") envelope.payload = validateProposal(input.payload, envelope);
-  else if (type === "action.approved") envelope.payload = validateApproval(input.payload);
+  else if (type === "action.approved") envelope.payload = validateApproval(input.payload, envelope);
   else if (type === "action.receipted") envelope.payload = validateReceipt(input.payload, envelope);
   else if (type === "artifact.created") envelope.payload = validateArtifact(input.payload);
   else if (type === "message.created") envelope.payload = validateMessage(input.payload);
@@ -178,11 +190,15 @@ function validateProposal(input, envelope) {
   };
 }
 
-function validateApproval(input) {
+function validateApproval(input, envelope) {
   if (!isRecord(input)) throw protocolError("invalid_approval", "approval payload must be an object");
+  const proposalMessageId = requireId(input.proposal_message_id, "payload.proposal_message_id");
+  if (envelope.reply_to !== proposalMessageId) {
+    throw protocolError("approval_proposal_mismatch", "approval reply_to must identify its proposal message");
+  }
   return {
     proposal_id: requireId(input.proposal_id, "payload.proposal_id"),
-    proposal_message_id: requireId(input.proposal_message_id, "payload.proposal_message_id"),
+    proposal_message_id: proposalMessageId,
     proposal_digest: requireDigest(input.proposal_digest, "payload.proposal_digest"),
     decision: requireEnum(input.decision, new Set(["approved", "rejected"]), "payload.decision"),
     actor_id: requireId(input.actor_id, "payload.actor_id"),
@@ -225,30 +241,55 @@ function canExecuteProposal(proposalEnvelope, context = {}) {
   let envelope;
   try { envelope = validateEnvelope(proposalEnvelope); }
   catch (error) { return decision(false, error.code || "invalid_proposal"); }
-  if (envelope.type !== "action.proposed") return decision(false, "not_a_proposal");
+  const contextFailure = proposalContextFailure(envelope, context);
+  if (contextFailure) return decision(false, contextFailure);
+  if (envelope.payload.approval_class === "none") return decision(true, "eligible");
+  return validateApprovalForProposal(envelope, context);
+}
+
+function proposalContextFailure(envelope, context) {
+  if (envelope.type !== "action.proposed") return "not_a_proposal";
   const now = Date.parse(context.now || new Date().toISOString());
-  if (!Number.isFinite(now)) return decision(false, "invalid_clock");
-  if (Date.parse(envelope.payload.expires_at) <= now) return decision(false, "expired");
-  if (context.session_id !== envelope.session_id) return decision(false, "session_mismatch");
-  if (context.surface_id !== envelope.surface.id) return decision(false, "surface_mismatch");
-  if (!preconditionsMatch(envelope.payload.preconditions, context.state || {})) return decision(false, "stale_state");
-  if (envelope.payload.approval_class !== "none") {
-    let approval;
-    try { approval = validateEnvelope(context.approval); }
-    catch { return decision(false, "approval_required"); }
-    if (approval.type !== "action.approved") return decision(false, "approval_required");
-    if (approval.version !== envelope.version) return decision(false, "approval_version_mismatch");
-    if (approval.session_id !== envelope.session_id) return decision(false, "approval_session_mismatch");
-    if (approval.surface.id !== envelope.surface.id) return decision(false, "approval_surface_mismatch");
-    if (approval.payload.proposal_id !== envelope.payload.proposal_id ||
-        approval.payload.proposal_message_id !== envelope.message_id ||
-        approval.reply_to !== envelope.message_id) return decision(false, "approval_proposal_mismatch");
-    if (approval.payload.proposal_digest !== proposalDigest(envelope)) return decision(false, "approval_proposal_digest_mismatch");
-    const decidedAt = Date.parse(approval.payload.decided_at);
-    if (decidedAt < Date.parse(envelope.timestamp) || decidedAt > now) return decision(false, "approval_time_invalid");
-    if (approval.payload.decision !== "approved") return decision(false, "approval_rejected");
-  }
-  return decision(true, "eligible");
+  if (!Number.isFinite(now)) return "invalid_clock";
+  if (Date.parse(envelope.payload.expires_at) <= now) return "expired";
+  if (context.session_id !== envelope.session_id) return "session_mismatch";
+  if (context.surface_id !== envelope.surface.id) return "surface_mismatch";
+  if (!preconditionsMatch(envelope.payload.preconditions, context.state || {})) return "stale_state";
+  return null;
+}
+
+function validateApprovalForProposal(envelope, context) {
+  let approval;
+  try { approval = validateEnvelope(context.approval); }
+  catch { return decision(false, "approval_required"); }
+  const mismatch = approvalMismatch(envelope, approval, context);
+  return mismatch ? decision(false, mismatch) : decision(true, "eligible");
+}
+
+function approvalMismatch(proposal, approval, context) {
+  if (approval.type !== "action.approved") return "approval_required";
+  return approvalScopeMismatch(proposal, approval) || approvalBindingMismatch(proposal, approval) || approvalDecisionMismatch(proposal, approval, context);
+}
+
+function approvalScopeMismatch(proposal, approval) {
+  if (approval.version !== proposal.version) return "approval_version_mismatch";
+  if (approval.session_id !== proposal.session_id) return "approval_session_mismatch";
+  if (approval.surface.id !== proposal.surface.id) return "approval_surface_mismatch";
+  return null;
+}
+
+function approvalBindingMismatch(proposal, approval) {
+  if (approval.payload.proposal_id !== proposal.payload.proposal_id || approval.payload.proposal_message_id !== proposal.message_id) return "approval_proposal_mismatch";
+  if (approval.payload.proposal_digest !== proposalDigest(proposal)) return "approval_proposal_digest_mismatch";
+  return null;
+}
+
+function approvalDecisionMismatch(proposal, approval, context) {
+  const decidedAt = Date.parse(approval.payload.decided_at);
+  const now = Date.parse(context.now || new Date().toISOString());
+  if (decidedAt < Date.parse(proposal.timestamp) || decidedAt > now) return "approval_time_invalid";
+  if (approval.payload.decision !== "approved") return "approval_rejected";
+  return null;
 }
 
 function createSessionReplay(options = {}) {
@@ -258,6 +299,7 @@ function createSessionReplay(options = {}) {
   let totalBytes = 0;
   function accept(input) {
     const event = validateEnvelope(input, { require_sequence: true });
+    if (!SERVER_REPLAY_TYPES.has(event.type)) throw protocolError("invalid_replay_type", "replay accepts server event types only");
     if (event.session_id !== sessionId) throw protocolError("session_mismatch", "event belongs to another session");
     const bytes = jsonBytes(event);
     const existing = bySequence.get(event.sequence);
@@ -325,6 +367,7 @@ function createEchoAdapter(options = {}) {
       const runId = `run_echo_${digest(turn.message_id).slice(0, 16)}`;
       const artifactId = `artifact_echo_${digest(`${turn.session_id}:${turn.message_id}`).slice(0, 16)}`;
       const record = deepFreeze({ run_id: runId, session_id: turn.session_id, status: "completed", created_at: now(), artifacts: [{ artifact_id: artifactId, run_id: runId, kind: "text", title: "Echo result", digest: digest(turn.payload.text), text: turn.payload.text }] });
+      if (!runs.has(runId) && runs.size >= MAX_ECHO_RUNS) runs.delete(runs.keys().next().value);
       runs.set(runId, record);
       return record;
     },
@@ -376,6 +419,18 @@ function requireDigest(value, field) { if (typeof value !== "string" || !/^[a-f0
 function assertBoundedJson(value, maxBytes, field) { let size; try { size = jsonBytes(value); } catch { throw protocolError("invalid_json", `${field} must be JSON serializable`); } if (size > maxBytes) throw protocolError("too_large", `${field} exceeds ${maxBytes} bytes`); }
 function assertSafeData(value, field, depth = 0) { if (depth > 8) throw protocolError("too_deep", `${field} exceeds depth 8`); if (value === null || typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return; if (Array.isArray(value)) { if (value.length > 64) throw protocolError("too_many_items", `${field} exceeds 64 items`); value.forEach((item, index) => assertSafeData(item, `${field}[${index}]`, depth + 1)); return; } if (!isRecord(value)) throw protocolError("unsafe_value", `${field} contains a non-data value`); if (Object.keys(value).length > 64) throw protocolError("too_many_fields", `${field} exceeds 64 fields`); assertNoExecutableKeys(value, field); for (const [key, item] of Object.entries(value)) { if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(key)) throw protocolError("invalid_field", `${field} contains invalid field name`); assertSafeData(item, `${field}.${key}`, depth + 1); } }
 function assertNoExecutableKeys(value, field) { for (const key of Object.keys(value)) { const normalized = key.toLowerCase(); if (EXECUTABLE_KEYS.has(normalized)) throw protocolError("executable_payload", `${field} contains forbidden executable field ${key}`); if (SECRET_KEYS.has(normalized)) throw protocolError("secret_payload", `${field} contains forbidden credential field ${key}`); } }
+function assertNoDangerousData(value, field, depth = 0) {
+  if (depth > 12) throw protocolError("too_deep", `${field} exceeds security scan depth 12`);
+  if (typeof value === "string") {
+    if (CREDENTIAL_VALUE_PATTERNS.some((pattern) => pattern.test(value))) throw protocolError("secret_payload", `${field} contains credential-shaped data`);
+    return;
+  }
+  if (value === null || typeof value === "boolean" || typeof value === "number") return;
+  if (Array.isArray(value)) { value.forEach((item, index) => assertNoDangerousData(item, `${field}[${index}]`, depth + 1)); return; }
+  if (!isRecord(value)) return;
+  assertNoExecutableKeys(value, field);
+  for (const [key, item] of Object.entries(value)) assertNoDangerousData(item, `${field}.${key}`, depth + 1);
+}
 function validateVersionList(input) { if (!Array.isArray(input) || input.length < 1 || input.length > 8 || !input.every(Number.isSafeInteger)) throw protocolError("invalid_versions", "supported_versions must contain 1-8 integer versions"); return [...new Set(input)]; }
 function validateStringList(input, field, maxItems, maxBytes) { if (!Array.isArray(input) || input.length > maxItems) throw protocolError("invalid_list", `${field} must be an array with at most ${maxItems} items`); return input.map((item, index) => requireBoundedString(item, maxBytes, `${field}[${index}]`)); }
 function isRecord(value) { return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype; }
@@ -398,7 +453,7 @@ function protocolError(code, message) { const error = new Error(message); error.
 
 module.exports = {
   CURRENT_VERSION, PREVIOUS_VERSION, SUPPORTED_VERSIONS, MAX_ENVELOPE_BYTES,
-  MAX_REPLAY_EVENTS, MAX_REPLAY_BYTES, MAX_PENDING_EVENTS, MAX_PENDING_BYTES,
+  MAX_REPLAY_EVENTS, MAX_REPLAY_BYTES, MAX_PENDING_EVENTS, MAX_PENDING_BYTES, MAX_ECHO_RUNS,
   negotiateVersion, validateEnvelope, canExecuteProposal, createSessionReplay,
   reconnectDelay, createEchoAdapter, createPendingBuffer, proposalDigest,
 };

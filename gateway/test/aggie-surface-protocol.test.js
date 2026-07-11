@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const { describe, test } = require("node:test");
 const {
-  MAX_PENDING_EVENTS, MAX_REPLAY_EVENTS, negotiateVersion, validateEnvelope,
+  MAX_PENDING_EVENTS, MAX_REPLAY_EVENTS, MAX_ECHO_RUNS, negotiateVersion, validateEnvelope,
   canExecuteProposal, createSessionReplay, reconnectDelay, createEchoAdapter,
   createPendingBuffer, proposalDigest,
 } = require("../lib/aggie-surface-protocol");
@@ -89,6 +89,10 @@ describe("Aggie surface protocol", () => {
     assert.throws(() => validateEnvelope(envelope({ message_id: "bad id" })), { code: "invalid_id" });
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: { shell: "rm -rf /" } } })), { code: "executable_payload" });
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: { nested: { api_key: "secret" } } } })), { code: "secret_payload" });
+    assert.throws(() => validateEnvelope(envelope({ harmless_future: { authorization: "future-secret" } })), { code: "secret_payload" });
+    assert.throws(() => validateEnvelope(envelope({ harmless_future: "Bearer abcdefghijklmnopqrstuvwxyz" })), { code: "secret_payload" });
+    assert.throws(() => validateEnvelope(envelope({ payload: { text: "https://example.test/callback?code=oauthsecret123456" } })), { code: "secret_payload" });
+    assert.doesNotThrow(() => validateEnvelope(envelope({ harmless_future: { theme: "purple", count: 2 } })));
     let nested = "end"; for (let i = 0; i < 10; i += 1) nested = { next: nested };
     assert.throws(() => validateEnvelope(envelope({ payload: { text: "ok", context: nested } })), { code: "too_deep" });
   });
@@ -116,11 +120,13 @@ describe("Aggie surface protocol", () => {
     assert.equal(canExecuteProposal(proposal({ kind: "dial" }), { ...context, approval: approved }).reason, "approval_proposal_digest_mismatch");
     assert.equal(canExecuteProposal(proposal({ expires_at: "2026-07-10T12:00:30.000Z" }), { ...context, approval: approved }).reason, "approval_proposal_digest_mismatch");
     assert.equal(canExecuteProposal(proposal({ preconditions: { active_tab: "tab_1", account: "other" } }), { ...context, state: { active_tab: "tab_1", account: "other" }, approval: approved }).reason, "approval_proposal_digest_mismatch");
-    assert.equal(canExecuteProposal(proposal(), { ...context, approval: approval({ reply_to: "other_message" }) }).reason, "approval_proposal_mismatch");
+    assert.equal(canExecuteProposal(proposal(), { ...context, approval: approval({ reply_to: "other_message" }) }).reason, "approval_required");
   });
 
   test("approval and receipt envelopes require explicit proposal/message linkage", () => {
     assert.throws(() => validateEnvelope(approval({ payload: { proposal_id: "proposal_1", decision: "approved", actor_id: "local_user", decided_at: NOW } })), { code: "invalid_id" });
+    assert.throws(() => validateEnvelope(approval({ reply_to: undefined })), { code: "approval_proposal_mismatch" });
+    assert.throws(() => validateEnvelope(approval({ reply_to: "other_proposal_message" })), { code: "approval_proposal_mismatch" });
     const receipt = validateEnvelope(envelope({ type: "action.receipted", reply_to: "proposal_message_1", payload: { receipt_id: "receipt_1", proposal_id: "proposal_1", proposal_message_id: "proposal_message_1", approval_message_id: "approval_message_1", outcome: "executed", observed_at: NOW, state_hash: "a".repeat(64) } }));
     assert.equal(receipt.payload.proposal_message_id, receipt.reply_to);
     assert.equal(receipt.payload.approval_message_id, "approval_message_1");
@@ -135,6 +141,8 @@ describe("Aggie surface protocol", () => {
     assert.throws(() => replay.accept(envelope({ type: "message.created", sequence: 2, message_id: "msg_1", payload: { role: "assistant", text: "two" } })), { code: "message_conflict" });
     assert.throws(() => replay.accept(envelope({ type: "message.created", sequence: 3, message_id: "msg_3", payload: { role: "assistant", text: "three" } })), { code: "sequence_gap" });
     assert.throws(() => replay.accept(envelope({ type: "message.created", sequence: 2, session_id: "sess_other", payload: { role: "assistant", text: "two" } })), { code: "session_mismatch" });
+    assert.throws(() => replay.accept(envelope({ type: "turn.text", sequence: 2, message_id: "client_turn", payload: { text: "not a server replay event" } })), { code: "invalid_replay_type" });
+    assert.throws(() => replay.accept(approval({ sequence: 2 })), { code: "invalid_replay_type" });
   });
 
   test("replay is bounded and demands a snapshot for an evicted cursor", () => {
@@ -163,5 +171,18 @@ describe("Aggie surface protocol", () => {
     assert.equal((await echo.listArtifacts(first.run_id))[0].text, "hello");
     assert.equal((await echo.cancelRun(first.run_id)).cancel_result, "already_terminal");
     assert.equal(await echo.resumeRun("run_missing"), null);
+  });
+
+  test("echo run and artifact retention evicts oldest state at a hard bound", async () => {
+    const echo = createEchoAdapter({ now: () => NOW });
+    let first;
+    let latest;
+    for (let index = 0; index <= MAX_ECHO_RUNS; index += 1) {
+      latest = await echo.startRun(envelope({ message_id: `echo_turn_${index}`, payload: { text: `echo ${index}` } }));
+      if (index === 0) first = latest;
+    }
+    assert.equal(await echo.resumeRun(first.run_id), null);
+    assert.equal((await echo.listArtifacts(first.run_id)).length, 0);
+    assert.equal((await echo.listArtifacts(latest.run_id)).length, 1);
   });
 });

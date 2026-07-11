@@ -10,6 +10,7 @@
     "test": "node --test \"test/**/*.test.js\"",
     "test:billing": "node --test test/billing-domain.test.js",
     "test:aggie-protocol": "node --test test/aggie-surface-protocol.test.js",
+    "quality:aggie-protocol": "node scripts/check-aggie-protocol-quality.js",
     "migrate": "node-pg-migrate up",
     "migrate:up": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
@@ -86,5 +87,8 @@
     "node-pg-migrate": "^7.9.1",
     "pg": "^8.22.0",
     "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@babel/parser": "^7.29.7"
   }
 }

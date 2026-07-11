@@ -11,3 +11,7 @@ tests or production traffic were used in this lane.
 | Echo adapter is deterministic, bounded and external-I/O-free | verified for module | focused test and `node scripts/smoke-aggie-surface-protocol.js` PASS | repair verification passed; fresh audit pending |
 | macOS/iOS/Windows behavior works | unproven | no signed/device evidence | out of protocol scope |
 | Device or actor identity is authenticated | unproven | protocol correlation only; no signing/transport/device evidence | explicitly not claimed |
+| Fresh audit after `94f0764` | refuted/block | missing approval `reply_to` validation; client types admitted to replay; unbounded echo map; complexity gate absent; dangerous additive semantics unresolved | repair required |
+| Repair 2 closes those audit reproductions | verified by implementer, auditor pending | focused 13/13; quality gate max cyclomatic 9 and max CRAP 9.47; echo retention/replay/security hostile tests | fresh independent audit required |
+| Repair 2 preserves the gateway gate | verified | `npm run check`: 194 pass, 1 skip, 0 fail; strict OpenSpec PASS | fresh independent audit required |
+| Dependency audit is clean | refuted / not claimed | package-lock-only install reported 2 existing high-severity dependency advisories; no `audit fix --force` attempted | residual repo dependency risk outside this repair |
