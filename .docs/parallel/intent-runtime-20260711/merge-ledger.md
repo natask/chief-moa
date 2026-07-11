@@ -155,6 +155,12 @@ voice/LLM trace correlation.
   separation, state-isolated previews, releases, upstream-fork lifecycle, and
   operational documentation. Explicitly rejected its workspace/task schema as
   Chief Moa's canonical intent model.
+- 2026-07-11: consolidated the user's rapid spoken statements into
+  `research/spoken-intent-map.md`, with ten bounded product nodes and explicit
+  authority edges. This keeps capture, intent, canonical voice history,
+  telemetry, agent-generated operations knowledge, software-factory execution,
+  CI optimization, instrumentation, trace/eval backends, and infrastructure
+  dashboards related without collapsing them into “observability.”
 - 2026-07-11: intent focused repair passed 16/16, but the main orchestrator then
   reproduced a real-adapter race with two independent runtimes over JSONL: both
   commands fulfilled and persisted stream versions `[1,2,2]`. Added repair
