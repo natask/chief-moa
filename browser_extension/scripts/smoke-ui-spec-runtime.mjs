@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { resolveChromeForTesting, quietChromeArgs } from "./chrome-for-testing.mjs";
 
@@ -10,8 +10,7 @@ const extensionPath = join(root, "extension");
 const runDir = join(root, ".gstack", "background-qa", `ui-spec-${Date.now()}`);
 const profilePath = join(runDir, "chrome-profile");
 const token = "isolated-ui-spec-smoke-token";
-let spec = { version: 1, surfaces: [{ id: "main", title: "Before", components: [{ type: "card", id: "status", body: "Initial UI" }], controls: [] }] };
-let getCount = 0;
+const gatewayDir = resolve(root, "../gateway");
 
 function treeHash(dir) {
   const hash = createHash("sha256");
@@ -56,17 +55,15 @@ async function waitEval(cdp, expression, timeout = 15000) {
   throw new Error(`condition timeout: ${expression}`);
 }
 
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url, "http://localhost");
-  if (url.pathname === "/") { res.writeHead(200, { "content-type": "text/html" }); return res.end("<!doctype html><title>UI spec runtime</title><main>fixture</main>"); }
-  if (url.pathname === "/v1/ui/spec" && req.headers.authorization !== `Bearer ${token}`) { res.writeHead(401); return res.end('{"error":"unauthorized"}'); }
-  if (url.pathname === "/v1/ui/spec" && req.method === "GET") { getCount += 1; res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ spec, is_customized: true })); }
-  if (url.pathname === "/v1/ui/spec" && req.method === "PUT") { let body = ""; for await (const chunk of req) body += chunk; spec = JSON.parse(body).spec; res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ spec, is_customized: true })); }
-  res.writeHead(404); res.end();
-});
-
-await new Promise((ok) => server.listen(0, "localhost", ok));
-const gatewayUrl = `http://localhost:${server.address().port}`;
+const probe = createServer();
+await new Promise((ok) => probe.listen(0, "127.0.0.1", ok));
+const gatewayPort = probe.address().port;
+await new Promise((ok) => probe.close(ok));
+const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+const gateway = spawn(process.execPath, ["server.js"], { cwd: gatewayDir, env: { PATH: process.env.PATH || "", HOME: process.env.HOME || "", NODE_ENV: "test", HOST: "127.0.0.1", PORT: String(gatewayPort), DATA_DIR: join(runDir, "gateway-data"), MOA_GATEWAY_TOKEN: token, ALLOW_AGENT_WITHOUT_TOKEN: "0", DATABASE_URL: "" }, stdio: ["ignore", "ignore", "pipe"] });
+for (let i = 0; i < 150; i += 1) { if (await fetch(`${gatewayUrl}/health`).then((r) => r.ok).catch(() => false)) break; if (i === 149) throw new Error("actual gateway did not become healthy"); await delay(100); }
+const initialPut = await fetch(`${gatewayUrl}/v1/ui/spec`, { method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ spec: { version: 1, surfaces: [{ id: "main", title: "Before", components: [{ type: "card", id: "status", body: "Initial UI" }], controls: [] }] } }) });
+if (!initialPut.ok) throw new Error(`actual gateway initial PUT failed: ${initialPut.status}`);
 mkdirSync(profilePath, { recursive: true });
 const beforeHash = treeHash(extensionPath);
 const chrome = spawn(resolveChromeForTesting(), quietChromeArgs({ extensionPath, profilePath }), { stdio: ["ignore", "ignore", "pipe"] });
@@ -79,25 +76,28 @@ try {
   await evalValue(worker, `(async()=>{await chrome.storage.local.set({ageeGatewayUrl:${JSON.stringify(gatewayUrl)},ageeGatewayToken:${JSON.stringify(token)}});return true})()`);
   const version = await fetch(`http://127.0.0.1:${port}/json/version`).then((r) => r.json());
   const browser = new Cdp(version.webSocketDebuggerUrl);
-  const created = await browser.send("Target.createTarget", { url: gatewayUrl });
+  const created = await browser.send("Target.createTarget", { url: `${gatewayUrl}/health` });
   const pageTarget = await waitFor(port, (t) => t.id === created.targetId);
   page = new Cdp(pageTarget.webSocketDebuggerUrl); await page.send("Runtime.enable");
   await waitEval(page, `document.readyState === "complete" && document.querySelector("#agee-ui-surface") ? true : null`);
-  await delay(2100);
-  await evalValue(worker, `(async()=>{await AgeeUiSpecRefresh.refresh("runtime_smoke_initial");return true})()`);
-  await waitEval(page, `document.querySelector("#agee-ui-surface")?.textContent.includes("Initial UI")`);
-  const next = { version: 1, surfaces: [{ id: "main", title: "After", components: [{ type: "card", id: "status", body: "Live updated UI" }], controls: [] }] };
+  const next = { version: 1, surfaces: [{ id: "main", title: "After", components: [{ type: "card", id: "status", body: "Live updated UI" }], controls: [{ type: "button", id: "inert", label: "Unknown action", action: "unknown.action" }, { type: "button", id: "open", label: "Open command", action: "command.open", prompt: "safe dispatch" }] }] };
   const put = await fetch(`${gatewayUrl}/v1/ui/spec`, { method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ spec: next }) });
   if (!put.ok) throw new Error(`PUT failed: ${put.status}`);
   await delay(2100);
-  const beforeCoalesced = getCount;
+  await evalValue(worker, `(()=>{const original=globalThis.fetch;globalThis.__uiSpecGets=0;globalThis.fetch=async(...args)=>{if(String(args[0]).includes("/v1/ui/spec"))globalThis.__uiSpecGets++;return original(...args)};return true})()`);
   await evalValue(worker, `(async()=>{await Promise.all([AgeeUiSpecRefresh.refresh("runtime_smoke_a"),AgeeUiSpecRefresh.refresh("runtime_smoke_b"),AgeeUiSpecRefresh.refresh("runtime_smoke_c")]);return true})()`);
-  if (getCount - beforeCoalesced !== 1) throw new Error(`concurrent refreshes made ${getCount - beforeCoalesced} requests, expected 1`);
+  const refreshGets = await evalValue(worker, `globalThis.__uiSpecGets`);
+  if (refreshGets !== 1) throw new Error(`concurrent refreshes made ${refreshGets} requests, expected 1`);
   await waitEval(page, `document.querySelector("#agee-ui-surface")?.textContent.includes("Live updated UI")`);
+  await evalValue(page, `(()=>{const input=document.querySelector("#agee-input");window.__beforeNoop=input?.value||"";[...document.querySelectorAll(".agee-ui-button")].find(b=>b.textContent==="Unknown action").click();return true})()`);
+  const noopChanged = await evalValue(page, `document.querySelector("#agee-input")?.value !== window.__beforeNoop`);
+  if (noopChanged) throw new Error("unknown/noop control produced an observable effect");
+  await evalValue(page, `[...document.querySelectorAll(".agee-ui-button")].find(b=>b.textContent==="Open command").click()`);
+  await waitEval(page, `document.querySelector("#agee-input")?.value === "safe dispatch"`);
   const afterHash = treeHash(extensionPath);
   if (beforeHash !== afterHash) throw new Error("extension source changed during runtime customization");
   console.log(`ui-spec real runtime smoke passed (source sha256 ${beforeHash})`);
   browser.close();
 } finally {
-  page?.close(); worker?.close(); chrome.kill("SIGTERM"); server.close(); await delay(200); rmSync(runDir, { recursive: true, force: true });
+  page?.close(); worker?.close(); chrome.kill("SIGTERM"); gateway.kill("SIGTERM"); await delay(200); rmSync(runDir, { recursive: true, force: true });
 }

@@ -41,11 +41,24 @@ async function main() {
 
   try {
     await step("store: default, replace, reject, persist, reset", () => assertStore(storeDir));
-    await step("store: account directories remain isolated", () => assertAccountIsolation(path.join(tempDir, "accounts")));
+    await step("store primitive: distinct directories remain isolated", () => assertDirectoryIsolation(path.join(tempDir, "accounts")));
     await step("normalizer: document fanout is bounded", assertDocumentBounds);
 
+    fs.mkdirSync(dataDir, { recursive: true });
+    const legacy = defaultSpec();
+    legacy.surfaces[0].title = "Legacy single-token owner";
+    fs.writeFileSync(path.join(dataDir, "ui-spec.json"), JSON.stringify(legacy));
     server = await startGateway({ port, dataDir });
     await step("GET requires a token", () => assertAuthRequired(baseUrl));
+    await step("legacy single-token file is consumed once by token-derived owner", async () => {
+      const payload = await getJson(`${baseUrl}/v1/ui/spec`);
+      assert.equal(payload.spec.surfaces[0].title, "Legacy single-token owner");
+      assert.equal(fs.existsSync(path.join(dataDir, "ui-spec.json")), false, "legacy file must be consumed");
+      const accountDirs = fs.readdirSync(path.join(dataDir, "ui-specs"));
+      assert.equal(accountDirs.length, 1, "exactly one token-derived owner directory must be created");
+      assert.equal(fs.existsSync(path.join(dataDir, "ui-specs", accountDirs[0], "ui-spec.json")), true);
+      await assertReset(baseUrl);
+    });
     await step("default spec is served", () => assertDefaultSpec(baseUrl));
     await step("round-trip: PUT then GET reflects it", () => assertRoundTrip(baseUrl));
     await step("invalid PUT is 400 and leaves spec unchanged", () => assertInvalidRejected(baseUrl));
@@ -57,9 +70,10 @@ async function main() {
       checks: [
         "store: default spec, replace persists, invalid rejected, reload sees persisted, reset clears",
         "GET /v1/ui/spec requires a token",
+        "legacy single-token spec is consumed once into the configured token-derived owner",
         "GET returns the default command-panel spec when uncustomized",
-        "PUT a changed spec; GET reflects it at the authenticated gateway boundary",
-        "separate account store directories cannot overwrite one another",
+        "PUT a changed spec; GET reflects it for the configured single-token account scope",
+        "store primitive keeps explicitly distinct directories isolated (not a multi-identity route claim)",
         "invalid spec PUT -> 400; the live spec is left unchanged (never blanked)",
         "POST /v1/ui/spec/reset returns to the default spec",
       ],
@@ -130,7 +144,7 @@ function assertStore(dir) {
   assert.deepEqual(reopened.effective(), defaultSpec(), "reset must return the default spec");
 }
 
-function assertAccountIsolation(rootDir) {
+function assertDirectoryIsolation(rootDir) {
   const first = createUiSpecStore({ dataDir: path.join(rootDir, "usr_first") });
   const second = createUiSpecStore({ dataDir: path.join(rootDir, "usr_second") });
   const firstSpec = defaultSpec();

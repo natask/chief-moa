@@ -20,5 +20,9 @@ assert.equal("code" in sanitized, false);
 assert.equal(runtime.sanitize({ spec: { version: 1, surfaces: Array.from({ length: 20 }, (_, i) => ({ id: `s${i}`, components: [{ type: "card", id: `c${i}` }] })) } }).surfaces.length, 8);
 assert.equal(runtime.sanitize({ spec: { version: 1, surfaces: [{ id: "s", components: Array.from({ length: 100 }, (_, i) => ({ type: "card", id: `c${i}` })), controls: Array.from({ length: 100 }, (_, i) => ({ type: "button", id: `b${i}` })) }] } }).surfaces[0].components.length, 40);
 assert.ok(JSON.stringify(sanitized).length <= 131072);
+let surfaceReads = 0;
+const oversizedSurfaces = new Proxy(Array.from({ length: 1000 }, (_, i) => ({ id: `p${i}` })), { get(target, key, receiver) { if (/^\d+$/.test(String(key))) surfaceReads += 1; return Reflect.get(target, key, receiver); } });
+runtime.sanitize({ spec: { version: 1, surfaces: oversizedSurfaces } });
+assert.equal(surfaceReads, 8, "sanitizer must not traverse beyond the surface input cap");
 
 console.log("ui-spec runtime tests passed");

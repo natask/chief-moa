@@ -4729,10 +4729,10 @@ function uiSpecForUser(userId = accountUserId()) {
     const scopedDir = path.join(DATA_DIR, "ui-specs", safeUserId);
     const scopedPath = path.join(scopedDir, "ui-spec.json");
     const legacyPath = path.join(DATA_DIR, "ui-spec.json");
-    if (!fs.existsSync(scopedPath) && fs.existsSync(legacyPath)) {
+    if (safeUserId === accountUserId() && !fs.existsSync(scopedPath) && fs.existsSync(legacyPath)) {
       fs.mkdirSync(scopedDir, { recursive: true });
-      // Consume the legacy single-account file exactly once. Copying it would
-      // seed every subsequently observed identity with another user's spec.
+      // The configured token owns the legacy single-token file. Consume it
+      // exactly once; this does not imply multi-identity request routing.
       try {
         fs.renameSync(legacyPath, scopedPath);
       } catch (error) {

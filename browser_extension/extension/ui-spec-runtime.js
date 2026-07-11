@@ -62,13 +62,13 @@
     if (!value || typeof value !== "object") return null;
     const id = token(value.id);
     if (!id) return null;
-    return { id, title: text(value.title || id, 80), components: Array.isArray(value.components) ? value.components.map(component).filter(Boolean).slice(0, 40) : [], controls: Array.isArray(value.controls) ? value.controls.map(control).filter(Boolean).slice(0, 40) : [] };
+    return { id, title: text(value.title || id, 80), components: Array.isArray(value.components) ? value.components.slice(0, 40).map(component).filter(Boolean) : [], controls: Array.isArray(value.controls) ? value.controls.slice(0, 40).map(control).filter(Boolean) : [] };
   }
   function sanitize(payload) {
     const source = payload?.payload && typeof payload.payload === "object" ? payload.payload : payload;
     const spec = source?.spec && typeof source.spec === "object" ? source.spec : source;
     if (!spec || typeof spec !== "object" || spec.version !== 1 || !Array.isArray(spec.surfaces)) return null;
-    const surfaces = spec.surfaces.map(surface).filter(Boolean).slice(0, 8);
+    const surfaces = spec.surfaces.slice(0, 8).map(surface).filter(Boolean);
     let remaining = 80;
     for (const item of surfaces) {
       item.components = item.components.slice(0, remaining);
