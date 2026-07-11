@@ -38,8 +38,8 @@ for (const [name, node] of nodes) {
   results.push({ name, complexity, coverage_percent: Number((coverage * 100).toFixed(2)), crap: Number(crap.toFixed(2)) });
 }
 fs.rmSync(coverageDirectory, { recursive: true, force: true });
-const failures = results.filter((item) => item.complexity > 10 || item.crap > 30);
-console.log(JSON.stringify({ ok: failures.length === 0, thresholds: { cyclomatic: 10, crap: 30 }, functions: results }));
+const failures = results.filter((item) => item.complexity > 10 || item.crap > 15);
+console.log(JSON.stringify({ ok: failures.length === 0, thresholds: { cyclomatic: 10, crap: 15 }, functions: results }));
 if (failures.length) process.exitCode = 1;
 
 function cyclomatic(root) {
