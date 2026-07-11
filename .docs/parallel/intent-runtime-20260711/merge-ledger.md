@@ -1,0 +1,107 @@
+# Peter/Natstack Merge Ledger: Intent Runtime 2026-07-11
+
+## Run objective
+
+Deliver a coherent, user-visible Chief Moa slice that turns voice capture into
+durable, navigable intent state: explicit send, foreground pause, durable park
+and resume, cancel, new-root versus continuation, temporary transactional
+preference intents that return to their parent, project rehydration, and owned
+voice/LLM trace correlation.
+
+## Non-goals
+
+- Build or adopt a generic observability platform.
+- Replace the current voice provider pipeline.
+- Treat operational telemetry as canonical conversation or intent state.
+- Promote a live target without preview, rollback, no-interruption,
+  compatibility, backup/restore, and smoke evidence.
+- Turn the separate company hypothesis into implementation scope.
+
+## Live-application constraints
+
+- The active gateway at `https://api.agee.app` is live.
+- No slice may edit the worktree backing a running application.
+- Preview state, storage, URLs, queues, and workers must be isolated.
+- Recordings, voice turns, uploads, agent runs, and active sessions must not be
+  interrupted or stranded.
+- Persisted-state changes must be additive and old/new compatible.
+
+## Base and staging
+
+- Base ref: `f08e48923026019c648e3296f91efae742f86c52`
+- Staging branch: `agent/intent-runtime-20260711`
+- Staging worktree:
+  `/Users/natnaelkahssay/projs/chief-moa-worktrees/intent-runtime-20260711`
+- Active source worktree remains untouched.
+
+## Verification contract
+
+- Gateway: `cd gateway && npm run check`
+- Browser extension: `cd browser_extension && npm run verify && npm run smoke`
+- Android: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- OpenSpec: run the matching strict validator when available; otherwise inspect
+  the complete change and record the missing validator.
+- Runtime: isolated gateway smoke plus manual gesture QA closest to the changed
+  behavior.
+
+## Slice ledger
+
+| Slice | Branch | Worktree | Ownership | State |
+|---|---|---|---|---|
+| S0 contract | staging | staging worktree | contracts, OpenSpec, architecture, ledger | contracted |
+| S1 intent domain | `agent/intent-domain-20260711` | `chief-moa-worktrees/intent-domain-20260711` | new event-backed intent module/tests | implementing |
+| S2 voice drafts | `agent/voice-drafts-20260711` | `chief-moa-worktrees/voice-drafts-20260711` | new draft store/tests/smoke | implementing |
+| S3 Android | `agent/android-draft-controls-20260711` | `chief-moa-worktrees/android-draft-controls-20260711` | Android capture state/gestures/tests | implementing |
+| S4 browser | `agent/browser-draft-controls-20260711` | `chief-moa-worktrees/browser-draft-controls-20260711` | extension capture state/gestures/tests | implementing |
+| S5 context/protocol | `agent/context-protocol-20260711` | `chief-moa-worktrees/context-protocol-20260711` | repaired M3 context + repaired M5 protocol | audit |
+| S6 verification | staging | staging worktree | integration gates, runtime QA, release evidence | pending |
+
+## Research passes
+
+- Intent/thread/work-graph topology: complete. The event substrate is the
+  canonical persistence boundary; thread, project/repo binding, work task,
+  work node, run, and artifact remain distinct projections with no intent
+  aggregate or focus stack.
+- Android/browser gesture topology: complete. Send exists; foreground pause,
+  durable park/resume, directional outcomes, and parent-return do not. System
+  cancellation can incorrectly take a send path on both surfaces.
+- Gateway profile/telemetry topology: complete. Profile changes and receipts
+  exist; product events remain canonical and semantic telemetry remains a
+  bounded, loss-tolerant projection.
+- Existing branch/worktree reuse audit: complete. M3 context artifacts and M5
+  Aggie protocol are unique and reusable; M3 remains blocked until context is
+  selected before answering. The Android resolver-only branch adds no required
+  behavior and will not be merged.
+- Live deployment and state-safety audit: pending integration.
+
+## Baseline evidence
+
+- Gateway: `npm ci`, then `npm run check` -> 187 pass, 0 fail, 1 skip.
+- Browser extension: `npm run verify && npm run smoke` -> pass.
+- Android: `ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+  -> BUILD SUCCESSFUL.
+- The first gateway check failure was missing worktree-local dependencies, not
+  a source failure. The lockfile install reported two existing high-severity
+  audit findings; no forced dependency rewrite was attempted.
+
+## Blocking findings converted to contracts
+
+1. Explicit new/incognito turns currently assemble caller-thread context before
+   their filing decision; clean-slate and privacy claims therefore fail closed.
+2. Broker routing/launch currently occurs before the broker event is durable.
+3. `cancel_turn` preserves an incomplete canonical turn and is not a content
+   discard operation.
+4. `audio_note` is a storage-only recording and cannot be relabeled as a
+   resumable voice input draft.
+5. Android `ACTION_CANCEL` and browser `pointercancel` can commit a confirmed
+   hold; OS cancellation must always discard/no-execute.
+
+## Merge and audit history
+
+- 2026-07-11: created isolated staging worktree from `f08e489`.
+- 2026-07-11: recorded scope, non-goals, live constraints, and verification
+  before implementation.
+- 2026-07-11: reran all three baseline surface gates in the isolated staging
+  worktree.
+- 2026-07-11: completed Tier-2 topology audits and started two Tier-3 contracts:
+  product-events-backed intent runtime and a distinct voice-draft lifecycle.
