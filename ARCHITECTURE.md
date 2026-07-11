@@ -569,16 +569,11 @@ for the artifact types they support.
 
 The first browser slice is `avatar_behavior`: the gateway serves an active
 declarative spec such as "thinking -> orbit -> subtle", and the extension maps
-that spec to known CSS classes on the Aggie/Lion mark. The tier-A generated UI
-slice is `/v1/ui/spec`: the gateway validates a per-user declarative surface and
-the extension fetches, caches, and renders only known controls and components
-(`button`, `text`, `toggle`, `select`, `card`, `list`, `stat`, `map`) in the
-overlay. The `map` component is schematic bounded data (center, zoom, markers),
-not remote map tiles or executable code. No generated JavaScript is executed in
-privileged extension code. Richer generated UI remains declarative or sandboxed,
-and page-acting code remains opt-in through the existing `userScripts`
-boundary. Browser clients preserve the last-good runtime/spec when the gateway
-is temporarily unavailable and mark the cached runtime/spec stale instead of
+that spec to known CSS classes on the Aggie/Lion mark. No generated JavaScript is
+executed in privileged extension code. Richer generated UI remains declarative
+or sandboxed, and page-acting code remains opt-in through the existing
+`userScripts` boundary. Browser clients preserve the last-good runtime when the
+gateway is temporarily unavailable and mark the cached runtime stale instead of
 visually clearing an applied customization.
 
 ### Agent Work
@@ -1060,10 +1055,6 @@ queues.
 - `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
   validators, active pointers, and runtime projection for conversational
   customization.
-- `gateway/lib/ui-spec.js`: engine-served tier-A UI spec store and validator
-  for declarative overlay surfaces, including bounded controls plus
-  `card`/`list`/`stat`/schematic-`map` components. Smoke:
-  `scripts/smoke-ui-spec.js` (`npm run smoke:ui-spec`).
 - `gateway/schema.sql`: Postgres schema for work graph records, product events,
   projection checkpoints, event blobs, and sync import checkpoints.
 - `gateway/lib/voice-intent.js`: pure voice-turn classifier
@@ -1110,11 +1101,8 @@ queues.
 - `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
 - `browser_extension/extension`: thin browser client for command,
-  voice, page context, settings, engine-served UI spec rendering, and
-  engine-routed browser actions, including the background agent-loop poll
-  (`pollBrowserAgentTasks`). UI spec smoke:
-  `browser_extension/scripts/smoke-ui-spec.mjs` (`npm run smoke:ui-spec`).
-  Agent-loop smoke:
+  voice, page context, settings, and engine-routed browser actions, including
+  the background agent-loop poll (`pollBrowserAgentTasks`). Smoke:
   `browser_extension/scripts/smoke-agent-loop.mjs`
   (`npm run smoke:agent-loop`).
 - `scripts/deploy.sh`: shared deploy entrypoint for gateway, Android OTA,

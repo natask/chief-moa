@@ -23,10 +23,8 @@
 
 ### 3. Follow-Up Generated UI
 
-- [x] Fetch the existing `/v1/ui/spec` document from the gateway.
-- [x] Render known tier-A controls and bounded components in the browser
-      overlay, including `card`, `list`, `stat`, and a declarative schematic
-      `map` component.
+- [ ] Fetch the existing `/v1/ui/spec` document from the gateway.
+- [ ] Render known tier-A controls in the browser overlay.
 - [ ] Keep richer generated surfaces in sandboxed iframes and reserve
       page-acting code for explicit `userScripts` opt-in.
 

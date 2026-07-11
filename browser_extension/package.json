@@ -20,7 +20,6 @@
     "smoke:live-voice-main": "node scripts/smoke-live-voice-main.mjs",
     "smoke:history": "node scripts/smoke-history.mjs",
     "smoke:self-extension": "node scripts/smoke-self-extension.mjs",
-    "smoke:ui-spec": "node scripts/smoke-ui-spec.mjs",
     "smoke:sidepanel": "node scripts/smoke-sidepanel.mjs",
     "smoke:unified-browser-agent": "node scripts/smoke-unified-browser-agent.mjs",
     "smoke:agent-loop": "node scripts/smoke-agent-loop.mjs",

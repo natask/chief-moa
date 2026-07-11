@@ -41,7 +41,6 @@ const requiredFiles = [
   "scripts/smoke-ambient.mjs",
   "scripts/smoke-settings.mjs",
   "scripts/smoke-live-voice-main.mjs",
-  "scripts/smoke-ui-spec.mjs",
   "scripts/smoke-unified-browser-agent.mjs",
   "scripts/test-voice-sampler-lifecycle.mjs",
 ];
@@ -901,7 +900,6 @@ for (const file of [
   "scripts/smoke-gateway.mjs",
   "scripts/smoke-settings.mjs",
   "scripts/smoke-live-voice-main.mjs",
-  "scripts/smoke-ui-spec.mjs",
   "scripts/smoke-unified-browser-agent.mjs",
   "scripts/smoke-cdp.mjs",
   "scripts/smoke-integration.mjs",
