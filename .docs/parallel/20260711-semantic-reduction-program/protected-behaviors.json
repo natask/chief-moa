@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "production_loc_metric": "tracked semantic code from frozen scc classifier",
+    "test_loc_unrestricted": true,
+    "parity_rule": "All tiers 1..highest_feasible_tier must pass for baseline and candidate with identical fixtures; lower-tier evidence never substitutes for a feasible higher tier.",
+    "tier_reduction_requires": ["infeasibility", "evidence", "owner", "expiry", "independent_approval"],
+    "tier_6_is_release_only": true
+  },
+  "tiers": {
+    "1": "unit_contract",
+    "2": "component",
+    "3": "real_protocol_storage_fake_paid_providers",
+    "4": "client_gateway_result_action_history_e2e",
+    "5": "sanitized_runtime_shape_replay",
+    "6": "minimal_live_canary"
+  },
+  "behaviors": [
+    {
+      "id": "browser_text_roundtrip",
+      "owner": "browser-text",
+      "highest_feasible_tier": 4,
+      "fixtures": ["synthetic browser page", "fixed draft", "fake reply/error", "temporary turn store"],
+      "commands": ["cd browser_extension && npm run verify", "cd browser_extension && npm run smoke:gateway"],
+      "assertions": ["draft preserved", "authenticated request shape", "reply or loud error visible", "stored turn query matches visible result"],
+      "status": "missing_authoritative_tier_4_isolated_gateway"
+    },
+    {
+      "id": "browser_voice_controls_roundtrip",
+      "owner": "browser-voice-verification",
+      "highest_feasible_tier": 4,
+      "fixtures": ["synthetic PCM English", "synthetic PCM Amharic", "fake partial/final STT", "ordered fake TTS"],
+      "commands": ["cd browser_extension && npm run verify", "cd browser_extension && npm run smoke", "cd gateway && npm run eval:voice:e2e"],
+      "assertions": ["one transition per shortcut", "tap and hold contracts", "draft preserved", "partial replaced by final", "audio ordered", "turn done", "stored turn query"],
+      "status": "blocked_extension_shortcut_double_toggle"
+    },
+    {
+      "id": "android_voice_roundtrip",
+      "owner": "android-voice",
+      "highest_feasible_tier": 4,
+      "fixtures": ["emulator snapshot", "fake microphone PCM", "isolated gateway", "fake STT LLM TTS"],
+      "commands": ["cd android_app && ANDROID_HOME=\"$HOME/Library/Android/sdk\" ./gradlew testDebugUnitTest assembleDebug"],
+      "assertions": ["gesture starts and commits once", "transcript visible and canonical", "reply or audio delivered", "interrupt retains partial", "history query and resume"],
+      "status": "missing_authoritative_tier_4_emulator_harness"
+    },
+    {
+      "id": "phone_action_approval_receipt",
+      "owner": "android-action",
+      "highest_feasible_tier": 4,
+      "fixtures": ["fake device executor", "approved proposal", "rejected malformed and stale proposals", "temporary receipt store"],
+      "commands": ["cd android_app && ANDROID_HOME=\"$HOME/Library/Android/sdk\" ./gradlew testDebugUnitTest", "cd gateway && npm run smoke:device-hub"],
+      "assertions": ["gateway only proposes", "local validation and approval", "exactly-once fake execution", "receipt linked and queryable", "unsafe proposal has zero calls"],
+      "status": "missing_authoritative_tier_4_executor_history_harness"
+    },
+    {
+      "id": "browser_page_action_and_agent_task",
+      "owner": "browser-action-cdp",
+      "highest_feasible_tier": 4,
+      "fixtures": ["synthetic DOM", "bounded page tweak", "malformed tweak", "fake claimed browser task"],
+      "commands": ["cd gateway && npm run smoke:page-tweak-e2e && npm run smoke:browser-agent-routing", "cd browser_extension && npm run smoke:tweaks && npm run smoke:cdp && npm run smoke:agent-loop"],
+      "assertions": ["declarative allowlist", "no model CSS or JS execution", "observable page result", "task evidence and history", "malformed action rejected"],
+      "status": "fragmented_needs_single_tier_4_journey"
+    },
+    {
+      "id": "turn_persistence_interrupt_cross_client_resume",
+      "owner": "gateway-storage",
+      "highest_feasible_tier": 5,
+      "fixtures": ["completed turn", "interrupted partial turn", "profile version", "sanitized cross-client replay"],
+      "commands": ["cd gateway && npm run smoke:session-history && npm run smoke:voice-turn-storage && npm run smoke:live-interrupt-handoff && npm run smoke:live-browser-continuity", "cd gateway && TEST_DATABASE_URL=\"$DISPOSABLE_DATABASE_URL\" node --test test/integration/*.integration.test.js"],
+      "assertions": ["canonical identifiers and provenance", "partial retained through restart", "bounded context includes partial", "other client resumes same dataset", "old and candidate state relations equal"],
+      "status": "missing_tier_4_cross_client_and_tier_5_replay"
+    },
+    {
+      "id": "voice_failure_diagnosis",
+      "owner": "gateway-voice",
+      "highest_feasible_tier": 5,
+      "fixtures": ["failure injection matrix", "sanitized normalized event replays"],
+      "commands": ["cd gateway && npm run smoke:voice-diagnosis && npm run smoke:cascaded-voice && npm run smoke:voice-audio-storage"],
+      "assertions": ["capture transport stt context reasoning tts playback storage attribution", "visible fallback", "self-hosted evidence refs", "no silent terminal failure"],
+      "status": "missing_unified_tier_3_matrix_and_tier_5_replay"
+    },
+    {
+      "id": "profile_language_voice_sampling",
+      "owner": "gateway-profile-and-clients",
+      "highest_feasible_tier": 4,
+      "fixtures": ["valid and rejected language updates", "profile revert", "voice sampler sequence", "concurrent admitted turn"],
+      "commands": ["cd gateway && npm run smoke:voice-profile && npm run smoke:profile-revert && npm run smoke:language-allowlist && npm run smoke:shared-session-profile", "cd browser_extension && npm run verify"],
+      "assertions": ["sanitized append-only version", "admitted turn snapshot stable", "next turn sees update", "revert works", "sampling does not mutate saved voice"],
+      "status": "missing_single_tier_4_client_display_and_snapshot_journey"
+    },
+    {
+      "id": "work_lifecycle_and_history",
+      "owner": "gateway-workflow",
+      "highest_feasible_tier": 4,
+      "fixtures": ["fake harness", "synthetic run and broker messages", "temporary event and history stores"],
+      "commands": ["cd gateway && npm run smoke:message-broker && npm run smoke:work-history && npm run smoke:live-stacked-agents && npm run smoke:live-durable-routing"],
+      "assertions": ["create route claim status cancel feedback", "active run not interrupted by unrelated turn", "durable query", "client-visible state matches history"],
+      "status": "missing_authoritative_tier_4_client_rendering"
+    },
+    {
+      "id": "api_and_trust_boundary",
+      "owner": "gateway-contract-security",
+      "highest_feasible_tier": 4,
+      "fixtures": ["route manifest", "auth and body-limit matrix", "malformed IDs JSON and actions", "old client payloads"],
+      "commands": ["cd gateway && npm run check", "cd browser_extension && npm run verify", "cd android_app && ANDROID_HOME=\"$HOME/Library/Android/sdk\" ./gradlew testDebugUnitTest"],
+      "assertions": ["method path auth body limit and error shapes", "no provider credentials in clients", "screen context remains evidence", "model output cannot directly execute local action"],
+      "status": "missing_exhaustive_tier_3_route_matrix_and_tier_4_old_client_replay"
+    }
+  ],
+  "blockers": [
+    {
+      "id": "B1",
+      "owner": "browser-voice-verification",
+      "summary": "assembled extension shortcut smoke observes start plus premature commit from duplicate effective toggle",
+      "repair_order": 2
+    },
+    {
+      "id": "B2",
+      "owner": "gateway-verification",
+      "summary": "pg is declared and locked but clean worktree dependencies were not installed; top-level test imports fail before database skip",
+      "repair_order": 1
+    }
+  ]
+}
