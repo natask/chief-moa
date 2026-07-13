@@ -115,6 +115,7 @@ async function main() {
   await incognitoWarrantGate();
   await clientActionBeatsModel();
   await preflightFailureMatrixFallsBackOnce();
+  await shortContinueSkipsPreflight();
   await chatContextBlockAndPersistence();
   await completedChatRetryIsIdempotent();
   await answerFailureDoesNotMaterializePlan();
@@ -129,6 +130,7 @@ async function main() {
       "the model may only choose incognito with an explicit warrant; else it is denied",
       "an explicit client context_action beats the model tool call",
       "malformed, absent, unknown, duplicate, and thrown preflights use the prior without leaking prose",
+      "a short plain-continue turn skips the preflight round-trip (fast path)",
       "/v1/chat returns a context block, skips persistence for incognito, files a new thread on a thr- branch",
       "a completed chat turn replay skips preflight and preserves its exact filing branch",
       "a failed answer transport leaves the planned new branch absent from thread state",
@@ -249,6 +251,23 @@ async function newArtifactFailureNeverLeaksCallerHistory() {
   } finally {
     brain.recallStandingFacts = original;
   }
+}
+
+async function shortContinueSkipsPreflight() {
+  // A tiny ack/continuation turn (<= CONTEXT_PREFLIGHT_FAST_MAX_WORDS words,
+  // deterministic prior "continue" with no phrasing lift) must answer with
+  // ONE model request: the preflight round-trip is skipped entirely.
+  modelRequests.length = 0;
+  const result = await requestJson("POST", "/v1/chat", {
+    session_id: SESSION_ID,
+    turn_id: "short-continue-fast-path",
+    source: "console",
+    messages: [{ role: "user", content: "keep going" }],
+  });
+  assert.equal(result.status, 200, "short continue turn must succeed");
+  assert.equal(result.json.context.action, "continue", "short turn must file as continue");
+  assert.equal(modelRequests.length, 1, "short continue turn must skip the preflight and make only the answer request");
+  assert.ok(modelRequests.every((request) => request.tool_choice?.function?.name !== "context_management"), "no preflight request may fire on the fast path");
 }
 
 async function preflightFailureMatrixFallsBackOnce() {

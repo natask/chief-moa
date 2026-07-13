@@ -97,7 +97,7 @@ function createAgentProfileStore(options) {
   // Patch + persist as a new version; returns the new effective profile. Applied
   // to later turns with no restart because callers read effective() per request.
   function patch(updates, metadata = {}) {
-    const next = pickProfileFields(updates);
+    const next = guardSpokenIdentityFields(pickProfileFields(updates), metadata.source);
     if (Object.keys(next).length === 0) {
       return effective(metadata);
     }
@@ -797,6 +797,35 @@ function normalizeProfile(defaults) {
     active_companion_source: picked.active_companion_source || "",
     active_companion_version: picked.active_companion_version || "",
   };
+}
+
+// Spoken turns are the highest-corruption write channel: a mis-transcribed
+// utterance can silently rename the assistant or replace its persona (seen
+// live 2026-07-13: STT garbage persisted as system_prompt, assistant_name
+// churned through nonsense values). A spoken rename must look like a name and
+// a spoken persona must stay small; anything larger needs the API/studio
+// path. Dropped fields fall out of the patch, so callers' before/after diff
+// honestly reports "nothing changed".
+const SPOKEN_PROFILE_SOURCES = /^(voice|gemini-live-tool)/;
+const SPOKEN_NAME_MAX_CHARS = 40;
+const SPOKEN_NAME_MAX_WORDS = 4;
+const SPOKEN_PROMPT_MAX_CHARS = 400;
+
+function guardSpokenIdentityFields(next, source) {
+  if (!SPOKEN_PROFILE_SOURCES.test(String(source || ""))) {
+    return next;
+  }
+  const out = { ...next };
+  if (typeof out.assistant_name === "string") {
+    const words = out.assistant_name.split(/\s+/).filter(Boolean);
+    if (out.assistant_name.length > SPOKEN_NAME_MAX_CHARS || words.length > SPOKEN_NAME_MAX_WORDS) {
+      delete out.assistant_name;
+    }
+  }
+  if (typeof out.system_prompt === "string" && out.system_prompt.length > SPOKEN_PROMPT_MAX_CHARS) {
+    delete out.system_prompt;
+  }
+  return out;
 }
 
 function normalizeAssistantName(value) {

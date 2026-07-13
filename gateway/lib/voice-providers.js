@@ -1089,7 +1089,7 @@ class CascadedVoiceProvider {
         const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone });
         if (pcm && pcm.length) {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { playbackRate: clientRate });
-          await hooks.sendAudio(pcm);
+          await hooks.sendAudio(pcm, { segmentIndex: 0, segmentText: ttsText });
           await hooks.onAssistantAudioDone();
           spoke = true;
           await voiceStageDone(hooks, "tts", ttsStartedAtMs, {
@@ -1184,7 +1184,9 @@ class CascadedVoiceProvider {
       firstChunkMaxChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_FIRST_MAX_CHARS, 60)),
       minChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_MIN_CHARS, 60)),
       maxChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_MAX_CHARS, 220)),
-      flushTimeoutMs: Math.max(50, numberFrom(this.env.VOICE_CHUNK_FLUSH_MS, 1200)),
+      // 700 (was 1200): a short trailing sentence was waiting 1.2s before it
+      // was force-emitted, a flat add to time-to-first-audio on short replies.
+      flushTimeoutMs: Math.max(50, numberFrom(this.env.VOICE_CHUNK_FLUSH_MS, 700)),
     };
   }
 
@@ -1314,7 +1316,13 @@ class CascadedVoiceProvider {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { streaming: true, playbackRate });
           state.started = true;
         }
-        await hooks.sendAudio(pcm);
+        // The segment metadata rides along so the session server can keep a
+        // frame->reply-text ledger: on interruption it is the only way to know
+        // which words were already spoken (binary PCM frames carry no text).
+        await hooks.sendAudio(pcm, {
+          segmentIndex: state.emitted,
+          segmentText: text,
+        });
         state.emitted += 1;
         if (!state.firstAudioAtMs) {
           state.firstAudioAtMs = Date.now();
@@ -1497,7 +1505,7 @@ class CascadedVoiceProvider {
       });
       if (pcm && pcm.length) {
         await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { playbackRate: this.clientPlaybackRate(this.speakingRate(options.profile)) });
-        await hooks.sendAudio(pcm);
+        await hooks.sendAudio(pcm, { segmentIndex: 0, segmentText: speak });
         await hooks.onAssistantAudioDone();
         this.lastTtsError = "";
         return { spoke: true, tts_error: "" };
@@ -3107,6 +3115,14 @@ function composeTtsStylePrompt(style, tone, rate) {
   return parts.join(" ").trim();
 }
 
+// Vertex content-safety rejection of a synthesis request: HTTP 400
+// INVALID_ARGUMENT whose message cites the usage guidelines. Distinct from
+// malformed-request 400s, which must not trigger the prompt-stripped retry.
+function isCloudTtsContentPolicyFailure(failure) {
+  const text = String(failure || "").toLowerCase();
+  return text.includes("(400)") && (text.includes("usage guidelines") || text.includes("violates"));
+}
+
 // Synthesize reply audio with Google Cloud Text-to-Speech and return PCM16 mono
 // at the client's sample rate. Uses LINEAR16 output so no decoding is needed;
 // resamples from the TTS rate to the client rate when they differ.
@@ -3146,8 +3162,8 @@ async function synthesizeCloudTts(options) {
   const speakingRate = Number.isFinite(rateInput) && rateInput > 0 && rateInput !== 1
     ? Math.min(2, Math.max(0.25, rateInput))
     : 0;
-  const body = JSON.stringify({
-    input,
+  const requestBody = (requestInput) => JSON.stringify({
+    input: requestInput,
     voice,
     audioConfig: {
       audioEncoding: "LINEAR16",
@@ -3167,21 +3183,38 @@ async function synthesizeCloudTts(options) {
   }
   let response = null;
   let lastFailure = "";
-  for (const endpoint of endpoints) {
-    response = await fetchWithTimeout(endpoint, {
-      method: "POST",
-      headers: ttsHeaders,
-      body,
-      signal: options.signal,
-    }, timeoutMs);
-    if (response.ok) {
-      break;
+  const attempt = async (body) => {
+    for (const endpoint of endpoints) {
+      response = await fetchWithTimeout(endpoint, {
+        method: "POST",
+        headers: ttsHeaders,
+        body,
+        signal: options.signal,
+      }, timeoutMs);
+      if (response.ok) {
+        return;
+      }
+      const text = await response.text();
+      lastFailure = `cloud TTS failed (${response.status}): ${cleanError(text)}`;
+      response = null;
     }
-    const text = await response.text();
-    lastFailure = `cloud TTS failed (${response.status}): ${cleanError(text)}`;
-    response = null;
+  };
+  await attempt(requestBody(input));
+  // Gemini-TTS content policy rejects some (reply text, style prompt) pairs
+  // with a 400 "usage guidelines" INVALID_ARGUMENT — observed silencing ~half
+  // of am-ET replies. The style prompt is optional flavor; the reply is not.
+  // Retry once with the bare text before degrading the turn to text-only.
+  if (!response && input.prompt && isCloudTtsContentPolicyFailure(lastFailure)) {
+    const policyFailure = lastFailure;
+    await attempt(requestBody({ text: input.text }));
+    if (!response) {
+      lastFailure = `${policyFailure}; retry without style prompt also failed: ${lastFailure}`;
+    }
   }
   if (!response) {
+    if (isCloudTtsContentPolicyFailure(lastFailure)) {
+      lastFailure = `tts_content_policy: ${lastFailure}`;
+    }
     throw new Error(lastFailure || "cloud TTS failed");
   }
   const json = await response.json();

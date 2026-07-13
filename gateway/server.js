@@ -162,7 +162,9 @@ const VOICE_TTS_MAX_CHARS = Number(process.env.VOICE_TTS_MAX_CHARS || 280);
 // Streaming sanitizer ceiling (chunked pipeline only; the shared 280-char
 // VOICE_TTS_MAX_CHARS keeps governing every non-streaming consumer). Read per
 // turn inside streamingSpeakCap so an env flip needs no module reload.
-const VOICE_STREAM_MAX_CHARS_DEFAULT = 1600;
+// 4800 (was 1600) so a token-limit auto-continued reply stays audible instead
+// of silently degrading to text partway through.
+const VOICE_STREAM_MAX_CHARS_DEFAULT = 4800;
 const MODEL_LANGUAGE = String(process.env.MODEL_LANGUAGE || "").trim();
 const MAX_BODY_BYTES = 1024 * 1024;
 const AUDIO_NOTE_MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -7664,6 +7666,20 @@ async function prepareContextDecision({ text, contextAction, profile }) {
   if (!providerConfiguredFor(provider)) {
     return { decision: prior, preflight: { attempted: false, tool_called: false, fallback_reason: "unsupported_provider" } };
   }
+  // Fast path: a very short conversational turn whose deterministic prior is
+  // plain "continue" (no new/fork/incognito phrasing matched) skips the model
+  // preflight — that call is a full model round-trip serially in front of the
+  // reply stream, and on acks/continuations ("yes", "keep going", "and
+  // then?") the refinement it buys is negligible. Kept tight (3 words) so a
+  // short but topic-bearing turn still gets the model decision. The decision
+  // still lands BEFORE retrieval; only how it was decided changes. 0 disables.
+  const fastPathMaxWords = Number(process.env.CONTEXT_PREFLIGHT_FAST_MAX_WORDS ?? 3);
+  if (fastPathMaxWords > 0 && prior.action === "continue" && prior.prior_source === "default") {
+    const wordCount = String(text || "").trim().split(/\s+/).filter(Boolean).length;
+    if (wordCount > 0 && wordCount <= fastPathMaxWords) {
+      return { decision: prior, preflight: { attempted: false, tool_called: false, fallback_reason: "short_continue_fast_path" } };
+    }
+  }
   try {
     const toolCall = provider === "vertex"
       ? await vertexContextPreflight(text, effective)
@@ -7822,6 +7838,17 @@ async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
 // circuit breaker and the whole loop degrades to a plain reply, exactly like
 // callModelToolLoop's catch. The non-streaming loop stays untouched for
 // VOICE_STREAMING=0 and non-voice callers.
+// Token-limit auto-continuation for the streaming loops: when a final answer
+// ends with finish reason MAX_TOKENS/"length" (not a tool round), the loop
+// replays the truncated text and asks the model to resume, so a reply is never
+// silently cut off by the per-request output budget. Bounded per turn; 0
+// disables. Read per call so an env flip needs no restart.
+const AUTOCONTINUE_PROMPT = "Your previous message was cut off by the output length limit, not finished. Continue your reply from the exact point it stopped — resume mid-sentence if needed. Do not repeat, re-introduce, or summarize anything you already said.";
+function autoContinueRounds() {
+  const value = Number(process.env.MODEL_AUTOCONTINUE_MAX_ROUNDS);
+  return Number.isFinite(value) && value >= 0 ? Math.min(10, Math.floor(value)) : 3;
+}
+
 async function callModelToolLoopStreaming(messages, profile, toolDefs, options = {}) {
   const effective = profile || agentProfile.effective();
   const maxRounds = Math.max(1, Math.min(Number(options.maxRounds || 2), 4));
@@ -7951,7 +7978,25 @@ async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds,
     }
     const calls = roundOutcome.toolCalls;
     if (calls.length === 0) {
-      return { text: lastText, tool_results: toolResults, rounds: round + 1 };
+      // Token-limit auto-continuation, mirroring the Vertex streaming loop.
+      let raw = String(roundOutcome.rawText || roundOutcome.text || "");
+      let continued = roundOutcome;
+      let continuations = 0;
+      while (continued.finishReason === "length" && raw && continuations < autoContinueRounds()) {
+        continuations += 1;
+        convo.push({ role: "assistant", content: continued.rawText || continued.text || "" });
+        convo.push({ role: "user", content: AUTOCONTINUE_PROMPT });
+        try {
+          continued = await openAiStreamRound(convo, effective, tools, emit);
+        } catch {
+          break;
+        }
+        if (continued.toolCalls.length > 0) {
+          break;
+        }
+        raw += String(continued.rawText || continued.text || "");
+      }
+      return { text: raw.trim() || lastText, tool_results: toolResults, rounds: round + 1, continuations };
     }
     if (onToolRound) {
       onToolRound({ round: round + 1, toolNames: calls.map((call) => call.name) });
@@ -8007,8 +8052,13 @@ async function openAiStreamRound(convo, effective, tools, emit) {
   }
   let rawText = "";
   let sawTool = false;
+  let finishReason = "";
   const toolCallsByIndex = new Map();
   for await (const event of sseJsonEvents(upstream.body)) {
+    const eventFinish = String(event.choices?.[0]?.finish_reason || "");
+    if (eventFinish) {
+      finishReason = eventFinish;
+    }
     const delta = event.choices?.[0]?.delta || {};
     if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
       sawTool = true;
@@ -8033,7 +8083,7 @@ async function openAiStreamRound(convo, effective, tools, emit) {
     .sort((a, b) => a[0] - b[0])
     .map(([, call]) => call)
     .filter((call) => call.name);
-  return { text: rawText.trim(), rawText, toolCalls };
+  return { text: rawText.trim(), rawText, toolCalls, finishReason };
 }
 
 // The non-streaming per-round fallback, shaped like one openAiToolLoop round.
@@ -8060,7 +8110,7 @@ async function openAiPlainRound(convo, effective, tools) {
   const toolCalls = (Array.isArray(message.tool_calls) ? message.tool_calls : [])
     .filter((call) => call?.function?.name)
     .map((call) => ({ id: call.id || "", name: call.function.name, arguments: call.function.arguments || "{}" }));
-  return { text: rawText.trim(), rawText, toolCalls };
+  return { text: rawText.trim(), rawText, toolCalls, finishReason: String(json.choices?.[0]?.finish_reason || "") };
 }
 
 async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null) {
@@ -8089,7 +8139,28 @@ async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds,
       lastText = roundOutcome.text;
     }
     if (roundOutcome.fnCalls.length === 0) {
-      return { text: lastText, tool_results: toolResults, rounds: round + 1 };
+      // Token-limit auto-continuation: a MAX_TOKENS cutoff is not the end of
+      // the reply. Re-issue with the truncated text replayed so the model
+      // resumes mid-thought, still streaming through the same emit (the
+      // spoken stream never pauses for a "please continue" from the user).
+      let raw = String(roundOutcome.rawText || roundOutcome.text || "");
+      let continued = roundOutcome;
+      let continuations = 0;
+      while (continued.finishReason === "MAX_TOKENS" && raw && continuations < autoContinueRounds()) {
+        continuations += 1;
+        contents.push({ role: "model", parts: continued.mergedParts });
+        contents.push({ role: "user", parts: [{ text: AUTOCONTINUE_PROMPT }] });
+        try {
+          continued = await vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit);
+        } catch {
+          break;
+        }
+        if (continued.fnCalls.length > 0) {
+          break;
+        }
+        raw += String(continued.rawText || continued.text || "");
+      }
+      return { text: raw.trim() || lastText, tool_results: toolResults, rounds: round + 1, continuations };
     }
     if (onToolRound) {
       onToolRound({ round: round + 1, toolNames: roundOutcome.fnCalls.map((fnCall) => String(fnCall.name || "")) });
@@ -8165,9 +8236,14 @@ async function vertexStreamRound(contents, systemInstruction, effective, functio
   }
   let roundText = "";
   let sawTool = false;
+  let finishReason = "";
   const mergedParts = [];
   const fnCalls = [];
   for await (const event of sseJsonEvents(upstream.body)) {
+    const eventFinish = String(event.candidates?.[0]?.finishReason || "");
+    if (eventFinish) {
+      finishReason = eventFinish;
+    }
     const parts = event.candidates?.[0]?.content?.parts || [];
     for (const part of parts) {
       const fnCall = part.functionCall || part.function_call;
@@ -8199,7 +8275,7 @@ async function vertexStreamRound(contents, systemInstruction, effective, functio
       }
     }
   }
-  return { text: roundText.trim(), mergedParts, fnCalls };
+  return { text: roundText.trim(), rawText: roundText, mergedParts, fnCalls, finishReason };
 }
 
 // The non-streaming per-round Vertex fallback, shaped like one vertexToolLoop round.
@@ -8218,7 +8294,7 @@ async function vertexPlainRound(contents, systemInstruction, effective, function
   const textParts = parts.map((part) => String(part.text || "")).filter(Boolean).join("\n").trim();
   const mergedParts = parts.map(vertexReplayPart).filter(Boolean);
   const fnCalls = parts.map((part) => part.functionCall || part.function_call).filter(Boolean);
-  return { text: textParts, mergedParts, fnCalls };
+  return { text: textParts, rawText: textParts, mergedParts, fnCalls, finishReason: String(json.candidates?.[0]?.finishReason || "") };
 }
 
 // Rebuild a model part for the tool-loop replay turn. Gemini 3.x thinking
@@ -11596,6 +11672,11 @@ async function recordStreamingVoiceTurn(turn) {
       transcription_only: turn.transcription_only === true,
       incomplete,
       status: turnStatus,
+      // Interruption cutoff: which reply segments were sent/actually played and
+      // the spoken-text prefix, so "continue" can resume at the exact spot.
+      ...(turn.spoken_progress && typeof turn.spoken_progress === "object" && !Array.isArray(turn.spoken_progress)
+        ? { spoken_progress: turn.spoken_progress }
+        : {}),
       error: String(turn.error || ""),
     },
   };
@@ -11783,6 +11864,17 @@ async function recordStreamingVoiceTurn(turn) {
   } else if (!display && transcriptSource === "synthetic" && !hasAssistantAudio) {
     display = "I heard audio, but I did not get a reliable transcript. Please try again.";
   }
+  // A turn interrupted mid-stream may have spoken segments but no
+  // assistant_text (the full text lands only when the LLM stream ends). The
+  // segment ledger is then the only copy of what was said — surface it so the
+  // record is readable and the next turn can continue from it.
+  if (incomplete && !display && turn.spoken_progress && typeof turn.spoken_progress === "object") {
+    const spokenParts = [turn.spoken_progress.spoken_text, turn.spoken_progress.unspoken_text]
+      .filter((part) => typeof part === "string" && part.trim());
+    if (spokenParts.length) {
+      display = spokenParts.join(" ").trim();
+    }
+  }
 
   const payload = voiceTurnPayload(baseRecord, {
     speak: speak || (turn.transcription_only === true ? "" : assistantText),
@@ -11801,6 +11893,19 @@ async function recordStreamingVoiceTurn(turn) {
   };
   await writeCompletedVoiceTurnRecord(canonicalRecord);
   return canonicalRecord;
+}
+
+// Label for an interrupted assistant reply in durable context. When the turn
+// recorded a playback cutoff (spoken_progress from the frame->text ledger),
+// name the exact words where speech stopped so a "continue" resumes there
+// instead of restarting or re-answering.
+function interruptedAssistantLabel(voiceSession) {
+  const spoken = String(voiceSession?.spoken_progress?.spoken_text || "").trim();
+  if (!spoken) {
+    return " (interrupted, partial)";
+  }
+  const tail = spoken.length > 160 ? `…${spoken.slice(-160)}` : spoken;
+  return ` (interrupted by the user mid-speech; the last words spoken aloud were: "${tail}" — if asked to continue, resume from that exact point without repeating earlier text)`;
 }
 
 function voiceLiveContextPrompt(turn) {
@@ -11841,7 +11946,7 @@ function voiceLiveContextPrompt(turn) {
       const interrupted = record.references?.voice_session?.incomplete === true || record.classification === "interrupted";
       lines.push(`- user (${record.classification || "turn"}, ${record.profile_version || "profile_unknown"}): ${user || "(empty)"}`);
       if (assistant) {
-        lines.push(`  assistant${interrupted ? " (interrupted, partial)" : ""}: ${assistant}`);
+        lines.push(`  assistant${interrupted ? interruptedAssistantLabel(record.references?.voice_session) : ""}: ${assistant}`);
       }
     }
   }
@@ -12391,7 +12496,7 @@ function durableSessionContextBlock(options = {}) {
       const interrupted = turn.references?.voice_session?.incomplete === true || turn.classification === "interrupted";
       lines.push(`- user (${turn.classification || "turn"}, branch=${turn.branch_id || "default"}): ${user || "(empty)"}`);
       if (assistant) {
-        lines.push(`  assistant${interrupted ? " (interrupted, partial)" : ""}: ${assistant}`);
+        lines.push(`  assistant${interrupted ? interruptedAssistantLabel(turn.references?.voice_session) : ""}: ${assistant}`);
       }
     }
   }
@@ -12603,7 +12708,7 @@ function buildCanonicalContextArtifact(options = {}) {
       const interrupted = turn.references?.voice_session?.incomplete === true || turn.classification === "interrupted";
       const lines = [`- [${sourceId}] user (${turn.classification || "turn"}, branch=${turn.branch_id || "default"}): ${user || "(empty)"}`];
       if (assistant) {
-        lines.push(`  assistant${interrupted ? " (interrupted, partial)" : ""}: ${assistant}`);
+        lines.push(`  assistant${interrupted ? interruptedAssistantLabel(turn.references?.voice_session) : ""}: ${assistant}`);
       }
       sources.push({
         source_id: sourceId,
@@ -13111,11 +13216,14 @@ function profileIdentityInstruction(profile) {
   if (!name) {
     return "";
   }
+  const address = String(profile?.user_address || "master").trim() || "master";
   return [
     "Assistant identity profile:",
-    "- This identity profile overrides any older name in the base prompt.",
+    "- This identity profile overrides any older name in the base prompt and any persona prompt.",
     `- Your current name is ${name}.`,
     `- If asked who or what you are, say you are ${name}.`,
+    `- If asked who created, made, built, trained, designed, or owns you, say you were created by your ${address}.`,
+    "- Never say you were created by Google, Gemini, OpenAI, Anthropic, or any AI company, and never describe yourself as a Google model, a Gemini model, or a language model.",
     "- If your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word.",
     "- Use the user's requested form of address, title, or interaction style when provided.",
   ].join("\n");

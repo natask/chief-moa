@@ -767,7 +767,7 @@ class VoiceSessionConnection {
           ...(playbackRate ? { playback_rate: playbackRate } : {}),
         });
       },
-      sendAudio: async (chunk) => {
+      sendAudio: async (chunk, meta) => {
         assertTurnActive();
         const wroteAudio = await writeAssistantAudio(turn, chunk);
         assertTurnActive();
@@ -786,6 +786,23 @@ class VoiceSessionConnection {
         // socket corrupts the NEXT turn's audio window on current clients.
         assertTurnActive();
         await sendWs(this.ws, chunk, { binary: true });
+        // Frame->text ledger: the provider tags each frame with the reply-text
+        // segment it carries. Recorded only after the socket write succeeds, so
+        // the ledger holds exactly what reached the client. On interruption
+        // this is the only mapping from "audio played" back to "words spoken".
+        const segmentText = typeof meta?.segmentText === "string" ? meta.segmentText : "";
+        if (segmentText) {
+          if (!Array.isArray(turn.assistantSegments)) {
+            turn.assistantSegments = [];
+          }
+          // pcm16 mono at the client rate: bytes -> audio milliseconds, so an
+          // Android played_ms report can be mapped back to a segment boundary.
+          const bytesPerMs = (ASSISTANT_AUDIO_FORMAT.sample_rate * 2) / 1000;
+          turn.assistantSegments.push({
+            text: segmentText,
+            ms: Math.round(toBuffer(chunk).length / bytesPerMs),
+          });
+        }
       },
       sendToolResponse: async (functionResponses) => {
         await this.sendEvent({
@@ -1071,6 +1088,45 @@ class VoiceSessionConnection {
   // forward to the next turn and to the other device. Without this, an
   // interrupted Gemini Live turn only lands in observability logs and is lost
   // from the Moa-owned context pack.
+  // Where speech stopped for an interrupted/canceled turn, from the
+  // frame->text ledger plus (when the client reported it) the actual playback
+  // position. Without a client report, "sent" is the upper bound for "heard".
+  spokenProgressForTurn(turn) {
+    const segments = Array.isArray(turn.assistantSegments) ? turn.assistantSegments : [];
+    if (segments.length === 0) {
+      return null;
+    }
+    let playedCount = segments.length;
+    let clientReported = false;
+    if (Number.isFinite(turn.clientPlayedSegments)) {
+      playedCount = Math.min(Math.max(0, turn.clientPlayedSegments), segments.length);
+      clientReported = true;
+    } else if (Number.isFinite(turn.clientPlayedMs)) {
+      // Android reports the AudioTrack playback clock; walk the per-segment
+      // durations and count every segment whose audio had fully played.
+      clientReported = true;
+      playedCount = 0;
+      let cumulativeMs = 0;
+      for (const segment of segments) {
+        cumulativeMs += Number(segment.ms) || 0;
+        if (turn.clientPlayedMs + 50 < cumulativeMs) {
+          break;
+        }
+        playedCount += 1;
+      }
+    }
+    const spokenText = segments.slice(0, playedCount).map((segment) => segment.text).join(" ").trim();
+    const unplayedText = segments.slice(playedCount).map((segment) => segment.text).join(" ").trim();
+    return {
+      segments_sent: segments.length,
+      segments_played: playedCount,
+      client_reported: clientReported,
+      ...(Number.isFinite(turn.clientPlayedMs) ? { played_ms: turn.clientPlayedMs } : {}),
+      spoken_text: spokenText,
+      ...(unplayedText ? { unspoken_text: unplayedText } : {}),
+    };
+  }
+
   async recordIncompleteTurn(turn, status, errorMessage = "") {
     if (!turn || turn.recordedCanonical || !this.onTurnCompleted) {
       return;
@@ -1085,6 +1141,7 @@ class VoiceSessionConnection {
       return;
     }
     turn.recordedCanonical = true;
+    const spokenProgress = this.spokenProgressForTurn(turn);
     try {
       return await this.onTurnCompleted({
         session_id: turn.sessionId,
@@ -1121,6 +1178,7 @@ class VoiceSessionConnection {
         incomplete: true,
         status,
         error: errorMessage,
+        ...(spokenProgress ? { spoken_progress: spokenProgress } : {}),
         stage_timings: sanitizeStageTimings(providerEvents.stageTimings),
         transcript_language_rejected: turn.transcriptLanguageRejected === true,
         // Input languages the STT leg restricted to, so an interrupted turn's
@@ -1292,6 +1350,20 @@ class VoiceSessionConnection {
     const turn = this.currentTurnFor(event.turn_id);
     if (!turn) {
       return;
+    }
+
+    // Additive playback-position report: how far the client actually played
+    // before the user interrupted. Captured BEFORE the turn goes terminal so
+    // the incomplete record can say where speech stopped. Segments is the
+    // count of fully-played audio frames (browser); played_ms is the audio
+    // clock (Android AudioTrack head position). Both optional.
+    const playedSegments = Number(event.played_segments);
+    if (Number.isFinite(playedSegments) && playedSegments >= 0) {
+      turn.clientPlayedSegments = Math.floor(playedSegments);
+    }
+    const playedMs = Number(event.played_ms);
+    if (Number.isFinite(playedMs) && playedMs >= 0) {
+      turn.clientPlayedMs = Math.floor(playedMs);
     }
 
     turn.status = "canceled";

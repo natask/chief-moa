@@ -54,6 +54,11 @@ process.env.GEMINI_API_KEY = "";
 process.env.VERTEX_PROJECT = "cascaded-reasoner-smoke-project";
 process.env.VERTEX_LOCATION = "us-central1";
 process.env.VERTEX_ACCESS_TOKEN = "cascaded-reasoner-smoke-vertex-token";
+// This smoke verifies provider ROUTING using the context preflight as the
+// probe; short transcripts ("good day") must still fire it, so disable the
+// short-continue fast path here. The fast path has its own smoke coverage in
+// smoke-context-decision.js.
+process.env.CONTEXT_PREFLIGHT_FAST_MAX_WORDS = "0";
 
 const previousFetch = global.fetch;
 const fetchCalls = [];
