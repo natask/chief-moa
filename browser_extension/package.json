@@ -24,6 +24,8 @@
     "smoke:sidepanel": "node scripts/smoke-sidepanel.mjs",
     "smoke:unified-browser-agent": "node scripts/smoke-unified-browser-agent.mjs",
     "smoke:agent-loop": "node scripts/smoke-agent-loop.mjs",
+    "smoke:proactive": "node scripts/smoke-proactive.mjs",
+    "test:proactive": "node scripts/test-proactive-helper.mjs",
     "verify": "node scripts/test-aggie-protocol-adapter.mjs && node scripts/verify-extension.mjs",
     "package": "node scripts/package-extension.mjs",
     "deploy:browser": "node scripts/poke-dev-reload.mjs"
