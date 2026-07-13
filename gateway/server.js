@@ -443,6 +443,7 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/health") {
       const voiceProvider = voiceSessionServer.status();
+      const profileStatus = agentProfileRuntimeStatus();
       sendJson(response, 200, {
         ok: true,
         mode: runtimeMode.mode,
@@ -476,6 +477,7 @@ const server = http.createServer(async (request, response) => {
           endpoint: voiceSessionServer.endpoint,
           ticket_endpoint: "/v1/voice/session-ticket",
           provider: voiceProvider,
+          profile_diagnostics: voiceProfileDiagnostics(profileStatus, voiceProvider),
           activity: voiceSessionServer.activityStatus(),
           input_format: {
             encoding: "pcm16",
@@ -488,7 +490,7 @@ const server = http.createServer(async (request, response) => {
             channels: 1,
           },
         },
-        agent_profile: agentProfileRuntimeStatus(),
+        agent_profile: profileStatus,
         // Flag-gated LiveKit voice-transport prototype. Inert (enabled:false)
         // unless LIVEKIT_URL/KEY/SECRET are set; the default WS pipeline above is
         // unchanged either way.
@@ -1808,6 +1810,7 @@ module.exports = {
   defaultSessionId,
   profileSystemInstruction,
   durableSessionContextBlock,
+  voiceProfileDiagnostics,
   // Exported for in-process smoke tests that drive the cascaded reasoner and its
   // model-tool loop directly. Not part of the runtime HTTP surface.
   runCascadedVoiceReasoning,
@@ -4690,6 +4693,35 @@ function agentProfileRuntimeStatus(options = {}) {
     memory_policy: profile.memory_policy,
     recovery_mode: profile.recovery_mode,
     active_companion: activeCompanionPayload(profile),
+  };
+}
+
+function voiceProfileDiagnostics(profileStatus, providerStatus) {
+  const warnings = [];
+  const storedProvider = String(profileStatus?.providers?.voice_provider || "").trim();
+  const runtimeProvider = String(providerStatus?.provider || providerStatus?.mode || "").trim();
+  if (storedProvider && runtimeProvider && storedProvider !== runtimeProvider) {
+    warnings.push({
+      code: "stored_runtime_provider_drift",
+      summary: `Stored voice provider ${storedProvider} differs from effective runtime ${runtimeProvider}.`,
+    });
+  }
+  const inputLanguages = String(profileStatus?.language?.input || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (inputLanguages.length === 1) {
+    warnings.push({
+      code: "single_input_language_restriction",
+      summary: `Speech recognition is restricted to ${inputLanguages[0]}; turns in other languages can be rejected.`,
+    });
+  }
+  return {
+    ok: warnings.length === 0,
+    stored_voice_provider: storedProvider,
+    runtime_voice_provider: runtimeProvider,
+    input_languages: inputLanguages,
+    warnings,
   };
 }
 

@@ -258,7 +258,6 @@ final class MoaStreamingVoiceSessionController {
             loggedVoiceActivity = false;
             sessionReady = false;
             pendingCommitAfterSessionReady = false;
-            assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
@@ -474,7 +473,6 @@ final class MoaStreamingVoiceSessionController {
             loggedVoiceActivity = false;
             sessionReady = false;
             pendingCommitAfterSessionReady = false;
-            assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
@@ -823,11 +821,15 @@ final class MoaStreamingVoiceSessionController {
             }
             Log.i(TAG, "assistantAudioDone");
             mainHandler.postDelayed(() -> {
+                MoaAssistantAudioProgressTracker.PlaybackProgress finalProgress;
                 synchronized (lock) {
+                    finalProgress = assistantAudioProgress.snapshot(
+                            playbackToDrain != null ? playbackToDrain.playedPcmFrames() : 0L);
                     if (playbackController == playbackToDrain) {
                         assistantAudioStarted = false;
                     }
                 }
+                maybeSendFinalPlaybackProgress(gatewaySocket, audioTurnId, finalProgress, "playback_done");
                 if (playbackToDrain != null && playbackEnabled) {
                     playbackToDrain.stop();
                 }

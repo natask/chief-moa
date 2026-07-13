@@ -48,6 +48,14 @@
 - [ ] 6.3 Preserve active agent-run follow-up routing when the user speaks while an agent run is ongoing.
 - [ ] 6.4 Add phone QA for barge-in or fallback interruption when provider-native barge-in is unavailable.
 - [x] 6.5 Add browser semi-interaction mode: a spoken session command enables background assistant speech so a new browser voice turn can start without stopping already queued assistant audio, while still using one durable session id and distinct turn ids. Verified 2026-06-20 with `cd browser_extension && npm run verify`, `cd browser_extension && npm run smoke`, `cd gateway && npm run check`, and `cd gateway && node scripts/smoke-regression.js`.
+- [x] 6.6 Emit additive assistant-audio segment bounds, report endpoint-observed
+      Android/browser playback progress before teardown, persist a bounded
+      checkpoint, and include the played prefix plus unheard suffix in the next
+      durable context. This evidence does not claim the audio was heard.
+- [ ] 6.7 Add bounded automatic long-answer continuation keyed by an explicit
+      terminal reason, with per-session time/token/cost ceilings, visible
+      progress, user interruption, and loop detection. Do not model this as an
+      unbounded generation loop or by merely raising `voice_max_chars`.
 
 ## 7. Safe Mode And Recovery
 

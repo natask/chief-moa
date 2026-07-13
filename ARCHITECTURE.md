@@ -355,6 +355,16 @@ later turn in that process onto the non-streaming path with no operator
 action, because the deploy gate's restore-check never drives a real voice
 turn.
 
+Each assistant PCM frame is preceded by an additive
+`assistant_audio_segment` event containing its text bounds, byte count, and
+PCM duration. Android and the browser correlate those bounds with their local
+playback clocks and send a final `playback_progress` event before a cancel or
+close. The gateway clamps that checkpoint to audio already emitted, persists
+it on the incomplete turn, and supplies an endpoint-observed played prefix and
+unheard suffix to the next durable context. This is presentation evidence, not
+proof that a human heard the audio. Older clients safely ignore the additive
+segment event.
+
 The chunker (`gateway/lib/voice-chunker.js`) is pure and timer-free: sentence
 enders (`. ! ? …` and Ethiopic `። ፧ ፨`) are the primary boundary, clause
 enders (`, ; :` and Ethiopic `፣ ፤ ፥`) apply once the pending text is already

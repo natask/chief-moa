@@ -2563,8 +2563,6 @@
     ensureVoiceCueCard(state, state.transcript || "Voice", summary);
     updateCue(state.cueId, summary, "done");
     reactLauncher("done");
-    closeLiveVoiceSession(state, "turn done");
-    untrackLiveVoiceState(state);
     if (!wasCurrentTurn) return;
     setVoiceState(false);
     // Wait for the spoken reply to finish playing, then either listen again (so
@@ -2572,6 +2570,11 @@
     // stopped. Re-arming only after playback ends keeps the reply out of the mic.
     const delayMs = Math.max(0, ((state.playbackTime || 0) - (audioCtx?.currentTime || 0)) * 1000);
     setTimeout(() => {
+      if (isLiveVoiceStateActive(state)) {
+        sendFinalPlaybackProgress(state);
+        closeLiveVoiceSession(state, "playback done");
+        untrackLiveVoiceState(state);
+      }
       if (liveVoice) return;
       if (conversationActive) {
         startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });

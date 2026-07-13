@@ -67,3 +67,19 @@
 - [x] 5.5 Run Android debug build after Gradle can create/cache its wrapper and
       bind the required local daemon socket.
 - [ ] 5.6 Deployment is blocked until the user explicitly approves promotion.
+
+## 6. Licensed Companion Library And Builder
+
+- [ ] 6.1 Define a shareable companion package containing declarative sprites,
+      animation states, palette, bounded behaviors, persona, and voice binding;
+      generated code is not accepted as a package payload.
+- [ ] 6.2 Add an automated builder that validates and previews a package in an
+      isolated renderer before a user can publish or apply it.
+- [ ] 6.3 Add private/shared-library visibility, provenance, license, moderation,
+      version, rollback, and removal fields for every package and media asset.
+- [ ] 6.4 Add custom-voice enrollment only for a consenting speaker or authorized
+      rightsholder, with consent evidence, revocation, deletion, and anti-abuse
+      review. Do not scrape or clone celebrity, actor, or character voices.
+- [ ] 6.5 Research existing companion catalogs and reusable open-source engines
+      before expanding the renderer; reuse compatible licensed assets and APIs
+      instead of copying copyrighted sprites or rebuilding mature tooling.

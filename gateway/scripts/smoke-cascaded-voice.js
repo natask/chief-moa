@@ -76,6 +76,7 @@ async function main() {
     await streamingCapPrefixProperty(tempDir);
     await streamingKillSwitchReproducesOldSequence(tempDir);
     await playbackProgressPersistsOnIncompleteTurn(tempDir);
+    await playbackTailCanDowngradeCompletedTurn(tempDir);
     await stalePlaybackProgressIsRejected(tempDir);
     console.log("smoke-cascaded-voice: ok");
   } finally {
@@ -1021,7 +1022,7 @@ function makeHungLiveProvider() {
   };
 }
 
-function makeSegmentedHungLiveProvider() {
+function makeSegmentedHungLiveProvider(options = {}) {
   let resolveDone;
   const done = new Promise((resolve) => {
     resolveDone = resolve;
@@ -1058,6 +1059,16 @@ function makeSegmentedHungLiveProvider() {
             audio_bytes: secondPcm.length,
             pcm_ms: 140,
           });
+          await hooks.sendAudio(secondPcm);
+          if (options.complete === true) {
+            resolveDone({
+              provider: "gemini-live",
+              model: "test-live",
+              transcript: "keep going",
+              assistant_text: `${firstText} ${secondText}`,
+              audio_format: audioFormat,
+            });
+          }
         },
         cancel() {
           resolveDone({
@@ -1566,7 +1577,7 @@ async function playbackProgressPersistsOnIncompleteTurn(tempDir) {
     type: "playback_progress",
     turn_id: turnId,
     segment_index: 1,
-    played_pcm_ms: 120,
+    played_pcm_ms: 180,
   }));
   await connection.handleCancelTurn({ type: "cancel_turn", turn_id: turnId });
   await commitPromise;
@@ -1580,9 +1591,52 @@ async function playbackProgressPersistsOnIncompleteTurn(tempDir) {
   assert.equal(progress.endpoint_observed, true);
   assert.ok(progress.played_pcm_ms > 0 && progress.played_pcm_ms < progress.emitted_pcm_ms, "played pcm must stay bounded below the emitted total");
   assert.ok(progress.estimated_text.includes("First sentence"), `estimated played text must reflect the played prefix, got ${JSON.stringify(progress.estimated_text)}`);
+  assert.ok(progress.estimated_text.includes("Second sentence"), `multi-segment played text must accumulate into one prefix, got ${JSON.stringify(progress.estimated_text)}`);
   const context = durableSessionContextBlock({ sessionId, branchId: "default" });
   assert.match(context, /endpoint-observed playback reached about/i, `durable context must surface endpoint playback progress, got ${JSON.stringify(context)}`);
   assert.match(context, /assistant unheard remainder:/i, `durable context must surface the unheard suffix, got ${JSON.stringify(context)}`);
+}
+
+async function playbackTailCanDowngradeCompletedTurn(tempDir) {
+  const records = [];
+  const dataDir = path.join(tempDir, "session-playback-tail");
+  const connection = new VoiceSessionConnection(fakeWs([]), {
+    request: {},
+    sessionsDir: path.join(dataDir, "voice-sessions"),
+    providerEventsFile: path.join(dataDir, "voice-provider-events.jsonl"),
+    voiceProvider: makeSegmentedHungLiveProvider({ complete: true }),
+    onTurnCompleted: async (record) => {
+      records.push(record);
+      return record;
+    },
+  });
+  fs.mkdirSync(path.join(dataDir, "voice-sessions"), { recursive: true });
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: "sess_playback_tail",
+    turn_id: "turn_playback_tail",
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 40, frequencyHz: 240, sampleRate: 16000, volume: 0.2 }));
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_playback_tail" });
+  await waitFor(() => connection.turn?.status === "playback", 5000, "completed playback-tail state");
+  assert.equal(connection.turn?.status, "playback", "completed generation must remain checkpointable during the local playback tail");
+  await connection.handleText(JSON.stringify({
+    type: "playback_progress",
+    turn_id: "turn_playback_tail",
+    segment_index: 1,
+    played_pcm_ms: 180,
+  }));
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: "sess_playback_tail",
+    turn_id: "turn_after_tail_interrupt",
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  const replacement = records.at(-1);
+  assert.equal(replacement?.status, "replaced");
+  assert.equal(replacement?.incomplete, true);
+  assert.ok(replacement?.playback_progress?.estimated_text.includes("Second sentence"), "tail interruption must persist the accumulated played prefix");
 }
 
 async function stalePlaybackProgressIsRejected(tempDir) {

@@ -90,4 +90,20 @@ QA remain separate evidence and are not inferred from deterministic smokes.
 - 2026-07-13: created isolated worktree from `master`.
 - 2026-07-13: completed read-only production health diagnosis; no active state
   was changed.
-- 2026-07-13: implementation pending.
+- 2026-07-13: gateway lane committed as `251e99c`; Android lane as `839f102`;
+  browser lane as `1e6cdc3`; all three were cherry-picked serially.
+- 2026-07-13: gateway lane `npm run check` passed (152 pass, 1 skip).
+  Integrated gateway run had one concurrent audio-storage smoke flake; the same
+  smoke passed twice serially, and the new cascaded/profile smokes passed.
+- 2026-07-13: integrated Android `testDebugUnitTest assembleDebug` passed.
+- 2026-07-13: integrated extension `npm run verify && npm run smoke` passed in
+  real headless Chrome.
+- 2026-07-13: auditor ring initially blocked the playback tail, multi-segment
+  prefix accumulation, no-audio checkpoints, and synchronous per-segment event
+  logging. Focused repairs landed in the integrated worktree; the independent
+  repair audit returned `PASS` with no remaining blockers.
+- 2026-07-13: final integrated gateway `npm run check` passed (152 pass,
+  1 skip), including the new completed-playback-tail replacement smoke.
+- 2026-07-13: production was not mutated. Active promotion remains gated on an
+  isolated gateway preview plus persisted-state backup/restore evidence; phone
+  QA is also still required before Android OTA installation.

@@ -33,6 +33,7 @@ const {
   server,
   defaultSessionId,
   profileSystemInstruction,
+  voiceProfileDiagnostics,
 } = require(path.join(GATEWAY_DIR, "server"));
 const { createAgentProfileStore } = require(path.join(GATEWAY_DIR, "lib", "agent-profile"));
 const { createCompanionCatalogStore } = require(path.join(GATEWAY_DIR, "lib", "companion-catalog"));
@@ -52,6 +53,7 @@ async function main() {
   await step("companion apply preserves address directive", assertCompanionKeepsAddress);
   await step("profile reset restores address directive", assertResetKeepsAddress);
   await step("live voice prompt contains durable address directive", assertLivePromptAddress);
+  await step("health diagnostics explain profile restrictions and provider drift", assertVoiceProfileDiagnostics);
   await step("omitted session ids converge in storage", assertSharedSessionStorage);
 
   console.log(JSON.stringify({
@@ -64,9 +66,23 @@ async function main() {
       "companion apply leaves user_address intact and the prompt directive remains after identity",
       "profile reset restores user_address to master and the prompt directive remains after identity",
       "Live voice effectiveSystemPrompt includes the same durable address directive after identity",
+      "health diagnostics explain a single-language restriction and stored/runtime provider drift",
       "chat, voice, and browser turns with omitted session ids store under the shared session id",
     ],
   }, null, 2));
+}
+
+async function assertVoiceProfileDiagnostics() {
+  const diagnostics = voiceProfileDiagnostics({
+    language: { input: "am-ET" },
+    providers: { voice_provider: "vertex-live" },
+  }, { provider: "cascaded" });
+  assert.equal(diagnostics.ok, false);
+  assert.deepEqual(diagnostics.input_languages, ["am-ET"]);
+  assert.deepEqual(
+    diagnostics.warnings.map((warning) => warning.code).sort(),
+    ["single_input_language_restriction", "stored_runtime_provider_drift"]
+  );
 }
 
 async function assertDefaultSession() {
