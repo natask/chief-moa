@@ -419,6 +419,23 @@ if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.te
 }
 
 if (
+  !/function normalizeAssistantAudioSegment\(/.test(contentSource) ||
+  !/msg\.type === "assistant_audio_segment"/.test(contentSource) ||
+  !/pendingAssistantAudioSegments/.test(contentSource) ||
+  !/function computePlaybackProgress\(/.test(contentSource) ||
+  !/type:\s*"playback_progress"/.test(contentSource)
+) {
+  throw new Error("content.js must correlate assistant_audio_segment metadata with the following PCM frame and derive playback_progress from local playback");
+}
+
+if (
+  !/function routeLiveTranscriptThroughGateway\([\s\S]{0,800}sendFinalPlaybackProgress\(state\);[\s\S]{0,800}closeLiveVoiceSession\(state/.test(contentSource) ||
+  !/function stopLiveVoiceState\([\s\S]{0,400}sendFinalPlaybackProgress\(state\);[\s\S]{0,400}cancel_turn/.test(contentSource)
+) {
+  throw new Error("content.js must send final playback_progress before cancel or close paths tear the live voice session down");
+}
+
+if (
   !/ACTIVE_BROWSER_AGENT_OWNER_KEY\s*=\s*"ageeActiveBrowserAgentOwner"/.test(backgroundSource) ||
   !/function setActiveBrowserAgentOwner/.test(backgroundSource) ||
   !/function notifyBrowserAgentOwner/.test(backgroundSource) ||

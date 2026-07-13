@@ -1845,6 +1845,110 @@
     if (root) root.classList.toggle("agee-ambient", ambientState === "on");
   }
 
+  function finiteNumber(...values) {
+    for (const value of values) {
+      const num = Number(value);
+      if (Number.isFinite(num)) return num;
+    }
+    return null;
+  }
+
+  function normalizeAssistantAudioSegment(msg) {
+    if (!msg || typeof msg !== "object") return null;
+    const sourceDurationMs = finiteNumber(
+      msg.pcm_ms,
+      msg.source_duration_ms,
+      msg.sourceDurationMs,
+      msg.duration_ms,
+      msg.durationMs,
+    );
+    if (!(sourceDurationMs > 0)) return null;
+    const playbackRate = finiteNumber(msg.playback_rate, msg.playbackRate, msg.rate);
+    const textStartChar = finiteNumber(
+      msg.text_char_start,
+      msg.textStartChar,
+      msg.text_start,
+      msg.textStart,
+    );
+    const textEndChar = finiteNumber(
+      msg.text_char_end,
+      msg.textEndChar,
+      msg.text_end,
+      msg.textEnd,
+    );
+    const segmentIndex = finiteNumber(msg.segment_index, msg.segmentIndex, msg.index);
+    return {
+      segmentIndex: segmentIndex != null ? Math.max(0, Math.round(segmentIndex)) : null,
+      sourceDurationMs,
+      playbackRate: playbackRate && playbackRate > 0 ? playbackRate : null,
+      textStartChar: textStartChar != null ? Math.max(0, Math.round(textStartChar)) : null,
+      textEndChar: textEndChar != null ? Math.max(0, Math.round(textEndChar)) : null,
+    };
+  }
+
+  function recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, fallbackRate) {
+    const meta = state.pendingAssistantAudioSegments?.shift();
+    if (!meta || !source || !audioBuffer) return;
+    const playbackRate = meta.playbackRate || (fallbackRate > 0 ? fallbackRate : 1);
+    state.playedAssistantAudioSegments ||= [];
+    const previous = state.playedAssistantAudioSegments.at(-1);
+    const sourceStartMs = previous
+      ? previous.sourceStartMs + previous.sourceDurationMs
+      : 0;
+    state.playedAssistantAudioSegments.push({
+      segmentIndex: meta.segmentIndex,
+      sourceStartMs,
+      sourceDurationMs: meta.sourceDurationMs,
+      playbackRate,
+      textStartChar: meta.textStartChar,
+      textEndChar: meta.textEndChar,
+      scheduledAt: startAt,
+      wallDurationMs: (audioBuffer.duration / playbackRate) * 1000,
+    });
+  }
+
+  function computePlaybackProgress(state) {
+    if (!state?.playedAssistantAudioSegments?.length) return null;
+    const now = audioCtx?.currentTime;
+    if (!Number.isFinite(now)) return null;
+    let best = null;
+    for (const segment of state.playedAssistantAudioSegments) {
+      if (!(segment?.sourceDurationMs > 0) || !(segment?.sourceStartMs >= 0) || !Number.isFinite(segment?.scheduledAt)) {
+        continue;
+      }
+      const elapsedWallMs = Math.max(0, (now - segment.scheduledAt) * 1000);
+      const playbackRate = segment.playbackRate > 0 ? segment.playbackRate : 1;
+      const playedMs = Math.max(0, Math.min(segment.sourceDurationMs, elapsedWallMs * playbackRate));
+      if (!(playedMs > 0)) continue;
+      const playedToMs = segment.sourceStartMs + playedMs;
+      if (!best || playedToMs > best.played_pcm_ms) {
+        best = {
+          type: "playback_progress",
+          turn_id: state.turnId,
+          segment_index: segment.segmentIndex,
+          playback_rate: playbackRate,
+          played_pcm_ms: Math.round(playedToMs),
+        };
+        if (segment.textStartChar != null && segment.textEndChar != null && segment.textEndChar >= segment.textStartChar) {
+          const span = segment.textEndChar - segment.textStartChar;
+          const playedTextChars = Math.round(span * Math.min(1, playedMs / segment.sourceDurationMs));
+          best.text_char_start = segment.textStartChar;
+          best.text_char_end = segment.textEndChar;
+          best.played_text_char_end = Math.min(segment.textEndChar, segment.textStartChar + playedTextChars);
+        }
+      }
+    }
+    return best;
+  }
+
+  function sendFinalPlaybackProgress(state) {
+    if (!state?.voiceSessionId || state.playbackProgressSent) return;
+    const progress = computePlaybackProgress(state);
+    if (!progress) return;
+    state.playbackProgressSent = true;
+    sendLiveVoiceControl(state, progress);
+  }
+
   function mergeLiveVoiceTranscript(previous, incoming) {
     const prev = String(previous || "").trim();
     const next = String(incoming || "").trim();
@@ -1892,6 +1996,9 @@
       playbackTime: 0,
       playbackRate: 1,
       playbackSources: new Set(),
+      pendingAssistantAudioSegments: [],
+      playedAssistantAudioSegments: [],
+      playbackProgressSent: false,
       assistantText: "",
       transcript: "",
       gatewayRouted: false,
@@ -2028,6 +2135,11 @@
       updateCue(state.cueId, text, "running");
       return;
     }
+    if (msg.type === "assistant_audio_segment") {
+      const segment = normalizeAssistantAudioSegment(msg);
+      if (segment) state.pendingAssistantAudioSegments.push(segment);
+      return;
+    }
     if (msg.type === "assistant_audio_start") {
       if (isCurrentTurn) {
         setVoiceState(false);
@@ -2111,6 +2223,7 @@
       assistantPlaybackSources.delete(source);
     };
     const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
+    recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, rate);
     source.start(startAt);
     state.playbackTime = startAt + audioBuffer.duration / rate;
   }
@@ -2148,6 +2261,7 @@
     state.gatewayRouted = true;
     state.committed = true;
     stopLiveCapture(state);
+    sendFinalPlaybackProgress(state);
     stopLivePlayback(state);
     setVoiceState(false);
     setAgentState("thinking");
@@ -2249,6 +2363,7 @@
   function stopLiveVoiceState(state, mode = "stop") {
     if (!isLiveVoiceStateActive(state)) return;
     stopLiveCapture(state);
+    sendFinalPlaybackProgress(state);
     stopLivePlayback(state);
     if (mode === "cancel") sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
     closeLiveVoiceSession(state, mode);
