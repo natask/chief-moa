@@ -76,6 +76,7 @@ async function main() {
   seedStandingFact();
   await controlTurnPersists();
   await incognitoHttpVoiceTurnPersistsNothing();
+  await httpVoiceColdScopeMatrix();
   await incognitoStreamingTurnDeletesPcmAndPersistsNothing();
 
   console.log(JSON.stringify({
@@ -85,9 +86,60 @@ async function main() {
       "an incognito HTTP voice turn adds zero turn files, ledger lines, product events, and gbrain facts",
       "the incognito response reports action=incognito, persisted:false, on an inc- branch, and is still answered",
       "standing facts are still read on an incognito turn (the model messages carry the known user fact)",
+      "HTTP voice explicit new and warranted incognito are standing-only while phrasing-only new remains continue",
       "an incognito streaming turn deletes its buffered PCM archive and persists nothing",
     ],
   }, null, 2));
+}
+
+async function httpVoiceColdScopeMatrix() {
+  const callerSentinel = "HTTP_VOICE_CALLER_RECENCY_SENTINEL";
+  await requestJson("POST", "/v1/voice/turns", {
+    session_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "http-cold-scope-seed",
+    source: "android-overlay",
+    transcript: callerSentinel,
+  });
+
+  fetchCalls.length = 0;
+  const fresh = await requestJson("POST", "/v1/voice/turns", {
+    session_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "http-explicit-new",
+    source: "android-overlay",
+    context_action: "new",
+    transcript: "draft an unrelated plan",
+  });
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.json.context.action, "new");
+  const freshCall = fetchCalls.find((call) => Array.isArray(call.body.messages));
+  assert.match(JSON.stringify(freshCall.body.messages), /Master Zed/);
+  assert.doesNotMatch(JSON.stringify(freshCall.body.messages), new RegExp(callerSentinel));
+
+  fetchCalls.length = 0;
+  const warranted = await requestJson("POST", "/v1/voice/turns", {
+    session_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "http-warranted-incognito",
+    source: "android-overlay",
+    transcript: "keep this off the record while you answer",
+  });
+  assert.equal(warranted.json.context.action, "incognito");
+  assert.equal(warranted.json.context.persisted, false);
+  const warrantedCall = fetchCalls.find((call) => Array.isArray(call.body.messages));
+  assert.match(JSON.stringify(warrantedCall.body.messages), /Master Zed/);
+  assert.doesNotMatch(JSON.stringify(warrantedCall.body.messages), new RegExp(callerSentinel));
+
+  const phrasing = await requestJson("POST", "/v1/voice/turns", {
+    session_id: SESSION_ID,
+    branch_id: "default",
+    turn_id: "http-phrasing-new",
+    source: "android-overlay",
+    transcript: "let us start a new topic about travel",
+  });
+  assert.equal(phrasing.json.context.action, "continue", "phrasing-only HTTP voice new remains deterministic continue");
+  assert.equal(phrasing.json.context.branch_id, "default");
 }
 
 function seedStandingFact() {

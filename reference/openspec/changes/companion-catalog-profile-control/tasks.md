@@ -1,5 +1,10 @@
 ## 1. Spec And Boundary
 
+- [x] 1.3 Define a canonical provider-neutral signed package manifest.
+- [x] 1.4 Add bounded non-archive resources, provenance, license,
+      compatibility, moderation and revocation gates.
+- [x] 1.5 Add non-mutating preview/apply/revert receipt chaining.
+
 - [x] 1.1 Define companion as a gateway-owned manifest, not a device action or
       privileged extension customization.
 - [x] 1.2 Update architecture with the companion primitive and active profile

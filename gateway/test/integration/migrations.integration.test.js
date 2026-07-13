@@ -27,6 +27,13 @@ const relationalTables = [
   "tool_requests",
   "agent_profiles",
   "agent_profile_versions",
+  "billing_price_versions",
+  "billing_usage_facts",
+  "billing_entitlement_facts",
+  "billing_budget_versions",
+  "billing_budget_reservations",
+  "billing_webhook_receipts",
+  "billing_adjustment_facts",
 ];
 
 function runMigrateUp() {

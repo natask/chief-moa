@@ -32,13 +32,39 @@ fresh branch and set it active.
 ### Requirement: The context_management decision
 The gateway SHALL decide where a user turn belongs (continue, new, fork, or
 incognito) before answering, on the text-chat path and the cascaded voice
-reasoner, via one `context_management` tool call. A deterministic prior SHALL run
+reasoner, via exactly one `context_management` tool call in a dedicated decision
+preflight. The preflight SHALL receive only the current user text and bounded
+decision instructions, SHALL force that tool, SHALL discard prose, and SHALL
+offer no mutation/action tools. The answer SHALL start as a fresh provider
+request after scope resolution and SHALL NOT offer `context_management`. A
+deterministic prior SHALL run
 first: an explicit client `context_action` SHALL always win; otherwise the prior
 SHALL default to continue, lift to new/fork by phrasing, and lift to incognito
 only on an explicit linguistic warrant. The model tool call MAY override the
 prior EXCEPT it MAY only choose incognito when the transcript carries that
 explicit warrant. Every decision SHALL be stored as an inspectable record and a
 product event, and a decision failure SHALL never fail the turn.
+
+An explicit valid client action SHALL skip preflight. A malformed, absent,
+unknown, duplicate, timed-out, or failed preflight tool result SHALL retain the
+prior without a preflight plain-answer fallback. The canonical artifact query
+SHALL use the valid decision `retrieval_query` when nonblank and otherwise the
+current user text.
+
+The gateway SHALL represent the resolved filing identity and fork cutoff as one
+immutable plan used by both retrieval and persistence. It SHALL NOT create,
+switch, touch, or seed a durable branch before the answer succeeds. A completed
+chat or cascaded-voice `turn_id` retry SHALL return the stored response before
+preflight and SHALL NOT mint a new branch or repeat a provider request.
+
+#### Scenario: Failed answer leaves no planned branch
+- **WHEN** a new or fork filing plan is resolved but the answer does not succeed
+- **THEN** no durable branch, active-thread switch, or fork summary seed is written
+
+#### Scenario: Completed retry replays exact filing
+- **WHEN** a completed chat or cascaded-voice turn is retried with the same turn id
+- **THEN** the stored response and filing branch are returned without preflight
+- **AND** no additional branch is minted
 
 #### Scenario: Model overrides the prior
 - **WHEN** the model calls `context_management` with `action` = new on a turn
@@ -73,6 +99,29 @@ recency block. A new or incognito thread SHALL still load standing facts.
 - **WHEN** a turn's words match a rolling thread summary in the Brain
 - **THEN** a bounded "Related past threads" block is injected into the model
   messages
+
+### Requirement: Canonical context artifact
+The gateway SHALL assemble the bounded chat and cascaded-voice retrieval inputs
+as a canonical context artifact after any decision preflight and before the
+fresh answer provider call. No retrieval artifact or source content SHALL be
+assembled for or disclosed to the preflight. That artifact SHALL carry
+an artifact version, artifact id, deterministic cache identity, stable source
+ids, ranking rationale, truncation metadata, and secret-like-text redaction
+metadata. The user-visible response `context` block SHALL expose only a bounded
+receipt of that artifact rather than the full raw context payload.
+
+#### Scenario: Query or source revision invalidates the cache identity
+- **WHEN** the retrieval query changes or any cited source revision changes
+- **THEN** the artifact cache identity changes
+- **AND** an equivalent query over the same cited source revisions keeps the
+  same cache identity
+
+#### Scenario: Deleted or incognito content is excluded from the artifact
+- **WHEN** a candidate retrieval item is marked deleted or belongs to an
+  incognito branch
+- **THEN** the gateway omits it from the context artifact
+- **AND** the artifact receipt records the omission without surfacing the hidden
+  content
 
 ### Requirement: Rolling per-thread summaries
 The gateway SHALL maintain a rolling summary per thread, regenerated

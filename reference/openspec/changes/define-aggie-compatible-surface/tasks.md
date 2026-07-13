@@ -28,7 +28,7 @@
 ## 4. Backend Adapter
 
 - [ ] 4.1 Add backend adapter metadata and health output.
-- [ ] 4.2 Add an echo backend adapter for deterministic smoke tests.
+- [x] 4.2 Add an echo backend adapter for deterministic protocol smoke tests.
 - [ ] 4.3 Add Hermes/OpenClaw only after the echo adapter and session facade are
   proven.
 - [ ] 4.4 Keep STT/TTS owned by Aggie when a backend lacks native LiveVoice.
@@ -39,11 +39,11 @@
   -> route decision -> subscribed event.
 - [ ] 5.2 Smoke LiveVoice: mobile/browser surface -> `/v1/aggie/live` -> final
   transcript -> route decision -> assistant text/audio event.
-- [ ] 5.3 Smoke backend adapter: Aggie -> echo backend -> run event -> artifact
+- [x] 5.3 Smoke backend adapter: Aggie -> echo backend -> run event -> artifact
   link.
 - [ ] 5.4 Verify no provider keys or canonical chat history are stored in the
   browser surface.
-- [ ] 5.5 Run `openspec validate define-aggie-compatible-surface --strict`.
-  Blocked in this checkout on 2026-06-24 because `openspec list` reports no
-  root OpenSpec changes directory; this repo currently stores specs under
-  `reference/openspec`.
+- [x] 5.5 Run `openspec validate define-aggie-compatible-surface --strict`.
+  Passed from the repository root on 2026-07-11.
+- [x] 5.6 Add versioned N/N-1 envelope, replay, reconnect, stale-action,
+  approval and receipt fixtures before facade/native integration.

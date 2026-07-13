@@ -23,10 +23,15 @@
 
 ### 3. Follow-Up Generated UI
 
-- [ ] Fetch the existing `/v1/ui/spec` document from the gateway.
-- [ ] Render known tier-A controls in the browser overlay.
+- [x] Fetch the existing `/v1/ui/spec` document from the gateway.
+- [x] Render known tier-A controls and bounded components in the browser
+      overlay, including `card`, `list`, `stat`, and a declarative schematic
+      `map` component.
 - [ ] Keep richer generated surfaces in sandboxed iframes and reserve
       page-acting code for explicit `userScripts` opt-in.
+- [ ] Implement Tier B and Tier C only against the hard trust-boundary contract
+      in `browser-generated-surface-contract.md`; keep the two approval and
+      execution paths separate.
 
 ### 4. Later Capability Expansion
 

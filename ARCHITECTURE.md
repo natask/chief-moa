@@ -65,9 +65,100 @@ External APIs
   and SaaS tools. Use official APIs where possible.
 ```
 
+## Billing and entitlement boundary
+
+Billing facts are gateway-owned, tenant-scoped and append-only. Price and budget
+authority is versioned; usage and reservations reference an immutable version,
+and money is represented only as safe integer minor units plus a three-letter
+currency code. Provider webhook input is evidence until its raw-body signature,
+timestamp, event identity and payload digest pass verification; even then it is
+stored as `verified_unapplied` and cannot directly mutate an entitlement.
+
+The provider-neutral sandbox adapter has no charging effect. Real provider,
+pricing, tax, refund, dispute and grace policy remain intentionally unwired.
+Billing tables use FORCE RLS and deny application-role update/delete. The local
+domain seam proves deterministic invariants, but Postgres migration/restore,
+cross-process atomic budget reservation and live-provider behavior require
+separate isolated evidence before the seam can become payment authority.
+
+## Companion package boundary
+
+Portable companions are canonical signed data and bounded image/audio assets,
+never executable extensions. The provider-neutral verifier requires a
+caller-owned Ed25519 trust store, accepted-license set, moderation-policy set,
+protocol version and revocation snapshot. All policies are empty and fail
+closed by default: a valid signature alone is not marketplace authority.
+
+The local package envelope is JSON rather than an extracted archive. Its initial
+portable-media profile accepts only fully parsed PNG and PCM-style WAV
+containers; broader formats require equally strict bounded parsers. It rejects
+unknown fields, traversal, polyglot/trailing or executable media, and undeclared profile fields;
+checks encoded, per-asset, total-byte, count and dimension limits; and verifies
+each content hash before returning an immutable value. Preview, apply and revert
+records are hash-chained non-mutating plans. They do not write a profile,
+publish a listing, fetch remote content or execute a capability. Hosted sharing
+and actual profile apply wait for identity and Aggie/MX protocol authority.
+Public trust roots, accepted licenses, moderation/appeals, offline revocation
+freshness and client rollback remain intentionally unwired.
+
+## Telemetry and observability boundary
+
+Canonical product events remain the source of truth. Operational telemetry is a
+derived, loss-tolerant projection and must never decide product state. Moa owns
+the versioned semantic envelope, redaction/allowlist policy, release metadata,
+and cross-surface correlation before any vendor translation occurs.
+
+The gateway telemetry foundation exposes a bounded asynchronous exporter seam.
+Exporter rejection, timeout, or queue overflow may drop telemetry and increment
+local counters, but cannot fail the product operation. User content, identity,
+credentials, financial data, and high-cardinality IDs are excluded by default;
+opaque release/correlation identifiers use numeric `major.minor.patch` plus generated or validated
+`prefix_uuid` formats and are not metric dimensions. Export timeouts abort the
+adapter signal and quarantine new export starts until the timed-out underlying
+attempt settles, so a non-cooperative adapter cannot pile up unresolved export
+work. Client SDKs, consent-aware analytics, and a Collector/backend remain
+inactive until identity policy and an isolated preview satisfy the telemetry
+OpenSpec.
+
 The gateway may propose actions. The Android app decides whether an action is
 allowed, whether approval is required, and whether the current device state still
 matches the proposal.
+
+## Aggie surface protocol boundary
+
+Aggie is the gateway-owned personal-agent session contract; Moa browser,
+Android and future native clients are thin compatible surfaces. Protocol
+versions N and N-1 share bounded typed envelopes for turns, events, action
+proposals, approvals and local receipts. Unknown additive fields are ignored,
+but unknown semantic types, executable/credential-shaped payloads, cross-session
+replay, sequence conflicts, expired actions and stale state fail closed.
+
+The protocol library is transport- and provider-neutral. Its echo adapter has
+no external I/O and proves deterministic contract behavior before any backend
+adapter or native shell is added. It does not create a second session database:
+the existing gateway event, voice, broker and work stores remain authoritative.
+Local clients alone validate current device state, request required approval,
+execute allowed local effects and upload receipts. Platform UX, secure storage,
+signing, updates and device behavior require separate per-OS evidence.
+This protocol slice binds approvals to a canonical proposal digest and receipts
+to proposal-message correlation. It does not authenticate a device or actor;
+transport authentication, device signing and native execution remain outside
+this module and must not be inferred from those correlation checks.
+
+### Apple native surface seam
+
+`apple_surfaces` is a shared macOS/iOS Swift library that consumes the same
+bounded Aggie N/N-1 proposal contract. It owns only local decoding, explicit
+approval coordination, final expiry/state revalidation, bounded replay and
+local receipt formation. Stateful authority is actor-isolated and any effect is
+available only through an injected executor after all local checks pass.
+
+This seam has no transport, provider credential, canonical conversation store,
+Keychain policy, OS action implementation, SwiftUI product shell, signing,
+update or distribution authority. An unsigned macOS or iOS Simulator build is
+compilation evidence only; it does not establish device behavior, security,
+accessibility, energy use, signing or production readiness. Permanent companion
+versus seamless-assistant UX remains an explicit product decision.
 
 ## Runtime Flows
 
@@ -102,14 +193,17 @@ gateway voice turn without stopping already queued assistant audio.
 
 An experimental voice-first gesture mode (off by default; browser flag
 `ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
-both surfaces to the same contract: single click toggles hands-free talk mode
-with barge-in (arming stops any playing assistant audio; a second click sends;
-a tap-armed turn with no captured speech disarms quietly, so a silent tap
-doubles as "shut up") with a visible active state on the mark/orb, a still
-first-press hold is push-to-talk (release commits; a large move after the hold
-confirms cancels the capture and escapes into a drag), and double-click opens
-the demoted chat surface. Drag and resize are unchanged, and the flag off
-keeps the default contract above. Contract:
+the primary surface toward voice: single click toggles hands-free talk mode
+with barge-in (arming stops any playing assistant audio; a later single click
+sends after the multi-click window; a tap-armed turn with no captured speech
+disarms quietly, so a silent tap doubles as "shut up"), double-click starts a
+fresh voice thread that does not use the current thread's replies, and
+triple-click opens the demoted chat surface. A still first-press hold is
+push-to-talk (release commits; a large move after the hold confirms cancels
+the capture and escapes into a drag). Drag and resize are unchanged, and the
+flag off keeps the default contract above. Android implements this v3 mapping
+first; the browser flag remains on the prior v2 mapping until the browser
+follow-up lands. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface stays small: it shows the current intent/result and compact
@@ -120,9 +214,12 @@ available, shows partial/final user transcript feedback above it, and streams
 assistant text into the result stack above the input. The gateway still stores
 durable session, branch, turn, transcript, provider-event, and agent-run
 history. Realtime providers receive a bounded Moa-owned context pack at session
-start so provider memory is not the product database. If the user wants history,
-they ask Moa for it through the same intent surface instead of browsing visible
-scrollback.
+start so provider memory is not the product database. The gateway's chat and
+cascaded voice paths assemble that pack through a canonical context-artifact
+envelope with versioned cache identity, stable source ids, ranking rationale,
+and secret-like-text redaction before any provider call. If the user wants
+history, they ask Moa for it through the same intent surface instead of
+browsing visible scrollback.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript
@@ -566,11 +663,16 @@ for the artifact types they support.
 
 The first browser slice is `avatar_behavior`: the gateway serves an active
 declarative spec such as "thinking -> orbit -> subtle", and the extension maps
-that spec to known CSS classes on the Aggie/Lion mark. No generated JavaScript is
-executed in privileged extension code. Richer generated UI remains declarative
-or sandboxed, and page-acting code remains opt-in through the existing
-`userScripts` boundary. Browser clients preserve the last-good runtime when the
-gateway is temporarily unavailable and mark the cached runtime stale instead of
+that spec to known CSS classes on the Aggie/Lion mark. The tier-A generated UI
+slice is `/v1/ui/spec`: the gateway validates a per-user declarative surface and
+the extension fetches, caches, and renders only known controls and components
+(`button`, `text`, `toggle`, `select`, `card`, `list`, `stat`, `map`) in the
+overlay. The `map` component is schematic bounded data (center, zoom, markers),
+not remote map tiles or executable code. No generated JavaScript is executed in
+privileged extension code. Richer generated UI remains declarative or sandboxed,
+and page-acting code remains opt-in through the existing `userScripts`
+boundary. Browser clients preserve the last-good runtime/spec when the gateway
+is temporarily unavailable and mark the cached runtime/spec stale instead of
 visually clearing an applied customization.
 
 ### Agent Work
@@ -678,12 +780,19 @@ to accomplish.
 user turn (chat or cascaded voice)
   -> deterministic prior: explicit client context_action wins; else continue,
      lifted to new/fork by phrasing, to incognito only on an explicit warrant
-  -> the model may call context_management (one tool call) to refine the choice,
-     and returns a retrieval_query for recall
+  -> unless the client made an explicit choice, a dedicated context-free model
+     preflight is forced to call only context_management exactly once; its text
+     is discarded and it returns a retrieval_query for recall
   -> double gate: the model may override the prior EXCEPT it may only choose
      incognito with the same explicit warrant
-  -> the turn is filed on the resolved branch and the decision is stored as a
-     record + product event
+  -> the gateway resolves one immutable filing/scope result, assembles one
+     canonical artifact for that scope, then starts a fresh answer request that
+     does not offer context_management
+  -> only after the answer succeeds, the exact plan is committed and the turn
+     is filed on that same resolved branch; completed turn-id retries replay the
+     stored response without another preflight or branch mint
+  -> the decision is stored
+     as a record + product event
 ```
 
 A thread is a `branch` inside the one shared session. The thread store adds the
@@ -708,7 +817,15 @@ The four actions:
   no broker event. The reply carries `context: { action: "incognito", persisted:
   false }`. This is the explicit carve-out to "no spoken intent is ephemeral".
 
-Every non-incognito turn gets per-query enrichment, assembled LLM-free at read
+The preflight receives only the bounded current user text and decision schema:
+no prior messages, standing facts, screen evidence, recency, recall, runs, or
+tasks. Failure, malformed output, an unsupported/duplicate tool, or a provider
+without tools leaves the deterministic prior in force and never triggers a
+preflight plain-answer fallback. Explicit client choices and local utility
+replies skip the preflight. New and incognito answer artifacts are standing-only;
+fork artifacts contain parent lineage only through the captured fork point.
+
+Every non-incognito continued/fork turn gets per-query enrichment, assembled LLM-free at read
 time within the existing char budgets, in priority order: (1) standing facts,
 (2) thread recency scoped to the active branch with fork-point inheritance, and
 (3) a bounded semantic recall block from `brain.recall` over rolling thread
@@ -717,7 +834,8 @@ recency block. Rolling per-thread summaries are regenerated asynchronously after
 the response is sent (never adding turn latency) on a turn-count cadence and when
 the user moves off the thread, and indexed into gbrain for later recall. The
 context decision, the thread store, and the enrichment blocks never fail a turn:
-any error falls back to continue on the caller branch with standing-facts recall.
+any error falls back to the resolved scope without injecting caller history into
+a new or incognito answer.
 
 ### Voice Work-History Control Plane
 
@@ -1052,6 +1170,10 @@ queues.
 - `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
   validators, active pointers, and runtime projection for conversational
   customization.
+- `gateway/lib/ui-spec.js`: engine-served tier-A UI spec store and validator
+  for declarative overlay surfaces, including bounded controls plus
+  `card`/`list`/`stat`/schematic-`map` components. Smoke:
+  `scripts/smoke-ui-spec.js` (`npm run smoke:ui-spec`).
 - `gateway/schema.sql`: Postgres schema for work graph records, product events,
   projection checkpoints, event blobs, and sync import checkpoints.
 - `gateway/lib/voice-intent.js`: pure voice-turn classifier
@@ -1098,8 +1220,11 @@ queues.
 - `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
 - `browser_extension/extension`: thin browser client for command,
-  voice, page context, settings, and engine-routed browser actions, including
-  the background agent-loop poll (`pollBrowserAgentTasks`). Smoke:
+  voice, page context, settings, engine-served UI spec rendering, and
+  engine-routed browser actions, including the background agent-loop poll
+  (`pollBrowserAgentTasks`). UI spec smoke:
+  `browser_extension/scripts/smoke-ui-spec.mjs` (`npm run smoke:ui-spec`).
+  Agent-loop smoke:
   `browser_extension/scripts/smoke-agent-loop.mjs`
   (`npm run smoke:agent-loop`).
 - `scripts/deploy.sh`: shared deploy entrypoint for gateway, Android OTA,

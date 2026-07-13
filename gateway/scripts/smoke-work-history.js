@@ -276,17 +276,18 @@ async function assertDeploymentLinks(baseUrl) {
     status: "applied",
     active_url: "https://app.example.test",
   });
-  assert.equal(badApplied.status, 400, "applied without explicit promotion must be rejected");
-  await postJson(`${baseUrl}/v1/work-history/deployments`, {
+  assert.equal(badApplied.status, 400, "requestless applied state must be rejected");
+  const forgedApplied = await postJson(`${baseUrl}/v1/work-history/deployments`, {
     target: "gateway",
     mode: "applied",
     status: "applied",
     active_url: "https://app.example.test",
     explicit_promotion: true,
     backup_record_ref: "backup://smoke",
-    restore_check_ref: "restore-check://smoke",
+    restore_check_ref: "restore://smoke",
     applied_by_actor: "user",
   });
+  assert.equal(forgedApplied.status, 400, "promotion flags cannot bypass the guarded request state machine");
 
   const countDeploymentRecords = async () => {
     const events = await getJson(`${baseUrl}/v1/events?event_type=deployment.recorded&limit=100`);
@@ -302,8 +303,8 @@ async function assertDeploymentLinks(baseUrl) {
   assert.equal(links.status, 200, JSON.stringify(links.json));
   assert.equal(links.json.classification, "work_history");
   assert.match(links.json.display, /preview\.example\.test\/build-7/);
-  assert.match(links.json.display, /app\.example\.test/);
-  assert.notEqual(links.json.work_history.latest_preview_id, links.json.work_history.latest_applied_id);
+  assert.doesNotMatch(links.json.display, /app\.example\.test/);
+  assert.equal(links.json.work_history.latest_applied_id, "");
   assert.equal(await countDeploymentRecords(), beforeCount, "a link question must not create deployment records");
 }
 

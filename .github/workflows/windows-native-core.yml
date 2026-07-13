@@ -1,0 +1,27 @@
+name: Verify Windows surface core
+
+on:
+  pull_request:
+    paths: ["windows_app/**", ".github/workflows/windows-native-core.yml"]
+  push:
+    paths: ["windows_app/**", ".github/workflows/windows-native-core.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  portable-core:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: windows_app/core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-pc-windows-msvc
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --locked --target x86_64-pc-windows-msvc

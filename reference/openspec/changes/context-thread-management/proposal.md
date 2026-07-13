@@ -30,6 +30,10 @@ explicit client choice always winning.
 - Add per-query enrichment (LLM-free at read time): standing facts, thread
   recency scoped to the active branch with fork-point inheritance, and a new
   bounded semantic recall block over rolling thread summaries + intent memories.
+- Emit a canonical bounded context artifact for chat and cascaded voice
+  retrieval: versioned artifact id, cache identity, source ids, ranking
+  rationale, truncation/redaction metadata, and a bounded receipt on the
+  response `context` block.
 - Add rolling per-thread summaries, regenerated asynchronously (never adding turn
   latency) on a turn-count cadence and when the user moves off a thread. A fork
   seeds its summary from the parent. Incognito is never summarized.

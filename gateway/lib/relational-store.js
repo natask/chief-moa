@@ -1,8 +1,10 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 const { appendEventOnClient, withTransaction } = require("./event-substrate");
 
-const DEFAULT_USER_ID = "owner";
+const TENANT_EVENT_SCOPE_VERSION = "tenant-event-scope.v1";
 
 function createRelationalStore(options = {}) {
   if (!options.pool || typeof options.pool.connect !== "function") {
@@ -10,28 +12,29 @@ function createRelationalStore(options = {}) {
   }
   const pool = options.pool;
   const originId = options.originId;
+  const userId = trustedUserId(options.userId);
 
   return {
     upsertSession(record = {}) {
-      return withTransaction(pool, (client) => upsertSessionOnClient(client, record, { originId }));
+      return withTransaction(pool, (client) => upsertSessionOnClient(client, record, { originId, userId }));
     },
     upsertBranch(record = {}) {
-      return withTransaction(pool, (client) => upsertBranchOnClient(client, record, { originId }));
+      return withTransaction(pool, (client) => upsertBranchOnClient(client, record, { originId, userId }));
     },
     upsertChatTurn(record = {}) {
-      return withTransaction(pool, (client) => upsertChatTurnOnClient(client, record, { originId }));
+      return withTransaction(pool, (client) => upsertChatTurnOnClient(client, record, { originId, userId }));
     },
     upsertVoiceTurn(record = {}) {
-      return withTransaction(pool, (client) => upsertVoiceTurnOnClient(client, record, { originId }));
+      return withTransaction(pool, (client) => upsertVoiceTurnOnClient(client, record, { originId, userId }));
     },
     upsertAgentRun(record = {}) {
-      return withTransaction(pool, (client) => upsertAgentRunOnClient(client, record, { originId }));
+      return withTransaction(pool, (client) => upsertAgentRunOnClient(client, record, { originId, userId }));
     },
     upsertBrowserTask(record = {}) {
-      return withTransaction(pool, (client) => upsertBrowserTaskOnClient(client, record, { originId }));
+      return withTransaction(pool, (client) => upsertBrowserTaskOnClient(client, record, { originId, userId }));
     },
     upsertToolRequest(record = {}) {
-      return withTransaction(pool, (client) => upsertToolRequestOnClient(client, record, { originId }));
+      return withTransaction(pool, (client) => upsertToolRequestOnClient(client, record, { originId, userId }));
     },
   };
 }
@@ -61,10 +64,11 @@ async function upsertSessionOnClient(client, input, options) {
        data = excluded.data,
        created_at = excluded.created_at,
        updated_at = excluded.updated_at
+     where sessions.user_id = excluded.user_id
      returning *, (xmax = 0) as inserted`,
     [
       id,
-      userIdFor(record),
+      userIdFor(record, options.userId),
       text(record.kind, "default"),
       text(record.label),
       JSON.stringify(data),
@@ -120,11 +124,12 @@ async function upsertBranchOnClient(client, input, options) {
        data = excluded.data,
        created_at = excluded.created_at,
        updated_at = excluded.updated_at
+     where branches.user_id = excluded.user_id
      returning *, (xmax = 0) as inserted`,
     [
       sessionId,
       branchId,
-      userIdFor(record),
+      userIdFor(record, options.userId),
       text(record.kind, "default"),
       nullableText(record.parent_branch_id || record.parentBranchId),
       nullableText(record.fork_point || record.forkPoint),
@@ -196,10 +201,11 @@ async function upsertChatTurnOnClient(client, input, options) {
        occurred_at = excluded.occurred_at,
        created_at = excluded.created_at,
        updated_at = excluded.updated_at
+     where turns.user_id = excluded.user_id
      returning *, (xmax = 0) as inserted`,
     [
       turnId,
-      userIdFor(record),
+      userIdFor(record, options.userId),
       sessionId,
       branchId,
       turnId,
@@ -280,10 +286,11 @@ async function upsertVoiceTurnOnClient(client, input, options) {
        data = excluded.data,
        occurred_at = excluded.occurred_at,
        created_at = excluded.created_at
+     where voice_turns.user_id = excluded.user_id
      returning *, (xmax = 0) as inserted`,
     [
       turnId,
-      userIdFor(record),
+      userIdFor(record, options.userId),
       sessionId,
       nullableText(record.conversation_id || record.conversationId || sessionId),
       branchId,
@@ -367,10 +374,11 @@ async function upsertAgentRunOnClient(client, input, options) {
        updated_at = excluded.updated_at,
        started_at = excluded.started_at,
        finished_at = excluded.finished_at
+     where agent_runs.user_id = excluded.user_id
      returning *, (xmax = 0) as inserted`,
     [
       id,
-      userIdFor(record),
+      userIdFor(record, options.userId),
       status,
       nullableText(record.harness),
       sessionId,
@@ -446,10 +454,11 @@ async function upsertBrowserTaskOnClient(client, input, options) {
        data = excluded.data,
        created_at = excluded.created_at,
        updated_at = excluded.updated_at
+     where browser_tasks.user_id = excluded.user_id
      returning *, (xmax = 0) as inserted`,
     [
       id,
-      userIdFor(record),
+      userIdFor(record, options.userId),
       nullableText(record.status),
       nullableText(record.instruction || record.prompt || record.task),
       nullableText(record.url),
@@ -519,10 +528,11 @@ async function upsertToolRequestOnClient(client, input, options) {
        data = excluded.data,
        created_at = excluded.created_at,
        updated_at = excluded.updated_at
+     where tool_requests.user_id = excluded.user_id
      returning *, (xmax = 0) as inserted`,
     [
       id,
-      userIdFor(record),
+      userIdFor(record, options.userId),
       nullableText(record.status),
       nullableText(record.target_device_id || record.targetDeviceId),
       nullableText(record.surface || record.target_surface_type || record.targetSurfaceType),
@@ -556,8 +566,10 @@ async function upsertToolRequestOnClient(client, input, options) {
 }
 
 async function withEventResult(client, row, eventInput, options) {
-  const eventWasPresent = await productEventExists(client, eventInput);
-  const event = await appendEventOnClient(client, eventInput, { originId: options.originId });
+  if (!row) throw new Error("record identifier is already owned by another user");
+  const scopedEventInput = tenantEventInput(eventInput, options.userId);
+  const eventWasPresent = await productEventExists(client, scopedEventInput);
+  const event = await appendEventOnClient(client, scopedEventInput, { originId: options.originId });
   return {
     row: withoutInserted(row),
     event,
@@ -591,8 +603,76 @@ function objectRecord(value) {
   return value;
 }
 
-function userIdFor(record) {
-  return text(record.user_id || record.userId, DEFAULT_USER_ID);
+function userIdFor(record, trustedUserIdValue) {
+  const claimed = text(record.user_id || record.userId);
+  if (claimed && claimed !== trustedUserIdValue) {
+    throw new Error("record user_id does not match trusted store identity");
+  }
+  return trustedUserIdValue;
+}
+
+function trustedUserId(value) {
+  const userId = text(value);
+  if (!userId) throw new Error("createRelationalStore requires userId");
+  if (userId.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(userId)) {
+    throw new Error("createRelationalStore userId is invalid");
+  }
+  return userId;
+}
+
+function tenantEventInput(input, userId) {
+  // Preserve the already-shipped single-owner event identity so re-running the
+  // legacy importer remains idempotent across this staged change. `owner` is a
+  // reserved seeded principal; new hosted identities use derived namespaces.
+  if (userId === "owner") {
+    return {
+      ...input,
+      authority: {
+        ...(input.authority && typeof input.authority === "object" ? input.authority : {}),
+        tenant_id: userId,
+      },
+    };
+  }
+  return {
+    ...input,
+    stream_id: tenantEventIdentifier("stream", userId, input.stream_id),
+    idempotency_key: input.idempotency_key
+      ? tenantEventIdentifier("idempotency", userId, input.idempotency_key)
+      : null,
+    authority: {
+      ...(input.authority && typeof input.authority === "object" ? input.authority : {}),
+      tenant_id: userId,
+    },
+  };
+}
+
+function tenantEventIdentifier(domain, userId, value) {
+  const rawValue = text(value);
+  const namespace = tenantEventNamespace(userId, domain);
+  const label = tenantEventLabel(rawValue, domain === "stream" ? "event" : "key");
+  const digest = tenantEventHash("value", domain, userId, rawValue);
+  return `${namespace}:${label}:h:${digest}`;
+}
+
+function tenantEventNamespace(userId, domain) {
+  return `tenant:v1:${domain}:${tenantEventHash("tenant", domain, userId)}`;
+}
+
+function tenantEventHash(kind, domain, userId, value = "") {
+  return crypto
+    .createHash("sha256")
+    .update([TENANT_EVENT_SCOPE_VERSION, kind, domain, userId, value].join("\u0000"))
+    .digest("hex");
+}
+
+function tenantEventLabel(value, fallback) {
+  const raw = text(String(value || "").split(":")[0], fallback).toLowerCase();
+  const normalized = raw
+    .replace(/[^a-z0-9_.-]/g, ".")
+    .replace(/\.+/g, ".")
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 24);
+  return normalized || fallback;
 }
 
 function text(value, fallback = "") {

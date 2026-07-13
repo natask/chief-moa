@@ -549,6 +549,7 @@ public final class OverlayService extends Service {
                 () -> MoaPrefs.voiceFirstGestures(this),
                 this::isContinuousLoopActive,
                 this::handleOrbStartTalkLoop,
+                this::handleOrbStartFreshTalkLoop,
                 this::endContinuousVoiceLoop,
                 this::handleOrbCancelTalkLoop,
                 this::showPanel,
@@ -1344,7 +1345,7 @@ public final class OverlayService extends Service {
         if (MoaPrefs.voiceFirstGestures(this)) {
             return recordModeEnabled
                     ? "Record mode: press and hold to record a note."
-                    : "Tap to talk (tap again to send). Hold to talk precisely. Double-tap for chat. Drag to move.";
+                    : "Tap to continue. Double-tap for new thread. Triple-tap for chat. Hold to talk. Drag to move.";
         }
         return recordModeEnabled
                 ? "Record mode: double-click and hold to record a note."
@@ -2265,6 +2266,18 @@ public final class OverlayService extends Service {
         // a failed utterance. Set after the barge-in teardown clears it.
         suppressFirstTapTurnEmptyCue = true;
         startContinuousStreamingVoiceTurn();
+    }
+
+    // VOICE-FIRST double quick tap = start a fresh-thread voice turn. The tap
+    // resolver cancels any milliseconds-old or pending current loop first; this
+    // method only arms the one-shot branch choice and opens the normal talk loop.
+    private void handleOrbStartFreshTalkLoop() {
+        if (pushToTalkVoiceTurn || audioNoteActive) {
+            return;
+        }
+        newThreadArmed = true;
+        refreshContextControls();
+        handleOrbStartTalkLoop();
     }
 
     // Stop any assistant audio so a tap-to-talk starts on a quiet mic. Cancels an

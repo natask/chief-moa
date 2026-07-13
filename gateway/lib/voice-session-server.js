@@ -383,9 +383,14 @@ class VoiceSessionConnection {
       completing: false,
       recordedCanonical: false,
       contextPrompt: "",
+      contextBuildFailed: false,
+      contextSummary: {},
+      captureSummary: {},
+      transportSummary: {},
       syntheticText: "",
     };
     turn.contextPrompt = this.contextPromptForTurn(turn);
+    turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
 
     turn.audioStream = fs.createWriteStream(turn.pcmPath, { flags: "w" });
     turn.audioStream.on("error", (error) => {
@@ -442,6 +447,7 @@ class VoiceSessionConnection {
     await this.recordProviderEvent(turn, turn.providerEvents, "profile_applied", {
       application: "turn_start",
     });
+    await this.recordProviderEvent(turn, turn.providerEvents, "context_attached", turn.contextSummary);
     await this.sendEvent({
       type: "profile_applied",
       session_id: sessionId,
@@ -467,6 +473,7 @@ class VoiceSessionConnection {
         device_id: turn.deviceId || "",
       }) || "").slice(0, 12000);
     } catch {
+      turn.contextBuildFailed = true;
       return "";
     }
   }
@@ -493,6 +500,10 @@ class VoiceSessionConnection {
 
     try {
       turn.status = "committed";
+      turn.captureSummary = captureSummaryForTurn(turn, { inputKind: "audio" });
+      turn.transportSummary = transportSummaryForTurn(turn, "audio");
+      await this.recordProviderEvent(turn, providerEvents, "capture_committed", turn.captureSummary);
+      await this.recordProviderEvent(turn, providerEvents, "transport_committed", turn.transportSummary);
       if (turn.liveSession) {
         // Live/native path: the provider streams through the session-start hooks
         // and never calls onTurnProgress, so the session server keepalives from
@@ -554,6 +565,10 @@ class VoiceSessionConnection {
     try {
       turn.status = "committed";
       turn.syntheticText = text;
+      turn.captureSummary = captureSummaryForTurn(turn, { inputKind: "text", textChars: text.length });
+      turn.transportSummary = transportSummaryForTurn(turn, "text");
+      await this.recordProviderEvent(turn, providerEvents, "capture_committed", turn.captureSummary);
+      await this.recordProviderEvent(turn, providerEvents, "transport_committed", turn.transportSummary);
       if (turn.liveSession) {
         this.startTurnProgress(turn, "reasoning");
       }
@@ -1099,6 +1114,9 @@ class VoiceSessionConnection {
           bytes: turn.assistantAudioBytes,
           chunks: turn.assistantAudioChunks,
         },
+        context: turn.contextSummary || {},
+        capture: turn.captureSummary || captureSummaryForTurn(turn),
+        transport: turn.transportSummary || {},
         playback_policy: turn.playbackPolicy || {},
         incomplete: true,
         status,
@@ -1152,6 +1170,9 @@ class VoiceSessionConnection {
           bytes: turn.assistantAudioBytes,
           chunks: turn.assistantAudioChunks,
         },
+        context: turn.contextSummary || {},
+        capture: turn.captureSummary || captureSummaryForTurn(turn),
+        transport: turn.transportSummary || {},
         playback_policy: turn.playbackPolicy || {},
         transcription_only: providerResult?.transcription_only === true,
         // Cascaded pipeline: reply (OUTPUT) language and whether hosted TTS
@@ -1457,6 +1478,34 @@ function normalizePlaybackPolicy(policy) {
   };
 }
 
+function contextSummaryForTurn(turn, contextProvider) {
+  return {
+    enabled: typeof contextProvider === "function",
+    build_failed: turn?.contextBuildFailed === true,
+    chars: String(turn?.contextPrompt || "").length,
+    all_branches_context: turn?.allBranchesContext === true,
+  };
+}
+
+function captureSummaryForTurn(turn, options = {}) {
+  const textChars = Math.max(0, Math.round(Number(options.textChars) || 0));
+  const inputKind = String(options.inputKind || (textChars > 0 ? "text" : (Number(turn?.audioBytes) > 0 ? "audio" : "unknown")));
+  return {
+    input_kind: inputKind,
+    audio_bytes: Math.max(0, Number(turn?.audioBytes) || 0),
+    audio_chunks: Math.max(0, Number(turn?.audioChunks) || 0),
+    ...(textChars > 0 ? { text_chars: textChars } : {}),
+  };
+}
+
+function transportSummaryForTurn(turn, inputKind) {
+  return {
+    transport: turn?.liveSession ? "websocket_live" : "websocket_process_turn",
+    input_kind: String(inputKind || "audio"),
+    committed: true,
+  };
+}
+
 // A session may speak AS a companion (a website pet, a picked character): a
 // bounded per-session persona from session_start, treated as untrusted client
 // input — sanitized, hard-capped, session-scoped, never written to the stored
@@ -1596,6 +1645,9 @@ function writeTurnMetadata(turn, patch) {
     source: turn.source,
     input_format: turn.format,
     playback_policy: turn.playbackPolicy || previous.playback_policy || {},
+    context: turn.contextSummary || previous.context || {},
+    capture: turn.captureSummary || previous.capture || captureSummaryForTurn(turn),
+    transport: turn.transportSummary || previous.transport || {},
     status: patch.status || previous.status || turn.status,
     started_at: turn.startedAt,
     updated_at: nowIso(),
@@ -1702,7 +1754,6 @@ function summarizeVoiceActivity(connections) {
     && summary.active_responding_connections === 0;
   return summary;
 }
-
 function normalizeStageName(stage) {
   const value = String(stage || "")
     .trim()

@@ -24,7 +24,7 @@ const { spawn } = require("node:child_process");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "ui-spec-smoke-token";
-const { createUiSpecStore, defaultSpec } = require(path.join(GATEWAY_DIR, "lib", "ui-spec"));
+const { createUiSpecStore, defaultSpec, normalizeSpec } = require(path.join(GATEWAY_DIR, "lib", "ui-spec"));
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -41,9 +41,24 @@ async function main() {
 
   try {
     await step("store: default, replace, reject, persist, reset", () => assertStore(storeDir));
+    await step("store primitive: distinct directories remain isolated", () => assertDirectoryIsolation(path.join(tempDir, "accounts")));
+    await step("normalizer: document fanout is bounded", assertDocumentBounds);
 
+    fs.mkdirSync(dataDir, { recursive: true });
+    const legacy = defaultSpec();
+    legacy.surfaces[0].title = "Legacy single-token owner";
+    fs.writeFileSync(path.join(dataDir, "ui-spec.json"), JSON.stringify(legacy));
     server = await startGateway({ port, dataDir });
     await step("GET requires a token", () => assertAuthRequired(baseUrl));
+    await step("legacy single-token file is consumed once by token-derived owner", async () => {
+      const payload = await getJson(`${baseUrl}/v1/ui/spec`);
+      assert.equal(payload.spec.surfaces[0].title, "Legacy single-token owner");
+      assert.equal(fs.existsSync(path.join(dataDir, "ui-spec.json")), false, "legacy file must be consumed");
+      const accountDirs = fs.readdirSync(path.join(dataDir, "ui-specs"));
+      assert.equal(accountDirs.length, 1, "exactly one token-derived owner directory must be created");
+      assert.equal(fs.existsSync(path.join(dataDir, "ui-specs", accountDirs[0], "ui-spec.json")), true);
+      await assertReset(baseUrl);
+    });
     await step("default spec is served", () => assertDefaultSpec(baseUrl));
     await step("round-trip: PUT then GET reflects it", () => assertRoundTrip(baseUrl));
     await step("invalid PUT is 400 and leaves spec unchanged", () => assertInvalidRejected(baseUrl));
@@ -55,8 +70,10 @@ async function main() {
       checks: [
         "store: default spec, replace persists, invalid rejected, reload sees persisted, reset clears",
         "GET /v1/ui/spec requires a token",
+        "legacy single-token spec is consumed once into the configured token-derived owner",
         "GET returns the default command-panel spec when uncustomized",
-        "PUT a changed spec; GET reflects it (engine -> client round-trip, package unchanged)",
+        "PUT a changed spec; GET reflects it for the configured single-token account scope",
+        "store primitive keeps explicitly distinct directories isolated (not a multi-identity route claim)",
         "invalid spec PUT -> 400; the live spec is left unchanged (never blanked)",
         "POST /v1/ui/spec/reset returns to the default spec",
       ],
@@ -86,11 +103,31 @@ function assertStore(dir) {
 
   const custom = {
     surfaces: [
-      { id: "command-panel", title: "my Aggie", controls: [{ type: "button", id: "go", label: "Go", action: "agent.run" }] },
+      {
+        id: "command-panel",
+        title: "my Aggie",
+        components: [
+          { type: "card", id: "brief", title: "Next step", body: "Open the browser agent panel.", tone: "info" },
+          { type: "stat", id: "runs", label: "Runs", value: "2", delta: "+1", tone: "good" },
+          { type: "list", id: "apps", title: "Apps", items: [{ label: "Maps", detail: "Open a map workflow", action: "agent.run", prompt: "Open Maps" }] },
+          {
+            type: "map",
+            id: "nearby",
+            title: "Nearby",
+            center: { lat: 37.7749, lng: -122.4194, label: "San Francisco" },
+            zoom: 11,
+            markers: [{ lat: 37.7749, lng: -122.4194, label: "SF", detail: "Center" }],
+          },
+        ],
+        controls: [{ type: "button", id: "go", label: "Go", action: "agent.run", prompt: "Open the app manager" }],
+      },
     ],
   };
   const replaced = store.replace(custom);
   assert.equal(replaced.surfaces[0].title, "my Aggie", "replace must persist the new title");
+  assert.equal(replaced.surfaces[0].components.length, 4, "replace must persist known components");
+  assert.equal(replaced.surfaces[0].components.find((component) => component.type === "map").markers[0].label, "SF", "map markers must survive normalization");
+  assert.equal(replaced.surfaces[0].controls[0].prompt, "Open the app manager", "control prompts must survive normalization");
   assert.equal(store.isCustomized(), true, "store must report customized after replace");
 
   // Invalid: not a renderable document -> throws, surface stays customized.
@@ -105,6 +142,58 @@ function assertStore(dir) {
   reopened.reset();
   assert.equal(reopened.isCustomized(), false, "reset must clear customization");
   assert.deepEqual(reopened.effective(), defaultSpec(), "reset must return the default spec");
+}
+
+function assertDirectoryIsolation(rootDir) {
+  const first = createUiSpecStore({ dataDir: path.join(rootDir, "usr_first") });
+  const second = createUiSpecStore({ dataDir: path.join(rootDir, "usr_second") });
+  const firstSpec = defaultSpec();
+  firstSpec.surfaces[0].title = "First account";
+  const secondSpec = defaultSpec();
+  secondSpec.surfaces[0].title = "Second account";
+
+  first.replace(firstSpec);
+  second.replace(secondSpec);
+
+  assert.equal(first.effective().surfaces[0].title, "First account");
+  assert.equal(second.effective().surfaces[0].title, "Second account");
+  first.reset();
+  assert.equal(second.effective().surfaces[0].title, "Second account", "resetting one account must not alter another");
+}
+
+function assertDocumentBounds() {
+  const surfaces = Array.from({ length: 20 }, (_, surfaceIndex) => ({
+    id: `surface-${surfaceIndex}`,
+    components: Array.from({ length: 100 }, (_, index) => ({ type: "card", id: `card-${index}`, body: "bounded" })),
+    controls: Array.from({ length: 100 }, (_, index) => ({ type: "button", id: `button-${index}`, action: "noop" })),
+  }));
+  const normalized = normalizeSpec({ surfaces });
+  assert.equal(normalized.surfaces.length, 8);
+  assert.equal(normalized.surfaces[0].components.length, 40);
+  assert.equal(normalized.surfaces[0].controls.length, 24);
+
+  const bounded = (length, makeValue) => {
+    let reads = 0;
+    return {
+      values: new Proxy(Array.from({ length }, (_, index) => makeValue(index)), {
+        get(target, key, receiver) {
+          if (/^\d+$/.test(String(key))) reads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      }),
+      reads: () => reads,
+    };
+  };
+  const options = bounded(1000, (index) => `option-${index}`);
+  const items = bounded(1000, (index) => ({ label: `item-${index}` }));
+  const markers = bounded(1000, (index) => ({ lat: 10, lng: 20, label: `marker-${index}` }));
+  normalizeSpec({ surfaces: [{ id: "nested-bounds", components: [
+    { type: "list", id: "list", items: items.values },
+    { type: "map", id: "map", markers: markers.values },
+  ], controls: [{ type: "select", id: "select", options: options.values }] }] });
+  assert.equal(options.reads(), 50, "normalizer must cap option reads before traversal");
+  assert.equal(items.reads(), 30, "normalizer must cap list item reads before traversal");
+  assert.equal(markers.reads(), 24, "normalizer must cap marker reads before traversal");
 }
 
 async function assertAuthRequired(baseUrl) {
@@ -124,8 +213,19 @@ async function assertRoundTrip(baseUrl) {
       {
         id: "command-panel",
         title: "Aggie — deployed",
+        components: [
+          { type: "card", id: "status", title: "Live UI", body: "Rendered by the extension from gateway data.", tone: "info" },
+          { type: "list", id: "targets", title: "Targets", items: [{ label: "Calendar", detail: "Open an app workflow", action: "agent.run", prompt: "Open Calendar" }] },
+          {
+            type: "map",
+            id: "meetup",
+            title: "Meetup map",
+            center: { lat: 40.7128, lng: -74.006, label: "NYC" },
+            markers: [{ lat: 40.7128, lng: -74.006, label: "Meet here" }],
+          },
+        ],
         controls: [
-          { type: "button", id: "talk", label: "Speak", action: "voice.toggle" },
+          { type: "button", id: "talk", label: "Speak", action: "voice.toggle", prompt: "Start voice" },
           { type: "text", id: "intent", label: "Do this:", action: "agent.run" },
         ],
       },
@@ -138,6 +238,9 @@ async function assertRoundTrip(baseUrl) {
   const after = await getJson(`${baseUrl}/v1/ui/spec`);
   assert.equal(after.spec.surfaces[0].title, "Aggie — deployed", "GET must reflect the deployed title");
   assert.equal(after.spec.surfaces[0].controls[0].label, "Speak", "GET must reflect the deployed control label");
+  assert.equal(after.spec.surfaces[0].controls[0].prompt, "Start voice", "GET must reflect bounded control prompts");
+  assert.equal(after.spec.surfaces[0].components.length, 3, "GET must reflect deployed known components");
+  assert.equal(after.spec.surfaces[0].components.find((component) => component.type === "map").markers[0].label, "Meet here", "GET must reflect deployed map markers");
 }
 
 async function assertInvalidRejected(baseUrl) {

@@ -17,10 +17,14 @@ const path = require("node:path");
 
 const SPEC_FILENAME = "ui-spec.json";
 const SPEC_VERSION = 1;
-// A control the renderer knows how to draw. `action` names a client-side
-// capability (voice toggle, command open, agent run); the engine never ships
-// executable code here, only the binding name.
+// A control/component the renderer knows how to draw. `action` names a
+// client-side capability (voice toggle, command open, agent run); the engine
+// never ships executable code here, only data and binding names.
 const CONTROL_TYPES = ["button", "text", "toggle", "select"];
+const COMPONENT_TYPES = ["card", "list", "map", "stat"];
+const MAX_SURFACES = 8;
+const MAX_COMPONENTS_PER_SURFACE = 40;
+const MAX_CONTROLS_PER_SURFACE = 24;
 const KNOWN_ACTIONS = [
   "voice.toggle",
   "command.open",
@@ -39,6 +43,7 @@ function defaultSpec() {
       {
         id: "command-panel",
         title: "A.G.",
+        components: [],
         controls: [
           { type: "button", id: "talk", label: "Talk", action: "voice.toggle" },
           { type: "button", id: "type", label: "Type", action: "command.open" },
@@ -122,6 +127,7 @@ function normalizeSpec(input) {
     return null;
   }
   const surfaces = input.surfaces
+    .slice(0, MAX_SURFACES)
     .map(normalizeSurface)
     .filter(Boolean);
   if (surfaces.length === 0) {
@@ -138,12 +144,16 @@ function normalizeSurface(surface) {
   if (!id) {
     return null;
   }
+  const components = Array.isArray(surface.components)
+    ? surface.components.slice(0, MAX_COMPONENTS_PER_SURFACE).map(normalizeComponent).filter(Boolean)
+    : [];
   const controls = Array.isArray(surface.controls)
-    ? surface.controls.map(normalizeControl).filter(Boolean)
+    ? surface.controls.slice(0, MAX_CONTROLS_PER_SURFACE).map(normalizeControl).filter(Boolean)
     : [];
   return {
     id,
     title: typeof surface.title === "string" ? surface.title.slice(0, 80) : id,
+    components,
     controls,
   };
 }
@@ -164,14 +174,123 @@ function normalizeControl(control) {
     label: typeof control.label === "string" ? control.label.slice(0, 80) : id,
     action,
   };
+  if (typeof control.prompt === "string") {
+    out.prompt = sanitizeText(control.prompt, 500);
+  }
+  if (control.value != null) {
+    out.value = sanitizeText(control.value, 500);
+  }
+  if (type === "toggle") {
+    out.checked = control.checked === true;
+  }
   // select carries its options as plain string data (config, not code).
   if (type === "select" && Array.isArray(control.options)) {
     out.options = control.options
+      .slice(0, 50)
       .map((opt) => (typeof opt === "string" ? opt.slice(0, 80) : ""))
-      .filter(Boolean)
-      .slice(0, 50);
+      .filter(Boolean);
   }
   return out;
+}
+
+function normalizeComponent(component) {
+  if (!component || typeof component !== "object") {
+    return null;
+  }
+  const type = COMPONENT_TYPES.includes(component.type) ? component.type : null;
+  const id = cleanToken(component.id);
+  if (!type || !id) {
+    return null;
+  }
+  const base = {
+    type,
+    id,
+    title: typeof component.title === "string" ? sanitizeText(component.title, 100) : "",
+  };
+  if (type === "card") {
+    return {
+      ...base,
+      body: sanitizeText(component.body || component.text || "", 1200),
+      tone: normalizeTone(component.tone),
+    };
+  }
+  if (type === "stat") {
+    return {
+      ...base,
+      label: sanitizeText(component.label || component.title || id, 80),
+      value: sanitizeText(component.value || "", 120),
+      delta: sanitizeText(component.delta || "", 120),
+      tone: normalizeTone(component.tone),
+    };
+  }
+  if (type === "list") {
+    const items = Array.isArray(component.items)
+      ? component.items.slice(0, 30).map(normalizeListItem).filter(Boolean)
+      : [];
+    if (items.length === 0) return null;
+    return { ...base, items };
+  }
+  if (type === "map") {
+    const center = normalizeCoordinate(component.center);
+    const markers = Array.isArray(component.markers)
+      ? component.markers.slice(0, 24).map(normalizeMapMarker).filter(Boolean)
+      : [];
+    if (!center && markers.length === 0) return null;
+    const zoom = Number(component.zoom);
+    return {
+      ...base,
+      center: center || { lat: markers[0].lat, lng: markers[0].lng, label: markers[0].label || "" },
+      zoom: Number.isFinite(zoom) ? Math.max(1, Math.min(Math.round(zoom), 20)) : 12,
+      markers,
+    };
+  }
+  return null;
+}
+
+function normalizeListItem(item) {
+  if (!item || typeof item !== "object") return null;
+  const label = sanitizeText(item.label || item.title || "", 120);
+  if (!label) return null;
+  const action = KNOWN_ACTIONS.includes(item.action) ? item.action : "";
+  const out = {
+    label,
+    detail: sanitizeText(item.detail || item.body || item.text || "", 300),
+  };
+  if (action) out.action = action;
+  if (typeof item.prompt === "string") out.prompt = sanitizeText(item.prompt, 500);
+  return out;
+}
+
+function normalizeMapMarker(marker) {
+  const coord = normalizeCoordinate(marker);
+  if (!coord) return null;
+  return {
+    ...coord,
+    detail: sanitizeText(marker.detail || marker.body || "", 220),
+  };
+}
+
+function normalizeCoordinate(value) {
+  if (!value || typeof value !== "object") return null;
+  const lat = Number(value.lat ?? value.latitude);
+  const lng = Number(value.lng ?? value.lon ?? value.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return {
+    lat: Number(lat.toFixed(6)),
+    lng: Number(lng.toFixed(6)),
+    label: sanitizeText(value.label || value.name || "", 100),
+  };
+}
+
+function normalizeTone(value) {
+  const tone = String(value || "").trim().toLowerCase();
+  return ["neutral", "good", "warn", "danger", "info"].includes(tone) ? tone : "neutral";
+}
+
+function sanitizeText(value, max) {
+  const text = String(value == null ? "" : value).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  return text.length > max ? text.slice(0, max) : text;
 }
 
 function cleanToken(value) {
@@ -190,5 +309,6 @@ module.exports = {
   normalizeSpec,
   SPEC_VERSION,
   CONTROL_TYPES,
+  COMPONENT_TYPES,
   KNOWN_ACTIONS,
 };

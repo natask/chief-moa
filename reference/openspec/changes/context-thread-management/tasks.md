@@ -10,12 +10,16 @@
 ## 2. context_management tool + guardrails
 
 - [x] 2.1 Add `lib/context-decision.js`: deterministic prior + double-gate resolver.
-- [x] 2.2 Offer `context_management` via `callModelToolLoop` on the chat path and
-      the cascaded voice reasoner.
+- [x] 2.2 Force `context_management` in a context-free decision preflight on the
+      chat and cascaded voice paths, then start a fresh scoped answer request
+      without the decision tool.
 - [x] 2.3 Resolve the filing thread (continue/new/fork/incognito) and store the
       decision as a record + `context.decision.recorded` product event.
 - [x] 2.4 Return a bounded `context` block on both paths.
 - [x] 2.5 `scripts/smoke-context-decision.js` (golden table + wired chat path).
+- [x] 2.6 Plan filing identity/fork cutoff without durable mutation, commit the
+      exact plan only after answer success, and replay completed chat/cascaded
+      turn ids before preflight.
 
 ## 3. Enrichment + rolling summaries
 
@@ -27,6 +31,9 @@
       gbrain under `moa/memory/thread/*`.
 - [x] 3.4 `scripts/smoke-thread-enrichment.js` (recall block + bound, cadence
       summary + gbrain index, fork inheritance).
+- [x] 3.5 Add a canonical context artifact envelope with version/cache identity,
+      ranking rationale, redaction metadata, and a bounded response receipt for
+      chat and cascaded voice retrieval.
 
 ## 4. Incognito persistence skips
 

@@ -8,6 +8,8 @@ import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileCo
 import { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
 import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice.js";
+import { parseVoiceSamplerAction } from "./voice-sampler.js";
+import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
@@ -56,6 +58,11 @@ const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
 const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
 const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
+const UI_SPEC_CACHE_KEY = "ageeUiSpec";
+const UI_SPEC_ALARM = "agee-ui-spec-refresh";
+const UI_SPEC_REFRESH_MIN_MS = 2000;
+let uiSpecRefreshInFlight = null;
+let uiSpecLastRefreshAt = 0;
 const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
 let activeAgentTabId = null;
 let creatingOffscreenVoiceDocument = null;
@@ -235,6 +242,115 @@ async function startSelfExtensionRuntimeRefresh() {
   await refreshSelfExtensionRuntime("startup");
   if (chrome?.alarms) {
     chrome.alarms.create(SELF_EXTENSION_RUNTIME_ALARM, { periodInMinutes: 0.5 });
+  }
+}
+
+const UI_SPEC_FALLBACK = Object.freeze({
+  spec: { version: 1, surfaces: [] },
+  is_customized: false,
+});
+
+function normalizeUiSpecPayload(payload) {
+  const spec = payload?.spec && typeof payload.spec === "object" ? payload.spec : payload;
+  if (!spec || typeof spec !== "object" || spec.version !== 1 || !Array.isArray(spec.surfaces)) {
+    return null;
+  }
+  return {
+    spec,
+    is_customized: payload?.is_customized === true,
+  };
+}
+
+async function fetchUiSpec() {
+  const cfg = await getConfig();
+  if (!cfg.gatewayUrl) throw new Error("No gateway URL set.");
+  const payload = normalizeUiSpecPayload(await callGateway(cfg, "/v1/ui/spec", { method: "GET" }));
+  if (!payload) throw new Error("Gateway returned an invalid UI spec.");
+  return payload;
+}
+
+async function cachedUiSpecRecord() {
+  if (!chrome?.storage?.local) return null;
+  const stored = await chrome.storage.local.get({ [UI_SPEC_CACHE_KEY]: null });
+  const record = stored[UI_SPEC_CACHE_KEY];
+  const payload = normalizeUiSpecPayload(record?.payload || record);
+  if (!payload) return null;
+  return {
+    payload,
+    reason: typeof record?.reason === "string" ? record.reason : "cache",
+    updated_at: typeof record?.updated_at === "string" ? record.updated_at : "",
+    stale: record?.stale === true,
+    stale_reason: typeof record?.stale_reason === "string" ? record.stale_reason : "",
+    stale_at: typeof record?.stale_at === "string" ? record.stale_at : "",
+  };
+}
+
+async function loadUiSpec() {
+  try {
+    return await fetchUiSpec();
+  } catch {
+    const cached = await cachedUiSpecRecord();
+    return cached?.payload || UI_SPEC_FALLBACK;
+  }
+}
+
+async function refreshUiSpec(reason = "refresh") {
+  const now = Date.now();
+  if (uiSpecRefreshInFlight) return uiSpecRefreshInFlight;
+  if (now - uiSpecLastRefreshAt < UI_SPEC_REFRESH_MIN_MS) {
+    const cached = await cachedUiSpecRecord();
+    return cached?.payload || UI_SPEC_FALLBACK;
+  }
+  uiSpecLastRefreshAt = now;
+  uiSpecRefreshInFlight = refreshUiSpecOnce(reason);
+  try {
+    return await uiSpecRefreshInFlight;
+  } finally {
+    uiSpecRefreshInFlight = null;
+  }
+}
+
+async function refreshUiSpecOnce(reason = "refresh") {
+  try {
+    const payload = await fetchUiSpec();
+    if (chrome?.storage?.local) {
+      await chrome.storage.local.set({
+        [UI_SPEC_CACHE_KEY]: {
+          payload,
+          reason,
+          stale: false,
+          updated_at: new Date().toISOString(),
+        },
+      });
+    }
+    return payload;
+  } catch (error) {
+    const cached = await cachedUiSpecRecord();
+    if (cached && chrome?.storage?.local) {
+      await chrome.storage.local.set({
+        [UI_SPEC_CACHE_KEY]: {
+          ...cached,
+          reason,
+          stale: true,
+          stale_reason: String(error?.message || error).slice(0, 200),
+          stale_at: new Date().toISOString(),
+        },
+      });
+      return cached.payload;
+    }
+    return UI_SPEC_FALLBACK;
+  }
+}
+
+// Narrow diagnostic hook for the extension's own worker QA. This object is not
+// web-accessible and exposes no gateway response beyond the normal refresh path.
+globalThis.AgeeUiSpecRefresh = Object.freeze({ refresh: refreshUiSpec });
+
+async function startUiSpecRefresh() {
+  if (!chrome?.storage?.local) return;
+  await refreshUiSpec("startup");
+  if (chrome?.alarms) {
+    chrome.alarms.create(UI_SPEC_ALARM, { periodInMinutes: 0.5 });
   }
 }
 
@@ -828,6 +944,8 @@ if (chrome?.alarms?.onAlarm) {
       pollDevReloadVersion("alarm").catch(() => {});
     } else if (alarm.name === SELF_EXTENSION_RUNTIME_ALARM) {
       refreshSelfExtensionRuntime("alarm").catch(() => {});
+    } else if (alarm.name === UI_SPEC_ALARM) {
+      refreshUiSpec("alarm").catch(() => {});
     }
   });
 }
@@ -835,6 +953,7 @@ startBrowserTaskPolling();
 startDevReloadPolling().catch(() => {});
 startDeviceClientHeartbeat().catch(() => {});
 startSelfExtensionRuntimeRefresh().catch(() => {});
+startUiSpecRefresh().catch(() => {});
 adoptSharedGatewaySession("startup").catch(() => {});
 reloadDevTabsAfterExtensionRestart().catch(() => {});
 
@@ -1782,6 +1901,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
   }
   send(tabId, { cmd: "done", cueId, summary, speak });
   refreshSelfExtensionRuntime("turn_complete").catch(() => {});
+  refreshUiSpec("turn_complete").catch(() => {});
   await saveTaskState(cueId, {
     status: "done",
     instruction,
@@ -1808,6 +1928,11 @@ function turnActions(data) {
 // applied and a done summary was already sent.
 async function maybeApplyTurnActions(tabId, data, signal, cueId) {
   const actions = turnActions(data);
+  const samplerAction = actions.find((a) => a.type === "voice_sampler");
+  if (samplerAction) {
+    await startVoiceSampler(tabId, cueId, samplerAction, signal);
+    return true;
+  }
   const tweakAction = actions.find((a) => a.type === "page_tweak" && a.record && typeof a.record === "object");
   if (!tweakAction) return false;
 
@@ -1848,6 +1973,35 @@ async function maybeApplyTurnActions(tabId, data, signal, cueId) {
   return true;
 }
 
+const voiceSamplerRuntime = createVoiceSamplerRuntime({
+  send,
+  closeSession: closeVoiceSession,
+  async startSample({ sampler, sample, sampleIndex, onSessionCreated }) {
+    const session = await startVoiceSessionProxy(sampler.tabId, {
+      cueId: sampler.cueId,
+      turnId: `voice_sample_${Date.now().toString(36)}_${sampleIndex}`,
+      capture: "none",
+      autoCommit: false,
+      profileOverride: { voice: sample.voice, response_modality: "speech" },
+      sampleText: sample.text,
+      onSessionCreated,
+    });
+    attachVoiceSession(session.voiceSessionId, sampler.tabId);
+    return session;
+  },
+});
+
+async function startVoiceSampler(tabId, cueId, action, signal) {
+  const samples = parseVoiceSamplerAction(action);
+  if (!samples.length) throw new Error("The gateway returned an invalid or empty voice sampler plan.");
+  send(tabId, { cmd: "progress", cueId, text: `sampling 1 of ${samples.length}…` });
+  await voiceSamplerRuntime.start(tabId, cueId, samples, { signal });
+}
+
+function cancelVoiceSampler(tabId, reason) {
+  voiceSamplerRuntime.cancel(tabId, reason);
+}
+
 function send(tabId, msg) {
   // Panel-owned sessions are addressed with the PANEL_TAB_ID sentinel: the
   // side panel is an extension page, not a tab, so tabs.sendMessage can never
@@ -1868,7 +2022,7 @@ async function ensureContent(tabId) {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "content.js"] });
   }
 }
 
@@ -2048,7 +2202,7 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   return startVoiceSessionProxy(tabId, opts);
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
   // Hold the capture mutex across the async setup window. recordSessionStart
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
@@ -2058,7 +2212,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
@@ -2082,7 +2236,7 @@ async function switchThreadBranch(cfg, action, label) {
   return String(data?.thread?.branch_id || data?.active?.branch_id || data?.branch_id || "").trim();
 }
 
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel } = {}) {
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
   const session = {
@@ -2109,8 +2263,14 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     committed: false,
     autoCommitTimer: null,
     maxCommitTimer: null,
+    profileOverride,
+    sampleText,
   };
   voiceSessions.set(id, session);
+  onSessionCreated?.(id);
+  if (voiceSessions.get(id) !== session || session.closed) {
+    throw new Error(session.setupErrorMessage || "Voice session closed during setup.");
+  }
   if (session.capture === "extension-offscreen") {
     session.captureStartRequested = true;
     startOffscreenVoiceCapture(id)
@@ -2229,6 +2389,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         playback_policy: {
           assistant_overlap: assistantOverlap === true,
         },
+        ...(profileOverride ? { profile_override: profileOverride } : {}),
         format: {
           encoding: "pcm16",
           sample_rate: 16000,
@@ -2252,6 +2413,13 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     ws.onerror = () => {
       if (!session.opened) {
         failBeforeOpen("Live voice connection failed.");
+        return;
+      }
+      if (voiceSamplerRuntime.handleSessionTerminal(session.id, {
+        failed: true,
+        message: "Live voice connection failed.",
+        closeReason: "sample failed",
+      })) {
         return;
       }
       deliverVoiceSessionEvent(session, {
@@ -2283,6 +2451,16 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       clearVoiceAutoCommit(session);
       clearQueuedVoiceSessionMedia(session);
       stopOffscreenVoiceCapture(id).catch(() => {});
+      if (voiceSamplerRuntime.handleSessionTerminal(session.id, {
+        failed: !session.revoked,
+        cancelled: session.revoked,
+        message: session.revoked ? "" : "Live voice connection closed.",
+        closeReason: session.revoked ? session.closedReason || "revoked" : "sample failed",
+      })) {
+        if (session.attached) voiceSessions.delete(id);
+        else setTimeout(() => voiceSessions.delete(id), 5000);
+        return;
+      }
       deliverVoiceSessionEvent(session, {
         event: session.revoked
           ? { type: "revoked", reason: session.closedReason || "revoked" }
@@ -2433,6 +2611,9 @@ async function forwardVoiceSessionEvent(session, event) {
   } catch {}
   if (parsed?.type === "session_ready") {
     session.gatewayReady = true;
+    if (session.sampleText) {
+      sendVoiceSessionJson(session, { type: "text_turn", text: session.sampleText, turn_id: session.turnId });
+    }
     flushQueuedVoiceSessionMedia(session);
     if (session.capture === "extension-offscreen" && !session.captureStarted && !session.captureStartRequested) {
       session.captureStartRequested = true;
@@ -2442,6 +2623,16 @@ async function forwardVoiceSessionEvent(session, event) {
         })
         .catch((error) => handleOffscreenVoiceError(session.id, error));
     }
+  }
+  if (parsed?.type === "turn_done" || parsed?.type === "error" || String(parsed?.status || "").toLowerCase() === "error") {
+    const failed = parsed?.type === "error" || String(parsed?.status || "").toLowerCase() === "error";
+    if (voiceSamplerRuntime.handleSessionTerminal(session.id, { failed, closeReason: failed ? "sample failed" : "sample complete" })) {
+      return;
+    }
+  }
+  if (parsed?.type === "error") {
+    deliverVoiceSessionEvent(session, { event: parsed });
+    return;
   }
   if (parsed?.type === "turn_progress") {
     // Keepalive the gateway emits every ~5s between commit and turn_done. Route it
@@ -2500,6 +2691,7 @@ async function sendVoiceSessionControl(id, message) {
 function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   const session = voiceSessions.get(id);
   if (!session) return;
+  session.closed = true;
   session.closedReason = reason;
   session.revoked = revoked === true;
   voiceSessions.delete(id);
@@ -3851,6 +4043,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(() => sendResponse({ ok: true, runtime: SELF_EXTENSION_RUNTIME_FALLBACK }));
     return true;
   }
+  if (msg.cmd === "uiSpec") {
+    refreshUiSpec("content_request")
+      .then((payload) => sendResponse({ ok: true, ...payload }))
+      .catch(() => sendResponse({ ok: true, ...UI_SPEC_FALLBACK }));
+    return true;
+  }
+  if (msg.cmd === "openOptions") {
+    chrome.runtime.openOptionsPage?.().catch(() => {});
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.cmd === "activeCompanionPet") {
     loadActiveCompanionPet()
       .then((result) => sendResponse(result))
@@ -3968,6 +4171,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Stop the ambient loop if its tab goes away, so it never posts against a dead tab.
 chrome.tabs.onRemoved.addListener((tabId) => {
+  cancelVoiceSampler(tabId, "tab closed");
   if (ambient && ambient.tabId === tabId) stopAmbientCapture();
   if (activeAgentTabId === tabId) {
     activeAgentTabId = null;

@@ -28,6 +28,7 @@ async function main() {
   const voiceServer = createVoiceSessionServer({
     dataDir,
     voiceProvider: fakeVoiceProvider(),
+    contextProvider: () => "Durable context marker for diagnosis smoke.",
     onTurnCompleted: (turn) => {
       completedTurns.push(turn);
     },
@@ -68,9 +69,11 @@ async function main() {
         "assistant_text and turn_done websocket event shapes are stable",
         "canonical completed turn carries transcript, assistant text, and provider events",
         "canonical completed turn carries bounded stage timing evidence",
+        "canonical completed turn carries context, capture, and transport attribution",
         "provider event ledger keeps transcript/assistant events queryable by session and turn",
         "provider event ledger keeps STT/reasoning/TTS/first-audio timing queryable",
         "voice session activity status exposes active/drained counts for deploy safety",
+        "provider event ledger keeps context and pre-provider commit attribution queryable",
       ],
     }, null, 2));
   } finally {
@@ -145,6 +148,7 @@ function runVoiceTurn(target, voiceServer) {
         branch_id: "shape_branch",
         turn_id: "shape_turn",
         source: "voice-session-events-smoke",
+        all_branches_context: true,
         format: AUDIO_FORMAT,
       }));
     });
@@ -235,6 +239,9 @@ function assertCanonicalCompletion(completedTurns) {
   assert.ok(turn.provider_events.some((event) => event.type === "transcript_partial"));
   assert.ok(turn.provider_events.some((event) => event.type === "transcript_final"));
   assert.ok(turn.provider_events.some((event) => event.type === "assistant_text"));
+  assert.ok(turn.provider_events.some((event) => event.type === "context_attached"));
+  assert.ok(turn.provider_events.some((event) => event.type === "capture_committed"));
+  assert.ok(turn.provider_events.some((event) => event.type === "transport_committed"));
   assert.ok(turn.provider_events.some((event) => event.type === "stage_done" && event.stage === "stt"));
   assert.ok(turn.provider_events.some((event) => event.type === "stage_done" && event.stage === "reasoning"));
   assert.ok(turn.provider_events.some((event) => event.type === "stage_done" && event.stage === "tts"));
@@ -243,6 +250,14 @@ function assertCanonicalCompletion(completedTurns) {
   assert.equal(turn.stage_timings.reasoning_ms, 17);
   assert.equal(turn.stage_timings.tts_ms, 23);
   assert.ok(Number.isFinite(turn.stage_timings.first_audio_ms));
+  assert.equal(turn.context.enabled, true);
+  assert.ok(turn.context.chars > 0, "canonical turn must record durable context chars");
+  assert.equal(turn.context.all_branches_context, true);
+  assert.equal(turn.capture.input_kind, "audio");
+  assert.ok(turn.capture.audio_bytes > 0, "canonical turn must record committed capture bytes");
+  assert.equal(turn.transport.transport, "websocket_process_turn");
+  assert.equal(turn.transport.input_kind, "audio");
+  assert.equal(turn.transport.committed, true);
 }
 
 function assertProviderEventLedger(dataDir) {
@@ -252,7 +267,7 @@ function assertProviderEventLedger(dataDir) {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-  for (const type of ["transcript_partial", "transcript_final", "assistant_text", "stage_start", "stage_done", "turn_completed"]) {
+  for (const type of ["context_attached", "capture_committed", "transport_committed", "transcript_partial", "transcript_final", "assistant_text", "stage_start", "stage_done", "turn_completed"]) {
     const event = events.find((candidate) => candidate.type === type);
     assert.ok(event, `provider ledger missing ${type}`);
     assert.equal(event.session_id, "shape_session");
@@ -272,6 +287,17 @@ function assertProviderEventLedger(dataDir) {
   assert.equal(completed.stage_timings.tts_ms, 23);
   assert.ok(Number.isFinite(completed.stage_timings.first_audio_ms));
   assert.ok(Number.isFinite(completed.stage_timings.completion_ms));
+  const context = events.find((candidate) => candidate.type === "context_attached");
+  assert.equal(context.enabled, true);
+  assert.ok(context.chars > 0, "context_attached must record context size");
+  assert.equal(context.all_branches_context, true);
+  const capture = events.find((candidate) => candidate.type === "capture_committed");
+  assert.equal(capture.input_kind, "audio");
+  assert.ok(capture.audio_bytes > 0, "capture_committed must record audio bytes");
+  const transport = events.find((candidate) => candidate.type === "transport_committed");
+  assert.equal(transport.transport, "websocket_process_turn");
+  assert.equal(transport.input_kind, "audio");
+  assert.equal(transport.committed, true);
 }
 
 function eventOfType(events, type) {

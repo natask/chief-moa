@@ -83,14 +83,14 @@
 
 - [ ] 11.1 Keep `voice-product-contract-notes.md` as the raw product-direction artifact for diagnosable failures, self-hostable logs, long-response audio reliability, first-audio latency, continuous partial STT, interruption context, profiles/modes, demos, gestures, shortcuts, and cache-friendly context.
 - [ ] 11.2 Add normalized voice failure phase labels on gateway turn/provider events: capture, transport, STT, context, reasoning, TTS, playback, storage, and comparison.
-- [ ] 11.3 Add a token-protected voice diagnosis read path that answers "why did voice fail?" from self-hosted gateway records, returning session, branch, turn, profile version, provider IDs, phase, timing, artifact refs, context-pack refs, and a user-facing summary.
+- [ ] 11.3 Add a token-protected voice diagnosis read path named `GET /v1/voice/diagnosis?session_id={sessionId}&turn_id={turnId}` that answers "why did voice fail?" from self-hosted gateway records, returning session, branch, turn, profile version, provider IDs, phase, timing, artifact refs, context-pack refs, and a user-facing summary.
 - [ ] 11.4 Ensure provider-console logs are supplementary only: a self-hosted deployment with Postgres or JSON/JSONL fallback can diagnose the failure phases above from local gateway data.
-- [ ] 11.5 Add deterministic smoke coverage for at least STT failure, reasoner failure, TTS failure, socket/transport drop, and storage failure; each smoke must assert the phase label and diagnosis response.
-- [ ] 11.6 Verification: `cd gateway && npm run check` plus the new voice-diagnosis smoke, then `openspec validate provider-agnostic-voice-agent-runtime --strict`.
+- [ ] 11.5 Add deterministic smoke coverage in `gateway/scripts/smoke-voice-diagnosis.js` for at least STT failure, reasoner failure, TTS failure, socket/transport drop, and storage failure; each smoke must assert the phase label and diagnosis response.
+- [ ] 11.6 Verification: `cd gateway && npm run check && node scripts/smoke-voice-diagnosis.js`, then `openspec validate provider-agnostic-voice-agent-runtime --strict`.
 
 ## 12. Stage B: Audio Reliability, Latency, And Partial STT
 
-- [ ] 12.1 Add a first-audio latency metric to all voice provider results that can report it. For cascaded streaming, measure `first_audio_ms` from final transcript or explicit turn commit to the first assistant PCM frame.
+- [ ] 12.1 Add a first-audio latency metric to all voice provider results that can report it. For cascaded streaming, measure `first_audio_ms` from the canonical gateway-local reply-pipeline clock for that admitted turn; in current code that clock starts immediately after transcript resolution and before reasoning/TTS begin.
 - [ ] 12.2 Add a configurable launch-profile budget for first audio; deterministic voice QA fails when `first_audio_ms` exceeds that budget, while live QA records observed percentiles for phone and browser.
 - [ ] 12.3 Add long-response audio QA: a fixture that produces multiple TTS segments must emit ordered audio, store one assistant PCM artifact, set `tts_segments`, and either finish spoken or degrade to visible text with `tts_error`.
 - [ ] 12.4 Add continuous partial STT events for providers that support them, normalized as provisional transcript events with final transcript replacement and canonical final transcript storage.
@@ -101,15 +101,49 @@
 
 - [ ] 13.1 Persist interrupted, canceled, and dropped turns with partial transcript, partial assistant text, audio refs when available, provider events, failure/interruption phase, and incomplete status.
 - [ ] 13.2 Include the partial turn summary in the next Moa-owned context pack so the user can interrupt on one device and resume on another without losing what was said.
-- [ ] 13.3 Define per-turn context packs with stable refs for session, branch, turn, active thread, profile version, mode overlay, summaries, voice evidence, provider events, route decisions, and artifact refs.
+- [ ] 13.3 Define the canonical context commands and per-turn pack shape together: client override `context_action`, model tool `context_management`, live read tool `get_session_context`, and stable refs for session, branch, turn, active thread, profile version, mode overlay, summaries, voice evidence, provider events, route decisions, and artifact refs.
 - [ ] 13.4 Add a cache key or content hash to each context pack so retries, provider reconnects, replay QA, and agent routing reuse the same bounded evidence instead of rebuilding an unbounded prompt.
-- [ ] 13.5 Verify with a barge-in/drop smoke that the next turn receives the partial context pack and that no stale assistant audio from the interrupted turn writes into the new turn.
+- [ ] 13.5 Verify with `cd gateway && npm run smoke:live-interrupt-handoff && node scripts/smoke-context-decision.js && node scripts/smoke-thread-enrichment.js` that the next turn receives the partial context pack and that no stale assistant audio from the interrupted turn writes into the new turn.
 
 ## 14. Stage D: Profiles, Modes, Controls, And Demonstration
 
 - [ ] 14.1 Add named mode overlays on the versioned agent profile for at least reliable voice, low-latency voice, text-only, demo, safe mode, and voice-first gestures. Each mode records its provider/profile deltas, latency budget, retention policy, and client interaction hints.
 - [ ] 14.2 Make spoken and UI profile/mode changes reversible, visible, and scoped global or device-specific, with the response reporting whether the change applies immediately, next turn, or after reconnect.
+- [ ] 14.2a Enforce segmented next-utterance switching: pin one immutable
+      effective profile snapshot at turn admission; a mid-turn write cannot
+      change that turn's STT/reasoning/TTS/chunks, and the next admitted turn
+      resolves the committed version. Add concurrent-turn and mid-stream tests.
+- [ ] 14.2b Keep sample/preview voice overrides session-only: prove they do not
+      advance durable profile version, cannot leak into concurrent ordinary
+      turns, and are cleared at sample termination. A retry gets a new turn id
+      and resolves current profile unless explicitly requested as exact replay.
 - [ ] 14.3 Android: implement and QA the flag-gated voice-first orb gesture contract while preserving default drag, chat, and push-to-talk behavior when the flag is off.
 - [ ] 14.4 Browser extension: implement and QA the mark gesture plus keyboard shortcut contract: Cmd+, or Ctrl+, opens text intent; Cmd+. or Ctrl+. toggles/commits voice on tap and uses push-to-talk while held.
 - [ ] 14.5 Build a repeatable voice demonstration checklist and fixture set covering partial STT, first-audio latency, long-response playback, interruption/context preservation, profile/mode switching, voice-first gestures, browser shortcuts, and diagnosed failure.
-- [ ] 14.6 Verification: Android build, browser verify/smoke, gateway check, deterministic voice demo smoke, one phone live voice turn, one browser live voice turn, and `openspec validate provider-agnostic-voice-agent-runtime --strict`.
+- [ ] 14.6 Verification: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`; `cd browser_extension && npm run verify && npm run smoke`; `cd gateway && npm run check && npm run smoke:voice-profile && npm run smoke:live-browser-continuity && npm run eval:voice`; one phone live voice turn; one browser live voice turn; `openspec validate provider-agnostic-voice-agent-runtime --strict`; and `openspec validate streaming-cascaded-voice --strict`.
+
+## 15. Evidence And Anti-Gaming Gate
+
+- [ ] 15.1 Publish a claims ledger mapping each implementation claim to exact
+      files, focused tests, command output, and `verified`, `refuted`, or
+      `unproven`; an existing field/comment/test name is not proof by itself.
+- [ ] 15.2 Separate deterministic measured results, live-provider measured
+      results, real-surface measured results, and architecture-confidence
+      ratings. Never present a confidence target (including 95+ or BEAM 85+) as
+      a benchmark result without the benchmark/sample evidence.
+- [ ] 15.3 Run correctness, security/trust-boundary, performance/resource,
+      quality/complexity, and anti-gaming audits. Each returns PASS or BLOCK
+      with file:line and command evidence; every BLOCK gets a repair contract
+      and re-audit.
+- [ ] 15.4 Exact contract acceptance commands: `cd gateway && npm run check &&
+      npm run smoke:voice-profile && npm run smoke:live-browser-continuity &&
+      npm run smoke:live-interrupt-handoff && node
+      scripts/smoke-voice-diagnosis.js && node scripts/smoke-context-decision.js
+      && node scripts/smoke-thread-enrichment.js && node
+      scripts/smoke-cascaded-voice.js && npm run eval:voice`;
+      `cd browser_extension && npm run verify && npm run smoke`; `cd
+      android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew
+      assembleDebug`; `openspec validate provider-agnostic-voice-agent-runtime
+      --strict`; and `openspec validate streaming-cascaded-voice --strict`.
+      Paid/live eval and
+      phone/browser QA remain explicitly NOT MEASURED until run.

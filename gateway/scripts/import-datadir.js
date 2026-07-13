@@ -33,6 +33,7 @@ async function main() {
   const pool = new Pool({ connectionString: databaseUrl });
   const store = createRelationalStore({
     pool,
+    userId: "owner",
     originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "datadir-importer",
   });
 

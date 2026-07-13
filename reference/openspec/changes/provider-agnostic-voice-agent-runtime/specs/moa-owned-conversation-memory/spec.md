@@ -69,6 +69,26 @@ store.
 - **AND** current session context exposes bounded recent browser tasks alongside
   voice turns, chat turns, provider events, profile status, and runs
 
+### Requirement: Token-Protected Read Paths Stay In One User Scope
+The current implementation SHALL treat conversation-memory reads as bearer-gated
+single-user scope until hosted multi-user auth replaces the token-derived user
+resolver.
+
+#### Scenario: Stored conversation read without the gateway token
+- **WHEN** a caller requests `GET /v1/sessions/{sessionId}/context`,
+  `GET /v1/sessions/{sessionId}/turns`, `GET /v1/history/messages`,
+  `GET /v1/voice/turns/{turnId}`, or
+  `GET /v1/voice/audio/{sessionId}/{turnId}?kind=user|assistant` without the
+  configured gateway bearer token
+- **THEN** the gateway denies the read
+- **AND** a single-use voice session ticket does not authorize those read paths
+
+#### Scenario: Default shared session stays within one authenticated scope
+- **WHEN** the gateway derives its current-user scope from the configured
+  gateway token
+- **THEN** the default shared session id stays inside that authenticated scope
+- **AND** conversation-memory reads do not merge data across token scopes
+
 ### Requirement: Provider Event Normalization
 The gateway SHALL normalize provider-specific voice events into Moa event types
 for transcript, audio, interruption, completion, error, and profile application.
@@ -78,6 +98,25 @@ for transcript, audio, interruption, completion, error, and profile application.
   or error event
 - **THEN** the gateway stores a normalized Moa event and may also retain the raw
   provider event for debugging according to retention policy
+
+### Requirement: Stored Memory Respects Redaction And Retention Boundaries
+Conversation-memory records SHALL expose only Moa-owned fields and redacted
+provider metadata. PCM retention SHALL follow the current storage boundary:
+ordinary retained turns may expose token-protected audio refs when files exist,
+while incognito turns and deleted PCM SHALL expose no durable audio bytes.
+
+#### Scenario: Provider metadata includes an endpoint secret
+- **WHEN** provider status or diagnostic metadata is stored with a turn or
+  provider event
+- **THEN** secret-bearing endpoint query parameters are redacted before the
+  value is stored or returned
+
+#### Scenario: Audio artifact is missing or was deleted
+- **WHEN** a caller requests a user or assistant PCM artifact for a turn whose
+  retained file is absent
+- **THEN** the gateway returns no audio reference in the read model
+- **AND** the direct audio read returns not found instead of synthesizing or
+  guessing the artifact
 
 ### Requirement: Replayable Voice Evidence
 The gateway SHALL be able to turn retained spoken turns into replayable QA

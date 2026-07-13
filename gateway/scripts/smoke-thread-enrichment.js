@@ -63,6 +63,9 @@ global.fetch = async (url, options = {}) => {
   if (u.includes("/chat/completions")) {
     const body = JSON.parse(String(options.body || "{}"));
     fetchCalls.push({ url: u, body });
+    if (body.tool_choice?.function?.name === "context_management") {
+      return jsonResponse({ choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "context_1", type: "function", function: { name: "context_management", arguments: JSON.stringify({ action: "continue", retrieval_query: "" }) } }] } }] });
+    }
     return jsonResponse({ choices: [{ message: { role: "assistant", content: cannedReply } }] });
   }
   throw new Error(`unexpected fetch to ${u}`);
@@ -119,7 +122,7 @@ async function recallBlockSurfacesThreadSummary() {
     messages: [{ role: "user", content: "remind me what we decided about the grocery budget" }],
   });
   assert.equal(chat.status, 200, `chat must succeed: ${JSON.stringify(chat.json)}`);
-  const call = fetchCalls.find((c) => Array.isArray(c.body.messages));
+  const call = fetchCalls.find((c) => Array.isArray(c.body.messages) && c.body.tool_choice?.function?.name !== "context_management");
   assert.ok(call, "the chat turn must call the model");
   const systemText = call.body.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
   assert.match(systemText, /Related past threads \(semantic recall/, "the semantic recall block must be injected");
@@ -192,7 +195,7 @@ async function forkInheritsParentRecency() {
     messages: [{ role: "user", content: "continue with that shipping plan" }],
   });
   assert.equal(chat.status, 200, `fork continue turn must succeed: ${JSON.stringify(chat.json)}`);
-  const call = fetchCalls.find((c) => Array.isArray(c.body.messages));
+  const call = fetchCalls.find((c) => Array.isArray(c.body.messages) && c.body.tool_choice?.function?.name !== "context_management");
   const systemText = call.body.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
   assert.match(systemText, /vendor alpha for shipping/, "the fork must inherit the parent branch recency up to the fork point");
 }
