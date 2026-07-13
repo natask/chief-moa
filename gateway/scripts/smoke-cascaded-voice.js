@@ -23,6 +23,10 @@ const path = require("node:path");
 const { WebSocket } = require("ws");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
+const SERVER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "moa-cascaded-server-"));
+process.env.DATA_DIR = SERVER_DATA_DIR;
+process.env.ANDROID_OTA_DIR = path.join(SERVER_DATA_DIR, "android-ota");
+process.env.MOA_GATEWAY_TOKEN = process.env.MOA_GATEWAY_TOKEN || "cascaded-voice-smoke-token";
 const {
   createVoiceProvider,
   generatePcm16Tone,
@@ -32,6 +36,7 @@ const {
 } = require(path.join(GATEWAY_DIR, "lib", "voice-providers"));
 const { createSpeakStreamSanitizer } = require(path.join(GATEWAY_DIR, "lib", "voice-chunker"));
 const { VoiceSessionConnection } = require(path.join(GATEWAY_DIR, "lib", "voice-session-server"));
+const { recordStreamingVoiceTurn, durableSessionContextBlock, server } = require(path.join(GATEWAY_DIR, "server"));
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -62,6 +67,7 @@ async function main() {
     await turnProgressStopsAfterCancel(tempDir);
     await turnProgressStopsAfterClose(tempDir);
     await streamingMultiFrameWireOrder(tempDir);
+    await streamingSegmentCorrelationEvents(tempDir);
     await streamingSynthesisBodiesInSentenceOrder(tempDir);
     await streamingMidStreamTtsFailure(tempDir);
     await streamingInterruptionGoesSilent(tempDir);
@@ -69,10 +75,14 @@ async function main() {
     await streamingCircuitBreakerLatches(tempDir);
     await streamingCapPrefixProperty(tempDir);
     await streamingKillSwitchReproducesOldSequence(tempDir);
+    await playbackProgressPersistsOnIncompleteTurn(tempDir);
+    await stalePlaybackProgressIsRejected(tempDir);
     console.log("smoke-cascaded-voice: ok");
   } finally {
     global.fetch = previousFetch;
     fs.rmSync(tempDir, { recursive: true, force: true });
+    server.close();
+    fs.rmSync(SERVER_DATA_DIR, { recursive: true, force: true });
   }
 }
 
@@ -1011,6 +1021,58 @@ function makeHungLiveProvider() {
   };
 }
 
+function makeSegmentedHungLiveProvider() {
+  let resolveDone;
+  const done = new Promise((resolve) => {
+    resolveDone = resolve;
+  });
+  const audioFormat = { encoding: "pcm16", sample_rate: 16000, channels: 1 };
+  const firstText = "First sentence leaves early.";
+  const secondText = "Second sentence stays unheard because the user interrupted the turn.";
+  const firstPcm = Buffer.from(generatePcm16Tone({ durationMs: 120, frequencyHz: 230, sampleRate: 16000, volume: 0.2 }));
+  const secondPcm = Buffer.from(generatePcm16Tone({ durationMs: 140, frequencyHz: 260, sampleRate: 16000, volume: 0.2 }));
+  return {
+    status: () => ({ provider: "gemini-live", model: "test-live", configured: true, assistant_audio_format: audioFormat }),
+    createLiveTurnSession(_turn, hooks) {
+      return {
+        done,
+        sendAudio() {},
+        async commit() {
+          await hooks.onTranscriptFinal("keep going");
+          await hooks.onAssistantText(`${firstText} ${secondText}`);
+          await hooks.onAssistantAudioStart(audioFormat, { streaming: true });
+          await hooks.onAssistantAudioSegment({
+            segment_index: 0,
+            text_start: 0,
+            text_end: firstText.length,
+            text: firstText,
+            audio_bytes: firstPcm.length,
+            pcm_ms: 120,
+          });
+          await hooks.sendAudio(firstPcm);
+          await hooks.onAssistantAudioSegment({
+            segment_index: 1,
+            text_start: firstText.length + 1,
+            text_end: firstText.length + 1 + secondText.length,
+            text: secondText,
+            audio_bytes: secondPcm.length,
+            pcm_ms: 140,
+          });
+        },
+        cancel() {
+          resolveDone({
+            provider: "gemini-live",
+            model: "test-live",
+            transcript: "keep going",
+            assistant_text: `${firstText} ${secondText}`,
+            audio_format: audioFormat,
+          });
+        },
+      };
+    },
+  };
+}
+
 async function setupHungLiveConnection(tempDir, tag, turnProgressIntervalMs) {
   const { connection, events } = makeProgressConnection(tempDir, tag, makeHungLiveProvider(), turnProgressIntervalMs);
   await connection.handleSessionStart({
@@ -1142,6 +1204,43 @@ async function streamingMultiFrameWireOrder(tempDir) {
   assert.equal(done.streaming, true, "turn_done must mark the streaming turn");
   assert.ok(Number.isFinite(done.first_audio_ms), "turn_done must carry first_audio_ms");
   assert.ok(done.tts_segments >= 3, `turn_done must carry tts_segments >= 3 (got ${done.tts_segments})`);
+}
+
+async function streamingSegmentCorrelationEvents(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "tell me a story", calls });
+  const s1 = "Sure.";
+  const s2 = "Here is a much longer second sentence that clearly crosses the sixty character minimum mark.";
+  const s3 = "And the third sentence also runs far enough past sixty characters to form its own chunk.";
+  const speak = `${s1} ${s2} ${s3}`;
+  const events = [];
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      input.on_speak_delta(`${s1} `);
+      input.on_speak_delta(`${s2} `);
+      input.on_speak_delta(s3);
+      return { speak, display: speak, language: "en-US", model: "test-model", classification: "chat" };
+    },
+  });
+  const connection = makeStreamingConnection(tempDir, "segment-correlation", provider, events);
+  await startStreamingTurn(connection, "segment-correlation");
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_segment-correlation" });
+
+  const segments = events.filter((event) => event.type === "assistant_audio_segment");
+  const binaries = events.filter((event) => event.type === "binary");
+  assert.equal(segments.length, 3, `expected one assistant_audio_segment per chunk, got ${segments.length}`);
+  assert.ok(binaries.length >= 3, "streaming turn must still emit binary audio");
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    assert.equal(segment.segment_index, index, `segment ${index} must have a stable index`);
+    assert.ok(segment.text_end > segment.text_start, `segment ${index} must carry text bounds`);
+    assert.ok(segment.audio_bytes > 0, `segment ${index} must carry audio byte length`);
+    assert.ok(segment.pcm_ms > 0, `segment ${index} must carry pcm duration`);
+    const segmentEventIndex = events.indexOf(segment);
+    const binaryEventIndex = events.findIndex((event, eventIndex) => eventIndex > segmentEventIndex && event.type === "binary");
+    assert.ok(binaryEventIndex > segmentEventIndex, `segment ${index} must arrive before its binary frame`);
+  }
 }
 
 // Per-chunk synthesize request bodies arrive in sentence order (processTurn
@@ -1427,6 +1526,100 @@ async function streamingKillSwitchReproducesOldSequence(tempDir) {
   );
   assert.equal(result.streaming, undefined, "a kill-switched turn carries no streaming metadata");
   assert.equal(result.tts_spoke, true);
+}
+
+async function playbackProgressPersistsOnIncompleteTurn(tempDir) {
+  const sessionId = "sess_playback_progress";
+  const turnId = "turn_playback_progress";
+  const provider = makeSegmentedHungLiveProvider();
+  const records = [];
+  const dataDir = path.join(tempDir, "session-playback-progress");
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const events = [];
+  const connection = new VoiceSessionConnection(fakeWs(events), {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    onTurnCompleted: async (record) => {
+      records.push(record);
+      return record;
+    },
+  });
+
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: sessionId,
+    conversation_id: sessionId,
+    turn_id: turnId,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 40, frequencyHz: 240, sampleRate: 16000, volume: 0.2 }));
+  const commitPromise = connection.handleCommitTurn({ type: "commit_turn", turn_id: turnId }).catch((error) => {
+    throw new Error(`playback progress commit must not reject: ${error?.message || error}`);
+  });
+  await waitFor(() => events.some((event) => event.type === "assistant_audio_segment" && event.segment_index === 1), 5000, "second assistant_audio_segment");
+
+  await connection.handleText(JSON.stringify({
+    type: "playback_progress",
+    turn_id: turnId,
+    segment_index: 1,
+    played_pcm_ms: 120,
+  }));
+  await connection.handleCancelTurn({ type: "cancel_turn", turn_id: turnId });
+  await commitPromise;
+
+  await waitFor(() => records.some((record) => record.status === "canceled"), 5000, "canceled turn canonical record");
+  const canceledRecord = records.find((record) => record.status === "canceled");
+  assert.ok(canceledRecord, `expected a canceled canonical record, got ${JSON.stringify(records)}`);
+  await recordStreamingVoiceTurn(canceledRecord);
+  const progress = canceledRecord.playback_progress;
+  assert.ok(progress, "incomplete canonical turn must persist playback_progress");
+  assert.equal(progress.endpoint_observed, true);
+  assert.ok(progress.played_pcm_ms > 0 && progress.played_pcm_ms < progress.emitted_pcm_ms, "played pcm must stay bounded below the emitted total");
+  assert.ok(progress.estimated_text.includes("First sentence"), `estimated played text must reflect the played prefix, got ${JSON.stringify(progress.estimated_text)}`);
+  const context = durableSessionContextBlock({ sessionId, branchId: "default" });
+  assert.match(context, /endpoint-observed playback reached about/i, `durable context must surface endpoint playback progress, got ${JSON.stringify(context)}`);
+  assert.match(context, /assistant unheard remainder:/i, `durable context must surface the unheard suffix, got ${JSON.stringify(context)}`);
+}
+
+async function stalePlaybackProgressIsRejected(tempDir) {
+  const provider = makeSegmentedHungLiveProvider();
+  const dataDir = path.join(tempDir, "session-playback-reject");
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const events = [];
+  const connection = new VoiceSessionConnection(fakeWs(events), {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    onTurnCompleted: async (record) => record,
+  });
+
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: "sess_playback_reject",
+    turn_id: "turn_playback_reject",
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 40, frequencyHz: 220, sampleRate: 16000, volume: 0.2 }));
+  const commitPromise = connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_playback_reject" }).catch(() => {});
+  await waitFor(() => events.some((event) => event.type === "assistant_audio_segment"), 5000, "first assistant_audio_segment");
+
+  await connection.handleText(JSON.stringify({
+    type: "playback_progress",
+    turn_id: "turn_other",
+    played_pcm_ms: 40,
+  }));
+
+  assert.ok(events.some((event) => event.type === "error" && /turn_id does not match active turn/i.test(event.message)), "cross-turn playback progress must be rejected");
+  assert.equal(connection.turn.playbackProgress, null, "rejected playback progress must not mutate the active turn");
+  await connection.handleCancelTurn({ type: "cancel_turn", turn_id: "turn_playback_reject" });
+  await commitPromise;
 }
 
 function makeTurn(tempDir, tag) {

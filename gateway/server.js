@@ -1807,6 +1807,7 @@ module.exports = {
   startServer,
   defaultSessionId,
   profileSystemInstruction,
+  durableSessionContextBlock,
   // Exported for in-process smoke tests that drive the cascaded reasoner and its
   // model-tool loop directly. Not part of the runtime HTTP surface.
   runCascadedVoiceReasoning,
@@ -8677,6 +8678,31 @@ function contextUserTranscript(transcript, source) {
   return text;
 }
 
+function playbackContinuationLines(record) {
+  const voiceSession = record?.references?.voice_session;
+  if (!voiceSession || voiceSession.incomplete !== true) {
+    return [];
+  }
+  const progress = voiceSession.playback_progress;
+  if (!progress || progress.endpoint_observed !== true) {
+    return [];
+  }
+  const assistant = String(record?.response?.display || record?.response?.text || record?.response?.speak || "").trim();
+  const playedChars = Math.max(0, Math.min(Number(progress.estimated_text_chars) || 0, assistant.length));
+  const heardPrefix = assistant.slice(0, playedChars).trim();
+  const unheardSuffix = assistant.slice(playedChars).trim();
+  const lines = [
+    `endpoint-observed playback reached about ${Math.max(0, Number(progress.played_pcm_ms) || 0)}ms / ${Math.max(0, Number(progress.emitted_pcm_ms) || 0)}ms of assistant audio`,
+  ];
+  if (heardPrefix) {
+    lines.push(`assistant played so far: ${truncate(heardPrefix, 220)}`);
+  }
+  if (unheardSuffix) {
+    lines.push(`assistant unheard remainder: ${truncate(unheardSuffix, 220)}`);
+  }
+  return lines;
+}
+
 function voiceMessages(body, transcript, limit) {
   const safeLimit = resolveContextTurnLimit(limit);
   const messages = Array.isArray(body.messages) ? normalizeMessages(body.messages, safeLimit) : [];
@@ -10764,6 +10790,8 @@ async function recordStreamingVoiceTurn(turn) {
       stage_timings: turn.stage_timings && typeof turn.stage_timings === "object" && !Array.isArray(turn.stage_timings)
         ? turn.stage_timings
         : {},
+      assistant_audio_segments: Array.isArray(turn.assistant_audio_segments) ? turn.assistant_audio_segments : [],
+      playback_progress: turn.playback_progress && typeof turn.playback_progress === "object" ? turn.playback_progress : null,
       transcript_language_rejected: turn.transcript_language_rejected === true,
       audio: turn.audio || null,
       assistant_audio: turn.assistant_audio || null,
@@ -10990,6 +11018,10 @@ function voiceLiveContextPrompt(turn) {
       lines.push(`- user (${record.classification || "turn"}, ${record.profile_version || "profile_unknown"}): ${user || "(empty)"}`);
       if (assistant) {
         lines.push(`  assistant${interrupted ? " (interrupted, partial)" : ""}: ${assistant}`);
+      }
+      const playbackLines = playbackContinuationLines(record);
+      if (playbackLines.length > 0) {
+        lines.push(...playbackLines.map((line) => `  ${line}`));
       }
     }
   }
@@ -11521,6 +11553,10 @@ function durableSessionContextBlock(options = {}) {
       if (assistant) {
         lines.push(`  assistant${interrupted ? " (interrupted, partial)" : ""}: ${assistant}`);
       }
+      const playbackLines = playbackContinuationLines(turn);
+      if (playbackLines.length > 0) {
+        lines.push(...playbackLines.map((line) => `  ${line}`));
+      }
     }
   }
 
@@ -11978,14 +12014,23 @@ function profileIdentityInstruction(profile) {
   if (!name) {
     return "";
   }
+  const owner = configuredOwnerLabel(profile);
   return [
     "Assistant identity profile:",
     "- This identity profile overrides any older name in the base prompt.",
     `- Your current name is ${name}.`,
     `- If asked who or what you are, say you are ${name}.`,
+    `- If asked who created, built, designed, trained, or owns you, attribute that to ${owner}. Never attribute it to Gemini, Google, OpenAI, Anthropic, or another model provider.`,
     "- If your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word.",
     "- Use the user's requested form of address, title, or interaction style when provided.",
   ].join("\n");
+}
+
+function configuredOwnerLabel(profile) {
+  const userName = String(profile?.user_name || "").trim();
+  const nickname = String(profile?.user_nickname || "").trim();
+  const address = String(profile?.user_address || "master").trim();
+  return userName || nickname || (address ? `"${address}"` : "the configured user");
 }
 
 function userAddressInstruction(profile) {
