@@ -50,6 +50,33 @@ The audit predicted 2 conflicts (Package.swift, AggieAppleSurface.swift). Actual
 - S6: gateway wiring of canonical intent runtime into HTTP/WS routes contracted but never built.
 - signing/notarization/device tests/Postgres-live gates recorded SKIP/BLOCK by original program.
 
+## Verification gate results (run in worktree, node v25.2.1, real npm not the pnpm alias)
+
+- `gateway`: `npm install` (212 pkgs) + `npm run check` → **273 tests, 272 pass, 0 fail, 1 skipped**. Includes merged aggie-surface-protocol, proactive-turn, macos-proactive, runtime-authority, deployment-evidence (projection rebuild, idempotency, crash-after-effect) suites. PASS.
+- `browser_extension`: `npm run verify` → aggie N/N-1 adapter pass + 7 sampler tests pass + proactive helper checks + extension verification passed. `npm run smoke` → **PASS** (REAL extension, headless Chrome for Testing; service worker loaded, cross-tab ownership transfer, type+click executed, no window/focus taken). PASS.
+- `android_app`: `ANDROID_HOME=~/Library/Android/sdk ./gradlew assembleDebug` → **BUILD SUCCESSFUL**. PASS.
+- `apple_surfaces` (not in AGENTS.md defaults, run because merge 5 made a nontrivial Swift decision): `swift build` → both product targets (AggieSurfaceApp + MoaMac) + MoaMacCore link. `swift test` → **24 tests pass** (ours' AggieAppleSurfaceTests incl. digest assertion + theirs' MoaMacCoreTests coexist). Validates the merge-5 resolution end to end. PASS.
+- OpenSpec strict validation: **SKIPPED** — openspec CLI not installed and no `reference/openspec` project config in this checkout (per AGENTS.md, note skipped).
+
+No genuine integration breakage was found; no post-merge fix commits were needed beyond the conflict resolutions.
+
+## Open decisions (recorded, NOT resolved here — need a human design call)
+
+- **codex/preview-control-foundation** and **codex/telemetry-readback-final** were NOT merged. They duplicate M4/MT functionality in `gateway/lib/work-history.js`, `gateway/lib/semantic-telemetry.js`, `gateway/lib/event-substrate.js`. A design decision is needed on which implementation (the intent-runtime superset's vs the codex telemetry branches') wins before either is integrated. Merging both would collide semantically.
+
+## Known residual gap (recorded, not attempted — per program audit)
+
+- **S6**: gateway wiring of the canonical intent runtime into HTTP/WS routes was contracted but never built. The runtime domain modules are present (from merge 1) but not wired into live request/socket handlers.
+- Signing / notarization / device tests / Postgres-live gates were all recorded **SKIP/BLOCK** by the original program. The Apple surfaces are unsigned compilation+package evidence only; not TCC-tested, not a production notarization artifact.
+
+## Promotion readiness
+
+- Deliverable is the verified integration branch `integrate/portfolio-20260713`. This task does NOT promote.
+- Pushing this branch triggers **no** deploy workflow (`deploy-vps.yml` is master-only). Safe to push.
+- Branch is promotion-*ready pending the active-promotion gate* (preview URL + smoke, rollback path, no interrupted user process, state compatibility, backup/restore for persisted gateway state) — that gate is a separate, later step and is NOT satisfied by this integration alone.
+
 ## Log
 
 - Setup complete; worktree + ledger created.
+- Merges 1-4 clean (server.js auto-merged textually across 3+4). Merge 5 resolved 11 conflicts.
+- Full verification gate green (gateway/browser/android + bonus apple swift). OpenSpec skipped.
