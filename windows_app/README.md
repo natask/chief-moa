@@ -12,10 +12,10 @@ The core:
 - produces a local receipt only after a caller reports an observed outcome;
 - never performs an effect, stores a provider key, or owns canonical history.
 
-It intentionally has no HTTP client, command runner, filesystem write path,
-credential store, WinUI shell, MSIX manifest, signing identity, or updater.
-Those require a Windows worktree with the .NET/Windows App SDK toolchain and a
-separate signing/install authority review.
+`Aggie.Windows/` now adds an unsigned WinUI source scaffold and a Windows-host
+CI build contract. It is not connected to the Rust authority core, has no HTTP
+client, command runner, credential store, effect implementation, signing
+identity, installer, or updater, and has not been built on this macOS host.
 
 ## Verify the portable core
 
@@ -27,7 +27,7 @@ cargo clippy --all-targets -- -D warnings
 
 ## Windows build contract
 
-The `windows-native-core.yml` workflow runs the same checks on a current
-Windows runner and builds the MSVC target. A passing workflow proves only the
-portable library on that runner; it is not WinUI, MSIX, signing, installation,
-accessibility, or physical-device evidence.
+The workflows run the portable-core checks and define an unsigned scaffold
+build on a Windows runner. Until an actual workflow result is observed, the
+scaffold build is unproven. Even a pass is not MSIX, signing, installation,
+accessibility-runtime, integration, or physical-device evidence.
