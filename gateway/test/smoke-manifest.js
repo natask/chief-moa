@@ -99,6 +99,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/voice-chunker.js",
   "lib/voice-stages.js",
   "scripts/test-voice-chunker.js",
+  "scripts/smoke-profile-identity-guard.js",
 ];
 
 const SMOKE_SCRIPTS = [
@@ -157,6 +158,7 @@ const SMOKE_SCRIPTS = [
   "scripts/smoke-surface-skills.js",
   "scripts/smoke-livekit-transport.js",
   "scripts/test-voice-chunker.js",
+  "scripts/smoke-profile-identity-guard.js",
 ];
 
 function hasDatabaseUrl() {
