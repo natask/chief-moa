@@ -2327,6 +2327,8 @@
       playbackTime: 0,
       playbackRate: 1,
       playbackSources: new Set(),
+      framesReceived: 0,
+      framesPlayed: 0,
       assistantText: "",
       transcript: "",
       gatewayRouted: false,
@@ -2541,9 +2543,21 @@
     source.connect(audioCtx.destination);
     state.playbackSources.add(source);
     assistantPlaybackSources.add(source);
+    // Each scheduled PCM frame is one reply-text segment on the gateway's
+    // frame->text ledger. Track received vs. naturally-finished frames so an
+    // interrupt can report how far speech actually got (see cancel_turn sites).
+    state.framesReceived = (state.framesReceived || 0) + 1;
+    let counted = false;
     source.onended = () => {
       state.playbackSources.delete(source);
       assistantPlaybackSources.delete(source);
+      // onended fires for both natural completion and an explicit stop(). The
+      // cancel paths capture framesPlayed BEFORE stopping, so this only ever
+      // records segments that finished on their own.
+      if (!counted) {
+        counted = true;
+        state.framesPlayed = (state.framesPlayed || 0) + 1;
+      }
     };
     const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
     source.start(startAt);
@@ -2583,13 +2597,15 @@
     state.gatewayRouted = true;
     state.committed = true;
     stopLiveCapture(state);
+    // Capture fully-played segments before stopLivePlayback stop()s the sources.
+    const playedSegments = state.framesPlayed || 0;
     stopLivePlayback(state);
     setVoiceState(false);
     setAgentState("thinking");
     setTranscript(transcript);
     updateCueLabel(state.cueId, transcript);
     materializeCue(state.cueId, transcript, pageContextTurn ? "collecting page context" : "updating settings...");
-    sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments));
     closeLiveVoiceSession(state, pageContextTurn ? "page context routed to browser agent" : "profile control routed to gateway");
     untrackLiveVoiceState(state);
     safeRuntimeSendMessage({
@@ -2684,8 +2700,10 @@
   function stopLiveVoiceState(state, mode = "stop") {
     if (!isLiveVoiceStateActive(state)) return;
     stopLiveCapture(state);
+    // Capture fully-played segments before stopLivePlayback stop()s the sources.
+    const playedSegments = state.framesPlayed || 0;
     stopLivePlayback(state);
-    if (mode === "cancel") sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    if (mode === "cancel") sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments));
     closeLiveVoiceSession(state, mode);
     if (mode === "revoked") {
       rememberRevokedCue(state.cueId);
@@ -2727,6 +2745,15 @@
     root.dataset.ageeOwnerStatus = browserAgentOwner?.status || "";
     root.dataset.ageeOwnerCue = browserAgentOwner?.cue_id || "";
     root.dataset.ageeOwnerResult = browserAgentOwner?.last_result || "";
+  }
+
+  function liveCancelTurnMessage(state, playedSegments) {
+    // Additive: gateway records where speech stopped from played_segments. When
+    // the counter is absent (older state / never played), send cancel_turn as-is.
+    const message = { type: "cancel_turn", turn_id: state.turnId };
+    const played = Number.isFinite(playedSegments) ? playedSegments : state?.framesPlayed;
+    if (Number.isFinite(played) && played >= 0) message.played_segments = played;
+    return message;
   }
 
   function sendLiveVoiceControl(state, message) {
@@ -3102,7 +3129,7 @@
     state.gatewayRouted = true;
     state.committed = true;
     stopLiveCapture(state);
-    sendLiveVoiceControl(state, { type: "cancel_turn", turn_id: state.turnId });
+    sendLiveVoiceControl(state, liveCancelTurnMessage(state, state.framesPlayed || 0));
     closeLiveVoiceSession(state, policy.enabled ? "assistant speech overlap enabled" : "assistant barge-in enabled");
     untrackLiveVoiceState(state);
     setVoiceState(false);

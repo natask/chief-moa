@@ -183,6 +183,13 @@ final class MoaVoiceGatewaySocket {
         return sendTurnEvent("cancel_turn", turnId);
     }
 
+    // Interrupt overload: playedMs is how many ms of assistant audio the client
+    // actually played before the user barged in. Included in the JSON only when
+    // >= 0 (an unavailable position sends the plain cancel_turn unchanged).
+    boolean sendCancelTurn(String turnId, long playedMs) {
+        return sendTurnEvent("cancel_turn", turnId, playedMs);
+    }
+
     void close() {
         WebSocket socket;
         synchronized (lock) {
@@ -210,10 +217,19 @@ final class MoaVoiceGatewaySocket {
     }
 
     private boolean sendTurnEvent(String type, String turnId) {
+        return sendTurnEvent(type, turnId, -1);
+    }
+
+    private boolean sendTurnEvent(String type, String turnId, long playedMs) {
         try {
             JSONObject body = new JSONObject();
             body.put("type", type);
             body.put("turn_id", turnId);
+            // Additive: only present when the client has a real played position.
+            // Absent keeps the old {type, turn_id} shape for all other callers.
+            if (playedMs >= 0) {
+                body.put("played_ms", playedMs);
+            }
             return sendJson(body);
         } catch (JSONException error) {
             reportFailure("Could not build " + type + " event.", error);

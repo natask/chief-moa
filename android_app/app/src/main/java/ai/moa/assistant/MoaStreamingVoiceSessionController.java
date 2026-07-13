@@ -265,12 +265,17 @@ final class MoaStreamingVoiceSessionController {
         if (capture != null) {
             capture.stop();
         }
+        // Stop playback FIRST, then read how far it got: the interrupt's
+        // cancel_turn carries played_ms so the gateway knows where speech
+        // stopped. stop() captures the head position before flushing it.
+        long playedMs = -1;
         if (playback != null) {
             playback.stop();
+            playedMs = playback.lastPlayedMs();
         }
         if (socket != null) {
             if (!currentTurnId.isEmpty()) {
-                socket.sendCancelTurn(currentTurnId);
+                socket.sendCancelTurn(currentTurnId, playedMs);
             }
             socket.close();
         }

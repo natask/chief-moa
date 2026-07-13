@@ -51,7 +51,9 @@ const BROWSER_TURN_STATUS_POLL_MS = 400;
 // element summaries, and envelope metadata still need room in the same request.
 const MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS = 420 * 1024;
 const VOICE_AUTO_COMMIT_ENABLED = true;
-const VOICE_AUTO_COMMIT_SILENCE_MS = 900;
+// 750 (was 900): aligned toward Android's 700ms; this hold is a flat serial
+// add to every turn's time-to-first-audio, so keep it as tight as VAD allows.
+const VOICE_AUTO_COMMIT_SILENCE_MS = 750;
 const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
 const VOICE_AUTO_COMMIT_MAX_RECORDING_MS = 18000;
 const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;

@@ -48,6 +48,10 @@ final class MoaAudioPlaybackController {
 
     private AudioTrack audioTrack;
     private boolean playing;
+    // Where playback reached, in ms, captured inside stop() BEFORE the track's
+    // head position is flushed. -1 = unavailable (never played this turn or the
+    // head could not be read). Reset on start() so a prior turn cannot leak.
+    private long lastPlayedMs = -1;
 
     MoaAudioPlaybackController(Callback callback) {
         this.callback = callback;
@@ -72,6 +76,7 @@ final class MoaAudioPlaybackController {
             if (playing) {
                 return;
             }
+            lastPlayedMs = -1;
             try {
                 int minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE_HZ, CHANNEL_CONFIG, AUDIO_FORMAT);
                 if (minBufferSize == AudioTrack.ERROR || minBufferSize == AudioTrack.ERROR_BAD_VALUE) {
@@ -186,11 +191,51 @@ final class MoaAudioPlaybackController {
         return offset == pcm.length;
     }
 
+    // Where playback stopped, in ms, as of the last stop(). -1 when unavailable.
+    // Read after stop() to tell the gateway how much assistant audio the user
+    // actually heard before interrupting.
+    long lastPlayedMs() {
+        synchronized (lock) {
+            return lastPlayedMs;
+        }
+    }
+
+    // Live played position in ms while the track is still active. -1 when the
+    // track is released/null or the head position is unreadable.
+    long playedMs() {
+        synchronized (lock) {
+            return currentPlayedMsLocked();
+        }
+    }
+
+    // Caller must hold `lock`. Reads the AudioTrack playback head (a frame
+    // count) and converts to ms via the fixed 16000 Hz track sample rate.
+    // getPlaybackHeadPosition() is a signed frame count; a negative reading (or
+    // a released/throwing track) is treated as unavailable and returns -1.
+    private long currentPlayedMsLocked() {
+        if (audioTrack == null) {
+            return -1;
+        }
+        try {
+            int frames = audioTrack.getPlaybackHeadPosition();
+            if (frames < 0) {
+                return -1;
+            }
+            return (long) frames * 1000L / SAMPLE_RATE_HZ;
+        } catch (RuntimeException error) {
+            return -1;
+        }
+    }
+
     void stop() {
         synchronized (lock) {
             if (!playing && audioTrack == null) {
                 return;
             }
+            // Capture where playback reached BEFORE pause()/flush(): flush()
+            // resets the head position to 0, so reading it afterwards would
+            // always report 0. Stored for lastPlayedMs().
+            lastPlayedMs = currentPlayedMsLocked();
             playing = false;
             if (audioTrack != null) {
                 try {
