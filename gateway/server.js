@@ -67,6 +67,7 @@ const {
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
+  profileControlIntentMutates,
   classifyVoiceTurn,
 } = require("./lib/voice-intent");
 const {
@@ -7837,6 +7838,125 @@ async function handleInternalVoiceTurnRecord(request, response) {
   }
 }
 
+// A short, human-readable description of the change a deterministic profile
+// mutation intent would make, for the confirmation judge's prompt.
+function profileMutationDescription(intent) {
+  if (!intent || typeof intent !== "object") {
+    return "";
+  }
+  if (intent.action === "revert") {
+    return intent.mode === "reset"
+      ? "reset all of your settings to the defaults"
+      : "undo your last settings change";
+  }
+  if (intent.action === "companion_create_apply") {
+    return `become a "${intent.companion_role || "companion"}"`;
+  }
+  if (intent.action === "update" && intent.patch && typeof intent.patch === "object") {
+    const patch = intent.patch;
+    if (patch.assistant_name) {
+      return `change your name to "${patch.assistant_name}"`;
+    }
+    if (patch.system_prompt) {
+      return "change your persona / system prompt";
+    }
+    if (patch.voice) {
+      return `change your voice to "${patch.voice}"`;
+    }
+    if (patch.language || patch.input_languages) {
+      return `change your ${intent.summary || "language settings"}`;
+    }
+    return `change ${intent.summary || "your settings"}`;
+  }
+  return String(intent.summary || "");
+}
+
+// Strict yes/no parse of the confirmation judge's reply. Returns true ONLY when
+// the model returned a JSON object with confirmed === true. Any parse failure,
+// missing field, or non-true value returns false, so the caller fails closed.
+function parseMutationJudgeConfirmed(raw) {
+  const text = String(raw || "");
+  const start = text.indexOf("{");
+  if (start < 0) {
+    return false;
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const ch = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+    } else if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(text.slice(start, index + 1));
+          return parsed && parsed.confirmed === true;
+        } catch (_error) {
+          return false;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Cheap reasoning-model confirmation for a deterministic voice profile MUTATION
+// on the model-less HTTP path. Returns true ONLY when a configured model
+// answers, in strict JSON, that the user clearly and deliberately asked for this
+// exact change. Fails CLOSED: no provider, a model/parse error, a timeout, or a
+// "no" all return false, so STT recognition garbage can never write the profile.
+async function confirmVoiceProfileMutation(transcript, intent) {
+  const description = profileMutationDescription(intent);
+  const utterance = String(transcript || "").trim();
+  if (!description || !utterance) {
+    return false;
+  }
+  const effective = agentProfile.effective();
+  if (!providerConfiguredFor(resolveReasoningProvider(effective))) {
+    return false;
+  }
+  const messages = [
+    {
+      role: "system",
+      content: [
+        "You are a strict intent-confirmation judge for a voice assistant's own settings.",
+        "The transcript is speech-to-text and may contain recognition errors, noise, or garbage.",
+        "Decide whether the user CLEARLY and DELIBERATELY asked for the specific settings change below.",
+        "If the transcript is unclear, unrelated, garbled, offensive noise, or only vaguely related, answer no.",
+        "Respond with ONLY a JSON object: {\"confirmed\": true} or {\"confirmed\": false}. No other text.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        `Requested change: ${description}`,
+        `Transcript: ${JSON.stringify(utterance)}`,
+        "Did the user clearly and deliberately ask for this exact change?",
+      ].join("\n"),
+    },
+  ];
+  try {
+    const raw = await callModel(messages, effective);
+    return parseMutationJudgeConfirmed(raw);
+  } catch (_error) {
+    return false;
+  }
+}
+
 async function handleVoiceProfileControl(record, transcript, turnProfileOptions = {}) {
   // Reply language for the CANNED confirmations below, from the current profile.
   // The update path recomputes this from the post-change profile so a language
@@ -7957,6 +8077,39 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
     };
+  }
+
+  // Model-routed mutation gate for the model-less HTTP path. A deterministic
+  // matchtext parse must NEVER apply a profile mutation on its own — STT garbage
+  // repeatedly matched the identity/persona/voice/language parsers and wrote the
+  // live profile. The cascaded/live path already re-routes these turns to the
+  // reasoning model's settings tool (classifyVoiceTurnWithPersona), so a mutation
+  // only reaches here on the /v1/voice/turns HTTP path that has no profile tool
+  // to offer. Confirm it with a cheap strict-JSON reasoning-model judge; if no
+  // provider is configured, the judge errors, or it does not say yes, DO NOT
+  // apply. This fails CLOSED — it never writes on ambiguity. The response_modality
+  // fast path is the one allowed deterministic write and is not gated here.
+  if (profileControlIntentMutates(intent)) {
+    const confirmed = await confirmVoiceProfileMutation(transcript, intent);
+    if (!confirmed) {
+      const message = voiceL10n.t(currentReplyLanguage, "profileMutationUnconfirmed");
+      return {
+        ...voiceTurnPayload(record, {
+          classification: "profile_control",
+          speak: message,
+          display: message,
+          actions: [{
+            type: "profile_update_blocked",
+            reason: "unconfirmed_voice_mutation",
+            summary: intent.summary || "",
+          }],
+          follow_up_expected: false,
+          reply_language: currentReplyLanguage,
+        }),
+        profile_version: agentProfile.currentVersion(profileOptions),
+        profile: agentProfileRuntimeStatus(profileOptions),
+      };
+    }
   }
 
   if (intent.action === "revert") {
@@ -12540,11 +12693,27 @@ function collectCascadedToolActions(toolResults) {
 // ("change your voice to charon") keep the profile-control path unchanged.
 function classifyVoiceTurnWithPersona(persona, body, transcript) {
   const classification = classifyVoiceTurn(body, transcript);
-  if (classification !== "profile_control" || !persona || typeof persona !== "object") {
+  if (classification !== "profile_control") {
     return classification;
   }
   const intent = parseProfileControlIntent(transcript);
-  return intent && intent.action === "summary" ? "chat" : classification;
+  // Profile MUTATIONS on the cascaded/live path are model-routed: a matchtext
+  // parse may no longer apply an identity/persona/voice/language/companion/revert
+  // change on its own. Re-route the turn as chat so the reasoning model actually
+  // reasons about it and calls update_agent_profile / revert_agent_profile
+  // (source "voice-cascaded-tool") when — and only when — the user really asked.
+  // STT garbage that happened to match the deterministic mutation parser now
+  // flows to the model as an ordinary utterance and produces no write. Read-only
+  // queries and the response_modality fast path stay deterministic.
+  if (profileControlIntentMutates(intent)) {
+    return "chat";
+  }
+  // A session persona (website pet) keeps identity SUMMARIES conversational so
+  // the pet answers in character rather than reading the durable profile back.
+  if (persona && typeof persona === "object" && intent && intent.action === "summary") {
+    return "chat";
+  }
+  return classification;
 }
 
 function sessionPersonaBlock(persona) {
