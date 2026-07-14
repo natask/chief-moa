@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-07-13",
+  "provider": "google-cloud-speech-v2",
+  "model": "chirp_3",
+  "endpoint_region": "us",
+  "audio_format": {
+    "encoding": "LINEAR16",
+    "sample_rate_hz": 16000,
+    "channels": 1
+  },
+  "privacy": {
+    "raw_audio_committed": false,
+    "raw_transcripts_committed": false,
+    "source": "protected VPS voice archive",
+    "note": "Opaque archive references and SHA-256 digests make the evidence repeatable without publishing user voice data."
+  },
+  "cases": [
+    {
+      "id": "pure_amharic_wrong_script_regression",
+      "session_id": "agee_78d3efd4-0163-45a8-bda2-137eee6e7c7f",
+      "turn_id": "voice_mrk4bk8i_vln6y7",
+      "audio_bytes": 45140,
+      "audio_sha256": "59d330669c03078444c20e48a23dc2bfbda57285bb8b2303218b63b8d9bc79c7",
+      "reference_scripts": ["Ethiopic"],
+      "results": {
+        "am_ET": { "trials": 3, "reference_match_trials": 3, "foreign_script_trials": 0 },
+        "en_US_am_ET": { "trials": 3, "reference_match_trials": 0, "foreign_script_trials": 3, "returned_language_code": null },
+        "am_ET_en_US": { "trials": 3, "reference_match_trials": 0, "foreign_script_trials": 3, "returned_language_code": null },
+        "am_ET_code_switch_prompt": { "trials": 2, "reference_match_trials": 2, "foreign_script_trials": 0 }
+      }
+    },
+    {
+      "id": "pure_english_control",
+      "session_id": "agee_78d3efd4-0163-45a8-bda2-137eee6e7c7f",
+      "turn_id": "voice_mrk3bnsu_2lnrbh",
+      "audio_bytes": 128918,
+      "audio_sha256": "dc892b728ea051ae908a01104527d0cb9252431fb89e9e26f12ddfdc365b967e",
+      "reference_transcript_sha256": "2b53ea950033c4582dc9fd7b286a7ce561bbf2202ae05307e7103d9227bf5b12",
+      "reference_scripts": ["Latin"],
+      "results": {
+        "am_ET": { "trials": 3, "reference_match_trials": 3, "foreign_script_trials": 0, "returned_language_code": "am-ET" },
+        "en_US": { "trials": 2, "reference_match_trials": 2, "foreign_script_trials": 0, "returned_language_code": "en-US" },
+        "en_US_am_ET": { "trials": 2, "reference_match_trials": 2, "foreign_script_trials": 0, "returned_language_code": "en-US" },
+        "am_ET_code_switch_prompt": { "trials": 2, "reference_match_trials": 2, "foreign_script_trials": 0 }
+      }
+    },
+    {
+      "id": "mixed_amharic_with_embedded_english_token",
+      "session_id": "shared-usr_74223d7809682c30",
+      "turn_id": "turn_1cdde864-8a25-46f0-aac2-230fd2cc87a9",
+      "audio_bytes": 190720,
+      "audio_sha256": "acccb806a8ffcfa2ca02e8b8ae675ae4b0ac625eb83fd6f50e113bbada131f9a",
+      "reference_transcript_sha256": "767686ef2afee06ee401d7b258bc3bec3de3fe3486ee773f7685efe4e0dc4d81",
+      "reference_scripts": ["Ethiopic", "Latin"],
+      "results": {
+        "am_ET": { "trials": 2, "reference_match_trials": 0, "failure": "converted or omitted the embedded English token" },
+        "en_US_am_ET": { "trials": 2, "reference_match_trials": 2 },
+        "am_ET_code_switch_prompt": { "trials": 2, "reference_match_trials": 0, "failure": "rendered the English token phonetically in Ethiopic" }
+      }
+    },
+    {
+      "id": "mixed_amharic_then_english_clause",
+      "session_id": "shared-usr_74223d7809682c30",
+      "turn_id": "turn_439733cd-ca52-40eb-8d44-0a2ae274f885",
+      "audio_bytes": 238720,
+      "audio_sha256": "4b228cb3af17ddd2fd83466c31012f23ce49d73e38cac2776e1bd53833eca216",
+      "reference_transcript_sha256": "2db9256c1e098bb8854cd04593b32497d5800b64e5aa1429f2a786b597e094a8",
+      "reference_scripts": ["Ethiopic", "Latin"],
+      "results": {
+        "am_ET": { "trials": 2, "reference_match_trials": 0, "failure": "dropped the English clause" },
+        "en_US_am_ET": { "trials": 2, "reference_match_trials": 2 },
+        "am_ET_code_switch_prompt": { "trials": 2, "reference_match_trials": 2 }
+      }
+    },
+    {
+      "id": "mixed_english_then_amharic_clause",
+      "session_id": "shared-usr_74223d7809682c30",
+      "turn_id": "turn_759d968f-4a86-4078-bafc-a8e402b21c03",
+      "audio_bytes": 154880,
+      "audio_sha256": "7d9f235cba66db3f089ffebb5851e1a08e7e841db8c29c53b1bab161d2f950ce",
+      "reference_transcript_sha256": "5a02be3d0988053740946b91574a918fe74a703294829ca28580ded7f7e3f3d7",
+      "reference_scripts": ["Latin", "Ethiopic"],
+      "results": {
+        "am_ET": { "trials": 2, "reference_match_trials": 2 },
+        "en_US_am_ET": { "trials": 2, "reference_match_trials": 0, "failure": "dropped the Amharic clause" },
+        "am_ET_code_switch_prompt": { "trials": 2, "reference_match_trials": 2 }
+      }
+    }
+  ]
+}
