@@ -903,26 +903,47 @@ class VoiceSessionConnection {
     }
   }
 
-  // A tool result may carry a client-actionable action (today only page_tweak).
-  // The tool response we send the provider is not visible to the extension, and
-  // native-audio models go silent after a tool call, so the visual confirmation
-  // is the primary feedback. Forward the action as its own control event on the
-  // session socket, following the same envelope the HTTP turn path attaches to
-  // actions[], so the client can apply it the same way on both paths.
+  // A tool result may carry a client-actionable action (page_tweak or
+  // companion_motion). The tool response we send the provider is not visible to
+  // the client, and native-audio models go silent after a tool call, so the
+  // visual/motion confirmation is the primary feedback. Forward the action as its
+  // own control event on the session socket, following the same envelope the HTTP
+  // turn path attaches to actions[], so the client can apply it the same way on
+  // both paths.
   async forwardTurnAction(turn, result) {
     const action = result && typeof result === "object" ? result.action : null;
-    if (!action || typeof action !== "object" || action.type !== "page_tweak" || !action.record) {
+    await this.emitClientAction(turn, action, typeof result?.message === "string" ? result.message : "");
+  }
+
+  // Emit one client-forwardable action envelope. page_tweak carries a `record`;
+  // companion_motion carries a `plan`. Unknown or malformed actions are ignored.
+  async emitClientAction(turn, action, message = "") {
+    if (!action || typeof action !== "object" || Array.isArray(action)) {
       return;
     }
-    await this.sendEvent({
-      type: "page_tweak",
-      session_id: turn.sessionId,
-      branch_id: turn.branchId,
-      turn_id: turn.turnId,
-      action,
-      record: action.record,
-      message: typeof result.message === "string" ? result.message : "",
-    });
+    if (action.type === "page_tweak" && action.record) {
+      await this.sendEvent({
+        type: "page_tweak",
+        session_id: turn.sessionId,
+        branch_id: turn.branchId,
+        turn_id: turn.turnId,
+        action,
+        record: action.record,
+        message: typeof message === "string" ? message : "",
+      });
+      return;
+    }
+    if (action.type === "companion_motion" && action.plan) {
+      await this.sendEvent({
+        type: "companion_motion",
+        session_id: turn.sessionId,
+        branch_id: turn.branchId,
+        turn_id: turn.turnId,
+        action,
+        plan: action.plan,
+        message: typeof message === "string" ? message : "",
+      });
+    }
   }
 
   async completeLiveTurn(turn, providerResult) {
@@ -1076,6 +1097,15 @@ class VoiceSessionConnection {
       ...(Number.isFinite(providerResult?.reasoner_first_delta_ms) ? { reasoner_first_delta_ms: providerResult.reasoner_first_delta_ms } : {}),
       ...(doneTtsError ? { tts_error: doneTtsError } : {}),
     });
+    // Cascaded path: the reasoner's tools may have proposed client-forwardable
+    // actions (e.g. companion_motion) on providerResult.actions. Forward each as
+    // its own client event before turn_done, the same way the Live tool path
+    // forwards a page_tweak, so the client runtime can apply it.
+    if (Array.isArray(providerResult?.actions)) {
+      for (const action of providerResult.actions) {
+        await this.emitClientAction(turn, action, "");
+      }
+    }
     // Terminal path: clear the keepalive before turn_done so no progress tick can
     // fire after the turn is done. Cleared synchronously (clearInterval) before
     // the awaited send, so the interval cannot slip a tick in on the yield.

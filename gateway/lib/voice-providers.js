@@ -1189,6 +1189,10 @@ class CascadedVoiceProvider {
       ...(options.streaming && Number.isFinite(options.ttsSegments) ? { tts_segments: options.ttsSegments } : {}),
       ...(Number.isFinite(options.reasonerFirstDeltaMs) ? { reasoner_first_delta_ms: Math.max(0, Math.round(options.reasonerFirstDeltaMs)) } : {}),
       ...(options.ttsLanguageMismatch ? { tts_language_mismatch: true } : {}),
+      // Client-forwardable action envelopes proposed by the reasoner's tools
+      // this turn (e.g. companion_motion). The session server forwards each as
+      // its own client event; absent on turns with no proposed action.
+      ...(Array.isArray(reasoning.actions) && reasoning.actions.length ? { actions: reasoning.actions.slice(0, 8) } : {}),
     };
   }
 

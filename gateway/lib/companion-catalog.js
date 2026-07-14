@@ -7,8 +7,22 @@ const { normalizeVoiceChoice } = require("./profile-options");
 const CATALOG_FILENAME = "companion-catalog.json";
 const CATALOG_VERSION = "companion-catalog/v1";
 const PET_SPEC_VERSION = "companion-pet/v1";
+// Character manifest v2: additive optional companion-level fields (persona,
+// voice_profile, provenance, command_verbs, visibility). v1 manifests without
+// these load unchanged — every sanitizer below defaults to a safe empty/local
+// shape, and the fields round-trip through list/create/preview/apply.
+const MANIFEST_VERSION = "companion-manifest/v2";
 const MAX_IMAGE_DATA_URL_CHARS = 700_000;
 const MAX_RULES = 12;
+const PERSONA_MAX_CHARS = 2000;
+const MAX_REFERENCE_MEDIA_URLS = 8;
+// The fixed motion-verb allowlist the animation runtime understands. A manifest
+// declares which of these its sprite set supports; the companion_motion tool
+// validates a requested verb against this allowlist.
+const COMMAND_VERBS = Object.freeze(["walk", "climb", "fall", "idle", "wave", "drag", "seek"]);
+const CONSENT_STATES = Object.freeze(["unreviewed", "approved", "rejected"]);
+const VOICE_CLONE_PROVIDER = "chirp3-instant-custom-voice";
+const MAX_CLONE_AUDIO_BYTES = 8_000_000;
 
 const BUILTIN_COMPANIONS = Object.freeze([
   companion({
@@ -118,7 +132,7 @@ function createCompanionCatalogStore(options = {}) {
 
   function list(options = {}) {
     const query = normalizeSearch(options.q || options.query || "");
-    const all = [...BUILTIN_COMPANIONS, ...state.companions].map((item) => publicCompanion(item, voiceBindingOptions));
+    const all = [...BUILTIN_COMPANIONS, ...state.companions].map((item) => decorateClone(publicCompanion(item, voiceBindingOptions)));
     const filtered = query
       ? all.filter((item) => searchText(item).includes(query))
       : all;
@@ -129,12 +143,44 @@ function createCompanionCatalogStore(options = {}) {
   function get(id) {
     const target = normalizeId(id);
     if (!target) return null;
-    return publicCompanion(
+    return decorateClone(publicCompanion(
       BUILTIN_COMPANIONS.find((item) => item.id === target)
         || state.companions.find((item) => item.id === target)
         || null,
       voiceBindingOptions,
-    );
+    ));
+  }
+
+  // Overlay the latest voice-clone job's status onto the public companion so a
+  // client sees custom_voice.status ("blocked_allowlist" while Google cloning is
+  // allowlist-pending) and a compact voice_clone summary. The bound voice stays
+  // the canonical fallback in voice_binding.provider_voice_id.
+  function decorateClone(pub) {
+    if (!pub) return pub;
+    const job = latestCloneJob(pub.id);
+    if (!job) return pub;
+    const nextBinding = pub.voice_binding
+      ? { ...pub.voice_binding, custom_voice: { ...(pub.voice_binding.custom_voice || {}), status: job.status } }
+      : pub.voice_binding;
+    return {
+      ...pub,
+      voice_binding: nextBinding,
+      voice_clone: {
+        job_id: job.id,
+        status: job.status,
+        mode: job.mode,
+        fallback_voice: job.fallback_voice,
+      },
+    };
+  }
+
+  function latestCloneJob(companionId) {
+    const target = normalizeId(companionId);
+    let latest = null;
+    for (const job of state.voice_clone_jobs) {
+      if (job.companion_id === target) latest = job;
+    }
+    return latest;
   }
 
   function createDraft(input = {}) {
@@ -174,6 +220,13 @@ function createCompanionCatalogStore(options = {}) {
         memory_policy: "recall_and_write",
         system_prompt: customSystemPrompt(name, role, text, rules),
       },
+      // Character manifest v2: pass client-supplied fields through the
+      // sanitizers in companion(); absent fields default safely.
+      persona: input.persona,
+      voice_profile: input.voice_profile || input.voiceProfile,
+      provenance: input.provenance,
+      command_verbs: input.command_verbs || input.commandVerbs,
+      visibility: input.visibility,
       created_at: now,
       updated_at: now,
     });
@@ -266,7 +319,7 @@ function createCompanionCatalogStore(options = {}) {
     }
     const patch = compileProfilePatch(selected);
     return {
-      companion: publicCompanion(selected, voiceBindingOptions),
+      companion: decorateClone(publicCompanion(selected, voiceBindingOptions)),
       profile_overrides: patch,
       mutates_profile: false,
       sample_text: `This is ${selected.name}. ${selected.summary}`,
@@ -354,6 +407,127 @@ function createCompanionCatalogStore(options = {}) {
     fs.renameSync(tmpPath, catalogPath);
   }
 
+  // Replace a mutable (custom) companion record with a re-sanitized copy that
+  // merges `changes`. Builtins are frozen and not in state, so they cannot be
+  // mutated (publish/clone are custom-companion operations). Returns the new
+  // frozen record or null when the id is not a mutable companion.
+  function updateCompanionRecord(id, changes) {
+    const target = normalizeId(id);
+    const index = state.companions.findIndex((item) => item.id === target);
+    if (index === -1) return null;
+    const merged = companion({ ...state.companions[index], ...changes, updated_at: new Date().toISOString() });
+    if (!merged) return null;
+    state.companions[index] = merged;
+    persist();
+    return merged;
+  }
+
+  // Voice-clone job (consent + allowlist gated). Reference audio bytes and any
+  // credentials are NEVER stored; the reference is recorded as a bounded
+  // descriptor. In dry-run mode (default, while Google cloning is allowlist
+  // pending) the job is stored "blocked_allowlist" and the closest canonical
+  // voice is bound as the pet's fallback so it always has a usable voice. With
+  // MOA_VOICE_CLONE_LIVE the job records "not_implemented_live" (reserved).
+  function createVoiceCloneJob(input = {}) {
+    const companionRecord = getRaw(input.companion_id || input.companionId || input.id);
+    if (!companionRecord) {
+      throw new Error("companion not found");
+    }
+    const now = new Date().toISOString();
+    const live = input.live === true;
+    const fallbackVoice = normalizeVoiceChoice(companionRecord.voice) || "Kore";
+    const status = live ? "not_implemented_live" : "blocked_allowlist";
+    const job = {
+      id: uniqueCloneJobId(companionRecord.id),
+      companion_id: companionRecord.id,
+      status,
+      mode: live ? "live" : "dry_run",
+      provider: VOICE_CLONE_PROVIDER,
+      consent: {
+        attested: input.consent?.attested === true,
+        subject: cleanText(input.consent?.subject, 160),
+        recorded_at: now,
+      },
+      // Bounded, credential-free descriptor of the reference; no raw bytes/URL
+      // fetch happens in this change.
+      reference: cleanCloneReference(input.reference),
+      fallback_voice: fallbackVoice,
+      plan: {
+        provider: VOICE_CLONE_PROVIDER,
+        target_companion: companionRecord.id,
+        steps: [
+          "record consent",
+          "upload reference audio to the cloning provider",
+          "enroll a custom voice and bind voice_profile.custom_voice_ref",
+        ],
+        note: live
+          ? "Live cloning is not implemented in this change (MOA_VOICE_CLONE_LIVE reserved)."
+          : "Google voice cloning is allowlist-gated for this project; plan stored and the closest canonical voice is bound as the fallback.",
+      },
+      last_error: "",
+      created_at: now,
+      updated_at: now,
+    };
+    state.voice_clone_jobs.push(job);
+    // Dry-run: bind the canonical fallback into the pet's voice_profile so the
+    // custom voice reference points at the pending job while the pet keeps a
+    // real voice. Live mode leaves the binding until enrollment completes.
+    if (!live) {
+      updateCompanionRecord(companionRecord.id, {
+        voice_profile: { kind: "custom", voice_id: fallbackVoice, custom_voice_ref: job.id },
+      });
+    }
+    persist();
+    return { job, companion: get(companionRecord.id) };
+  }
+
+  function getVoiceCloneJob(jobId) {
+    const target = String(jobId || "").trim();
+    return state.voice_clone_jobs.find((job) => job.id === target) || null;
+  }
+
+  function listVoiceCloneJobs(companionId) {
+    const target = normalizeId(companionId);
+    return state.voice_clone_jobs.filter((job) => job.companion_id === target);
+  }
+
+  function uniqueCloneJobId(companionId) {
+    const prefix = `voiceclone-${normalizeId(companionId) || "companion"}`.slice(0, 90).replace(/-+$/g, "");
+    let candidate = `${prefix}-1`;
+    let index = 2;
+    while (state.voice_clone_jobs.some((job) => job.id === candidate)) {
+      candidate = `${prefix}-${index++}`;
+    }
+    return candidate;
+  }
+
+  // Shared library: mark a custom companion shared (publish) or list shared
+  // manifests. Publish requires an approved consent_state; install is a plain
+  // apply the server performs by companion_id.
+  function publishCompanion(input = {}) {
+    const record = getRaw(input.id || input.companion_id || input.companionId);
+    if (!record) {
+      throw new Error("companion not found");
+    }
+    if (record.provenance?.consent_state !== "approved") {
+      const error = new Error("provenance consent_state must be \"approved\" before publishing");
+      error.code = "consent_not_approved";
+      error.reason = record.provenance?.consent_state || "unreviewed";
+      throw error;
+    }
+    const updated = updateCompanionRecord(record.id, { visibility: "shared" });
+    if (!updated) {
+      const error = new Error("only custom companions can be published to the shared library");
+      error.code = "not_publishable";
+      throw error;
+    }
+    return get(updated.id);
+  }
+
+  function listShared(options = {}) {
+    return list(options).filter((item) => item.visibility === "shared");
+  }
+
   return {
     catalogPath,
     version: CATALOG_VERSION,
@@ -368,11 +542,33 @@ function createCompanionCatalogStore(options = {}) {
     getBookmark,
     preview,
     compileProfilePatch,
+    createVoiceCloneJob,
+    getVoiceCloneJob,
+    listVoiceCloneJobs,
+    publishCompanion,
+    listShared,
+    commandVerbs: () => COMMAND_VERBS.slice(),
   };
 }
 
+// A bounded, credential-free record of the clone reference. Reference audio
+// bytes are never persisted; only their size/hash and a validated https URL are
+// kept, and the server never fetches the URL in this change.
+function cleanCloneReference(input) {
+  const src = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const kind = src.kind === "url" ? "url" : src.kind === "audio" ? "audio" : "";
+  const ref = { kind };
+  const url = cleanHttpsUrl(src.url);
+  if (url) ref.url = url;
+  const bytes = Number(src.audio_bytes);
+  if (Number.isFinite(bytes) && bytes > 0) ref.audio_bytes = Math.round(bytes);
+  const sha = String(src.audio_sha256 || "").trim().toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, 64);
+  if (sha) ref.audio_sha256 = sha;
+  return ref;
+}
+
 function loadState(catalogPath) {
-  const empty = { version: CATALOG_VERSION, companions: [], agents: [], bookmarks: [] };
+  const empty = { version: CATALOG_VERSION, companions: [], agents: [], bookmarks: [], voice_clone_jobs: [] };
   if (!fs.existsSync(catalogPath)) {
     return empty;
   }
@@ -391,7 +587,12 @@ function loadState(catalogPath) {
     const bookmarks = Array.isArray(raw.bookmarks)
       ? raw.bookmarks.map((item) => bookmark(item, getRaw)).filter(Boolean)
       : [];
-    return { version: CATALOG_VERSION, companions, agents, bookmarks };
+    // Clone jobs are plain records (no cross-refs to rebuild); keep only those
+    // whose companion still exists. Absent on v1 catalogs -> empty.
+    const voiceCloneJobs = Array.isArray(raw.voice_clone_jobs)
+      ? raw.voice_clone_jobs.filter((job) => job && typeof job === "object" && !Array.isArray(job) && typeof job.id === "string")
+      : [];
+    return { version: CATALOG_VERSION, companions, agents, bookmarks, voice_clone_jobs: voiceCloneJobs };
   } catch {
     return empty;
   }
@@ -422,6 +623,12 @@ function companion(input) {
       role: input.summary || input.description || name,
       appearance: cleanAppearance(input.appearance),
     }),
+    // Character manifest v2 (additive; v1 records default these safely).
+    persona: cleanPersona(input.persona),
+    voice_profile: cleanVoiceProfile(input.voice_profile || input.voiceProfile, voice),
+    provenance: cleanProvenance(input.provenance),
+    command_verbs: cleanCommandVerbs(input.command_verbs || input.commandVerbs),
+    visibility: cleanVisibility(input.visibility),
     created_at: typeof input.created_at === "string" ? input.created_at : "",
     updated_at: typeof input.updated_at === "string" ? input.updated_at : "",
   });
@@ -445,6 +652,14 @@ function publicCompanion(input, voiceBindingOptions = {}) {
     smoke_prompts: Array.isArray(input.smoke_prompts) ? input.smoke_prompts.slice() : [],
     rules: cleanRules(input.rules),
     profile_patch: { ...(input.profile_patch || {}) },
+    // Character manifest v2 (additive; preserved through the public projection
+    // so list/preview/apply round-trip the fields the client created).
+    manifest_version: MANIFEST_VERSION,
+    persona: cleanPersona(input.persona),
+    voice_profile: cleanVoiceProfile(input.voice_profile, input.voice),
+    provenance: cleanProvenance(input.provenance),
+    command_verbs: cleanCommandVerbs(input.command_verbs),
+    visibility: cleanVisibility(input.visibility),
     created_at: input.created_at || "",
     updated_at: input.updated_at || "",
   };
@@ -599,6 +814,84 @@ function cleanProfilePatch(input, fallback = {}) {
   patch.autonomy_level = cleanMachineValue(input.autonomy_level) || "confirm_actions";
   patch.memory_policy = cleanMachineValue(input.memory_policy) || "recall_and_write";
   return patch;
+}
+
+// --- Character manifest v2 sanitizers (additive) --------------------------
+
+// The persona is a system-prompt fragment. It is untrusted client input, so it
+// is stripped of control characters and hard-capped exactly like the durable
+// system_prompt / session persona paths.
+function cleanPersona(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, PERSONA_MAX_CHARS);
+}
+
+// voice_profile.kind selects a canonical (catalog) voice or a cloned/custom
+// voice reference. voice_id is always a valid catalog voice — for a custom
+// profile it is the bound canonical FALLBACK the pet actually speaks with until
+// the clone is enrolled, so a pet is never left without a usable voice.
+function cleanVoiceProfile(input, fallbackVoice) {
+  const src = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const kind = src.kind === "custom" ? "custom" : "canonical";
+  const voiceId = normalizeVoiceChoice(src.voice_id || src.voiceId || fallbackVoice)
+    || normalizeVoiceChoice(fallbackVoice)
+    || "Kore";
+  const profile = { kind, voice_id: voiceId };
+  const ref = cleanText(src.custom_voice_ref || src.customVoiceRef, 160);
+  if (ref) profile.custom_voice_ref = ref;
+  return profile;
+}
+
+// Provenance records where a character came from and its consent/license state.
+// reference_media_urls are https-only and capped; consent_state gates publish.
+function cleanProvenance(input) {
+  const src = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const consentState = CONSENT_STATES.includes(src.consent_state) ? src.consent_state : "unreviewed";
+  const rawUrls = Array.isArray(src.reference_media_urls || src.referenceMediaUrls)
+    ? (src.reference_media_urls || src.referenceMediaUrls)
+    : [];
+  return {
+    character_name: cleanText(src.character_name || src.characterName, 120),
+    reference_media_urls: rawUrls.map(cleanHttpsUrl).filter(Boolean).slice(0, MAX_REFERENCE_MEDIA_URLS),
+    license_note: cleanText(src.license_note || src.licenseNote, 400),
+    consent_state: consentState,
+  };
+}
+
+function cleanHttpsUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 500) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:") return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+// command_verbs is the subset of the fixed allowlist this character's animation
+// set supports. An unknown verb is dropped; an empty/absent list defaults to the
+// full allowlist so a plain v1 pet is still commandable.
+function cleanCommandVerbs(input) {
+  const list = Array.isArray(input) ? input : [];
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const verb = cleanMachineValue(item);
+    if (COMMAND_VERBS.includes(verb) && !seen.has(verb)) {
+      seen.add(verb);
+      out.push(verb);
+    }
+  }
+  return out.length > 0 ? out : COMMAND_VERBS.slice();
+}
+
+function cleanVisibility(value) {
+  return value === "shared" ? "shared" : "local";
 }
 
 function roleFromText(value) {
@@ -1058,4 +1351,6 @@ function companionVersion(sequence) {
 module.exports = {
   createCompanionCatalogStore,
   CATALOG_VERSION,
+  MANIFEST_VERSION,
+  COMMAND_VERBS,
 };

@@ -103,6 +103,8 @@ const SYNTAX_CHECK_FILES = [
   "scripts/smoke-profile-identity-guard.js",
   "scripts/smoke-streaming-stt.js",
   "scripts/smoke-voice-retranscribe.js",
+  "scripts/smoke-companion-character.js",
+  "scripts/smoke-companion-motion.js",
 ];
 
 const SMOKE_SCRIPTS = [
@@ -164,6 +166,8 @@ const SMOKE_SCRIPTS = [
   "scripts/smoke-profile-identity-guard.js",
   "scripts/smoke-streaming-stt.js",
   "scripts/smoke-voice-retranscribe.js",
+  "scripts/smoke-companion-character.js",
+  "scripts/smoke-companion-motion.js",
 ];
 
 function hasDatabaseUrl() {
