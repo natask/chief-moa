@@ -43,6 +43,7 @@ const { resolveRemoteMode } = require("./lib/remote-mode");
 const { createWorkHistoryStore } = require("./lib/work-history");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
+const androidOta = require("./lib/android-ota");
 const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
@@ -143,7 +144,6 @@ const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 // this keeps the durable, queryable history of how behavior was steered over time.
 const PROFILE_HISTORY_FILE = path.join(DATA_DIR, "agent-profile-history.jsonl");
 const ANDROID_OTA_DIR = path.resolve(process.env.ANDROID_OTA_DIR || path.join(DATA_DIR, "android-ota"));
-const ANDROID_OTA_MANIFEST_PATH = path.join(ANDROID_OTA_DIR, "latest.json");
 const MODEL_PROVIDER = String(process.env.MODEL_PROVIDER || "openai-compatible").toLowerCase();
 const MODEL_BASE_URL = stripTrailingSlash(process.env.MODEL_BASE_URL || "https://api.openai.com/v1");
 const MODEL_ID = process.env.MODEL_ID || process.env.VERTEX_MODEL || (MODEL_PROVIDER === "vertex" ? "gemini-3.5-flash" : "gpt-4o-mini");
@@ -561,6 +561,26 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       sendAndroidOtaApk(response);
+      return;
+    }
+
+    const releaseApkMatch = request.method === "GET"
+      && url.pathname.match(/^\/v1\/android\/updates\/releases\/([^/]+)\.apk$/);
+    if (releaseApkMatch) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      sendAndroidOtaReleaseApk(response, decodeURIComponent(releaseApkMatch[1]));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/android/updates/rollback") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleAndroidOtaRollback(request, response);
       return;
     }
 
@@ -14115,6 +14135,15 @@ function sendAgentRun(response, id) {
   });
 }
 
+function readAndroidOtaManifest() {
+  try {
+    return androidOta.buildLatestManifest(ANDROID_OTA_DIR);
+  } catch (error) {
+    console.warn(`android OTA manifest read failed: ${cleanError(error)}`);
+    return null;
+  }
+}
+
 function sendAndroidOtaManifest(request, response) {
   const manifest = readAndroidOtaManifest();
   if (!manifest) {
@@ -14133,18 +14162,38 @@ function sendAndroidOtaManifest(request, response) {
 }
 
 function sendAndroidOtaApk(response) {
-  const manifest = readAndroidOtaManifest();
-  if (!manifest) {
+  let current;
+  try {
+    current = androidOta.readCurrentRelease(ANDROID_OTA_DIR);
+  } catch (error) {
+    console.warn(`android OTA apk resolve failed: ${cleanError(error)}`);
+    current = null;
+  }
+  if (!current) {
     sendJson(response, 404, { error: "android update artifact not found" });
     return;
   }
+  streamApk(response, current.apk_path);
+}
 
-  const apkPath = resolveAndroidOtaApkPath(manifest);
+function sendAndroidOtaReleaseApk(response, releaseId) {
+  if (!androidOta.isValidReleaseId(releaseId)) {
+    sendJson(response, 400, { error: "invalid release_id" });
+    return;
+  }
+  const apkPath = androidOta.resolveReleaseApkPath(ANDROID_OTA_DIR, releaseId);
+  if (!apkPath) {
+    sendJson(response, 400, { error: "invalid release_id" });
+    return;
+  }
+  streamApk(response, apkPath);
+}
+
+function streamApk(response, apkPath) {
   if (!apkPath || !fs.existsSync(apkPath)) {
     sendJson(response, 404, { error: "android APK not found" });
     return;
   }
-
   const stat = fs.statSync(apkPath);
   response.writeHead(200, {
     "content-type": "application/vnd.android.package-archive",
@@ -14152,6 +14201,46 @@ function sendAndroidOtaApk(response) {
     "cache-control": "no-store",
   });
   fs.createReadStream(apkPath).pipe(response);
+}
+
+async function handleAndroidOtaRollback(request, response) {
+  let result;
+  try {
+    result = androidOta.rollbackToPreviousRelease(ANDROID_OTA_DIR);
+  } catch (error) {
+    sendJson(response, 500, { error: cleanError(error) });
+    return;
+  }
+  if (!result.ok) {
+    const status = result.reason === "no_current_release" ? 404 : 409;
+    sendJson(response, status, {
+      error: "rollback unavailable",
+      reason: result.reason,
+      current_release_id: result.current_release_id || null,
+    });
+    return;
+  }
+
+  recordProductEventBestEffort({
+    stream_id: "android-ota",
+    event_type: "android_ota.rollback",
+    actor: { kind: "gateway", id: "admin" },
+    payload: {
+      from_release_id: result.from_release_id,
+      to_release_id: result.to_release_id,
+    },
+  });
+
+  const origin = externalOriginForRequest(request);
+  sendJson(response, 200, {
+    rolled_back: true,
+    from_release_id: result.from_release_id,
+    to_release_id: result.to_release_id,
+    manifest: {
+      ...result.manifest,
+      download_url: `${origin}/v1/android/updates/latest.apk`,
+    },
+  });
 }
 
 function androidOtaHealth() {
@@ -14169,25 +14258,11 @@ function androidOtaHealth() {
     endpoint: "/v1/android/updates/latest",
     version_code: manifest.version_code,
     version_name: manifest.version_name,
+    release_id: manifest.release_id,
     built_at: manifest.built_at,
     git_sha: manifest.git_sha,
+    rollback_available: Boolean(manifest.rollback_available),
   };
-}
-
-function readAndroidOtaManifest() {
-  if (!fs.existsSync(ANDROID_OTA_MANIFEST_PATH)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(ANDROID_OTA_MANIFEST_PATH, "utf8"));
-  } catch (error) {
-    return null;
-  }
-}
-
-function resolveAndroidOtaApkPath(manifest) {
-  const apkName = String(manifest.apk || "moa-assistant.apk").replace(/[/\\]/g, "");
-  return path.join(ANDROID_OTA_DIR, apkName);
 }
 
 function listAgentRuns(limit) {
