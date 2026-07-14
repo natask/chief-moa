@@ -5,8 +5,9 @@
 - [x] 1.1 Inventory tracked production source files above 2,000 lines.
 - [x] 1.2 Add a repository source-size policy with explicit debt ceilings.
 - [x] 1.3 Run the policy from the gateway test suite.
-- [x] 1.4 Critique and replace the initial 10,000-line/2x-test proposal with a
-      60,000-line first milestone and informational test-size reporting.
+- [x] 1.4 Critique the 10,000-line/2x-test proposal, retain both as ultimate
+      constraints, and add a 60,000-line first milestone to prevent destructive
+      metric chasing.
 - [x] 1.5 Add a production-only 90% lines/branches/functions gate for the first
       extracted slice.
 - [ ] 1.6 Extend the production-only coverage gate to every changed surface.
@@ -17,7 +18,8 @@
 ## 2. Gateway Decomposition
 
 - [x] 2.1 Extract and unit-test browser-evidence normalization.
-- [ ] 2.2 Extract browser-turn lifecycle and persistence.
+- [x] 2.2 Extract browser-turn lifecycle and persistence with a focused 90%
+      line/branch/function coverage gate; reduce `server.js` to 15,529 lines.
 - [ ] 2.3 Extract broker routing and work-history handlers.
 - [ ] 2.4 Extract companion, pet, and profile handlers.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.

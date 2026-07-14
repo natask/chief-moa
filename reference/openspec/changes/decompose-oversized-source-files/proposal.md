@@ -11,10 +11,11 @@ change isolation materially harder.
 ## Policy
 
 - New production source files must not exceed 2,000 lines.
-- Total owned production source should first be reduced toward 60,000 lines,
-  then re-evaluated against retained product scope.
-- Test-to-production size is reported but not capped; adversarial and matrix
-  tests must not be deleted to improve a ratio.
+- Total owned production source should first be reduced toward 60,000 lines on
+  the way to the user-directed 10,000-line ultimate goal. Each milestone must
+  preserve explicitly retained behavior rather than compressing files.
+- Test and verification source must remain at or below 2x production source;
+  adversarial and matrix tests must not be deleted merely to improve the ratio.
 - Executable production coverage must reach at least 90% for lines, branches,
   and functions per deployable surface, not through one blended repository number.
 - Existing files above 2,000 lines are explicit migration debt with a fixed

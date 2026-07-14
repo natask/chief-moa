@@ -4,7 +4,9 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   MAX_SOURCE_LINES,
+  MAX_TEST_TO_PRODUCTION_RATIO,
   TARGET_PRODUCTION_LINES,
+  ULTIMATE_PRODUCTION_LINES,
   auditSourceSizes,
   isProductionSource,
   isTestSource,
@@ -26,10 +28,13 @@ test("source-size policy recognizes production code but excludes tests and scrip
   assert.equal(lineCount("one\ntwo\n"), 2);
   assert.equal(MAX_SOURCE_LINES, 2000);
   assert.equal(TARGET_PRODUCTION_LINES, 60000);
+  assert.equal(ULTIMATE_PRODUCTION_LINES, 10000);
+  assert.equal(MAX_TEST_TO_PRODUCTION_RATIO, 2);
 });
 
 test("tracked and non-ignored production sources do not exceed a debt ceiling", () => {
   const audit = auditSourceSizes();
   assert.deepEqual(audit.violations, [], JSON.stringify(audit.violations, null, 2));
   assert.ok(audit.productionLines > audit.targetProductionLines);
+  assert.ok(audit.testToProductionRatio <= MAX_TEST_TO_PRODUCTION_RATIO);
 });

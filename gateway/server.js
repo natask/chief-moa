@@ -49,6 +49,7 @@ const {
   sanitizeBrowserIdList,
 } = require("./lib/browser-evidence");
 const { sanitizeLooseId, screenNodeLabel } = require("./lib/input-utils");
+const browserTurns = require("./lib/browser-turns");
 const {
   resolveContextDecision,
   normalizeContextAction,
@@ -276,8 +277,6 @@ fs.mkdirSync(CONVERSATIONS_DIR, { recursive: true });
 fs.mkdirSync(AGENT_RUNS_DIR, { recursive: true });
 fs.mkdirSync(BROWSER_TASKS_DIR, { recursive: true });
 fs.mkdirSync(TOOL_REQUESTS_DIR, { recursive: true });
-fs.mkdirSync(BROWSER_TURNS_DIR, { recursive: true });
-fs.mkdirSync(BROWSER_EVIDENCE_DIR, { recursive: true });
 fs.mkdirSync(VOICE_TURNS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_EVENTS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
@@ -285,6 +284,10 @@ fs.mkdirSync(BROKER_RESEARCH_REPORTS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
 fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
+const browserTurnStore = browserTurns.createBrowserTurnStore({ turnsDir: BROWSER_TURNS_DIR, evidenceDir: BROWSER_EVIDENCE_DIR });
+const browserTurnLifecycle = browserTurns.createBrowserTurnLifecycle({
+  answerBrowserEvidence: browserEvidenceAnswer,
+});
 const audioNotes = createAudioNotesStore({
   dataDir: DATA_DIR,
   maxTotalBytes: process.env.AUDIO_NOTES_MAX_TOTAL_BYTES,
@@ -1205,7 +1208,12 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const id = decodeURIComponent(url.pathname.slice("/v1/browser/turns/".length, -"/status".length));
-      sendBrowserTurnStatus(response, id);
+      const record = browserTurnStore.readBrowserTurnRecord(id);
+      if (!record) {
+        sendJson(response, 404, { error: "browser turn not found" });
+        return;
+      }
+      sendJson(response, 200, browserTurns.browserLifecyclePayload(record));
       return;
     }
 
@@ -3102,8 +3110,8 @@ async function handleBrowserTurnBody(response, body, options = {}) {
   const record = await buildBrowserTurnRecord(body, {
     modality: options.modality || browserTurnModality(body),
   });
-  writeBrowserTurnRecord(record);
-  sendJson(response, browserTurnHttpStatus(record), browserLifecyclePayload(record, { legacy: options.legacy }));
+  browserTurnStore.writeBrowserTurnRecord(record);
+  sendJson(response, browserTurns.browserTurnHttpStatus(record), browserTurns.browserLifecyclePayload(record, { legacy: options.legacy }));
 }
 
 async function handleBrowserEvidence(request, response) {
@@ -3116,8 +3124,8 @@ async function handleBrowserEvidence(request, response) {
   }
 
   const turn = requestedTurnId
-    ? readBrowserTurnRecord(requestedTurnId)
-    : findBrowserTurnByEvidenceRequestId(requestedEvidenceRequestId);
+    ? browserTurnStore.readBrowserTurnRecord(requestedTurnId)
+    : browserTurnStore.findBrowserTurnByEvidenceRequestId(requestedEvidenceRequestId);
   if (!turn) {
     sendJson(response, 404, { error: "browser turn not found" });
     return;
@@ -3146,10 +3154,10 @@ async function handleBrowserEvidence(request, response) {
     summary,
     created_at: now,
   };
-  writeBrowserEvidenceRecord(evidence);
+  browserTurnStore.writeBrowserEvidenceRecord(evidence);
 
   const evidenceRefs = Array.from(new Set([].concat(turn.evidence_refs || [], evidence.id).filter(Boolean)));
-  const completed = await completeBrowserTurnRecord({
+  const completed = await browserTurnLifecycle.completeBrowserTurnRecord({
     ...turn,
     page_ref: mergeBrowserPageRefs(turn.page_ref, evidence.page_ref),
     evidence_refs: evidenceRefs,
@@ -3158,20 +3166,11 @@ async function handleBrowserEvidence(request, response) {
   }, {
     completedAt: now,
   });
-  writeBrowserTurnRecord(completed);
+  browserTurnStore.writeBrowserTurnRecord(completed);
   sendJson(response, 200, {
-    ...browserLifecyclePayload(completed),
+    ...browserTurns.browserLifecyclePayload(completed),
     evidence,
   });
-}
-
-function sendBrowserTurnStatus(response, id) {
-  const record = readBrowserTurnRecord(id);
-  if (!record) {
-    sendJson(response, 404, { error: "browser turn not found" });
-    return;
-  }
-  sendJson(response, 200, browserLifecyclePayload(record));
 }
 
 function shouldDelegateToBrowserTurn(body) {
@@ -3307,84 +3306,9 @@ async function buildBrowserTurnRecord(body, options = {}) {
     failed_at: "",
     response: null,
   };
-  return hasEvidence ? await completeBrowserTurnRecord(base, { completedAt: now }) : browserNeedsEvidenceRecord(base);
-}
-
-function browserNeedsEvidenceRecord(record) {
-  const display = "I need page evidence from the browser extension before I can answer this page question.";
-  return {
-    ...record,
-    status: "needs_evidence",
-    classification: "browser_page_question",
-    response: {
-      display,
-      text: display,
-      speak: "",
-      actions: [],
-    },
-  };
-}
-
-async function completeBrowserTurnRecord(record, options = {}) {
-  const completedAt = options.completedAt || record.completed_at || new Date().toISOString();
-  const response = await browserEvidenceAnswer(record);
-  return {
-    ...record,
-    status: "completed",
-    classification: "browser_page_question",
-    completed_at: completedAt,
-    updated_at: record.updated_at || completedAt,
-    response,
-  };
-}
-
-function browserLifecyclePayload(record, options = {}) {
-  const response = record.response || {};
-  const display = String(response.display || response.text || "");
-  const speak = String(response.speak || "");
-  return {
-    id: record.id,
-    turn_id: record.turn_id || record.id,
-    session_id: record.session_id,
-    conversation_id: record.conversation_id,
-    branch_id: record.branch_id,
-    source: record.source || "",
-    device_id: record.device_id || "",
-    client: record.client || {},
-    modality: record.modality || "text",
-    transcript: record.transcript || "",
-    text: display || String(record.text || ""),
-    display,
-    speak,
-    page_ref: record.page_ref || {},
-    evidence_refs: Array.isArray(record.evidence_refs) ? record.evidence_refs : [],
-    evidence_summary: record.evidence_summary || null,
-    status: record.status,
-    broker_event_id: record.broker_event_id || "",
-    route_decision_id: record.route_decision_id || "",
-    classification: record.classification || "browser_page_question",
-    action: record.classification || "browser_page_question",
-    status_url: record.status_url || browserTurnStatusUrl(record.id),
-    task_ids: Array.isArray(record.task_ids) ? record.task_ids : [],
-    agent_run_ids: Array.isArray(record.agent_run_ids) ? record.agent_run_ids : [],
-    evidence_request_ids: Array.isArray(record.evidence_request_ids) ? record.evidence_request_ids : [],
-    proposal_ids: Array.isArray(record.proposal_ids) ? record.proposal_ids : [],
-    actions: Array.isArray(record.actions) ? record.actions : [],
-    browser_turn: summarizeBrowserTurn(record),
-    follow_up_expected: record.status === "needs_evidence",
-    end_of_turn: record.status !== "needs_evidence",
-    legacy_surface: options.legacy || undefined,
-  };
-}
-
-function browserTurnHttpStatus(record) {
-  if (record.status === "needs_evidence") {
-    return 202;
-  }
-  if (record.status === "failed") {
-    return 500;
-  }
-  return 200;
+  return hasEvidence
+    ? await browserTurnLifecycle.completeBrowserTurnRecord(base, { completedAt: now })
+    : browserTurns.browserNeedsEvidenceRecord(base);
 }
 
 async function browserEvidenceAnswer(record) {
@@ -3446,33 +3370,10 @@ function deterministicBrowserEvidenceAnswer(record) {
   };
 }
 
-function summarizeBrowserTurn(record) {
-  return {
-    id: record.id,
-    turn_id: record.turn_id || record.id,
-    session_id: record.session_id,
-    conversation_id: record.conversation_id,
-    branch_id: record.branch_id,
-    modality: record.modality,
-    status: record.status,
-    classification: record.classification,
-    page_ref: record.page_ref || {},
-    evidence_request_ids: Array.isArray(record.evidence_request_ids) ? record.evidence_request_ids : [],
-    evidence_refs: Array.isArray(record.evidence_refs) ? record.evidence_refs : [],
-    task_ids: Array.isArray(record.task_ids) ? record.task_ids : [],
-    agent_run_ids: Array.isArray(record.agent_run_ids) ? record.agent_run_ids : [],
-    proposal_ids: Array.isArray(record.proposal_ids) ? record.proposal_ids : [],
-    created_at: record.created_at,
-    updated_at: record.updated_at,
-    completed_at: record.completed_at || "",
-    deleted_at: record.deleted_at || "",
-  };
-}
-
 function browserEvidenceSummariesFromRefs(refs) {
   const summaries = [];
   for (const ref of refs) {
-    const evidence = readBrowserEvidenceRecord(ref);
+    const evidence = browserTurnStore.readBrowserEvidenceRecord(ref);
     if (evidence?.summary) {
       summaries.push(evidence.summary);
     } else if (ref) {
@@ -14018,7 +13919,7 @@ function browserTasksForSession(sessionId, branchId = "", limit = 50) {
 function browserTurnsForSession(sessionId, branchId = "", limit = 50) {
   const safeSessionId = sanitizeOptionalId(sessionId, "default");
   const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
-  return listAllBrowserTurns()
+  return browserTurnStore.listAllBrowserTurns()
     .filter((turn) => {
       const turnSessionId = String(turn.session_id || turn.conversation_id || "");
       if (turnSessionId !== safeSessionId) return false;
@@ -14028,7 +13929,7 @@ function browserTurnsForSession(sessionId, branchId = "", limit = 50) {
     .sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")))
     .slice(0, safeLimit)
     .map((turn) => ({
-      ...summarizeBrowserTurn(turn),
+      ...browserTurns.summarizeBrowserTurn(turn),
       user_text: truncate(String(turn.text || turn.transcript || ""), 2000),
       response_text: truncate(String(turn.response?.display || turn.response?.text || ""), 2000),
     }));
@@ -15930,7 +15831,7 @@ function sessionSummaryPayload(limit, options = {}) {
     }
   }
   if (sources.includes("browser")) {
-    for (const turn of listAllBrowserTurns()) {
+    for (const turn of browserTurnStore.listAllBrowserTurns()) {
       rows.push({
         session_id: String(turn.session_id || turn.conversation_id || "default"),
         conversation_id: String(turn.conversation_id || turn.session_id || "default"),
@@ -16286,8 +16187,8 @@ function recordContextDecisionProductEventBestEffort({ sessionId, thread, turnId
 function latestContextPayload() {
   const turns = readVoiceTurnLedger().slice(-25);
   const chatTurns = readChatTurnLedger().map(summarizeChatTurnRecord).slice(-25);
-  const browserTurns = listAllBrowserTurns().slice(0, 25).map((turn) => ({
-    ...summarizeBrowserTurn(turn),
+  const browserTurnItems = browserTurnStore.listAllBrowserTurns().slice(0, 25).map((turn) => ({
+    ...browserTurns.summarizeBrowserTurn(turn),
     user_text: truncate(String(turn.text || turn.transcript || ""), 2000),
     response_text: truncate(String(turn.response?.display || turn.response?.text || ""), 2000),
   }));
@@ -16302,7 +16203,7 @@ function latestContextPayload() {
     sessions: sessionSummaryPayload(25).sessions,
     recent_turns: turns,
     recent_chat_turns: chatTurns,
-    recent_browser_turns: browserTurns,
+    recent_browser_turns: browserTurnItems,
     recent_provider_events: readProviderEventLedger({ limit: 50 }),
     recent_runs: runs,
     recent_browser_tasks: listBrowserTasks({ limit: 25 }),
@@ -16550,14 +16451,6 @@ function browserTaskPath(id) {
   return path.join(BROWSER_TASKS_DIR, `${sanitizeId(id)}.json`);
 }
 
-function browserTurnPath(id) {
-  return path.join(BROWSER_TURNS_DIR, `${sanitizeId(id)}.json`);
-}
-
-function browserEvidencePath(id) {
-  return path.join(BROWSER_EVIDENCE_DIR, `${sanitizeId(id)}.json`);
-}
-
 function readAgentRun(id) {
   return JSON.parse(fs.readFileSync(agentRunPath(id), "utf8"));
 }
@@ -16592,78 +16485,6 @@ function updateBrowserTask(id, patch) {
   const next = { ...task, ...patch };
   writeBrowserTask(next);
   return next;
-}
-
-function readBrowserTurnRecord(id) {
-  const safe = sanitizeLooseId(id);
-  if (!safe) {
-    return null;
-  }
-  const filePath = browserTurnPath(safe);
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function writeBrowserTurnRecord(record) {
-  const filePath = browserTurnPath(record.id);
-  const tmpPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(record, null, 2));
-  fs.renameSync(tmpPath, filePath);
-}
-
-function listAllBrowserTurns() {
-  if (!fs.existsSync(BROWSER_TURNS_DIR)) {
-    return [];
-  }
-  const records = [];
-  for (const name of fs.readdirSync(BROWSER_TURNS_DIR)) {
-    if (!name.endsWith(".json")) continue;
-    try {
-      const record = JSON.parse(fs.readFileSync(path.join(BROWSER_TURNS_DIR, name), "utf8"));
-      if (record?.id) records.push(record);
-    } catch {
-      // Skip unreadable records.
-    }
-  }
-  records.sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")));
-  return records;
-}
-
-function findBrowserTurnByEvidenceRequestId(id) {
-  const safe = sanitizeLooseId(id);
-  if (!safe) {
-    return null;
-  }
-  return listAllBrowserTurns().find((turn) => Array.isArray(turn.evidence_request_ids) && turn.evidence_request_ids.includes(safe)) || null;
-}
-
-function readBrowserEvidenceRecord(id) {
-  const safe = sanitizeLooseId(id);
-  if (!safe) {
-    return null;
-  }
-  const filePath = browserEvidencePath(safe);
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function writeBrowserEvidenceRecord(record) {
-  const filePath = browserEvidencePath(record.id);
-  const tmpPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(record, null, 2));
-  fs.renameSync(tmpPath, filePath);
 }
 
 function appendAgentEvent(runId, type, data) {

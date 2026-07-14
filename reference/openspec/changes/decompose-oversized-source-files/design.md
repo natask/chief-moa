@@ -26,12 +26,15 @@ ceiling after an extraction makes the improvement permanent.
 
 The initial pre-classifier cross-surface baseline was 75,802 production lines
 in the working tree, including non-ignored untracked source files. The first
-reviewed simplification milestone is 60,000 owned production lines; a 10,000
-line repo would require deleting most Android, browser, and gateway behavior and
-is not adopted without an explicit product-scope rewrite.
+reviewed simplification milestone is 60,000 owned production lines. The 10,000
+line ultimate goal remains explicit, but reaching it requires evidence-backed
+scope reduction and deduplication across Android, browser, and gateway—not
+minification or moving owned behavior into dependencies.
 
 The total-production ceiling ratchets downward separately from that milestone.
-Test and smoke source is measured independently but has no hard ratio cap.
+Test and smoke source is measured independently and may not exceed 2x owned
+production source. The ratio gate must not be satisfied by deleting meaningful
+failure-path, adversarial, or integration coverage.
 Coverage is measured per surface over eligible executable production source;
 test/smoke files and UI markup/styles cannot inflate the reported percentage.
 
