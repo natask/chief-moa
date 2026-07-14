@@ -20,7 +20,10 @@
 - [x] 2.1 Extract and unit-test browser-evidence normalization.
 - [x] 2.2 Extract browser-turn lifecycle and persistence with a focused 90%
       line/branch/function coverage gate; reduce `server.js` to 15,529 lines.
-- [ ] 2.3 Extract broker routing and work-history handlers.
+- [x] 2.3a Extract deterministic broker routing with a focused 90%
+      line/branch/function coverage gate.
+- [ ] 2.3b Extract broker context-pack and launch handlers.
+- [ ] 2.3c Extract work-history handlers.
 - [ ] 2.4 Extract companion, pet, and profile handlers.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.

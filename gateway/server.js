@@ -50,6 +50,7 @@ const {
 } = require("./lib/browser-evidence");
 const { sanitizeLooseId, screenNodeLabel } = require("./lib/input-utils");
 const browserTurns = require("./lib/browser-turns");
+const { createBrokerRouter, workflowRecommendation: brokerWorkflowRecommendation } = require("./lib/broker-router");
 const {
   resolveContextDecision,
   normalizeContextAction,
@@ -287,6 +288,14 @@ fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 const browserTurnStore = browserTurns.createBrowserTurnStore({ turnsDir: BROWSER_TURNS_DIR, evidenceDir: BROWSER_EVIDENCE_DIR });
 const browserTurnLifecycle = browserTurns.createBrowserTurnLifecycle({
   answerBrowserEvidence: browserEvidenceAnswer,
+});
+const brokerRouter = createBrokerRouter({
+  listSessions: () => sessionSummaryPayload(50, { sources: ["voice"] }).sessions,
+  listProjects,
+  listAgentRuns: listAllAgentRuns,
+  isTerminalRunStatus,
+  randomId,
+  sanitizeOptionalId,
 });
 const audioNotes = createAudioNotesStore({
   dataDir: DATA_DIR,
@@ -3516,7 +3525,7 @@ async function recordBrokerResearchProductEvent(report) {
 // work-history control plane so every control-plane turn is broker-first.
 async function storeBrokerMessage(body, text) {
   const event = buildBrokerEvent(body, text);
-  const decisions = brokerRouteDecisions(event, body);
+  const decisions = brokerRouter.routeDecisions(event, body);
   const contextPacks = brokerContextPacksForDecisions(event, decisions, body);
   const launches = launchBrokerRunsIfRequested(event, decisions, contextPacks, body);
   writeBrokerContextPacks(contextPacks);
@@ -4247,213 +4256,6 @@ function buildBrokerEvent(body, text) {
     created_at: now,
     updated_at: now,
   };
-}
-
-function brokerRouteDecisions(event, body = {}) {
-  const decisions = [];
-  const text = String(event.text || "");
-  const lower = normalizeSpeech(text);
-  const explicitSessionId = event.session_id;
-  const explicitProjectId = event.project_id;
-  const explicitRunId = body.agent_run_id ? sanitizeOptionalId(body.agent_run_id, "") : "";
-
-  // Voice-only source keeps the broker's continuation routing stable; the merged
-  // chat/browser summaries are a read model for /v1/sessions and /v1/threads.
-  const sessions = sessionSummaryPayload(50, { sources: ["voice"] }).sessions;
-  for (const session of sessions) {
-    const score = explicitSessionId && session.session_id === explicitSessionId
-      ? 0.98
-      : textOverlapScore(text, `${session.latest_transcript || ""} ${session.session_id || ""} ${session.branch_id || ""}`);
-    if (score >= 0.18) {
-      decisions.push(brokerDecision({
-        targetType: "session",
-        targetId: session.session_id,
-        action: "continue_session",
-        confidence: score,
-        reason: explicitSessionId && session.session_id === explicitSessionId
-          ? "message carried this session_id"
-          : "message overlaps recent session transcript",
-        contextRefs: [{ type: "session", id: session.session_id, branch_id: session.branch_id }],
-        cancellation: "none",
-      }));
-    }
-  }
-
-  for (const project of listProjects()) {
-    const score = explicitProjectId && project.id === explicitProjectId
-      ? 0.98
-      : textOverlapScore(text, `${project.name || ""} ${project.id || ""}`);
-    if (score >= 0.2) {
-      decisions.push(brokerDecision({
-        targetType: "project",
-        targetId: project.id,
-        action: "attach_project_context",
-        confidence: score,
-        reason: explicitProjectId && project.id === explicitProjectId
-          ? "message carried this project_id"
-          : "message overlaps a known project name",
-        contextRefs: [{ type: "project", id: project.id }],
-        cancellation: "none",
-      }));
-    }
-  }
-
-  const activeOrRecentRuns = listAllAgentRuns()
-    .filter((run) => run.active || !isTerminalRunStatus(run.status))
-    .slice(0, 25);
-  // A broadcast is an explicit "reach every active agent" turn. Under a
-  // broadcast the broker evaluates each active/forked run: runs the message
-  // actually pertains to receive it as evidence, and runs it does NOT pertain to
-  // self-dismiss with a stored no-op reason (task 3.3). A dismissal never
-  // cancels, pauses, or restarts the run; it only records why the broadcast was
-  // not attached, so the agent-manager decision stays inspectable.
-  const broadcast = body.fanout_all_active === true
-    || /\b(?:all|every)\b[^.]*\b(?:active|running|open)\b[^.]*\b(?:agent|thread|run|fork)s?\b/.test(lower)
-    || /\b(?:tell|update|notify|ask)\s+(?:all|every|the)\b[^.]*\bagents?\b/.test(lower);
-  for (const run of activeOrRecentRuns) {
-    const explicit = explicitRunId && run.id === explicitRunId;
-    const overlap = textOverlapScore(text, `${run.prompt_preview || ""} ${run.output_preview || ""} ${run.id || ""}`);
-    const score = explicit ? 0.99 : overlap;
-    if (score >= 0.16) {
-      decisions.push(brokerDecision({
-        targetType: "agent_run",
-        targetId: run.id,
-        action: "attach_as_evidence",
-        confidence: score,
-        reason: explicit
-          ? "message carried this agent_run_id"
-          : broadcast
-            ? "broadcast overlaps this active run's context"
-            : "message overlaps active run context",
-        contextRefs: [{ type: "agent_run", id: run.id }],
-        cancellation: "none",
-      }));
-    } else if (broadcast) {
-      decisions.push(brokerDecision({
-        targetType: "agent_run",
-        targetId: run.id,
-        action: "dismiss_irrelevant",
-        confidence: 0.1,
-        reason: "broadcast to active agents did not match this run; left running unchanged as a no-op",
-        contextRefs: [{ type: "agent_run", id: run.id }],
-        cancellation: "none",
-      }));
-    }
-  }
-
-  const workflow = brokerWorkflowRecommendation(lower);
-  if (workflow) {
-    decisions.push(brokerDecision({
-      targetType: "workflow",
-      targetId: workflow.id,
-      action: "invoke_workflow",
-      confidence: workflow.confidence,
-      reason: workflow.reason,
-      contextRefs: [{ type: "broker_event", id: event.id }],
-      cancellation: "none",
-    }));
-  }
-
-  if (decisions.length === 0 || brokerLooksLikeNewWork(lower)) {
-    decisions.push(brokerDecision({
-      targetType: "session",
-      targetId: event.session_id || randomId("session"),
-      action: "create_new_fork",
-      confidence: decisions.length === 0 ? 0.62 : 0.48,
-      reason: decisions.length === 0
-        ? "no strong existing session/project/run match"
-        : "message appears to start a distinct line of work",
-      contextRefs: [{ type: "broker_event", id: event.id }],
-      cancellation: "none",
-    }));
-  }
-
-  // Cap the launchable/attach routes by confidence, but always keep the no-op
-  // dismissals so every broadcast records why each unrelated fork stood down.
-  const dismissals = decisions.filter((decision) => decision.action === "dismiss_irrelevant").slice(0, 25);
-  const primary = decisions
-    .filter((decision) => decision.action !== "dismiss_irrelevant")
-    .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, 12);
-  return [...primary, ...dismissals];
-}
-
-function brokerDecision({ targetType, targetId, action, confidence, reason, contextRefs, cancellation }) {
-  return {
-    id: randomId("route"),
-    target_type: targetType,
-    target_id: String(targetId || ""),
-    action,
-    confidence: Math.max(0, Math.min(Number(confidence || 0), 1)),
-    reason,
-    context_refs: contextRefs || [],
-    cancellation_behavior: cancellation || "none",
-    created_at: new Date().toISOString(),
-  };
-}
-
-function brokerWorkflowRecommendation(lower) {
-  if (/\b(?:research|search online|look up|landscape|compare|comparison|report|explore|find the best|most optimal|optimal path)\b/.test(lower)) {
-    return {
-      id: "landscape-research",
-      confidence: 0.82,
-      reason: "message asks for research/search/comparison/report workflow",
-    };
-  }
-  if (/\b(?:qa|smoke|test|tests|testing|verify|verification|validate|validation|regression)\b/.test(lower)) {
-    return {
-      id: "qa",
-      confidence: 0.78,
-      reason: "message asks for testing, validation, smoke, or QA workflow",
-    };
-  }
-  if (/\b(?:design|ui|ux|frontend|visual|layout|screen|component)\b/.test(lower)) {
-    return {
-      id: "design",
-      confidence: 0.74,
-      reason: "message asks for design, frontend, or visual workflow",
-    };
-  }
-  if (/\b(?:fix|build|implement|code|bug|test|deploy|commit)\b/.test(lower)) {
-    return {
-      id: "coding",
-      confidence: 0.72,
-      reason: "message asks for implementation or verification work",
-    };
-  }
-  if (/\b(?:write|rewrite|edit|draft|copy|essay|post|email)\b/.test(lower)) {
-    return {
-      id: "writing",
-      confidence: 0.68,
-      reason: "message asks for writing or editing workflow",
-    };
-  }
-  return null;
-}
-
-function brokerLooksLikeNewWork(lower) {
-  return /\b(?:start|new|another|different|fork|separate|also|besides)\b/.test(lower);
-}
-
-function textOverlapScore(a, b) {
-  const left = meaningfulTokens(a);
-  const right = meaningfulTokens(b);
-  if (left.length === 0 || right.length === 0) return 0;
-  const rightSet = new Set(right);
-  let hits = 0;
-  for (const token of new Set(left)) {
-    if (rightSet.has(token)) hits += 1;
-  }
-  return hits / Math.max(4, Math.min(new Set(left).size, rightSet.size));
-}
-
-function meaningfulTokens(text) {
-  const stop = new Set(["the", "and", "that", "this", "with", "for", "you", "have", "from", "into", "should", "could", "would", "message", "messages"]);
-  return normalizeSpeech(text)
-    .split(/[^a-z0-9_-]+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !stop.has(token))
-    .slice(0, 120);
 }
 
 function brokerContextPacksForDecisions(event, decisions, body = {}) {
