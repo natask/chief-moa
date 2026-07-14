@@ -104,6 +104,10 @@ export function quietChromeArgs({ extensionPath, profilePath, initialUrl = "abou
     "--disable-sync",
     "--disable-default-apps",
     "--disable-component-update",
+    // Chrome 150+ ships built-in component extensions whose service workers
+    // also live at chrome-extension://…/background.js; without this flag they
+    // shadow the extension under test when harnesses scan worker targets.
+    "--disable-component-extensions-with-background-pages",
     // Never prompt the macOS keychain or any password store while we run.
     "--use-mock-keychain",
     "--password-store=basic",
