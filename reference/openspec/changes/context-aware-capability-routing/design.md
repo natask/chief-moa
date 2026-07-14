@@ -16,6 +16,12 @@ This design deliberately separates five questions:
 4. Which authenticated connection or local executor can perform each one?
 5. Which owning surface must approve, revalidate, execute, and receipt it?
 
+The companion thought document
+[`intent-place-agent-launch-thought.md`](intent-place-agent-launch-thought.md)
+explores the layer above this resolver: combining a canonical utterance,
+inferred intent, relevant place, retrieval, workflow profiles, capabilities,
+and execution policy into an inspectable per-request agent launch plan.
+
 ## Goals / Non-Goals
 
 **Goals:**
