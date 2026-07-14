@@ -22,7 +22,9 @@ classifications without publishing raw user recordings or full transcripts.
 
 1. Fixed Amharic: `languageCodes=["am-ET"]`.
 2. Multilingual: `languageCodes=["en-US","am-ET"]`.
-3. Fixed Amharic plus Chirp 3 custom prompt:
+3. Language-agnostic: `languageCodes=["auto"]`.
+4. Fixed Amharic and language-agnostic mode, each with the same Chirp 3 custom
+   prompt:
 
    ```text
    Transcribe the speaker verbatim. The speaker may switch between Amharic
@@ -33,21 +35,39 @@ classifications without publishing raw user recordings or full transcripts.
 
 The pure Amharic regression also tested reversed multilingual order
 `["am-ET","en-US"]`; order did not change the wrong-script result.
+Omitting `languageCodes` entirely was also tested and returned HTTP 400 because
+the field must be non-empty. Chirp 3 represents language-agnostic operation with
+`["auto"]`, not an absent field.
 
 ## Results
 
-| Capture | `am-ET` | `en-US,am-ET` | `am-ET` + code-switch prompt |
-| --- | --- | --- | --- |
-| Pure Amharic wrong-script regression | correct 3/3 | Hindi/Devanagari 3/3, no language code | correct 2/2 |
-| Pure English control | correct 3/3 | correct 2/2 | correct 2/2 |
-| Mixed: Amharic with one English token | lost/transliterated token 2/2 | preserved 2/2 | transliterated token 2/2 |
-| Mixed: Amharic then English clause | dropped English clause 2/2 | preserved 2/2 | preserved 2/2 |
-| Mixed: English then Amharic clause | preserved 2/2 | dropped Amharic clause 2/2 | preserved 2/2 |
+| Capture | `auto` | `auto` + prompt | `am-ET` | `en-US,am-ET` | `am-ET` + prompt |
+| --- | --- | --- | --- | --- | --- |
+| Pure Amharic wrong-script regression | Hindi 2/2 | correct 2/2 | correct 3/3 | Hindi 3/3 | correct 2/2 |
+| Pure English control | correct 2/2 | correct 2/2 | correct 3/3 | correct 2/2 | correct 2/2 |
+| Mixed: Amharic with one English token | lost token 2/2 | transliterated token 2/2 | lost/transliterated token 2/2 | preserved 2/2 | transliterated token 2/2 |
+| Mixed: Amharic then English clause | dropped Amharic prefix 2/2 | preserved 2/2 | dropped English clause 2/2 | preserved 2/2 | preserved 2/2 |
+| Mixed: English then Amharic clause | Latin transliteration 2/2 | preserved 2/2 | preserved 2/2 | dropped Amharic clause 2/2 | preserved 2/2 |
+
+Google returned the effective prompt in response metadata. With `am-ET`, Google
+prepended an internal instruction to transcribe in Amharic and respond in the
+original language, Amharic. With `auto`, Google omitted that language-specific
+instruction and retained a generic instruction to respond in the original
+language. In both cases the custom prompt appeared inside Google's larger
+provider-authored transcription prompt. This is observable behavior, not proof
+of the model's unpublished internal architecture or precedence rules.
 
 ## Decision evidence
 
 - Fixed `am-ET` is not limited to Ethiopic output: it transcribed the pure
   English control exactly while reporting `languageCode=am-ET`.
+- Removing `languageCodes` is not a valid API configuration. `auto` is the
+  supported language-agnostic value.
+- `auto` alone is unsafe for this corpus: it repeated the Hindi substitution on
+  pure Amharic and selected only the dominant language on two mixed captures.
+- `auto` plus the code-switch prompt matched the strong results of prompted
+  `am-ET`: it corrected the Hindi regression, preserved both long code-switch
+  directions, and transliterated the short embedded English token.
 - Fixed `am-ET` alone is not sufficient for arbitrary code-switching. It can
   omit a longer English clause or render a short English word phonetically in
   Ethiopic.
@@ -61,11 +81,14 @@ The pure Amharic regression also tested reversed multilingual order
   fixed `am-ET` labels a fully English transcript `am-ET`, and the wrong-script
   multilingual regression returned no language code.
 
-No configuration earned a universal code-switch guarantee on this small live
-corpus. The best candidate observed was fixed `am-ET` plus the code-switch
-prompt, combined with a deterministic Latin/Ethiopic script allowlist, but it
-still needs a larger user-verified corpus and an explicit policy for
-transliterated or omitted embedded words before promotion.
+No configuration earned a universal verbatim code-switch guarantee on this
+small live corpus. Under a rubric that accepts meaning-preserving
+transliteration, both `auto` plus the prompt and fixed `am-ET` plus the prompt
+produced usable Amharic-English content across all five captures without a
+foreign non-English substitution. `auto` plus the prompt avoids claiming a
+single recognition locale, while fixed `am-ET` adds a provider-authored Amharic
+bias. Choosing between them still needs a larger user-verified corpus and a
+deterministic Latin/Ethiopic output policy before promotion.
 
 ## Reproduction contract
 
