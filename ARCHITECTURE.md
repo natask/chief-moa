@@ -75,6 +75,43 @@ External APIs
   and SaaS tools. Use official APIs where possible.
 ```
 
+## Context-to-capability boundary
+
+Browser, Android, macOS, and Windows publish bounded active-app/page descriptors
+and local execution-adapter advertisements through the same device-client
+contract. These observations contain identity and freshness evidence, not page
+bodies, accessibility text, credentials, or instructions. The gateway combines
+them with its own declarative service catalog, project context, and opaque
+account-connection summaries to rank API, browser-session, and device-local
+candidates. Resolution is deterministic planning only; it performs no action.
+
+The model-facing execution surface remains small and generic. Adding a service
+catalog entry or connector adapter must not register another permanent model
+tool. An official API connection keeps credentials in the gateway or an
+approved external broker. An already authenticated browser is a local executor,
+not a credential source: cookies, authorization headers, passwords, and browser
+storage never move to the gateway. Every side effect still becomes a bound
+proposal that the owning gateway/device policy revalidates, approves, executes,
+and receipts.
+
+## Cross-surface release boundary
+
+Release selection is a shared planning contract over immutable artifact
+metadata, compatibility, rollout cohort, and declared rollback. It never
+downloads or installs software. Platform adapters retain native trust and
+installation authority: Android verifies and hands an APK to the package
+installer, browser releases use Chrome Web Store policy or a development reload,
+macOS uses Sparkle 2/App Store/managed distribution, and Windows uses Microsoft
+Store or App Installer/MSIX. Common metadata cannot replace APK signer
+continuity, Apple code signing/notarization, Authenticode/publisher identity, or
+store review.
+
+CI build evidence, an uploaded artifact, store submission, publication,
+installation, and post-relaunch smoke are distinct states. No earlier state may
+be reported as a later one. macOS and Windows remain protocol/library seams
+until native application packaging, signing, installation, and recovery are
+proven on their respective platforms.
+
 ## Billing and entitlement boundary
 
 Billing facts are gateway-owned, tenant-scoped and append-only. Price and budget
@@ -1160,6 +1197,10 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   This replaces ambiguous product use of “flow”; `workflow` remains a reusable
   procedure/package.
 - `device`: a registered Android device with local permissions and settings.
+- `project`: a gateway-owned durable work object, independent of disposable
+  agent sessions. Its editable brief records the real problem, desired outcome,
+  current state, and next viable step; the local gateway console reads and
+  updates that brief through authenticated project APIs.
 - `device_client`: a connected Android, browser, or future desktop surface that
   heartbeats its online state and local tool manifest to the gateway.
 - `session`: a coherent work session. The gateway owns one canonical shared

@@ -41,6 +41,223 @@ fn approval(p: &Envelope) -> LocalApproval {
     .unwrap()
 }
 
+fn context_descriptor() -> ContextDescriptor {
+    ContextDescriptor {
+        version: 1,
+        surface: "windows".into(),
+        availability: ContextAvailability::Available,
+        reason: None,
+        captured_at: NOW.into(),
+        freshness: ContextFreshness::Fresh,
+        application: Some(ContextApplication {
+            kind: "browser".into(),
+            id: "Chrome.EXE".into(),
+            origin: Some("https://mail.example.test".into()),
+            document_id: Some("mail.example.test".into()),
+            class_id: Some("Chrome_WidgetWin_1".into()),
+        }),
+        page: None,
+        privacy: ContextPrivacy {
+            page_content_included: false,
+            window_title_included: false,
+        },
+    }
+}
+
+fn adapter() -> ExecutionAdapterDescriptor {
+    ExecutionAdapterDescriptor {
+        version: 1,
+        adapter: "browser-session".into(),
+        status: AdapterStatus::Available,
+        unavailable_reason: None,
+        credential_source: CredentialSource::ExistingBrowserSession,
+        authentication_state: AuthenticationState::NotInspected,
+        context_binding: Some(AdapterContextBinding {
+            application_id: "chrome.exe".into(),
+            document_id: Some("mail.example.test".into()),
+            class_id: Some("Chrome_WidgetWin_1".into()),
+        }),
+        modes: vec![ExecutionMode::Read, ExecutionMode::Draft],
+        constraints: vec![
+            AdapterConstraint::LocalAllowlistValidation,
+            AdapterConstraint::NoCookieExport,
+            AdapterConstraint::NoProviderCredentials,
+            AdapterConstraint::ProposalBeforeExecution,
+        ],
+    }
+}
+
+fn installed_package() -> InstalledWindowsPackage {
+    InstalledWindowsPackage {
+        package_id: "Moa.Windows".into(),
+        version: WindowsPackageVersion {
+            major: 1,
+            minor: 2,
+            build: 3,
+            revision: 4,
+        },
+        architecture: WindowsArchitecture::X64,
+        channel: UpdateChannel::Stable,
+    }
+}
+
+fn update_metadata() -> WindowsUpdateMetadata {
+    WindowsUpdateMetadata {
+        package_id: "Moa.Windows".into(),
+        version: WindowsPackageVersion {
+            major: 1,
+            minor: 3,
+            build: 0,
+            revision: 0,
+        },
+        architectures: vec![WindowsArchitecture::X64, WindowsArchitecture::Arm64],
+        channel: UpdateChannel::Stable,
+        mechanism: WindowsUpdateMechanism::MicrosoftStore {
+            product_id: "9NMOAWINDOWS".into(),
+        },
+    }
+}
+
+#[test]
+fn fresh_context_resolves_adapter_without_claiming_authentication() {
+    let resolved = resolve_execution_adapters(
+        &context_descriptor(),
+        &[adapter()],
+        CREATED,
+        "2026-07-11T12:00:20.000Z",
+    )
+    .unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].adapter, "browser-session");
+    assert_eq!(
+        resolved[0].authentication_state,
+        AuthenticationState::NotInspected
+    );
+    let wire = serde_json::to_string(&resolved).unwrap();
+    assert!(wire.contains("\"authentication_state\":\"not_inspected\""));
+    assert!(!wire.contains("Bearer "));
+    assert!(!wire.contains("access_token"));
+    assert!(!wire.contains("secret"));
+}
+
+#[test]
+fn context_matching_fails_closed_for_stale_private_or_mismatched_evidence() {
+    let cases = [
+        {
+            let mut value = context_descriptor();
+            value.freshness = ContextFreshness::Stale;
+            value
+        },
+        {
+            let mut value = context_descriptor();
+            value.privacy.window_title_included = true;
+            value
+        },
+        {
+            let mut value = context_descriptor();
+            value.captured_at = "2026-07-11T12:00:30.000Z".into();
+            value
+        },
+    ];
+    for context in cases {
+        assert_eq!(
+            resolve_execution_adapters(&context, &[adapter()], CREATED, "2026-07-11T12:00:20.000Z")
+                .unwrap_err(),
+            SurfaceError::InvalidObservation
+        );
+    }
+
+    let mut mismatched = adapter();
+    mismatched.context_binding.as_mut().unwrap().class_id = Some("OtherWindow".into());
+    assert!(
+        resolve_execution_adapters(
+            &context_descriptor(),
+            &[mismatched],
+            CREATED,
+            "2026-07-11T12:00:20.000Z"
+        )
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[test]
+fn adapter_advertisements_require_all_local_authority_constraints() {
+    let mut missing_guard = adapter();
+    missing_guard.constraints.pop();
+    assert_eq!(
+        resolve_execution_adapters(
+            &context_descriptor(),
+            &[missing_guard],
+            CREATED,
+            "2026-07-11T12:00:20.000Z"
+        )
+        .unwrap_err(),
+        SurfaceError::InvalidCapabilityDescriptor
+    );
+
+    let mut unavailable = adapter();
+    unavailable.status = AdapterStatus::Unavailable;
+    unavailable.unavailable_reason = Some("browser_adapter_offline".into());
+    assert!(
+        resolve_execution_adapters(
+            &context_descriptor(),
+            &[unavailable],
+            CREATED,
+            "2026-07-11T12:00:20.000Z"
+        )
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[test]
+fn standard_windows_update_metadata_is_eligible_without_installing() {
+    assert_eq!(
+        evaluate_windows_update(&installed_package(), &update_metadata()).unwrap(),
+        UpdateEligibility::Eligible
+    );
+    let mut current = update_metadata();
+    current.version = installed_package().version;
+    assert_eq!(
+        evaluate_windows_update(&installed_package(), &current).unwrap(),
+        UpdateEligibility::AlreadyCurrent
+    );
+}
+
+#[test]
+fn update_eligibility_rejects_incompatible_or_bespoke_metadata() {
+    let mut wrong_channel = update_metadata();
+    wrong_channel.channel = UpdateChannel::Preview;
+    assert_eq!(
+        evaluate_windows_update(&installed_package(), &wrong_channel).unwrap(),
+        UpdateEligibility::ChannelMismatch
+    );
+
+    for uri in [
+        "http://updates.example.test/moa.appinstaller",
+        "https://user@updates.example.test/moa.appinstaller",
+        "https://updates.example.test/moa.exe",
+        "https://updates.example.test/moa.appinstaller?token=secret",
+    ] {
+        let mut update = update_metadata();
+        update.mechanism = WindowsUpdateMechanism::AppInstaller {
+            manifest_uri: uri.into(),
+        };
+        assert_eq!(
+            evaluate_windows_update(&installed_package(), &update).unwrap_err(),
+            SurfaceError::InvalidUpdateMetadata
+        );
+    }
+
+    let mut duplicate_architecture = update_metadata();
+    duplicate_architecture.architectures = vec![WindowsArchitecture::X64; 2];
+    assert_eq!(
+        evaluate_windows_update(&installed_package(), &duplicate_architecture).unwrap_err(),
+        SurfaceError::InvalidUpdateMetadata
+    );
+}
+
 #[test]
 fn valid_local_approval_produces_bound_receipt_without_execution() {
     let p = proposal();

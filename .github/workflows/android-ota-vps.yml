@@ -1,0 +1,397 @@
+name: Build and publish Android OTA
+
+# Pushes produce an installable CI artifact without requiring production
+# credentials. Publishing is deliberately manual and additionally gated on the
+# exact master SHA, an explicit active-promotion acknowledgement, stable Android
+# signing identity, a protected GitHub environment, and explicit VPS details.
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/android-ota-vps.yml"
+      - "android_app/**"
+      - "gateway/server.js"
+      - "gateway/scripts/smoke-main-machine.js"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the verified stable-signed APK to the VPS OTA directory"
+        required: true
+        default: false
+        type: boolean
+      promotion_gate_proven:
+        description: "Preview/artifact, rollback, no-interruption, and compatibility gates are proven"
+        required: true
+        default: false
+        type: boolean
+      confirm_sha:
+        description: "Exact 40-character master commit SHA to publish (required when publish is true)"
+        required: false
+        type: string
+
+concurrency:
+  group: chief-moa-android-ota-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Verify Android and build OTA artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify Android unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd android_app
+          ./gradlew testDebugUnitTest
+
+      - name: Build credential-free OTA artifact
+        shell: bash
+        env:
+          ANDROID_OTA_OUT_DIR: ${{ runner.temp }}/android-ota
+        run: |
+          set -euo pipefail
+          version_code="$(date -u +%s)"
+          MOA_ANDROID_VERSION_CODE="$version_code" \
+          MOA_ANDROID_VERSION_NAME="0.1.$version_code" \
+          bash android_app/deploy/ota/build-ota-artifact.sh
+
+          node <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const dir = process.env.ANDROID_OTA_OUT_DIR;
+          const manifest = JSON.parse(fs.readFileSync(path.join(dir, "latest.json"), "utf8"));
+          const apk = fs.readFileSync(path.join(dir, manifest.apk));
+          const digest = crypto.createHash("sha256").update(apk).digest("hex");
+          if (manifest.app_id !== "ai.moa.assistant") throw new Error("unexpected Android application id");
+          if (!Number.isSafeInteger(manifest.version_code) || manifest.version_code <= 0) {
+            throw new Error("invalid Android version code");
+          }
+          if (manifest.size_bytes !== apk.length) throw new Error("OTA artifact size mismatch");
+          if (manifest.sha256 !== digest) throw new Error("OTA artifact digest mismatch");
+          if (manifest.git_sha !== process.env.GITHUB_SHA) throw new Error("OTA artifact git SHA mismatch");
+          NODE
+
+      - name: Upload OTA build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ota-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-ota/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish stable-signed OTA to VPS
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: android-ota-production
+    env:
+      ANDROID_OTA_OUT_DIR: ${{ runner.temp }}/android-ota-stable
+      CONFIRMED_SHA: ${{ inputs.confirm_sha }}
+      PROMOTION_GATE_PROVEN: ${{ inputs.promotion_gate_proven }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enforce branch, ref, promotion, and secret gates
+        shell: bash
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_TARGET: ${{ secrets.VPS_SSH_TARGET }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_ANDROID_OTA_DIR: ${{ secrets.VPS_ANDROID_OTA_DIR }}
+          VPS_PUBLIC_GATEWAY_URL: ${{ secrets.VPS_PUBLIC_GATEWAY_URL }}
+          MOA_GATEWAY_TOKEN: ${{ secrets.MOA_GATEWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/master" ]]; then
+            echo "Android OTA publication is allowed only from master." >&2
+            exit 1
+          fi
+          if [[ "$PROMOTION_GATE_PROVEN" != "true" ]]; then
+            echo "Active-promotion evidence was not acknowledged." >&2
+            exit 1
+          fi
+          if [[ ! "$CONFIRMED_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ "$CONFIRMED_SHA" != "$GITHUB_SHA" ]]; then
+            echo "confirm_sha must exactly match the checked-out 40-character commit SHA." >&2
+            exit 1
+          fi
+
+          git fetch --quiet origin master
+          if [[ "$(git rev-parse origin/master)" != "$GITHUB_SHA" ]]; then
+            echo "The checked-out commit is not the current origin/master tip." >&2
+            exit 1
+          fi
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "Refusing to publish from a dirty checkout." >&2
+            exit 1
+          fi
+
+          required=(
+            ANDROID_RELEASE_KEYSTORE_BASE64
+            ANDROID_RELEASE_KEYSTORE_PASSWORD
+            ANDROID_RELEASE_KEY_ALIAS
+            ANDROID_RELEASE_KEY_PASSWORD
+            ANDROID_RELEASE_CERT_SHA256
+            VPS_SSH_PRIVATE_KEY
+            VPS_SSH_TARGET
+            VPS_SSH_KNOWN_HOSTS
+            VPS_ANDROID_OTA_DIR
+            VPS_PUBLIC_GATEWAY_URL
+            MOA_GATEWAY_TOKEN
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required production setting is missing: $name" >&2
+              exit 1
+            fi
+          done
+          normalized_cert="$(printf '%s' "$ANDROID_RELEASE_CERT_SHA256" | tr -d ':')"
+          if [[ ! "$normalized_cert" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+            echo "ANDROID_RELEASE_CERT_SHA256 must be a SHA-256 certificate digest." >&2
+            exit 1
+          fi
+          if [[ ! "$VPS_SSH_TARGET" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]]; then
+            echo "VPS_SSH_TARGET must be a plain user@host target." >&2
+            exit 1
+          fi
+          if [[ ! "$VPS_ANDROID_OTA_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+            echo "VPS_ANDROID_OTA_DIR must be a plain absolute path." >&2
+            exit 1
+          fi
+          if [[ ! "$VPS_PUBLIC_GATEWAY_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+            echo "VPS_PUBLIC_GATEWAY_URL must be an HTTPS origin without a path." >&2
+            exit 1
+          fi
+
+      - name: Prepare stable signing and SSH credentials
+        shell: bash
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-release.keystore"
+          keytool -list \
+            -keystore "$RUNNER_TEMP/android-release.keystore" \
+            -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_RELEASE_KEY_ALIAS" >/dev/null
+
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.ssh/config" <<'SSH_CONFIG'
+          Host *
+            BatchMode yes
+            IdentitiesOnly yes
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking yes
+          SSH_CONFIG
+          chmod 600 "$HOME/.ssh/config"
+
+      - name: Build and verify stable-signed OTA artifact
+        shell: bash
+        env:
+          MOA_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/android-release.keystore
+          MOA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          MOA_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          MOA_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          version_code="$(date -u +%s)"
+          version_name="0.1.$version_code"
+          export MOA_ANDROID_VERSION_CODE="$version_code"
+          export MOA_ANDROID_VERSION_NAME="$version_name"
+          {
+            echo "MOA_ANDROID_VERSION_CODE=$version_code"
+            echo "MOA_ANDROID_VERSION_NAME=$version_name"
+            echo "MOA_ANDROID_KEYSTORE_PATH=$MOA_ANDROID_KEYSTORE_PATH"
+          } >> "$GITHUB_ENV"
+
+          bash android_app/deploy/ota/build-ota-artifact.sh
+
+          apk="$ANDROID_OTA_OUT_DIR/moa-assistant.apk"
+          manifest="$ANDROID_OTA_OUT_DIR/latest.json"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          if [[ -z "$apksigner" || -z "$aapt" ]]; then
+            echo "Android build tools required for OTA verification were not found." >&2
+            exit 1
+          fi
+
+          "$apksigner" verify "$apk"
+          actual_cert="$("$apksigner" verify --print-certs "$apk" | awk -F': ' '/certificate SHA-256 digest/ {print $2; exit}')"
+          actual_cert="$(printf '%s' "$actual_cert" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          expected_cert="$(printf '%s' "$ANDROID_RELEASE_CERT_SHA256" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          if [[ -z "$actual_cert" || "$actual_cert" != "$expected_cert" ]]; then
+            echo "Stable Android signing certificate verification failed." >&2
+            exit 1
+          fi
+
+          badging="$("$aapt" dump badging "$apk" | head -n 1)"
+          [[ "$badging" == *"package: name='ai.moa.assistant'"* ]] || {
+            echo "Signed APK package id verification failed." >&2
+            exit 1
+          }
+          [[ "$badging" == *"versionCode='$version_code'"* ]] || {
+            echo "Signed APK version code verification failed." >&2
+            exit 1
+          }
+
+          node "$manifest" "$apk" <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const [manifestPath, apkPath] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const apk = fs.readFileSync(apkPath);
+          if (manifest.app_id !== "ai.moa.assistant") throw new Error("unexpected Android application id");
+          if (manifest.version_code !== Number(process.env.MOA_ANDROID_VERSION_CODE)) {
+            throw new Error("OTA version code mismatch");
+          }
+          if (manifest.version_name !== process.env.MOA_ANDROID_VERSION_NAME) {
+            throw new Error("OTA version name mismatch");
+          }
+          if (manifest.git_sha !== process.env.GITHUB_SHA) throw new Error("OTA git SHA mismatch");
+          if (manifest.size_bytes !== apk.length) throw new Error("OTA size mismatch");
+          if (manifest.sha256 !== crypto.createHash("sha256").update(apk).digest("hex")) {
+            throw new Error("OTA digest mismatch");
+          }
+          NODE
+
+          sha256sum "$apk" | awk '{print $1}' > "$RUNNER_TEMP/pre-publish-apk.sha256"
+
+      - name: Publish through the existing VPS sync path
+        shell: bash
+        env:
+          MOA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          MOA_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          MOA_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          VPS_SSH_TARGET: ${{ secrets.VPS_SSH_TARGET }}
+          VPS_ANDROID_OTA_DIR: ${{ secrets.VPS_ANDROID_OTA_DIR }}
+        run: |
+          set -euo pipefail
+          if ! MOA_VPS_SSH="$VPS_SSH_TARGET" \
+            MOA_VPS_OTA_DIR="$VPS_ANDROID_OTA_DIR" \
+            bash android_app/deploy/ota/sync-vps.sh >"$RUNNER_TEMP/android-ota-sync.log" 2>&1; then
+            echo "Android OTA VPS sync failed; output withheld because it may contain target details." >&2
+            exit 1
+          fi
+          if ! sha256sum --check --status <(printf '%s  %s\n' \
+            "$(cat "$RUNNER_TEMP/pre-publish-apk.sha256")" \
+            "$ANDROID_OTA_OUT_DIR/moa-assistant.apk"); then
+            echo "The APK changed between verification and VPS sync." >&2
+            exit 1
+          fi
+          echo "Verified stable-signed Android OTA artifact was synced. Installation remains Android/user-owned."
+
+      - name: Fetch and verify the published OTA
+        shell: bash
+        env:
+          VPS_PUBLIC_GATEWAY_URL: ${{ secrets.VPS_PUBLIC_GATEWAY_URL }}
+          MOA_GATEWAY_TOKEN: ${{ secrets.MOA_GATEWAY_TOKEN }}
+          ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          base_url="${VPS_PUBLIC_GATEWAY_URL%/}"
+          auth_header="Authorization: Bearer $MOA_GATEWAY_TOKEN"
+          if ! curl -fsS -H "$auth_header" \
+            "$base_url/v1/android/updates/latest" \
+            -o "$RUNNER_TEMP/published-latest.json" 2>/dev/null; then
+            echo "Published Android OTA metadata could not be fetched." >&2
+            exit 1
+          fi
+          if ! curl -fsS -H "$auth_header" \
+            "$base_url/v1/android/updates/latest.apk" \
+            -o "$RUNNER_TEMP/published.apk" 2>/dev/null; then
+            echo "Published Android OTA APK could not be fetched." >&2
+            exit 1
+          fi
+
+          node "$ANDROID_OTA_OUT_DIR/latest.json" \
+            "$ANDROID_OTA_OUT_DIR/moa-assistant.apk" \
+            "$RUNNER_TEMP/published-latest.json" \
+            "$RUNNER_TEMP/published.apk" <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const [localManifestPath, localApkPath, remoteManifestPath, remoteApkPath] = process.argv.slice(2);
+          const localManifest = JSON.parse(fs.readFileSync(localManifestPath, "utf8"));
+          const remoteManifest = JSON.parse(fs.readFileSync(remoteManifestPath, "utf8"));
+          const localApk = fs.readFileSync(localApkPath);
+          const remoteApk = fs.readFileSync(remoteApkPath);
+          for (const key of ["app_id", "version_code", "version_name", "size_bytes", "sha256", "git_sha"]) {
+            if (remoteManifest[key] !== localManifest[key]) throw new Error(`published manifest mismatch: ${key}`);
+          }
+          const digest = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+          if (digest(remoteApk) !== digest(localApk) || digest(remoteApk) !== remoteManifest.sha256) {
+            throw new Error("published APK digest mismatch");
+          }
+          NODE
+
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          "$apksigner" verify "$RUNNER_TEMP/published.apk"
+          actual_cert="$("$apksigner" verify --print-certs "$RUNNER_TEMP/published.apk" | awk -F': ' '/certificate SHA-256 digest/ {print $2; exit}')"
+          actual_cert="$(printf '%s' "$actual_cert" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          expected_cert="$(printf '%s' "$ANDROID_RELEASE_CERT_SHA256" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          if [[ -z "$actual_cert" || "$actual_cert" != "$expected_cert" ]]; then
+            echo "Published APK signer does not match the stable signing identity." >&2
+            exit 1
+          fi
+          echo "Published Android OTA metadata, bytes, package signature, and git SHA verified."
+
+      - name: Remove ephemeral credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/android-release.keystore" "$HOME/.ssh/id_ed25519" "$HOME/.ssh/config"

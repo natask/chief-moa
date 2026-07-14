@@ -298,6 +298,13 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.sendAudio(chunk);
     }
+    // Tee to the streaming STT recognizer (cascaded path). The disk write above
+    // stays the source of truth; this is an additive fan-out that produces live
+    // partial transcripts and the final transcript without re-reading the file.
+    // push() never throws — a streaming fault degrades to the batch path.
+    if (turn.sttStream) {
+      turn.sttStream.push(chunk);
+    }
   }
 
   bufferEarlyAudio(chunk) {
@@ -387,6 +394,9 @@ class VoiceSessionConnection {
       streamingAudio: false,
       providerEvents: null,
       liveSession: null,
+      // Streaming STT recognizer session (cascaded path), teed audio frames.
+      // null until session_start wires it and when streaming is disabled.
+      sttStream: null,
       completing: false,
       recordedCanonical: false,
       contextPrompt: "",
@@ -440,6 +450,23 @@ class VoiceSessionConnection {
       turn.liveSession.done
         .then((providerResult) => this.completeLiveTurn(turn, providerResult))
         .catch((error) => this.failLiveTurn(turn, error));
+    } else if (typeof this.voiceProvider.createStreamingSttSession === "function") {
+      // Cascaded/STT-only path: open a streaming recognizer so audio frames are
+      // transcribed AS THEY ARRIVE and partial transcripts stream back to the
+      // client. Provider events are created up front so the same set threads
+      // through commit. A null result (streaming disabled/unsupported) simply
+      // leaves the turn on the batch path — this never blocks session_ready and
+      // never throws (a streaming fault must not fail the turn).
+      turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
+      try {
+        turn.sttStream = this.voiceProvider.createStreamingSttSession(
+          turn,
+          this.providerHooks(turn, turn.providerEvents),
+        );
+      } catch (error) {
+        turn.sttStream = null;
+        writeTurnMetadata(turn, { stt_stream_error: cleanError(error) });
+      }
     }
     this.flushEarlyAudio(turn);
     writeTurnMetadata(turn, { status: "recording" });
@@ -899,26 +926,47 @@ class VoiceSessionConnection {
     }
   }
 
-  // A tool result may carry a client-actionable action (today only page_tweak).
-  // The tool response we send the provider is not visible to the extension, and
-  // native-audio models go silent after a tool call, so the visual confirmation
-  // is the primary feedback. Forward the action as its own control event on the
-  // session socket, following the same envelope the HTTP turn path attaches to
-  // actions[], so the client can apply it the same way on both paths.
+  // A tool result may carry a client-actionable action (page_tweak or
+  // companion_motion). The tool response we send the provider is not visible to
+  // the client, and native-audio models go silent after a tool call, so the
+  // visual/motion confirmation is the primary feedback. Forward the action as its
+  // own control event on the session socket, following the same envelope the HTTP
+  // turn path attaches to actions[], so the client can apply it the same way on
+  // both paths.
   async forwardTurnAction(turn, result) {
     const action = result && typeof result === "object" ? result.action : null;
-    if (!action || typeof action !== "object" || action.type !== "page_tweak" || !action.record) {
+    await this.emitClientAction(turn, action, typeof result?.message === "string" ? result.message : "");
+  }
+
+  // Emit one client-forwardable action envelope. page_tweak carries a `record`;
+  // companion_motion carries a `plan`. Unknown or malformed actions are ignored.
+  async emitClientAction(turn, action, message = "") {
+    if (!action || typeof action !== "object" || Array.isArray(action)) {
       return;
     }
-    await this.sendEvent({
-      type: "page_tweak",
-      session_id: turn.sessionId,
-      branch_id: turn.branchId,
-      turn_id: turn.turnId,
-      action,
-      record: action.record,
-      message: typeof result.message === "string" ? result.message : "",
-    });
+    if (action.type === "page_tweak" && action.record) {
+      await this.sendEvent({
+        type: "page_tweak",
+        session_id: turn.sessionId,
+        branch_id: turn.branchId,
+        turn_id: turn.turnId,
+        action,
+        record: action.record,
+        message: typeof message === "string" ? message : "",
+      });
+      return;
+    }
+    if (action.type === "companion_motion" && action.plan) {
+      await this.sendEvent({
+        type: "companion_motion",
+        session_id: turn.sessionId,
+        branch_id: turn.branchId,
+        turn_id: turn.turnId,
+        action,
+        plan: action.plan,
+        message: typeof message === "string" ? message : "",
+      });
+    }
   }
 
   async completeLiveTurn(turn, providerResult) {
@@ -978,6 +1026,8 @@ class VoiceSessionConnection {
         turn_id: turn.turnId,
         status: "no_speech",
         reason: "stt_empty",
+        reply_language: turnReplyLanguage(turn, providerResult, null),
+        input_languages: turnInputLanguages(turn),
       });
       if (this.turn === turn) {
         this.turn = null;
@@ -1031,7 +1081,10 @@ class VoiceSessionConnection {
           && typeof this.voiceProvider.synthesizeAssistantSpeech === "function") {
         try {
           confirmationTts = await this.voiceProvider.synthesizeAssistantSpeech(profileControlText, providerHooks, {
-            language: providerResult?.reply_language || canonicalRecord?.response?.reply_language || "",
+            // Tag the confirmation TTS with the SAME language the confirmation
+            // text is written in (the gateway localizes canned text to the reply
+            // language), so text language and TTS language can never diverge.
+            language: turnReplyLanguage(turn, providerResult, canonicalRecord),
             // Confirmations speak with the same per-turn voice as the reply
             // (session_start override included), not the global default.
             profile: turn.effectiveProfile,
@@ -1072,6 +1125,15 @@ class VoiceSessionConnection {
       ...(Number.isFinite(providerResult?.reasoner_first_delta_ms) ? { reasoner_first_delta_ms: providerResult.reasoner_first_delta_ms } : {}),
       ...(doneTtsError ? { tts_error: doneTtsError } : {}),
     });
+    // Cascaded path: the reasoner's tools may have proposed client-forwardable
+    // actions (e.g. companion_motion) on providerResult.actions. Forward each as
+    // its own client event before turn_done, the same way the Live tool path
+    // forwards a page_tweak, so the client runtime can apply it.
+    if (Array.isArray(providerResult?.actions)) {
+      for (const action of providerResult.actions) {
+        await this.emitClientAction(turn, action, "");
+      }
+    }
     // Terminal path: clear the keepalive before turn_done so no progress tick can
     // fire after the turn is done. Cleared synchronously (clearInterval) before
     // the awaited send, so the interval cannot slip a tick in on the yield.
@@ -1084,7 +1146,12 @@ class VoiceSessionConnection {
       status: "completed",
       transcription_only: providerResult?.transcription_only === true,
       ...(typeof doneTtsSpoke === "boolean" ? { tts_spoke: doneTtsSpoke } : {}),
-      ...(providerResult?.reply_language ? { reply_language: providerResult.reply_language } : {}),
+      // Language visibility: ALWAYS report the reply (spoken) language and the
+      // restricted input (heard) languages so a client overlay can render a live
+      // "hears X / speaks Y" indicator. reply_language falls back to the turn's
+      // effective profile when the provider result omits it.
+      reply_language: turnReplyLanguage(turn, providerResult, canonicalRecord),
+      input_languages: turnInputLanguages(turn),
       // Honest delivery signals: how the reply was delivered ("text" = not
       // spoken) and, when hosted TTS failed, the short reason.
       ...(doneModality ? { modality: doneModality } : {}),
@@ -1324,6 +1391,7 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
+    abortSttStream(turn);
     const events = providerEvents || this.createProviderEvents(turn);
     const failedStage = events.activeStage
       || normalizeProgressStage(this.turnProgressStage)
@@ -1361,6 +1429,8 @@ class VoiceSessionConnection {
       status: "error",
       reason: turnErrorReason(error),
       error_summary: cleanErrorSummary(message),
+      reply_language: turnReplyLanguage(turn, null, null),
+      input_languages: turnInputLanguages(turn),
     });
     if (this.turn === turn) {
       this.turn = null;
@@ -1411,6 +1481,7 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
+    abortSttStream(turn);
     await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), "turn_canceled", {});
     await this.recordIncompleteTurn(turn, "canceled");
     writeTurnMetadata(turn, {
@@ -1423,6 +1494,8 @@ class VoiceSessionConnection {
       branch_id: turn.branchId,
       turn_id: turn.turnId,
       status: "canceled",
+      reply_language: turnReplyLanguage(turn, null, null),
+      input_languages: turnInputLanguages(turn),
     });
     this.turn = null;
   }
@@ -1491,6 +1564,7 @@ class VoiceSessionConnection {
       if (turn.liveSession) {
         turn.liveSession.cancel();
       }
+      abortSttStream(turn);
       await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
         status,
       });
@@ -1509,6 +1583,7 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
+    abortSttStream(turn);
     await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
       status,
     });
@@ -1570,6 +1645,38 @@ class VoiceSessionConnection {
       message,
     }));
   }
+}
+
+// The restricted INPUT (STT) language codes for a turn, captured at session
+// start. Always an array so clients can render a live "hears X" indicator.
+function turnInputLanguages(turn) {
+  const codes = turn?.providerStatus?.language_codes;
+  return Array.isArray(codes) ? codes.filter(Boolean).map((code) => String(code)) : [];
+}
+
+// The reply (OUTPUT) language for a turn, so turn_done and the profile-control
+// confirmation TTS always carry a language code even when the provider result
+// omits it: provider result -> canonical record -> the turn's effective profile
+// reply language -> the first restricted STT input language. This keeps the
+// spoken text's language and its TTS language tag from ever diverging, and lets
+// clients show "speaks Y" every turn.
+function turnReplyLanguage(turn, providerResult, canonicalRecord) {
+  const fromProvider = String(providerResult?.reply_language || "").trim();
+  if (fromProvider) {
+    return fromProvider;
+  }
+  const fromRecord = String(
+    canonicalRecord?.response?.reply_language || canonicalRecord?.reply_language || "",
+  ).trim();
+  if (fromRecord) {
+    return fromRecord;
+  }
+  const profile = turn?.effectiveProfile || null;
+  const fromProfile = String(profile?.language_primary || profile?.language || "").trim();
+  if (fromProfile) {
+    return fromProfile.split(",")[0].trim();
+  }
+  return turnInputLanguages(turn)[0] || "";
 }
 
 function profileControlAssistantText(record) {
@@ -1692,6 +1799,23 @@ function effectiveProfileForSession(profile, event) {
     next.voice_tone = tone;
   }
   return next;
+}
+
+// Tear down the streaming STT recognizer without finalizing (cancel/close/
+// interrupt paths). The commit path finalizes via runSttStage instead; here the
+// turn is terminal, so we just destroy the gRPC stream. Best-effort, never
+// throws — a streaming fault must never take the session down.
+function abortSttStream(turn) {
+  if (!turn || !turn.sttStream) {
+    return;
+  }
+  const stream = turn.sttStream;
+  turn.sttStream = null;
+  try {
+    stream.abort?.();
+  } catch {
+    // best effort
+  }
 }
 
 async function closeAudioStream(turn) {

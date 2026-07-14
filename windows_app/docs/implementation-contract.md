@@ -27,16 +27,26 @@ explicit approval decide eligibility. The library performs no effects.
   canonical SHA-256 proposal digest.
 - Make an eligible proposal an opaque capability that can produce a bounded
   data receipt only after an observed outcome is supplied.
+- Accept a fresh, caller-observed `context_descriptor` v1 and resolve bounded
+  `execution_adapters` v1 without inspecting authentication or exporting
+  cookies, tokens, provider credentials, or executable callbacks.
+- Accept only standard Microsoft Store or App Installer update metadata and
+  return compatibility/eligibility data without fetching or installing it.
 - Contain no network, provider credential, canonical history, effect execution,
-  command invocation, storage, install, signing, or update code.
+  command invocation, storage, install, signing, downloader, or updater code.
 
 ## Edge cases and forbidden shortcuts
 
 Reject unknown versions, malformed/impossible timestamps, stale state,
 cross-session/surface/device approvals, mutated proposals, missing approval,
 oversized/nested/wide input, OAuth callback codes, bearer/token material and
-executable-shaped fields. Do not call the Windows CI artifact a native Windows
-app, signed package, accessibility proof or production build.
+executable-shaped fields. Context matching must reject stale/future evidence,
+binding mismatches and adapter advertisements missing local-authority guards.
+Update metadata must reject downgrades as eligible, incompatible package/channel
+or architecture, duplicate architectures, non-HTTPS App Installer manifests,
+credential-bearing URLs and non-App-Installer payloads. Do not call the Windows
+CI artifact a native Windows app, signed package, accessibility proof,
+self-updating application or production build.
 
 ## Gates
 

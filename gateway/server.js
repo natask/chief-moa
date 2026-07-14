@@ -25,7 +25,8 @@ const {
   supportedLanguagesSentence,
   languageControlPatch,
 } = require("./lib/profile-options");
-const { createCompanionCatalogStore } = require("./lib/companion-catalog");
+const voiceL10n = require("./lib/voice-l10n");
+const { createCompanionCatalogStore, COMMAND_VERBS: COMPANION_COMMAND_VERBS } = require("./lib/companion-catalog");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
@@ -181,6 +182,8 @@ const PET_CATALOG_VERSION = "companion-pets/v1";
 const PET_IMAGE_MODEL = process.env.MOA_PET_IMAGE_MODEL || process.env.VERTEX_IMAGE_MODEL || "gemini-3.1-flash-image";
 const PET_ANIMATION_MODEL = process.env.MOA_PET_ANIMATION_MODEL || process.env.VERTEX_ANIMATION_MODEL || "veo-3.1-generate-001";
 const PET_ENABLE_VERTEX_GENERATION = process.env.MOA_PET_ENABLE_VERTEX_GENERATION === "1";
+// Decoded-bytes cap on reference audio for a voice-clone enrollment job.
+const VOICE_CLONE_MAX_AUDIO_BYTES = Number(process.env.MOA_VOICE_CLONE_MAX_AUDIO_BYTES || 8_000_000);
 const MOA_GATEWAY_TOKEN = process.env.MOA_GATEWAY_TOKEN || "";
 const MOA_DEPLOY_REVIEWER_TOKEN = process.env.MOA_DEPLOY_REVIEWER_TOKEN || "";
 const MOA_PREVIEW_DEPLOYER_TOKEN = process.env.MOA_PREVIEW_DEPLOYER_TOKEN || "";
@@ -809,6 +812,61 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    // Shared library: browse published (shared) character manifests, and install
+    // one as a companion profile patch (same authority as apply). Exact-path
+    // routes registered before the /:id/* regexes below so they never collide.
+    if (url.pathname === "/v1/agent/pets/shared" && request.method === "GET") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      sendJson(response, 200, petSharedPayload(url));
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/pets/install" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handlePetInstall(request, response);
+      return;
+    }
+
+    // Voice-clone job for a character. POST enqueues a consent-gated clone job
+    // (dry-run while Google cloning is allowlist-pending); GET reads job status.
+    {
+      const match = url.pathname.match(/^\/v1\/agent\/pets\/([^/]+)\/voice-clone$/);
+      if (match) {
+        if (!authorizedAgent(request)) {
+          sendJson(response, 401, agentAuthError());
+          return;
+        }
+        const petId = decodeURIComponent(match[1]);
+        if (request.method === "POST") {
+          await handlePetVoiceClone(request, response, petId);
+          return;
+        }
+        if (request.method === "GET") {
+          sendJson(response, 200, petVoiceCloneStatusPayload(petId));
+          return;
+        }
+      }
+    }
+
+    // Publish a character to the shared library (requires approved provenance).
+    {
+      const match = url.pathname.match(/^\/v1\/agent\/pets\/([^/]+)\/publish$/);
+      if (match && request.method === "POST") {
+        if (!authorizedAgent(request)) {
+          sendJson(response, 401, agentAuthError());
+          return;
+        }
+        await handlePetPublish(request, response, decodeURIComponent(match[1]));
+        return;
+      }
+    }
+
     if (url.pathname === "/v1/agent/profile" && request.method === "GET") {
       if (!authorizedAgent(request)) {
         sendJson(response, 401, agentAuthError());
@@ -1433,6 +1491,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "PATCH" && url.pathname.startsWith("/v1/projects/")) {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleUpdateProject(request, response, decodeURIComponent(url.pathname.slice("/v1/projects/".length)));
+      return;
+    }
+
     // Router activation loop. The router holds no work: it routes an utterance,
     // assembles context, LAUNCHES a disposable task agent (an agent run), tracks
     // its status, and PINGS on completion. It does not speak -- the response is
@@ -1727,6 +1794,17 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       await handleMacosProactiveTurn(request, response);
+      return;
+    }
+
+    if (request.method === "POST"
+      && url.pathname.startsWith("/v1/voice/turns/")
+      && url.pathname.endsWith("/retranscribe")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleVoiceRetranscribe(request, response, url);
       return;
     }
 
@@ -2528,7 +2606,7 @@ async function handleChat(request, response) {
   const screenContext = formatScreenContext(body.screen);
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const userText = lastUser?.content || "";
-  const utilityReply = localUtilityReply(userText);
+  const utilityReply = localUtilityReply(userText, effectiveReplyLanguage(profile));
   const prepared = utilityReply
     ? { decision: resolveContextDecision({ text: userText, contextAction: body.context_action }), preflight: { attempted: false, tool_called: false, fallback_reason: "local_utility" } }
     : await prepareContextDecision({ text: userText, contextAction: body.context_action, profile });
@@ -5415,6 +5493,7 @@ async function handleCreatePet(request, response) {
       pet: petInputFromBody(body),
       image_data_url: body?.image_data_url || body?.imageDataUrl || body?.source_image || body?.sourceImage,
       rules: body?.rules,
+      ...manifestV2FieldsFromBody(body),
     });
     const preview = companionCatalog.preview({ companion_id: companion.id });
     sendJson(response, 201, {
@@ -5439,6 +5518,7 @@ async function handleCreatePetAgent(request, response) {
       pet: petInputFromBody(body),
       image_data_url: body?.image_data_url || body?.imageDataUrl || body?.source_image || body?.sourceImage,
       rules: body?.rules,
+      ...manifestV2FieldsFromBody(body),
     });
     const preview = companionCatalog.preview({ companion_id: agent.companion_id });
     sendJson(response, 201, {
@@ -5585,6 +5665,183 @@ async function handlePetGenerate(request, response) {
       error: cleanError(error),
       plan,
     });
+  }
+}
+
+// Voice-clone job endpoint. Consent-gated and (until the Google cloning
+// allowlist clears) dry-run: the plan is stored, the job status is
+// "blocked_allowlist", and the closest canonical voice is bound as the pet's
+// fallback. Reference audio bytes and any credentials are never persisted — only
+// a bounded descriptor (size + sha) — and reference_url is recorded, never
+// fetched server-side in this change. MOA_VOICE_CLONE_LIVE=1 is reserved: it
+// records the job "not_implemented_live" rather than calling any provider API.
+async function handlePetVoiceClone(request, response, petId) {
+  const body = await readJsonBody(request);
+  const pet = companionCatalog.get(petId);
+  if (!pet) {
+    sendJson(response, 404, { error: "companion not found" });
+    return;
+  }
+  const consent = body?.consent && typeof body.consent === "object" && !Array.isArray(body.consent) ? body.consent : {};
+  if (consent.attested !== true) {
+    sendJson(response, 422, { error: "consent.attested must be true to enroll a cloned voice" });
+    return;
+  }
+  const reference = voiceCloneReferenceFromBody(body);
+  if (!reference.ok) {
+    sendJson(response, 422, { error: reference.error });
+    return;
+  }
+  try {
+    const live = String(process.env.MOA_VOICE_CLONE_LIVE || "").trim() === "1";
+    const result = companionCatalog.createVoiceCloneJob({
+      companion_id: petId,
+      consent: { attested: true, subject: String(consent.subject || "") },
+      reference: reference.record,
+      live,
+    });
+    sendJson(response, 201, {
+      version: PET_CATALOG_VERSION,
+      job: result.job,
+      pet: companionPetRecord(result.companion),
+      companion: result.companion,
+      // The clone leg is allowlist-blocked; surface it plainly so callers know
+      // the pet is speaking with the bound canonical fallback for now.
+      blocker: live
+        ? "MOA_VOICE_CLONE_LIVE is set but live cloning is not implemented in this change."
+        : "Google voice cloning is allowlist-gated for this project; the job is stored in dry-run and the closest canonical voice is bound as the fallback.",
+      mutates_profile: false,
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+function petVoiceCloneStatusPayload(petId) {
+  const pet = companionCatalog.get(petId);
+  const jobs = companionCatalog.listVoiceCloneJobs(petId);
+  return {
+    version: PET_CATALOG_VERSION,
+    generated_at: new Date().toISOString(),
+    companion_id: pet?.id || "",
+    found: Boolean(pet),
+    voice_binding: pet?.voice_binding || null,
+    voice_clone: pet?.voice_clone || null,
+    job: jobs.length ? jobs[jobs.length - 1] : null,
+    jobs,
+  };
+}
+
+// Validate the clone reference from the request body. Reference audio is capped
+// (decoded bytes), reference URLs are https-only. Returns a bounded descriptor;
+// the raw audio bytes are intentionally discarded here and never stored.
+function voiceCloneReferenceFromBody(body = {}) {
+  const audioBase64 = typeof body?.reference_audio_base64 === "string" ? body.reference_audio_base64.trim() : "";
+  const referenceUrl = typeof body?.reference_url === "string" ? body.reference_url.trim() : "";
+  if (audioBase64) {
+    const normalized = audioBase64.replace(/^data:[^;]+;base64,/, "");
+    let buffer;
+    try {
+      buffer = Buffer.from(normalized, "base64");
+    } catch {
+      buffer = null;
+    }
+    if (!buffer || buffer.length === 0) {
+      return { ok: false, error: "reference_audio_base64 is not valid base64 audio" };
+    }
+    if (buffer.length > VOICE_CLONE_MAX_AUDIO_BYTES) {
+      return { ok: false, error: `reference audio exceeds the ${VOICE_CLONE_MAX_AUDIO_BYTES}-byte cap` };
+    }
+    const sha = crypto.createHash("sha256").update(buffer).digest("hex");
+    return { ok: true, record: { kind: "audio", audio_bytes: buffer.length, audio_sha256: sha } };
+  }
+  if (referenceUrl) {
+    let parsed;
+    try {
+      parsed = new URL(referenceUrl);
+    } catch {
+      return { ok: false, error: "reference_url must be a valid URL" };
+    }
+    if (parsed.protocol !== "https:") {
+      return { ok: false, error: "reference_url must be https" };
+    }
+    return { ok: true, record: { kind: "url", url: parsed.toString() } };
+  }
+  return { ok: false, error: "provide reference_audio_base64 or reference_url" };
+}
+
+// Publish a character to the shared library. Requires provenance.consent_state
+// === "approved"; otherwise 409 with the current state in `reason`.
+async function handlePetPublish(request, response, petId) {
+  await readJsonBody(request).catch(() => ({}));
+  try {
+    const companion = companionCatalog.publishCompanion({ id: petId });
+    sendJson(response, 200, {
+      version: PET_CATALOG_VERSION,
+      pet: companionPetRecord(companion),
+      companion,
+      visibility: companion.visibility,
+    });
+  } catch (error) {
+    if (error?.code === "consent_not_approved") {
+      sendJson(response, 409, {
+        error: cleanError(error),
+        code: "consent_not_approved",
+        reason: error.reason || "unreviewed",
+      });
+      return;
+    }
+    if (error?.code === "not_publishable") {
+      sendJson(response, 409, { error: cleanError(error), code: "not_publishable" });
+      return;
+    }
+    sendJson(response, 404, { error: cleanError(error) });
+  }
+}
+
+function petSharedPayload(url) {
+  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
+  const limit = Number(url?.searchParams?.get("limit") || 100);
+  const shared = companionCatalog.listShared({ query, limit });
+  return {
+    version: PET_CATALOG_VERSION,
+    generated_at: new Date().toISOString(),
+    query,
+    pets: shared.map(companionPetRecord),
+    companions: shared,
+    endpoints: {
+      shared: "/v1/agent/pets/shared",
+      install: "/v1/agent/pets/install",
+      publish: "/v1/agent/pets/:id/publish",
+    },
+  };
+}
+
+// Install a shared character: a companion profile patch, identical authority to
+// apply. Applying/installing grants no local action authority.
+async function handlePetInstall(request, response) {
+  const body = await readJsonBody(request);
+  const petId = body?.id || body?.companion_id || body?.companionId;
+  const companion = companionCatalog.get(petId);
+  if (!companion) {
+    sendJson(response, 404, { error: "companion not found" });
+    return;
+  }
+  const profileOptions = profileOptionsFromBody(body, "global");
+  if (!requireDeviceScope(response, profileOptions)) {
+    return;
+  }
+  try {
+    const result = applyCompanionToProfile({ companion_id: companion.id }, profileOptions, body?.source || "pet-install");
+    sendJson(response, 200, {
+      version: PET_CATALOG_VERSION,
+      pet: companionPetRecord(result.companion),
+      installed_id: companion.id,
+      visibility: companion.visibility,
+      ...result,
+    });
+  } catch (error) {
+    sendJson(response, 404, { error: cleanError(error) });
   }
 }
 
@@ -5763,6 +6020,23 @@ function petInputFromBody(body = {}) {
     source_image: body.image_data_url || body.imageDataUrl || body.source_image || body.sourceImage || pet.source_image,
     asset_url: body.asset_url || body.assetUrl || pet.asset_url,
   };
+}
+
+// Optional character-manifest-v2 fields a create/agent request may carry. Passed
+// through to the catalog's sanitizers (companion()); absent fields default
+// safely there, so v1 requests are unaffected.
+function manifestV2FieldsFromBody(body = {}) {
+  const fields = {};
+  if (body?.persona !== undefined) fields.persona = body.persona;
+  if (body?.voice_profile !== undefined || body?.voiceProfile !== undefined) {
+    fields.voice_profile = body.voice_profile || body.voiceProfile;
+  }
+  if (body?.provenance !== undefined) fields.provenance = body.provenance;
+  if (body?.command_verbs !== undefined || body?.commandVerbs !== undefined) {
+    fields.command_verbs = body.command_verbs || body.commandVerbs;
+  }
+  if (body?.visibility !== undefined) fields.visibility = body.visibility;
+  return fields;
 }
 
 function companionPetRecord(companion) {
@@ -6302,6 +6576,20 @@ async function handleCreateProject(request, response) {
   const body = await readJsonBody(request);
   try {
     sendJson(response, 201, { project: createProject(body) });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
+async function handleUpdateProject(request, response, id) {
+  const body = await readJsonBody(request);
+  try {
+    const project = updateProject(id, body);
+    if (!project) {
+      sendJson(response, 404, { error: "project not found" });
+      return;
+    }
+    sendJson(response, 200, { project });
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
   }
@@ -7053,7 +7341,7 @@ async function handleVoiceTurn(request, response) {
     return;
   }
 
-  const utilityReply = localUtilityReply(transcript);
+  const utilityReply = localUtilityReply(transcript, effectiveReplyLanguage(profile));
   if (utilityReply) {
     const payload = voiceTurnPayload(baseRecord, {
       speak: capSpeakText(utilityReply, profile.voice_max_chars),
@@ -7495,15 +7783,22 @@ async function handleInternalVoiceTurnRecord(request, response) {
 }
 
 async function handleVoiceProfileControl(record, transcript, turnProfileOptions = {}) {
+  // Reply language for the CANNED confirmations below, from the current profile.
+  // The update path recomputes this from the post-change profile so a language
+  // SWITCH is confirmed in the NEW language.
+  const currentReplyLanguage = effectiveReplyLanguage(
+    agentProfile.effective(turnProfileOptions.deviceId ? { deviceId: turnProfileOptions.deviceId } : {}),
+  );
   const intent = parseProfileControlIntent(transcript);
   if (!intent) {
-    const message = "Hey, I would like to do that, but I need you to say which voice, input language, or reply language to change.";
+    const message = voiceL10n.t(currentReplyLanguage, "needProfileTarget");
     return voiceTurnPayload(record, {
       classification: "profile_control",
       speak: message,
       display: message,
       actions: [],
       follow_up_expected: false,
+      reply_language: currentReplyLanguage,
     });
   }
   const profileOptions = {
@@ -7512,7 +7807,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     deviceId: turnProfileOptions.deviceId || "",
   };
   if (profileOptions.requested_scope === "device" && !profileOptions.deviceId) {
-    const message = "Hey, I would like to do that, but I need you to give me access to this device's Moa device id.";
+    const message = voiceL10n.t(currentReplyLanguage, "needDeviceId");
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7520,6 +7815,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display: message,
         actions: [{ type: "profile_update_blocked", reason: "missing_device_id" }],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(),
       profile: agentProfileRuntimeStatus(),
@@ -7529,8 +7825,8 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
   if (intent.action === "echo_transcript") {
     const previous = previousUserTranscript(record.session_id, record.branch_id, record.id);
     const speak = previous.transcript
-      ? `You said: ${previous.transcript}`
-      : "I don't have a previous turn to repeat yet.";
+      ? voiceL10n.t(currentReplyLanguage, "echoTranscript", { transcript: previous.transcript })
+      : voiceL10n.t(currentReplyLanguage, "noPreviousTurn");
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7543,6 +7839,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
           transcript_source: previous.transcript_source || "",
         }],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       echoed_turn_id: previous.turn_id || "",
       echoed_transcript: previous.transcript || "",
@@ -7553,7 +7850,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
   }
 
   if (intent.action === "summary") {
-    const summary = profileSummaryText(intent.subject, profileOptions);
+    const summary = profileSummaryText(intent.subject, { ...profileOptions, replyLanguage: currentReplyLanguage });
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7561,6 +7858,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display: summary,
         actions: [{ type: "profile_summary", subject: intent.subject }],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
@@ -7578,6 +7876,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display,
         actions: [sampler],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
@@ -7589,8 +7888,8 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     // keep the current setting and tell the user what is available. The turn
     // still completes normally, so no setting change can break the app.
     const message = intent.subject === "language"
-      ? `I only speak ${supportedLanguagesSentence()} for now, so I kept the current language.`
-      : "I can't change that setting, so I kept the current one.";
+      ? voiceL10n.t(currentReplyLanguage, "rejectLanguage", { languages: supportedLanguagesSentence() })
+      : voiceL10n.t(currentReplyLanguage, "rejectGeneric");
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7598,6 +7897,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display: message,
         actions: [{ type: "profile_update_rejected", subject: intent.subject || "" }],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
@@ -7609,7 +7909,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
   }
 
   if (intent.action === "clarify") {
-    const message = profileClarificationText(intent.subject, profileOptions);
+    const message = profileClarificationText(intent.subject, { ...profileOptions, replyLanguage: currentReplyLanguage });
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7617,6 +7917,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display: message,
         actions: [{ type: "profile_clarification", subject: intent.subject }],
         follow_up_expected: true,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
@@ -7629,8 +7930,14 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
       name: "",
     });
     const result = applyCompanionToProfile({ companion_id: draft.id }, profileOptions, "voice");
-    const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
-    const display = `Created and switched to ${draft.name} ${scopeText}. Profile version is ${result.profile_version}; applies ${result.application.applies.replace(/_/g, " ")}.`;
+    // A companion carries its own reply language; confirm in the NEW language.
+    const companionReplyLanguage = effectiveReplyLanguage(agentProfile.effective(profileOptions)) || currentReplyLanguage;
+    const display = voiceL10n.t(companionReplyLanguage, "companionApplied", {
+      name: draft.name,
+      scope: profileOptions.scope,
+      version: result.profile_version,
+      applies: result.application.applies,
+    });
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7646,6 +7953,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
           application: result.application,
         }],
         follow_up_expected: false,
+        reply_language: companionReplyLanguage,
       }),
       profile_version: result.profile_version,
       from_profile_version: result.from_profile_version,
@@ -7673,11 +7981,19 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
   });
   const changed = beforeVersion !== afterVersion;
   const application = profileApplicationSemantics();
-  const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
-  const display = intent.confirmation
+  // Confirm in the POST-change reply language, so switching TO Amharic is
+  // confirmed in Amharic and switching TO English is confirmed in English.
+  const afterReplyLanguage = effectiveReplyLanguage(after) || currentReplyLanguage;
+  // Persona / assistant-name intents carry a structured confirmation key so the
+  // spoken confirmation is localized too (falls back to the English literal).
+  const localizedConfirmation = intent.confirmation_key
+    ? voiceL10n.t(afterReplyLanguage, intent.confirmation_key, intent.confirmation_params || {})
+    : "";
+  const display = localizedConfirmation
+    || intent.confirmation
     || (changed
-      ? `Updated ${intent.summary || "profile"} ${scopeText}. Profile version is ${afterVersion}; applies ${application.applies.replace(/_/g, " ")}.`
-      : `That profile setting is already active ${scopeText}. Profile version is still ${afterVersion}.`);
+      ? voiceL10n.t(afterReplyLanguage, "profileUpdated", { summary: intent.summary || "profile", scope: profileOptions.scope, version: afterVersion, applies: application.applies })
+      : voiceL10n.t(afterReplyLanguage, "profileAlreadyActive", { scope: profileOptions.scope, version: afterVersion }));
   return {
     ...voiceTurnPayload(record, {
       classification: "profile_control",
@@ -7694,6 +8010,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         application,
       }],
       follow_up_expected: false,
+      reply_language: afterReplyLanguage,
     }),
     profile_version: afterVersion,
     from_profile_version: beforeVersion,
@@ -7879,27 +8196,30 @@ function voiceSamplerDisplayText(sampler) {
 function profileSummaryText(subject, options = {}) {
   const profile = agentProfile.effective(options);
   const version = agentProfile.currentVersion(options);
-  const scopeText = options.scope === "device" ? "on this device" : "on all devices";
+  // Localize the "Profile N on all devices." lead-in to the reply language; the
+  // technical read-out that follows stays in the catalog's own labels.
+  const replyLanguage = options.replyLanguage || effectiveReplyLanguage(profile);
+  const lead = voiceL10n.t(replyLanguage, "profileSummaryLead", { version, scope: options.scope });
   if (subject === "system_prompt") {
-    return `Profile ${version} ${scopeText}. Current system prompt: ${truncate(profile.system_prompt || "(empty)", 220)}`;
+    return `${lead} Current system prompt: ${truncate(profile.system_prompt || "(empty)", 220)}`;
   }
   if (subject === "language") {
     const language = profile.language || profile.language_primary || "unspecified";
-    return `Profile ${version} ${scopeText}. Reply language is ${language}; input language is ${profile.input_languages || "unspecified"}; auto switch is ${profile.language_auto_switch ? "on" : "off"}.`;
+    return `${lead} Reply language is ${language}; input language is ${profile.input_languages || "unspecified"}; auto switch is ${profile.language_auto_switch ? "on" : "off"}.`;
   }
   if (subject === "language_options") {
     const languages = languageOptionsPayload().map((language) => `${language.label} (${language.code})`).join(", ");
-    return `Profile ${version} ${scopeText}. Supported reply and input languages are: ${languages}. Use comma-separated codes to set more than one.`;
+    return `${lead} Supported reply and input languages are: ${languages}. Use comma-separated codes to set more than one.`;
   }
   if (subject === "voice") {
-    return `Profile ${version} ${scopeText}. Voice is ${profile.voice || "default"}.`;
+    return `${lead} Voice is ${profile.voice || "default"}.`;
   }
   if (subject === "voice_options") {
     const voices = voiceOptionsPayload().map((voice) => `${voice.id} (${voice.tone_tags.join("/")})`).join(", ");
-    return `Profile ${version} ${scopeText}. Supported voices are: ${voices}. Feminine maps to Aoede; masculine maps to Charon unless you choose a specific voice id.`;
+    return `${lead} Supported voices are: ${voices}. Feminine maps to Aoede; masculine maps to Charon unless you choose a specific voice id.`;
   }
   if (subject === "assistant_name") {
-    return `Profile ${version} ${scopeText}. My name is ${profile.assistant_name || "A.G."}.`;
+    return `${lead} My name is ${profile.assistant_name || "A.G."}.`;
   }
   if (subject === "providers") {
     return `Profile ${version}. Providers: voice ${profile.voice_provider || "default"}, STT ${profile.stt_provider || "default"}, reasoning ${profile.reasoning_provider || "default"} (model ${profile.model || "default"}), TTS ${profile.tts_provider || "default"}.`;
@@ -7911,13 +8231,14 @@ function profileSummaryText(subject, options = {}) {
 }
 
 function profileClarificationText(subject, options = {}) {
+  const replyLanguage = options.replyLanguage || effectiveReplyLanguage(agentProfile.effective(options));
   if (subject === "voice") {
     const version = agentProfile.currentVersion(options);
-    const scopeText = options.scope === "device" ? "on this device" : "on all devices";
     const voices = voiceOptionsPayload().map((voice) => voice.id).join(", ");
-    return `I can change my voice ${scopeText}. Pick one of: ${voices}. You can also say masculine or feminine. Profile version is ${version}.`;
+    const lead = voiceL10n.t(replyLanguage, "voiceClarifyLead", { scope: options.scope });
+    return `${lead} Pick one of: ${voices}. You can also say masculine or feminine. Profile version is ${version}.`;
   }
-  return "Tell me which profile setting to change.";
+  return voiceL10n.t(replyLanguage, "tellMeSetting");
 }
 
 // The reasoning provider for THIS turn: the profile's reasoning_provider when it
@@ -8950,9 +9271,9 @@ function toVertexFunctionSchema(schema) {
   return out;
 }
 
-function localUtilityReply(prompt) {
+function localUtilityReply(prompt, replyLanguage = "") {
   if (isCurrentTimeQuestion(prompt)) {
-    return currentTimeReply();
+    return currentTimeReply(new Date(), replyLanguage);
   }
   if (isOperationalStatusQuestion(prompt)) {
     return operationalStatusSummary();
@@ -8970,9 +9291,12 @@ function isCurrentTimeQuestion(prompt) {
     || lower === "tell me the time";
 }
 
-function currentTimeReply(now = new Date()) {
+function currentTimeReply(now = new Date(), replyLanguage = "") {
   const timeZone = gatewayTimeZone();
-  const formatted = new Intl.DateTimeFormat("en-US", {
+  // Render the date/time in the reply language's locale (Amharic month/weekday
+  // names for am-ET) instead of a hardcoded en-US, then wrap it in the localized
+  // "It's ..." frame so the whole reply is in one language.
+  const formatted = new Intl.DateTimeFormat(voiceL10n.intlLocaleFor(replyLanguage), {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -8982,7 +9306,7 @@ function currentTimeReply(now = new Date()) {
     timeZoneName: "short",
     timeZone,
   }).format(now);
-  return `It's ${formatted}.`;
+  return voiceL10n.t(replyLanguage, "timeReply", { formatted });
 }
 
 function gatewayTimeZone() {
@@ -9010,12 +9334,9 @@ function gatewayFallbackReply(prompt) {
 }
 
 function createAgentRun(body) {
-  const prompt = String(body.prompt || body.instruction || body.text || "").trim();
-  if (!prompt) {
+  const userPrompt = String(body.prompt || body.instruction || body.text || "").trim();
+  if (!userPrompt) {
     throw new Error("prompt is required");
-  }
-  if (Buffer.byteLength(prompt, "utf8") > MAX_AGENT_PROMPT_BYTES) {
-    throw new Error(`prompt is too large; max ${MAX_AGENT_PROMPT_BYTES} bytes`);
   }
 
   // A run can target a saved project (resolves its working dir + default
@@ -9024,6 +9345,12 @@ function createAgentRun(body) {
   const project = requestedProjectId ? findProject(requestedProjectId) : null;
   if (requestedProjectId && !project && !useWorkerPullForAgentRuns()) {
     throw new Error(`unknown project: ${body.project_id}`);
+  }
+  const prompt = project && body.include_project_brief !== false
+    ? promptWithProjectBrief(userPrompt, project)
+    : userPrompt;
+  if (Buffer.byteLength(prompt, "utf8") > MAX_AGENT_PROMPT_BYTES) {
+    throw new Error(`prompt plus project brief is too large; max ${MAX_AGENT_PROMPT_BYTES} bytes`);
   }
   const harness = sanitizeHarness(body.harness || project?.default_harness || DEFAULT_HARNESS);
   const workingDir = resolveHarnessWorkingDir(body.working_dir || body.cwd || project?.working_dir || "");
@@ -9050,6 +9377,7 @@ function createAgentRun(body) {
     profile_version: profileVersion,
     parent_run_id: body.parent_run_id ? sanitizeId(body.parent_run_id) : "",
     project_id: project ? project.id : requestedProjectId,
+    project_brief_updated_at: project?.updated_at || "",
     local_project_alias: body.local_project_alias
       ? String(body.local_project_alias).replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 120)
       : (project ? project.name : requestedProjectId),
@@ -9099,9 +9427,11 @@ function createAgentRun(body) {
 }
 
 // --- Projects store -------------------------------------------------------
-// A project = { id, name, working_dir, default_harness }. Stored flat in
-// PROJECTS_FILE. The working dir is validated against the harness root the same
-// way a run's working_dir is, so a project can never escape the sandbox.
+// A project is the durable object the user manages. Its brief records the
+// problem, desired outcome, current state, and next viable step independently
+// of any disposable agent session. Stored flat in PROJECTS_FILE. The working
+// dir is validated against the harness root the same way a run's working_dir
+// is, so a project can never escape the sandbox.
 
 function listProjects() {
   try {
@@ -9136,11 +9466,65 @@ function createProject(body) {
     name,
     working_dir: workingDir,
     default_harness: defaultHarness,
+    brief: sanitizeProjectBrief(body.brief || body),
     created_at: now,
+    updated_at: now,
   };
   projects.push(project);
   writeProjects(projects);
   return project;
+}
+
+function updateProject(id, body) {
+  const safeId = sanitizeId(id);
+  const projects = listProjects();
+  const index = projects.findIndex((project) => project.id === safeId);
+  if (index < 0) {
+    return null;
+  }
+  const previous = projects[index];
+  const incoming = body && typeof body.brief === "object" ? body.brief : body;
+  const brief = sanitizeProjectBrief({
+    ...(previous.brief && typeof previous.brief === "object" ? previous.brief : {}),
+    ...(incoming && typeof incoming === "object" ? incoming : {}),
+  });
+  const now = new Date().toISOString();
+  const project = { ...previous, brief, updated_at: now };
+  projects[index] = project;
+  writeProjects(projects);
+  return project;
+}
+
+function sanitizeProjectBrief(value) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    problem: truncate(String(input.problem || "").trim(), 4000),
+    desired_outcome: truncate(String(input.desired_outcome || input.outcome || "").trim(), 4000),
+    current_state: truncate(String(input.current_state || input.state || "").trim(), 12000),
+    next_step: truncate(String(input.next_step || "").trim(), 4000),
+  };
+}
+
+function promptWithProjectBrief(prompt, project) {
+  const brief = sanitizeProjectBrief(project?.brief);
+  const fields = [
+    ["Problem", brief.problem],
+    ["Desired outcome", brief.desired_outcome],
+    ["Current state", brief.current_state],
+    ["Next viable step", brief.next_step],
+  ].filter(([, value]) => value);
+  if (!fields.length) {
+    return prompt;
+  }
+  return [
+    "User instruction:",
+    prompt,
+    "",
+    `Durable project brief (${project.name || project.id}):`,
+    ...fields.map(([label, value]) => `${label}: ${value}`),
+    "",
+    "Use the brief as project context. Advance the user instruction and leave durable evidence; do not manage or narrate agent identities.",
+  ].join("\n");
 }
 
 async function executeAgentRun(runId, active) {
@@ -9806,7 +10190,23 @@ function voiceTurnPayload(record, patch) {
     agent_runs: patch.agent_runs || [],
     follow_up_expected: Boolean(patch.follow_up_expected),
     end_of_turn: true,
+    // The language the speak/display text is actually written in. Canned
+    // (pre-LLM) replies localize their text to the reply language, so tagging it
+    // here keeps the downstream TTS language code from diverging from the text
+    // language (a wrong tag is a known trigger of gemini-tts am-ET 400s).
+    ...(patch.reply_language ? { reply_language: String(patch.reply_language) } : {}),
   };
+}
+
+// The effective reply (OUTPUT) language code for a profile, primary first,
+// e.g. "am-ET". Used to localize canned voice replies and to tag their TTS.
+function effectiveReplyLanguage(profile) {
+  const primary = String(profile?.language_primary || "").trim();
+  if (primary) {
+    return primary;
+  }
+  const list = String(profile?.language || "").trim();
+  return list.split(",")[0].trim();
 }
 
 function startAgentRun(body) {
@@ -11061,6 +11461,176 @@ function handleVoiceTurnGet(response, turnId, sessionId) {
   });
 }
 
+// POST /v1/voice/turns/:sessionId/:turnId/retranscribe — re-run STT (batch,
+// windowed so length is unbounded) over the stored user PCM and return the
+// fresh transcript. The audio archive is the durable source of truth: spoken
+// input is never lost, so a bad/empty/wrong-language streaming transcript can
+// always be recovered from the recording. Non-destructive: the original
+// transcript is preserved as revision 0 and the new one is appended + marked
+// retranscribed:true. 404 when the PCM is gone (e.g. incognito-deleted).
+async function handleVoiceRetranscribe(request, response, url) {
+  const rest = url.pathname
+    .slice("/v1/voice/turns/".length, url.pathname.length - "/retranscribe".length)
+    .split("/")
+    .filter(Boolean);
+  if (rest.length !== 2) {
+    sendJson(response, 404, { error: "voice turn not found" });
+    return;
+  }
+  let sessionId;
+  let turnId;
+  try {
+    sessionId = sanitizeOptionalId(decodeURIComponent(rest[0]), "default");
+    turnId = sanitizeOptionalId(decodeURIComponent(rest[1]), "");
+  } catch {
+    sendJson(response, 404, { error: "voice turn not found" });
+    return;
+  }
+  if (!turnId) {
+    sendJson(response, 404, { error: "voice turn not found" });
+    return;
+  }
+
+  const pcmPath = voiceTurnAudioPath(sessionId, turnId, "user");
+  if (!pcmPath || !fs.existsSync(pcmPath)) {
+    sendJson(response, 404, { error: "voice turn audio not found", session_id: sessionId, turn_id: turnId });
+    return;
+  }
+  let stat;
+  try {
+    stat = fs.statSync(pcmPath);
+  } catch {
+    sendJson(response, 404, { error: "voice turn audio not found", session_id: sessionId, turn_id: turnId });
+    return;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    sendJson(response, 404, { error: "voice turn audio not found", session_id: sessionId, turn_id: turnId });
+    return;
+  }
+
+  const body = await readJsonBody(request).catch(() => ({}));
+  const provider = internalTtsProvider();
+  if (typeof provider.transcribePcmWindowed !== "function") {
+    sendJson(response, 501, {
+      error: "active voice provider has no batch STT leg",
+      reason: "retranscribe needs a cascaded (chirp) STT provider",
+      provider: provider.status?.().provider || "unknown",
+    });
+    return;
+  }
+
+  const overrideCodes = normalizeRetranscribeLanguageCodes(body.language_codes || body.languageCodes);
+  const codes = overrideCodes.length > 0
+    ? overrideCodes
+    : (typeof provider.sttLanguageCodes === "function" ? provider.sttLanguageCodes() : ["en-US"]);
+  const syntheticTurn = {
+    turnId,
+    pcmPath,
+    audioBytes: stat.size,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  };
+
+  let transcription;
+  try {
+    transcription = await provider.transcribePcmWindowed(syntheticTurn, codes);
+  } catch (error) {
+    sendJson(response, 502, { error: `retranscribe failed: ${cleanError(error)}` });
+    return;
+  }
+  const transcript = String(transcription?.text || "").trim();
+  const now = new Date().toISOString();
+
+  const record = readVoiceTurnRecord(sessionId, turnId);
+  let revision = 1;
+  if (record) {
+    // Non-destructive: seed revision 0 with the original the first time, then
+    // append this retranscription. The primary transcript is updated to the
+    // fresh one but the original stays recoverable in transcript_revisions.
+    const revisions = Array.isArray(record.transcript_revisions) ? record.transcript_revisions.slice() : [];
+    if (revisions.length === 0) {
+      revisions.push({
+        revision: 0,
+        transcript: String(record.transcript || ""),
+        transcript_source: String(record.transcript_source || ""),
+        source: "original",
+        created_at: String(record.updated_at || record.created_at || now),
+      });
+    }
+    revision = revisions.length;
+    revisions.push({
+      revision,
+      transcript,
+      transcript_source: "stt-retranscribe",
+      source: "retranscribe",
+      language_codes: codes,
+      windowed: transcription?.windowed === true,
+      created_at: now,
+    });
+    record.transcript_revisions = revisions;
+    record.retranscribed = true;
+    record.transcript = transcript;
+    record.transcript_source = "stt-retranscribe";
+    record.updated_at = now;
+    const voiceSession = record.references?.voice_session;
+    if (voiceSession && typeof voiceSession === "object") {
+      const providerEvents = Array.isArray(voiceSession.provider_events) ? voiceSession.provider_events : [];
+      providerEvents.push({
+        type: "transcript_retranscribed",
+        ts: now,
+        revision,
+        transcript_chars: transcript.length,
+        language_codes: codes,
+        windowed: transcription?.windowed === true,
+      });
+      voiceSession.provider_events = providerEvents;
+    }
+    writeVoiceTurnRecord(record);
+  }
+
+  // Durable audit trail even when no turn record exists (e.g. the record was
+  // pruned but the PCM survived): append a provider-events ledger line.
+  try {
+    fs.appendFileSync(VOICE_PROVIDER_EVENTS_FILE, JSON.stringify({
+      ts: now,
+      session_id: sessionId,
+      turn_id: turnId,
+      type: "transcript_retranscribed",
+      revision,
+      transcript_chars: transcript.length,
+      language_codes: codes,
+      windowed: transcription?.windowed === true,
+    }) + "\n");
+  } catch {
+    // best effort audit
+  }
+
+  sendJson(response, 200, {
+    session_id: sessionId,
+    turn_id: turnId,
+    transcript,
+    transcript_source: "stt-retranscribe",
+    retranscribed: true,
+    revision,
+    language_codes: codes,
+    windowed: transcription?.windowed === true,
+    language_rejected: transcription?.languageRejected === true,
+    audio_bytes: stat.size,
+    record_updated: Boolean(record),
+    updated_at: now,
+  });
+}
+
+function normalizeRetranscribeLanguageCodes(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[,\s]+/);
+  const codes = raw
+    .map((code) => String(code || "").trim())
+    .filter(Boolean)
+    .filter((code) => code.toLowerCase() !== "auto");
+  return Array.from(new Set(codes)).slice(0, 2);
+}
+
 const VOICE_DIAGNOSIS_LIMIT_MAX = 20;
 const VOICE_DIAGNOSIS_EVENT_LIMIT = 12;
 const VOICE_DIAGNOSIS_FAULT_ORDER = Object.freeze([
@@ -11792,6 +12362,7 @@ async function runCascadedVoiceReasoningInner(input) {
   };
   const toolDefs = cascadedVoiceProfileTools(toolCall)
     .concat(cascadedAgentRunTools(toolCall))
+    .concat([companionMotionTool()])
     .concat(surfaceClassicTools(toolCall, surfaceSkillDeps()));
   if (voiceExecuteToolEnabled()) {
     toolDefs.push(cascadedExecuteToolDef(toolCall));
@@ -11862,6 +12433,11 @@ async function runCascadedVoiceReasoningInner(input) {
   const ttsText = useExpressiveTts
     ? capSpeakText(expressive.speechText, effectiveAfter.voice_max_chars)
     : displaySpeak;
+  // Collect any client-forwardable actions a tool proposed this turn (today
+  // companion_motion and page_tweak). The cascaded provider carries these on the
+  // turn result and the session server forwards each as its own client event —
+  // model output stays a proposal; the client runtime validates and executes.
+  const turnActions = collectCascadedToolActions(toolTurn.tool_results);
   return {
     speak: displaySpeak,
     display: displaySpeak,
@@ -11870,12 +12446,29 @@ async function runCascadedVoiceReasoningInner(input) {
     language: replyLanguage,
     model: effectiveAfter.model || MODEL_ID,
     classification: "chat",
+    ...(turnActions.length ? { actions: turnActions } : {}),
     context: contextResponseBlock(
       filingThread,
       contextDecision,
       contextArtifact
     ),
   };
+}
+
+// Pull client-forwardable action envelopes out of the cascaded tool loop's
+// results. A tool that proposes a client action returns { ok:true, action:
+// { type, ... } }; only recognized action types are forwarded.
+const FORWARDABLE_ACTION_TYPES = new Set(["companion_motion", "page_tweak"]);
+function collectCascadedToolActions(toolResults) {
+  if (!Array.isArray(toolResults)) return [];
+  const actions = [];
+  for (const entry of toolResults) {
+    const action = entry?.result?.action;
+    if (action && typeof action === "object" && !Array.isArray(action) && FORWARDABLE_ACTION_TYPES.has(action.type)) {
+      actions.push(action);
+    }
+  }
+  return actions.slice(0, 8);
 }
 
 // One extra system block when the session speaks AS a companion (a website
@@ -12044,6 +12637,95 @@ function cascadedExecuteToolDef(call) {
   };
 }
 
+// Command-driven animation: expose the pet motion runtime as a validated,
+// proposal-only tool. The handler validates the verb (against the fixed
+// command-verb allowlist) and target, then returns a motion-plan proposal PLUS a
+// client-forwardable action { type: "companion_motion", plan }. Same authority
+// model as page_tweak: the gateway never executes motion — it forwards the plan
+// and the client-side runtime validates targets and animates. The action rides
+// out on the turn's actions[] (see runCascadedVoiceReasoning) and is forwarded
+// to the session socket by voice-session-server's forwardTurnAction.
+const COMPANION_MOTION_TARGETS = Object.freeze([
+  "corner_top_left",
+  "corner_top_right",
+  "corner_bottom_left",
+  "corner_bottom_right",
+  "center",
+  "pointer",
+]);
+const COMPANION_MOTION_MAX_DURATION_MS = 60_000;
+
+function validateCompanionMotion(args = {}) {
+  const verb = String(args?.verb || "").trim().toLowerCase();
+  if (!COMPANION_COMMAND_VERBS.includes(verb)) {
+    return {
+      ok: false,
+      error: `unsupported motion verb; use one of: ${COMPANION_COMMAND_VERBS.join(", ")}`,
+      supported_verbs: COMPANION_COMMAND_VERBS.slice(),
+    };
+  }
+  const rawTarget = args?.target;
+  let target = null;
+  if (rawTarget !== null && rawTarget !== undefined && String(rawTarget).trim() !== "") {
+    const candidate = String(rawTarget).trim().toLowerCase();
+    if (!COMPANION_MOTION_TARGETS.includes(candidate)) {
+      return {
+        ok: false,
+        error: `unsupported motion target; use one of: ${COMPANION_MOTION_TARGETS.join(", ")}, or null`,
+        supported_targets: COMPANION_MOTION_TARGETS.slice(),
+      };
+    }
+    target = candidate;
+  }
+  let durationMs = null;
+  const rawDuration = Number(args?.duration_ms ?? args?.durationMs);
+  if (Number.isFinite(rawDuration) && rawDuration > 0) {
+    durationMs = Math.min(Math.round(rawDuration), COMPANION_MOTION_MAX_DURATION_MS);
+  }
+  const plan = {
+    renderer: "shimeji-web",
+    verb,
+    target,
+    ...(durationMs !== null ? { duration_ms: durationMs } : {}),
+  };
+  return { ok: true, plan };
+}
+
+function companionMotionTool() {
+  return {
+    name: "companion_motion",
+    description: [
+      "Move the on-screen companion character. Call this when the user tells the character to move, e.g. \"walk to the top right corner\", \"go to the center\", \"come to my pointer\".",
+      `verb must be one of: ${COMPANION_COMMAND_VERBS.join(", ")}.`,
+      `target is where to move: one of ${COMPANION_MOTION_TARGETS.join(", ")}, or null for in-place motion.`,
+      "You do NOT execute the motion: you propose a bounded plan and the on-screen runtime validates the target and animates it. Confirm briefly in your reply after calling.",
+    ].join(" "),
+    parameters: {
+      type: "object",
+      properties: {
+        verb: { type: "string", description: `The motion verb. One of: ${COMPANION_COMMAND_VERBS.join(", ")}.` },
+        target: { type: "string", description: `Where to move: ${COMPANION_MOTION_TARGETS.join(", ")}, or null for in-place motion.` },
+        duration_ms: { type: "number", description: "Optional motion duration in milliseconds." },
+      },
+      required: ["verb"],
+    },
+    handler: (args) => {
+      const validated = validateCompanionMotion(args || {});
+      if (!validated.ok) {
+        return { ok: false, type: "companion_motion_rejected", error: validated.error, supported_verbs: validated.supported_verbs, supported_targets: validated.supported_targets };
+      }
+      const plan = validated.plan;
+      return {
+        ok: true,
+        type: "companion_motion",
+        action: { type: "companion_motion", plan },
+        plan,
+        message: `Proposed a ${plan.verb}${plan.target ? ` to ${plan.target}` : ""} motion for the companion; the on-screen runtime will animate it.`,
+      };
+    },
+  };
+}
+
 // Agent-run tools for the cascaded reasoner - the same launch/list/cancel
 // handlers the Live path uses, so a spoken "have an agent do X" works on the
 // pipeline that is actually live. Launch keeps the transcript gate
@@ -12169,10 +12851,12 @@ function replyLanguageDirective(profile) {
   return `Reply in ${language}. Keep the spoken answer short, direct, and TTS-safe.`;
 }
 
-// Tell the reasoner it OWNS language control by tool call. There is no keyword
-// matcher for language anymore, so when the user asks to change which languages
-// are understood or replied in, the model must call update_agent_profile (or the
-// set_languages code-mode skill) — the gateway does not sniff the transcript.
+// Tell the reasoner it OWNS language control by tool call. A deterministic
+// keyword matcher DOES exist (languageUpdateFrom() in lib/voice-intent.js) and
+// handles the clearest phrasings on the profile-control path; but the reasoner
+// must not rely on it. When the user asks to change which languages are
+// understood or replied in, the model should still call update_agent_profile
+// (or the set_languages code-mode skill) so it works regardless of routing.
 function languageControlDirective(profile) {
   const understand = String(profile?.input_languages || profile?.input_language_primary || "").trim();
   const reply = String(profile?.language || profile?.language_primary || "").trim();
@@ -12209,7 +12893,8 @@ function voiceDeliveryDirective(profile) {
 // (cascadedToolAckText) covers the case where it goes straight to tools.
 function voiceToolAckDirective() {
   return [
-    "Tool-use narration (spoken turns): before calling any tool that does real work (launching an agent, running code, changing settings, starting a task), FIRST say one very short acknowledgment in the reply language — like 'Okay, doing that now.' or 'On it — one moment.' — then call the tool. When the tool finishes, report the outcome in one short sentence. Do not narrate instant lookups (reading options, context, or catalogs).",
+    "Tool-use narration (spoken turns): before calling any tool that does real work (launching an agent, running code, changing settings, starting a task), FIRST say one very short acknowledgment IN THE REPLY LANGUAGE, then call the tool. When the tool finishes, report the outcome in one short sentence. Do not narrate instant lookups (reading options, context, or catalogs).",
+    "- The English phrases 'Okay, doing that now.' and 'On it — one moment.' are only examples of the MEANING; render that meaning in the reply language. Never speak them verbatim in English when the reply language is not English.",
   ].join("\n");
 }
 
@@ -13918,7 +14603,7 @@ function missionAccessInstruction() {
   return [
     "Mission-agent access policy:",
     "- Start from yes and look for a path to satisfy the user's request.",
-    "- Do not answer with a flat refusal. When blocked by missing permission, credentials, integration setup, local approval, or device capability, say: \"Hey, I would like to do that, but I need you to give me access to <specific access>.\"",
+    "- Do not answer with a flat refusal. When blocked by missing permission, credentials, integration setup, local approval, or device capability, say — IN YOUR CURRENT REPLY LANGUAGE — the equivalent of: \"I would like to do that, but I need you to give me access to <specific access>.\" That English sentence is the meaning to convey, not text to speak verbatim; when the reply language is not English, phrase it naturally in that language.",
     "- Do not give a persona or roleplay refusal when the user's request is only about tone, address, title, or interaction style; follow the requested style.",
     "- Do not claim an action is done until the owning device, gateway, or integration returns a receipt.",
     "- Server/model output remains a proposal; local devices still own permissions, approvals, execution, and receipts.",
@@ -13966,8 +14651,9 @@ function userAddressInstruction(profile) {
     lines.push(`- The user prefers to be called "${nickname}".`);
   }
   if (address) {
-    lines.push(`- Always address the user as "${address}".`);
+    lines.push(`- Always address the user as "${address}"; this is a durable preference — never drop the honorific.`);
     lines.push("- Use that form of address naturally in your replies.");
+    lines.push(`- When your reply language is not English, render the form of address naturally IN THAT LANGUAGE (translate/adapt "${address}" to its natural equivalent, e.g. the Amharic form of "${address}"). The English word "${address}" must not appear in a non-English reply.`);
   }
   lines.push("- These facts come from the stored profile; do not ask for them again unless the user wants to change them.");
   lines.push("- This rule outranks any older wording in the base prompt.");
@@ -13986,6 +14672,7 @@ function profileLanguageInstruction(profile) {
   const lines = ["Language profile:"];
   if (allowed) {
     lines.push(`- Reply only in: ${allowed}.`);
+    lines.push("- This is absolute and covers EVERY part of EVERY reply: greetings, acknowledgments, confirmations, error messages, refusals, tool narration, and the form of address must all be in the reply language. Never mix English words into a non-English reply (proper nouns — names, brands, place names — are the only exception).");
     if (primary) lines.push(`- Primary reply language: ${primary}.`);
     if (output === "primary_only") {
       lines.push("- Reply in the primary language unless the user explicitly asks for another allowed language.");
@@ -15410,6 +16097,7 @@ function summarizeAgentRun(run) {
     profile_version: run.profile_version || "",
     parent_run_id: run.parent_run_id,
     project_id: run.project_id || "",
+    project_brief_updated_at: run.project_brief_updated_at || "",
     work_node_id: run.work_node_id || "",
     context_pack_ref: run.context_pack_ref || "",
     working_dir: run.working_dir,

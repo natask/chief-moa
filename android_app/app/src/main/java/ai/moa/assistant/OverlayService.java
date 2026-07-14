@@ -54,7 +54,6 @@ public final class OverlayService extends Service {
     private static final int ORB_WINDOW_DP = 96;
     private static final int ORB_EDGE_MARGIN_DP = 16;
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
-    private static final long VOICE_USER_EXIT_MS = 150;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
     // A text-only reply (the gateway returned text but no spoken audio) is held on
     // screen noticeably longer than a spoken one, since the eye is the only way to
@@ -105,18 +104,26 @@ public final class OverlayService extends Service {
     private View transcriptView;
     private LinearLayout voiceTranscriptColumn;
     private ScrollView voiceTranscriptScroll;
-    private TextView voiceUserText;
-    private TextView voiceAssistantText;
     private TextView voiceMetaLine;
-    private View voiceUserRow;
-    private View voiceAssistantRow;
+    private TextView voiceLanguageLine;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
+    // Persistent, stacked transcript. Each turn appends a fresh user + assistant
+    // row; older rows stay until the user swipes them away. The scalar mirrors
+    // below track only the current turn's rows so the large body of streaming
+    // logic that reads voiceUserTranscript / voiceAssistantTranscript keeps
+    // working unchanged.
+    private static final int MAX_VOICE_TRANSCRIPT_ENTRIES = 20;
+    private final MoaVoiceTranscriptLog voiceLog =
+            new MoaVoiceTranscriptLog(MAX_VOICE_TRANSCRIPT_ENTRIES);
     private String voiceUserTranscript = "";
     private String voiceAssistantTranscript = "";
     private boolean voiceUserTranscriptFinal;
-    private boolean voiceUserHiddenForAssistant;
     private boolean animateNextAssistantRow;
     private boolean currentStreamingAssistantRecorded;
+    // Live language status for the session header. Speak updates when a turn_done
+    // carries reply_language; both fall back to the cached agent profile.
+    private String sessionSpeakLanguage = "";
+    private String sessionHearLanguages = "";
     private Runnable pendingAutoDismiss;
     private Runnable pendingContinuousVoiceRestart;
     private Runnable pendingStreamingTurnWatchdog;
@@ -329,6 +336,7 @@ public final class OverlayService extends Service {
         cancelAudioNoteCapture();
         discardWarmMic();
         cancelStreamingTurnWatchdog();
+        voiceLog.clear();
         removeTranscriptOverlay();
         removePanel();
         removeOrb();
@@ -699,6 +707,7 @@ public final class OverlayService extends Service {
         }
         String initialText = visibleVoiceContent(value);
         if (!initialText.isEmpty()) {
+            voiceLog.setUser(initialText, false);
             voiceUserTranscript = initialText;
             voiceUserTranscriptFinal = false;
         }
@@ -720,7 +729,7 @@ public final class OverlayService extends Service {
 
         card.addView(createVoiceHeader());
 
-        voiceTranscriptScroll = new CappedScrollView(this, dp(300));
+        voiceTranscriptScroll = new CappedScrollView(this, dp(360));
         voiceTranscriptScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         voiceTranscriptScroll.setVerticalScrollBarEnabled(false);
         voiceTranscriptScroll.setClipToPadding(false);
@@ -763,10 +772,13 @@ public final class OverlayService extends Service {
     }
 
     private View createVoiceHeader() {
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(2), 0, dp(2), dp(8));
+        header.setPadding(dp(2), 0, dp(2), dp(4));
 
         PulseDot dot = new PulseDot(this);
         LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(9), dp(9));
@@ -780,8 +792,18 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
+        container.addView(header);
+
+        // A dedicated line that ALWAYS shows the current hear (STT) / speak
+        // (reply) languages, even while an agent run is active, so the language
+        // segment is never replaced by run status.
+        voiceLanguageLine = text("", MoaColors.MUTED, 11, false);
+        voiceLanguageLine.setLetterSpacing(0.02f);
+        voiceLanguageLine.setPadding(dp(2), 0, dp(2), dp(8));
+        container.addView(voiceLanguageLine);
+
         updateVoiceHeaderState();
-        return header;
+        return container;
     }
 
     private void showCurrentScreenContext() {
@@ -802,10 +824,9 @@ public final class OverlayService extends Service {
         if (value.isEmpty()) {
             return;
         }
+        voiceLog.setUser(value, isFinal);
         voiceUserTranscript = value;
         voiceUserTranscriptFinal = isFinal;
-        voiceUserHiddenForAssistant = false;
-        animateNextAssistantRow = false;
         if (transcriptView == null) {
             showTranscriptOverlay(value);
             return;
@@ -818,39 +839,40 @@ public final class OverlayService extends Service {
         if (value.isEmpty()) {
             return;
         }
+        // Animate a freshly-appended assistant row; a suffix/edit on the same
+        // row (e.g. "(not spoken)") updates in place without re-animating.
+        if (voiceLog.currentAssistantText().isEmpty()) {
+            animateNextAssistantRow = true;
+        }
+        voiceLog.setAssistant(value);
         voiceAssistantTranscript = value;
         if (transcriptView == null) {
             showTranscriptOverlay("");
         }
         setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
-        if (!voiceUserHiddenForAssistant && voiceUserRow != null && !voiceUserTranscript.isEmpty()) {
-            hideVoiceUserRowThenShowAssistant();
-            return;
-        }
-        voiceUserHiddenForAssistant = true;
         renderVoiceTranscriptRows();
     }
 
+    // Rebuild every persistent row from the log. Older rows stay on screen until
+    // swiped away; the newest assistant row optionally fades in.
     private void renderVoiceTranscriptRows() {
         if (voiceTranscriptColumn == null) {
             return;
         }
         voiceTranscriptColumn.removeAllViews();
-        voiceUserText = null;
-        voiceAssistantText = null;
-        voiceUserRow = null;
-        voiceAssistantRow = null;
-        boolean showUser = voiceAssistantTranscript.isEmpty() || !voiceUserHiddenForAssistant;
-        if (showUser) {
-            voiceTranscriptColumn.addView(voiceMessageRow(false, voiceUserTranscript, voiceUserTranscriptFinal));
-        }
-        if (!voiceAssistantTranscript.isEmpty()) {
-            voiceTranscriptColumn.addView(voiceMessageRow(true, voiceAssistantTranscript, true));
-            if (animateNextAssistantRow && voiceAssistantRow != null) {
+        int count = voiceLog.size();
+        for (int i = 0; i < count; i++) {
+            MoaVoiceTranscriptLog.Entry entry = voiceLog.get(i);
+            boolean assistant = !entry.isUser();
+            View row = voiceMessageRow(assistant, entry.text, entry.finalText);
+            attachSwipeDismiss(row, entry);
+            voiceTranscriptColumn.addView(row);
+            boolean newestAssistant = assistant && i == count - 1;
+            if (animateNextAssistantRow && newestAssistant) {
                 animateNextAssistantRow = false;
-                voiceAssistantRow.setAlpha(0f);
-                voiceAssistantRow.setTranslationY(dp(8));
-                voiceAssistantRow.animate()
+                row.setAlpha(0f);
+                row.setTranslationY(dp(8));
+                row.animate()
                         .alpha(1f)
                         .translationY(0f)
                         .setDuration(170)
@@ -862,25 +884,96 @@ public final class OverlayService extends Service {
         scrollVoiceTranscriptToBottom();
     }
 
-    private void hideVoiceUserRowThenShowAssistant() {
-        View row = voiceUserRow;
-        if (row == null) {
-            voiceUserHiddenForAssistant = true;
-            animateNextAssistantRow = true;
-            renderVoiceTranscriptRows();
-            return;
-        }
+    // Horizontal swipe on a row dismisses that row and every older row (all the
+    // rows stacked above it). A vertical drag is left to the CappedScrollView.
+    private void attachSwipeDismiss(final View row, final MoaVoiceTranscriptLog.Entry entry) {
+        final int touchSlop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+        row.setOnTouchListener(new View.OnTouchListener() {
+            private float downX;
+            private float downY;
+            private boolean decided;
+            private boolean swiping;
+
+            @Override
+            public boolean onTouch(View v, android.view.MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        downX = event.getRawX();
+                        downY = event.getRawY();
+                        decided = false;
+                        swiping = false;
+                        // Claim the gesture stream; a vertical drag is still handed
+                        // back to the scroll parent (it intercepts on its own).
+                        return true;
+                    case android.view.MotionEvent.ACTION_MOVE: {
+                        float dx = event.getRawX() - downX;
+                        float dy = event.getRawY() - downY;
+                        if (!decided) {
+                            if (Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy) * 1.4f) {
+                                decided = true;
+                                swiping = true;
+                                android.view.ViewParent parent = v.getParent();
+                                if (parent != null) {
+                                    parent.requestDisallowInterceptTouchEvent(true);
+                                }
+                            } else if (Math.abs(dy) > touchSlop) {
+                                // Vertical: release to the scroll container.
+                                decided = true;
+                                swiping = false;
+                            }
+                        }
+                        if (swiping) {
+                            v.setTranslationX(dx);
+                            float frac = Math.min(1f, Math.abs(dx) / Math.max(1, v.getWidth()));
+                            v.setAlpha(1f - 0.72f * frac);
+                            return true;
+                        }
+                        return true;
+                    }
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL: {
+                        if (!swiping) {
+                            return false;
+                        }
+                        float dx = event.getRawX() - downX;
+                        float width = Math.max(1, v.getWidth());
+                        boolean dismiss = Math.abs(dx) > width * 0.33f || Math.abs(dx) > dp(120);
+                        if (dismiss && event.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                            animateSwipeOutThenCascade(v, entry, dx >= 0);
+                        } else {
+                            v.animate().translationX(0f).alpha(1f).setDuration(150).start();
+                        }
+                        return true;
+                    }
+                    default:
+                        return false;
+                }
+            }
+        });
+    }
+
+    private void animateSwipeOutThenCascade(final View row, final MoaVoiceTranscriptLog.Entry entry, boolean toRight) {
+        int dir = toRight ? 1 : -1;
+        float target = dir * Math.max(row.getWidth(), dp(320));
         row.animate()
+                .translationX(target)
                 .alpha(0f)
-                .translationY(-dp(8))
-                .setDuration(VOICE_USER_EXIT_MS)
+                .setDuration(160)
                 .setInterpolator(new android.view.animation.AccelerateInterpolator())
-                .withEndAction(() -> {
-                    voiceUserHiddenForAssistant = true;
-                    animateNextAssistantRow = true;
-                    renderVoiceTranscriptRows();
-                })
+                .withEndAction(() -> dismissCascadeFromEntry(entry))
                 .start();
+    }
+
+    private void dismissCascadeFromEntry(MoaVoiceTranscriptLog.Entry entry) {
+        voiceLog.dismissCascadeFrom(entry);
+        // Keep the current-turn scalar mirrors honest after a cascade.
+        voiceUserTranscript = voiceLog.currentUserText();
+        voiceAssistantTranscript = voiceLog.currentAssistantText();
+        if (voiceLog.isEmpty()) {
+            removeTranscriptOverlay();
+        } else {
+            renderVoiceTranscriptRows();
+        }
     }
 
     private View voiceMessageRow(boolean assistant, String text, boolean finalText) {
@@ -923,14 +1016,6 @@ public final class OverlayService extends Service {
         params.rightMargin = assistant ? dp(34) : 0;
         wrap.setLayoutParams(params);
         wrap.setGravity(assistant ? Gravity.START : Gravity.END);
-
-        if (assistant) {
-            voiceAssistantText = body;
-            voiceAssistantRow = wrap;
-        } else {
-            voiceUserText = body;
-            voiceUserRow = wrap;
-        }
         return wrap;
     }
 
@@ -961,43 +1046,59 @@ public final class OverlayService extends Service {
     }
 
     private void updateVoiceHeaderState() {
-        if (voiceMetaLine == null) {
-            return;
-        }
         String runStatus = agentRunStatusText();
-        voiceMetaLine.setText("Ready".equals(runStatus) ? voiceStateLabel() : runStatus);
-        voiceMetaLine.setTextColor(voiceStateColor());
+        if (voiceMetaLine != null) {
+            // When a run is active, show BOTH the run status and the live voice
+            // state; otherwise show the voice state and companion name. The
+            // language is on its own always-visible line, never dropped here.
+            String status = "Ready".equals(runStatus)
+                    ? voiceStateWord() + " · " + MoaPrefs.companionName(this)
+                    : runStatus + " · " + voiceStateWord();
+            voiceMetaLine.setText(status);
+            voiceMetaLine.setTextColor(voiceStateColor());
+        }
+        if (voiceLanguageLine != null) {
+            voiceLanguageLine.setText(sessionLanguageStatus());
+        }
     }
 
-    private String voiceStateLabel() {
-        String state;
+    // Always-visible "Hears <in> / Speaks <out>" line. Speak reflects the last
+    // turn_done reply_language when seen; both fall back to the agent profile.
+    private String sessionLanguageStatus() {
+        String hear = sessionHearLanguages.isEmpty()
+                ? MoaPrefs.inputLanguagesShort(this)
+                : sessionHearLanguages;
+        String speak = sessionSpeakLanguage.isEmpty()
+                ? MoaPrefs.shortLanguageTag(MoaPrefs.replyLanguageTag(this))
+                : sessionSpeakLanguage;
+        if (hear.isEmpty()) {
+            hear = "?";
+        }
+        if (speak.isEmpty()) {
+            speak = "?";
+        }
+        return "Hears " + hear + " / Speaks " + speak;
+    }
+
+    private String voiceStateWord() {
         switch (voiceRuntimeState) {
             case LISTENING:
-                state = "Listening";
-                break;
+                return "Listening";
             case SENDING:
-                state = "Sending";
-                break;
+                return "Sending";
             case THINKING:
-                state = "Thinking";
-                break;
+                return "Thinking";
             case SPEAKING:
-                state = "Speaking";
-                break;
+                return "Speaking";
             case ERROR:
-                state = "Error";
-                break;
+                return "Error";
             case INTERRUPTED:
-                state = "Interrupted";
-                break;
+                return "Interrupted";
             case RECOVERING:
-                state = "Recovering";
-                break;
+                return "Recovering";
             default:
-                state = "Ready";
-                break;
+                return "Ready";
         }
-        return state + " / " + MoaPrefs.companionName(this) + " / " + MoaPrefs.languageStatus(this);
     }
 
     private int voiceStateColor() {
@@ -1055,15 +1156,16 @@ public final class OverlayService extends Service {
         if (transcriptView == null) {
             return;
         }
+        // The transcript log survives a window teardown so the messages persist
+        // across barge-in / controller churn and reappear when voice reopens.
+        // Only an explicit user dismissal (dismissOverlayUi / collapse / swipe
+        // to empty / onDestroy) clears the log.
         final View dying = transcriptView;
         transcriptView = null;
         voiceTranscriptColumn = null;
         voiceTranscriptScroll = null;
-        voiceUserText = null;
-        voiceAssistantText = null;
-        voiceUserRow = null;
-        voiceAssistantRow = null;
         voiceMetaLine = null;
+        voiceLanguageLine = null;
         dying.animate()
                 .alpha(0f)
                 .translationY(dp(12))
@@ -1073,19 +1175,9 @@ public final class OverlayService extends Service {
                 .start();
     }
 
-    // Voice cards are per-turn surfaces. After a response has been shown or
-    // spoken, the card clears so the next turn does not show stale context.
-    private void scheduleAutoDismiss(long delayMs) {
-        cancelAutoDismiss();
-        pendingAutoDismiss = () -> {
-            pendingAutoDismiss = null;
-            if (!streamingVoiceActive() && !voiceController.isActive() && voiceSamplePlayer == null) {
-                removeTranscriptOverlay();
-            }
-        };
-        mainHandler.postDelayed(pendingAutoDismiss, delayMs);
-    }
-
+    // The voice card is a persistent transcript now: it is no longer torn down by
+    // a reading-time timer. cancelAutoDismiss stays as a defensive no-op guard in
+    // case any stray legacy dismissal was ever posted.
     private void cancelAutoDismiss() {
         if (pendingAutoDismiss != null) {
             mainHandler.removeCallbacks(pendingAutoDismiss);
@@ -1102,9 +1194,9 @@ public final class OverlayService extends Service {
         updateMicState();
         if (continuousVoiceLoop) {
             scheduleContinuousVoiceRestart(streamingVoiceGeneration);
-        } else {
-            scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
         }
+        // Non-continuous: the reply STAYS on the card so it can be read. It is
+        // only removed by an explicit dismissal or a swipe, never by a timer.
     }
 
     private void scheduleContinuousVoiceRestart(int generation) {
@@ -1909,6 +2001,8 @@ public final class OverlayService extends Service {
         metadata.put("screen_access_enabled", actionBroker.isScreenAccessEnabled());
         metadata.put("screen_access_running", actionBroker.isScreenAccessRunning());
         metadata.put("overlay_running", true);
+        metadata.put("context_descriptor", actionBroker.activeAppDescriptor());
+        metadata.put("execution_adapters", actionBroker.executionAdapters());
         body.put("metadata", metadata);
         return body;
     }
@@ -1932,7 +2026,7 @@ public final class OverlayService extends Service {
         putToolManifestItem(manifest, "system.back", "navigation", "implicit_user_command");
         putToolManifestItem(manifest, "system.home", "navigation", "implicit_user_command");
         putToolManifestItem(manifest, "screen.summary", "read_only", "none");
-        putToolManifestItem(manifest, "screen.tap_text", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "screen.tap_text", "navigation", "implicit_user_command", "expected_package");
         putToolManifestItem(manifest, "audio.speak", "local_output", "implicit_user_command");
         putToolManifestItem(manifest, "email.compose", "external_side_effect", "target_app_confirmation");
         putToolManifestItem(manifest, "sms.compose", "external_side_effect", "target_app_confirmation");
@@ -1943,10 +2037,17 @@ public final class OverlayService extends Service {
     }
 
     private void putToolManifestItem(JSONArray manifest, String tool, String risk, String approval) throws JSONException {
+        putToolManifestItem(manifest, tool, risk, approval, "");
+    }
+
+    private void putToolManifestItem(JSONArray manifest, String tool, String risk, String approval, String requiredInput) throws JSONException {
         JSONObject item = new JSONObject();
         item.put("tool", tool);
         item.put("risk", risk);
         item.put("approval", approval);
+        if (!safe(requiredInput).isEmpty()) {
+            item.put("required_input", new JSONArray().put(requiredInput));
+        }
         manifest.put(item);
     }
 
@@ -2298,6 +2399,7 @@ public final class OverlayService extends Service {
     private void handleOrbCancelTalkLoop() {
         suppressFirstTapTurnEmptyCue = false;
         cancelStreamingVoice();
+        voiceLog.clear();
         removeTranscriptOverlay();
         updateMicState();
     }
@@ -2344,7 +2446,7 @@ public final class OverlayService extends Service {
 
     private void startPushToTalkVoiceTurn() {
         if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
-            dismissOverlayUi();
+            dismissOverlayUi(false);
         }
         loadSettings();
         pushToTalkVoiceTurn = true;
@@ -2439,16 +2541,14 @@ public final class OverlayService extends Service {
                 return;
             }
             Log.w(TAG, "streaming turn inactivity watchdog fired; tearing down stalled turn");
-            if (streamingVoiceActive()) {
-                cancelStreamingVoice();
-            }
+            // Stop the stalled controller but KEEP the card, then show the
+            // timeout as a persistent message instead of wiping the transcript.
+            stopStreamingVoiceKeepingCard();
             String failure = "The voice turn timed out.";
             updateVoiceAssistantTranscript(failure);
             speakOverlayNotice(failure);
             setVoiceRuntimeState(VoiceRuntimeState.ERROR);
-            continuousVoiceLoop = false;
             updateMicState();
-            scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
         };
         mainHandler.postDelayed(pendingStreamingTurnWatchdog, STREAMING_TURN_WATCHDOG_MS);
     }
@@ -2516,6 +2616,14 @@ public final class OverlayService extends Service {
     // Close every overlay surface except the orb: the chat panel, the voice
     // transcript card, and any live voice turn. Hide the keyboard too.
     private void dismissOverlayUi() {
+        dismissOverlayUi(true);
+    }
+
+    // clearVoiceLog=false is used when this is an internal pre-reset before
+    // starting a brand-new turn (PTT hold, audio note): the prior transcript
+    // rows must persist and the new turn appends to them. A genuine user close
+    // (Done button, tap-outside, end-loop) clears the stack.
+    private void dismissOverlayUi(boolean clearVoiceLog) {
         cancelAudioNoteCapture();
         discardWarmMic();
         pushToTalkVoiceTurn = false;
@@ -2529,6 +2637,9 @@ public final class OverlayService extends Service {
         }
         cancelVoiceSampler();
         voiceController.stopQuietly();
+        if (clearVoiceLog) {
+            voiceLog.clear();
+        }
         removeTranscriptOverlay();
         hideKeyboard();
         removePanel();
@@ -2545,6 +2656,7 @@ public final class OverlayService extends Service {
         cancelAudioNoteCapture();
         discardWarmMic();
         cancelVoiceSampler();
+        voiceLog.clear();
         removeTranscriptOverlay();
         hideKeyboard();
         removePanel();
@@ -2601,7 +2713,7 @@ public final class OverlayService extends Service {
         // Never record on top of a live voice surface.
         if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null
                 || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
-            dismissOverlayUi();
+            dismissOverlayUi(false);
         }
         loadSettings();
         if (!streamingVoiceAvailable()) {
@@ -2768,12 +2880,13 @@ public final class OverlayService extends Service {
     }
 
     private void showAudioNoteResult(String message, boolean failed) {
+        // Start a fresh turn boundary (keeps prior rows) then append the result
+        // as a persistent row; the note result stays until dismissed or swiped.
         resetVoiceTurnTranscript();
         showTranscriptOverlay("");
         updateVoiceAssistantTranscript(message);
         setVoiceRuntimeState(failed ? VoiceRuntimeState.ERROR : VoiceRuntimeState.READY);
         updateMicState();
-        scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS * 2);
     }
 
     private void startLocalVoiceTurn(boolean manualCommitOnly) {
@@ -2799,6 +2912,26 @@ public final class OverlayService extends Service {
 
     private boolean streamingVoiceAvailable() {
         return !safe(gatewayUrl).isEmpty() && !safe(gatewayToken).isEmpty();
+    }
+
+    // Stop the in-flight streaming controller and its timers WITHOUT removing the
+    // transcript card, so a persistent notice (e.g. a timeout) can be shown in
+    // place. Mirrors cancelStreamingVoice minus the card teardown.
+    private void stopStreamingVoiceKeepingCard() {
+        pushToTalkVoiceTurn = false;
+        continuousVoiceLoop = false;
+        suppressFirstTapTurnEmptyCue = false;
+        invalidatePendingBranchSwitch();
+        cancelContinuousVoiceRestart();
+        cancelStreamingTurnWatchdog();
+        if (streamingVoiceActive()) {
+            streamingVoiceController.cancel();
+            streamingVoiceController = null;
+            nextStreamingTurnFollowsActiveRun = false;
+        }
+        // Deliberately does NOT call voiceController.stopQuietly(): on the
+        // streaming path the local recognizer is idle, and stopQuietly would
+        // fire onRemoveTranscript and tear the card down.
     }
 
     private void cancelStreamingVoice() {
@@ -2928,7 +3061,6 @@ public final class OverlayService extends Service {
                     updateVoiceAssistantTranscript(notice);
                     setVoiceRuntimeState(VoiceRuntimeState.ERROR);
                     updateMicState();
-                    scheduleAutoDismiss(VOICE_RESPONSE_HOLD_MS);
                     return;
                 }
                 String branchToUse = switchOk ? resolvedBranch : "default";
@@ -3150,6 +3282,14 @@ public final class OverlayService extends Service {
                     return;
                 }
                 cancelStreamingTurnWatchdog();
+                // turn_done carries the language the assistant actually replied in.
+                // Persist it for the session so the header's "Speaks" segment stays
+                // live even after the turn; falls back to the profile when absent.
+                String replyShort = MoaPrefs.shortLanguageTag(replyLanguage);
+                if (!replyShort.isEmpty()) {
+                    sessionSpeakLanguage = replyShort;
+                    updateVoiceHeaderState();
+                }
                 if (transcriptionOnly && !currentStreamingTurnRouted && !currentStreamingTranscript.isEmpty()) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript, !voiceUserTranscriptFinal);
                     return;
@@ -3198,6 +3338,7 @@ public final class OverlayService extends Service {
                         // of scolding a barge-in or a stray tap.
                         suppressFirstTapTurnEmptyCue = false;
                         cancelStreamingVoice();
+                        voiceLog.clear();
                         removeTranscriptOverlay();
                         updateMicState();
                         return;
@@ -3365,10 +3506,12 @@ public final class OverlayService extends Service {
     }
 
     private void resetVoiceTurnTranscript() {
+        // A new turn boundary: keep every prior row on screen (persistent stack)
+        // and detach the live pointers so the next partials append fresh rows.
+        voiceLog.startTurn();
         voiceUserTranscript = "";
         voiceAssistantTranscript = "";
         voiceUserTranscriptFinal = false;
-        voiceUserHiddenForAssistant = false;
         animateNextAssistantRow = false;
         currentStreamingAssistantRecorded = false;
         renderVoiceTranscriptRows();
@@ -3471,7 +3614,9 @@ public final class OverlayService extends Service {
             scheduleContinuousVoiceRestart(generation);
             return;
         }
-        scheduleAutoDismiss(dismissDelayMs);
+        // The completed turn's rows STAY on the card (persistent transcript).
+        // dismissDelayMs is retained only for call-site compatibility; the card
+        // is now removed only by an explicit dismissal or a swipe.
     }
 
     // Append a small "(not spoken)" marker to the visible assistant reply. The

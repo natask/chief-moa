@@ -26,7 +26,8 @@
     "smoke:agent-loop": "node scripts/smoke-agent-loop.mjs",
     "smoke:proactive": "node scripts/smoke-proactive.mjs",
     "test:proactive": "node scripts/test-proactive-helper.mjs",
-    "verify": "node scripts/test-aggie-protocol-adapter.mjs && node scripts/verify-extension.mjs",
+    "test:browser-context": "node scripts/test-browser-context-adapter.mjs",
+    "verify": "node scripts/test-aggie-protocol-adapter.mjs && node scripts/test-browser-context-adapter.mjs && node scripts/verify-extension.mjs",
     "package": "node scripts/package-extension.mjs",
     "deploy:browser": "node scripts/poke-dev-reload.mjs"
   }

@@ -9,6 +9,7 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.HashSet;
@@ -99,26 +100,63 @@ public final class MoaAccessibilityService extends AccessibilityService {
             snapshot.put("class", latestClass);
             snapshot.put("updated_at_ms", latestUpdatedAtMs);
             snapshot.put("summary", latestScreenSummary());
+            snapshot.put("active_app", currentActiveAppDescriptor());
         } catch (JSONException ignored) {
         }
         return snapshot;
     }
 
-    static boolean clickByText(String label) {
+    static JSONObject currentActiveAppDescriptor() {
+        return MoaActiveAppDescriptor.create(
+                isRunning(),
+                latestPackage,
+                latestClass,
+                latestUpdatedAtMs,
+                System.currentTimeMillis()
+        );
+    }
+
+    static JSONArray currentExecutionAdapters() {
+        return MoaActiveAppDescriptor.executionAdapters(
+                isRunning(),
+                latestPackage,
+                latestClass,
+                latestUpdatedAtMs,
+                System.currentTimeMillis()
+        );
+    }
+
+    static TapResult clickByText(String label, String expectedPackage) {
         MoaAccessibilityService service = activeService;
         String target = normalize(label);
-        if (service == null || target.isEmpty()) {
-            return false;
+        if (service == null || target.isEmpty() || expectedPackage == null || expectedPackage.trim().isEmpty()) {
+            return TapResult.UNAVAILABLE;
         }
 
         AccessibilityNodeInfo root = service.getRootInActiveWindow();
         if (root == null) {
-            return false;
+            return TapResult.UNAVAILABLE;
+        }
+        String actualPackage = root.getPackageName() == null ? "" : root.getPackageName().toString();
+        if (!MoaActiveAppDescriptor.packageMatches(expectedPackage, actualPackage)) {
+            return TapResult.STALE_TARGET;
         }
 
         AccessibilityNodeInfo match = findMatchingNode(root, target);
         AccessibilityNodeInfo clickable = firstClickable(match);
-        return clickable != null && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        if (clickable == null) {
+            return TapResult.NOT_FOUND;
+        }
+        return clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                ? TapResult.CLICKED
+                : TapResult.NOT_FOUND;
+    }
+
+    enum TapResult {
+        CLICKED,
+        STALE_TARGET,
+        NOT_FOUND,
+        UNAVAILABLE
     }
 
     static boolean performBack() {

@@ -9,6 +9,7 @@ const { safeSystemPromptForProvider } = require("./agent-profile");
 const { voiceOptionsPayload } = require("./profile-options");
 const { createSttStage, createReasonerStage, createTtsStage } = require("./voice-stages");
 const { createSpeechChunker } = require("./voice-chunker");
+const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
 
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
@@ -621,6 +622,17 @@ class CascadedVoiceProvider {
     this.serviceAccountKeyJson = env.CHIRP_SERVICE_ACCOUNT_KEY || env.GCP_SERVICE_ACCOUNT_KEY || "";
     this.serviceAccountKeyFile = env.CHIRP_SERVICE_ACCOUNT_KEY_FILE || env.GOOGLE_APPLICATION_CREDENTIALS || "";
     this.tokenCache = { value: "", expiresAt: 0 };
+    this.sttProviderId = "chirp";
+    // Streaming STT (Google Speech v2 streamingRecognize). Gated by
+    // VOICE_STT_STREAMING (default ON, "0" -> pure batch :recognize path). The
+    // gRPC client is built lazily and can be injected for tests so nothing hits
+    // Google in `npm run check`. Rotation keeps a session under the ~5-min gRPC
+    // cap so speech length is effectively unbounded.
+    this.streamingSttClientFactory = typeof options?.streamingSttClientFactory === "function"
+      ? options.streamingSttClientFactory
+      : null;
+    this.streamingSttRotateAfterMs = Math.max(10000, numberFrom(env.VOICE_STT_STREAM_ROTATE_MS, DEFAULT_ROTATE_AFTER_MS));
+    this._streamingSttClient = null;
     // Cascaded pipeline wiring. `reasoner` is injected by the gateway; when set,
     // the provider runs STT -> reasoner (the gateway's durable LLM turn) -> TTS
     // in one turn instead of STT-only. When unset, it stays STT-only so the
@@ -644,8 +656,8 @@ class CascadedVoiceProvider {
     // the token cache stay shared across stages.
     this.sttStage = createSttStage({
       id: "chirp",
-      capabilities: { partial_transcripts: false, language_hints: true },
-      transcribe: ({ turn, languageCodes }) => this.transcribePcmFile(turn, languageCodes),
+      capabilities: { partial_transcripts: this.streamingSttFlagEnabled(), language_hints: true },
+      transcribe: ({ turn, languageCodes }) => this.runSttStage(turn, languageCodes),
     });
     this.reasonerStage = this.reasoner
       ? createReasonerStage({
@@ -758,6 +770,18 @@ class CascadedVoiceProvider {
       voice_streaming: {
         enabled: this.streamingEnabledForTurn(),
         tripped: voiceStreamingTripped(),
+      },
+      // Streaming STT posture for ops: whether streamingRecognize is active for
+      // the current language set and whether live partial transcripts flow.
+      // Honest per-turn: reflects the env flag, the breaker, and the
+      // language/model legality of streaming for the configured codes.
+      voice_stt: {
+        provider_id: this.sttProviderId,
+        model: this.model,
+        streaming_recognition: this.streamingSttEnabled(codes),
+        streaming_flag_enabled: this.streamingSttFlagEnabled(),
+        partial_transcripts: this.streamingSttEnabled(codes),
+        rotate_after_ms: this.streamingSttRotateAfterMs,
       },
       input_audio_format: CLIENT_AUDIO_FORMAT,
       assistant_audio_format: CLIENT_AUDIO_FORMAT,
@@ -1175,6 +1199,10 @@ class CascadedVoiceProvider {
       ...(options.streaming && Number.isFinite(options.ttsSegments) ? { tts_segments: options.ttsSegments } : {}),
       ...(Number.isFinite(options.reasonerFirstDeltaMs) ? { reasoner_first_delta_ms: Math.max(0, Math.round(options.reasonerFirstDeltaMs)) } : {}),
       ...(options.ttsLanguageMismatch ? { tts_language_mismatch: true } : {}),
+      // Client-forwardable action envelopes proposed by the reasoner's tools
+      // this turn (e.g. companion_motion). The session server forwards each as
+      // its own client event; absent on turns with no proposed action.
+      ...(Array.isArray(reasoning.actions) && reasoning.actions.length ? { actions: reasoning.actions.slice(0, 8) } : {}),
     };
   }
 
@@ -1728,10 +1756,214 @@ class CascadedVoiceProvider {
     });
   }
 
+  // Env kill switch only: VOICE_STT_STREAMING="0" forces the pure batch path.
+  streamingSttFlagEnabled() {
+    return String(this.env.VOICE_STT_STREAMING ?? "").trim() !== "0";
+  }
+
+  // Per-turn streaming decision: the env flag is on, the in-process streaming
+  // breaker has not latched, and the configured language/model combination is
+  // legal for streamingRecognize (Chirp-3-only languages require model=chirp_3,
+  // the same restriction the batch path asserts). A rejection here degrades the
+  // turn to the batch path — it never fails the turn.
+  streamingSttEnabled(codes = this.sttLanguageCodes()) {
+    if (!this.streamingSttFlagEnabled()) return false;
+    if (voiceStreamingTripped()) return false;
+    // "auto" (language-agnostic) is a batch-only convenience; streaming keeps
+    // the restricted-language contract.
+    if (!Array.isArray(codes) || codes.length === 0 || codes[0] === "auto") return false;
+    const chirp3Only = chirp3OnlyLanguages(codes);
+    if (chirp3Only.length > 0 && !isChirp3Model(this.model)) return false;
+    return true;
+  }
+
+  // Lazily build (or reuse) the Google Speech v2 streaming client. The gRPC
+  // dependency is required only here so `npm run check` (which injects a stub)
+  // never loads @google-cloud/speech. Auth mirrors the REST path EXACTLY: the
+  // same service-account key JSON/file, then GOOGLE_APPLICATION_CREDENTIALS /
+  // ADC. Access-token-only auth cannot drive the gRPC client, so those turns
+  // fall back to the batch path. Returns null on any failure (never throws).
+  streamingSttClient() {
+    if (this.streamingSttClientFactory) {
+      return this.streamingSttClientFactory();
+    }
+    if (this._streamingSttClient) {
+      return this._streamingSttClient;
+    }
+    let SpeechClient;
+    try {
+      ({ SpeechClient } = require("@google-cloud/speech").v2);
+    } catch (error) {
+      reportVoiceStreamingFault(`stt_stream_client_load: ${cleanError(error)}`);
+      return null;
+    }
+    const apiEndpoint = this.location === "global"
+      ? "speech.googleapis.com"
+      : `${this.location}-speech.googleapis.com`;
+    const clientOptions = { apiEndpoint };
+    if (this.projectId) clientOptions.projectId = this.projectId;
+    if (this.serviceAccountKeyJson) {
+      try {
+        clientOptions.credentials = JSON.parse(this.serviceAccountKeyJson);
+      } catch (error) {
+        reportVoiceStreamingFault(`stt_stream_bad_key_json: ${cleanError(error)}`);
+        return null;
+      }
+    } else if (this.serviceAccountKeyFile) {
+      clientOptions.keyFilename = this.serviceAccountKeyFile;
+    } else {
+      const credentialFile = googleCredentialFile(this.env);
+      if (credentialFile) {
+        clientOptions.keyFilename = credentialFile;
+      } else if (this.staticAccessToken) {
+        // No key material the gRPC client can use — fall back to batch.
+        return null;
+      }
+    }
+    try {
+      this._streamingSttClient = new SpeechClient(clientOptions);
+    } catch (error) {
+      reportVoiceStreamingFault(`stt_stream_client_new: ${cleanError(error)}`);
+      return null;
+    }
+    return this._streamingSttClient;
+  }
+
+  recognizerResource() {
+    return `projects/${this.projectId}/locations/${this.location}/recognizers/_`;
+  }
+
+  streamingRecognitionConfig(codes, sampleRate, channels) {
+    return {
+      recognizer: this.recognizerResource(),
+      streamingConfig: {
+        config: {
+          explicitDecodingConfig: {
+            encoding: "LINEAR16",
+            sampleRateHertz: sampleRate,
+            audioChannelCount: channels,
+          },
+          languageCodes: codes,
+          model: this.model,
+          features: { enableAutomaticPunctuation: true },
+        },
+        streamingFeatures: { interimResults: true },
+      },
+    };
+  }
+
+  // Open a streaming STT session that tees audio as it arrives from the
+  // websocket. `hooks.onTranscriptPartial` is broadcast as `transcript_partial`
+  // by the session server; the disk write stays the source of truth. Returns
+  // null when streaming is disabled/unsupported so the caller stays batch-only.
+  createStreamingSttSession(turn, hooks) {
+    const codes = this.sttLanguageCodes();
+    if (!this.streamingSttEnabled(codes)) {
+      return null;
+    }
+    const client = this.streamingSttClient();
+    if (!client || typeof client.streamingRecognize !== "function") {
+      return null;
+    }
+    const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
+    const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
+    const configMessage = this.streamingRecognitionConfig(codes, sampleRate, channels);
+    try {
+      return createStreamingSttSession({
+        openStream: () => client.streamingRecognize(),
+        configMessage,
+        audioMessage: (chunk) => ({ audio: chunk }),
+        parseResults: (data) => {
+          const results = Array.isArray(data?.results) ? data.results : [];
+          return results.map((result) => ({
+            transcript: result?.alternatives?.[0]?.transcript || "",
+            isFinal: result?.isFinal === true || result?.is_final === true,
+            languageCode: result?.languageCode || result?.language_code || "",
+          }));
+        },
+        onPartial: hooks && typeof hooks.onTranscriptPartial === "function"
+          ? (text) => hooks.onTranscriptPartial(text)
+          : null,
+        rotateAfterMs: this.streamingSttRotateAfterMs,
+        logger: (event, details) => {
+          try {
+            console.error(JSON.stringify({ level: "info", at: event, turn: turn.turnId || "", ...details }));
+          } catch {
+            // logging is best-effort
+          }
+        },
+      });
+    } catch (error) {
+      reportVoiceStreamingFault(`stt_stream_session_open: ${cleanError(error)}`);
+      return null;
+    }
+  }
+
+  // STT stage entry. Prefers the live streaming session teed during capture;
+  // when streaming produced a usable transcript we use it without re-reading the
+  // stored PCM. Any streaming shortfall (disabled, empty, error) degrades to the
+  // windowed batch path over the stored file — a broken stream never fails the
+  // turn.
+  async runSttStage(turn, codes = this.sttLanguageCodes()) {
+    const stream = turn?.sttStream;
+    if (stream && typeof stream.finalize === "function") {
+      try {
+        const result = await stream.finalize();
+        if (result && result.ok && result.text) {
+          return {
+            text: result.text,
+            languageRejected: false,
+            streaming: true,
+            rotations: result.rotations || 0,
+          };
+        }
+        if (result && !result.ok && result.error) {
+          reportVoiceStreamingFault(`stt_stream_result: ${result.error}`);
+        }
+      } catch (error) {
+        reportVoiceStreamingFault(`stt_stream_finalize: ${cleanError(error)}`);
+      }
+    }
+    return this.transcribePcmWindowed(turn, codes);
+  }
+
+  // Batch path with no length limit: batch :recognize caps inline audio (~60s),
+  // so audio longer than a 55s window is split on frame boundaries, each window
+  // transcribed independently and the transcripts concatenated. Short audio
+  // takes the single-request path unchanged.
+  async transcribePcmWindowed(turn, sttLanguageCodes = this.sttLanguageCodes()) {
+    const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
+    const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
+    const audio = fs.readFileSync(turn.pcmPath);
+    const frameBytes = channels * 2; // pcm16
+    const bytesPerSecond = sampleRate * frameBytes;
+    // 55s window keeps each request under the ~60s / 10MB inline recognize cap.
+    let windowBytes = Math.max(frameBytes, Math.floor(55 * bytesPerSecond));
+    windowBytes -= windowBytes % frameBytes; // align to a whole sample frame
+    if (audio.length <= windowBytes) {
+      return this.transcribePcmBuffer(audio, sampleRate, channels, sttLanguageCodes);
+    }
+    const texts = [];
+    let anyRejected = false;
+    for (let offset = 0; offset < audio.length; offset += windowBytes) {
+      const window = audio.subarray(offset, Math.min(offset + windowBytes, audio.length));
+      if (window.length < frameBytes) break;
+      const part = await this.transcribePcmBuffer(window, sampleRate, channels, sttLanguageCodes);
+      if (part.text) texts.push(part.text);
+      if (part.languageRejected) anyRejected = true;
+    }
+    const text = texts.join(" ").replace(/\s+/g, " ").trim();
+    return { text, languageRejected: anyRejected && !text, windowed: true };
+  }
+
   async transcribePcmFile(turn, sttLanguageCodes = this.sttLanguageCodes()) {
     const audio = fs.readFileSync(turn.pcmPath);
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
+    return this.transcribePcmBuffer(audio, sampleRate, channels, sttLanguageCodes);
+  }
+
+  async transcribePcmBuffer(audio, sampleRate, channels, sttLanguageCodes = this.sttLanguageCodes()) {
     const token = await this.accessToken();
     const sttHeaders = {
       Authorization: `Bearer ${token}`,
@@ -1764,7 +1996,7 @@ class CascadedVoiceProvider {
             enableAutomaticPunctuation: true,
           },
         },
-        content: audio.toString("base64"),
+        content: Buffer.isBuffer(audio) ? audio.toString("base64") : Buffer.from(audio).toString("base64"),
       }),
     }, this.timeoutMs);
 

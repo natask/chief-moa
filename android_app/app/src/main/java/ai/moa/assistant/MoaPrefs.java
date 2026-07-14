@@ -324,6 +324,59 @@ final class MoaPrefs {
         return "Hear " + input + " / Reply " + reply;
     }
 
+    // Short primary subtag for a BCP-47 tag: "en-US" -> "en", "am-ET" -> "am".
+    static String shortLanguageTag(String tag) {
+        String raw = tag == null ? "" : tag.trim();
+        if (raw.isEmpty()) {
+            return "";
+        }
+        int cut = raw.length();
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '-' || c == '_') {
+                cut = i;
+                break;
+            }
+        }
+        return raw.substring(0, cut).toLowerCase(Locale.US);
+    }
+
+    // Distinct short input (STT) languages joined with a middot, e.g. "en·am".
+    // Reads the profile's input_languages list, falling back to the primary tag.
+    static String inputLanguagesShort(Context context) {
+        JSONObject profile = agentProfile(context);
+        String list = firstNonEmpty(
+                profile.optString("input_languages", ""),
+                profile.optString("input_language_primary", ""),
+                profile.optString("language", ""),
+                inputLanguageTag(context)
+        );
+        String joined = shortLanguageList(list);
+        return joined.isEmpty() ? shortLanguageTag(inputLanguageTag(context)) : joined;
+    }
+
+    static String shortLanguageList(String csv) {
+        String raw = csv == null ? "" : csv.trim();
+        if (raw.isEmpty()) {
+            return "";
+        }
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        for (String part : raw.split("[,\\s]+")) {
+            String item = shortLanguageTag(part);
+            if (!item.isEmpty()) {
+                seen.add(item);
+            }
+        }
+        StringBuilder out = new StringBuilder();
+        for (String item : seen) {
+            if (out.length() > 0) {
+                out.append("·");
+            }
+            out.append(item);
+        }
+        return out.toString();
+    }
+
     static String gatewayUrlAfterStaleDefaultMigration(String storedGatewayUrl, String gatewayToken) {
         String stored = safe(storedGatewayUrl);
         if (stored.isEmpty() || !safe(gatewayToken).isEmpty()) {

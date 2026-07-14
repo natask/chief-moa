@@ -316,7 +316,11 @@ target_has_committed_changes() {
 target_has_dirty_changes() {
   local target="$1"
   local paths
-  paths="$(git -C "$ROOT_DIR" diff --name-only; git -C "$ROOT_DIR" diff --cached --name-only)"
+  paths="$(
+    git -C "$ROOT_DIR" diff --name-only
+    git -C "$ROOT_DIR" diff --cached --name-only
+    git -C "$ROOT_DIR" ls-files --others --exclude-standard
+  )"
   printf '%s\n' "$paths" | target_has_path "$target"
 }
 

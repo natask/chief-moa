@@ -6,8 +6,10 @@ Date: 2026-07-11
 
 PASS for the provider-neutral portable core and Windows-target source artifact.
 BLOCK for any claim of a Windows application, WinUI UX, secure credential
-storage, native action execution, MSIX, signing, install, update, accessibility,
-physical-device behavior, transport authentication or production readiness.
+storage, native action execution, UI Automation observation, MSIX, signing,
+install/runtime update, accessibility, physical-device behavior, transport
+authentication or production readiness. Context routing and standard update
+eligibility are portable data seams only.
 
 ## Claims ledger
 
@@ -58,11 +60,13 @@ Auditor verdict -> BLOCK broader claim
 - UX/accessibility: no UI exists. That is an honest staged boundary, not a PASS.
 - Packaging/supply chain: exact Cargo lock exists and GitHub job permissions are
   read-only. GitHub-hosted Windows CI has not yet run, and action pinning remains
-  by major tag rather than immutable commit digest.
+  by major tag rather than immutable commit digest. Store/App Installer metadata
+  validation does not prove package identity, signature, download, installation,
+  restart, rollback or update behavior.
 
 ## Measured evidence
 
-- `cargo test --locked`: 15 passed, 0 failed, 0 ignored.
+- `cargo test --locked`: 20 passed, 0 failed, 0 ignored.
 - `cargo clippy --all-targets -- -D warnings`: passed.
 - `cargo build --locked --target x86_64-pc-windows-msvc`: passed as a macOS
   cross-build after installing the Rust standard library target.

@@ -13,6 +13,7 @@ pub const MAX_ENVELOPE_BYTES: usize = 64 * 1024;
 pub const MAX_NESTING: usize = 12;
 pub const MAX_FIELDS: usize = 64;
 pub const MAX_ITEMS: usize = 64;
+pub const MAX_CAPABILITY_DESCRIPTORS: usize = 64;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SurfaceError {
@@ -40,6 +41,194 @@ pub enum SurfaceError {
     ApprovalTimeInvalid,
     #[error("a receipt requires a previously eligible proposal")]
     NotEligible,
+    #[error("active-application observation is invalid or stale")]
+    InvalidObservation,
+    #[error("capability descriptor is invalid")]
+    InvalidCapabilityDescriptor,
+    #[error("platform update metadata is invalid")]
+    InvalidUpdateMetadata,
+}
+
+/// Cross-surface `context_descriptor` v1. The portable core does not discover
+/// these values; a future platform adapter supplies them. Content is omitted
+/// unless the caller explicitly marks that it was included.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ContextDescriptor {
+    pub version: u8,
+    pub surface: String,
+    pub availability: ContextAvailability,
+    pub reason: Option<String>,
+    pub captured_at: String,
+    pub freshness: ContextFreshness,
+    pub application: Option<ContextApplication>,
+    pub page: Option<ContextPage>,
+    pub privacy: ContextPrivacy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextAvailability {
+    Available,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ContextApplication {
+    pub kind: String,
+    pub id: String,
+    pub origin: Option<String>,
+    pub document_id: Option<String>,
+    pub class_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ContextPage {
+    pub title: Option<String>,
+    pub location_scope: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ContextPrivacy {
+    pub page_content_included: bool,
+    pub window_title_included: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextFreshness {
+    Fresh,
+    Stale,
+}
+
+/// Where an applicable capability is already available. This is routing data,
+/// not a dynamically executable tool or proof that authentication is valid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterStatus {
+    Available,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialSource {
+    ExistingBrowserSession,
+    ConnectedApi,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticationState {
+    NotInspected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    Read,
+    Draft,
+    ExternalEffect,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterConstraint {
+    LocalAllowlistValidation,
+    NoCookieExport,
+    NoProviderCredentials,
+    ProposalBeforeExecution,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AdapterContextBinding {
+    pub application_id: String,
+    pub document_id: Option<String>,
+    pub class_id: Option<String>,
+}
+
+/// Declarative context-to-capability mapping supplied by a caller-owned
+/// catalog. Matching only suggests a route; it grants no execution authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ExecutionAdapterDescriptor {
+    pub version: u8,
+    pub adapter: String,
+    pub status: AdapterStatus,
+    pub unavailable_reason: Option<String>,
+    pub credential_source: CredentialSource,
+    pub authentication_state: AuthenticationState,
+    pub context_binding: Option<AdapterContextBinding>,
+    pub modes: Vec<ExecutionMode>,
+    pub constraints: Vec<AdapterConstraint>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ApplicableExecutionAdapter {
+    pub adapter: String,
+    pub credential_source: CredentialSource,
+    pub authentication_state: AuthenticationState,
+    pub modes: Vec<ExecutionMode>,
+    pub constraints: Vec<AdapterConstraint>,
+    pub matched_application_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct WindowsPackageVersion {
+    pub major: u16,
+    pub minor: u16,
+    pub build: u16,
+    pub revision: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsArchitecture {
+    X64,
+    Arm64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateChannel {
+    Stable,
+    Preview,
+}
+
+/// A standard Windows-owned update handoff. No custom downloader is modeled.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WindowsUpdateMechanism {
+    MicrosoftStore { product_id: String },
+    AppInstaller { manifest_uri: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct InstalledWindowsPackage {
+    pub package_id: String,
+    pub version: WindowsPackageVersion,
+    pub architecture: WindowsArchitecture,
+    pub channel: UpdateChannel,
+}
+
+/// Signed metadata must still be authenticated by the platform-specific shell.
+/// This core only checks compatibility before handing off to Windows.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WindowsUpdateMetadata {
+    pub package_id: String,
+    pub version: WindowsPackageVersion,
+    pub architectures: Vec<WindowsArchitecture>,
+    pub channel: UpdateChannel,
+    pub mechanism: WindowsUpdateMechanism,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateEligibility {
+    Eligible,
+    AlreadyCurrent,
+    PackageMismatch,
+    ChannelMismatch,
+    ArchitectureMismatch,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -133,6 +322,239 @@ pub enum Outcome {
     Rejected,
     Failed,
     Canceled,
+}
+
+/// Resolves data-only execution adapter advertisements for fresh foreground
+/// context. The result is deterministic and grants no authority to execute.
+pub fn resolve_execution_adapters(
+    context: &ContextDescriptor,
+    adapters: &[ExecutionAdapterDescriptor],
+    fresh_not_before: &str,
+    now: &str,
+) -> Result<Vec<ApplicableExecutionAdapter>, SurfaceError> {
+    validate_context_descriptor(context, fresh_not_before, now)?;
+    if adapters.len() > MAX_CAPABILITY_DESCRIPTORS {
+        return Err(SurfaceError::InvalidCapabilityDescriptor);
+    }
+
+    let application = context
+        .application
+        .as_ref()
+        .ok_or(SurfaceError::InvalidObservation)?;
+    let matches: Vec<_> = adapters
+        .iter()
+        .map(|adapter| {
+            validate_execution_adapter(adapter)?;
+            Ok(adapter)
+        })
+        .collect::<Result<Vec<_>, SurfaceError>>()?
+        .into_iter()
+        .filter(|adapter| {
+            adapter.status == AdapterStatus::Available
+                && adapter.context_binding.as_ref().is_some_and(|binding| {
+                    binding.application_id.eq_ignore_ascii_case(&application.id)
+                        && binding.document_id.as_ref().is_none_or(|expected| {
+                            application.document_id.as_ref() == Some(expected)
+                        })
+                        && binding
+                            .class_id
+                            .as_ref()
+                            .is_none_or(|expected| application.class_id.as_ref() == Some(expected))
+                })
+        })
+        .collect();
+
+    Ok(matches
+        .into_iter()
+        .map(|adapter| ApplicableExecutionAdapter {
+            adapter: adapter.adapter.clone(),
+            credential_source: adapter.credential_source,
+            authentication_state: adapter.authentication_state,
+            modes: adapter.modes.clone(),
+            constraints: adapter.constraints.clone(),
+            matched_application_id: application.id.clone(),
+        })
+        .collect())
+}
+
+/// Evaluates metadata for a platform-owned Store or App Installer handoff. It
+/// does not fetch, verify, install, restart, or roll back a package.
+pub fn evaluate_windows_update(
+    installed: &InstalledWindowsPackage,
+    update: &WindowsUpdateMetadata,
+) -> Result<UpdateEligibility, SurfaceError> {
+    validate_installed_package(installed)?;
+    validate_update_metadata(update)?;
+    if installed.package_id != update.package_id {
+        return Ok(UpdateEligibility::PackageMismatch);
+    }
+    if installed.channel != update.channel {
+        return Ok(UpdateEligibility::ChannelMismatch);
+    }
+    if !update.architectures.contains(&installed.architecture) {
+        return Ok(UpdateEligibility::ArchitectureMismatch);
+    }
+    if update.version <= installed.version {
+        return Ok(UpdateEligibility::AlreadyCurrent);
+    }
+    Ok(UpdateEligibility::Eligible)
+}
+
+fn validate_context_descriptor(
+    context: &ContextDescriptor,
+    fresh_not_before: &str,
+    now: &str,
+) -> Result<(), SurfaceError> {
+    if context.version != 1
+        || context.surface != "windows"
+        || context.availability != ContextAvailability::Available
+        || context.reason.is_some()
+        || context.freshness != ContextFreshness::Fresh
+        || context.application.is_none()
+        || context.privacy.window_title_included
+    {
+        return Err(SurfaceError::InvalidObservation);
+    }
+    let application = context.application.as_ref().expect("checked above");
+    if !matches!(application.kind.as_str(), "desktop_app" | "browser")
+        || require_application_id(&application.id).is_err()
+        || application.origin.as_deref().is_some_and(|origin| {
+            origin.len() > 512
+                || !origin.starts_with("https://")
+                || origin.contains('@')
+                || origin.contains(['?', '#'])
+        })
+        || application
+            .document_id
+            .as_deref()
+            .is_some_and(|id| require_context_identity(id).is_err())
+        || application
+            .class_id
+            .as_deref()
+            .is_some_and(|id| require_context_identity(id).is_err())
+        || context.page.as_ref().is_some_and(|page| {
+            require_context_identity(&page.location_scope).is_err()
+                || page
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| require_display_name(title).is_err())
+        })
+    {
+        return Err(SurfaceError::InvalidObservation);
+    }
+    let captured =
+        parse_time(&context.captured_at).map_err(|_| SurfaceError::InvalidObservation)?;
+    let not_before = parse_time(fresh_not_before).map_err(|_| SurfaceError::InvalidObservation)?;
+    let now = parse_time(now).map_err(|_| SurfaceError::InvalidObservation)?;
+    if not_before > now || captured < not_before || captured > now {
+        return Err(SurfaceError::InvalidObservation);
+    }
+    Ok(())
+}
+
+fn validate_execution_adapter(adapter: &ExecutionAdapterDescriptor) -> Result<(), SurfaceError> {
+    if adapter.version != 1
+        || require_id(&adapter.adapter).is_err()
+        || adapter.authentication_state != AuthenticationState::NotInspected
+        || adapter.modes.is_empty()
+        || adapter.modes.len() > 3
+        || adapter.constraints.len() != 4
+        || (adapter.status == AdapterStatus::Available && adapter.unavailable_reason.is_some())
+        || (adapter.status == AdapterStatus::Unavailable && adapter.unavailable_reason.is_none())
+        || adapter
+            .unavailable_reason
+            .as_deref()
+            .is_some_and(|reason| require_id(reason).is_err())
+        || adapter.context_binding.as_ref().is_some_and(|binding| {
+            require_application_id(&binding.application_id).is_err()
+                || binding
+                    .document_id
+                    .as_deref()
+                    .is_some_and(|id| require_context_identity(id).is_err())
+                || binding
+                    .class_id
+                    .as_deref()
+                    .is_some_and(|id| require_context_identity(id).is_err())
+        })
+    {
+        return Err(SurfaceError::InvalidCapabilityDescriptor);
+    }
+    let required_constraints = [
+        AdapterConstraint::LocalAllowlistValidation,
+        AdapterConstraint::NoCookieExport,
+        AdapterConstraint::NoProviderCredentials,
+        AdapterConstraint::ProposalBeforeExecution,
+    ];
+    if required_constraints
+        .iter()
+        .any(|constraint| !adapter.constraints.contains(constraint))
+        || adapter
+            .modes
+            .iter()
+            .enumerate()
+            .any(|(index, mode)| adapter.modes[..index].contains(mode))
+    {
+        return Err(SurfaceError::InvalidCapabilityDescriptor);
+    }
+    Ok(())
+}
+
+fn validate_installed_package(installed: &InstalledWindowsPackage) -> Result<(), SurfaceError> {
+    require_id(&installed.package_id).map_err(|_| SurfaceError::InvalidUpdateMetadata)
+}
+
+fn validate_update_metadata(update: &WindowsUpdateMetadata) -> Result<(), SurfaceError> {
+    if require_id(&update.package_id).is_err()
+        || update.version
+            == (WindowsPackageVersion {
+                major: 0,
+                minor: 0,
+                build: 0,
+                revision: 0,
+            })
+        || update.architectures.is_empty()
+        || update.architectures.len() > 2
+    {
+        return Err(SurfaceError::InvalidUpdateMetadata);
+    }
+    let mut architectures = update.architectures.clone();
+    architectures.sort_by_key(|architecture| match architecture {
+        WindowsArchitecture::X64 => 0,
+        WindowsArchitecture::Arm64 => 1,
+    });
+    architectures.dedup();
+    if architectures.len() != update.architectures.len() {
+        return Err(SurfaceError::InvalidUpdateMetadata);
+    }
+    match &update.mechanism {
+        WindowsUpdateMechanism::MicrosoftStore { product_id } => {
+            require_id(product_id).map_err(|_| SurfaceError::InvalidUpdateMetadata)?;
+        }
+        WindowsUpdateMechanism::AppInstaller { manifest_uri } => {
+            validate_appinstaller_uri(manifest_uri)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_appinstaller_uri(uri: &str) -> Result<(), SurfaceError> {
+    let Some(rest) = uri.strip_prefix("https://") else {
+        return Err(SurfaceError::InvalidUpdateMetadata);
+    };
+    let Some((authority, path)) = rest.split_once('/') else {
+        return Err(SurfaceError::InvalidUpdateMetadata);
+    };
+    if uri.len() > 2048
+        || !uri.is_ascii()
+        || uri.bytes().any(|byte| byte.is_ascii_whitespace())
+        || authority.is_empty()
+        || authority.contains('@')
+        || path.contains(['?', '#'])
+        || !path.to_ascii_lowercase().ends_with(".appinstaller")
+    {
+        return Err(SurfaceError::InvalidUpdateMetadata);
+    }
+    Ok(())
 }
 
 pub fn parse_envelope(bytes: &[u8]) -> Result<Envelope, SurfaceError> {
@@ -521,6 +943,41 @@ fn require_id(value: &str) -> Result<(), SurfaceError> {
             .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
     {
         return Err(SurfaceError::InvalidEnvelope);
+    }
+    Ok(())
+}
+
+fn require_application_id(value: &str) -> Result<(), SurfaceError> {
+    if value.is_empty()
+        || value.len() > 200
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-!".contains(&byte))
+    {
+        return Err(SurfaceError::InvalidObservation);
+    }
+    Ok(())
+}
+
+fn require_context_identity(value: &str) -> Result<(), SurfaceError> {
+    if value.is_empty()
+        || value.len() > 240
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-!@".contains(&byte))
+    {
+        return Err(SurfaceError::InvalidObservation);
+    }
+    Ok(())
+}
+
+fn require_display_name(value: &str) -> Result<(), SurfaceError> {
+    if value.is_empty()
+        || value.len() > 120
+        || value.chars().any(char::is_control)
+        || value.to_ascii_lowercase().contains("bearer ")
+    {
+        return Err(SurfaceError::InvalidCapabilityDescriptor);
     }
     Ok(())
 }

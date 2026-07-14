@@ -31,7 +31,7 @@
   body{font-family:var(--serif);letter-spacing:0;-webkit-font-smoothing:antialiased}
   button,input,textarea{font:inherit}
   button{cursor:pointer}
-  .shell{min-height:100vh;display:grid;grid-template-rows:auto minmax(0,1fr)}
+  .shell{min-height:100vh;display:grid;grid-template-rows:auto auto minmax(0,1fr)}
   .topbar{height:64px;display:flex;align-items:center;justify-content:space-between;gap:20px;
     padding:0 22px;border-bottom:1px solid var(--line);background:rgba(251,250,247,.92)}
   .brand{display:flex;align-items:center;gap:11px;font-family:var(--mono);font-size:12px;
@@ -168,6 +168,35 @@
   .hint{min-height:18px;font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.45}
   .hint.err{color:#a43a2a}.hint.ok{color:#26724d}
 
+  /* Describe-it: one prompt makes a character; manual controls are refinement. */
+  .describe{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#fff,#fbfaf7)}
+  .describe-inner{max-width:1180px;margin:0 auto;padding:16px 22px;display:grid;gap:10px}
+  .describe-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .describe-head strong{font-size:19px;font-weight:500}
+  .describe-head span{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .describe-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:stretch}
+  .describe-row input{width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:8px;
+    padding:12px 14px;outline:none;font-family:var(--serif);font-size:17px;line-height:1.3}
+  .describe-row input:focus{border-color:rgba(229,72,43,.68)}
+  .describe-row .cmd{height:auto;padding:0 18px;font-size:12px}
+  .describe-status{min-height:18px;font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.45}
+  .describe-status.err{color:#a43a2a}.describe-status.ok{color:#26724d}.describe-status.plan{color:var(--amber)}
+
+  /* Shared library: browse + install; hidden until the gateway advertises it. */
+  .library{border-top:1px solid var(--line)}
+  .library.hidden{display:none}
+  .library-empty{padding:12px 14px;font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.4}
+  .lib-row{display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:11px;align-items:center;padding:8px;
+    border:1px solid transparent;border-radius:8px}
+  .lib-row:hover{border-color:var(--line);background:#fbfaf7}
+  .lib-copy{min-width:0}
+  .lib-copy strong{display:block;font-size:14px;font-weight:500;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lib-copy span{display:block;margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lib-install{height:30px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);
+    font-family:var(--mono);font-size:11px;padding:0 11px}
+  .lib-install:disabled{opacity:.5;cursor:default}
+  .cmd.publish.hidden{display:none}
+
   @media (max-width:980px){
     .workspace{grid-template-columns:1fr}
     .rail,.inspector{min-height:auto;border:0;border-bottom:1px solid var(--line)}
@@ -180,6 +209,8 @@
     .stage-actions .cmd{width:100%}.console{grid-template-columns:1fr}.behavior{justify-content:flex-start}.catalog{grid-template-columns:1fr}
     .rule-row{grid-template-columns:48px minmax(0,1fr) 34px}
     .rule-row .rule-action{grid-column:2/4}
+    .describe-inner{padding:12px 14px}
+    .describe-row{grid-template-columns:1fr}
   }
   @media (prefers-reduced-motion:reduce){
     .pet *{animation:none!important}
@@ -193,6 +224,22 @@
     <a href="../">Home</a>
   </header>
 
+  <section class="describe">
+    <div class="describe-inner">
+      <div class="describe-head">
+        <strong>Describe a character</strong>
+        <span>One prompt makes it. The panels on the right refine it.</span>
+      </div>
+      <div class="describe-row">
+        <input id="describeInput" type="text" autocomplete="off"
+          placeholder="Make me a shy forest fox that guards my notes and speaks softly" />
+        <button class="cmd primary" id="describeBtn" type="button">Make it</button>
+        <button class="cmd" id="describeApplyBtn" type="button" disabled>Apply character</button>
+      </div>
+      <div class="describe-status" id="describeStatus" role="status" aria-live="polite">Type a character and press Make it. One more click applies it as your companion.</div>
+    </div>
+  </section>
+
   <main class="workspace">
     <aside class="rail">
       <div class="pane-head">
@@ -203,6 +250,14 @@
         <input id="searchInput" type="search" placeholder="Search pets" autocomplete="off" />
       </div>
       <div class="catalog" id="catalog"></div>
+      <section class="library hidden" id="library">
+        <div class="pane-head">
+          <h2>Library</h2>
+          <span class="status" id="libraryStatus"></span>
+        </div>
+        <div class="catalog" id="libraryList"></div>
+        <div class="library-empty" id="libraryEmpty" hidden>No shared characters yet.</div>
+      </section>
     </aside>
 
     <section class="stage-wrap">
@@ -214,6 +269,7 @@
         <div class="stage-actions">
           <button class="cmd" id="previewBtn" type="button">Preview</button>
           <button class="cmd" id="shareBtn" type="button">Share</button>
+          <button class="cmd publish hidden" id="publishBtn" type="button">Publish</button>
           <button class="cmd primary" id="applyBtn" type="button">Apply</button>
         </div>
       </div>
@@ -322,6 +378,38 @@
   ];
   var localAgentsKey="moa.petStudio.agents.v1";
   var deviceIdKey="moa.petStudio.deviceId.v1";
+
+  // Describe-it heuristics: map free-text prompts to the studio's existing
+  // palette/motion/voice vocabulary. Used only as a fallback when the gateway's
+  // server-side derivation (POST /v1/agent/pets {text}) is unavailable.
+  var PALETTE_HINTS=[
+    {re:/red|crimson|fire|flame|ember|ruby|scarlet|lava/,value:"red"},
+    {re:/green|forest|leaf|moss|emerald|jade|vine|frog/,value:"green"},
+    {re:/blue|ocean|sky|water|azure|sea|frost|ice|glacier/,value:"blue"},
+    {re:/violet|purple|lavender|magic|mystic|amethyst|arcane|wizard/,value:"violet"},
+    {re:/amber|gold|orange|\bsun\b|honey|bronze|autumn|fox\b/,value:"amber"},
+    {re:/teal|cyan|aqua|mint|turquoise/,value:"teal"},
+    {re:/graphite|gray|grey|stone|steel|shadow|iron|slate|robot/,value:"graphite"},
+    {re:/white|mono|ghost|snow|cloud|pearl|ivory|angel/,value:"mono"}
+  ];
+  var MOTION_HINTS=[
+    {re:/fly|float|hover|ghost|cloud|dream|drift|angel|balloon|spirit/,value:"float"},
+    {re:/climb|peek|shy|hide|spy|scout|sneak|lurk|guard|watch/,value:"peek"},
+    {re:/spark|energetic|hyper|zap|electric|zoom|lightning|manic/,value:"spark"},
+    {re:/bounce|playful|happy|jump|hop|excited|tap|cheer/,value:"tap"},
+    {re:/trail|wander|roam|explore|travel|nomad/,value:"trail"}
+  ];
+  var VOICE_HINTS=[
+    {re:/soft|calm|gentle|quiet|shy|whisper|soothing|tender|sleepy/,value:"Leda"},
+    {re:/warm|friendly|kind|expressive|smooth|cozy/,value:"Aoede"},
+    {re:/deep|low|gruff|strong|firm|grounded|bold|fierce|gruff/,value:"Fenrir"},
+    {re:/formal|serious|professional|precise|composed|butler/,value:"Orus"},
+    {re:/bright|happy|upbeat|energetic|playful|cheerful|quick/,value:"Puck"},
+    {re:/steady|direct|confident|matter-of-fact/,value:"Charon"},
+    {re:/airy|relaxed|chill|breezy|light|mellow/,value:"Zephyr"}
+  ];
+  var NAME_STOPWORDS=["that","who","which","with","and","for","the","this","really","very",
+    "some","kind","sort","type","character","companion","pet","little","small","big","cute"];
   var fallbackPets=[
     petRecord("shigmi-steward","Shigmi Steward","Default operator","graphite","hover","steward"),
     petRecord("shigmi-scout","Shigmi Scout","Research and discovery","green","peek","scout"),
@@ -375,12 +463,28 @@
     previewBtn:document.getElementById("previewBtn"),
     shareBtn:document.getElementById("shareBtn"),
     applyBtn:document.getElementById("applyBtn"),
-    generateBtn:document.getElementById("generateBtn")
+    publishBtn:document.getElementById("publishBtn"),
+    generateBtn:document.getElementById("generateBtn"),
+    describeInput:document.getElementById("describeInput"),
+    describeBtn:document.getElementById("describeBtn"),
+    describeApplyBtn:document.getElementById("describeApplyBtn"),
+    describeStatus:document.getElementById("describeStatus"),
+    library:document.getElementById("library"),
+    libraryStatus:document.getElementById("libraryStatus"),
+    libraryList:document.getElementById("libraryList"),
+    libraryEmpty:document.getElementById("libraryEmpty")
   };
+
+  // Feature flags: the shared-library + publish gateway routes may not exist yet
+  // (the site can deploy before or after the gateway). We enable each only after
+  // a non-404 probe, and hide the UI otherwise.
+  var features={sharedLibrary:false,publish:false};
+  var sharedItems=[];
 
   initControls();
   bindEvents();
   loadPets();
+  loadSharedLibrary();
   requestAnimationFrame(tick);
 
   function petRecord(id,name,summary,palette,motion,skin){
@@ -451,7 +555,14 @@
     els.previewBtn.addEventListener("click",previewSelected);
     els.shareBtn.addEventListener("click",bookmarkSelected);
     els.applyBtn.addEventListener("click",applySelected);
+    els.publishBtn.addEventListener("click",publishSelected);
     els.generateBtn.addEventListener("click",generateImage);
+    els.describeBtn.addEventListener("click",describeCharacter);
+    els.describeApplyBtn.addEventListener("click",applyDescribedCharacter);
+    els.describeInput.addEventListener("keydown",function(event){
+      if(event.key==="Enter"){event.preventDefault();describeCharacter();}
+    });
+    els.libraryList.addEventListener("click",onLibraryClick);
     els.pet.addEventListener("pointerdown",startDrag);
     window.addEventListener("pointermove",dragMove);
     window.addEventListener("pointerup",endDrag);
@@ -493,6 +604,7 @@
       tags:item.tags||companion.tags||[],
       voice:item.voice||companion.voice||"",
       voice_binding:item.voice_binding||companion.voice_binding||null,
+      voice_clone:item.voice_clone||companion.voice_clone||null,
       pet:{
         renderer:pet.renderer||"shimeji-web",
         family:pet.family||"shigmi",
@@ -692,6 +804,7 @@
     renderRules();
     applyPetVisual();
     refreshControlState();
+    updatePublishVisibility();
   }
 
   function applyControlsToPreview(){
@@ -730,14 +843,35 @@
     return binding&&binding.custom_voice&&typeof binding.custom_voice==="object"?binding.custom_voice:null;
   }
 
-  function voiceReadiness(item){
+  // Clone-job status can arrive on voice_binding.custom_voice.status (the
+  // gateway overlays the job status there once a job exists) or on the compact
+  // companion.voice_clone.status. Prefer whichever is present.
+  function cloneJobStatus(item){
     var custom=customVoiceState(item);
-    var status=String(custom&&custom.status||"not_configured").toLowerCase();
-    if(status==="ready")return {kind:"ready",label:"Custom voice ready"};
-    if(status==="consent_required")return {kind:"waiting",label:"Custom voice needs consent"};
-    if(status==="error")return {kind:"error",label:"Custom voice unavailable"};
-    if(custom&&custom.access_required===true)return {kind:"waiting",label:"Custom voice access required"};
-    return {kind:"waiting",label:"Custom voice not configured"};
+    if(custom&&custom.status)return String(custom.status).toLowerCase();
+    var clone=item&&item.voice_clone&&typeof item.voice_clone==="object"?item.voice_clone:null;
+    if(clone&&clone.status)return String(clone.status).toLowerCase();
+    return "not_configured";
+  }
+
+  function voiceReadiness(item){
+    var status=cloneJobStatus(item);
+    if(status==="ready")return {kind:"ready",label:"Cloned voice ready"};
+    // Google voice cloning is allowlist-gated on the current project. Until the
+    // allowlist is granted the clone job runs in dry-run and the character falls
+    // back to the closest canonical voice — say that honestly, not as an error.
+    if(status==="blocked_allowlist"||status==="allowlist_pending"||status==="allowlist_blocked")
+      return {kind:"waiting",label:"Cloned voice pending Google approval — using closest catalog voice"};
+    if(status==="not_implemented_live")
+      return {kind:"waiting",label:"Cloned voice pending live enablement — using closest catalog voice"};
+    if(status==="pending"||status==="processing"||status==="queued"||status==="running")
+      return {kind:"waiting",label:"Cloned voice processing — using closest catalog voice"};
+    if(status==="consent_required")return {kind:"waiting",label:"Cloned voice needs consent"};
+    if(status==="error")return {kind:"error",label:"Cloned voice unavailable — using closest catalog voice"};
+    var custom=customVoiceState(item);
+    if(custom&&custom.access_required===true)
+      return {kind:"waiting",label:"Cloned voice pending Google approval — using closest catalog voice"};
+    return {kind:"waiting",label:"Catalog voice"};
   }
 
   function renderVoiceStatus(item){
@@ -848,15 +982,17 @@
   }
 
   async function applySelected(){
-    if(!state.selected)return;
+    if(!state.selected)return false;
     setConsole("Applying", state.selected.companion_name);
     try{
       var res=await fetch("/api/pets/apply",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agent_id:state.selected.id,companion_id:state.selected.companion_id,scope:"global",source:"website-pet-studio",rules:readRules()})});
       var data=await res.json().catch(function(){return {};});
       if(!res.ok)throw new Error(data.error||"Apply failed");
       setConsole("Applied", data.profile&&data.profile.active_companion_name||state.selected.companion_name);
+      return true;
     }catch(err){
       setConsole("Apply blocked", err.message||"Gateway unavailable");
+      return false;
     }
   }
 
@@ -876,6 +1012,274 @@
     }catch(err){
       setHint(err.message||"Generate failed", "err");
     }
+  }
+
+  // ---- Describe-it: one prompt -> draft manifest + sprite/plan + suggested
+  // voice, in one pass. The manual controls on the right become refinement.
+
+  async function describeCharacter(){
+    var prompt=cleanText(els.describeInput.value,400);
+    if(!prompt){
+      setDescribeStatus("Describe a character first, e.g. \"a shy forest fox that guards my notes\".","err");
+      els.describeInput.focus();
+      return;
+    }
+    els.describeApplyBtn.disabled=true;
+    setDescribeStatus("Making a character from your description…","");
+    var draft=await deriveDraft(prompt);
+    state.describedDraft=draft.record;
+    state.describedServerBacked=draft.serverBacked;
+    if(draft.serverBacked)upsertPet(draft.record);
+    selectPet(draft.record);
+    els.describeApplyBtn.disabled=false;
+    setDescribeStatus("Drafted "+draft.record.companion_name+" — "+draft.record.pet.palette+" / "+draft.record.pet.motion+
+      " / voice "+voiceBindingVoice(draft.record)+(draft.serverBacked?"":" (offline draft)")+". Generating a sprite…","");
+    await runDescribeGeneration(prompt,draft.record);
+  }
+
+  // Prefer the gateway's server-side derivation (POST /v1/agent/pets {text}),
+  // which returns a persisted draft manifest with a suggested voice. Fall back
+  // to client keyword heuristics when the gateway route is unavailable.
+  async function deriveDraft(prompt){
+    try{
+      var res=await fetch("/api/pets",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:prompt})});
+      if(res.ok){
+        var data=await res.json().catch(function(){return {};});
+        if(data.pet||data.companion){
+          var record=normalizePet(data.pet||data.companion);
+          if(!record.companion_summary)record.companion_summary=prompt;
+          return {record:record,serverBacked:true};
+        }
+      }
+    }catch(err){}
+    return {record:buildDraftFromPrompt(prompt).record,serverBacked:false};
+  }
+
+  async function runDescribeGeneration(prompt,record){
+    var name=record.companion_name;
+    var body=formBody();
+    body.text=prompt;
+    body.image_data_url="";
+    try{
+      var res=await fetch("/api/pets/generate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      if(res.status===404||res.status===503||res.status===501){
+        setDescribeStatus("Drafted "+name+" with a built-in sprite (gateway generation unavailable). Press Apply character to make it your companion.","plan");
+        return;
+      }
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||"Generate failed");
+      if(data.images&&data.images[0]&&data.images[0].data_url){
+        state.imageDataUrl=data.images[0].data_url;
+        els.fileName.textContent="Generated image";
+        applyPetVisual();
+        setDescribeStatus("Generated a sprite for "+name+". Press Apply character to make it your companion.","ok");
+      }else if(data.status==="not_configured"){
+        setDescribeStatus("Live sprite generation is off on the gateway — "+name+" uses the built-in sprite for now. The character plan is ready; press Apply character to make it your companion.","plan");
+      }else{
+        setDescribeStatus(name+" is drafted (sprite generation planned). Press Apply character to make it your companion.","plan");
+      }
+    }catch(err){
+      setDescribeStatus("Drafted "+name+" ("+(err&&err.message||"generation unavailable")+"). Press Apply character to make it your companion.","plan");
+    }
+  }
+
+  async function applyDescribedCharacter(){
+    if(!state.describedDraft){
+      setDescribeStatus("Describe a character and press Make it first.","err");
+      return;
+    }
+    els.describeApplyBtn.disabled=true;
+    // A server-backed draft is already a persisted companion — apply it directly.
+    // A client-only (offline) draft needs a create pass first.
+    if(!state.describedServerBacked){
+      setDescribeStatus("Creating "+(els.petName.value.trim()||"the character")+"…","");
+      await createPet({preventDefault:function(){}});
+    }
+    setDescribeStatus("Applying "+(state.selected&&state.selected.companion_name||"character")+" as your companion…","");
+    var applied=await applySelected();
+    var name=state.selected&&state.selected.companion_name||"Your character";
+    if(applied){
+      setDescribeStatus(name+" is now your companion. Refine it in the panels on the right, then Apply again to update.","ok");
+    }else{
+      setDescribeStatus(name+" is drafted, but applying it needs the gateway (see the console). Refine it in the panels, then Apply again.","plan");
+    }
+    els.describeApplyBtn.disabled=false;
+  }
+
+  function buildDraftFromPrompt(prompt){
+    var lower=prompt.toLowerCase();
+    var palette=matchHint(lower,PALETTE_HINTS,"blue");
+    var motion=matchHint(lower,MOTION_HINTS,"walk");
+    var voice=matchHint(lower,VOICE_HINTS,"Kore");
+    var name=deriveName(prompt);
+    var record=petRecord("draft-"+Date.now().toString(36),name,prompt,palette,motion,"custom");
+    record.source="draft";
+    record.companion_summary=prompt;
+    record.voice=voice;
+    return {record:record,name:name,palette:palette,motion:motion,voice:voice};
+  }
+
+  function matchHint(text,table,fallback){
+    for(var i=0;i<table.length;i++){if(table[i].re.test(text))return table[i].value;}
+    return fallback;
+  }
+
+  function deriveName(prompt){
+    var named=prompt.match(/\b(?:named|called)\s+([A-Za-z][\w'-]*(?:\s+[A-Za-z][\w'-]*)?)/);
+    if(named&&named[1]){
+      var picked=cleanText(named[1],40).split(/\s+/).filter(function(word){
+        return NAME_STOPWORDS.indexOf(word.toLowerCase())<0;
+      });
+      if(picked.length)return titleCase(picked.join(" "));
+    }
+    var lead=prompt.replace(/^\s*(?:make|create|build|design|give)\s+(?:me\s+)?(?:an?|the)?\s*/i,"");
+    var words=cleanText(lead,80).split(/\s+/).filter(function(word){
+      return word.length>1&&NAME_STOPWORDS.indexOf(word.toLowerCase())<0;
+    });
+    return titleCase(words.slice(0,2).join(" "))||"Shigmi Companion";
+  }
+
+  function titleCase(value){
+    return String(value||"").toLowerCase().replace(/\b[a-z]/g,function(c){return c.toUpperCase();}).trim();
+  }
+
+  function setDescribeStatus(text,kind){
+    els.describeStatus.textContent=text;
+    els.describeStatus.className="describe-status "+(kind||"");
+  }
+
+  // ---- Shared library: browse + install + publish. Feature-detected on 404 so
+  // the site is safe to ship before or after the gateway library routes land.
+
+  function ownsSelected(){
+    var selected=state.selected;
+    if(!selected)return false;
+    var source=String(selected.source||"custom").toLowerCase();
+    return source==="local"||source==="draft"||source==="custom"||source==="user";
+  }
+
+  function updatePublishVisibility(){
+    els.publishBtn.classList.toggle("hidden",!(features.publish&&ownsSelected()));
+  }
+
+  function hideLibrary(){
+    features.sharedLibrary=false;
+    features.publish=false;
+    els.library.classList.add("hidden");
+    updatePublishVisibility();
+  }
+
+  async function loadSharedLibrary(){
+    try{
+      var res=await fetch("/api/pets/shared",{headers:{"accept":"application/json"}});
+      if(res.status===404||res.status===503||res.status===501){hideLibrary();return;}
+      if(!res.ok)throw new Error("HTTP "+res.status);
+      var data=await res.json().catch(function(){return {};});
+      var raw=data.pets||data.shared||data.items||data.library||data.characters||[];
+      sharedItems=(Array.isArray(raw)?raw:[]).map(normalizePet);
+      features.sharedLibrary=true;
+      features.publish=true;
+      els.library.classList.remove("hidden");
+      renderLibrary(sharedItems);
+      updatePublishVisibility();
+    }catch(err){
+      hideLibrary();
+    }
+  }
+
+  function renderLibrary(items){
+    els.libraryList.innerHTML="";
+    var list=(items||[]).slice(0,40);
+    els.libraryStatus.textContent=String(list.length);
+    els.libraryEmpty.hidden=list.length>0;
+    list.forEach(function(item){
+      var row=document.createElement("div");
+      row.className="lib-row";
+      row.dataset.sharedId=item.id||item.companion_id||"";
+      row.innerHTML='<span class="mini"><span class="mini-dot"></span></span>'+
+        '<span class="lib-copy"><strong></strong><span></span></span>'+
+        '<button class="lib-install" type="button">Install</button>';
+      row.querySelector("strong").textContent=item.companion_name||"Shared character";
+      row.querySelector(".lib-copy span").textContent=(item.pet.motion||"walk")+" / voice "+voiceBindingVoice(item);
+      row.querySelector(".mini-dot").style.background=palettes[item.pet.palette]||palettes.blue;
+      els.libraryList.appendChild(row);
+    });
+  }
+
+  function onLibraryClick(event){
+    var row=event.target.closest(".lib-row");
+    if(!row)return;
+    var id=row.dataset.sharedId;
+    var item=sharedItems.filter(function(entry){return (entry.id||entry.companion_id)===id;})[0];
+    if(!item)return;
+    if(event.target.closest(".lib-install")){installShared(item,row);return;}
+    // Row click previews the shared character in the stage without installing.
+    selectPet(item);
+  }
+
+  async function installShared(item,row){
+    var button=row&&row.querySelector(".lib-install");
+    if(button)button.disabled=true;
+    setConsole("Installing",item.companion_name);
+    try{
+      var res=await fetch("/api/pets/install",{method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({id:item.id||item.companion_id,companion_id:item.companion_id,scope:"global",source:"website-pet-studio"})});
+      var data=await res.json().catch(function(){return {};});
+      if(!res.ok)throw new Error(data.error||("Install failed ("+res.status+")"));
+      var pet=normalizePet(data.pet||data.agent||data.companion||item);
+      upsertPet(pet);
+      selectPet(pet);
+      setConsole("Installed",(data.profile&&data.profile.active_companion_name)||pet.companion_name);
+    }catch(err){
+      setConsole("Install blocked",err&&err.message||"Gateway unavailable");
+    }finally{
+      if(button)button.disabled=false;
+    }
+  }
+
+  async function publishSelected(){
+    if(!state.selected)return;
+    var id=state.selected.id||state.selected.companion_id;
+    if(!id){setConsole("Publish blocked","This character isn't saved yet — press Create agent first");return;}
+    setConsole("Publishing",state.selected.companion_name);
+    try{
+      // Per-pet publish: POST /v1/agent/pets/:id/publish, empty body.
+      var res=await fetch("/api/pets/"+encodeURIComponent(id)+"/publish",{method:"POST",
+        headers:{"content-type":"application/json"},body:"{}"});
+      if(res.status===501){
+        features.publish=false;updatePublishVisibility();
+        setConsole("Publish unavailable","This gateway does not offer publishing yet");
+        return;
+      }
+      var data=await res.json().catch(function(){return {};});
+      if(res.status===409){
+        // Consent/provenance review not approved, or a built-in that can't be
+        // published — a normal state, shown plainly, not an error toast.
+        setConsole("Publish pending review",publishBlockMessage(data));
+        return;
+      }
+      if(res.status===404){
+        // The library routes exist (features.publish came from /shared), so a
+        // 404 here means this character is not saved on the gateway yet.
+        setConsole("Publish blocked","This character isn't saved on the gateway yet — press Create agent first");
+        return;
+      }
+      if(!res.ok)throw new Error(data.error||("Publish failed ("+res.status+")"));
+      setConsole("Published",state.selected.companion_name+" is now in the shared library");
+      loadSharedLibrary();
+    }catch(err){
+      setConsole("Publish blocked",err&&err.message||"Gateway unavailable");
+    }
+  }
+
+  function publishBlockMessage(data){
+    var code=String(data&&data.code||"").toLowerCase();
+    if(code==="not_publishable")
+      return "Built-in characters can't be published. Make your own with Describe or Create agent.";
+    var reason=String(data&&data.reason||"").toLowerCase();
+    if(reason==="rejected")
+      return "This character's provenance review was rejected, so it can't be shared.";
+    return (data&&data.error)||"This character needs consent and provenance review before it can be shared.";
   }
 
   function formBody(){
