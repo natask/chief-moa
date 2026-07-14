@@ -36,9 +36,15 @@ if [ -z "$HOST" ]; then
   exit 1
 fi
 
+# build-ota-artifact.sh publishes into the versioned layout:
+#   releases/<release_id>/{moa-assistant.apk,release.json}
+#   current -> releases/<release_id>        (atomic, relative symlink)
+#   moa-assistant.apk + latest.json         (legacy, for pre-rollback clients)
 "$ROOT_DIR/android_app/deploy/ota/build-ota-artifact.sh"
 
 ssh -o ConnectTimeout=10 "$HOST" "mkdir -p '$REMOTE_OTA_DIR'"
+# -a preserves the relative `current` symlink as a symlink; --delete prunes
+# stale releases so the remote store matches the local one.
 rsync -az --delete "$LOCAL_OTA_DIR/" "$HOST:$REMOTE_OTA_DIR/"
 
-echo "Synced Android OTA artifact to $HOST:$REMOTE_OTA_DIR"
+echo "Synced Android OTA releases + current pointer to $HOST:$REMOTE_OTA_DIR"
