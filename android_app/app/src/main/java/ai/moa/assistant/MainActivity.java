@@ -2,10 +2,12 @@ package ai.moa.assistant;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.graphics.Typeface;
@@ -37,11 +39,14 @@ import java.io.FileInputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class MainActivity extends Activity {
     static final String EXTRA_GATEWAY_URL = "ai.moa.assistant.extra.GATEWAY_URL";
     static final String EXTRA_GATEWAY_TOKEN = "ai.moa.assistant.extra.GATEWAY_TOKEN";
     static final String EXTRA_START_OVERLAY = "ai.moa.assistant.extra.START_OVERLAY";
+    static final String EXTRA_REVIEW_UPDATE = "ai.moa.assistant.extra.REVIEW_UPDATE";
 
     // Overlay contract: the overlay agent handles this action to re-read the
     // stored orb scale. Kept as a literal so the main app builds even before the
@@ -80,6 +85,8 @@ public final class MainActivity extends Activity {
     private boolean requestedMicOnStartup;
     private int gatewayHealthGeneration;
     private int updateCheckGeneration;
+    private long updateDialogVersionCode;
+    private boolean reviewUpdateOnNextCheck;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -265,7 +272,7 @@ public final class MainActivity extends Activity {
         updateButton = secondaryButton("Check for app update");
         updateButton.setOnClickListener(v -> {
             if (pendingUpdate != null) {
-                installPendingUpdate();
+                showUpdateDecisionDialog(pendingUpdate);
             } else {
                 checkForAppUpdate(true);
             }
@@ -539,7 +546,7 @@ public final class MainActivity extends Activity {
         }
 
         if (updateButton != null && pendingUpdate != null) {
-            updateButton.setText("Install app update");
+            updateButton.setText("Review app update");
         }
     }
 
@@ -596,6 +603,10 @@ public final class MainActivity extends Activity {
     private void applyIntentConfiguration(Intent intent) {
         if (intent == null) {
             return;
+        }
+        if (intent.getBooleanExtra(EXTRA_REVIEW_UPDATE, false)) {
+            reviewUpdateOnNextCheck = true;
+            intent.removeExtra(EXTRA_REVIEW_UPDATE);
         }
         boolean hasGatewayUrl = intent.hasExtra(EXTRA_GATEWAY_URL);
         boolean hasGatewayToken = intent.hasExtra(EXTRA_GATEWAY_TOKEN);
@@ -882,17 +893,24 @@ public final class MainActivity extends Activity {
             String label = "Unavailable";
             int color = MoaColors.GOLD;
             JSONObject update = null;
+            MoaUpdatePolicy.Decision decision = null;
             try {
                 MoaGatewayClient client = new MoaGatewayClient(gatewayUrl, MoaPrefs.gatewayToken(this));
                 JSONObject manifest = client.latestAndroidUpdate();
-                long remoteVersionCode = manifest.optLong("version_code", 0);
-                String remoteGitSha = manifest.optString("git_sha", "").trim();
-                String currentGitSha = BuildConfig.GIT_SHA == null ? "" : BuildConfig.GIT_SHA.trim();
-                boolean sameSource = !remoteGitSha.isEmpty() && remoteGitSha.equals(currentGitSha);
-                if (!sameSource && remoteVersionCode > currentVersionCode()) {
+                decision = MoaUpdatePolicy.evaluate(
+                        manifest,
+                        currentVersionCode(),
+                        BuildConfig.GIT_SHA,
+                        MoaPrefs.deferredUpdateVersionCode(this)
+                );
+                if (decision.isAvailable()) {
                     update = manifest;
-                    label = "v" + manifest.optString("version_name", String.valueOf(remoteVersionCode)) + " available";
+                    label = "v" + decision.versionName
+                            + (decision.state == MoaUpdatePolicy.State.DEFERRED ? " — later" : " available");
                     color = MoaColors.OK;
+                } else if (decision.state == MoaUpdatePolicy.State.INVALID) {
+                    label = "Update metadata rejected";
+                    color = MoaColors.WARN;
                 } else {
                     label = "Current";
                     color = MoaColors.OK;
@@ -904,6 +922,7 @@ public final class MainActivity extends Activity {
             }
 
             final JSONObject nextUpdate = update;
+            final MoaUpdatePolicy.Decision nextDecision = decision;
             final String nextLabel = label;
             final int nextColor = color;
             mainHandler.post(() -> {
@@ -918,17 +937,69 @@ public final class MainActivity extends Activity {
                 if (updateButton != null) {
                     updateButton.setEnabled(true);
                     updateButton.setAlpha(1f);
-                    updateButton.setText(nextUpdate == null ? "Check for app update" : "Install app update");
+                    updateButton.setText(nextUpdate == null ? "Check for app update" : "Review app update");
                     updateButton.setOnClickListener(v -> {
                         if (pendingUpdate == null) {
                             checkForAppUpdate(true);
                         } else {
-                            installPendingUpdate();
+                            showUpdateDecisionDialog(pendingUpdate);
                         }
                     });
                 }
+                boolean forcedReview = reviewUpdateOnNextCheck;
+                reviewUpdateOnNextCheck = false;
+                if (nextUpdate != null && nextDecision != null
+                        && (userInitiated || forcedReview || nextDecision.state == MoaUpdatePolicy.State.AVAILABLE)) {
+                    showUpdateDecisionDialog(nextUpdate);
+                }
             });
         }, "moa-update-check").start();
+    }
+
+    private void showUpdateDecisionDialog(JSONObject update) {
+        if (update == null || isFinishing()) {
+            return;
+        }
+        MoaUpdatePolicy.Decision decision;
+        try {
+            decision = MoaUpdatePolicy.evaluate(
+                    update,
+                    currentVersionCode(),
+                    BuildConfig.GIT_SHA,
+                    MoaPrefs.deferredUpdateVersionCode(this)
+            );
+        } catch (Exception error) {
+            return;
+        }
+        if (!decision.isAvailable() || updateDialogVersionCode == decision.versionCode) {
+            return;
+        }
+        updateDialogVersionCode = decision.versionCode;
+        MoaPrefs.markUpdateNotified(this, decision.versionCode);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("New A.G. version available")
+                .setMessage(MoaUpdatePolicy.decisionMessage(decision))
+                .setNegativeButton("Not now", (ignored, which) -> {
+                    MoaPrefs.deferUpdate(this, decision.versionCode);
+                    updateDialogVersionCode = 0L;
+                    if (updateStatus != null) {
+                        updateStatus.setText("v" + decision.versionName + " — later");
+                    }
+                })
+                .setPositiveButton("Install", (ignored, which) -> {
+                    MoaPrefs.clearDeferredUpdate(this);
+                    updateDialogVersionCode = 0L;
+                    installPendingUpdate();
+                })
+                .create();
+        dialog.setCanceledOnTouchOutside(false);
+        dialog.setOnCancelListener(ignored -> {
+            MoaPrefs.deferUpdate(this, decision.versionCode);
+            updateDialogVersionCode = 0L;
+        });
+        dialog.setOnDismissListener(ignored -> updateDialogVersionCode = 0L);
+        dialog.show();
     }
 
     private void installPendingUpdate() {
@@ -964,6 +1035,12 @@ public final class MainActivity extends Activity {
                 MoaGatewayClient client = new MoaGatewayClient(MoaPrefs.gatewayUrl(this), MoaPrefs.gatewayToken(this));
                 client.downloadLatestAndroidUpdate(apk);
                 verifyDownloadedUpdate(update, apk);
+                MoaPrefs.recordVersionBeforeUpdate(
+                        this,
+                        currentVersionCode(),
+                        currentVersionName(),
+                        BuildConfig.GIT_SHA
+                );
                 mainHandler.post(() -> launchInstaller());
                 return;
             } catch (Exception ignored) {
@@ -1009,14 +1086,70 @@ public final class MainActivity extends Activity {
     }
 
     private void verifyDownloadedUpdate(JSONObject update, File apk) throws Exception {
+        if (!getPackageName().equals(update.optString("app_id", "").trim())) {
+            throw new IllegalStateException("APK application id mismatch");
+        }
         long expectedSize = update.optLong("size_bytes", 0);
-        if (expectedSize > 0 && apk.length() != expectedSize) {
+        if (expectedSize <= 0 || apk.length() != expectedSize) {
             throw new IllegalStateException("APK size mismatch");
         }
-        String expectedSha = update.optString("sha256", "").trim();
-        if (!expectedSha.isEmpty() && !expectedSha.equalsIgnoreCase(sha256Hex(apk))) {
+        String expectedSha = update.optString("sha256", "").trim().toLowerCase();
+        if (!expectedSha.matches("[a-f0-9]{64}") || !expectedSha.equalsIgnoreCase(sha256Hex(apk))) {
             throw new IllegalStateException("APK checksum mismatch");
         }
+
+        PackageInfo archive = packageInfoForArchive(apk);
+        if (archive == null || !getPackageName().equals(archive.packageName)) {
+            throw new IllegalStateException("APK package mismatch");
+        }
+        long archiveVersionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? archive.getLongVersionCode()
+                : archive.versionCode;
+        long manifestVersionCode = update.optLong("version_code", 0L);
+        if (manifestVersionCode <= currentVersionCode() || archiveVersionCode != manifestVersionCode) {
+            throw new IllegalStateException("APK version mismatch");
+        }
+
+        PackageInfo installed = getPackageManager().getPackageInfo(
+                getPackageName(),
+                signatureFlags()
+        );
+        if (!signatureDigests(installed).equals(signatureDigests(archive))) {
+            throw new IllegalStateException("APK signer mismatch");
+        }
+    }
+
+    private PackageInfo packageInfoForArchive(File apk) {
+        return getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), signatureFlags());
+    }
+
+    private int signatureFlags() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? PackageManager.GET_SIGNING_CERTIFICATES
+                : PackageManager.GET_SIGNATURES;
+    }
+
+    private Set<String> signatureDigests(PackageInfo info) throws Exception {
+        Signature[] signatures;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            signatures = info.signingInfo == null ? null : info.signingInfo.getApkContentsSigners();
+        } else {
+            signatures = info.signatures;
+        }
+        if (signatures == null || signatures.length == 0) {
+            throw new IllegalStateException("APK signer missing");
+        }
+        Set<String> digests = new HashSet<>();
+        for (Signature signature : signatures) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(signature.toByteArray());
+            StringBuilder hex = new StringBuilder(bytes.length * 2);
+            for (byte value : bytes) {
+                hex.append(String.format("%02x", value));
+            }
+            digests.add(hex.toString());
+        }
+        return digests;
     }
 
     private File updateApkFile() {
@@ -1031,6 +1164,11 @@ public final class MainActivity extends Activity {
             return info.getLongVersionCode();
         }
         return info.versionCode;
+    }
+
+    private String currentVersionName() throws Exception {
+        PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+        return info.versionName == null ? "" : info.versionName;
     }
 
     private String sha256Hex(File file) throws Exception {

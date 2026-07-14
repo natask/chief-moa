@@ -39,6 +39,11 @@ final class MoaPrefs {
     // Experimental voice-first orb gestures. Off by default: the overlay keeps
     // today's tap/double-click-and-hold contract until this is turned on.
     private static final String KEY_VOICE_FIRST_GESTURES = "voice_first_gestures";
+    private static final String KEY_DEFERRED_UPDATE_VERSION_CODE = "deferred_update_version_code";
+    private static final String KEY_NOTIFIED_UPDATE_VERSION_CODE = "notified_update_version_code";
+    private static final String KEY_PREVIOUS_VERSION_CODE = "previous_version_code";
+    private static final String KEY_PREVIOUS_VERSION_NAME = "previous_version_name";
+    private static final String KEY_PREVIOUS_GIT_SHA = "previous_git_sha";
 
     // Orb scale contract shared by the overlay (applies it) and the main app
     // (exposes the slider). Percent of the 96dp base window; clamped 50-150.
@@ -67,6 +72,45 @@ final class MoaPrefs {
 
     static void setVoiceFirstGestures(Context context, boolean enabled) {
         prefs(context).edit().putBoolean(KEY_VOICE_FIRST_GESTURES, enabled).apply();
+    }
+
+    static long deferredUpdateVersionCode(Context context) {
+        return prefs(context).getLong(KEY_DEFERRED_UPDATE_VERSION_CODE, 0L);
+    }
+
+    static void deferUpdate(Context context, long versionCode) {
+        prefs(context).edit().putLong(KEY_DEFERRED_UPDATE_VERSION_CODE, Math.max(0L, versionCode)).apply();
+    }
+
+    static void clearDeferredUpdate(Context context) {
+        prefs(context).edit().remove(KEY_DEFERRED_UPDATE_VERSION_CODE).apply();
+    }
+
+    static long notifiedUpdateVersionCode(Context context) {
+        return prefs(context).getLong(KEY_NOTIFIED_UPDATE_VERSION_CODE, 0L);
+    }
+
+    static void markUpdateNotified(Context context, long versionCode) {
+        prefs(context).edit().putLong(KEY_NOTIFIED_UPDATE_VERSION_CODE, Math.max(0L, versionCode)).apply();
+    }
+
+    static void recordVersionBeforeUpdate(Context context, long versionCode, String versionName, String gitSha) {
+        prefs(context).edit()
+                .putLong(KEY_PREVIOUS_VERSION_CODE, Math.max(0L, versionCode))
+                .putString(KEY_PREVIOUS_VERSION_NAME, safe(versionName))
+                .putString(KEY_PREVIOUS_GIT_SHA, safe(gitSha))
+                .apply();
+    }
+
+    static String previousVersionSummary(Context context) {
+        long code = prefs(context).getLong(KEY_PREVIOUS_VERSION_CODE, 0L);
+        String name = safe(prefs(context).getString(KEY_PREVIOUS_VERSION_NAME, ""));
+        String sha = safe(prefs(context).getString(KEY_PREVIOUS_GIT_SHA, ""));
+        if (code <= 0L) {
+            return "";
+        }
+        String label = name.isEmpty() ? String.valueOf(code) : name;
+        return sha.isEmpty() ? label : label + " (" + sha + ")";
     }
 
     static String gatewayUrl(Context context) {
