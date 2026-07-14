@@ -1909,6 +1909,8 @@ public final class OverlayService extends Service {
         metadata.put("screen_access_enabled", actionBroker.isScreenAccessEnabled());
         metadata.put("screen_access_running", actionBroker.isScreenAccessRunning());
         metadata.put("overlay_running", true);
+        metadata.put("context_descriptor", actionBroker.activeAppDescriptor());
+        metadata.put("execution_adapters", actionBroker.executionAdapters());
         body.put("metadata", metadata);
         return body;
     }
@@ -1932,7 +1934,7 @@ public final class OverlayService extends Service {
         putToolManifestItem(manifest, "system.back", "navigation", "implicit_user_command");
         putToolManifestItem(manifest, "system.home", "navigation", "implicit_user_command");
         putToolManifestItem(manifest, "screen.summary", "read_only", "none");
-        putToolManifestItem(manifest, "screen.tap_text", "navigation", "implicit_user_command");
+        putToolManifestItem(manifest, "screen.tap_text", "navigation", "implicit_user_command", "expected_package");
         putToolManifestItem(manifest, "audio.speak", "local_output", "implicit_user_command");
         putToolManifestItem(manifest, "email.compose", "external_side_effect", "target_app_confirmation");
         putToolManifestItem(manifest, "sms.compose", "external_side_effect", "target_app_confirmation");
@@ -1943,10 +1945,17 @@ public final class OverlayService extends Service {
     }
 
     private void putToolManifestItem(JSONArray manifest, String tool, String risk, String approval) throws JSONException {
+        putToolManifestItem(manifest, tool, risk, approval, "");
+    }
+
+    private void putToolManifestItem(JSONArray manifest, String tool, String risk, String approval, String requiredInput) throws JSONException {
         JSONObject item = new JSONObject();
         item.put("tool", tool);
         item.put("risk", risk);
         item.put("approval", approval);
+        if (!safe(requiredInput).isEmpty()) {
+            item.put("required_input", new JSONArray().put(requiredInput));
+        }
         manifest.put(item);
     }
 
