@@ -28,6 +28,7 @@
     recordButton,
     stopButton,
     log,
+    langChip,
     uiSpecSurfaceEl,
     pendingConfirm = null,
     open = false,
@@ -100,6 +101,10 @@
   const UI_SPEC_CACHE_KEY = "ageeUiSpec";
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
   const PROFILE_CACHE_KEY = "ageeProfileCache";
+  // Language chip: what A.G. currently hears (STT) and speaks (reply), read
+  // from the cached gateway profile and kept live across a running turn.
+  let ageeProfileCacheValue = null;
+  let lastReplyLanguageCode = "";
   let devReloadTimer = null;
   let devReloadInFlight = false;
   let devReloadVersion = null;
@@ -332,6 +337,7 @@
           <span id="agee-transcript" aria-live="polite"></span>
         </div>
         <div id="agee-ui-surface" aria-live="polite"></div>
+        <div id="agee-lang-chip" class="agee-lang-chip" hidden aria-live="polite"></div>
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
@@ -351,11 +357,13 @@
     stopButton = root.querySelector("#agee-stop");
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-log");
+    langChip = root.querySelector("#agee-lang-chip");
     voiceState = root.querySelector("#agee-voice-state");
     transcriptEl = root.querySelector("#agee-transcript");
     tipEl = root.querySelector("#agee-tip");
 
     setupOverlayTooltips();
+    setupCueLogInteractions();
     restoreLauncherPosition();
     restoreMascotScale();
     restoreUiChimePreference();
@@ -363,6 +371,7 @@
     loadAvatarBehaviorRuntime();
     loadUiSpec();
     loadActiveCompanionPet();
+    loadLanguageChip();
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
@@ -1583,6 +1592,66 @@
       .catch(() => applyActiveCompanionPet(null));
   }
 
+  // ---- Language chip -----------------------------------------------------
+  // "Hears en·am · Speaks am": a short, always-legible readout of what A.G.
+  // currently understands (STT) and replies in (TTS/text), so the active
+  // language is never a guess. Understood-language data comes from the
+  // cached gateway profile (input_languages / input_language_primary); the
+  // spoken side prefers the live reply_language from the current turn's
+  // turn_done and otherwise falls back to the profile's language_primary.
+  function shortLangTag(code) {
+    const value = String(code || "").trim();
+    if (!value) return "";
+    return value.split(/[-_]/)[0].toLowerCase();
+  }
+
+  function parseLanguageCodes(value) {
+    return String(value || "")
+      .split(",")
+      .map((code) => shortLangTag(code))
+      .filter(Boolean);
+  }
+
+  // Pure formatter: profile is the {input_languages, input_language_primary,
+  // language, language_primary} shape cached under ageeProfileCache;
+  // replyOverride is the live reply language for the current turn (state.
+  // replyLanguage), which wins over the profile's reply setting when present.
+  // Returns "" (never "undefined"/"null") when there is nothing to show, so
+  // the caller can hide the chip instead of rendering garbage.
+  function formatLanguageChipText(profile, replyOverride) {
+    const p = profile && typeof profile === "object" ? profile : {};
+    const heard = parseLanguageCodes(p.input_languages).length
+      ? parseLanguageCodes(p.input_languages)
+      : parseLanguageCodes(p.input_language_primary);
+    const spoken = parseLanguageCodes(replyOverride || p.language_primary || p.language);
+    const parts = [];
+    if (heard.length) parts.push(`Hears ${[...new Set(heard)].join("·")}`);
+    if (spoken.length) parts.push(`Speaks ${spoken[0]}`);
+    return parts.join(" · ");
+  }
+
+  function renderLanguageChip() {
+    if (!langChip) return;
+    const profile = ageeProfileCacheValue?.profile || ageeProfileCacheValue || null;
+    const text = formatLanguageChipText(profile, lastReplyLanguageCode);
+    if (!text) {
+      langChip.hidden = true;
+      langChip.textContent = "";
+      return;
+    }
+    langChip.hidden = false;
+    langChip.textContent = text;
+  }
+
+  function loadLanguageChip() {
+    safeStorageLocalGet({ [PROFILE_CACHE_KEY]: null })
+      .then((stored) => {
+        ageeProfileCacheValue = stored?.[PROFILE_CACHE_KEY] || null;
+        renderLanguageChip();
+      })
+      .catch(() => {});
+  }
+
   function applyActiveCompanionPet(payload) {
     activeCompanionPet = sanitizeActiveCompanionPet(payload);
     if (!root || !launcher) return;
@@ -1700,7 +1769,7 @@
 
   // Cards stack as the user keeps sending. Drop the oldest finished ones past the
   // cap so the log stays bounded; a running card is never pruned.
-  const MAX_CUE_CARDS = 12;
+  const MAX_CUE_CARDS = 20;
   function pruneCueCards() {
     if (!log) return;
     const cards = [...log.querySelectorAll(".agee-cue")];
@@ -1714,18 +1783,32 @@
     }
   }
 
-  // The surface is not a chat. A card lives only while its turn is in flight, then
-  // lingers just long enough to read the answer and fades out. A running card is
-  // never auto-dismissed — it waits for its response.
-  const CUE_LINGER_DONE_MS = 6000;
-  const CUE_LINGER_ERROR_MS = 9000;
+  // A card is not auto-dismissed once it finishes — the surface is a short
+  // reading log now, not a toast that vanishes while you're still reading it.
+  // Cards persist until the user dismisses one explicitly (see
+  // selectCascadeDismissIds below), and are only ever pruned oldest-first past
+  // MAX_CUE_CARDS. Nothing schedules a timer to remove a finished card anymore;
+  // dismissCue() below is invoked only by an explicit user action.
 
-  function scheduleCueDismiss(cueId, kind) {
-    const entry = cues.get(cueId);
-    if (!entry) return;
-    if (entry.dismissTimer) clearTimeout(entry.dismissTimer);
-    const delay = kind === "error" ? CUE_LINGER_ERROR_MS : CUE_LINGER_DONE_MS;
-    entry.dismissTimer = setTimeout(() => dismissCue(cueId), delay);
+  // Pure selection helper for the dismiss-and-cascade gesture (✕ button or
+  // horizontal swipe): given the ordered list of cue cards (oldest first, the
+  // same order they stack in #agee-log) and the id whose control fired, return
+  // the ids to remove — that card and every older card above it. In-flight
+  // (active) cards are never included, so a cascade that reaches back into a
+  // still-running turn simply skips it instead of tearing down live state.
+  // Kept dependency-free (no DOM, no closures over module state) so it can be
+  // unit tested directly — see scripts/test-cue-dismiss.mjs.
+  function selectCascadeDismissIds(cards, clickedId) {
+    const list = Array.isArray(cards) ? cards : [];
+    const idx = list.findIndex((card) => card && card.id === clickedId);
+    if (idx === -1) return [];
+    if (list[idx].active) return []; // in-flight: not dismissable
+    const ids = [];
+    for (let i = 0; i <= idx; i += 1) {
+      const card = list[i];
+      if (card && !card.active) ids.push(card.id);
+    }
+    return ids;
   }
 
   // Fade a finished card out, then remove it. In-flight cards are left alone.
@@ -1746,6 +1829,83 @@
     };
     card.addEventListener("animationend", finalize, { once: true });
     setTimeout(finalize, 400); // fallback if the animation never fires
+  }
+
+  // Dismiss cardId and every older card above it (see selectCascadeDismissIds).
+  // Shared by the ✕ button and the swipe gesture below.
+  function cascadeDismissFromCard(clickedId) {
+    if (!log || !clickedId) return;
+    const cards = [...log.querySelectorAll(".agee-cue")].map((card) => ({
+      id: card.dataset.cue,
+      active: activeCues.has(card.dataset.cue),
+    }));
+    for (const id of selectCascadeDismissIds(cards, clickedId)) dismissCue(id);
+  }
+
+  // A single delegated click handler for every card's ✕ button, plus a
+  // pointer-based horizontal swipe as an equivalent gesture. The swipe only
+  // claims the gesture once movement is deliberately horizontal past a small
+  // threshold, so an ordinary attempt to select the answer text (which tends
+  // to be short, vertical, or below the threshold) is left alone.
+  const CUE_SWIPE_ACTIVATE_PX = 12;
+  const CUE_SWIPE_DISMISS_PX = 72;
+  let cueSwipeState = null;
+
+  function setupCueLogInteractions() {
+    if (!log) return;
+    log.addEventListener("click", (event) => {
+      const btn = event.target.closest(".agee-cue-dismiss");
+      if (!btn || btn.disabled) return;
+      const card = btn.closest(".agee-cue");
+      if (card) cascadeDismissFromCard(card.dataset.cue);
+    });
+    log.addEventListener("pointerdown", handleCueSwipeStart);
+  }
+
+  function handleCueSwipeStart(event) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (event.target.closest(".agee-cue-dismiss, .agee-tweak-review")) return;
+    const card = event.target.closest(".agee-cue");
+    if (!card) return;
+    const cueId = card.dataset.cue;
+    if (!cueId || activeCues.has(cueId)) return; // in-flight: no swipe-dismiss
+    cueSwipeState = { cueId, card, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false };
+    card.addEventListener("pointermove", handleCueSwipeMove);
+    card.addEventListener("pointerup", handleCueSwipeEnd);
+    card.addEventListener("pointercancel", handleCueSwipeEnd);
+  }
+
+  function handleCueSwipeMove(event) {
+    const state = cueSwipeState;
+    if (!state || event.pointerId !== state.pointerId) return;
+    const dx = event.clientX - state.startX;
+    const dy = event.clientY - state.startY;
+    if (!state.dragging) {
+      // Require a deliberate, mostly-horizontal drag before claiming the
+      // gesture over normal text selection.
+      if (Math.abs(dx) < CUE_SWIPE_ACTIVATE_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      state.dragging = true;
+      state.card.classList.add("agee-cue-dragging");
+      try { state.card.setPointerCapture(state.pointerId); } catch { /* not capturable */ }
+    }
+    event.preventDefault();
+    state.card.style.transform = `translateX(${dx}px)`;
+    state.card.style.opacity = String(Math.max(0.3, 1 - Math.abs(dx) / 200));
+  }
+
+  function handleCueSwipeEnd(event) {
+    const state = cueSwipeState;
+    if (!state || event.pointerId !== state.pointerId) return;
+    state.card.removeEventListener("pointermove", handleCueSwipeMove);
+    state.card.removeEventListener("pointerup", handleCueSwipeEnd);
+    state.card.removeEventListener("pointercancel", handleCueSwipeEnd);
+    cueSwipeState = null;
+    if (!state.dragging) return;
+    const dx = event.clientX - state.startX;
+    state.card.classList.remove("agee-cue-dragging");
+    state.card.style.transform = "";
+    state.card.style.opacity = "";
+    if (Math.abs(dx) >= CUE_SWIPE_DISMISS_PX) cascadeDismissFromCard(state.cueId);
   }
 
   // ---- Tweak review (fast overlay) --------------------------------------
@@ -1878,18 +2038,6 @@
     setTimeout(() => revokedCueIds.delete(cueId), 30000);
   }
 
-  // Sending a new message clears whatever already finished, so only live turns
-  // stay on screen. Running cards are kept — several intents can run at once.
-  function clearFinishedCues() {
-    if (!log) return;
-    for (const card of [...log.querySelectorAll(".agee-cue")]) {
-      const id = card.dataset.cue;
-      if (activeCues.has(id)) continue;
-      removeCueCard(id);
-    }
-    syncLogVisibility();
-  }
-
   function createCue(cueId, label, { presentation = "card" } = {}) {
     if (presentation === "icon") {
       currentCueId = cueId;
@@ -1905,7 +2053,9 @@
     if (!log) return null;
     let entry = cues.get(cueId);
     if (entry?.cardEl && entry?.statusEl) return entry;
-    clearFinishedCues(); // a new turn wipes whatever already answered
+    // Finished cards from earlier turns are left in place — the log persists
+    // until the user dismisses a card (see selectCascadeDismissIds). A new
+    // turn only ever appends.
     currentCueId = cueId;
     const card = document.createElement("div");
     card.className = "agee-cue agee-cue-running";
@@ -1933,10 +2083,20 @@
     const status = document.createElement("div");
     status.className = "agee-cue-status";
     status.textContent = statusText || "";
+    // Dismiss control: removes this card and every older one above it. Hidden
+    // while the turn is running (see CSS) and re-enabled by updateCue() once
+    // the card lands on done/error — an in-flight card is never dismissable.
+    const dismissBtn = document.createElement("button");
+    dismissBtn.type = "button";
+    dismissBtn.className = "agee-cue-dismiss";
+    dismissBtn.setAttribute("aria-label", "Dismiss this reply and everything above it");
+    dismissBtn.textContent = "×";
+    dismissBtn.disabled = true;
     card.appendChild(you);
     card.appendChild(head);
     card.appendChild(skeleton);
     card.appendChild(status);
+    card.appendChild(dismissBtn);
     log.appendChild(card);
     entry = {
       ...(entry || {}),
@@ -2015,7 +2175,10 @@
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
-      scheduleCueDismiss(cueId, kind); // served → linger briefly, then fade out
+      // No auto-dismiss timer: the card stays until the user dismisses it.
+      // Turning off "running" just reveals and enables its ✕ control.
+      const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
+      if (dismissBtn) dismissBtn.disabled = false;
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
@@ -2485,7 +2648,13 @@
       // by its canonical id.
       state.turnStatus = status;
       state.ttsSpoke = msg.tts_spoke === true;
-      if (msg.reply_language) state.replyLanguage = String(msg.reply_language);
+      if (msg.reply_language) {
+        state.replyLanguage = String(msg.reply_language);
+        // Live-update the "Speaks" side of the language chip from this turn,
+        // overriding the profile's default reply language until it changes.
+        lastReplyLanguageCode = state.replyLanguage;
+        renderLanguageChip();
+      }
       if (msg.turn_id) state.gatewayTurnId = String(msg.turn_id);
       if (status === "no_speech" && !state.assistantText) {
         if (state.tapTalk && !String(state.transcript || "").trim()) {
@@ -3291,6 +3460,10 @@
           }
           if (changes[PROFILE_CACHE_KEY] || changes.ageeGatewayUrl || changes.ageeGatewayToken) {
             loadActiveCompanionPet();
+          }
+          if (changes[PROFILE_CACHE_KEY]) {
+            ageeProfileCacheValue = changes[PROFILE_CACHE_KEY].newValue || null;
+            renderLanguageChip();
           }
           if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
             configure().catch(() => {});

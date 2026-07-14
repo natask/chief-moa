@@ -945,9 +945,30 @@ button.agee-ui-list-row:hover {
   padding: 6px 8px;
 }
 
-/* ---- Result stack: ephemeral cue cards ----------------------------------- */
-/* The log sits above the composer and holds the streamed answer cards. It shows
-   whenever it has content, so replies stack right above where you type. */
+/* ---- Language chip -------------------------------------------------------- */
+/* A short, always-visible readout of what A.G. currently hears (STT) and
+   speaks (reply) — "Hears en·am · Speaks am". Styled like other muted meta
+   text; hidden (via the `hidden` attribute from content.js) when there is no
+   language data yet rather than showing a blank or "undefined" line. */
+.agee-lang-chip {
+  padding: 4px 16px 0;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  color: var(--agee-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agee-lang-chip[hidden] {
+  display: none;
+}
+
+/* ---- Result stack: cue cards ---------------------------------------------- */
+/* The log sits above the composer and holds the answer cards. It shows
+   whenever it has content, so replies stack right above where you type. Cards
+   persist until the user dismisses one (see .agee-cue-dismiss) instead of
+   fading on their own — the log is scrollable and height-capped so it never
+   swallows the page. */
 #agee-log {
   display: none;
   max-height: 38vh;
@@ -982,8 +1003,9 @@ button.agee-ui-list-row:hover {
    a glowing status dot and the assistant label. State lives in the dot and text
    colour, not a heavy left border. */
 .agee-cue {
+  position: relative;
   margin: 8px 12px;
-  padding: 11px 13px 12px;
+  padding: 11px 30px 12px 13px;
   border: 1px solid var(--agee-card-line);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
@@ -991,6 +1013,11 @@ button.agee-ui-list-row:hover {
   border-radius: var(--agee-radius-lg);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
   animation: agee-cue-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+  touch-action: pan-y;
+}
+.agee-cue.agee-cue-dragging {
+  transition: none;
 }
 .agee-cue + .agee-cue {
   margin-top: 6px;
@@ -1100,8 +1127,46 @@ button.agee-ui-list-row:hover {
 .agee-cue-error .agee-cue-status {
   color: #ff8278;
 }
-/* A finished card is not kept. After its linger it fades up and out, then the
-   node is removed — the surface holds the current turn, not a transcript. */
+/* Dismiss control: removes this card and every older one above it. Hidden
+   entirely while the card is running (in-flight cards are not dismissable),
+   and revealed on hover for a mouse; a touch/narrow viewport shows it always
+   so there is no hover-only dead end. */
+.agee-cue-dismiss {
+  appearance: none;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--agee-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.agee-cue-running .agee-cue-dismiss {
+  display: none;
+}
+.agee-cue:hover .agee-cue-dismiss,
+.agee-cue-dismiss:focus-visible {
+  opacity: 1;
+}
+.agee-cue-dismiss:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ededf0;
+}
+.agee-cue-dismiss:disabled {
+  cursor: default;
+}
+/* A finished card now persists until the user dismisses it (see the ✕
+   control and the swipe gesture in content.js) — it is no longer wiped by a
+   timer or by the next turn starting. When it is dismissed, it fades up and
+   out, then the node is removed. */
 .agee-cue-leaving {
   animation: agee-cue-out 0.3s ease forwards;
   pointer-events: none;
@@ -1260,6 +1325,7 @@ button.agee-ui-list-row:hover {
   }
   .agee-cue {
     animation: none;
+    transition: none;
   }
   .agee-cue-streaming .agee-cue-status,
   .agee-cue-done .agee-cue-status,
@@ -1281,6 +1347,11 @@ button.agee-ui-list-row:hover {
   }
   .agee-ui-map {
     height: 128px;
+  }
+  /* No hover on touch/narrow viewports — keep the dismiss control visible
+     rather than leaving it behind a hover that can never fire. */
+  .agee-cue-dismiss {
+    opacity: 1;
   }
 }
 @media (max-width: 380px) {

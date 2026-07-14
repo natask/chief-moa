@@ -44,6 +44,7 @@ const requiredFiles = [
   "scripts/smoke-ui-spec.mjs",
   "scripts/smoke-unified-browser-agent.mjs",
   "scripts/test-voice-sampler-lifecycle.mjs",
+  "scripts/test-cue-dismiss.mjs",
 ];
 
 for (const file of requiredFiles) {
@@ -907,12 +908,17 @@ for (const file of [
   "scripts/smoke-integration.mjs",
   "scripts/smoke-history.mjs",
   "scripts/test-voice-sampler-lifecycle.mjs",
+  "scripts/test-cue-dismiss.mjs",
   "scripts/chrome-for-testing.mjs",
 ]) {
   execFileSync(process.execPath, ["--check", file], { stdio: "inherit" });
 }
 
 execFileSync(process.execPath, ["--test", "scripts/test-voice-sampler-lifecycle.mjs"], { stdio: "inherit" });
+// Pure-function tests for the persistent cue-card cascade dismiss and
+// language chip formatter (extracted straight out of extension/content.js —
+// see the file for why it can't be an ordinary ESM import).
+execFileSync(process.execPath, ["scripts/test-cue-dismiss.mjs"], { stdio: "inherit" });
 
 const { parseSettingsIntent, looksLikeGatewayProfileControlIntent } = await import("../extension/settings-intent.js");
 const { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } = await import("../extension/browser-task-intent.js");
