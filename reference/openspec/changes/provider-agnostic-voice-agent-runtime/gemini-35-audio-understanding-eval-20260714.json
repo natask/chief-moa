@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-07-14",
+  "provider": "vertex",
+  "model": "gemini-3.5-flash",
+  "location": "global",
+  "request_count": 20,
+  "audio_format": {
+    "source_encoding": "LINEAR16",
+    "sample_rate_hz": 16000,
+    "channels": 1,
+    "transport_mime_type": "audio/wav"
+  },
+  "privacy": {
+    "raw_audio_committed": false,
+    "raw_transcripts_committed": false,
+    "source": "protected VPS voice archive"
+  },
+  "prompt_modes": ["minimal", "bilingual", "strict"],
+  "strict_trials": 2,
+  "latency_ms": { "minimum": 1607, "maximum": 3144 },
+  "cases": [
+    {
+      "id": "pure_amharic_wrong_script_regression",
+      "audio_sha256": "59d330669c03078444c20e48a23dc2bfbda57285bb8b2303218b63b8d9bc79c7",
+      "minimal": "foreign_language_albanian_latin",
+      "bilingual": "ethiopic_but_embedded_material_absorbed",
+      "strict": "ethiopic_but_materially_inconsistent_across_trials"
+    },
+    {
+      "id": "pure_english_control",
+      "audio_sha256": "dc892b728ea051ae908a01104527d0cb9252431fb89e9e26f12ddfdc365b967e",
+      "minimal": "english_missing_leading_material",
+      "bilingual": "english_missing_leading_material",
+      "strict": "english_missing_leading_material_both_trials"
+    },
+    {
+      "id": "mixed_amharic_with_embedded_english_token",
+      "audio_sha256": "acccb806a8ffcfa2ca02e8b8ae675ae4b0ac625eb83fd6f50e113bbada131f9a",
+      "minimal": "meaning_preserved_token_absorbed",
+      "bilingual": "meaning_preserved_token_absorbed",
+      "strict": "meaning_preserved_token_absorbed_both_trials"
+    },
+    {
+      "id": "mixed_amharic_then_english_clause",
+      "audio_sha256": "4b228cb3af17ddd2fd83466c31012f23ce49d73e38cac2776e1bd53833eca216",
+      "minimal": "foreign_language_german_prefix",
+      "bilingual": "both_languages_native_scripts",
+      "strict": "both_languages_native_scripts_both_trials"
+    },
+    {
+      "id": "mixed_english_then_amharic_clause",
+      "audio_sha256": "7d9f235cba66db3f089ffebb5851e1a08e7e841db8c29c53b1bab161d2f950ce",
+      "minimal": "both_languages_native_scripts_wording_varied",
+      "bilingual": "both_languages_native_scripts_wording_varied",
+      "strict": "both_languages_native_scripts_wording_varied_across_trials"
+    }
+  ],
+  "decision": "sidecar_or_arbitrated_candidate_not_sole_canonical_stt"
+}
