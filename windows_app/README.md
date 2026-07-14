@@ -10,10 +10,17 @@ The core:
 - keeps proposal review, approval and execution eligibility local;
 - binds approval to the complete surface and proposal digest;
 - produces a local receipt only after a caller reports an observed outcome;
+- validates a privacy-bounded `context_descriptor` v1 and resolves only
+  caller-declared `execution_adapters` v1 for the observed foreground app;
+- evaluates package/channel/version/architecture metadata for handoff to the
+  Microsoft Store or Windows App Installer;
 - never performs an effect, stores a provider key, or owns canonical history.
 
 It intentionally has no HTTP client, command runner, filesystem write path,
-credential store, WinUI shell, MSIX manifest, signing identity, or updater.
+credential store, WinUI shell, UI Automation adapter, MSIX manifest, signing
+identity, downloader, installer, or bespoke updater. The update seam is
+eligibility metadata only: package discovery, signature verification, rollout,
+restart and rollback remain owned by the selected standard Windows mechanism.
 Those require a Windows worktree with the .NET/Windows App SDK toolchain and a
 separate signing/install authority review.
 

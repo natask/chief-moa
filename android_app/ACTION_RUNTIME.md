@@ -95,6 +95,13 @@ The app validates:
 - Required approval level is satisfied.
 - The current screen/package still matches any screen-bound action.
 
+`screen.tap_text` tool requests must include `expected_package`. Immediately
+before tapping, Android reads the active accessibility root and requires its
+package to match exactly. A missing package or an app switch fails closed and
+produces a failed local receipt. An explicit local `/tap` command binds the
+action to the package observed when that command begins and performs the same
+final check.
+
 ## Approval Rules
 
 Moa needs approval modes that are visible and predictable:
@@ -134,6 +141,13 @@ Not allowed:
 - Tap destructive or financial buttons without confirmation.
 - Send hidden text from password fields or sensitive views to the server.
 - Execute a plan if the screen changed after approval.
+
+Android heartbeat metadata includes a bounded `context_descriptor` for shared
+capability resolution. It contains only the current native application package,
+window class, capture time, and freshness; its privacy fields state that page
+content and URLs are not included. `execution_adapters` advertises the
+device-local accessibility session separately and never treats an open app as
+evidence that the user is authenticated to it.
 
 ## Audit Receipts
 

@@ -81,7 +81,7 @@ function readBody(req) {
 // observations, and records the finish receipt. Every other route the
 // extension's pollers/heartbeat may hit answers benignly so nothing errors.
 function startStubGateway(fixtureUrl) {
-  const state = { claimed: false, observations: [], finish: null, steps: [] };
+  const state = { claimed: false, observations: [], finish: null, steps: [], heartbeats: [] };
 
   function findByLabel(elements, text) {
     const wanted = String(text || "").trim().toLowerCase();
@@ -157,6 +157,10 @@ function startStubGateway(fixtureUrl) {
     if (path === "/v1/sessions/default") {
       await readBody(req);
       return respond({ session_id: "agent-loop-smoke-session" });
+    }
+    if (path === "/v1/device-clients/heartbeat") {
+      state.heartbeats.push(await readBody(req));
+      return respond({ ok: true });
     }
     await readBody(req);
     return respond({});
@@ -286,7 +290,7 @@ async function main() {
     // the agent-loop a window to open its background tab in.
     const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
     browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
-    await browserCdp.send("Target.createTarget", { url: "about:blank" });
+    await browserCdp.send("Target.createTarget", { url: fixtureUrl });
 
     workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
     await workerCdp.send("Runtime.enable");
@@ -327,13 +331,33 @@ async function main() {
 
     // The 2s poll claims the task and drives the loop. Wait for the finish POST.
     const deadline = Date.now() + 45000;
-    while (Date.now() < deadline && !stub.finish) {
+    while (Date.now() < deadline && (!stub.finish || stub.heartbeats.length < 1)) {
       await delay(150);
     }
     keepAlive = false;
     await pinger.catch(() => {});
     if (!stub.finish) {
       throw new Error(`agent-loop never posted a finish receipt; observations=${stub.observations.length}, steps=${JSON.stringify(stub.steps)}`);
+    }
+
+    // Device discovery advertises the existing browser session as an adapter,
+    // bound only to the active app origin. Full path/page evidence stays on the
+    // explicit evidence route.
+    const heartbeat = stub.heartbeats.find((item) => item?.metadata?.context_descriptor?.availability === "available");
+    if (!heartbeat) {
+      throw new Error(`no available browser context descriptor reached heartbeat: ${JSON.stringify(stub.heartbeats)}`);
+    }
+    const descriptor = heartbeat.metadata.context_descriptor;
+    if (descriptor.application?.id !== "localhost" || descriptor.application?.origin !== `http://localhost:${fixturePort}`) {
+      throw new Error(`heartbeat app identity was not origin-bounded: ${JSON.stringify(descriptor)}`);
+    }
+    const descriptorJson = JSON.stringify(descriptor);
+    if (descriptorJson.includes("/fixtures/") || descriptorJson.includes("page_text")) {
+      throw new Error(`heartbeat leaked full location or page evidence: ${descriptorJson}`);
+    }
+    const sessionAdapter = heartbeat.metadata.execution_adapters?.find((item) => item?.adapter === "browser_session");
+    if (sessionAdapter?.status !== "available" || sessionAdapter?.authentication_state !== "not_inspected") {
+      throw new Error(`heartbeat did not advertise a bounded browser-session adapter: ${JSON.stringify(sessionAdapter)}`);
     }
 
     // (c) The stub received the finish receipt with status "done".
@@ -379,7 +403,8 @@ async function main() {
         `(created active:false, never activated), captured a step-0 screenshot, executed click + type through the ` +
         `content-script act path, and posted finish status="${stub.finish.status}". ` +
         `Observations proved the click mutation "${CLICK_MARKER}" and the typed value "${TYPED_VALUE}"; ` +
-        `${stub.observations.length} observations, ${stub.steps.length} planned actions; no window shown, no focus taken.`,
+        `${stub.observations.length} observations, ${stub.steps.length} planned actions; heartbeat advertised the ` +
+        `origin-bounded browser_session adapter without inspecting auth; no window shown, no focus taken.`,
     );
   } finally {
     workerCdp?.close();

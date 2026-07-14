@@ -10,6 +10,7 @@ import android.content.pm.ResolveInfo;
 import android.provider.ContactsContract;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
@@ -63,10 +64,15 @@ final class MoaActionBroker {
                 recordReceipt(capability, label, false, "Screen access is not running.");
                 return LocalActionResult.handled("Screen access is not running. Enable it before using /tap.");
             }
-            boolean clicked = MoaAccessibilityService.clickByText(label);
-            if (clicked) {
+            String expectedPackage = currentPackageName();
+            MoaAccessibilityService.TapResult tapResult = MoaAccessibilityService.clickByText(label, expectedPackage);
+            if (tapResult == MoaAccessibilityService.TapResult.CLICKED) {
                 recordReceipt(capability, label, true, "Tapped visible label.");
                 return LocalActionResult.handled("Tapped \"" + label + "\".");
+            }
+            if (tapResult == MoaAccessibilityService.TapResult.STALE_TARGET) {
+                recordReceipt(capability, label, false, "Active app changed before execution.");
+                return LocalActionResult.handled("The active app changed before I could tap. Please try again on the intended screen.");
             }
             recordReceipt(capability, label, false, "No visible clickable match.");
             return LocalActionResult.handled("I could not find a visible clickable item matching \"" + label + "\".");
@@ -136,8 +142,19 @@ final class MoaActionBroker {
                 JSONObject receipt = recordReceipt(capability, label, false, "Screen access is not running.");
                 return ToolExecutionResult.done(false, "Screen access is not running.", receipt);
             }
-            boolean clicked = MoaAccessibilityService.clickByText(label);
-            JSONObject receipt = recordReceipt(capability, label, clicked, clicked ? "Tapped visible label." : "No visible clickable match.");
+            String expectedPackage = expectedPackage(args);
+            if (expectedPackage.isEmpty()) {
+                JSONObject receipt = recordReceipt(capability, label, false, "Expected package is required for a screen-bound action.");
+                return ToolExecutionResult.done(false, "expected_package is required for screen.tap_text.", receipt);
+            }
+            MoaAccessibilityService.TapResult tapResult = MoaAccessibilityService.clickByText(label, expectedPackage);
+            if (tapResult == MoaAccessibilityService.TapResult.STALE_TARGET) {
+                JSONObject receipt = recordReceipt(capability, label, false, "Active app no longer matches expected package.");
+                return ToolExecutionResult.done(false, "The active app changed; screen.tap_text was not executed.", receipt);
+            }
+            boolean clicked = tapResult == MoaAccessibilityService.TapResult.CLICKED;
+            String result = clicked ? "Tapped visible label." : "No visible clickable match.";
+            JSONObject receipt = recordReceipt(capability, label, clicked, result);
             return ToolExecutionResult.done(clicked, clicked ? "Tapped \"" + label + "\"." : "No visible clickable item matched \"" + label + "\".", receipt);
         }
 
@@ -204,6 +221,14 @@ final class MoaActionBroker {
         return MoaAccessibilityService.currentScreenSnapshot();
     }
 
+    JSONObject activeAppDescriptor() {
+        return MoaAccessibilityService.currentActiveAppDescriptor();
+    }
+
+    JSONArray executionAdapters() {
+        return MoaAccessibilityService.currentExecutionAdapters();
+    }
+
     String currentScreenSummary() {
         return MoaAccessibilityService.currentScreenSummary();
     }
@@ -213,6 +238,16 @@ final class MoaActionBroker {
         if (screen != null) {
             body.put("screen", screen);
         }
+    }
+
+    static String expectedPackage(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("expected_package", args.optString("expectedPackage", "")));
+    }
+
+    private static String currentPackageName() {
+        JSONObject descriptor = MoaAccessibilityService.currentActiveAppDescriptor();
+        return safe(descriptor.optString("package_name", ""));
     }
 
     String promptWithScreenContext(String prompt) {

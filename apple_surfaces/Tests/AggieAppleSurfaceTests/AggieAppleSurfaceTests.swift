@@ -2,10 +2,10 @@ import Foundation
 import Testing
 @testable import AggieAppleSurface
 
-private let surface = SurfaceIdentity(id: "moa-apple", kind: "macos", mode: "text", deviceID: "dev-1")
-private let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+let surface = SurfaceIdentity(id: "moa-apple", kind: "macos", mode: "text", deviceID: "dev-1")
+let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
 
-private func proposalData(overrides: [String: Any] = [:]) throws -> Data {
+func proposalData(overrides: [String: Any] = [:]) throws -> Data {
     var value: [String: Any] = [
         "version": 2, "type": "action.proposed", "message_id": "msg-1", "session_id": "sess-1",
         "surface": ["id": "moa-apple", "kind": "macos", "mode": "text", "device_id": "dev-1"],

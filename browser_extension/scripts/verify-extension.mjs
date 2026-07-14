@@ -5,7 +5,9 @@ const requiredFiles = [
   "package.json",
   "extension/manifest.json",
   "extension/background.js",
+  "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
+  "extension/browser-context-adapter.js",
   "extension/config.js",
   "extension/content.js",
   "extension/tweaks.js",
@@ -45,6 +47,7 @@ const requiredFiles = [
   "scripts/smoke-unified-browser-agent.mjs",
   "scripts/test-voice-sampler-lifecycle.mjs",
   "scripts/test-cue-dismiss.mjs",
+  "scripts/test-browser-context-adapter.mjs",
 ];
 
 for (const file of requiredFiles) {
@@ -472,6 +475,15 @@ if (
   !/tool:\s*"audio\.speak"/.test(backgroundSource)
 ) {
   throw new Error("extension must heartbeat as a browser device client and expose browser tab/CDP tool requests");
+}
+
+if (
+  !/function currentBrowserSessionAdvertisement/.test(backgroundSource) ||
+  !/context_descriptor:\s*sessionAdvertisement\.context_descriptor/.test(backgroundSource) ||
+  !/execution_adapters:\s*sessionAdvertisement\.execution_adapters/.test(backgroundSource) ||
+  !packageJson.scripts?.["test:browser-context"]
+) {
+  throw new Error("device heartbeat must advertise bounded current-page context and browser-session execution adapters");
 }
 
 if (
@@ -919,6 +931,7 @@ execFileSync(process.execPath, ["--test", "scripts/test-voice-sampler-lifecycle.
 // language chip formatter (extracted straight out of extension/content.js —
 // see the file for why it can't be an ordinary ESM import).
 execFileSync(process.execPath, ["scripts/test-cue-dismiss.mjs"], { stdio: "inherit" });
+execFileSync(process.execPath, ["scripts/test-browser-context-adapter.mjs"], { stdio: "inherit" });
 
 const { parseSettingsIntent, looksLikeGatewayProfileControlIntent } = await import("../extension/settings-intent.js");
 const { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } = await import("../extension/browser-task-intent.js");

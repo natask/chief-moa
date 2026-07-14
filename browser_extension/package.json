@@ -24,6 +24,7 @@
     "smoke:sidepanel": "node scripts/smoke-sidepanel.mjs",
     "smoke:unified-browser-agent": "node scripts/smoke-unified-browser-agent.mjs",
     "smoke:agent-loop": "node scripts/smoke-agent-loop.mjs",
+    "test:browser-context": "node scripts/test-browser-context-adapter.mjs",
     "verify": "node scripts/verify-extension.mjs",
     "package": "node scripts/package-extension.mjs",
     "deploy:browser": "node scripts/poke-dev-reload.mjs"

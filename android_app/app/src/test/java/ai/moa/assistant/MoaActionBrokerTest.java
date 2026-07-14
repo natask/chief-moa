@@ -118,6 +118,19 @@ public final class MoaActionBrokerTest {
     }
 
     @Test
+    public void extractsExpectedPackageForScreenBoundActions() throws Exception {
+        assertEquals(
+                "com.example.mail",
+                MoaActionBroker.expectedPackage(new JSONObject().put("expected_package", "com.example.mail"))
+        );
+        assertEquals(
+                "com.example.browser",
+                MoaActionBroker.expectedPackage(new JSONObject().put("expectedPackage", "com.example.browser"))
+        );
+        assertEquals("", MoaActionBroker.expectedPackage(new JSONObject()));
+    }
+
+    @Test
     public void reportsContactPermissionAndMissMessages() {
         assertEquals(
                 "Contacts permission not granted. Open the A.G. app to grant it.",
