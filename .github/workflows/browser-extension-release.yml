@@ -67,7 +67,9 @@ jobs:
         shell: bash
         env:
           PUPPETEER_CACHE_DIR: ${{ runner.temp }}/puppeteer
-        run: npx --yes @puppeteer/browsers@2.10.10 install chrome@stable
+        # The CLI installs into --path (default: cwd), not PUPPETEER_CACHE_DIR,
+        # so point it at the cache root the smoke harness searches.
+        run: npx --yes @puppeteer/browsers@2.10.10 install chrome@stable --path "$PUPPETEER_CACHE_DIR"
 
       - name: Verify extension
         working-directory: browser_extension
