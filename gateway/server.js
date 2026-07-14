@@ -44,6 +44,7 @@ const { createEventSubstrateStore, normalizeEventType } = require("./lib/event-s
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { createWorkHistoryStore } = require("./lib/work-history");
 const { createSemanticTelemetryStore, opaqueLifecycleId } = require("./lib/semantic-telemetry-store");
+const { createIntentRuntime } = require("./lib/intent-runtime");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
@@ -365,6 +366,12 @@ const semanticTelemetry = createSemanticTelemetryStore({
     build_id: process.env.MOA_TELEMETRY_BUILD_ID || undefined,
   },
 });
+
+// Intent runtime: durable, event-sourced capture/transition/connect/focus state
+// machine over the same event substrate. It holds no in-memory state, so its
+// projections rehydrate from the canonical event log on every read; startup
+// initialization is just constructing it against the shared substrate.
+const intentRuntime = createIntentRuntime({ events: eventSubstrate });
 
 // Account connections: user-connected provider accounts + credential health.
 // Raw provider credentials stay inside this store's encrypted boundary; the
@@ -1673,6 +1680,18 @@ const server = http.createServer(async (request, response) => {
       if (handled) return;
     }
 
+    // Intent runtime control plane. Clients capture intents and drive their
+    // lifecycle (transition/connect/focus) and query rehydrated projections.
+    // Everything is a durable product event; the gateway executes nothing here.
+    if (url.pathname.startsWith("/v1/intent-runtime/")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const handled = await routeIntentRuntime(request, response, url);
+      if (handled) return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/chat") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -1913,6 +1932,17 @@ function startServer() {
       console.log(`Model base URL: ${MODEL_BASE_URL}`);
     }
     console.log(`Data dir: ${DATA_DIR}`);
+    // Rehydrate the intent-runtime projections from the durable event log on
+    // boot. Best-effort and non-blocking: a read failure must never stop the
+    // gateway from serving, and the projections rebuild on demand regardless.
+    Promise.resolve()
+      .then(() => intentRuntime.list({ limit: 1 }))
+      .then((snapshot) => {
+        console.log(`Intent runtime: rehydrated projections (>= ${snapshot?.total_count_lower_bound ?? 0} live intents)`);
+      })
+      .catch((error) => {
+        console.warn(`Intent runtime rehydration warm failed (will rebuild on demand): ${cleanError(error)}`);
+      });
   });
 }
 
@@ -3841,6 +3871,84 @@ async function routeWorkHistory(request, response, url) {
   }
 
   sendJson(response, 404, { error: "unknown work-history endpoint" });
+  return true;
+}
+
+// Intent runtime HTTP surface. Thin, well-guarded bindings over the existing
+// intent-runtime module: capture, list/get projections, drive transitions,
+// connect relations, push/pop transactional focus, and rehydrate by intent or
+// project. All durable-event operations; the gateway executes nothing here.
+async function routeIntentRuntime(request, response, url) {
+  const method = request.method;
+  const pathname = url.pathname;
+
+  try {
+    if (method === "POST" && pathname === "/v1/intent-runtime/intents") {
+      const body = await readJsonBody(request);
+      sendJson(response, 201, { intent: await intentRuntime.capture(body) });
+      return true;
+    }
+    if (method === "GET" && pathname === "/v1/intent-runtime/intents") {
+      const intents = await intentRuntime.list({
+        project_id: url.searchParams.get("project_id") || "",
+        lifecycle_state: url.searchParams.get("lifecycle_state") || "",
+        session_id: url.searchParams.get("session_id") || "",
+        limit: url.searchParams.get("limit") || undefined,
+        offset: url.searchParams.get("offset") || undefined,
+      });
+      sendJson(response, 200, intents);
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/intent-runtime/focus") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, { focus: await intentRuntime.pushFocus(body) });
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/intent-runtime/focus/pop") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, { focus: await intentRuntime.popFocus(body) });
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/intent-runtime/rehydrate") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await intentRuntime.rehydrate(body));
+      return true;
+    }
+    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete))?$/);
+    if (intentMatch) {
+      const intentId = decodeURIComponent(intentMatch[1]);
+      const action = intentMatch[2] || "";
+      if (method === "GET" && !action) {
+        const intent = await intentRuntime.get(intentId);
+        if (!intent || intent.exists === false) {
+          sendJson(response, 404, { error: "intent not found" });
+          return true;
+        }
+        sendJson(response, 200, { intent });
+        return true;
+      }
+      if (method === "POST" && action === "transition") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.transition(intentId, body) });
+        return true;
+      }
+      if (method === "POST" && action === "connect") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.connect(intentId, body) });
+        return true;
+      }
+      if (method === "POST" && action === "complete") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.completeTransactional(intentId, body) });
+        return true;
+      }
+    }
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+    return true;
+  }
+
+  sendJson(response, 404, { error: "unknown intent-runtime endpoint" });
   return true;
 }
 
