@@ -485,6 +485,7 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/health") {
       const voiceProvider = voiceSessionServer.status();
+      const profileStatus = agentProfileRuntimeStatus();
       sendJson(response, 200, {
         ok: true,
         mode: runtimeMode.mode,
@@ -518,6 +519,7 @@ const server = http.createServer(async (request, response) => {
           endpoint: voiceSessionServer.endpoint,
           ticket_endpoint: "/v1/voice/session-ticket",
           provider: voiceProvider,
+          profile_diagnostics: voiceProfileDiagnostics(profileStatus, voiceProvider),
           activity: voiceSessionServer.activityStatus(),
           input_format: {
             encoding: "pcm16",
@@ -530,7 +532,7 @@ const server = http.createServer(async (request, response) => {
             channels: 1,
           },
         },
-        agent_profile: agentProfileRuntimeStatus(),
+        agent_profile: profileStatus,
         // Flag-gated LiveKit voice-transport prototype. Inert (enabled:false)
         // unless LIVEKIT_URL/KEY/SECRET are set; the default WS pipeline above is
         // unchanged either way.
@@ -1909,6 +1911,8 @@ module.exports = {
   startServer,
   defaultSessionId,
   profileSystemInstruction,
+  durableSessionContextBlock,
+  voiceProfileDiagnostics,
   // Exported for in-process smoke tests that drive the cascaded reasoner and its
   // model-tool loop directly. Not part of the runtime HTTP surface.
   runCascadedVoiceReasoning,
@@ -4979,6 +4983,35 @@ function agentProfileRuntimeStatus(options = {}) {
     memory_policy: profile.memory_policy,
     recovery_mode: profile.recovery_mode,
     active_companion: activeCompanionPayload(profile),
+  };
+}
+
+function voiceProfileDiagnostics(profileStatus, providerStatus) {
+  const warnings = [];
+  const storedProvider = String(profileStatus?.providers?.voice_provider || "").trim();
+  const runtimeProvider = String(providerStatus?.provider || providerStatus?.mode || "").trim();
+  if (storedProvider && runtimeProvider && storedProvider !== runtimeProvider) {
+    warnings.push({
+      code: "stored_runtime_provider_drift",
+      summary: `Stored voice provider ${storedProvider} differs from effective runtime ${runtimeProvider}.`,
+    });
+  }
+  const inputLanguages = String(profileStatus?.language?.input || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (inputLanguages.length === 1) {
+    warnings.push({
+      code: "single_input_language_restriction",
+      summary: `Speech recognition is restricted to ${inputLanguages[0]}; turns in other languages can be rejected.`,
+    });
+  }
+  return {
+    ok: warnings.length === 0,
+    stored_voice_provider: storedProvider,
+    runtime_voice_provider: runtimeProvider,
+    input_languages: inputLanguages,
+    warnings,
   };
 }
 
@@ -9309,6 +9342,31 @@ function contextUserTranscript(transcript, source) {
   return text;
 }
 
+function playbackContinuationLines(record) {
+  const voiceSession = record?.references?.voice_session;
+  if (!voiceSession || voiceSession.incomplete !== true) {
+    return [];
+  }
+  const progress = voiceSession.playback_progress;
+  if (!progress || progress.endpoint_observed !== true) {
+    return [];
+  }
+  const assistant = String(record?.response?.display || record?.response?.text || record?.response?.speak || "").trim();
+  const playedChars = Math.max(0, Math.min(Number(progress.estimated_text_chars) || 0, assistant.length));
+  const heardPrefix = assistant.slice(0, playedChars).trim();
+  const unheardSuffix = assistant.slice(playedChars).trim();
+  const lines = [
+    `endpoint-observed playback reached about ${Math.max(0, Number(progress.played_pcm_ms) || 0)}ms / ${Math.max(0, Number(progress.emitted_pcm_ms) || 0)}ms of assistant audio`,
+  ];
+  if (heardPrefix) {
+    lines.push(`assistant played so far: ${truncate(heardPrefix, 220)}`);
+  }
+  if (unheardSuffix) {
+    lines.push(`assistant unheard remainder: ${truncate(unheardSuffix, 220)}`);
+  }
+  return lines;
+}
+
 function voiceMessages(body, transcript, limit) {
   const safeLimit = resolveContextTurnLimit(limit);
   const messages = Array.isArray(body.messages) ? normalizeMessages(body.messages, safeLimit) : [];
@@ -12051,6 +12109,8 @@ async function recordStreamingVoiceTurn(turn) {
       stage_timings: turn.stage_timings && typeof turn.stage_timings === "object" && !Array.isArray(turn.stage_timings)
         ? turn.stage_timings
         : {},
+      assistant_audio_segments: Array.isArray(turn.assistant_audio_segments) ? turn.assistant_audio_segments : [],
+      playback_progress: turn.playback_progress && typeof turn.playback_progress === "object" ? turn.playback_progress : null,
       transcript_language_rejected: turn.transcript_language_rejected === true,
       audio: turn.audio || null,
       assistant_audio: turn.assistant_audio || null,
@@ -12343,6 +12403,10 @@ function voiceLiveContextPrompt(turn) {
       lines.push(`- user (${record.classification || "turn"}, ${record.profile_version || "profile_unknown"}): ${user || "(empty)"}`);
       if (assistant) {
         lines.push(`  assistant${interrupted ? interruptedAssistantLabel(record.references?.voice_session) : ""}: ${assistant}`);
+      }
+      const playbackLines = playbackContinuationLines(record);
+      if (playbackLines.length > 0) {
+        lines.push(...playbackLines.map((line) => `  ${line}`));
       }
     }
   }
@@ -12893,6 +12957,10 @@ function durableSessionContextBlock(options = {}) {
       lines.push(`- user (${turn.classification || "turn"}, branch=${turn.branch_id || "default"}): ${user || "(empty)"}`);
       if (assistant) {
         lines.push(`  assistant${interrupted ? interruptedAssistantLabel(turn.references?.voice_session) : ""}: ${assistant}`);
+      }
+      const playbackLines = playbackContinuationLines(turn);
+      if (playbackLines.length > 0) {
+        lines.push(...playbackLines.map((line) => `  ${line}`));
       }
     }
   }
@@ -13655,19 +13723,25 @@ function profileIdentityInstruction(profile) {
   if (!name) {
     return "";
   }
-  const address = String(profile?.user_address || "master").trim() || "master";
+  const owner = configuredOwnerLabel(profile);
   return [
     "Assistant identity profile:",
     "- This identity profile overrides any older name in the base prompt and any persona prompt.",
     `- Your current name is ${name}.`,
     `- If asked who or what you are, say you are ${name}.`,
-    `- If asked who created, made, built, trained, designed, or owns you, say you were created by your ${address}.`,
-    "- Never say you were created by Google, Gemini, OpenAI, Anthropic, or any AI company, and never describe yourself as a Google model, a Gemini model, or a language model.",
+    `- If asked who created, built, designed, trained, or owns you, attribute that to ${owner}. Never attribute it to Gemini, Google, OpenAI, Anthropic, or another model provider.`,
     "- If your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word.",
     "- Use the user's requested form of address, title, or interaction style when provided.",
     "- If asked who made, created, built, trained, or owns you, or who your creator or company is, answer only from this identity profile; never credit Google, Gemini, OpenAI, Anthropic, or any other AI lab or underlying model as your creator.",
     "- This rule outranks any older wording in the base prompt and any recalled memory fact that contradicts it.",
   ].join("\n");
+}
+
+function configuredOwnerLabel(profile) {
+  const userName = String(profile?.user_name || "").trim();
+  const nickname = String(profile?.user_nickname || "").trim();
+  const address = String(profile?.user_address || "master").trim();
+  return userName || nickname || (address ? `"${address}"` : "the configured user");
 }
 
 function userAddressInstruction(profile) {

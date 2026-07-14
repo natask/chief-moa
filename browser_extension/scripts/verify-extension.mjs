@@ -99,8 +99,8 @@ if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");
 }
 
-if (manifest.version !== "0.1.30") {
-  throw new Error(`privacy-first proactive release must use manifest 0.1.30, got ${manifest.version}`);
+if (manifest.version !== "0.1.31") {
+  throw new Error(`consolidated proactive and voice-continuity release must use manifest 0.1.31, got ${manifest.version}`);
 }
 
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
@@ -527,6 +527,24 @@ if (!/assistantOverlap:\s*assistantSpeechOverlap === true/.test(contentSource)) 
 
 if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.test(backgroundSource)) {
   throw new Error("background.js must forward assistant overlap policy into the gateway voice session_start event");
+}
+
+if (
+  !/function normalizeAssistantAudioSegment\(/.test(contentSource) ||
+  !/msg\.type === "assistant_audio_segment"/.test(contentSource) ||
+  !/pendingAssistantAudioSegments/.test(contentSource) ||
+  !/function computePlaybackProgress\(/.test(contentSource) ||
+  !/type:\s*"playback_progress"/.test(contentSource)
+) {
+  throw new Error("content.js must correlate assistant_audio_segment metadata with the following PCM frame and derive playback_progress from local playback");
+}
+
+if (
+  !/function routeLiveTranscriptThroughGateway\([\s\S]{0,800}sendFinalPlaybackProgress\(state\);[\s\S]{0,800}closeLiveVoiceSession\(state/.test(contentSource) ||
+  !/function stopLiveVoiceState\([\s\S]{0,500}sendFinalPlaybackProgress\(state\);[\s\S]{0,500}liveCancelTurnMessage\(state/.test(contentSource) ||
+  !/function applySpeechOverlapPolicyFromTranscript\([\s\S]{0,500}sendFinalPlaybackProgress\(state\);[\s\S]{0,500}liveCancelTurnMessage\(state/.test(contentSource)
+) {
+  throw new Error("content.js must send final playback_progress before cancel or close paths tear the live voice session down");
 }
 
 if (

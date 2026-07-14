@@ -51,6 +51,8 @@ final class MoaVoiceGatewaySocket {
         // when absent/invalid/out of range.
         void onAssistantAudioStart(String turnId, JSONObject format, double playbackRate);
 
+        void onAssistantAudioSegment(String turnId, JSONObject segment);
+
         void onAssistantAudio(byte[] pcm);
 
         void onAssistantAudioDone(String turnId);
@@ -190,6 +192,13 @@ final class MoaVoiceGatewaySocket {
         return sendTurnEvent("cancel_turn", turnId, playedMs);
     }
 
+    boolean sendPlaybackProgress(String turnId, MoaAssistantAudioProgressTracker.PlaybackProgress progress, String reason) {
+        if (progress == null) {
+            return false;
+        }
+        return sendJson(buildPlaybackProgressEvent(turnId, progress, reason));
+    }
+
     void close() {
         WebSocket socket;
         synchronized (lock) {
@@ -290,6 +299,11 @@ final class MoaVoiceGatewaySocket {
                             parsePlaybackRate(event));
                 }
                 break;
+            case "assistant_audio_segment":
+                if (callback != null) {
+                    callback.onAssistantAudioSegment(event.optString("turn_id", ""), event);
+                }
+                break;
             case "assistant_audio_done":
                 synchronized (lock) {
                     assistantAudioOpen = false;
@@ -356,6 +370,29 @@ final class MoaVoiceGatewaySocket {
     private static double parsePlaybackRate(JSONObject event) {
         double rate = event.optDouble("playback_rate", 1.0);
         return MoaAudioPlaybackController.clampPlaybackRate(rate);
+    }
+
+    static JSONObject buildPlaybackProgressEvent(String turnId, MoaAssistantAudioProgressTracker.PlaybackProgress progress, String reason) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("type", "playback_progress");
+            body.put("turn_id", safe(turnId));
+            body.put("played_audio_bytes", Math.max(0L, progress.playedPcmBytes));
+            body.put("played_pcm_frames", Math.max(0L, progress.playedPcmFrames));
+            body.put("played_pcm_ms", Math.max(0L, Math.round(progress.playedPcmFrames * 1000.0 / 16000.0)));
+            if (progress.assistantTextChars > 0) {
+                body.put("assistant_text_chars", progress.assistantTextChars);
+            }
+            if (progress.assistantSegmentIndex >= 0) {
+                body.put("segment_index", progress.assistantSegmentIndex);
+            }
+            if (!safe(reason).isEmpty()) {
+                body.put("reason", safe(reason));
+            }
+            return body;
+        } catch (JSONException error) {
+            throw new IllegalStateException("Could not build playback_progress event.", error);
+        }
     }
 
     private static String safe(String value) {

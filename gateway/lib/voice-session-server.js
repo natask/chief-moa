@@ -21,6 +21,7 @@ const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
 const EARLY_AUDIO_MAX_AGE_MS = 3000;
 const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "closed", "interrupted", "replaced", "no_speech"]);
+const ACTIVE_PLAYBACK_PROGRESS_STATUSES = new Set(["committed", "playback"]);
 // A committed turn can spend seconds between transcript_final and turn_done while
 // the reasoner (LLM/tool turn) and TTS run with no stream events. Clients run
 // inactivity watchdogs and tear those slow-but-healthy turns down as false
@@ -245,6 +246,10 @@ class VoiceSessionConnection {
       await this.handleCancelTurn(event);
       return;
     }
+    if (type === "playback_progress") {
+      await this.handlePlaybackProgress(event);
+      return;
+    }
     this.sendError(`unsupported voice event type: ${type || "missing"}`);
   }
 
@@ -367,6 +372,8 @@ class VoiceSessionConnection {
       assistantAudioBytes: 0,
       assistantAudioChunks: 0,
       firstAssistantAudioMs: null,
+      assistantAudioSegments: [],
+      playbackProgress: null,
       metadata: {},
       audioStream: null,
       assistantAudioStream: null,
@@ -727,6 +734,22 @@ class VoiceSessionConnection {
           text: value,
         });
       },
+      onAssistantAudioSegment: async (segment) => {
+        assertTurnActive();
+        const normalized = normalizeAssistantAudioSegment(segment, turn.assistantAudioSegments);
+        if (!normalized) {
+          return;
+        }
+        turn.assistantAudioSegments.push(normalized);
+        assertTurnActive();
+        await this.sendEvent({
+          type: "assistant_audio_segment",
+          session_id: turn.sessionId,
+          branch_id: turn.branchId,
+          turn_id: turn.turnId,
+          ...normalized,
+        });
+      },
       onAssistantAudioStart: async (format, options) => {
         assertTurnActive();
         providerEvents.assistantAudioStarted = true;
@@ -1072,12 +1095,17 @@ class VoiceSessionConnection {
       ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
     });
 
-    turn.status = "completed";
+    // Generation is complete, but endpoint playback may still have a queued
+    // tail. Keep audio turns addressable until the client closes or replaces
+    // the session so a barge-in during that tail can report its checkpoint.
+    // Text-only turns still close immediately for old-client compatibility.
+    const hasPlaybackTail = turn.assistantAudioBytes > 0 && turn.assistantAudioSegments.length > 0;
+    turn.status = hasPlaybackTail ? "playback" : "completed";
     writeTurnMetadata(turn, {
       status: "completed",
       completed_at: nowIso(),
     });
-    if (this.turn === turn) {
+    if (!hasPlaybackTail && this.turn === turn) {
       this.turn = null;
     }
   }
@@ -1174,7 +1202,9 @@ class VoiceSessionConnection {
         context: turn.contextSummary || {},
         capture: turn.captureSummary || captureSummaryForTurn(turn),
         transport: turn.transportSummary || {},
+        assistant_audio_segments: turn.assistantAudioSegments,
         playback_policy: turn.playbackPolicy || {},
+        playback_progress: turn.playbackProgress,
         incomplete: true,
         status,
         error: errorMessage,
@@ -1231,6 +1261,7 @@ class VoiceSessionConnection {
         context: turn.contextSummary || {},
         capture: turn.captureSummary || captureSummaryForTurn(turn),
         transport: turn.transportSummary || {},
+        assistant_audio_segments: turn.assistantAudioSegments,
         playback_policy: turn.playbackPolicy || {},
         transcription_only: providerResult?.transcription_only === true,
         // Cascaded pipeline: reply (OUTPUT) language and whether hosted TTS
@@ -1366,6 +1397,13 @@ class VoiceSessionConnection {
       turn.clientPlayedMs = Math.floor(playedMs);
     }
 
+    if (hasPartialEndpointPlayback(turn)) {
+      turn.recordedCanonical = false;
+    }
+    const legacyProgress = this.spokenProgressForTurn(turn);
+    if (legacyProgress?.client_reported && legacyProgress.segments_played < legacyProgress.segments_sent) {
+      turn.recordedCanonical = false;
+    }
     turn.status = "canceled";
     this.stopTurnProgress();
     await closeAudioStream(turn);
@@ -1387,6 +1425,27 @@ class VoiceSessionConnection {
       status: "canceled",
     });
     this.turn = null;
+  }
+
+  async handlePlaybackProgress(event) {
+    const turn = this.currentTurnFor(event.turn_id);
+    if (!turn) {
+      return;
+    }
+    if (!ACTIVE_PLAYBACK_PROGRESS_STATUSES.has(turn.status)) {
+      this.sendError(`turn is not accepting playback progress: ${turn.status}`);
+      return;
+    }
+    const progress = normalizePlaybackProgress(event, turn);
+    if (!progress) {
+      this.sendError("playback_progress requires bounded played_pcm_ms or played_audio_bytes for the active turn");
+      return;
+    }
+    turn.playbackProgress = progress;
+    await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), "playback_progress", progress);
+    writeTurnMetadata(turn, {
+      playback_progress: progress,
+    });
   }
 
   currentTurnFor(turnId) {
@@ -1423,6 +1482,9 @@ class VoiceSessionConnection {
     const turn = this.turn;
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     if (turn.status !== "recording") {
+      if (hasPartialEndpointPlayback(turn)) {
+        turn.recordedCanonical = false;
+      }
       turn.status = status;
       await closeAudioStream(turn);
       await closeAssistantAudioStream(turn);
@@ -1738,6 +1800,8 @@ function writeTurnMetadata(turn, patch) {
       last_audio_at: turn.lastAssistantAudioAt,
     },
     provider_events: patch.provider_events || previous.provider_events || [],
+    assistant_audio_segments: patch.assistant_audio_segments || previous.assistant_audio_segments || turn.assistantAudioSegments || [],
+    playback_progress: patch.playback_progress || previous.playback_progress || turn.playbackProgress || null,
   };
 
   turn.metadata = next;
@@ -1945,6 +2009,165 @@ function normalizeTurnProgressIntervalMs(value) {
     return Math.round(fromEnv);
   }
   return DEFAULT_TURN_PROGRESS_INTERVAL_MS;
+}
+
+function normalizeAssistantAudioSegment(segment, existingSegments) {
+  if (!segment || typeof segment !== "object" || Array.isArray(segment)) {
+    return null;
+  }
+  const fallbackIndex = Array.isArray(existingSegments) ? existingSegments.length : 0;
+  const segmentIndex = Number(segment.segment_index);
+  const textStart = Math.max(0, Math.round(Number(segment.text_start) || 0));
+  const textEnd = Math.max(textStart, Math.round(Number(segment.text_end) || textStart));
+  const audioBytes = Math.max(0, Math.round(Number(segment.audio_bytes) || 0));
+  const pcmMs = Math.max(0, Math.round(Number(segment.pcm_ms) || estimatePcmMs(audioBytes, ASSISTANT_AUDIO_FORMAT)));
+  const text = String(segment.text || "").replace(/\s+/g, " ").trim().slice(0, PROVIDER_EVENT_VALUE_MAX_CHARS);
+  return {
+    segment_index: Number.isFinite(segmentIndex) && segmentIndex >= 0 ? Math.round(segmentIndex) : fallbackIndex,
+    text_start: textStart,
+    text_end: textEnd,
+    ...(text ? { text } : {}),
+    audio_bytes: audioBytes,
+    pcm_ms: pcmMs,
+  };
+}
+
+function normalizePlaybackProgress(event, turn) {
+  const segments = Array.isArray(turn?.assistantAudioSegments) ? turn.assistantAudioSegments : [];
+  const describedBytes = segments.length > 0
+    ? segments.reduce((sum, segment) => sum + Math.max(0, Number(segment.audio_bytes) || 0), 0)
+    : Math.max(0, Number(turn?.assistantAudioBytes) || 0);
+  // Segment metadata is deliberately sent immediately before its binary PCM
+  // frame. During that small window it describes queued audio, not emitted
+  // audio, so never let a client checkpoint exceed bytes actually written.
+  const maxBytes = Math.min(describedBytes, Math.max(0, Number(turn?.assistantAudioBytes) || 0));
+  const describedPcmMs = segments.length > 0
+    ? segments.reduce((sum, segment) => sum + Math.max(0, Number(segment.pcm_ms) || 0), 0)
+    : estimatePcmMs(maxBytes, ASSISTANT_AUDIO_FORMAT);
+  const maxPcmMs = Math.min(describedPcmMs, estimatePcmMs(maxBytes, ASSISTANT_AUDIO_FORMAT));
+  const rawPlayedBytes = Number(event.played_audio_bytes ?? event.played_bytes);
+  const rawPlayedPcmMs = Number(event.played_pcm_ms);
+  if (maxBytes <= 0 || ((!Number.isFinite(rawPlayedBytes) || rawPlayedBytes < 0)
+      && (!Number.isFinite(rawPlayedPcmMs) || rawPlayedPcmMs < 0))) {
+    return null;
+  }
+  const segmentIndex = Number(event.segment_index);
+  const maxIndex = segments.length > 0 ? segments.length - 1 : -1;
+  const boundedIndex = Number.isFinite(segmentIndex) && segmentIndex >= 0
+    ? Math.min(maxIndex >= 0 ? maxIndex : Math.round(segmentIndex), Math.round(segmentIndex))
+    : maxIndex;
+  const segmentCeiling = boundedIndex >= 0
+    ? cumulativeSegmentProgress(segments, boundedIndex)
+    : { audioBytes: maxBytes, pcmMs: maxPcmMs };
+  const emittedBytes = Math.max(0, Math.min(maxBytes, segmentCeiling.audioBytes));
+  const emittedPcmMs = Math.max(0, Math.min(maxPcmMs, segmentCeiling.pcmMs));
+  const bytesFromMs = Number.isFinite(rawPlayedPcmMs) && rawPlayedPcmMs >= 0
+    ? estimatePcmBytes(rawPlayedPcmMs, ASSISTANT_AUDIO_FORMAT)
+    : null;
+  const playedAudioBytes = Math.max(0, Math.min(
+    emittedBytes,
+    Number.isFinite(rawPlayedBytes) && rawPlayedBytes >= 0
+      ? Math.round(rawPlayedBytes)
+      : (Number.isFinite(bytesFromMs) ? bytesFromMs : emittedBytes)
+  ));
+  const playedPcmMs = Math.max(0, Math.min(
+    emittedPcmMs,
+    Number.isFinite(rawPlayedPcmMs) && rawPlayedPcmMs >= 0
+      ? Math.round(rawPlayedPcmMs)
+      : estimatePcmMs(playedAudioBytes, ASSISTANT_AUDIO_FORMAT)
+  ));
+  const textEstimate = estimatePlayedTextFromSegments(segments, playedAudioBytes, playedPcmMs);
+  return {
+    endpoint_observed: true,
+    updated_at: nowIso(),
+    ...(boundedIndex >= 0 ? { segment_index: boundedIndex } : {}),
+    played_audio_bytes: playedAudioBytes,
+    played_pcm_ms: playedPcmMs,
+    emitted_audio_bytes: emittedBytes,
+    emitted_pcm_ms: emittedPcmMs,
+    estimated_text_chars: textEstimate.textChars,
+    estimated_text: textEstimate.text,
+  };
+}
+
+function hasPartialEndpointPlayback(turn) {
+  const progress = turn?.playbackProgress;
+  if (!progress?.endpoint_observed) {
+    return false;
+  }
+  const emitted = Math.max(0, Number(progress.emitted_audio_bytes) || 0);
+  const played = Math.max(0, Number(progress.played_audio_bytes) || 0);
+  return emitted > 0 && played < emitted;
+}
+
+function cumulativeSegmentProgress(segments, uptoIndex) {
+  let audioBytes = 0;
+  let pcmMs = 0;
+  for (const segment of segments) {
+    const index = Math.max(0, Number(segment?.segment_index) || 0);
+    if (index > uptoIndex) {
+      break;
+    }
+    audioBytes += Math.max(0, Number(segment?.audio_bytes) || 0);
+    pcmMs += Math.max(0, Number(segment?.pcm_ms) || 0);
+  }
+  return { audioBytes, pcmMs };
+}
+
+function estimatePlayedTextFromSegments(segments, playedAudioBytes, playedPcmMs) {
+  let textChars = 0;
+  const textParts = [];
+  let remainingBytes = Math.max(0, Number(playedAudioBytes) || 0);
+  let remainingMs = Math.max(0, Number(playedPcmMs) || 0);
+  for (const segment of segments) {
+    const segmentBytes = Math.max(0, Number(segment?.audio_bytes) || 0);
+    const segmentMs = Math.max(0, Number(segment?.pcm_ms) || 0);
+    const textStart = Math.max(0, Number(segment?.text_start) || 0);
+    const textEnd = Math.max(textStart, Number(segment?.text_end) || textStart);
+    const segmentText = String(segment?.text || "");
+    const segmentTextChars = Math.max(0, textEnd - textStart);
+    if (remainingBytes <= 0 && remainingMs <= 0) {
+      break;
+    }
+    const ratioByBytes = segmentBytes > 0 ? Math.min(1, remainingBytes / segmentBytes) : 0;
+    const ratioByMs = segmentMs > 0 ? Math.min(1, remainingMs / segmentMs) : 0;
+    const ratio = Math.max(ratioByBytes, ratioByMs, (segmentBytes === 0 && segmentMs === 0 && segmentTextChars > 0) ? 1 : 0);
+    if (ratio <= 0) {
+      break;
+    }
+    const takeChars = ratio >= 1
+      ? segmentTextChars
+      : Math.max(0, Math.min(segmentTextChars, Math.floor(segmentTextChars * ratio)));
+    textChars = Math.max(textChars, textStart + takeChars);
+    if (segmentText) {
+      const relativeChars = Math.min(segmentText.length, Math.max(0, textChars - textStart));
+      if (ratio >= 1) {
+        textParts.push(segmentText);
+      } else if (relativeChars > 0) {
+        textParts.push(segmentText.slice(0, relativeChars));
+      }
+    }
+    remainingBytes = Math.max(0, remainingBytes - segmentBytes);
+    remainingMs = Math.max(0, remainingMs - segmentMs);
+  }
+  return {
+    textChars,
+    text: textParts.join(" ").replace(/\s+/g, " ").trim().slice(0, PROVIDER_EVENT_VALUE_MAX_CHARS),
+  };
+}
+
+function estimatePcmMs(audioBytes, format) {
+  const bytes = Math.max(0, Number(audioBytes) || 0);
+  const sampleRate = Math.max(1, Number(format?.sample_rate) || 16000);
+  const channels = Math.max(1, Number(format?.channels) || 1);
+  return Math.round((bytes / (sampleRate * channels * 2)) * 1000);
+}
+
+function estimatePcmBytes(pcmMs, format) {
+  const ms = Math.max(0, Number(pcmMs) || 0);
+  const sampleRate = Math.max(1, Number(format?.sample_rate) || 16000);
+  const channels = Math.max(1, Number(format?.channels) || 1);
+  return Math.round((ms / 1000) * sampleRate * channels * 2);
 }
 
 // Only the two turn_progress stages the clients understand are accepted; an

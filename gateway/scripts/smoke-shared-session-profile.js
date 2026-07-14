@@ -33,6 +33,7 @@ const {
   server,
   defaultSessionId,
   profileSystemInstruction,
+  voiceProfileDiagnostics,
 } = require(path.join(GATEWAY_DIR, "server"));
 const { createAgentProfileStore } = require(path.join(GATEWAY_DIR, "lib", "agent-profile"));
 const { createCompanionCatalogStore } = require(path.join(GATEWAY_DIR, "lib", "companion-catalog"));
@@ -52,6 +53,7 @@ async function main() {
   await step("companion apply preserves address directive", assertCompanionKeepsAddress);
   await step("profile reset restores address directive", assertResetKeepsAddress);
   await step("live voice prompt contains durable address directive", assertLivePromptAddress);
+  await step("health diagnostics explain profile restrictions and provider drift", assertVoiceProfileDiagnostics);
   await step("omitted session ids converge in storage", assertSharedSessionStorage);
 
   console.log(JSON.stringify({
@@ -61,11 +63,26 @@ async function main() {
       "defaultSessionId() and GET /v1/sessions/default return the deterministic per-account default session id",
       "chat prompt assembly includes the user_address directive after the identity block by default",
       "unverified legacy companion apply is rejected and leaves user_address/profile version intact",
+      "chat and native voice prompts attribute creation/building to the configured user identity or address, never the model provider",
       "profile reset restores user_address to master and the prompt directive remains after identity",
       "Live voice effectiveSystemPrompt includes the same durable address directive after identity",
+      "health diagnostics explain a single-language restriction and stored/runtime provider drift",
       "chat, voice, and browser turns with omitted session ids store under the shared session id",
     ],
   }, null, 2));
+}
+
+async function assertVoiceProfileDiagnostics() {
+  const diagnostics = voiceProfileDiagnostics({
+    language: { input: "am-ET" },
+    providers: { voice_provider: "vertex-live" },
+  }, { provider: "cascaded" });
+  assert.equal(diagnostics.ok, false);
+  assert.deepEqual(diagnostics.input_languages, ["am-ET"]);
+  assert.deepEqual(
+    diagnostics.warnings.map((warning) => warning.code).sort(),
+    ["single_input_language_restriction", "stored_runtime_provider_drift"]
+  );
 }
 
 async function assertDefaultSession() {
@@ -82,7 +99,9 @@ async function assertDefaultSession() {
 async function assertDefaultProfilePrompt() {
   const profile = await getJson("/v1/agent/profile");
   assert.equal(profile.profile.user_address, "master");
-  assertAddressAfterIdentity(profileSystemInstruction(profile.profile), "Assistant identity profile:");
+  const prompt = profileSystemInstruction(profile.profile);
+  assertIdentityAttribution(prompt, "master");
+  assertAddressAfterIdentity(prompt, "Assistant identity profile:");
 }
 
 async function assertCompanionKeepsAddress() {
@@ -128,7 +147,9 @@ async function assertLivePromptAddress() {
       systemPrompt: "You are a live prompt smoke assistant.",
     });
 
-    assertAddressAfterIdentity(provider.effectiveSystemPrompt(agentProfile.effective()), "Moa identity profile:");
+    const prompt = provider.effectiveSystemPrompt(agentProfile.effective());
+    assertIdentityAttribution(prompt, "master");
+    assertAddressAfterIdentity(prompt, "Moa identity profile:");
 
     const catalog = createCompanionCatalogStore({ dataDir: liveDataDir });
     const companionPatch = catalog.preview({ companion_id: "shigmi-scout" }).profile_overrides;
@@ -198,6 +219,11 @@ function assertAddressAfterIdentity(systemText, identityHeading) {
   assert.ok(directiveIndex > identityIndex, `address directive must appear after identity block: ${systemText}`);
   assert.match(systemText, /Use that form of address naturally/i);
   assert.match(systemText, /outranks any older wording in the base prompt/i);
+}
+
+function assertIdentityAttribution(systemText, owner) {
+  assert.match(systemText, new RegExp(`attribute that to "?${owner}"?`, "i"));
+  assert.match(systemText, /never .*Gemini.*Google.*OpenAI.*Anthropic.*provider/i);
 }
 
 async function getJson(url) {

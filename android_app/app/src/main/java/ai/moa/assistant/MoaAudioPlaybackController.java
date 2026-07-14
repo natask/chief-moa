@@ -52,6 +52,10 @@ final class MoaAudioPlaybackController {
     // head position is flushed. -1 = unavailable (never played this turn or the
     // head could not be read). Reset on start() so a prior turn cannot leak.
     private long lastPlayedMs = -1;
+    private long totalPcmFramesWritten;
+    private long playbackHeadWrapFrames;
+    private long lastPlaybackHeadRawFrames;
+    private long lastKnownPlayedPcmFrames;
 
     MoaAudioPlaybackController(Callback callback) {
         this.callback = callback;
@@ -109,6 +113,10 @@ final class MoaAudioPlaybackController {
                 applyPlaybackRateLocked(playbackRate);
                 audioTrack.play();
                 playing = true;
+                totalPcmFramesWritten = 0L;
+                playbackHeadWrapFrames = 0L;
+                lastPlaybackHeadRawFrames = 0L;
+                lastKnownPlayedPcmFrames = 0L;
             } catch (RuntimeException error) {
                 releaseAudioTrack();
                 reportError("Audio playback could not start: " + cleanError(error) + ".", error);
@@ -152,6 +160,20 @@ final class MoaAudioPlaybackController {
         return rate;
     }
 
+    static long pcmFramesToBytes(long frames) {
+        if (frames <= 0L) {
+            return 0L;
+        }
+        return frames * PCM_BYTES_PER_SAMPLE;
+    }
+
+    static long pcmBytesToFrames(long bytes) {
+        if (bytes <= 0L) {
+            return 0L;
+        }
+        return bytes / PCM_BYTES_PER_SAMPLE;
+    }
+
     boolean write(byte[] pcm) {
         if (pcm == null || pcm.length == 0) {
             return false;
@@ -182,6 +204,7 @@ final class MoaAudioPlaybackController {
                     reportError("AudioTrack write failed with code " + written + ".", null);
                     return false;
                 }
+                totalPcmFramesWritten += pcmBytesToFrames(written);
             }
             if (written == 0) {
                 break;
@@ -227,6 +250,12 @@ final class MoaAudioPlaybackController {
         }
     }
 
+    long playedPcmFrames() {
+        synchronized (lock) {
+            return currentPlayedPcmFramesLocked();
+        }
+    }
+
     void stop() {
         synchronized (lock) {
             if (!playing && audioTrack == null) {
@@ -236,6 +265,7 @@ final class MoaAudioPlaybackController {
             // resets the head position to 0, so reading it afterwards would
             // always report 0. Stored for lastPlayedMs().
             lastPlayedMs = currentPlayedMsLocked();
+            lastKnownPlayedPcmFrames = currentPlayedPcmFramesLocked();
             playing = false;
             if (audioTrack != null) {
                 try {
@@ -260,6 +290,27 @@ final class MoaAudioPlaybackController {
         } catch (RuntimeException ignored) {
         }
         audioTrack = null;
+    }
+
+    private long currentPlayedPcmFramesLocked() {
+        if (audioTrack == null) {
+            return Math.min(lastKnownPlayedPcmFrames, totalPcmFramesWritten);
+        }
+        try {
+            long rawFrames = audioTrack.getPlaybackHeadPosition() & 0xffffffffL;
+            if (rawFrames < lastPlaybackHeadRawFrames) {
+                playbackHeadWrapFrames += (1L << 32);
+            }
+            lastPlaybackHeadRawFrames = rawFrames;
+            long playedFrames = playbackHeadWrapFrames + rawFrames;
+            long bounded = Math.min(playedFrames, totalPcmFramesWritten);
+            if (bounded > lastKnownPlayedPcmFrames) {
+                lastKnownPlayedPcmFrames = bounded;
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "getPlaybackHeadPosition() failed: " + cleanError(error));
+        }
+        return Math.min(lastKnownPlayedPcmFrames, totalPcmFramesWritten);
     }
 
     private void reportError(String message, Throwable error) {

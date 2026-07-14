@@ -96,6 +96,7 @@ final class MoaStreamingVoiceSessionController {
     private boolean sessionReady;
     private boolean pendingCommitAfterSessionReady;
     private final ArrayDeque<byte[]> pendingAudioChunks = new ArrayDeque<>();
+    private final MoaAssistantAudioProgressTracker assistantAudioProgress = new MoaAssistantAudioProgressTracker();
     private int pendingAudioBytes;
     private long capturedAudioBytes;
     private long recordingStartedAtMs;
@@ -162,6 +163,7 @@ final class MoaStreamingVoiceSessionController {
             loggedVoiceActivity = false;
             sessionReady = false;
             pendingCommitAfterSessionReady = false;
+            assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
@@ -243,6 +245,7 @@ final class MoaStreamingVoiceSessionController {
         MoaAudioPlaybackController playback;
         MoaVoiceGatewaySocket socket;
         String currentTurnId;
+        MoaAssistantAudioProgressTracker.PlaybackProgress finalPlaybackProgress;
         synchronized (lock) {
             capture = captureController;
             playback = playbackController;
@@ -269,10 +272,16 @@ final class MoaStreamingVoiceSessionController {
         // cancel_turn carries played_ms so the gateway knows where speech
         // stopped. stop() captures the head position before flushing it.
         long playedMs = -1;
+        long playedPcmFrames = 0L;
         if (playback != null) {
             playback.stop();
             playedMs = playback.lastPlayedMs();
+            playedPcmFrames = playback.playedPcmFrames();
         }
+        synchronized (lock) {
+            finalPlaybackProgress = assistantAudioProgress.snapshot(playedPcmFrames);
+        }
+        maybeSendFinalPlaybackProgress(socket, currentTurnId, finalPlaybackProgress, "cancel");
         if (socket != null) {
             if (!currentTurnId.isEmpty()) {
                 socket.sendCancelTurn(currentTurnId, playedMs);
@@ -286,10 +295,14 @@ final class MoaStreamingVoiceSessionController {
         MoaAudioCaptureController capture;
         MoaAudioPlaybackController playback;
         MoaVoiceGatewaySocket socket;
+        String currentTurnId;
+        MoaAssistantAudioProgressTracker.PlaybackProgress finalPlaybackProgress;
         synchronized (lock) {
             capture = captureController;
             playback = playbackController;
             socket = gatewaySocket;
+            currentTurnId = turnId;
+            finalPlaybackProgress = assistantAudioProgress.snapshot(playback != null ? playback.playedPcmFrames() : 0L);
             captureController = null;
             playbackController = null;
             gatewaySocket = null;
@@ -299,6 +312,7 @@ final class MoaStreamingVoiceSessionController {
             loggedVoiceActivity = false;
             sessionReady = false;
             pendingCommitAfterSessionReady = false;
+            assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
             sessionId = "";
@@ -312,6 +326,7 @@ final class MoaStreamingVoiceSessionController {
         if (capture != null) {
             capture.stop();
         }
+        maybeSendFinalPlaybackProgress(socket, currentTurnId, finalPlaybackProgress, "close");
         if (playback != null) {
             playback.stop();
         }
@@ -412,6 +427,7 @@ final class MoaStreamingVoiceSessionController {
         MoaAudioPlaybackController playback;
         MoaVoiceGatewaySocket socket;
         String currentTurnId;
+        MoaAssistantAudioProgressTracker.PlaybackProgress finalPlaybackProgress;
         synchronized (lock) {
             // Only fail if the turn is still waiting for session_ready. If the
             // commit already finished (or the turn was torn down), do nothing.
@@ -422,12 +438,14 @@ final class MoaStreamingVoiceSessionController {
             playback = playbackController;
             socket = gatewaySocket;
             currentTurnId = turnId;
+            finalPlaybackProgress = assistantAudioProgress.snapshot(playback != null ? playback.playedPcmFrames() : 0L);
             active = false;
             committed = false;
             assistantAudioStarted = false;
             loggedVoiceActivity = false;
             sessionReady = false;
             pendingCommitAfterSessionReady = false;
+            assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
@@ -438,6 +456,7 @@ final class MoaStreamingVoiceSessionController {
         if (capture != null) {
             capture.stop();
         }
+        maybeSendFinalPlaybackProgress(socket, currentTurnId, finalPlaybackProgress, "close");
         if (playback != null) {
             playback.stop();
         }
@@ -482,6 +501,13 @@ final class MoaStreamingVoiceSessionController {
     private void reportError(String message, Throwable error) {
         mainHandler.removeCallbacks(pendingCommitTimeout);
         post(() -> callback.onError(message, error));
+    }
+
+    private void maybeSendFinalPlaybackProgress(MoaVoiceGatewaySocket socket, String currentTurnId, MoaAssistantAudioProgressTracker.PlaybackProgress progress, String reason) {
+        if (socket == null || safe(currentTurnId).isEmpty()) {
+            return;
+        }
+        socket.sendPlaybackProgress(currentTurnId, progress, reason);
     }
 
     private void scheduleAutoCommitIfNeeded() {
@@ -669,6 +695,7 @@ final class MoaStreamingVoiceSessionController {
                 loggedVoiceActivity = false;
                 sessionReady = false;
                 pendingCommitAfterSessionReady = false;
+                assistantAudioProgress.reset();
                 clearPendingAudioLocked();
                 capturedAudioBytes = 0;
                 recordingStartedAtMs = 0;
@@ -694,6 +721,7 @@ final class MoaStreamingVoiceSessionController {
                 loggedVoiceActivity = false;
                 sessionReady = false;
                 pendingCommitAfterSessionReady = false;
+                assistantAudioProgress.reset();
                 clearPendingAudioLocked();
                 capturedAudioBytes = 0;
                 recordingStartedAtMs = 0;
@@ -772,12 +800,20 @@ final class MoaStreamingVoiceSessionController {
         }
 
         @Override
+        public void onAssistantAudioSegment(String audioTurnId, JSONObject segment) {
+            synchronized (lock) {
+                assistantAudioProgress.onAssistantAudioSegment(segment);
+            }
+        }
+
+        @Override
         public void onAssistantAudio(byte[] pcm) {
             MoaAudioPlaybackController playback;
             String currentTurnId;
             synchronized (lock) {
                 playback = playbackController;
                 currentTurnId = turnId;
+                assistantAudioProgress.onAssistantAudioFrame(pcm);
             }
             if (playbackEnabled && playback != null && !playback.write(pcm)) {
                 reportError("Could not write assistant audio frame to playback.", null);
@@ -794,11 +830,15 @@ final class MoaStreamingVoiceSessionController {
             }
             Log.i(TAG, "assistantAudioDone");
             mainHandler.postDelayed(() -> {
+                MoaAssistantAudioProgressTracker.PlaybackProgress finalProgress;
                 synchronized (lock) {
+                    finalProgress = assistantAudioProgress.snapshot(
+                            playbackToDrain != null ? playbackToDrain.playedPcmFrames() : 0L);
                     if (playbackController == playbackToDrain) {
                         assistantAudioStarted = false;
                     }
                 }
+                maybeSendFinalPlaybackProgress(gatewaySocket, audioTurnId, finalProgress, "playback_done");
                 if (playbackToDrain != null && playbackEnabled) {
                     playbackToDrain.stop();
                 }

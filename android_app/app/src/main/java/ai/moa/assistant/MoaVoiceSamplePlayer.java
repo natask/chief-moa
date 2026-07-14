@@ -234,6 +234,10 @@ final class MoaVoiceSamplePlayer {
         }
 
         @Override
+        public void onAssistantAudioSegment(String turnId, JSONObject segment) {
+        }
+
+        @Override
         public void onAssistantAudio(byte[] pcm) {
             if (playback != null && !playback.write(pcm)) {
                 fail("Could not play voice sample audio.", null);

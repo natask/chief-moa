@@ -1092,6 +1092,16 @@ class CascadedVoiceProvider {
         const pcm = await this.ttsStage.synthesize({ text: ttsText, language: reasoning.language, stylePrompt: ttsStyle, voice: pinnedVoice, speakingRate: pinnedRate, tone: pinnedTone });
         if (pcm && pcm.length) {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { playbackRate: clientRate });
+          if (typeof hooks.onAssistantAudioSegment === "function") {
+            await hooks.onAssistantAudioSegment({
+              segment_index: 0,
+              text_start: 0,
+              text_end: ttsText.length,
+              text: ttsText,
+              audio_bytes: pcm.length,
+              pcm_ms: pcmDurationMs(pcm.length, CLIENT_AUDIO_FORMAT),
+            });
+          }
           await hooks.sendAudio(pcm, { segmentIndex: 0, segmentText: ttsText });
           await hooks.onAssistantAudioDone();
           spoke = true;
@@ -1215,6 +1225,8 @@ class CascadedVoiceProvider {
       deltaCount: 0,
       firstDeltaAtMs: 0,
       emitted: 0,
+      nextSegmentIndex: 0,
+      textCursor: 0,
       started: false,
       failed: false,
       superseded: false,
@@ -1290,7 +1302,7 @@ class CascadedVoiceProvider {
         if (!pcm || !pcm.length) {
           throw new Error("hosted TTS returned no audio");
         }
-        return pcm;
+        return { pcm, text };
       } catch (error) {
         if (state.superseded || state.failed || error?.name === "AbortError") {
           return null;
@@ -1306,12 +1318,25 @@ class CascadedVoiceProvider {
       if (state.superseded || state.failed) {
         return;
       }
-      const synthPromise = synthesizeChunk(text);
+      const normalizedText = String(text || "").trim();
+      if (!normalizedText) {
+        return;
+      }
+      // The reasoner chunker normalizes away boundary whitespace. Preserve the
+      // one-character separator used by the stored assistant reply so segment
+      // offsets remain usable when reconstructing the unheard suffix.
+      const textStart = state.textCursor + (state.textCursor > 0 ? 1 : 0);
+      const textEnd = textStart + normalizedText.length;
+      const segmentIndex = state.nextSegmentIndex;
+      state.nextSegmentIndex += 1;
+      state.textCursor = textEnd;
+      const synthPromise = synthesizeChunk(normalizedText);
       emitChain = emitChain.then(async () => {
-        const pcm = await synthPromise;
-        if (!pcm || state.superseded || state.failed) {
+        const synthesized = await synthPromise;
+        if (!synthesized || state.superseded || state.failed) {
           return;
         }
+        const pcm = synthesized.pcm;
         if (!isActive()) {
           throw new TurnSupersededError("voice turn superseded before chunk emission");
         }
@@ -1319,12 +1344,22 @@ class CascadedVoiceProvider {
           await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { streaming: true, playbackRate });
           state.started = true;
         }
+        if (typeof hooks.onAssistantAudioSegment === "function") {
+          await hooks.onAssistantAudioSegment({
+            segment_index: segmentIndex,
+            text_start: textStart,
+            text_end: textEnd,
+            text: normalizedText,
+            audio_bytes: pcm.length,
+            pcm_ms: pcmDurationMs(pcm.length, CLIENT_AUDIO_FORMAT),
+          });
+        }
         // The segment metadata rides along so the session server can keep a
         // frame->reply-text ledger: on interruption it is the only way to know
         // which words were already spoken (binary PCM frames carry no text).
         await hooks.sendAudio(pcm, {
-          segmentIndex: state.emitted,
-          segmentText: text,
+          segmentIndex,
+          segmentText: normalizedText,
         });
         state.emitted += 1;
         if (!state.firstAudioAtMs) {
@@ -1508,6 +1543,16 @@ class CascadedVoiceProvider {
       });
       if (pcm && pcm.length) {
         await hooks.onAssistantAudioStart(CLIENT_AUDIO_FORMAT, { playbackRate: this.clientPlaybackRate(this.speakingRate(options.profile)) });
+        if (typeof hooks.onAssistantAudioSegment === "function") {
+          await hooks.onAssistantAudioSegment({
+            segment_index: 0,
+            text_start: 0,
+            text_end: speak.length,
+            text: speak,
+            audio_bytes: pcm.length,
+            pcm_ms: pcmDurationMs(pcm.length, CLIENT_AUDIO_FORMAT),
+          });
+        }
         await hooks.sendAudio(pcm, { segmentIndex: 0, segmentText: speak });
         await hooks.onAssistantAudioDone();
         this.lastTtsError = "";
@@ -3288,16 +3333,25 @@ function profileIdentityInstruction(profile) {
   if (!name) {
     return "";
   }
+  const owner = configuredOwnerLabel(profile);
   return [
     "Moa identity profile:",
     "- this identity profile overrides any older name in the base prompt",
     `- current assistant name: ${name}`,
     `- if asked who or what you are, say you are ${name}`,
+    `- if asked who created, built, designed, trained, or owns you, attribute that to ${owner}; never to Gemini, Google, OpenAI, Anthropic, or another model provider`,
     "- if your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word",
     "- use the user's requested form of address, title, or interaction style when provided",
     "- if asked who made, created, built, trained, or owns you, or who your creator or company is, answer only from this identity profile; never credit Google, Gemini, OpenAI, Anthropic, or any other AI lab or underlying model as your creator",
     "- this rule outranks any older wording in the base prompt and any recalled memory fact that contradicts it",
   ].join("\n");
+}
+
+function configuredOwnerLabel(profile) {
+  const userName = String(profile?.user_name || "").trim();
+  const nickname = String(profile?.user_nickname || "").trim();
+  const address = String(profile?.user_address || "master").trim();
+  return userName || nickname || (address ? `"${address}"` : "the configured user");
 }
 
 function userAddressInstruction(profile) {
@@ -3689,6 +3743,13 @@ function modelResource(model) {
 function numberFrom(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function pcmDurationMs(audioBytes, format) {
+  const bytes = Math.max(0, Number(audioBytes) || 0);
+  const sampleRate = Math.max(1, Number(format?.sample_rate) || 16000);
+  const channels = Math.max(1, Number(format?.channels) || 1);
+  return Math.round((bytes / (sampleRate * channels * 2)) * 1000);
 }
 
 function redactEndpoint(endpoint) {

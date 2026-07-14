@@ -64,6 +64,17 @@ No genuine integration breakage was found; no post-merge fix commits were needed
 
 - **codex/preview-control-foundation** and **codex/telemetry-readback-final** were NOT merged. They duplicate M4/MT functionality in `gateway/lib/work-history.js`, `gateway/lib/semantic-telemetry.js`, `gateway/lib/event-substrate.js`. A design decision is needed on which implementation (the intent-runtime superset's vs the codex telemetry branches') wins before either is integrated. Merging both would collide semantically.
 
+## Release consolidation decision — 2026-07-13
+
+- The integrated intent-runtime M4/MT implementation is the accepted line. The
+  duplicate `codex/preview-control-foundation` and
+  `codex/telemetry-readback-final` branches remain preserved but are not merged.
+- The repository-approved `master` -> verified `vps-deploy` -> droplet timer
+  promotion policy remains authoritative. The M4 deployment records are product
+  evidence and APIs; they do not replace or disable that active VPS mechanism.
+- The S6 canonical-intent HTTP/WebSocket wiring remains explicitly incomplete.
+  Shipping the bounded domain modules does not claim that capability is live.
+
 ## Known residual gap (recorded, not attempted — per program audit)
 
 - **S6**: gateway wiring of the canonical intent runtime into HTTP/WS routes was contracted but never built. The runtime domain modules are present (from merge 1) but not wired into live request/socket handlers.
