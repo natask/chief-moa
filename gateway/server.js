@@ -1355,6 +1355,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "PATCH" && url.pathname.startsWith("/v1/projects/")) {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleUpdateProject(request, response, decodeURIComponent(url.pathname.slice("/v1/projects/".length)));
+      return;
+    }
+
     // Router activation loop. The router holds no work: it routes an utterance,
     // assembles context, LAUNCHES a disposable task agent (an agent run), tracks
     // its status, and PINGS on completion. It does not speak -- the response is
@@ -5703,6 +5712,20 @@ async function handleCreateProject(request, response) {
   }
 }
 
+async function handleUpdateProject(request, response, id) {
+  const body = await readJsonBody(request);
+  try {
+    const project = updateProject(id, body);
+    if (!project) {
+      sendJson(response, 404, { error: "project not found" });
+      return;
+    }
+    sendJson(response, 200, { project });
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+  }
+}
+
 async function handleAgentRun(request, response) {
   const body = await readJsonBody(request);
   const runBody = agentRunBodyWithSessionContext(body);
@@ -8403,12 +8426,9 @@ function gatewayFallbackReply(prompt) {
 }
 
 function createAgentRun(body) {
-  const prompt = String(body.prompt || body.instruction || body.text || "").trim();
-  if (!prompt) {
+  const userPrompt = String(body.prompt || body.instruction || body.text || "").trim();
+  if (!userPrompt) {
     throw new Error("prompt is required");
-  }
-  if (Buffer.byteLength(prompt, "utf8") > MAX_AGENT_PROMPT_BYTES) {
-    throw new Error(`prompt is too large; max ${MAX_AGENT_PROMPT_BYTES} bytes`);
   }
 
   // A run can target a saved project (resolves its working dir + default
@@ -8417,6 +8437,12 @@ function createAgentRun(body) {
   const project = requestedProjectId ? findProject(requestedProjectId) : null;
   if (requestedProjectId && !project && !useWorkerPullForAgentRuns()) {
     throw new Error(`unknown project: ${body.project_id}`);
+  }
+  const prompt = project && body.include_project_brief !== false
+    ? promptWithProjectBrief(userPrompt, project)
+    : userPrompt;
+  if (Buffer.byteLength(prompt, "utf8") > MAX_AGENT_PROMPT_BYTES) {
+    throw new Error(`prompt plus project brief is too large; max ${MAX_AGENT_PROMPT_BYTES} bytes`);
   }
   const harness = sanitizeHarness(body.harness || project?.default_harness || DEFAULT_HARNESS);
   const workingDir = resolveHarnessWorkingDir(body.working_dir || body.cwd || project?.working_dir || "");
@@ -8443,6 +8469,7 @@ function createAgentRun(body) {
     profile_version: profileVersion,
     parent_run_id: body.parent_run_id ? sanitizeId(body.parent_run_id) : "",
     project_id: project ? project.id : requestedProjectId,
+    project_brief_updated_at: project?.updated_at || "",
     local_project_alias: body.local_project_alias
       ? String(body.local_project_alias).replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 120)
       : (project ? project.name : requestedProjectId),
@@ -8492,9 +8519,11 @@ function createAgentRun(body) {
 }
 
 // --- Projects store -------------------------------------------------------
-// A project = { id, name, working_dir, default_harness }. Stored flat in
-// PROJECTS_FILE. The working dir is validated against the harness root the same
-// way a run's working_dir is, so a project can never escape the sandbox.
+// A project is the durable object the user manages. Its brief records the
+// problem, desired outcome, current state, and next viable step independently
+// of any disposable agent session. Stored flat in PROJECTS_FILE. The working
+// dir is validated against the harness root the same way a run's working_dir
+// is, so a project can never escape the sandbox.
 
 function listProjects() {
   try {
@@ -8529,11 +8558,65 @@ function createProject(body) {
     name,
     working_dir: workingDir,
     default_harness: defaultHarness,
+    brief: sanitizeProjectBrief(body.brief || body),
     created_at: now,
+    updated_at: now,
   };
   projects.push(project);
   writeProjects(projects);
   return project;
+}
+
+function updateProject(id, body) {
+  const safeId = sanitizeId(id);
+  const projects = listProjects();
+  const index = projects.findIndex((project) => project.id === safeId);
+  if (index < 0) {
+    return null;
+  }
+  const previous = projects[index];
+  const incoming = body && typeof body.brief === "object" ? body.brief : body;
+  const brief = sanitizeProjectBrief({
+    ...(previous.brief && typeof previous.brief === "object" ? previous.brief : {}),
+    ...(incoming && typeof incoming === "object" ? incoming : {}),
+  });
+  const now = new Date().toISOString();
+  const project = { ...previous, brief, updated_at: now };
+  projects[index] = project;
+  writeProjects(projects);
+  return project;
+}
+
+function sanitizeProjectBrief(value) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    problem: truncate(String(input.problem || "").trim(), 4000),
+    desired_outcome: truncate(String(input.desired_outcome || input.outcome || "").trim(), 4000),
+    current_state: truncate(String(input.current_state || input.state || "").trim(), 12000),
+    next_step: truncate(String(input.next_step || "").trim(), 4000),
+  };
+}
+
+function promptWithProjectBrief(prompt, project) {
+  const brief = sanitizeProjectBrief(project?.brief);
+  const fields = [
+    ["Problem", brief.problem],
+    ["Desired outcome", brief.desired_outcome],
+    ["Current state", brief.current_state],
+    ["Next viable step", brief.next_step],
+  ].filter(([, value]) => value);
+  if (!fields.length) {
+    return prompt;
+  }
+  return [
+    "User instruction:",
+    prompt,
+    "",
+    `Durable project brief (${project.name || project.id}):`,
+    ...fields.map(([label, value]) => `${label}: ${value}`),
+    "",
+    "Use the brief as project context. Advance the user instruction and leave durable evidence; do not manage or narrate agent identities.",
+  ].join("\n");
 }
 
 async function executeAgentRun(runId, active) {
@@ -14613,6 +14696,7 @@ function summarizeAgentRun(run) {
     profile_version: run.profile_version || "",
     parent_run_id: run.parent_run_id,
     project_id: run.project_id || "",
+    project_brief_updated_at: run.project_brief_updated_at || "",
     work_node_id: run.work_node_id || "",
     context_pack_ref: run.context_pack_ref || "",
     working_dir: run.working_dir,

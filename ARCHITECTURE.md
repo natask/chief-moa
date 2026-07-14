@@ -995,6 +995,10 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
 ## Product Primitives
 
 - `device`: a registered Android device with local permissions and settings.
+- `project`: a gateway-owned durable work object, independent of disposable
+  agent sessions. Its editable brief records the real problem, desired outcome,
+  current state, and next viable step; the local gateway console reads and
+  updates that brief through authenticated project APIs.
 - `device_client`: a connected Android, browser, or future desktop surface that
   heartbeats its online state and local tool manifest to the gateway.
 - `session`: a coherent work session. The gateway owns one canonical shared

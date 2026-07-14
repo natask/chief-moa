@@ -47,6 +47,7 @@
     "smoke:event-substrate": "node scripts/smoke-event-substrate.js",
     "smoke:work-graph": "node scripts/smoke-work-graph.js",
     "smoke:supervisor": "node scripts/smoke-supervisor.js",
+    "smoke:project-state": "node scripts/smoke-project-state.js",
     "smoke:brain": "node scripts/smoke-brain.js",
     "smoke:vertex-answer-policy": "node scripts/smoke-vertex-answer-policy.js",
     "smoke:vertex-live-endpoint": "node scripts/smoke-vertex-live-endpoint.js",
