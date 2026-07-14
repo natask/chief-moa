@@ -15,14 +15,17 @@ confirmation email via Resend.
 ## Layout
 
 - `public/index.html` — the landing page and waitlist form (one file, no build step)
-- `public/pets/index.html` — companion pet studio with catalog, preview,
-  upload, declarative rules, saved agents, bookmarks, apply, and generation
-  controls
+- `public/pets/index.html` — companion pet studio with a "describe it" prompt
+  (one line makes a character; the panels refine it), catalog, preview, upload,
+  declarative rules, saved agents, bookmarks, apply, generation controls, a
+  shared-library browse/install/publish section, and cloned-voice status
 - `public/assets/` — deck images and logos
 - `functions/api/waitlist.js` — `POST /api/waitlist`: validate, store, email
 - `functions/api/pets/[[path]].js` — `/api/pets/*`: proxy to token-guarded
-  gateway pet, active, saved-agent, and bookmark endpoints without exposing
-  `MOA_GATEWAY_TOKEN` to the browser
+  gateway pet, active, saved-agent, bookmark, and shared-library
+  (`shared`/`publish`/`install`) endpoints without exposing `MOA_GATEWAY_TOKEN`
+  to the browser. The studio feature-detects the shared-library routes on 404
+  and hides that UI when the gateway does not offer them yet.
 - `schema.sql` — D1 table
 - `wrangler.toml` — Pages config and D1 binding
 

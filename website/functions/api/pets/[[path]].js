@@ -10,6 +10,12 @@ const ROUTES = new Map([
   ["active", "/v1/agent/pets/active"],
   ["agents", "/v1/agent/pets/agents"],
   ["bookmarks", "/v1/agent/pets/bookmarks"],
+  // Shared character library (companion-character-voice-library task 5.2).
+  // The website feature-detects these on 404 and hides the library UI, so it
+  // is safe for the site to deploy before or after the gateway routes land.
+  ["shared", "/v1/agent/pets/shared"],
+  ["publish", "/v1/agent/pets/publish"],
+  ["install", "/v1/agent/pets/install"],
 ]);
 
 const json = (status, body) =>
