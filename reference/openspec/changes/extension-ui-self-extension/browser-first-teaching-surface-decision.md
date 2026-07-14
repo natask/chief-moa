@@ -159,6 +159,26 @@ surface, while retaining a thin-client authority model. “Thin” means it does
 not own provider routing or canonical memory; it does not mean the UI must be
 small or generic.
 
+The 2026-07-14 product-direction refinement makes the platform order explicit:
+
+1. **Browser first:** the open-source extension-owned experience is the primary
+   product and the place where interaction quality is proven.
+2. **Mobile companion:** Android supplies voice entry, notifications,
+   approvals, status, and continuation when the user is away from the browser;
+   it does not need to reproduce the full artifact workspace.
+3. **Optional desktop browser shell:** a packaged Chromium/Electron experience
+   may later provide tighter integration, but it consumes the same browser
+   surface contracts rather than becoming a separate product architecture.
+4. **Other native desktop surfaces later:** macOS-specific cursor companions
+   are adapters only if demand justifies them, not the initial distribution
+   strategy.
+
+Open source is part of the product contract rather than only a repository
+setting. A user must be able to inspect the capture, grounding, lesson,
+renderer, action-policy, and gateway boundaries; self-host their durable state
+and models; modify the companion; and understand which optional providers or
+hosted services remain external.
+
 The product wedge is:
 
 > Learn any browser-based tool by doing the real task, with a voice guide that
@@ -169,6 +189,38 @@ The product wedge is:
 Figma-in-browser is the first demanding design partner, not a Figma-only
 architecture. It exercises canvas-heavy perception, selection/context adapters,
 multi-step teaching, visual explanation, and artifact generation.
+
+The intended position next to projects such as
+[OpenClaw](https://github.com/openclaw/openclaw) is differentiated rather than
+duplicative. OpenClaw demonstrates demand for an open, self-hosted, customizable
+personal assistant spanning tools and channels. Chief Moa's browser wedge is a
+visual, voice-first interface that inhabits the work itself, teaches through
+grounded interaction, and can express results as live interfaces and artifacts.
+
+## Teach, Collaborate, And Do
+
+“Teacher” and “agent” should not be forced into one irreversible product
+choice. They are explicit interaction policies over the same grounded browser
+context and action boundary:
+
+- **Coach (default):** explain, point, visualize, wait, verify, and adapt. The
+  assistant does not perform the step. This optimizes learning and user agency.
+- **Collaborate:** the user performs most work but may ask “do this step” or
+  approve one proposed action. The assistant explains what it did and verifies
+  the result.
+- **Delegate:** the user gives a bounded outcome and the browser agent performs
+  an approved sequence with visible progress, stop control, and receipts. This
+  is opt-in per task/profile, not inferred from urgency or model output.
+
+All three modes use the same lesson/goal record, page epochs, stable element
+references, proposal validation, and receipts. Switching mode changes action
+authority and narration style; it does not fork memory or page state. The user
+can move from “teach me” to “do this one” and back without restarting the task.
+
+This is fundamentally an interface product. Voice is the low-friction intent
+channel, but the response may be speech, a grounded highlight, a stepper, a
+table, a diagram, an editable canvas, an approval, or live run state. Chat text
+is one rendering choice, not the product container.
 
 ## Dynamic Page Context Model
 
@@ -308,6 +360,53 @@ example, a live hierarchy/Auto Layout diagram in the side panel or artifact tab.
 are self-hostable. The signed browser package remains stable and auditable
 rather than downloading privileged code from that gateway.
 
+## Electron/Desktop Browser Expansion
+
+Electron is a viable later packaging adapter, but loading the existing Chrome
+extension unchanged is not the durable boundary. Electron's official extension
+support covers only a subset of Chrome APIs, loads unpacked extensions per
+session, and explicitly does not aim for Chrome Web Store or arbitrary-extension
+compatibility. Chief Moa currently depends on APIs and browser concepts whose
+behavior must not be assumed equivalent.
+
+The reusable boundary should instead be a browser-surface core with platform
+adapters:
+
+| Layer | Chrome extension adapter | Electron browser-shell adapter |
+| --- | --- | --- |
+| Surface UI | Content overlay, side panel, artifact tab | Packaged local companion UI beside a `WebContentsView` |
+| Page evidence | Content script, accessibility/DOM snapshot, screenshot, optional CDP | Isolated preload/page adapter, `webContents` capture, optional DevTools protocol |
+| Navigation/tab state | Chrome extension APIs | Main-process-managed `WebContentsView` and navigation model |
+| Permissions/actions | Chrome permission and extension broker | Explicit Electron session permission handler and narrow IPC broker |
+| Gateway protocol | Shared | Shared |
+| Lesson/artifact contracts | Shared | Shared |
+
+Do not start this extraction before the Chrome teaching journey proves which
+contracts are actually stable. The first reusable candidates are data
+contracts and pure reducers—page evidence envelope, page epoch, lesson/step
+state, generated UI spec, action proposal, and receipt—not a premature shared
+framework.
+
+If the Electron shell is pursued:
+
+- use `WebContentsView`; `BrowserView` is deprecated and Electron recommends
+  avoiding the `<webview>` tag when possible;
+- keep Node integration off for remote pages, context isolation and process
+  sandboxing on, and expose only a narrow validated preload bridge;
+- install explicit session permission, navigation, new-window, download, and
+  external-open policies;
+- never expose gateway credentials, filesystem, shell, or raw IPC to remote
+  web content;
+- track Electron/Chromium security updates as a release-critical operational
+  obligation;
+- treat arbitrary web content as hostile evidence exactly as the Chrome
+  extension does.
+
+Electron itself warns that it is not a general web browser security product and
+that displaying arbitrary remote content expands the application's attack
+surface. The shell should therefore follow only after the extension validates a
+capability that users value enough to justify owning that maintenance burden.
+
 ## Smallest Coherent Delivery Plan
 
 1. **Teaching contract and evaluation:** define lesson, step predicate,
@@ -353,12 +452,18 @@ cannot stand in for another.
 
 ## Alignment Questions
 
-1. Is “learn any browser tool by doing” the primary wedge, with Figma as the
-   first demanding journey?
-2. Should the persistent side panel be the home surface, with the on-page buddy
-   reduced to guidance and the artifact canvas opened only when needed?
-3. Should lesson recording remain a later explicit mode, rather than part of
-   the default perception loop?
+The browser-first, open-source, self-hostable direction and mobile-companion
+expansion are now captured as the proposed primary product thesis. The
+remaining choices before capability specification are:
+
+1. Confirm **Coach** as the default interaction policy, with Collaborate and
+   Delegate explicitly selected rather than silently inferred.
+2. Confirm Figma's create-frame/text/button/Auto-Layout lesson as the first
+   end-to-end teaching journey.
+3. Confirm the Chrome extension as the first production vehicle and Electron as
+   a later adapter only after the Chrome journey passes usefulness evaluation.
+4. Confirm lesson recording remains a later explicit mode rather than part of
+   default perception.
 
 An affirmative decision authorizes converting this note into an OpenSpec
 capability delta and narrow implementation tickets. It does not by itself
@@ -388,3 +493,11 @@ authorize implementation or deployment.
   <https://developers.figma.com/docs/figma-mcp-server/>
 - Figma file/node API:
   <https://developers.figma.com/docs/rest-api/file-endpoints/>
+- OpenClaw repository:
+  <https://github.com/openclaw/openclaw>
+- Electron Chrome-extension compatibility boundary:
+  <https://www.electronjs.org/docs/latest/api/extensions/>
+- Electron `WebContentsView` migration:
+  <https://www.electronjs.org/blog/migrate-to-webcontentsview>
+- Electron security checklist:
+  <https://www.electronjs.org/docs/latest/tutorial/security>
