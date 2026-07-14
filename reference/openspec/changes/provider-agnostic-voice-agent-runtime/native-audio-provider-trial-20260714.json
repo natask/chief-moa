@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-07-14",
+  "corpus_size": 5,
+  "raw_audio_committed": false,
+  "credentials_committed": false,
+  "temporary_credential_file_deleted": true,
+  "providers": [
+    {
+      "provider": "vertex",
+      "model": "gemini-3.5-flash",
+      "endpoint_reached": true,
+      "audio_processed": true,
+      "request_count": 20,
+      "status": "completed_with_quality_findings",
+      "evidence": "gemini-35-audio-understanding-eval-20260714.json"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-realtime",
+      "endpoint_reached": true,
+      "audio_processed": false,
+      "status": "blocked",
+      "blocker": "project_quota_or_billing_exceeded"
+    },
+    {
+      "provider": "xai",
+      "model": "grok-voice-latest",
+      "endpoint_reached": true,
+      "audio_processed": false,
+      "status": "blocked",
+      "blocker": "team_has_no_credits_or_license"
+    }
+  ]
+}
