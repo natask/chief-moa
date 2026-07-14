@@ -23,9 +23,10 @@ confirmation email via Resend.
 - `functions/api/waitlist.js` — `POST /api/waitlist`: validate, store, email
 - `functions/api/pets/[[path]].js` — `/api/pets/*`: proxy to token-guarded
   gateway pet, active, saved-agent, bookmark, and shared-library
-  (`shared`/`publish`/`install`) endpoints without exposing `MOA_GATEWAY_TOKEN`
-  to the browser. The studio feature-detects the shared-library routes on 404
-  and hides that UI when the gateway does not offer them yet.
+  (`shared`, `install`, per-pet `:id/publish` and `:id/voice-clone`) endpoints
+  without exposing `MOA_GATEWAY_TOKEN` to the browser. The studio feature-detects
+  the shared-library routes on 404 and hides that UI when the gateway does not
+  offer them yet.
 - `schema.sql` — D1 table
 - `wrangler.toml` — Pages config and D1 binding
 

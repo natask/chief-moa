@@ -380,8 +380,8 @@
   var deviceIdKey="moa.petStudio.deviceId.v1";
 
   // Describe-it heuristics: map free-text prompts to the studio's existing
-  // palette/motion/voice vocabulary. The gateway may later return a richer
-  // server-derived draft (see mergeServerDraft) which wins when present.
+  // palette/motion/voice vocabulary. Used only as a fallback when the gateway's
+  // server-side derivation (POST /v1/agent/pets {text}) is unavailable.
   var PALETTE_HINTS=[
     {re:/red|crimson|fire|flame|ember|ruby|scarlet|lava/,value:"red"},
     {re:/green|forest|leaf|moss|emerald|jade|vine|frog/,value:"green"},
@@ -604,6 +604,7 @@
       tags:item.tags||companion.tags||[],
       voice:item.voice||companion.voice||"",
       voice_binding:item.voice_binding||companion.voice_binding||null,
+      voice_clone:item.voice_clone||companion.voice_clone||null,
       pet:{
         renderer:pet.renderer||"shimeji-web",
         family:pet.family||"shigmi",
@@ -842,19 +843,32 @@
     return binding&&binding.custom_voice&&typeof binding.custom_voice==="object"?binding.custom_voice:null;
   }
 
-  function voiceReadiness(item){
+  // Clone-job status can arrive on voice_binding.custom_voice.status (the
+  // gateway overlays the job status there once a job exists) or on the compact
+  // companion.voice_clone.status. Prefer whichever is present.
+  function cloneJobStatus(item){
     var custom=customVoiceState(item);
-    var status=String(custom&&custom.status||"not_configured").toLowerCase();
+    if(custom&&custom.status)return String(custom.status).toLowerCase();
+    var clone=item&&item.voice_clone&&typeof item.voice_clone==="object"?item.voice_clone:null;
+    if(clone&&clone.status)return String(clone.status).toLowerCase();
+    return "not_configured";
+  }
+
+  function voiceReadiness(item){
+    var status=cloneJobStatus(item);
     if(status==="ready")return {kind:"ready",label:"Cloned voice ready"};
     // Google voice cloning is allowlist-gated on the current project. Until the
     // allowlist is granted the clone job runs in dry-run and the character falls
     // back to the closest canonical voice — say that honestly, not as an error.
     if(status==="blocked_allowlist"||status==="allowlist_pending"||status==="allowlist_blocked")
       return {kind:"waiting",label:"Cloned voice pending Google approval — using closest catalog voice"};
+    if(status==="not_implemented_live")
+      return {kind:"waiting",label:"Cloned voice pending live enablement — using closest catalog voice"};
     if(status==="pending"||status==="processing"||status==="queued"||status==="running")
       return {kind:"waiting",label:"Cloned voice processing — using closest catalog voice"};
     if(status==="consent_required")return {kind:"waiting",label:"Cloned voice needs consent"};
     if(status==="error")return {kind:"error",label:"Cloned voice unavailable — using closest catalog voice"};
+    var custom=customVoiceState(item);
     if(custom&&custom.access_required===true)
       return {kind:"waiting",label:"Cloned voice pending Google approval — using closest catalog voice"};
     return {kind:"waiting",label:"Catalog voice"};
@@ -1003,36 +1017,57 @@
   // ---- Describe-it: one prompt -> draft manifest + sprite/plan + suggested
   // voice, in one pass. The manual controls on the right become refinement.
 
-  function describeCharacter(){
+  async function describeCharacter(){
     var prompt=cleanText(els.describeInput.value,400);
     if(!prompt){
       setDescribeStatus("Describe a character first, e.g. \"a shy forest fox that guards my notes\".","err");
       els.describeInput.focus();
       return;
     }
-    var draft=buildDraftFromPrompt(prompt);
+    els.describeApplyBtn.disabled=true;
+    setDescribeStatus("Making a character from your description…","");
+    var draft=await deriveDraft(prompt);
     state.describedDraft=draft.record;
+    state.describedServerBacked=draft.serverBacked;
+    if(draft.serverBacked)upsertPet(draft.record);
     selectPet(draft.record);
     els.describeApplyBtn.disabled=false;
-    setDescribeStatus("Drafted "+draft.record.companion_name+" — "+draft.palette+" / "+draft.motion+" / voice "+draft.voice+". Generating a sprite…","");
-    runDescribeGeneration(prompt,draft);
+    setDescribeStatus("Drafted "+draft.record.companion_name+" — "+draft.record.pet.palette+" / "+draft.record.pet.motion+
+      " / voice "+voiceBindingVoice(draft.record)+(draft.serverBacked?"":" (offline draft)")+". Generating a sprite…","");
+    await runDescribeGeneration(prompt,draft.record);
   }
 
-  async function runDescribeGeneration(prompt,draft){
+  // Prefer the gateway's server-side derivation (POST /v1/agent/pets {text}),
+  // which returns a persisted draft manifest with a suggested voice. Fall back
+  // to client keyword heuristics when the gateway route is unavailable.
+  async function deriveDraft(prompt){
+    try{
+      var res=await fetch("/api/pets",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:prompt})});
+      if(res.ok){
+        var data=await res.json().catch(function(){return {};});
+        if(data.pet||data.companion){
+          var record=normalizePet(data.pet||data.companion);
+          if(!record.companion_summary)record.companion_summary=prompt;
+          return {record:record,serverBacked:true};
+        }
+      }
+    }catch(err){}
+    return {record:buildDraftFromPrompt(prompt).record,serverBacked:false};
+  }
+
+  async function runDescribeGeneration(prompt,record){
+    var name=record.companion_name;
     var body=formBody();
     body.text=prompt;
     body.image_data_url="";
     try{
       var res=await fetch("/api/pets/generate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
       if(res.status===404||res.status===503||res.status===501){
-        setDescribeStatus("Drafted "+draft.record.companion_name+" with a built-in sprite (gateway generation unavailable). Press Apply character to make it your companion.","plan");
+        setDescribeStatus("Drafted "+name+" with a built-in sprite (gateway generation unavailable). Press Apply character to make it your companion.","plan");
         return;
       }
       var data=await res.json().catch(function(){return {};});
       if(!res.ok)throw new Error(data.error||"Generate failed");
-      // The gateway may return a richer server-derived manifest; adopt it.
-      mergeServerDraft(data,draft);
-      var name=draft.record.companion_name;
       if(data.images&&data.images[0]&&data.images[0].data_url){
         state.imageDataUrl=data.images[0].data_url;
         els.fileName.textContent="Generated image";
@@ -1044,28 +1079,8 @@
         setDescribeStatus(name+" is drafted (sprite generation planned). Press Apply character to make it your companion.","plan");
       }
     }catch(err){
-      setDescribeStatus("Drafted "+draft.record.companion_name+" locally ("+(err&&err.message||"generation unavailable")+"). Press Apply character to make it your companion.","plan");
+      setDescribeStatus("Drafted "+name+" ("+(err&&err.message||"generation unavailable")+"). Press Apply character to make it your companion.","plan");
     }
-  }
-
-  // Adopt a gateway-derived draft when the extended generate endpoint returns
-  // one; otherwise the client heuristics from buildDraftFromPrompt stand.
-  function mergeServerDraft(data){
-    var draft=data&&(data.draft||data.manifest||data.suggestion||data.character);
-    if(!draft||typeof draft!=="object")return;
-    var pet=draft.pet||draft;
-    var name=cleanText(draft.name||draft.companion_name,80);
-    if(name){els.petName.value=name;if(state.selected)state.selected.companion_name=name;}
-    var persona=cleanText(draft.persona||draft.text||draft.summary||draft.companion_summary,400);
-    if(persona){els.petPrompt.value=persona;if(state.selected)state.selected.companion_summary=persona;}
-    var palette=String(pet.palette||"").toLowerCase();
-    if(palettes[palette])state.palette=palette;
-    var motion=String(pet.motion||"").toLowerCase();
-    if(motions.indexOf(motion)>=0){state.motion=motion;state.mode=motionMode(motion);}
-    var voice=canonicalVoiceId(draft.suggested_voice||draft.voice||pet.voice);
-    if(voice)state.voice=voice;
-    applyControlsToPreview();
-    refreshControlState();
   }
 
   async function applyDescribedCharacter(){
@@ -1074,8 +1089,12 @@
       return;
     }
     els.describeApplyBtn.disabled=true;
-    setDescribeStatus("Creating "+(els.petName.value.trim()||"the character")+"…","");
-    await createPet({preventDefault:function(){}});
+    // A server-backed draft is already a persisted companion — apply it directly.
+    // A client-only (offline) draft needs a create pass first.
+    if(!state.describedServerBacked){
+      setDescribeStatus("Creating "+(els.petName.value.trim()||"the character")+"…","");
+      await createPet({preventDefault:function(){}});
+    }
     setDescribeStatus("Applying "+(state.selected&&state.selected.companion_name||"character")+" as your companion…","");
     var applied=await applySelected();
     var name=state.selected&&state.selected.companion_name||"Your character";
@@ -1204,7 +1223,7 @@
     setConsole("Installing",item.companion_name);
     try{
       var res=await fetch("/api/pets/install",{method:"POST",headers:{"content-type":"application/json"},
-        body:JSON.stringify({shared_id:item.id,companion_id:item.companion_id,scope:"global",source:"website-pet-studio"})});
+        body:JSON.stringify({id:item.id||item.companion_id,companion_id:item.companion_id,scope:"global",source:"website-pet-studio"})});
       var data=await res.json().catch(function(){return {};});
       if(!res.ok)throw new Error(data.error||("Install failed ("+res.status+")"));
       var pet=normalizePet(data.pet||data.agent||data.companion||item);
@@ -1220,35 +1239,47 @@
 
   async function publishSelected(){
     if(!state.selected)return;
+    var id=state.selected.id||state.selected.companion_id;
+    if(!id){setConsole("Publish blocked","This character isn't saved yet — press Create agent first");return;}
     setConsole("Publishing",state.selected.companion_name);
     try{
-      var res=await fetch("/api/pets/publish",{method:"POST",headers:{"content-type":"application/json"},
-        body:JSON.stringify({
-          agent_id:state.selected.id,
-          companion_id:state.selected.companion_id,
-          pet:state.selected.pet,
-          rules:readRules(),
-          visibility:"shared",
-          companion:{id:state.selected.companion_id,name:state.selected.companion_name,summary:state.selected.companion_summary}
-        })});
-      if(res.status===404||res.status===501){
+      // Per-pet publish: POST /v1/agent/pets/:id/publish, empty body.
+      var res=await fetch("/api/pets/"+encodeURIComponent(id)+"/publish",{method:"POST",
+        headers:{"content-type":"application/json"},body:"{}"});
+      if(res.status===501){
         features.publish=false;updatePublishVisibility();
         setConsole("Publish unavailable","This gateway does not offer publishing yet");
         return;
       }
       var data=await res.json().catch(function(){return {};});
       if(res.status===409){
-        // Consent/provenance review not approved — a normal state, not an error.
-        setConsole("Publish pending review",data.message||data.reason||data.error||
-          "This character needs consent and provenance review before it can be shared.");
+        // Consent/provenance review not approved, or a built-in that can't be
+        // published — a normal state, shown plainly, not an error toast.
+        setConsole("Publish pending review",publishBlockMessage(data));
+        return;
+      }
+      if(res.status===404){
+        // The library routes exist (features.publish came from /shared), so a
+        // 404 here means this character is not saved on the gateway yet.
+        setConsole("Publish blocked","This character isn't saved on the gateway yet — press Create agent first");
         return;
       }
       if(!res.ok)throw new Error(data.error||("Publish failed ("+res.status+")"));
-      setConsole("Published",data.message||(state.selected.companion_name+" is now in the shared library"));
+      setConsole("Published",state.selected.companion_name+" is now in the shared library");
       loadSharedLibrary();
     }catch(err){
       setConsole("Publish blocked",err&&err.message||"Gateway unavailable");
     }
+  }
+
+  function publishBlockMessage(data){
+    var code=String(data&&data.code||"").toLowerCase();
+    if(code==="not_publishable")
+      return "Built-in characters can't be published. Make your own with Describe or Create agent.";
+    var reason=String(data&&data.reason||"").toLowerCase();
+    if(reason==="rejected")
+      return "This character's provenance review was rejected, so it can't be shared.";
+    return (data&&data.error)||"This character needs consent and provenance review before it can be shared.";
   }
 
   function formBody(){
