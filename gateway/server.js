@@ -5459,6 +5459,10 @@ function activePetPayload(options = {}) {
     active_companion: activeCompanion,
     companion: activeCompanion?.companion || null,
     pet: activeCompanion?.pet || null,
+    // The profile's effective default voice — what hosted TTS uses when no
+    // per-session override rides the socket — so the companion dashboard can
+    // show and diff the default without exposing the whole profile.
+    profile_voice: String(profile.voice || ""),
   };
 }
 
@@ -5668,7 +5672,16 @@ async function handlePetApply(request, response) {
   }
   try {
     const companionInput = companionInputFromPetBody(body || {});
-    const result = applyCompanionToProfile(companionInput, profileOptions, body?.source || "pet-studio");
+    // Optional voice override: `voice` on the apply body re-applies the
+    // companion with that catalog voice as the profile default (the
+    // dashboard's "set as default voice"). Unknown names are ignored.
+    const requestedVoice = canonicalVoice(String(body?.voice || "")) || "";
+    const result = applyCompanionToProfile(
+      companionInput,
+      profileOptions,
+      body?.source || "pet-studio",
+      requestedVoice ? { voice: requestedVoice } : {},
+    );
     sendJson(response, 200, {
       version: PET_CATALOG_VERSION,
       pet: companionPetRecord(result.companion),
@@ -5907,7 +5920,7 @@ async function handlePetInstall(request, response) {
   }
 }
 
-function applyCompanionToProfile(input, profileOptions, source = "api") {
+function applyCompanionToProfile(input, profileOptions, source = "api", overrides = {}) {
   // First-party catalog/studio companions apply directly: the caller is already
   // token-authorized and the profile effect is reversible. External signed
   // packages must go through companionRuntimeAuthority's preview/approve/apply
@@ -5916,9 +5929,17 @@ function applyCompanionToProfile(input, profileOptions, source = "api") {
     throw new Error("companion packages must be applied through the runtime authority approval flow");
   }
   const preview = companionCatalog.preview(input || {});
+  // A caller may re-apply the active companion with a different voice ("set as
+  // default voice" on the companion dashboard). The override wins over the
+  // companion's bound voice for this apply only; the catalog record is
+  // untouched, so rollback and re-apply restore the bound voice.
+  const profilePatch = { ...preview.profile_overrides };
+  if (overrides.voice) {
+    profilePatch.voice = overrides.voice;
+  }
   const before = agentProfile.effective(profileOptions);
   const beforeVersion = agentProfile.currentVersion(profileOptions);
-  agentProfile.patch(preview.profile_overrides, {
+  agentProfile.patch(profilePatch, {
     source,
     reason: `companion:${preview.companion.id}`,
     scope: profileOptions.scope,
