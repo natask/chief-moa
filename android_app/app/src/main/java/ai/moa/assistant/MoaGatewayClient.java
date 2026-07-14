@@ -205,6 +205,22 @@ final class MoaGatewayClient {
         downloadFile(apiEndpoint("/v1/android/updates/latest.apk"), destination, 120000);
     }
 
+    // Download a specific rollback release. The URL comes from the update
+    // manifest (a proposal), so we only fetch it when it is same-origin with the
+    // configured gateway. This keeps a tampered manifest from redirecting the
+    // signed-APK download to an arbitrary host; signature + checksum are still
+    // verified by the caller before anything is installed.
+    void downloadRollbackApk(String downloadUrl, File destination) throws Exception {
+        String url = safe(downloadUrl);
+        if (url.isEmpty()) {
+            throw new IllegalArgumentException("rollback download url is required");
+        }
+        if (!sameOrigin(baseUrl, url)) {
+            throw new IllegalStateException("rollback download host is not the configured gateway");
+        }
+        downloadFile(url, destination, 120000);
+    }
+
     JSONObject agentRun(JSONObject body) throws Exception {
         String responseText = postJson(apiEndpoint("/v1/agent/runs"), body.toString(), 30000);
         return new JSONObject(responseText);
@@ -536,6 +552,34 @@ final class MoaGatewayClient {
             }
         }
         return builder.toString();
+    }
+
+    private static boolean sameOrigin(String a, String b) {
+        try {
+            java.net.URI ua = java.net.URI.create(safe(a));
+            java.net.URI ub = java.net.URI.create(safe(b));
+            return ua.getScheme() != null
+                    && ua.getScheme().equalsIgnoreCase(ub.getScheme())
+                    && ua.getHost() != null
+                    && ua.getHost().equalsIgnoreCase(ub.getHost())
+                    && normalizedPort(ua) == normalizedPort(ub);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static int normalizedPort(java.net.URI uri) {
+        if (uri.getPort() != -1) {
+            return uri.getPort();
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(java.util.Locale.US);
+        if ("https".equals(scheme)) {
+            return 443;
+        }
+        if ("http".equals(scheme)) {
+            return 80;
+        }
+        return -1;
     }
 
     private static String safe(String value) {

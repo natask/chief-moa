@@ -77,10 +77,12 @@ public final class MainActivity extends Activity {
     private Button startButton;
     private Button stopButton;
     private Button updateButton;
+    private Button rollbackButton;
     private EditText gatewayUrlInput;
     private EditText gatewayTokenInput;
     private CheckBox spokenRepliesInput;
     private JSONObject pendingUpdate;
+    private MoaUpdatePolicy.RollbackOption pendingRollback;
     private boolean autoStartedOverlay;
     private boolean requestedMicOnStartup;
     private int gatewayHealthGeneration;
@@ -278,6 +280,18 @@ public final class MainActivity extends Activity {
             }
         });
         card.addView(updateButton);
+
+        // Restore-previous-version lives here in the full app, never in the
+        // overlay. It is hidden until the gateway offers a verified rollback and
+        // only ever runs after explicit confirmation.
+        rollbackButton = secondaryButton("Restore previous version");
+        rollbackButton.setVisibility(View.GONE);
+        rollbackButton.setOnClickListener(v -> {
+            if (pendingRollback != null) {
+                showRollbackDialog(pendingRollback);
+            }
+        });
+        card.addView(rollbackButton);
         return card;
     }
 
@@ -930,6 +944,8 @@ public final class MainActivity extends Activity {
                     return;
                 }
                 pendingUpdate = nextUpdate;
+                pendingRollback = nextDecision != null ? nextDecision.rollback : null;
+                updateRollbackButton();
                 if (updateStatus != null) {
                     updateStatus.setText(nextLabel);
                     updateStatus.setTextColor(nextColor);
@@ -1060,6 +1076,115 @@ public final class MainActivity extends Activity {
         }, "moa-update-download").start();
     }
 
+    private void updateRollbackButton() {
+        if (rollbackButton == null) {
+            return;
+        }
+        MoaUpdatePolicy.RollbackOption rollback = pendingRollback;
+        if (rollback == null) {
+            rollbackButton.setVisibility(View.GONE);
+            return;
+        }
+        rollbackButton.setVisibility(View.VISIBLE);
+        rollbackButton.setEnabled(true);
+        rollbackButton.setAlpha(1f);
+        rollbackButton.setText("Restore previous version (" + rollback.versionName + ")");
+    }
+
+    private void showRollbackDialog(MoaUpdatePolicy.RollbackOption rollback) {
+        if (rollback == null || isFinishing()) {
+            return;
+        }
+        String positive = rollback.requiresReinstall ? "Uninstall current" : "Restore";
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Restore previous version")
+                .setMessage(MoaUpdatePolicy.rollbackMessage(rollback))
+                .setNegativeButton("Not now", null)
+                .setPositiveButton(positive, (ignored, which) -> {
+                    if (rollback.requiresReinstall) {
+                        routeToUninstallForRollback(rollback);
+                    } else {
+                        installRollback(rollback);
+                    }
+                })
+                .create();
+        dialog.setCanceledOnTouchOutside(false);
+        dialog.show();
+    }
+
+    // requires_reinstall: Android will not install an older version_code in
+    // place, so the user must remove the current build first. We only send them
+    // to the system uninstall screen; nothing is removed without their action.
+    private void routeToUninstallForRollback(MoaUpdatePolicy.RollbackOption rollback) {
+        if (updateStatus != null) {
+            updateStatus.setText("Uninstall to restore v" + rollback.versionName);
+            updateStatus.setTextColor(MoaColors.GOLD);
+        }
+        Intent uninstall = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + getPackageName()))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(uninstall);
+        } catch (ActivityNotFoundException error) {
+            // Uninstall also lives on the app details screen on some devices.
+            startActivity(new Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        }
+    }
+
+    // Non-reinstall rollback: the artifact is installable in place, so run the
+    // same consent-first download + verify + system-installer path as an update.
+    private void installRollback(MoaUpdatePolicy.RollbackOption rollback) {
+        if (rollback == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+            if (updateStatus != null) {
+                updateStatus.setText("Allow installs");
+                updateStatus.setTextColor(MoaColors.GOLD);
+            }
+            startActivity(new Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName())
+            ));
+            return;
+        }
+
+        if (updateStatus != null) {
+            updateStatus.setText("Downloading...");
+            updateStatus.setTextColor(MoaColors.GOLD);
+        }
+        if (rollbackButton != null) {
+            rollbackButton.setEnabled(false);
+            rollbackButton.setAlpha(0.6f);
+        }
+
+        new Thread(() -> {
+            try {
+                File apk = updateApkFile();
+                MoaGatewayClient client = new MoaGatewayClient(MoaPrefs.gatewayUrl(this), MoaPrefs.gatewayToken(this));
+                client.downloadRollbackApk(rollback.downloadUrl, apk);
+                verifyDownloadedRollback(rollback, apk);
+                mainHandler.post(this::launchInstaller);
+                return;
+            } catch (Exception ignored) {
+                // Report a compact user-facing state below.
+            }
+
+            mainHandler.post(() -> {
+                if (updateStatus != null) {
+                    updateStatus.setText("Restore failed");
+                    updateStatus.setTextColor(MoaColors.GOLD);
+                }
+                if (rollbackButton != null) {
+                    rollbackButton.setEnabled(true);
+                    rollbackButton.setAlpha(1f);
+                }
+            });
+        }, "moa-rollback-download").start();
+    }
+
     private void launchInstaller() {
         Uri apkUri = Uri.parse("content://" + getPackageName() + ".apkprovider/ota/" + MoaApkProvider.APK_NAME);
         Intent install = new Intent(Intent.ACTION_VIEW);
@@ -1082,6 +1207,40 @@ public final class MainActivity extends Activity {
                 updateButton.setEnabled(true);
                 updateButton.setAlpha(1f);
             }
+            if (rollbackButton != null) {
+                rollbackButton.setEnabled(true);
+                rollbackButton.setAlpha(1f);
+            }
+        }
+    }
+
+    // Rollback verification mirrors verifyDownloadedUpdate but must not require a
+    // higher version than installed — a rollback is intentionally same-or-lower.
+    private void verifyDownloadedRollback(MoaUpdatePolicy.RollbackOption rollback, File apk) throws Exception {
+        if (rollback.sizeBytes <= 0 || apk.length() != rollback.sizeBytes) {
+            throw new IllegalStateException("rollback APK size mismatch");
+        }
+        if (!rollback.sha256.matches("[a-f0-9]{64}") || !rollback.sha256.equalsIgnoreCase(sha256Hex(apk))) {
+            throw new IllegalStateException("rollback APK checksum mismatch");
+        }
+
+        PackageInfo archive = packageInfoForArchive(apk);
+        if (archive == null || !getPackageName().equals(archive.packageName)) {
+            throw new IllegalStateException("rollback APK package mismatch");
+        }
+        long archiveVersionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? archive.getLongVersionCode()
+                : archive.versionCode;
+        if (archiveVersionCode != rollback.versionCode) {
+            throw new IllegalStateException("rollback APK version mismatch");
+        }
+
+        PackageInfo installed = getPackageManager().getPackageInfo(
+                getPackageName(),
+                signatureFlags()
+        );
+        if (!signatureDigests(installed).equals(signatureDigests(archive))) {
+            throw new IllegalStateException("rollback APK signer mismatch");
         }
     }
 
