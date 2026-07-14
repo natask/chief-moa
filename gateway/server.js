@@ -24,6 +24,7 @@ const {
   rejectedLanguageFields,
   supportedLanguagesSentence,
   languageControlPatch,
+  canonicalVoice,
 } = require("./lib/profile-options");
 const voiceL10n = require("./lib/voice-l10n");
 const { createCompanionCatalogStore, COMMAND_VERBS: COMPANION_COMMAND_VERBS } = require("./lib/companion-catalog");
@@ -1865,6 +1866,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/v1/voice/turns") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      handleVoiceTurnsList(response, url);
+      return;
+    }
+
     if (request.method === "GET" && url.pathname.startsWith("/v1/voice/turns/")) {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -1913,9 +1923,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     // ---- LiveKit voice-transport PROTOTYPE (flag-gated) ---------------------
-    // All four routes below are inert unless LIVEKIT_URL + LIVEKIT_API_KEY +
-    // LIVEKIT_API_SECRET are set, so the default cascaded WS pipeline is
-    // unchanged. The client-facing token route and the three worker-facing
+    // The token/reason/turn-record routes below are inert unless LIVEKIT_URL +
+    // LIVEKIT_API_KEY + LIVEKIT_API_SECRET are set, so the default cascaded WS
+    // pipeline is unchanged. The client-facing token route and the worker-facing
     // internal hooks share the same bearer-token auth as their peers.
     if (request.method === "POST" && url.pathname === "/v1/voice/livekit/token") {
       if (!authorized(request)) {
@@ -1939,13 +1949,13 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    // Synthesize is NOT LiveKit-gated: it wraps the active provider's hosted
+    // TTS leg directly, so any authorized surface (LiveKit worker, website
+    // replay-in-another-voice) can re-voice stored reply text. The handler
+    // itself reports 501 when the active provider has no hosted TTS leg.
     if (request.method === "POST" && url.pathname === "/v1/internal/voice/synthesize") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      if (!livekitConfigured()) {
-        sendJson(response, 503, livekitNotConfiguredPayload());
         return;
       }
       await handleInternalVoiceSynthesize(request, response);
@@ -7775,8 +7785,15 @@ async function handleInternalVoiceSynthesize(request, response) {
   }
   const language = String(body.language || "").trim();
   const style = String(body.tts_style || body.style || "").trim();
+  // Optional per-call delivery overrides: `voice` (canonical catalog name;
+  // anything else falls back to the profile voice) and `speaking_rate`
+  // (clamped by the provider). Absent fields keep today's behavior, so this
+  // stays backwards compatible for existing callers.
+  const voice = canonicalVoice(String(body.voice || "")) || "";
+  const rateInput = Number(body.speaking_rate ?? body.speakingRate);
+  const delivery = Number.isFinite(rateInput) && rateInput > 0 ? { speakingRate: rateInput } : {};
   try {
-    const pcm = await provider.synthesizeSpeech(text, language, style);
+    const pcm = await provider.synthesizeSpeech(text, language, style, undefined, voice, delivery);
     if (!pcm || !pcm.length) {
       sendJson(response, 502, { error: "hosted TTS returned no audio", status: "tts_empty" });
       return;
@@ -7789,6 +7806,7 @@ async function handleInternalVoiceSynthesize(request, response) {
       "x-moa-audio-sample-rate": "16000",
       "x-moa-audio-channels": "1",
       "x-moa-reply-language": language || "",
+      "x-moa-voice": voice || "",
     });
     response.end(Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm));
   } catch (error) {
@@ -11668,6 +11686,44 @@ function handleVoiceTurnGet(response, turnId, sessionId) {
     created_at: String(record.created_at || ""),
     updated_at: String(record.updated_at || ""),
     references: record.references || {},
+  });
+}
+
+// GET /v1/voice/turns?session_id=... — list a session's stored turns (oldest
+// first, bounded by limit): the verbatim transcript, the assistant reply text,
+// timestamps, and which PCM archives still exist. This is the read side of the
+// conversation-history panel: a client can show the exchange, replay a stored
+// reply, or re-voice the reply text through /v1/internal/voice/synthesize.
+function handleVoiceTurnsList(response, url) {
+  const sessionId = sanitizeOptionalBlankId(
+    url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || "",
+  );
+  if (!sessionId) {
+    sendJson(response, 400, { error: "session_id is required to list voice turns" });
+    return;
+  }
+  const branchId = sanitizeOptionalBlankId(url.searchParams.get("branch_id") || "");
+  const limit = Math.max(1, Math.min(Number(url.searchParams.get("limit") || 50) || 50, 200));
+  const records = listVoiceTurnRecordsForSession(sessionId, branchId).slice(-limit);
+  sendJson(response, 200, {
+    session_id: sessionId,
+    branch_id: branchId,
+    generated_at: new Date().toISOString(),
+    turn_count: records.length,
+    turns: records.map((record) => ({
+      turn_id: String(record.id || ""),
+      session_id: String(record.session_id || sessionId),
+      branch_id: String(record.branch_id || "default"),
+      source: String(record.source || ""),
+      transcript: String(record.transcript || ""),
+      transcript_source: String(record.transcript_source || ""),
+      reply: String(record.response?.display || record.response?.speak || ""),
+      speak: String(record.response?.speak || ""),
+      reply_language: String(record.response?.language || record.reply_language || ""),
+      created_at: String(record.created_at || ""),
+      updated_at: String(record.updated_at || record.created_at || ""),
+      audio: voiceTurnAudioRefs(record),
+    })),
   });
 }
 

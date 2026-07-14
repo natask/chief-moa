@@ -57,11 +57,19 @@ async function main() {
       assert.equal(res.json.status, "not_configured");
     });
     await step("internal hooks 503 when LiveKit is not configured", async () => {
-      for (const route of ["/v1/internal/voice/reason", "/v1/internal/voice/synthesize", "/v1/internal/voice/turn-record"]) {
+      for (const route of ["/v1/internal/voice/reason", "/v1/internal/voice/turn-record"]) {
         const res = await post(unconfigured.baseUrl, route, { transcript: "hi", text: "hi" });
         assert.equal(res.status, 503, `${route}: ${res.text}`);
         assert.equal(res.json.status, "not_configured");
       }
+    });
+    await step("synthesize hook is served without LiveKit (provider-gated, not transport-gated)", async () => {
+      // The loopback provider has no hosted TTS leg, so the handler itself
+      // reports 501 tts_unavailable — proving the route is no longer behind
+      // the LiveKit config gate.
+      const res = await post(unconfigured.baseUrl, "/v1/internal/voice/synthesize", { text: "hi" });
+      assert.equal(res.status, 501, res.text);
+      assert.equal(res.json.status, "tts_unavailable");
     });
     await step("health reports livekit_voice disabled when unconfigured", async () => {
       const res = await get(unconfigured.baseUrl, "/health");
@@ -133,6 +141,18 @@ async function main() {
       assert.equal(res.body.length % 2, 0, "PCM16 byte length must be even");
     });
 
+    await step("synthesize hook accepts a per-call voice + speaking-rate override", async () => {
+      const res = await postRaw(configured.baseUrl, "/v1/internal/voice/synthesize", {
+        text: "hello again master",
+        language: "en-US",
+        voice: "aoede",
+        speaking_rate: 1.25,
+      });
+      assert.equal(res.status, 200, res.text());
+      assert.equal(res.headers["x-moa-voice"], "Aoede", "voice must be canonicalized and echoed");
+      assert.ok(res.body.length > 0, "override-voice PCM must be non-empty");
+    });
+
     await step("turn-record hook stores a turn through the shared record path", async () => {
       const turnId = "turn-lk-1";
       const sessionId = "sess-record";
@@ -156,6 +176,15 @@ async function main() {
       const stored = await get(configured.baseUrl, `/v1/voice/turns/${turnId}?session_id=${sessionId}`);
       assert.equal(stored.status, 200, stored.text);
       assert.equal(stored.json.transcript, "remember the plan");
+
+      // ...and appear in the session's turn list (the conversation-history read).
+      const listed = await get(configured.baseUrl, `/v1/voice/turns?session_id=${sessionId}`);
+      assert.equal(listed.status, 200, listed.text);
+      assert.equal(listed.json.turn_count, 1, listed.text);
+      assert.equal(listed.json.turns[0].turn_id, turnId);
+      assert.equal(listed.json.turns[0].transcript, "remember the plan");
+      assert.equal(listed.json.turns[0].reply, "Noted, master.");
+      assert.equal(typeof listed.json.turns[0].audio, "object");
     });
 
     console.log("smoke-livekit-transport: ok");
