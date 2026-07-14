@@ -389,6 +389,17 @@ restores defaults, both scoped global or per-device and both appending a new
 profile version so history stays append-only and every voice change is itself
 reversible by voice.
 
+Public web search follows a different boundary from code mode. On ordinary
+Vertex reasoning calls the gateway offers the model provider's native Google
+Search tool, so retrieval and grounding remain provider-visible. Providers
+whose current gateway protocol cannot expose native search may receive a
+bounded Exa `web_search` function when its gateway-side key is configured.
+Search never becomes arbitrary QuickJS network access: code mode still sees
+only registered `tools.moa.*` integration capabilities. Retrieved page text is
+untrusted evidence, not instruction or execution authority, and answers are
+prompted to cite the source URLs they use. Forced control-plane calls such as
+context preflight remain function-only and do not receive search.
+
 Browser page tweaks follow the proposal boundary: `propose_page_tweak` is
 available only on browser-sourced turns, and the gateway validates the proposed
 `{ kind, params, name? }` record against the extension's own tweak allowlist

@@ -106,6 +106,7 @@ const SYNTAX_CHECK_FILES = [
   "scripts/smoke-execute-language.js",
   "lib/browser-agent-loop.js",
   "lib/surface-skills.js",
+  "lib/exa-search.js",
   "scripts/smoke-browser-agent-loop.js",
   "scripts/smoke-surface-skills.js",
   "lib/livekit-transport.js",

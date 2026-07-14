@@ -617,6 +617,8 @@ async function modelAndReasoningProviderRoute() {
   assert.deepEqual(vertexPreflight.body.toolConfig.functionCallingConfig.allowedFunctionNames, ["context_management"]);
   assert.equal(vertexPreflight.body.toolConfig.functionCallingConfig.mode, "ANY");
   assert.equal(vertexPreflight.body.contents.length, 1, "Vertex preflight shape contains only current-turn contents");
+  assert.ok(vertexCall.body.tools.some((tool) => tool.googleSearch), "ordinary Vertex reasoning must receive the provider-native Google Search tool");
+  assert.ok(!vertexPreflight.body.tools.some((tool) => tool.googleSearch), "the forced context preflight must remain function-only");
   assert.match(vertexCall.url, /\/models\/gemini-smoke-custom:generateContent/, `profile.model must select the Vertex model in the URL: ${vertexCall.url}`);
   assert.ok(!fetchCalls.some((c) => c.kind === "openai"), "a vertex-routed turn must not also call the openai-compatible endpoint");
 
