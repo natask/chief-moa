@@ -505,9 +505,12 @@ test("concurrent recovery adopters serialize to one claim and one adoption", asy
       request_id: request.request_id, deployment_id: "dep_preview_adopt-race", operation: "preview",
       worker_id: previewClaim.worker_id, claim_id: previewClaim.claim_id, status: "passed",
     });
+    // Lease must outlive the observe call below under load; expiry is awaited
+    // off the actual timestamp so the race setup is load-independent.
+    const adoptLeaseExpiresAt = Date.now() + 400;
     const original = await storeA.claimDeploymentRequest({
       request_id: request.request_id, operation: "apply", worker_id: "original-worker",
-      claim_id: "original-claim", lease_expires_at: new Date(Date.now() + 25).toISOString(),
+      claim_id: "original-claim", lease_expires_at: new Date(adoptLeaseExpiresAt).toISOString(),
     });
     await storeA.observeDeploymentOperationEffect({
       request_id: request.request_id, operation: "apply", worker_id: "original-worker",
@@ -517,7 +520,7 @@ test("concurrent recovery adopters serialize to one claim and one adoption", asy
       smoke_artifact_ref: "smoke://adopt-race", rollback_ref: "rollback://adopt-race",
       drain_status: "drained", compatibility_status: "compatible",
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, adoptLeaseExpiresAt - Date.now()) + 40));
     const settled = await Promise.allSettled([
       storeA.adoptDeploymentOperationEffect({ request_id: request.request_id, operation: "apply", effect_id: "adopt-race-effect", worker_id: "replacement-a", claim_id: "replacement-claim-a" }),
       storeB.adoptDeploymentOperationEffect({ request_id: request.request_id, operation: "apply", effect_id: "adopt-race-effect", worker_id: "replacement-b", claim_id: "replacement-claim-b" }),

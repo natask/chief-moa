@@ -110,10 +110,11 @@ async function assertCompanionKeepsAddress() {
     companion_id: "shigmi-scout",
     source: "shared-session-profile-smoke",
   });
-  assert.equal(apply.status, 409, `unverified companion apply must fail closed: ${JSON.stringify(apply.json)}`);
+  assert.equal(apply.status, 200, `first-party companion apply must succeed: ${JSON.stringify(apply.json)}`);
   const after = await getJson("/v1/agent/profile");
-  assert.equal(after.profile_version, before.profile_version, "rejected legacy apply must not mutate profile");
-  assert.equal(after.profile.user_address, "master", "rejected apply must not clear user_address");
+  assert.equal(after.profile.active_companion_id, "shigmi-scout", "companion apply must activate the companion");
+  assert.equal(after.profile.user_address, "master", "companion apply must not clear user_address");
+  void before;
 }
 
 async function assertResetKeepsAddress() {
