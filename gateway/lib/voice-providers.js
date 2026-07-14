@@ -1870,7 +1870,14 @@ class CascadedVoiceProvider {
     const configMessage = this.streamingRecognitionConfig(codes, sampleRate, channels);
     try {
       return createStreamingSttSession({
-        openStream: () => client.streamingRecognize(),
+        // @google-cloud/speech v2's public streamingRecognize() currently
+        // dispatches through the wrong generated bidi surface and Google
+        // rejects an otherwise valid recognizer with RESOURCE_PROJECT_INVALID.
+        // The generated v2 bidi method is the working transport. Keep the
+        // public method as a compatibility fallback for injected/older clients.
+        openStream: () => (typeof client._streamingRecognize === "function"
+          ? client._streamingRecognize()
+          : client.streamingRecognize()),
         configMessage,
         audioMessage: (chunk) => ({ audio: chunk }),
         parseResults: (data) => {

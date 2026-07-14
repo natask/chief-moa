@@ -7,11 +7,13 @@
 //   A. The streaming session feeds live partial transcripts and finalizes a
 //      concatenated transcript ACROSS a simulated stream rotation (the ~5-min
 //      gRPC cap workaround that makes speech length unbounded).
-//   B. Any streaming failure degrades to the batch :recognize path — a broken
+//   B. The Google Speech v2 generated bidi method is selected instead of the
+//      public method that fails live with RESOURCE_PROJECT_INVALID.
+//   C. Any streaming failure degrades to the batch :recognize path — a broken
 //      stream never fails the turn.
-//   C. The batch fallback windows audio longer than 55s and concatenates the
+//   D. The batch fallback windows audio longer than 55s and concatenates the
 //      per-window transcripts, so even the fallback has no length limit.
-//   D. End to end through the real VoiceSessionConnection: audio frames teed
+//   E. End to end through the real VoiceSessionConnection: audio frames teed
 //      during capture broadcast `transcript_partial` to the client and the
 //      final transcript is produced on commit without re-reading the file.
 
@@ -130,6 +132,40 @@ function chirpProviderEnv(extra = {}) {
   };
 }
 
+async function testV2BidiMethodSelection() {
+  resetVoiceStreamingBreakerForTests();
+  const opened = [];
+  let generatedCalls = 0;
+  let publicCalls = 0;
+  const client = {
+    _streamingRecognize: () => {
+      generatedCalls += 1;
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    streamingRecognize: () => {
+      publicCalls += 1;
+      throw new Error("public v2 method must not be selected");
+    },
+  };
+  const provider = createVoiceProvider({
+    env: chirpProviderEnv(),
+    streamingSttClientFactory: () => client,
+  });
+  const session = provider.createStreamingSttSession({
+    turnId: "v2-bidi-method",
+    format: { sample_rate: 16000, channels: 1 },
+  }, { onTranscriptPartial: () => {} });
+
+  assert.ok(session, "streaming session should be created");
+  assert.equal(generatedCalls, 1, "Speech v2 generated bidi method is selected");
+  assert.equal(publicCalls, 0, "the live-broken public streamingRecognize method is not called");
+  assert.equal(opened.length, 1, "one generated bidi stream opens");
+  session.abort();
+  console.log("  B Speech v2 generated bidi method selection: ok");
+}
+
 async function testBatchFallbackOnStreamingError() {
   resetVoiceStreamingBreakerForTests();
   const previousFetch = global.fetch;
@@ -182,7 +218,7 @@ async function testBatchFallbackOnStreamingError() {
     assert.equal(result.streaming, undefined, "a failed stream must not report a streaming result");
     assert.equal(result.text, "batch recovery transcript", "STT degraded to the batch :recognize path");
     assert.ok(recognizeCalls >= 1, "batch recognize was invoked as the fallback");
-    console.log("  B batch fallback on streaming error: ok");
+    console.log("  C batch fallback on streaming error: ok");
   } finally {
     global.fetch = previousFetch;
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -224,7 +260,7 @@ async function testWindowedBatchSplit() {
     assert.deepEqual(windowTexts.map((w) => w.bytes), [11000, 11000, 3000], "windows are <=55s and frame-aligned");
     assert.equal(result.text, "w1 w2 w3", "window transcripts concatenate in order");
     assert.equal(result.windowed, true, "windowed batch is flagged");
-    console.log("  C windowed batch split (>55s): ok");
+    console.log("  D windowed batch split (>55s): ok");
   } finally {
     global.fetch = previousFetch;
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -281,7 +317,7 @@ async function testSessionServerTee() {
     assert.equal(recorded[0].transcript, "live one two", "final transcript came from the streaming session");
     assert.ok(sentEvents(ws).some((e) => e.type === "transcript_final" && e.text === "live one two"),
       "transcript_final was broadcast");
-    console.log("  D session-server tee + partial broadcast: ok");
+    console.log("  E session-server tee + partial broadcast: ok");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -364,6 +400,7 @@ function sentEvents(ws) {
 
 async function main() {
   await testRotationAndPartials();
+  await testV2BidiMethodSelection();
   await testBatchFallbackOnStreamingError();
   await testWindowedBatchSplit();
   await testSessionServerTee();
