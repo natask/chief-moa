@@ -16,6 +16,7 @@ const {
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
+  profileControlIntentMutates,
   parseProfileRevertIntent,
   parsePersonaIntent,
   classifyVoiceTurn,
@@ -348,5 +349,99 @@ assert.strictEqual(classifyVoiceTurn({ client: { intent_hint: "multi_agent" } },
 
 // null/undefined body must not throw.
 assert.strictEqual(classifyVoiceTurn(undefined, "hello there"), "chat");
+
+// profileControlIntentMutates: identity / persona / voice / language / companion /
+// revert intents WRITE the profile and must be model-routed; read-only queries and
+// the response_modality fast path do not mutate. This is the classifier the
+// gateway uses to decide whether a matchtext parse may be applied deterministically.
+for (const utterance of [
+  "your name is Moa",
+  "you are Aggie",
+  "call yourself The Steward",
+  "become a pirate",
+  "act like a therapist",
+  "pretend to be a grumpy chef who hates onions",
+  "use the Kore voice",
+  "use a feminine voice",
+  "speak Amharic and English",
+  "only process English and Amharic",
+  "I want you to be a research scout",
+  "set your prompt to You are a helper",
+]) {
+  assert.ok(
+    profileControlIntentMutates(parseProfileControlIntent(utterance)),
+    `'${utterance}' must be a profile MUTATION (model-routed, never matchtext-applied)`,
+  );
+}
+// Revert/reset stays deterministic on purpose: it only moves between existing
+// stored versions (no free-text payload), is itself reversible, and is the
+// escape hatch that must work even when no reasoning model is reachable.
+for (const escapeHatch of ["undo that", "reset your settings"]) {
+  assert.ok(
+    !profileControlIntentMutates(parseProfileControlIntent(escapeHatch)),
+    `'${escapeHatch}' must stay on the deterministic escape-hatch path`,
+  );
+}
+for (const readOnly of [
+  "what is your name",
+  "what voice are you using",
+  "what languages can you speak",
+  "what did you hear",
+  "go through all the voices and say something in every voice",
+  "change your voice", // clarify, not a write
+]) {
+  assert.ok(
+    !profileControlIntentMutates(parseProfileControlIntent(readOnly)),
+    `'${readOnly}' must NOT be classified as a profile mutation`,
+  );
+}
+// response_modality ("reply in text / out loud") is the one write kept on the
+// deterministic fast path: its value is a closed set, so it is not a mutation
+// for routing purposes and stays deterministic.
+for (const modality of ["respond in text", "just text", "speak to me out loud"]) {
+  const intent = parseProfileControlIntent(modality);
+  assert.equal(intent?.action, "update", `'${modality}' must be a modality update`);
+  assert.ok(intent.patch.response_modality, `'${modality}' must set response_modality`);
+  assert.ok(
+    !profileControlIntentMutates(intent),
+    `'${modality}' modality-only update must stay on the deterministic fast path`,
+  );
+}
+assert.equal(profileControlIntentMutates(null), false);
+assert.equal(profileControlIntentMutates({ action: "summary" }), false);
+
+// Production STT-garbage that reached the live profile as identity writes with
+// source "voice" (the resulting assistant_name value is on the right). Each of
+// these transcripts DOES match the deterministic assistant-name parser and would
+// previously have been applied verbatim. They must now be classified as
+// MUTATIONS so the server reroutes them to the model (cascaded path) or gates
+// them behind the confirmation judge (HTTP path) — a matchtext parse alone may
+// never persist them.
+const GARBAGE_IDENTITY_WRITES = [
+  ["your name is saying you whore", "saying you whore"], // "saying, you whore" 07-06
+  ["you are not designed to live", "not designed to live"], // 07-08
+  ["call yourself done", "done"], // 07-08
+  ["you are child you", "child you"], // "child, you" 07-08
+  ["you are master's servant", "master's servant"], // 07-08
+  ["you are so much a nazi", "so much a nazi"], // "so much a Nazi" 07-10
+  ["you are not speaking bitch", "not speaking bitch"], // "not speaking, bitch" 07-14
+  ["you are now saying", "saying"], // 07-14
+];
+for (const [transcript, name] of GARBAGE_IDENTITY_WRITES) {
+  const intent = parseProfileControlIntent(transcript);
+  assert.equal(intent?.patch?.assistant_name, name, `'${transcript}' still parses to the garbage name (regression fixture)`);
+  assert.ok(
+    profileControlIntentMutates(intent),
+    `garbage identity write '${transcript}' must be a MUTATION so it is model-routed, never matchtext-applied`,
+  );
+}
+
+// Stop / quiet fast path stays deterministic and exact-set (en). It is a
+// non-mutating control action, so it is untouched by the model-routing change.
+for (const stop of ["stop", "shut up", "be quiet", "never mind", "silence"]) {
+  assert.ok(isStopLike(stop), `'${stop}' must stay stop-like`);
+  assert.strictEqual(classifyVoiceTurn({}, stop), "control", `'${stop}' must classify as control`);
+}
+assert.ok(!isStopLike("stop the build"), "a real request must not be swept into stop");
 
 console.log("smoke-voice-intent: ok");

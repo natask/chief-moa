@@ -164,6 +164,8 @@ async function main() {
   await historyReachesTheModel();
   await modalityHintIsInjected();
   await modelToolCallUpdatesProfile();
+  await garbageIdentityWriteIsModelRoutedNotApplied();
+  await genuineRenameWritesThroughModelTool();
   await modelToolCallLaunchesAgentRun();
   await modelAndReasoningProviderRoute();
   await expressiveDirectiveAndParsing();
@@ -183,6 +185,8 @@ async function main() {
       "a prior voice turn's transcript reaches the cascaded reasoning model messages",
       "the reasoner injects a modality/TTS delivery hint (modality, availability, previous error)",
       "a model update_agent_profile tool call patches the profile through the sanitizer and the confirmation is spoken",
+      "a STT-garbage identity-write transcript is rerouted to the model as chat (not profile_control) and writes nothing when the model does not call the settings tool",
+      "a genuine spoken rename is rerouted to the model as chat and the model's update_agent_profile tool call persists the new assistant name",
       "a model launch_agent_run tool call starts a run in this session's work state, and the transcript gate blocks launches the user never asked for",
       "profile.model and profile.reasoning_provider route the next reasoning call to the selected provider/model",
       "on gemini-tts the reasoner prompts for expressive speech and splits style, tags, and clean display text",
@@ -464,6 +468,82 @@ async function modelToolCallUpdatesProfile() {
   } finally {
     pendingToolCall = null;
     // Restore the default voice so the run leaves no residue.
+    await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  }
+}
+
+// STT-garbage that used to match the deterministic assistant-name parser and get
+// written verbatim (source "voice") must now flow to the model as an ordinary
+// chat turn. When the model does NOT call the settings tool (a real model would
+// not, for garbage), nothing is written. This is the core regression: the
+// matchtext parse can no longer persist recognition noise as an identity.
+async function garbageIdentityWriteIsModelRoutedNotApplied() {
+  const before = agentProfile.effective().assistant_name;
+  pendingReply = "I'm not sure what you meant there, master.";
+  fetchCalls.length = 0;
+  const turnId = "reasoner-garbage-identity";
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "you are not speaking bitch",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: turnId,
+    });
+    assert.equal(
+      reasoning.classification,
+      "chat",
+      "a garbage identity-write transcript must be rerouted to the model as chat, not profile_control",
+    );
+    assert.equal(
+      agentProfile.effective().assistant_name,
+      before,
+      "a garbage identity write must not change the assistant name when the model does not call the tool",
+    );
+    const record = await recordStreamingVoiceTurn({
+      session_id: SESSION_ID,
+      conversation_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: turnId,
+      source: "voice-cascaded",
+      transcript: "you are not speaking bitch",
+      assistant_text: reasoning.display,
+    });
+    assert.equal(record.classification, "chat", "the stored canonical turn must be chat, not a profile write");
+    assert.equal(
+      agentProfile.effective().assistant_name,
+      before,
+      "recording the turn must not deterministically apply the garbage identity write",
+    );
+  } finally {
+    pendingReply = null;
+  }
+}
+
+// A genuine spoken rename is also rerouted to the model as chat, and the model's
+// update_agent_profile tool call is what persists it (source "voice-cascaded-tool")
+// — proving the model-owned path still performs real renames and confirms them.
+async function genuineRenameWritesThroughModelTool() {
+  assert.notEqual(agentProfile.effective().assistant_name, "Aster", "precondition: name must not already be Aster");
+  pendingToolCall = { name: "update_agent_profile", arguments: { profile: { assistant_name: "Aster" } } };
+  fetchCalls.length = 0;
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "your name is Aster",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-genuine-rename",
+    });
+    assert.equal(reasoning.classification, "chat", "a rename must reach the model as a chat turn, not short-circuit to profile_control");
+    const openaiCalls = fetchCalls.filter((c) => c.kind === "openai");
+    assert.equal(openaiCalls.length, 2, "the tool loop must run a tool round then a final text round");
+    assert.ok(
+      openaiCalls[0].body.tools.some((t) => t.function && t.function.name === "update_agent_profile"),
+      "update_agent_profile must be offered to the model for a rename turn",
+    );
+    assert.equal(agentProfile.effective().assistant_name, "Aster", "the model tool call must persist the new assistant name");
+    assert.ok(String(reasoning.speak || "").length > 0, "the model must speak a confirmation after renaming");
+  } finally {
+    pendingToolCall = null;
     await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
   }
 }

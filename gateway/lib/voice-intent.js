@@ -314,6 +314,45 @@ function parseProfileControlIntent(text) {
   return null;
 }
 
+// Does a parsed profile-control intent WRITE durable profile state? Identity,
+// persona, voice, language, companion, and revert/reset all mutate the stored
+// profile and therefore must be MODEL-ROUTED (the model decides and calls the
+// settings tool), never applied from a matchtext parse alone. STT garbage
+// repeatedly matched the deterministic mutation parsers and became identity
+// writes on the live profile ("assistant_name" set to recognition noise), so a
+// deterministic parse can no longer apply these on its own.
+//
+// The read-only intents (summary, echo_transcript, sample, clarify, reject)
+// change nothing and stay on the deterministic fast path. Two writes stay
+// deterministic: output modality ("reply in text / out loud"), whose value is
+// a closed {text, speech, auto} set that can never smuggle STT garbage into an
+// identity field and is latency-critical; and revert/reset, which only moves
+// between existing stored versions (no free-text payload), is itself
+// reversible, and is the user's escape hatch when a bad write DOES land — it
+// must keep working even when no reasoning model is reachable.
+function profileControlIntentMutates(intent) {
+  if (!intent || typeof intent !== "object") {
+    return false;
+  }
+  const action = String(intent.action || "");
+  if (action === "revert") {
+    return false;
+  }
+  if (action === "companion_create_apply") {
+    return true;
+  }
+  if (action !== "update") {
+    return false;
+  }
+  const patch = intent.patch && typeof intent.patch === "object" ? intent.patch : {};
+  const keys = Object.keys(patch);
+  if (keys.length === 0) {
+    return false;
+  }
+  // A response_modality-only update is the allowed deterministic exception.
+  return !keys.every((key) => key === "response_modality");
+}
+
 // "undo that" / "undo the last change" / "revert" -> restore the version before
 // the last change. "reset your settings" / "start over" / "back to default" ->
 // restore the gateway defaults. Returns { action: "revert", mode } or null.
@@ -840,6 +879,7 @@ module.exports = {
   shouldRunAgentFromVoice,
   explicitAgentPromptFrom,
   parseProfileControlIntent,
+  profileControlIntentMutates,
   parseProfileRevertIntent,
   parsePersonaIntent,
   looksLikeLanguageControl,

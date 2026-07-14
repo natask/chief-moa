@@ -79,6 +79,8 @@ const MESSAGES = {
       `I only speak ${languages} for now, so I kept the current language.`,
     rejectGeneric: () =>
       "I can't change that setting, so I kept the current one.",
+    profileMutationUnconfirmed: () =>
+      "I didn't change anything, since I couldn't confirm you asked for that.",
     missingAccess: ({ access }) =>
       `Hey, I would like to do that, but I need you to give me access to ${access}.`,
     needProfileTarget: () =>
@@ -106,6 +108,8 @@ const MESSAGES = {
       `ለአሁኑ ${languages} ብቻ ነው የምናገረው፣ ስለዚህ አሁን ያለውን ቋንቋ አቆይቻለሁ።`,
     rejectGeneric: () =>
       "ያንን ቅንብር መቀየር አልችልም፣ ስለዚህ አሁን ያለውን አቆይቻለሁ።",
+    profileMutationUnconfirmed: () =>
+      "ያንን እንደጠየቁ ማረጋገጥ ስላልቻልኩ ምንም አልቀየርኩም።",
     missingAccess: ({ access }) =>
       `ይህን ማድረግ እፈልጋለሁ፣ ግን ${access} እንዲሰጡኝ ያስፈልጋል።`,
     needProfileTarget: () =>
