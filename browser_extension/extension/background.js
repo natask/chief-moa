@@ -55,7 +55,12 @@ const VOICE_AUTO_COMMIT_ENABLED = true;
 // add to every turn's time-to-first-audio, so keep it as tight as VAD allows.
 const VOICE_AUTO_COMMIT_SILENCE_MS = 750;
 const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
-const VOICE_AUTO_COMMIT_MAX_RECORDING_MS = 18000;
+// NOT a product limit on how long the user may speak. Speech is streamed to the
+// gateway frame-by-frame, so an utterance can run indefinitely. This is only a
+// safety backstop that force-commits if the VAD gets stuck and never detects the
+// end-of-speech silence — 30 minutes, far past any real turn. Normal turns end
+// on the VAD silence auto-commit or on push-to-talk release, not here.
+const VOICE_STUCK_VAD_BACKSTOP_MS = 1_800_000;
 const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
 const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
 const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
@@ -2730,8 +2735,8 @@ function noteVoiceSessionAudio(session, buffer) {
   }
   if (session.lastSpeechAt && !session.maxCommitTimer) {
     session.maxCommitTimer = setTimeout(() => {
-      autoCommitVoiceSession(session.id, "max recording reached").catch(() => {});
-    }, VOICE_AUTO_COMMIT_MAX_RECORDING_MS);
+      autoCommitVoiceSession(session.id, "stuck-VAD backstop reached").catch(() => {});
+    }, VOICE_STUCK_VAD_BACKSTOP_MS);
   }
 }
 

@@ -15,7 +15,17 @@ final class MoaStreamingVoiceSessionController {
 
     private static final long AUTO_COMMIT_MIN_RECORDING_MS = 650;
     private static final long AUTO_COMMIT_SILENCE_MS = 700;
-    private static final long AUTO_COMMIT_MAX_RECORDING_MS = 12000;
+    // NOT a product limit on how long the user may speak. Audio is streamed to
+    // the gateway frame-by-frame, so an utterance can run indefinitely. Once
+    // speech has been heard, the turn ends on the silence VAD above; this 30-min
+    // value is only a safety backstop that force-commits if the VAD gets stuck
+    // and never detects the end-of-speech silence. It should never be hit by a
+    // real turn.
+    private static final long AUTO_COMMIT_STUCK_VAD_BACKSTOP_MS = 1_800_000;
+    // Separate, short give-up for a session where NO speech was ever detected
+    // (mic opened but the user never spoke): cancel so the orb returns to idle
+    // instead of listening forever. This bounds silence, not speech.
+    private static final long AUTO_COMMIT_NO_SPEECH_TIMEOUT_MS = 12000;
     private static final long AUTO_COMMIT_CHECK_MS = 100;
     // How long a commit will wait for session_ready before failing the turn.
     // Without this bound a deferred commit could wait forever on a hung socket.
@@ -513,9 +523,10 @@ final class MoaStreamingVoiceSessionController {
             boolean silentAfterSpeech = heardSpeech
                     && recordingAge >= AUTO_COMMIT_MIN_RECORDING_MS
                     && now - lastVoiceActivityAtMs >= AUTO_COMMIT_SILENCE_MS;
-            boolean maxed = recordingAge >= AUTO_COMMIT_MAX_RECORDING_MS;
-            shouldCommit = silentAfterSpeech || (heardSpeech && maxed);
-            shouldCancel = !heardSpeech && maxed;
+            boolean backstopReached = recordingAge >= AUTO_COMMIT_STUCK_VAD_BACKSTOP_MS;
+            boolean noSpeechTimedOut = !heardSpeech && recordingAge >= AUTO_COMMIT_NO_SPEECH_TIMEOUT_MS;
+            shouldCommit = silentAfterSpeech || (heardSpeech && backstopReached);
+            shouldCancel = noSpeechTimedOut;
         }
         if (shouldCommit) {
             Log.i(TAG, "autoCommit turn");
