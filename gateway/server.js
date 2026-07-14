@@ -5866,8 +5866,12 @@ async function handlePetInstall(request, response) {
 }
 
 function applyCompanionToProfile(input, profileOptions, source = "api") {
-  if (!input?.verified_runtime_authority) {
-    throw new Error("verified companion package approval is required");
+  // First-party catalog/studio companions apply directly: the caller is already
+  // token-authorized and the profile effect is reversible. External signed
+  // packages must go through companionRuntimeAuthority's preview/approve/apply
+  // lifecycle instead; reject anything that carries package material here.
+  if (input?.package || input?.package_digest || input?.manifest || input?.approval_binding) {
+    throw new Error("companion packages must be applied through the runtime authority approval flow");
   }
   const preview = companionCatalog.preview(input || {});
   const before = agentProfile.effective(profileOptions);
