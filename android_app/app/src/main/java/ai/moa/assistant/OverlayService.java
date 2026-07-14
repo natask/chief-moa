@@ -267,6 +267,7 @@ public final class OverlayService extends Service {
         // by an older build so the orb always starts fresh.
         MoaPrefs.setHistoryJson(this, "");
         promoteToForeground();
+        MoaUpdateNotifier.checkAsync(this, gatewayUrl, gatewayToken);
         showOrb();
         startDeviceClientLoop();
         adoptSharedSessionId();
