@@ -26,5 +26,8 @@ jobs:
       - name: Lint authority core
         working-directory: windows_app/core
         run: cargo clippy --all-targets -- -D warnings
+      - uses: microsoft/setup-msbuild@v2
+      # dotnet build cannot load the WindowsAppSDK 1.6 PRI packaging tasks
+      # (microsoft/WindowsAppSDK#3548); build with Visual Studio MSBuild.
       - name: Build unsigned WinUI scaffold
-        run: dotnet build windows_app/Aggie.Windows/Aggie.Windows.csproj -p:Platform=x64 -p:AppxPackageSigningEnabled=false
+        run: msbuild windows_app/Aggie.Windows/Aggie.Windows.csproj /restore /p:Platform=x64 /p:AppxPackageSigningEnabled=false

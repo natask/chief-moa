@@ -118,7 +118,12 @@ async function evaluate(cdp, expression) {
     returnByValue: true,
   });
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text || "Runtime evaluation failed");
+    // Newer Chrome puts the useful message in exception.description and leaves
+    // text as a bare "Uncaught".
+    const description = result.exceptionDetails.exception?.description;
+    const text = result.exceptionDetails.text;
+    const detail = [text, description].filter(Boolean).join(": ");
+    throw new Error(detail || "Runtime evaluation failed");
   }
   return result.result.value;
 }

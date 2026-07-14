@@ -112,11 +112,16 @@ jobs:
     timeout-minutes: 30
     environment: android-ota-production
     env:
-      ANDROID_OTA_OUT_DIR: ${{ runner.temp }}/android-ota-stable
       CONFIRMED_SHA: ${{ inputs.confirm_sha }}
       PROMOTION_GATE_PROVEN: ${{ inputs.promotion_gate_proven }}
 
     steps:
+      # The runner context is not available in job-level env, so resolve the
+      # stable OTA output directory in a step instead.
+      - name: Resolve OTA output directory
+        shell: bash
+        run: echo "ANDROID_OTA_OUT_DIR=$RUNNER_TEMP/android-ota-stable" >> "$GITHUB_ENV"
+
       - name: Check out repository
         uses: actions/checkout@v4
         with:
