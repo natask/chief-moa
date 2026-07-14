@@ -172,6 +172,25 @@ Next hardening step:
 - Add structured error codes such as `NO_ACTIVE_TAB`, `NO_PERMISSION`, `MODEL_TIMEOUT`, and `ACTION_TARGET_NOT_FOUND`.
 - Persist a resumable conversation state without storing large screenshot payloads.
 
+## Context And Execution-Adapter Discovery
+
+The extension's existing device-client heartbeat advertises two separate
+concepts to the gateway:
+
+- `local_tool_manifest` remains the fixed, locally validated execution
+  vocabulary. Opening a particular site does not create new model tools.
+- `metadata.context_descriptor` identifies the active web application by
+  hostname and origin, with a bounded title. It never includes the full URL,
+  query, fragment, DOM, page text, screenshot, cookies, or incognito identity.
+- `metadata.execution_adapters` advertises the existing `browser_session`
+  execution channel and its bounded modes. It records auth as `not_inspected`:
+  an open page is not proof that the user is logged in.
+
+This discovery record lets gateway routing prefer an already-running browser
+session when the active web application is relevant. Detailed page context is
+still collected only through the explicit evidence flow, and every proposed
+effect is still checked by the extension before execution.
+
 ## Agent Loop
 
 1. User opens overlay with Cmd/Ctrl+, through the extension command. On the localhost demo page, the content script shortcut also works directly.

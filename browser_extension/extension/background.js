@@ -10,6 +10,7 @@ import { isStopCommand } from "./stop-intent.js";
 import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice.js";
 import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
+import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 
 // Seed storage from the baked defaults on install/update so the Options page
 // shows the live values and the user never has to fill them in by hand. Only
@@ -986,6 +987,7 @@ async function heartbeatDeviceClient() {
     const deviceId = await getStableDeviceId();
     const sessionId = await getStableSessionId();
     const owner = await getActiveBrowserAgentOwner();
+    const sessionAdvertisement = await currentBrowserSessionAdvertisement();
     await callGateway(cfg, "/v1/device-clients/heartbeat", {
       body: {
         device_id: deviceId,
@@ -997,12 +999,30 @@ async function heartbeatDeviceClient() {
           source: "agee-extension",
           extension_id: chrome.runtime.id,
           active_owner: owner || null,
+          context_descriptor: sessionAdvertisement.context_descriptor,
+          execution_adapters: sessionAdvertisement.execution_adapters,
         },
       },
     });
   } finally {
     deviceClientHeartbeatInFlight = false;
   }
+}
+
+async function currentBrowserSessionAdvertisement() {
+  let active = null;
+  try {
+    [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!active) [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  } catch {
+    // A missing active tab is represented explicitly below. Heartbeat remains
+    // useful for device presence even when page identity cannot be observed.
+  }
+  const contextDescriptor = browserContextDescriptor(active);
+  return {
+    context_descriptor: contextDescriptor,
+    execution_adapters: browserSessionExecutionAdapters(contextDescriptor),
+  };
 }
 
 function browserLocalToolManifest() {
