@@ -189,7 +189,10 @@ async function runLiveReplay(args) {
       ok: true,
       mode: "live-replay",
       status: turn.turnDone?.status || "",
+      reason: turn.turnDone?.reason || "",
+      error_events: turn.events.filter((event) => event.type === "error").slice(0, 3),
       transcript,
+      reply_text: turn.events.filter((event) => event.type === "assistant_text").map((event) => event.text).join("").slice(0, 300),
       elapsed_ms: turn.elapsedMs,
       assistant_audio_bytes: turn.assistantAudioBytes,
     }, null, 2));
