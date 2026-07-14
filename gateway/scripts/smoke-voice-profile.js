@@ -476,13 +476,18 @@ async function assertCompanionCatalog(baseUrl) {
     scope: "global",
     source: "voice-profile-smoke",
   });
-  assert.equal(petApply.status, 404, `legacy pet apply must fail closed: ${JSON.stringify(petApply.json)}`);
-  assert.match(petApply.json.error, /verified companion package approval/);
-  const afterRejectedLegacyApply = await getJson(`${baseUrl}/v1/agent/profile`);
-  assert.equal(afterRejectedLegacyApply.profile_version, beforeAgentCreate.profile_version,
-    "unverified legacy pet apply must not mutate profile state");
-  return;
-  /* Verified package lifecycle coverage lives in runtime-authority.test.js. */
+  assert.equal(petApply.status, 200, `first-party pet apply must succeed: ${JSON.stringify(petApply.json)}`);
+  // Package-material inputs must still fail closed through this route; the
+  // signed-package lifecycle lives behind companionRuntimeAuthority
+  // (covered in runtime-authority.test.js).
+  const packageApply = await postJson(`${baseUrl}/v1/agent/pets/apply`, {
+    agent_id: savedAgent.json.agent.id,
+    package_digest: "0".repeat(64),
+    scope: "global",
+    source: "voice-profile-smoke",
+  });
+  assert.equal(packageApply.status, 404, `package-material apply must fail closed: ${JSON.stringify(packageApply.json)}`);
+  assert.match(packageApply.json.error, /runtime authority approval flow/);
   assert.equal(petApply.json.profile.active_companion_id, savedAgent.json.agent.companion_id);
   assert.equal(
     petApply.json.profile.voice,

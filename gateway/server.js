@@ -5567,14 +5567,34 @@ async function handleCreatePetBookmark(request, response) {
 
 async function handleCompanionPreview(request, response) {
   const body = await readJsonBody(request);
+  const profileOptions = profileOptionsFromBody(body, "global");
+  // Signed-package previews go through the runtime authority lifecycle; plain
+  // catalog/studio previews keep the live first-party contract.
+  if (body?.package_base64 || body?.package || body?.approval_binding) {
+    try {
+      const current = String(agentProfile.currentVersion(profileOptions));
+      const expected = String(body?.expected_profile_version || "") || current;
+      if (expected !== current) throw new Error("expected_profile_version is stale");
+      sendJson(response, 200, companionRuntimeAuthority.preview({ ...body, scope: profileOptions.scope,
+        device_id: profileOptions.deviceId, expected_profile_version: expected }));
+    } catch (error) {
+      sendJson(response, 400, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
+    }
+    return;
+  }
   try {
-    const profileOptions = profileOptionsFromBody(body, "global");
-    const expected = String(body?.expected_profile_version || "");
-    if (expected !== String(agentProfile.currentVersion(profileOptions))) throw new Error("expected_profile_version is stale");
-    sendJson(response, 200, companionRuntimeAuthority.preview({ ...body, scope: profileOptions.scope,
-      device_id: profileOptions.deviceId, expected_profile_version: expected }));
+    const preview = companionCatalog.preview(body || {});
+    const base = agentProfile.effective(profileOptions);
+    const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
+    sendJson(response, 200, {
+      ...preview,
+      mutates_profile: false,
+      profile_version: agentProfile.currentVersion(profileOptions),
+      profile_before: agentProfileRuntimeStatus(profileOptions),
+      profile_preview: summarizePreviewProfile(base, merged),
+    });
   } catch (error) {
-    sendJson(response, 400, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
+    sendJson(response, 404, { error: cleanError(error) });
   }
 }
 
@@ -5584,11 +5604,22 @@ async function handleCompanionApply(request, response) {
   if (!requireDeviceScope(response, profileOptions)) {
     return;
   }
+  // Signed-package applies require the runtime authority's approval binding;
+  // plain catalog/studio applies keep the live first-party contract.
+  if (body?.package_base64 || body?.package || body?.approval_binding || body?.package_digest) {
+    try {
+      sendJson(response, 200, companionRuntimeAuthority.apply({ ...body, scope: profileOptions.scope,
+        device_id: profileOptions.deviceId }));
+    } catch (error) {
+      sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
+    }
+    return;
+  }
   try {
-    sendJson(response, 200, companionRuntimeAuthority.apply({ ...body, scope: profileOptions.scope,
-      device_id: profileOptions.deviceId }));
+    const result = applyCompanionToProfile(body || {}, profileOptions, body?.source || "api");
+    sendJson(response, 200, result);
   } catch (error) {
-    sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
+    sendJson(response, 404, { error: cleanError(error) });
   }
 }
 
