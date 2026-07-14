@@ -258,44 +258,41 @@ async function assertHttpRevert(baseUrl) {
   });
   assert.equal(modality.status, 200, `modality turn must succeed: ${JSON.stringify(modality.json)}`);
   assert.equal(modality.json.classification, "profile_control", "modality utterance must route as profile_control");
+  assert.ok(
+    modality.json.actions?.some((a) => a.type === "profile_update_blocked"),
+    `modality change must be blocked on the model-less path: ${JSON.stringify(modality.json.actions)}`,
+  );
   let profile = await getJson(`${baseUrl}/v1/agent/profile`);
-  assert.equal(profile.profile.response_modality, "text", `HTTP modality change must persist response_modality=text, got ${profile.profile.response_modality}`);
+  assert.equal(profile.profile.response_modality, "auto", "blocked modality change must not persist");
 
-  // "undo that" reverts the modality change.
-  const undo = await postJson(`${baseUrl}/v1/voice/turns`, {
-    session_id: sessionId,
-    turn_id: "http-undo",
-    transcript: "undo that",
-    source: "profile-revert-smoke",
-  });
-  assert.equal(undo.status, 200, `undo turn must succeed: ${JSON.stringify(undo.json)}`);
-  assert.equal(undo.json.classification, "profile_control", "undo utterance must route as profile_control");
-  const undoAction = undo.json.actions?.find((a) => a.type === "profile_reverted");
-  assert.ok(undoAction, `undo must include a profile_reverted action: ${JSON.stringify(undo.json.actions)}`);
-  assert.equal(undoAction.mode, "previous", "undo action must be mode=previous");
+  // Every profile WRITE — including undo/reset — is model-routed (user
+  // decision 2026-07-14: no non-model pathways except the output kill switch).
+  // On this model-less HTTP path the fail-closed judge cannot confirm, so
+  // undo, voice changes, and reset must all be BLOCKED and leave the profile
+  // untouched. Model-path revert coverage lives with the revert_agent_profile
+  // tool tests.
+  const versionBefore = profile.profile_version;
+  for (const [turnId, utterance] of [
+    ["http-undo", "undo that"],
+    ["http-set-voice", "use the Charon voice"],
+    ["http-reset", "reset your settings"],
+  ]) {
+    const blocked = await postJson(`${baseUrl}/v1/voice/turns`, {
+      session_id: sessionId,
+      turn_id: turnId,
+      transcript: utterance,
+      source: "profile-revert-smoke",
+    });
+    assert.equal(blocked.status, 200, `'${utterance}' turn must succeed: ${JSON.stringify(blocked.json)}`);
+    const blockedAction = blocked.json.actions?.find((a) => a.type === "profile_update_blocked");
+    assert.ok(blockedAction, `'${utterance}' must be blocked without model confirmation: ${JSON.stringify(blocked.json.actions)}`);
+    assert.ok(
+      !blocked.json.actions?.some((a) => a.type === "profile_reverted" || a.type === "profile_updated"),
+      `'${utterance}' must not mutate on the model-less path`,
+    );
+  }
   profile = await getJson(`${baseUrl}/v1/agent/profile`);
-  assert.notEqual(profile.profile.response_modality, "text", "undo must revert the modality change");
-
-  // Set something, then "reset your settings" restores defaults.
-  await postJson(`${baseUrl}/v1/voice/turns`, {
-    session_id: sessionId,
-    turn_id: "http-set-voice",
-    transcript: "use the Charon voice",
-    source: "profile-revert-smoke",
-  });
-  const reset = await postJson(`${baseUrl}/v1/voice/turns`, {
-    session_id: sessionId,
-    turn_id: "http-reset",
-    transcript: "reset your settings",
-    source: "profile-revert-smoke",
-  });
-  assert.equal(reset.status, 200, `reset turn must succeed: ${JSON.stringify(reset.json)}`);
-  assert.equal(reset.json.classification, "profile_control", "reset utterance must route as profile_control");
-  const resetAction = reset.json.actions?.find((a) => a.type === "profile_reverted");
-  assert.ok(resetAction, `reset must include a profile_reverted action: ${JSON.stringify(reset.json.actions)}`);
-  assert.equal(resetAction.mode, "reset", "reset action must be mode=reset");
-  profile = await getJson(`${baseUrl}/v1/agent/profile`);
-  assert.equal(profile.is_overridden, false, "reset must leave the profile at defaults");
+  assert.equal(profile.profile_version, versionBefore, "blocked mutations must not advance the profile version");
 }
 
 async function startGateway({ port, dataDir, fakeUrl }) {

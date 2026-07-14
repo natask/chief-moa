@@ -8106,6 +8106,8 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
           follow_up_expected: false,
           reply_language: currentReplyLanguage,
         }),
+        scope: profileOptions.scope || "global",
+        device_id: profileOptions.deviceId || "",
         profile_version: agentProfile.currentVersion(profileOptions),
         profile: agentProfileRuntimeStatus(profileOptions),
       };
@@ -12646,6 +12648,25 @@ async function runCascadedVoiceReasoningInner(input) {
   // turn result and the session server forwards each as its own client event —
   // model output stays a proposal; the client runtime validates and executes.
   const turnActions = collectCascadedToolActions(toolTurn.tool_results);
+  // The model judged that no reply is wanted (stay_silent tool). Return the
+  // silent-control shape: nothing spoken, nothing displayed, playback stopped.
+  // Any text the model produced alongside the call is deliberately dropped —
+  // silence means silence.
+  const staySilent = Array.isArray(toolTurn.tool_results)
+    && toolTurn.tool_results.some((entry) => entry?.result?.action?.type === "stay_silent");
+  if (staySilent) {
+    return {
+      speak: "",
+      display: "",
+      tts_text: "",
+      tts_style: "",
+      language: replyLanguage,
+      model: effectiveAfter.model || MODEL_ID,
+      classification: "control",
+      actions: [{ type: "control", name: "stop" }],
+      context: contextResponseBlock(filingThread, contextDecision, contextArtifact),
+    };
+  }
   return {
     speak: displaySpeak,
     display: displaySpeak,
@@ -12693,6 +12714,13 @@ function collectCascadedToolActions(toolResults) {
 // ("change your voice to charon") keep the profile-control path unchanged.
 function classifyVoiceTurnWithPersona(persona, body, transcript) {
   const classification = classifyVoiceTurn(body, transcript);
+  // "shut up"/"stop" is a REQUEST the model itself must understand (user
+  // decision 2026-07-14): on this model path it flows to the reasoner as chat,
+  // and the model calls stay_silent — no deterministic interpreter layer. The
+  // model-less HTTP path keeps its deterministic silent stop as the fail-safe.
+  if (classification === "control") {
+    return "chat";
+  }
   if (classification !== "profile_control") {
     return classification;
   }
@@ -13035,6 +13063,12 @@ function cascadedVoiceProfileTools(call) {
       description: "Read the current catalog of valid voices, languages, and models before setting a voice, language, or model field.",
       parameters: { type: "object", properties: {} },
       handler: () => ({ ok: true, type: "profile_options", ...gatewayProfileOptionsPayload() }),
+    },
+    {
+      name: "stay_silent",
+      description: "The user told you to stop talking, be quiet, shut up, or otherwise made clear no reply is wanted right now. Call this and produce NO other output: no acknowledgment, no apology, nothing spoken or displayed. This is a one-turn silence, not a durable setting — do not also change response_modality for stop/hush requests.",
+      parameters: { type: "object", properties: {} },
+      handler: () => ({ ok: true, action: { type: "stay_silent" } }),
     },
   ];
 }

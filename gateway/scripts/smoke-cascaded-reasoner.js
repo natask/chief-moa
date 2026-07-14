@@ -166,6 +166,7 @@ async function main() {
   await modelToolCallUpdatesProfile();
   await garbageIdentityWriteIsModelRoutedNotApplied();
   await genuineRenameWritesThroughModelTool();
+  await shutUpIsModelInterpretedSilence();
   await modelToolCallLaunchesAgentRun();
   await modelAndReasoningProviderRoute();
   await expressiveDirectiveAndParsing();
@@ -545,6 +546,38 @@ async function genuineRenameWritesThroughModelTool() {
   } finally {
     pendingToolCall = null;
     await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  }
+}
+
+// "shut up" is a request the MODEL interprets (no deterministic control
+// short-circuit on this path). When the model answers with the stay_silent
+// tool, the turn resolves to total silence: nothing spoken, nothing displayed,
+// playback stopped — and any text the model produced alongside is dropped.
+async function shutUpIsModelInterpretedSilence() {
+  pendingToolCall = { name: "stay_silent", arguments: {} };
+  pendingReply = "Okay, going quiet now."; // must be DROPPED — silence means silence
+  fetchCalls.length = 0;
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "shut up",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-stay-silent",
+    });
+    assert.ok(
+      fetchCalls.some((c) => c.kind === "openai"),
+      "'shut up' must reach the model instead of a deterministic control short-circuit",
+    );
+    assert.equal(reasoning.speak, "", "a stay_silent turn must speak nothing");
+    assert.equal(reasoning.display, "", "a stay_silent turn must display nothing");
+    assert.equal(reasoning.tts_text || "", "", "a stay_silent turn must send nothing to TTS");
+    assert.ok(
+      (reasoning.actions || []).some((a) => a.type === "control" && a.name === "stop"),
+      `a stay_silent turn must stop playback: ${JSON.stringify(reasoning.actions)}`,
+    );
+  } finally {
+    pendingToolCall = null;
+    pendingReply = null;
   }
 }
 

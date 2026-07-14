@@ -315,10 +315,11 @@ async function assertPersonaOverrideStripped(baseUrl) {
 
 async function assertProfileScopeReported(baseUrl) {
   // Scope reporting is exercised via the response_modality fast path — the one
-  // profile write kept deterministic (its value is a closed {text,speech,auto}
-  // set, so it can never carry STT garbage into an identity field). Voice, name,
-  // persona, and language changes are model-routed and no longer produce a
-  // deterministic profile_update on this model-less HTTP path.
+  // EVERY durable write — including response_modality — is model-routed (user
+  // decision 2026-07-14; one-turn silence is the model's stay_silent tool, not
+  // a setting). On this model-less HTTP path the write must be BLOCKED, and the
+  // blocked payload must still report scope/device_id so clients can attribute
+  // the refusal.
   const turn = await postJson(`${baseUrl}/v1/voice/turns`, {
     session_id: "voice-profile-smoke",
     turn_id: "scope-report",
@@ -328,15 +329,16 @@ async function assertProfileScopeReported(baseUrl) {
   assert.equal(turn.status, 200, `scope-report turn must succeed: ${JSON.stringify(turn.json)}`);
   assert.equal(turn.json.scope, "global", `top-level scope must be reported, got ${turn.json.scope}`);
   assert.equal(turn.json.device_id, "", "top-level device_id must be present (empty for global)");
-  const action = turn.json.actions?.find((a) => a.type === "profile_update");
-  assert.ok(action, `scope turn must include a profile_update action: ${JSON.stringify(turn.json.actions)}`);
-  assert.equal(action.scope, "global", "profile_update action must carry scope");
-  assert.ok("device_id" in action, "profile_update action must carry device_id");
-  assert.ok(action.application, "profile_update action must carry application semantics");
+  assert.ok(
+    turn.json.actions?.some((a) => a.type === "profile_update_blocked"),
+    `modality write must be blocked on the model-less path: ${JSON.stringify(turn.json.actions)}`,
+  );
+  assert.ok(
+    !turn.json.actions?.some((a) => a.type === "profile_update"),
+    "no profile_update action may be emitted without model confirmation",
+  );
   const applied = await getJson(`${baseUrl}/v1/agent/profile`);
-  assert.equal(applied.profile.response_modality, "text", "response_modality must apply deterministically (allowed fast path)");
-  // Restore the default modality so downstream checks are unaffected.
-  await putJson(`${baseUrl}/v1/agent/profile`, { profile: { response_modality: "auto" } });
+  assert.equal(applied.profile.response_modality, "auto", "blocked modality write must not persist");
 }
 
 async function assertTranscriptEcho(baseUrl) {

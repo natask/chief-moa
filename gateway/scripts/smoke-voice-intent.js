@@ -367,19 +367,12 @@ for (const utterance of [
   "only process English and Amharic",
   "I want you to be a research scout",
   "set your prompt to You are a helper",
+  "undo that",
+  "reset your settings",
 ]) {
   assert.ok(
     profileControlIntentMutates(parseProfileControlIntent(utterance)),
     `'${utterance}' must be a profile MUTATION (model-routed, never matchtext-applied)`,
-  );
-}
-// Revert/reset stays deterministic on purpose: it only moves between existing
-// stored versions (no free-text payload), is itself reversible, and is the
-// escape hatch that must work even when no reasoning model is reachable.
-for (const escapeHatch of ["undo that", "reset your settings"]) {
-  assert.ok(
-    !profileControlIntentMutates(parseProfileControlIntent(escapeHatch)),
-    `'${escapeHatch}' must stay on the deterministic escape-hatch path`,
   );
 }
 for (const readOnly of [
@@ -402,9 +395,12 @@ for (const modality of ["respond in text", "just text", "speak to me out loud"])
   const intent = parseProfileControlIntent(modality);
   assert.equal(intent?.action, "update", `'${modality}' must be a modality update`);
   assert.ok(intent.patch.response_modality, `'${modality}' must set response_modality`);
+  // Durable modality changes are writes like any other and are model-routed
+  // (user decision 2026-07-14). One-turn silence is the model's stay_silent
+  // tool, not a durable setting.
   assert.ok(
-    !profileControlIntentMutates(intent),
-    `'${modality}' modality-only update must stay on the deterministic fast path`,
+    profileControlIntentMutates(intent),
+    `'${modality}' modality update must be model-routed like every write`,
   );
 }
 assert.equal(profileControlIntentMutates(null), false);
