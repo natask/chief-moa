@@ -926,6 +926,9 @@ class CascadedVoiceProvider {
           // NOW as its own chunk, not buffered by the sentence chunker.
           on_speak_say: (text) => pipeline.pushImmediate(text),
         } : {}),
+        // Turn liveness for the reasoner's unbounded auto-continuation loop:
+        // a barge-in must stop the model from generating for a dead turn.
+        is_turn_active: () => (typeof hooks.isTurnActive === "function" ? hooks.isTurnActive() !== false : true),
       });
       reasoning = { ...reasoning, ...(result && typeof result === "object" ? result : {}) };
       await voiceStageDone(hooks, "reasoning", reasoningStartedAtMs, {

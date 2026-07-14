@@ -162,9 +162,11 @@ const VOICE_TTS_MAX_CHARS = Number(process.env.VOICE_TTS_MAX_CHARS || 280);
 // Streaming sanitizer ceiling (chunked pipeline only; the shared 280-char
 // VOICE_TTS_MAX_CHARS keeps governing every non-streaming consumer). Read per
 // turn inside streamingSpeakCap so an env flip needs no module reload.
-// 4800 (was 1600) so a token-limit auto-continued reply stays audible instead
-// of silently degrading to text partway through.
-const VOICE_STREAM_MAX_CHARS_DEFAULT = 4800;
+// UNBOUNDED by default so an auto-continued reply speaks to its real end;
+// set VOICE_STREAM_MAX_CHARS to restore a ceiling. The user-facing brevity
+// control is the profile's voice_max_chars, which streamingSpeakCap still
+// honors first.
+const VOICE_STREAM_MAX_CHARS_DEFAULT = Number.MAX_SAFE_INTEGER;
 const MODEL_LANGUAGE = String(process.env.MODEL_LANGUAGE || "").trim();
 const MAX_BODY_BYTES = 1024 * 1024;
 const AUDIO_NOTE_MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -7841,12 +7843,15 @@ async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
 // Token-limit auto-continuation for the streaming loops: when a final answer
 // ends with finish reason MAX_TOKENS/"length" (not a tool round), the loop
 // replays the truncated text and asks the model to resume, so a reply is never
-// silently cut off by the per-request output budget. Bounded per turn; 0
-// disables. Read per call so an env flip needs no restart.
+// silently cut off by the per-request output budget. UNBOUNDED by default —
+// the assistant speaks until the model itself finishes or the user interrupts
+// (the isActive turn-liveness check ends the loop on barge-in). Set
+// MODEL_AUTOCONTINUE_MAX_ROUNDS to bound it; 0 disables. Read per call so an
+// env flip needs no restart.
 const AUTOCONTINUE_PROMPT = "Your previous message was cut off by the output length limit, not finished. Continue your reply from the exact point it stopped — resume mid-sentence if needed. Do not repeat, re-introduce, or summarize anything you already said.";
 function autoContinueRounds() {
   const value = Number(process.env.MODEL_AUTOCONTINUE_MAX_ROUNDS);
-  return Number.isFinite(value) && value >= 0 ? Math.min(10, Math.floor(value)) : 3;
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : Infinity;
 }
 
 async function callModelToolLoopStreaming(messages, profile, toolDefs, options = {}) {
@@ -7900,10 +7905,11 @@ async function callModelToolLoopStreaming(messages, profile, toolDefs, options =
     reconcile(text);
     return { text, tool_results: [], rounds: 0 };
   }
+  const isActive = typeof options.isActive === "function" ? options.isActive : () => true;
   try {
     const result = provider === "vertex"
-      ? await vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound)
-      : await openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound);
+      ? await vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound, isActive)
+      : await openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound, isActive);
     reconcile(result.text);
     return result;
   } catch (error) {
@@ -7948,7 +7954,7 @@ async function* sseJsonEvents(body) {
   }
 }
 
-async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null) {
+async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null, isActive = () => true) {
   const tools = toolDefs.map((tool) => ({
     type: "function",
     function: {
@@ -7982,7 +7988,7 @@ async function openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds,
       let raw = String(roundOutcome.rawText || roundOutcome.text || "");
       let continued = roundOutcome;
       let continuations = 0;
-      while (continued.finishReason === "length" && raw && continuations < autoContinueRounds()) {
+      while (continued.finishReason === "length" && raw && continuations < autoContinueRounds() && isActive() !== false) {
         continuations += 1;
         convo.push({ role: "assistant", content: continued.rawText || continued.text || "" });
         convo.push({ role: "user", content: AUTOCONTINUE_PROMPT });
@@ -8113,7 +8119,7 @@ async function openAiPlainRound(convo, effective, tools) {
   return { text: rawText.trim(), rawText, toolCalls, finishReason: String(json.choices?.[0]?.finish_reason || "") };
 }
 
-async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null) {
+async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null, isActive = () => true) {
   const functionDeclarations = toolDefs.map((tool) => ({
     name: tool.name,
     description: tool.description || "",
@@ -8146,7 +8152,7 @@ async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds,
       let raw = String(roundOutcome.rawText || roundOutcome.text || "");
       let continued = roundOutcome;
       let continuations = 0;
-      while (continued.finishReason === "MAX_TOKENS" && raw && continuations < autoContinueRounds()) {
+      while (continued.finishReason === "MAX_TOKENS" && raw && continuations < autoContinueRounds() && isActive() !== false) {
         continuations += 1;
         contents.push({ role: "model", parts: continued.mergedParts });
         contents.push({ role: "user", parts: [{ text: AUTOCONTINUE_PROMPT }] });
@@ -11182,6 +11188,7 @@ async function runCascadedVoiceReasoningInner(input) {
     ? await callModelToolLoopStreaming(modelMessages, profile, toolDefs, {
       onTextDelta: (delta) => speakSanitizer.push(delta),
       ...(speakToolAck ? { onToolRound: speakToolAck } : {}),
+      ...(typeof input?.is_turn_active === "function" ? { isActive: input.is_turn_active } : {}),
     })
     : await callModelToolLoop(modelMessages, profile, toolDefs);
   if (speakSanitizer) {
