@@ -263,7 +263,11 @@ function parseProfileControlIntent(text) {
       action: "update",
       patch: { assistant_name: assistantName },
       summary: "assistant name",
+      // English literal for legacy callers; the gateway localizes to the reply
+      // language via confirmation_key when it renders the spoken confirmation.
       confirmation: `Yes. I am now ${assistantName}.`,
+      confirmation_key: "assistantNameSet",
+      confirmation_params: { name: assistantName },
       scope,
     };
   }
@@ -411,6 +415,8 @@ function parsePersonaIntent(text, options = {}) {
         summary: `persona ${known.label}`,
         persona: known.id,
         confirmation: `Done. I am now your ${known.label.toLowerCase()}.`,
+        confirmation_key: "personaKnownSet",
+        confirmation_params: { label: known.label.toLowerCase() },
         scope,
       };
     }
@@ -423,6 +429,8 @@ function parsePersonaIntent(text, options = {}) {
       summary: `persona ${label}`,
       persona: "custom",
       confirmation: `Done. I am now ${label}.`,
+      confirmation_key: "personaCustomSet",
+      confirmation_params: { label },
       scope,
     };
   }

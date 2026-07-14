@@ -25,6 +25,7 @@ const {
   supportedLanguagesSentence,
   languageControlPatch,
 } = require("./lib/profile-options");
+const voiceL10n = require("./lib/voice-l10n");
 const { createCompanionCatalogStore } = require("./lib/companion-catalog");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
@@ -2281,7 +2282,7 @@ async function handleChat(request, response) {
   const screenContext = formatScreenContext(body.screen);
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const userText = lastUser?.content || "";
-  const utilityReply = localUtilityReply(userText);
+  const utilityReply = localUtilityReply(userText, effectiveReplyLanguage(profile));
   const prepared = utilityReply
     ? { decision: resolveContextDecision({ text: userText, contextAction: body.context_action }), preflight: { attempted: false, tool_called: false, fallback_reason: "local_utility" } }
     : await prepareContextDecision({ text: userText, contextAction: body.context_action, profile });
@@ -6483,7 +6484,7 @@ async function handleVoiceTurn(request, response) {
     return;
   }
 
-  const utilityReply = localUtilityReply(transcript);
+  const utilityReply = localUtilityReply(transcript, effectiveReplyLanguage(profile));
   if (utilityReply) {
     const payload = voiceTurnPayload(baseRecord, {
       speak: capSpeakText(utilityReply, profile.voice_max_chars),
@@ -6922,15 +6923,22 @@ async function handleInternalVoiceTurnRecord(request, response) {
 }
 
 async function handleVoiceProfileControl(record, transcript, turnProfileOptions = {}) {
+  // Reply language for the CANNED confirmations below, from the current profile.
+  // The update path recomputes this from the post-change profile so a language
+  // SWITCH is confirmed in the NEW language.
+  const currentReplyLanguage = effectiveReplyLanguage(
+    agentProfile.effective(turnProfileOptions.deviceId ? { deviceId: turnProfileOptions.deviceId } : {}),
+  );
   const intent = parseProfileControlIntent(transcript);
   if (!intent) {
-    const message = "Hey, I would like to do that, but I need you to say which voice, input language, or reply language to change.";
+    const message = voiceL10n.t(currentReplyLanguage, "needProfileTarget");
     return voiceTurnPayload(record, {
       classification: "profile_control",
       speak: message,
       display: message,
       actions: [],
       follow_up_expected: false,
+      reply_language: currentReplyLanguage,
     });
   }
   const profileOptions = {
@@ -6939,7 +6947,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     deviceId: turnProfileOptions.deviceId || "",
   };
   if (profileOptions.requested_scope === "device" && !profileOptions.deviceId) {
-    const message = "Hey, I would like to do that, but I need you to give me access to this device's Moa device id.";
+    const message = voiceL10n.t(currentReplyLanguage, "needDeviceId");
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -6947,6 +6955,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display: message,
         actions: [{ type: "profile_update_blocked", reason: "missing_device_id" }],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(),
       profile: agentProfileRuntimeStatus(),
@@ -6956,8 +6965,8 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
   if (intent.action === "echo_transcript") {
     const previous = previousUserTranscript(record.session_id, record.branch_id, record.id);
     const speak = previous.transcript
-      ? `You said: ${previous.transcript}`
-      : "I don't have a previous turn to repeat yet.";
+      ? voiceL10n.t(currentReplyLanguage, "echoTranscript", { transcript: previous.transcript })
+      : voiceL10n.t(currentReplyLanguage, "noPreviousTurn");
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -6970,6 +6979,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
           transcript_source: previous.transcript_source || "",
         }],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       echoed_turn_id: previous.turn_id || "",
       echoed_transcript: previous.transcript || "",
@@ -6980,7 +6990,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
   }
 
   if (intent.action === "summary") {
-    const summary = profileSummaryText(intent.subject, profileOptions);
+    const summary = profileSummaryText(intent.subject, { ...profileOptions, replyLanguage: currentReplyLanguage });
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -6988,6 +6998,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display: summary,
         actions: [{ type: "profile_summary", subject: intent.subject }],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
@@ -7005,6 +7016,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display,
         actions: [sampler],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
@@ -7016,8 +7028,8 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
     // keep the current setting and tell the user what is available. The turn
     // still completes normally, so no setting change can break the app.
     const message = intent.subject === "language"
-      ? `I only speak ${supportedLanguagesSentence()} for now, so I kept the current language.`
-      : "I can't change that setting, so I kept the current one.";
+      ? voiceL10n.t(currentReplyLanguage, "rejectLanguage", { languages: supportedLanguagesSentence() })
+      : voiceL10n.t(currentReplyLanguage, "rejectGeneric");
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7025,6 +7037,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display: message,
         actions: [{ type: "profile_update_rejected", subject: intent.subject || "" }],
         follow_up_expected: false,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
@@ -7036,7 +7049,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
   }
 
   if (intent.action === "clarify") {
-    const message = profileClarificationText(intent.subject, profileOptions);
+    const message = profileClarificationText(intent.subject, { ...profileOptions, replyLanguage: currentReplyLanguage });
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7044,6 +7057,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         display: message,
         actions: [{ type: "profile_clarification", subject: intent.subject }],
         follow_up_expected: true,
+        reply_language: currentReplyLanguage,
       }),
       profile_version: agentProfile.currentVersion(profileOptions),
       profile: agentProfileRuntimeStatus(profileOptions),
@@ -7056,8 +7070,14 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
       name: "",
     });
     const result = applyCompanionToProfile({ companion_id: draft.id }, profileOptions, "voice");
-    const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
-    const display = `Created and switched to ${draft.name} ${scopeText}. Profile version is ${result.profile_version}; applies ${result.application.applies.replace(/_/g, " ")}.`;
+    // A companion carries its own reply language; confirm in the NEW language.
+    const companionReplyLanguage = effectiveReplyLanguage(agentProfile.effective(profileOptions)) || currentReplyLanguage;
+    const display = voiceL10n.t(companionReplyLanguage, "companionApplied", {
+      name: draft.name,
+      scope: profileOptions.scope,
+      version: result.profile_version,
+      applies: result.application.applies,
+    });
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -7073,6 +7093,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
           application: result.application,
         }],
         follow_up_expected: false,
+        reply_language: companionReplyLanguage,
       }),
       profile_version: result.profile_version,
       from_profile_version: result.from_profile_version,
@@ -7100,11 +7121,19 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
   });
   const changed = beforeVersion !== afterVersion;
   const application = profileApplicationSemantics();
-  const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
-  const display = intent.confirmation
+  // Confirm in the POST-change reply language, so switching TO Amharic is
+  // confirmed in Amharic and switching TO English is confirmed in English.
+  const afterReplyLanguage = effectiveReplyLanguage(after) || currentReplyLanguage;
+  // Persona / assistant-name intents carry a structured confirmation key so the
+  // spoken confirmation is localized too (falls back to the English literal).
+  const localizedConfirmation = intent.confirmation_key
+    ? voiceL10n.t(afterReplyLanguage, intent.confirmation_key, intent.confirmation_params || {})
+    : "";
+  const display = localizedConfirmation
+    || intent.confirmation
     || (changed
-      ? `Updated ${intent.summary || "profile"} ${scopeText}. Profile version is ${afterVersion}; applies ${application.applies.replace(/_/g, " ")}.`
-      : `That profile setting is already active ${scopeText}. Profile version is still ${afterVersion}.`);
+      ? voiceL10n.t(afterReplyLanguage, "profileUpdated", { summary: intent.summary || "profile", scope: profileOptions.scope, version: afterVersion, applies: application.applies })
+      : voiceL10n.t(afterReplyLanguage, "profileAlreadyActive", { scope: profileOptions.scope, version: afterVersion }));
   return {
     ...voiceTurnPayload(record, {
       classification: "profile_control",
@@ -7121,6 +7150,7 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
         application,
       }],
       follow_up_expected: false,
+      reply_language: afterReplyLanguage,
     }),
     profile_version: afterVersion,
     from_profile_version: beforeVersion,
@@ -7306,27 +7336,30 @@ function voiceSamplerDisplayText(sampler) {
 function profileSummaryText(subject, options = {}) {
   const profile = agentProfile.effective(options);
   const version = agentProfile.currentVersion(options);
-  const scopeText = options.scope === "device" ? "on this device" : "on all devices";
+  // Localize the "Profile N on all devices." lead-in to the reply language; the
+  // technical read-out that follows stays in the catalog's own labels.
+  const replyLanguage = options.replyLanguage || effectiveReplyLanguage(profile);
+  const lead = voiceL10n.t(replyLanguage, "profileSummaryLead", { version, scope: options.scope });
   if (subject === "system_prompt") {
-    return `Profile ${version} ${scopeText}. Current system prompt: ${truncate(profile.system_prompt || "(empty)", 220)}`;
+    return `${lead} Current system prompt: ${truncate(profile.system_prompt || "(empty)", 220)}`;
   }
   if (subject === "language") {
     const language = profile.language || profile.language_primary || "unspecified";
-    return `Profile ${version} ${scopeText}. Reply language is ${language}; input language is ${profile.input_languages || "unspecified"}; auto switch is ${profile.language_auto_switch ? "on" : "off"}.`;
+    return `${lead} Reply language is ${language}; input language is ${profile.input_languages || "unspecified"}; auto switch is ${profile.language_auto_switch ? "on" : "off"}.`;
   }
   if (subject === "language_options") {
     const languages = languageOptionsPayload().map((language) => `${language.label} (${language.code})`).join(", ");
-    return `Profile ${version} ${scopeText}. Supported reply and input languages are: ${languages}. Use comma-separated codes to set more than one.`;
+    return `${lead} Supported reply and input languages are: ${languages}. Use comma-separated codes to set more than one.`;
   }
   if (subject === "voice") {
-    return `Profile ${version} ${scopeText}. Voice is ${profile.voice || "default"}.`;
+    return `${lead} Voice is ${profile.voice || "default"}.`;
   }
   if (subject === "voice_options") {
     const voices = voiceOptionsPayload().map((voice) => `${voice.id} (${voice.tone_tags.join("/")})`).join(", ");
-    return `Profile ${version} ${scopeText}. Supported voices are: ${voices}. Feminine maps to Aoede; masculine maps to Charon unless you choose a specific voice id.`;
+    return `${lead} Supported voices are: ${voices}. Feminine maps to Aoede; masculine maps to Charon unless you choose a specific voice id.`;
   }
   if (subject === "assistant_name") {
-    return `Profile ${version} ${scopeText}. My name is ${profile.assistant_name || "A.G."}.`;
+    return `${lead} My name is ${profile.assistant_name || "A.G."}.`;
   }
   if (subject === "providers") {
     return `Profile ${version}. Providers: voice ${profile.voice_provider || "default"}, STT ${profile.stt_provider || "default"}, reasoning ${profile.reasoning_provider || "default"} (model ${profile.model || "default"}), TTS ${profile.tts_provider || "default"}.`;
@@ -7338,13 +7371,14 @@ function profileSummaryText(subject, options = {}) {
 }
 
 function profileClarificationText(subject, options = {}) {
+  const replyLanguage = options.replyLanguage || effectiveReplyLanguage(agentProfile.effective(options));
   if (subject === "voice") {
     const version = agentProfile.currentVersion(options);
-    const scopeText = options.scope === "device" ? "on this device" : "on all devices";
     const voices = voiceOptionsPayload().map((voice) => voice.id).join(", ");
-    return `I can change my voice ${scopeText}. Pick one of: ${voices}. You can also say masculine or feminine. Profile version is ${version}.`;
+    const lead = voiceL10n.t(replyLanguage, "voiceClarifyLead", { scope: options.scope });
+    return `${lead} Pick one of: ${voices}. You can also say masculine or feminine. Profile version is ${version}.`;
   }
-  return "Tell me which profile setting to change.";
+  return voiceL10n.t(replyLanguage, "tellMeSetting");
 }
 
 // The reasoning provider for THIS turn: the profile's reasoning_provider when it
@@ -8377,9 +8411,9 @@ function toVertexFunctionSchema(schema) {
   return out;
 }
 
-function localUtilityReply(prompt) {
+function localUtilityReply(prompt, replyLanguage = "") {
   if (isCurrentTimeQuestion(prompt)) {
-    return currentTimeReply();
+    return currentTimeReply(new Date(), replyLanguage);
   }
   if (isOperationalStatusQuestion(prompt)) {
     return operationalStatusSummary();
@@ -8397,9 +8431,12 @@ function isCurrentTimeQuestion(prompt) {
     || lower === "tell me the time";
 }
 
-function currentTimeReply(now = new Date()) {
+function currentTimeReply(now = new Date(), replyLanguage = "") {
   const timeZone = gatewayTimeZone();
-  const formatted = new Intl.DateTimeFormat("en-US", {
+  // Render the date/time in the reply language's locale (Amharic month/weekday
+  // names for am-ET) instead of a hardcoded en-US, then wrap it in the localized
+  // "It's ..." frame so the whole reply is in one language.
+  const formatted = new Intl.DateTimeFormat(voiceL10n.intlLocaleFor(replyLanguage), {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -8409,7 +8446,7 @@ function currentTimeReply(now = new Date()) {
     timeZoneName: "short",
     timeZone,
   }).format(now);
-  return `It's ${formatted}.`;
+  return voiceL10n.t(replyLanguage, "timeReply", { formatted });
 }
 
 function gatewayTimeZone() {
@@ -9246,7 +9283,23 @@ function voiceTurnPayload(record, patch) {
     agent_runs: patch.agent_runs || [],
     follow_up_expected: Boolean(patch.follow_up_expected),
     end_of_turn: true,
+    // The language the speak/display text is actually written in. Canned
+    // (pre-LLM) replies localize their text to the reply language, so tagging it
+    // here keeps the downstream TTS language code from diverging from the text
+    // language (a wrong tag is a known trigger of gemini-tts am-ET 400s).
+    ...(patch.reply_language ? { reply_language: String(patch.reply_language) } : {}),
   };
+}
+
+// The effective reply (OUTPUT) language code for a profile, primary first,
+// e.g. "am-ET". Used to localize canned voice replies and to tag their TTS.
+function effectiveReplyLanguage(profile) {
+  const primary = String(profile?.language_primary || "").trim();
+  if (primary) {
+    return primary;
+  }
+  const list = String(profile?.language || "").trim();
+  return list.split(",")[0].trim();
 }
 
 function startAgentRun(body) {
@@ -11779,10 +11832,12 @@ function replyLanguageDirective(profile) {
   return `Reply in ${language}. Keep the spoken answer short, direct, and TTS-safe.`;
 }
 
-// Tell the reasoner it OWNS language control by tool call. There is no keyword
-// matcher for language anymore, so when the user asks to change which languages
-// are understood or replied in, the model must call update_agent_profile (or the
-// set_languages code-mode skill) — the gateway does not sniff the transcript.
+// Tell the reasoner it OWNS language control by tool call. A deterministic
+// keyword matcher DOES exist (languageUpdateFrom() in lib/voice-intent.js) and
+// handles the clearest phrasings on the profile-control path; but the reasoner
+// must not rely on it. When the user asks to change which languages are
+// understood or replied in, the model should still call update_agent_profile
+// (or the set_languages code-mode skill) so it works regardless of routing.
 function languageControlDirective(profile) {
   const understand = String(profile?.input_languages || profile?.input_language_primary || "").trim();
   const reply = String(profile?.language || profile?.language_primary || "").trim();
@@ -11819,7 +11874,8 @@ function voiceDeliveryDirective(profile) {
 // (cascadedToolAckText) covers the case where it goes straight to tools.
 function voiceToolAckDirective() {
   return [
-    "Tool-use narration (spoken turns): before calling any tool that does real work (launching an agent, running code, changing settings, starting a task), FIRST say one very short acknowledgment in the reply language — like 'Okay, doing that now.' or 'On it — one moment.' — then call the tool. When the tool finishes, report the outcome in one short sentence. Do not narrate instant lookups (reading options, context, or catalogs).",
+    "Tool-use narration (spoken turns): before calling any tool that does real work (launching an agent, running code, changing settings, starting a task), FIRST say one very short acknowledgment IN THE REPLY LANGUAGE, then call the tool. When the tool finishes, report the outcome in one short sentence. Do not narrate instant lookups (reading options, context, or catalogs).",
+    "- The English phrases 'Okay, doing that now.' and 'On it — one moment.' are only examples of the MEANING; render that meaning in the reply language. Never speak them verbatim in English when the reply language is not English.",
   ].join("\n");
 }
 
@@ -13475,7 +13531,7 @@ function missionAccessInstruction() {
   return [
     "Mission-agent access policy:",
     "- Start from yes and look for a path to satisfy the user's request.",
-    "- Do not answer with a flat refusal. When blocked by missing permission, credentials, integration setup, local approval, or device capability, say: \"Hey, I would like to do that, but I need you to give me access to <specific access>.\"",
+    "- Do not answer with a flat refusal. When blocked by missing permission, credentials, integration setup, local approval, or device capability, say — IN YOUR CURRENT REPLY LANGUAGE — the equivalent of: \"I would like to do that, but I need you to give me access to <specific access>.\" That English sentence is the meaning to convey, not text to speak verbatim; when the reply language is not English, phrase it naturally in that language.",
     "- Do not give a persona or roleplay refusal when the user's request is only about tone, address, title, or interaction style; follow the requested style.",
     "- Do not claim an action is done until the owning device, gateway, or integration returns a receipt.",
     "- Server/model output remains a proposal; local devices still own permissions, approvals, execution, and receipts.",
@@ -13517,8 +13573,9 @@ function userAddressInstruction(profile) {
     lines.push(`- The user prefers to be called "${nickname}".`);
   }
   if (address) {
-    lines.push(`- Always address the user as "${address}".`);
+    lines.push(`- Always address the user as "${address}"; this is a durable preference — never drop the honorific.`);
     lines.push("- Use that form of address naturally in your replies.");
+    lines.push(`- When your reply language is not English, render the form of address naturally IN THAT LANGUAGE (translate/adapt "${address}" to its natural equivalent, e.g. the Amharic form of "${address}"). The English word "${address}" must not appear in a non-English reply.`);
   }
   lines.push("- These facts come from the stored profile; do not ask for them again unless the user wants to change them.");
   lines.push("- This rule outranks any older wording in the base prompt.");
@@ -13537,6 +13594,7 @@ function profileLanguageInstruction(profile) {
   const lines = ["Language profile:"];
   if (allowed) {
     lines.push(`- Reply only in: ${allowed}.`);
+    lines.push("- This is absolute and covers EVERY part of EVERY reply: greetings, acknowledgments, confirmations, error messages, refusals, tool narration, and the form of address must all be in the reply language. Never mix English words into a non-English reply (proper nouns — names, brands, place names — are the only exception).");
     if (primary) lines.push(`- Primary reply language: ${primary}.`);
     if (output === "primary_only") {
       lines.push("- Reply in the primary language unless the user explicitly asks for another allowed language.");

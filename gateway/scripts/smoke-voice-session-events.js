@@ -218,10 +218,14 @@ function assertStableAssistantEvents(events) {
   assert.equal(text.text, "assistant event text");
 
   const done = eventOfType(events, "turn_done");
-  assert.deepEqual(Object.keys(done).sort(), ["branch_id", "first_audio_ms", "session_id", "status", "transcription_only", "turn_id", "type"]);
+  // turn_done always carries reply_language + input_languages so a client overlay
+  // can render a live "hears X / speaks Y" indicator every turn.
+  assert.deepEqual(Object.keys(done).sort(), ["branch_id", "first_audio_ms", "input_languages", "reply_language", "session_id", "status", "transcription_only", "turn_id", "type"]);
   assert.equal(done.status, "completed");
   assert.equal(done.transcription_only, false);
   assert.ok(Number.isFinite(done.first_audio_ms), "turn_done must carry first_audio_ms after audio is emitted");
+  assert.ok(Array.isArray(done.input_languages), "turn_done must always carry input_languages as an array");
+  assert.equal(typeof done.reply_language, "string", "turn_done must always carry reply_language as a string");
 }
 
 function assertCanonicalCompletion(completedTurns) {
