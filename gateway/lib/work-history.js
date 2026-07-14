@@ -764,6 +764,9 @@ function createWorkHistoryStore({ events }) {
     });
   }
 
+  // Intentionally not wrapped in deploymentTransition: this is an
+  // idempotency-keyed append-only observation, not a read-modify-write of the
+  // request's lifecycle state, so it does not need the per-stream lock.
   async function recordDeploymentVerification(input = {}) {
     const requestId = requireText(input.request_id, "request_id");
     const state = await collectState();

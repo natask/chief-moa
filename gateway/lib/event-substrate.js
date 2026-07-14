@@ -117,11 +117,13 @@ function createJsonEventSubstrateStore(options = {}) {
     const queued = previous.then(() => current, () => current);
     JSON_STREAM_LOCK_QUEUE.set(lockDir, queued);
     try { await previous; } catch { /* prior holder failure must not block us */ }
-    await acquireJsonStreamDirLock(lockDir, lockOptions);
+    const owner = await acquireJsonStreamDirLock(lockDir, lockOptions);
     try {
       return await fn();
     } finally {
-      try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      // Identity-bound release: if this holder ran long enough to be reclaimed,
+      // the nonce no longer matches and the successor's lock is left intact.
+      try { await releaseJsonStreamDirLock(lockDir, owner, lockOptions); } catch { /* best effort */ }
       release();
       if (JSON_STREAM_LOCK_QUEUE.get(lockDir) === queued) JSON_STREAM_LOCK_QUEUE.delete(lockDir);
     }
@@ -608,32 +610,171 @@ function boundedPositiveInteger(value, fallback, minimum, maximum) {
 }
 
 // Lightweight atomic-mkdir lock backing withStreamLock. mkdir is atomic across
-// processes on POSIX and needs no fsync, so acquisition is cheap. A holder that
-// crashes leaves the directory behind; a bounded stale age lets a successor
-// reclaim it rather than block forever.
+// processes on POSIX and needs no fsync, so the uncontended fast path stays
+// cheap. A holder that crashes leaves the directory behind; stale reclaim is
+// reaper-guarded: the first stale observation is only a hint, the re-check and
+// removal happen under a dedicated reaper mutex, and removal is bound to the
+// exact directory (owner nonce + inode) that was judged stale so two racing
+// reclaimers can never delete a fresh successor's lock.
 async function acquireJsonStreamDirLock(lockDir, options) {
   const deadline = Date.now() + options.timeoutMs;
   while (true) {
+    const owner = streamLockOwner();
+    let created = false;
     try {
       fs.mkdirSync(lockDir);
-      return;
+      created = true;
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
+    }
+    if (created) {
       try {
-        const stat = fs.statSync(lockDir);
-        if (Date.now() - stat.mtimeMs >= options.staleMs) {
-          fs.rmSync(lockDir, { recursive: true, force: true });
-          continue;
-        }
-      } catch { /* raced with another reclaimer; retry the mkdir */ }
-      if (Date.now() >= deadline) {
-        const error = new Error(`timed out acquiring event stream lock: ${path.basename(lockDir)}`);
-        error.code = "EVENT_SUBSTRATE_LOCK_TIMEOUT";
+        fs.writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch { /* best effort */ }
         throw error;
       }
+      return owner;
+    }
+    const observed = readStreamLockState(lockDir);
+    if (streamLockStateIsStale(observed, options.staleMs)) {
+      await withStreamReaperLock(lockDir, options, async () => {
+        // The first observation is only a hint. Re-read while every release
+        // and competing stale reaper is excluded, so a replacement lock can
+        // never be deleted based on its predecessor's stale state.
+        const current = readStreamLockState(lockDir);
+        if (streamLockStateIsStale(current, options.staleMs)) {
+          quarantineStreamLockDir(lockDir, current.owner?.nonce || "", current.stat);
+        }
+      });
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      const error = new Error(`timed out acquiring event stream lock: ${path.basename(lockDir)}`);
+      error.code = "EVENT_SUBSTRATE_LOCK_TIMEOUT";
+      throw error;
+    }
+    await delay(options.retryMs);
+  }
+}
+
+// Release is identity-bound: only the recorded owner's own directory is
+// removed, under the same reaper mutex the reclaim path uses, so a holder that
+// was reclaimed while still running cannot delete its successor's lock.
+async function releaseJsonStreamDirLock(lockDir, owner, options) {
+  return withStreamReaperLock(lockDir, options, async () => {
+    const current = readStreamLockState(lockDir);
+    if (!current || !owner?.nonce || current.owner?.nonce !== owner.nonce) return false;
+    return quarantineStreamLockDir(lockDir, owner.nonce, current.stat);
+  });
+}
+
+function streamLockOwner() {
+  return {
+    host: LOCK_OWNER_HOST,
+    pid: process.pid,
+    process_instance_id: LOCK_PROCESS_INSTANCE_ID,
+    nonce: crypto.randomUUID(),
+    acquired_at: new Date().toISOString(),
+  };
+}
+
+function readStreamLockState(lockDir) {
+  try {
+    const stat = fs.statSync(lockDir);
+    let owner = {};
+    try { owner = JSON.parse(fs.readFileSync(path.join(lockDir, "owner.json"), "utf8")); } catch { owner = {}; }
+    if (!owner || typeof owner !== "object") owner = {};
+    return { stat, owner };
+  } catch {
+    return null;
+  }
+}
+
+function streamLockStateIsStale(state, staleMs) {
+  if (!state) return false;
+  const age = Date.now() - Number(state.stat.mtimeMs || 0);
+  const owner = state.owner || {};
+  // Ownerless or corrupt owner records (crash between mkdir and the owner
+  // write) fall back to the bounded stale age.
+  if (!owner.host || !owner.pid || !owner.nonce) return age >= staleMs;
+  // A holder on another host cannot be liveness-checked here. Preserve it and
+  // let acquisition time out instead of stealing a possibly-live lock.
+  if (owner.host !== LOCK_OWNER_HOST) return false;
+  if (owner.pid === process.pid) {
+    // Same pid: only a prior instance of this process (pid reuse across
+    // restarts) is reclaimable; our own live instance never is.
+    return typeof owner.process_instance_id === "string"
+      && owner.process_instance_id !== LOCK_PROCESS_INSTANCE_ID;
+  }
+  return !processIsAlive(owner.pid);
+}
+
+// Serializes stale reclaim and release for one stream lock. The reaper mutex
+// itself is a mkdir lock with the same identity-bound reclaim, so a crashed
+// reaper cannot wedge the stream.
+async function withStreamReaperLock(lockDir, options, fn) {
+  const reaperDir = `${lockDir}.reaper`;
+  const deadline = Date.now() + options.timeoutMs;
+  let owner = null;
+  while (!owner) {
+    const candidate = streamLockOwner();
+    let created = false;
+    try {
+      fs.mkdirSync(reaperDir);
+      created = true;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+    if (created) {
+      try {
+        fs.writeFileSync(path.join(reaperDir, "owner.json"), JSON.stringify(candidate), { flag: "wx", mode: 0o600 });
+        owner = candidate;
+      } catch (error) {
+        try { fs.rmSync(reaperDir, { recursive: true, force: true }); } catch { /* best effort */ }
+        throw error;
+      }
+      break;
+    }
+    const observed = readStreamLockState(reaperDir);
+    if (streamLockStateIsStale(observed, options.staleMs)) {
+      // Bind reclamation to the exact owner and inode that were judged stale.
+      // If a competing reaper already replaced the mutex, this conditional
+      // quarantine becomes a no-op and can never remove the fresh one.
+      quarantineStreamLockDir(reaperDir, observed.owner?.nonce || "", observed.stat);
+    } else if (Date.now() >= deadline) {
+      const error = new Error(`timed out acquiring event stream lock reaper: ${path.basename(reaperDir)}`);
+      error.code = "EVENT_SUBSTRATE_LOCK_TIMEOUT";
+      throw error;
+    } else {
       await delay(options.retryMs);
     }
   }
+  try {
+    return await fn();
+  } finally {
+    quarantineStreamLockDir(reaperDir, owner.nonce);
+  }
+}
+
+// Removes a lock directory only when it is still the directory that was
+// observed: the caller pins the expected owner nonce and, when available, the
+// stat identity (dev + inode). rename-then-rm keeps the removal atomic with
+// respect to competing mkdir acquisitions at the same path.
+function quarantineStreamLockDir(lockDir, expectedNonce = "", expectedStat = null) {
+  const current = readStreamLockState(lockDir);
+  if (!current) return false;
+  if (expectedNonce && current.owner?.nonce !== expectedNonce) return false;
+  if (expectedStat && (current.stat.dev !== expectedStat.dev || current.stat.ino !== expectedStat.ino)) return false;
+  const tombstone = `${lockDir}.released-${process.pid}-${crypto.randomUUID()}`;
+  try {
+    fs.renameSync(lockDir, tombstone);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  fs.rmSync(tombstone, { recursive: true, force: true });
+  return true;
 }
 
 async function withJsonAppendLock(eventsPath, options, task) {
@@ -1068,4 +1209,9 @@ module.exports = {
   normalizeEvent,
   normalizeEventType,
   withTransaction,
+  // Internal stream-lock primitives, exported for direct race-condition tests
+  // of the reaper-guarded stale reclaim. Application code goes through
+  // store.withStreamLock instead.
+  acquireJsonStreamDirLock,
+  releaseJsonStreamDirLock,
 };

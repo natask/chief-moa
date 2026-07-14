@@ -7,7 +7,11 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 
-const { createEventSubstrateStore } = require("../lib/event-substrate");
+const {
+  acquireJsonStreamDirLock,
+  createEventSubstrateStore,
+  releaseJsonStreamDirLock,
+} = require("../lib/event-substrate");
 
 const CHILD_PATH = path.join(__dirname, "fixtures", "event-substrate-child.js");
 const EVENTS_FILENAME = "product-events.jsonl";
@@ -400,6 +404,38 @@ test("withStreamLock releases the stream after a failed transition", async () =>
     // The next caller must acquire immediately rather than time out on a wedged lock.
     const recovered = await store.withStreamLock("stream:err", async () => "recovered");
     assert.equal(recovered, "recovered");
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("two stale reapers cannot quarantine the new live winner", async () => {
+  // Direct reclaim race on the stream dir lock: a crashed holder left a stale
+  // directory with a corrupt owner record, and two contenders judge it stale
+  // simultaneously. The reaper mutex plus nonce/inode-bound quarantine must let
+  // exactly one contender win, and the loser's reclaim pass must be a no-op
+  // against the winner's fresh lock instead of deleting it.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-stream-lock-two-reapers-"));
+  const lockDir = path.join(dataDir, "stream.lock");
+  try {
+    fs.mkdirSync(lockDir);
+    fs.writeFileSync(path.join(lockDir, "owner.json"), "corrupt-stale-owner");
+    const aged = new Date(Date.now() - 2000);
+    fs.utimesSync(lockDir, aged, aged);
+
+    const options = { timeoutMs: 150, retryMs: 5, staleMs: 10 };
+    const settled = await Promise.allSettled([
+      acquireJsonStreamDirLock(lockDir, options),
+      acquireJsonStreamDirLock(lockDir, options),
+    ]);
+    const winners = settled.filter((item) => item.status === "fulfilled");
+    assert.equal(winners.length, 1, "exactly one contender owns the replacement lock");
+    assert.equal(settled.filter((item) => item.status === "rejected").length, 1);
+    const winner = winners[0].value;
+    const stored = JSON.parse(fs.readFileSync(path.join(lockDir, "owner.json"), "utf8"));
+    assert.equal(stored.nonce, winner.nonce, "the losing stale reaper must preserve the fresh owner");
+    assert.equal(await releaseJsonStreamDirLock(lockDir, winner, options), true);
+    assert.equal(fs.existsSync(lockDir), false);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
