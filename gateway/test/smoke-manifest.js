@@ -98,8 +98,11 @@ const SYNTAX_CHECK_FILES = [
   "scripts/smoke-livekit-transport.js",
   "lib/voice-chunker.js",
   "lib/voice-stages.js",
+  "lib/voice-stt-streaming.js",
   "scripts/test-voice-chunker.js",
   "scripts/smoke-profile-identity-guard.js",
+  "scripts/smoke-streaming-stt.js",
+  "scripts/smoke-voice-retranscribe.js",
 ];
 
 const SMOKE_SCRIPTS = [
@@ -159,6 +162,8 @@ const SMOKE_SCRIPTS = [
   "scripts/smoke-livekit-transport.js",
   "scripts/test-voice-chunker.js",
   "scripts/smoke-profile-identity-guard.js",
+  "scripts/smoke-streaming-stt.js",
+  "scripts/smoke-voice-retranscribe.js",
 ];
 
 function hasDatabaseUrl() {

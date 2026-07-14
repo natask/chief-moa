@@ -293,6 +293,13 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.sendAudio(chunk);
     }
+    // Tee to the streaming STT recognizer (cascaded path). The disk write above
+    // stays the source of truth; this is an additive fan-out that produces live
+    // partial transcripts and the final transcript without re-reading the file.
+    // push() never throws — a streaming fault degrades to the batch path.
+    if (turn.sttStream) {
+      turn.sttStream.push(chunk);
+    }
   }
 
   bufferEarlyAudio(chunk) {
@@ -380,6 +387,9 @@ class VoiceSessionConnection {
       streamingAudio: false,
       providerEvents: null,
       liveSession: null,
+      // Streaming STT recognizer session (cascaded path), teed audio frames.
+      // null until session_start wires it and when streaming is disabled.
+      sttStream: null,
       completing: false,
       recordedCanonical: false,
       contextPrompt: "",
@@ -433,6 +443,23 @@ class VoiceSessionConnection {
       turn.liveSession.done
         .then((providerResult) => this.completeLiveTurn(turn, providerResult))
         .catch((error) => this.failLiveTurn(turn, error));
+    } else if (typeof this.voiceProvider.createStreamingSttSession === "function") {
+      // Cascaded/STT-only path: open a streaming recognizer so audio frames are
+      // transcribed AS THEY ARRIVE and partial transcripts stream back to the
+      // client. Provider events are created up front so the same set threads
+      // through commit. A null result (streaming disabled/unsupported) simply
+      // leaves the turn on the batch path — this never blocks session_ready and
+      // never throws (a streaming fault must not fail the turn).
+      turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
+      try {
+        turn.sttStream = this.voiceProvider.createStreamingSttSession(
+          turn,
+          this.providerHooks(turn, turn.providerEvents),
+        );
+      } catch (error) {
+        turn.sttStream = null;
+        writeTurnMetadata(turn, { stt_stream_error: cleanError(error) });
+      }
     }
     this.flushEarlyAudio(turn);
     writeTurnMetadata(turn, { status: "recording" });
@@ -1293,6 +1320,7 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
+    abortSttStream(turn);
     const events = providerEvents || this.createProviderEvents(turn);
     const failedStage = events.activeStage
       || normalizeProgressStage(this.turnProgressStage)
@@ -1373,6 +1401,7 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
+    abortSttStream(turn);
     await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), "turn_canceled", {});
     await this.recordIncompleteTurn(turn, "canceled");
     writeTurnMetadata(turn, {
@@ -1429,6 +1458,7 @@ class VoiceSessionConnection {
       if (turn.liveSession) {
         turn.liveSession.cancel();
       }
+      abortSttStream(turn);
       await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
         status,
       });
@@ -1447,6 +1477,7 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.cancel();
     }
+    abortSttStream(turn);
     await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
       status,
     });
@@ -1630,6 +1661,23 @@ function effectiveProfileForSession(profile, event) {
     next.voice_tone = tone;
   }
   return next;
+}
+
+// Tear down the streaming STT recognizer without finalizing (cancel/close/
+// interrupt paths). The commit path finalizes via runSttStage instead; here the
+// turn is terminal, so we just destroy the gRPC stream. Best-effort, never
+// throws — a streaming fault must never take the session down.
+function abortSttStream(turn) {
+  if (!turn || !turn.sttStream) {
+    return;
+  }
+  const stream = turn.sttStream;
+  turn.sttStream = null;
+  try {
+    stream.abort?.();
+  } catch {
+    // best effort
+  }
 }
 
 async function closeAudioStream(turn) {

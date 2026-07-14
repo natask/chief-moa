@@ -1629,6 +1629,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST"
+      && url.pathname.startsWith("/v1/voice/turns/")
+      && url.pathname.endsWith("/retranscribe")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleVoiceRetranscribe(request, response, url);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/audio-notes") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -10488,6 +10499,176 @@ function handleVoiceTurnGet(response, turnId, sessionId) {
     updated_at: String(record.updated_at || ""),
     references: record.references || {},
   });
+}
+
+// POST /v1/voice/turns/:sessionId/:turnId/retranscribe — re-run STT (batch,
+// windowed so length is unbounded) over the stored user PCM and return the
+// fresh transcript. The audio archive is the durable source of truth: spoken
+// input is never lost, so a bad/empty/wrong-language streaming transcript can
+// always be recovered from the recording. Non-destructive: the original
+// transcript is preserved as revision 0 and the new one is appended + marked
+// retranscribed:true. 404 when the PCM is gone (e.g. incognito-deleted).
+async function handleVoiceRetranscribe(request, response, url) {
+  const rest = url.pathname
+    .slice("/v1/voice/turns/".length, url.pathname.length - "/retranscribe".length)
+    .split("/")
+    .filter(Boolean);
+  if (rest.length !== 2) {
+    sendJson(response, 404, { error: "voice turn not found" });
+    return;
+  }
+  let sessionId;
+  let turnId;
+  try {
+    sessionId = sanitizeOptionalId(decodeURIComponent(rest[0]), "default");
+    turnId = sanitizeOptionalId(decodeURIComponent(rest[1]), "");
+  } catch {
+    sendJson(response, 404, { error: "voice turn not found" });
+    return;
+  }
+  if (!turnId) {
+    sendJson(response, 404, { error: "voice turn not found" });
+    return;
+  }
+
+  const pcmPath = voiceTurnAudioPath(sessionId, turnId, "user");
+  if (!pcmPath || !fs.existsSync(pcmPath)) {
+    sendJson(response, 404, { error: "voice turn audio not found", session_id: sessionId, turn_id: turnId });
+    return;
+  }
+  let stat;
+  try {
+    stat = fs.statSync(pcmPath);
+  } catch {
+    sendJson(response, 404, { error: "voice turn audio not found", session_id: sessionId, turn_id: turnId });
+    return;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    sendJson(response, 404, { error: "voice turn audio not found", session_id: sessionId, turn_id: turnId });
+    return;
+  }
+
+  const body = await readJsonBody(request).catch(() => ({}));
+  const provider = internalTtsProvider();
+  if (typeof provider.transcribePcmWindowed !== "function") {
+    sendJson(response, 501, {
+      error: "active voice provider has no batch STT leg",
+      reason: "retranscribe needs a cascaded (chirp) STT provider",
+      provider: provider.status?.().provider || "unknown",
+    });
+    return;
+  }
+
+  const overrideCodes = normalizeRetranscribeLanguageCodes(body.language_codes || body.languageCodes);
+  const codes = overrideCodes.length > 0
+    ? overrideCodes
+    : (typeof provider.sttLanguageCodes === "function" ? provider.sttLanguageCodes() : ["en-US"]);
+  const syntheticTurn = {
+    turnId,
+    pcmPath,
+    audioBytes: stat.size,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  };
+
+  let transcription;
+  try {
+    transcription = await provider.transcribePcmWindowed(syntheticTurn, codes);
+  } catch (error) {
+    sendJson(response, 502, { error: `retranscribe failed: ${cleanError(error)}` });
+    return;
+  }
+  const transcript = String(transcription?.text || "").trim();
+  const now = new Date().toISOString();
+
+  const record = readVoiceTurnRecord(sessionId, turnId);
+  let revision = 1;
+  if (record) {
+    // Non-destructive: seed revision 0 with the original the first time, then
+    // append this retranscription. The primary transcript is updated to the
+    // fresh one but the original stays recoverable in transcript_revisions.
+    const revisions = Array.isArray(record.transcript_revisions) ? record.transcript_revisions.slice() : [];
+    if (revisions.length === 0) {
+      revisions.push({
+        revision: 0,
+        transcript: String(record.transcript || ""),
+        transcript_source: String(record.transcript_source || ""),
+        source: "original",
+        created_at: String(record.updated_at || record.created_at || now),
+      });
+    }
+    revision = revisions.length;
+    revisions.push({
+      revision,
+      transcript,
+      transcript_source: "stt-retranscribe",
+      source: "retranscribe",
+      language_codes: codes,
+      windowed: transcription?.windowed === true,
+      created_at: now,
+    });
+    record.transcript_revisions = revisions;
+    record.retranscribed = true;
+    record.transcript = transcript;
+    record.transcript_source = "stt-retranscribe";
+    record.updated_at = now;
+    const voiceSession = record.references?.voice_session;
+    if (voiceSession && typeof voiceSession === "object") {
+      const providerEvents = Array.isArray(voiceSession.provider_events) ? voiceSession.provider_events : [];
+      providerEvents.push({
+        type: "transcript_retranscribed",
+        ts: now,
+        revision,
+        transcript_chars: transcript.length,
+        language_codes: codes,
+        windowed: transcription?.windowed === true,
+      });
+      voiceSession.provider_events = providerEvents;
+    }
+    writeVoiceTurnRecord(record);
+  }
+
+  // Durable audit trail even when no turn record exists (e.g. the record was
+  // pruned but the PCM survived): append a provider-events ledger line.
+  try {
+    fs.appendFileSync(VOICE_PROVIDER_EVENTS_FILE, JSON.stringify({
+      ts: now,
+      session_id: sessionId,
+      turn_id: turnId,
+      type: "transcript_retranscribed",
+      revision,
+      transcript_chars: transcript.length,
+      language_codes: codes,
+      windowed: transcription?.windowed === true,
+    }) + "\n");
+  } catch {
+    // best effort audit
+  }
+
+  sendJson(response, 200, {
+    session_id: sessionId,
+    turn_id: turnId,
+    transcript,
+    transcript_source: "stt-retranscribe",
+    retranscribed: true,
+    revision,
+    language_codes: codes,
+    windowed: transcription?.windowed === true,
+    language_rejected: transcription?.languageRejected === true,
+    audio_bytes: stat.size,
+    record_updated: Boolean(record),
+    updated_at: now,
+  });
+}
+
+function normalizeRetranscribeLanguageCodes(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[,\s]+/);
+  const codes = raw
+    .map((code) => String(code || "").trim())
+    .filter(Boolean)
+    .filter((code) => code.toLowerCase() !== "auto");
+  return Array.from(new Set(codes)).slice(0, 2);
 }
 
 const VOICE_DIAGNOSIS_LIMIT_MAX = 20;
