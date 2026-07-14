@@ -1411,6 +1411,12 @@ queues.
   smoke for the proactive endpoint's exact request schema, rejection matrix,
   bounded text response, and unchanged conversation/task/workflow/broker-event/
   agent-run stores (`npm run smoke:proactive-turn`).
+- `gateway/lib/broker-router.js`: deterministic broker route selection for
+  sessions, projects, active runs, workflows, and new forks.
+- `gateway/lib/broker-launcher.js`: bounded broker context-pack construction,
+  launcher-profile selection, explicit run activation, and context-pack
+  persistence. Model output remains proposal-only unless the broker request
+  explicitly asks to launch a run.
 - `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
 - `gateway/public/credential-panel.html`: gateway-served credential-autopilot

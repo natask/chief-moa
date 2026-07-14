@@ -22,7 +22,8 @@
       line/branch/function coverage gate; reduce `server.js` to 15,529 lines.
 - [x] 2.3a Extract deterministic broker routing with a focused 90%
       line/branch/function coverage gate.
-- [ ] 2.3b Extract broker context-pack and launch handlers.
+- [x] 2.3b Extract broker context-pack and launch handlers with a focused 90%
+      line/branch/function coverage gate; reduce `server.js` to 14,983 lines.
 - [ ] 2.3c Extract work-history handlers.
 - [ ] 2.4 Extract companion, pet, and profile handlers.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.

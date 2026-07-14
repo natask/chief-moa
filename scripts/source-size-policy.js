@@ -9,7 +9,7 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const MAX_SOURCE_LINES = 2000;
 const TARGET_PRODUCTION_LINES = 60000;
 const ULTIMATE_PRODUCTION_LINES = 10000;
-const LEGACY_PRODUCTION_LINE_CEILING = 74900;
+const LEGACY_PRODUCTION_LINE_CEILING = 74896;
 const MAX_TEST_TO_PRODUCTION_RATIO = 2;
 const SOURCE_EXTENSIONS = new Set([".cjs", ".css", ".go", ".html", ".java", ".js", ".kt", ".mjs", ".py", ".rs", ".swift", ".ts", ".tsx"]);
 const EXCLUDED_PARTS = new Set(["node_modules", "build", "dist", "coverage", "vendor"]);
@@ -22,7 +22,7 @@ const LEGACY_DEBT_CEILINGS = Object.freeze({
   "browser_extension/extension/content.js": 3704,
   "gateway/lib/voice-providers.js": 4016,
   "gateway/lib/voice-session-server.js": 2047,
-  "gateway/server.js": 15331,
+  "gateway/server.js": 14983,
 });
 
 function lineCount(text) {
