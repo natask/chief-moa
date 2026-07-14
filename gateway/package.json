@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "node --env-file-if-exists=.env server.js",
-    "check": "MOA_SKIP_SLOW=1 node --test \"test/**/*.test.js\"",
+    "check": "MOA_SKIP_SLOW=1 node --test \"test/**/*.test.js\" && npm run check:quality",
+    "check:quality": "node ../scripts/source-size-policy.js && npm run test:coverage:browser-evidence",
+    "test:coverage:browser-evidence": "node --experimental-test-coverage --test-coverage-include='lib/browser-evidence.js' --test-coverage-include='lib/input-utils.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/browser-evidence.test.js",
     "check:context-quality": "node scripts/check-context-quality.js",
     "test": "node --test \"test/**/*.test.js\"",
     "test:billing": "node --test test/billing-domain.test.js",
