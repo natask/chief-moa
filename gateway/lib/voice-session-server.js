@@ -982,6 +982,8 @@ class VoiceSessionConnection {
         turn_id: turn.turnId,
         status: "no_speech",
         reason: "stt_empty",
+        reply_language: turnReplyLanguage(turn, providerResult, null),
+        input_languages: turnInputLanguages(turn),
       });
       if (this.turn === turn) {
         this.turn = null;
@@ -1035,7 +1037,10 @@ class VoiceSessionConnection {
           && typeof this.voiceProvider.synthesizeAssistantSpeech === "function") {
         try {
           confirmationTts = await this.voiceProvider.synthesizeAssistantSpeech(profileControlText, providerHooks, {
-            language: providerResult?.reply_language || canonicalRecord?.response?.reply_language || "",
+            // Tag the confirmation TTS with the SAME language the confirmation
+            // text is written in (the gateway localizes canned text to the reply
+            // language), so text language and TTS language can never diverge.
+            language: turnReplyLanguage(turn, providerResult, canonicalRecord),
             // Confirmations speak with the same per-turn voice as the reply
             // (session_start override included), not the global default.
             profile: turn.effectiveProfile,
@@ -1088,7 +1093,12 @@ class VoiceSessionConnection {
       status: "completed",
       transcription_only: providerResult?.transcription_only === true,
       ...(typeof doneTtsSpoke === "boolean" ? { tts_spoke: doneTtsSpoke } : {}),
-      ...(providerResult?.reply_language ? { reply_language: providerResult.reply_language } : {}),
+      // Language visibility: ALWAYS report the reply (spoken) language and the
+      // restricted input (heard) languages so a client overlay can render a live
+      // "hears X / speaks Y" indicator. reply_language falls back to the turn's
+      // effective profile when the provider result omits it.
+      reply_language: turnReplyLanguage(turn, providerResult, canonicalRecord),
+      input_languages: turnInputLanguages(turn),
       // Honest delivery signals: how the reply was delivered ("text" = not
       // spoken) and, when hosted TTS failed, the short reason.
       ...(doneModality ? { modality: doneModality } : {}),
@@ -1358,6 +1368,8 @@ class VoiceSessionConnection {
       status: "error",
       reason: turnErrorReason(error),
       error_summary: cleanErrorSummary(message),
+      reply_language: turnReplyLanguage(turn, null, null),
+      input_languages: turnInputLanguages(turn),
     });
     if (this.turn === turn) {
       this.turn = null;
@@ -1414,6 +1426,8 @@ class VoiceSessionConnection {
       branch_id: turn.branchId,
       turn_id: turn.turnId,
       status: "canceled",
+      reply_language: turnReplyLanguage(turn, null, null),
+      input_languages: turnInputLanguages(turn),
     });
     this.turn = null;
   }
@@ -1539,6 +1553,38 @@ class VoiceSessionConnection {
       message,
     }));
   }
+}
+
+// The restricted INPUT (STT) language codes for a turn, captured at session
+// start. Always an array so clients can render a live "hears X" indicator.
+function turnInputLanguages(turn) {
+  const codes = turn?.providerStatus?.language_codes;
+  return Array.isArray(codes) ? codes.filter(Boolean).map((code) => String(code)) : [];
+}
+
+// The reply (OUTPUT) language for a turn, so turn_done and the profile-control
+// confirmation TTS always carry a language code even when the provider result
+// omits it: provider result -> canonical record -> the turn's effective profile
+// reply language -> the first restricted STT input language. This keeps the
+// spoken text's language and its TTS language tag from ever diverging, and lets
+// clients show "speaks Y" every turn.
+function turnReplyLanguage(turn, providerResult, canonicalRecord) {
+  const fromProvider = String(providerResult?.reply_language || "").trim();
+  if (fromProvider) {
+    return fromProvider;
+  }
+  const fromRecord = String(
+    canonicalRecord?.response?.reply_language || canonicalRecord?.reply_language || "",
+  ).trim();
+  if (fromRecord) {
+    return fromRecord;
+  }
+  const profile = turn?.effectiveProfile || null;
+  const fromProfile = String(profile?.language_primary || profile?.language || "").trim();
+  if (fromProfile) {
+    return fromProfile.split(",")[0].trim();
+  }
+  return turnInputLanguages(turn)[0] || "";
 }
 
 function profileControlAssistantText(record) {
