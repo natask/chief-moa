@@ -26,6 +26,8 @@ const {
   languageControlPatch,
 } = require("./lib/profile-options");
 const { createCompanionCatalogStore } = require("./lib/companion-catalog");
+const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
+const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createBrain } = require("./lib/brain");
@@ -69,6 +71,29 @@ const {
 } = require("./lib/voice-router");
 const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
 const { createBrowserAgentLoopStore, buildAgentToolDefs } = require("./lib/browser-agent-loop");
+const {
+  PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
+  PROACTIVE_TURN_MAX_BODY_BYTES,
+  ProactiveTurnValidationError,
+  buildProactiveOpenAiPayload,
+  buildProactiveVertexPayload,
+  proactiveOpenAiText,
+  proactiveFallbackReply,
+  proactiveTurnResponse,
+  proactiveVertexText,
+  validateProactiveTurnBody,
+} = require("./lib/proactive-turn");
+const {
+  MACOS_PROACTIVE_MAX_BODY_BYTES,
+  MACOS_PROACTIVE_MAX_RESPONSE_BYTES,
+  MacosProactiveValidationError,
+  buildMacosOpenAiPayload,
+  buildMacosVertexPayload,
+  macosOpenAiText,
+  macosProactiveResponse,
+  macosVertexText,
+  validateMacosProactiveBody,
+} = require("./lib/macos-proactive-turn");
 const {
   resolveTurnSurface,
   surfaceExecuteCapabilities,
@@ -268,6 +293,15 @@ const companionCatalog = createCompanionCatalogStore({
   dataDir: DATA_DIR,
   voiceBinding: companionVoiceBindingOptions(),
 });
+const companionRuntimeAuthority = createCompanionRuntimeAuthority({
+  policy: loadCompanionRuntimePolicy(),
+  applyProfile: applyVerifiedCompanionPatch,
+  restoreProfile: restoreVerifiedCompanionPatch,
+  appendReceipt: appendCompanionRuntimeReceipt,
+  loadState: loadCompanionRuntimeState,
+  saveState: saveCompanionRuntimeState,
+});
+const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
 // surfaces from this; a "deployment" is a spec change here, not new extension
@@ -604,6 +638,27 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       await handleCompanionApply(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/agent/companions/rollback" && request.method === "POST") {
+      if (!authorizedAgent(request)) {
+        sendJson(response, 401, agentAuthError());
+        return;
+      }
+      await handleCompanionRollback(request, response);
+      return;
+    }
+
+    if (url.pathname === "/v1/billing/runtime/authorize" && request.method === "POST") {
+      if (!authorizedAgent(request)) { sendJson(response, 401, agentAuthError()); return; }
+      await handleBillingRuntime(request, response, false);
+      return;
+    }
+
+    if (url.pathname === "/v1/billing/runtime/usage" && request.method === "POST") {
+      if (!authorizedAgent(request)) { sendJson(response, 401, agentAuthError()); return; }
+      await handleBillingRuntime(request, response, true);
       return;
     }
 
@@ -1620,6 +1675,26 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/proactive/turns") {
+      response.setHeader("cache-control", "no-store");
+      if (!authorizedProactiveTurn(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleProactiveTurn(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/proactive/macos") {
+      response.setHeader("cache-control", "no-store");
+      if (!authorizedProactiveTurn(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleMacosProactiveTurn(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/audio-notes") {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
@@ -1843,11 +1918,15 @@ module.exports = {
   runsForSession,
   browserTasksForSession,
   buildCanonicalContextArtifact,
+  buildAdmittedAnswerMessages,
   contextPreflightMessages,
   contextPreflightTool,
   parseOpenAiContextPreflight,
   parseVertexContextPreflight,
   prepareContextDecision,
+  scopeClientMessagesForAdmission,
+  stashContextDecision,
+  takeContextDecision,
   planTurnFilingThread,
   commitTurnFilingThread,
   setContextLifecycleTestHook,
@@ -2226,6 +2305,146 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+// A deliberately separate intake path for the browser's accepted proactive
+// helper card. This route has no session id and never enters chat/voice
+// routing, tool loops, brokers, task stores, agent runs, or turn persistence.
+// The request validator returns only one of four packaged prompt strings; the
+// model/fallback call therefore receives no page-derived context.
+async function handleProactiveTurn(request, response) {
+  const contentType = String(request.headers["content-type"] || "").toLowerCase();
+  if (!/^application\/json(?:\s*;|$)/.test(contentType)) {
+    request.resume();
+    sendJson(response, 415, { error: "proactive request rejected", code: "content_type_required" });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readProactiveJsonBody(request);
+    body = validateProactiveTurnBody(body);
+  } catch (error) {
+    if (error instanceof ProactiveTurnValidationError) {
+      sendJson(response, error.statusCode, {
+        error: "proactive request rejected",
+        code: error.code,
+      });
+      return;
+    }
+    throw error;
+  }
+
+  const text = await callProactiveModelOrFallback(body.transcript);
+  sendJson(response, 200, proactiveTurnResponse(text));
+}
+
+async function callProactiveModelOrFallback(transcript) {
+  const provider = resolveReasoningProvider({ reasoning_provider: MODEL_PROVIDER });
+  if (!providerConfiguredFor(provider)) return proactiveFallbackReply(transcript);
+  if (provider === "vertex") return callProactiveVertexModel(transcript);
+  return callProactiveOpenAiModel(transcript);
+}
+
+async function callProactiveOpenAiModel(transcript) {
+  const result = await fetchBoundedResponseText(
+    `${MODEL_BASE_URL}/chat/completions`,
+    {
+      method: "POST",
+      headers: modelHeaders(),
+      body: JSON.stringify(buildProactiveOpenAiPayload(transcript, MODEL_ID)),
+    },
+    {
+      timeoutMs: proactiveProviderTimeoutMs(),
+      maxBytes: PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
+      label: "proactive OpenAI-compatible provider",
+    },
+  );
+  if (!result.response.ok) {
+    throw new Error(`proactive model HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
+  }
+  return proactiveOpenAiText(parseProactiveProviderJson(result.text, "OpenAI-compatible"));
+}
+
+async function callProactiveVertexModel(transcript) {
+  const accessToken = await vertexAccessToken();
+  const headers = {
+    authorization: `Bearer ${accessToken}`,
+    "content-type": "application/json",
+  };
+  if (process.env.VERTEX_PRIORITY !== "0") {
+    headers["x-vertex-ai-llm-shared-request-type"] = "priority";
+  }
+  const result = await fetchBoundedResponseText(
+    vertexEndpoint({ model: MODEL_ID }),
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(buildProactiveVertexPayload(transcript, vertexSafetySettings())),
+    },
+    {
+      timeoutMs: proactiveProviderTimeoutMs(),
+      maxBytes: PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
+      label: "proactive Vertex provider",
+    },
+  );
+  if (!result.response.ok) {
+    throw new Error(`proactive vertex HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
+  }
+  return proactiveVertexText(parseProactiveProviderJson(result.text, "Vertex"));
+}
+
+function parseProactiveProviderJson(text, provider) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`proactive ${provider} provider returned non-JSON`);
+  }
+}
+
+function proactiveProviderTimeoutMs() {
+  const configured = positiveNumberFrom(process.env.PROACTIVE_PROVIDER_TIMEOUT_MS, Math.min(MODEL_FETCH_TIMEOUT_MS, 15000));
+  return Math.max(250, Math.min(30000, configured));
+}
+
+async function handleMacosProactiveTurn(request, response) {
+  const contentType = String(request.headers["content-type"] || "").toLowerCase();
+  if (!/^application\/json(?:\s*;|$)/.test(contentType)) {
+    request.resume();
+    sendJson(response, 415, { error: "macOS proactive request rejected", code: "content_type_required" });
+    return;
+  }
+  let body;
+  try {
+    body = validateMacosProactiveBody(await readBoundedJsonBody(request, MACOS_PROACTIVE_MAX_BODY_BYTES, MacosProactiveValidationError));
+  } catch (error) {
+    if (error instanceof MacosProactiveValidationError) {
+      sendJson(response, error.statusCode, { error: "macOS proactive request rejected", code: error.code });
+      return;
+    }
+    throw error;
+  }
+  const provider = resolveReasoningProvider({ reasoning_provider: MODEL_PROVIDER });
+  let text;
+  if (!providerConfiguredFor(provider)) {
+    text = "Review the visible interface, confirm the intended outcome, and choose the smallest reversible next step.";
+  } else if (provider === "vertex") {
+    const result = await fetchBoundedResponseText(vertexEndpoint({ model: MODEL_ID }), {
+      method: "POST",
+      headers: { authorization: `Bearer ${await vertexAccessToken()}`, "content-type": "application/json" },
+      body: JSON.stringify(buildMacosVertexPayload(body, vertexSafetySettings())),
+      redirect: "error",
+    }, { timeoutMs: proactiveProviderTimeoutMs(), maxBytes: MACOS_PROACTIVE_MAX_RESPONSE_BYTES, label: "macOS proactive Vertex provider" });
+    if (!result.response.ok) throw new Error(`macOS proactive Vertex HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
+    text = macosVertexText(parseProactiveProviderJson(result.text, "Vertex"));
+  } else {
+    const result = await fetchBoundedResponseText(`${MODEL_BASE_URL}/chat/completions`, {
+      method: "POST", headers: modelHeaders(), body: JSON.stringify(buildMacosOpenAiPayload(body, MODEL_ID)), redirect: "error",
+    }, { timeoutMs: proactiveProviderTimeoutMs(), maxBytes: MACOS_PROACTIVE_MAX_RESPONSE_BYTES, label: "macOS proactive OpenAI-compatible provider" });
+    if (!result.response.ok) throw new Error(`macOS proactive model HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
+    text = macosOpenAiText(parseProactiveProviderJson(result.text, "OpenAI-compatible"));
+  }
+  sendJson(response, 200, macosProactiveResponse(text));
+}
+
 async function handleChat(request, response) {
   const body = await readJsonBody(request);
   if (shouldDelegateToBrowserTurn(body)) {
@@ -2291,9 +2510,12 @@ async function handleChat(request, response) {
     !contextArtifact ? legacyRecallContext : "",
     screenContext,
   ].filter(Boolean);
-  const modelMessages = systemBlocks.length
-    ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
-    : messages;
+  const modelMessages = buildAdmittedAnswerMessages({
+    systemBlocks,
+    messages,
+    action: decision.action,
+    fallbackText: userText,
+  });
 
   let text;
   if (utilityReply) {
@@ -3505,6 +3727,26 @@ async function routeWorkHistory(request, response, url) {
       const body = await readJsonBody(request);
       sendJson(response, 202, { request: await workHistory.requestDeployment(body) });
       return true;
+    }
+    const deploymentRequestMatch = pathname.match(/^\/v1\/work-history\/deployments\/requests\/([^/]+)(?:\/(review|claim|verification|effect|receipt))?$/);
+    if (deploymentRequestMatch) {
+      const requestId = decodeURIComponent(deploymentRequestMatch[1]);
+      const action = deploymentRequestMatch[2] || "";
+      if (method === "GET" && !action) {
+        const detail = await workHistory.deploymentRequestDetail(requestId);
+        if (!detail) sendJson(response, 404, { error: "deployment request not found" });
+        else sendJson(response, 200, detail);
+        return true;
+      }
+      if (method === "POST" && action) {
+        const body = { ...(await readJsonBody(request)), request_id: requestId };
+        if (action === "review") sendJson(response, 200, await workHistory.reviewDeploymentRequest(body));
+        else if (action === "claim") sendJson(response, 200, await workHistory.claimDeploymentRequest(body));
+        else if (action === "verification") sendJson(response, 201, await workHistory.recordDeploymentVerification(body));
+        else if (action === "effect") sendJson(response, 201, await workHistory.observeDeploymentOperationEffect(body));
+        else sendJson(response, 200, await workHistory.receiptDeploymentOperation(body));
+        return true;
+      }
     }
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
@@ -4990,18 +5232,13 @@ async function handleCreatePetBookmark(request, response) {
 async function handleCompanionPreview(request, response) {
   const body = await readJsonBody(request);
   try {
-    const preview = companionCatalog.preview(body || {});
     const profileOptions = profileOptionsFromBody(body, "global");
-    const base = agentProfile.effective(profileOptions);
-    const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
-    sendJson(response, 200, {
-      ...preview,
-      profile_version: agentProfile.currentVersion(profileOptions),
-      profile_before: agentProfileRuntimeStatus(profileOptions),
-      profile_preview: summarizePreviewProfile(base, merged),
-    });
+    const expected = String(body?.expected_profile_version || "");
+    if (expected !== String(agentProfile.currentVersion(profileOptions))) throw new Error("expected_profile_version is stale");
+    sendJson(response, 200, companionRuntimeAuthority.preview({ ...body, scope: profileOptions.scope,
+      device_id: profileOptions.deviceId, expected_profile_version: expected }));
   } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
+    sendJson(response, 400, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
   }
 }
 
@@ -5012,11 +5249,17 @@ async function handleCompanionApply(request, response) {
     return;
   }
   try {
-    const result = applyCompanionToProfile(body || {}, profileOptions, body?.source || "api");
-    sendJson(response, 200, result);
+    sendJson(response, 200, companionRuntimeAuthority.apply({ ...body, scope: profileOptions.scope,
+      device_id: profileOptions.deviceId }));
   } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
+    sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
   }
+}
+
+async function handleCompanionRollback(request, response) {
+  const body = await readJsonBody(request);
+  try { sendJson(response, 200, companionRuntimeAuthority.rollback(body || {})); }
+  catch (error) { sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" }); }
 }
 
 async function handlePetPreview(request, response) {
@@ -5110,6 +5353,9 @@ async function handlePetGenerate(request, response) {
 }
 
 function applyCompanionToProfile(input, profileOptions, source = "api") {
+  if (!input?.verified_runtime_authority) {
+    throw new Error("verified companion package approval is required");
+  }
   const preview = companionCatalog.preview(input || {});
   const before = agentProfile.effective(profileOptions);
   const beforeVersion = agentProfile.currentVersion(profileOptions);
@@ -5133,6 +5379,124 @@ function applyCompanionToProfile(input, profileOptions, source = "api") {
     companion_applied: beforeVersion !== afterVersion,
     from_profile_version: beforeVersion,
   }, profileOptions);
+}
+
+function loadCompanionRuntimePolicy() {
+  const policyPath = path.join(DATA_DIR, "companion-trust-policy.json");
+  if (!fs.existsSync(policyPath)) return {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+    const trustStore = new Map();
+    for (const [keyId, pem] of Object.entries(raw.trust_store || {})) {
+      if (typeof keyId !== "string" || typeof pem !== "string" || pem.length > 8192) throw new Error("invalid trust key");
+      trustStore.set(keyId, crypto.createPublicKey(pem));
+    }
+    const approvalTrustStore = new Map();
+    for (const [keyId, pem] of Object.entries(raw.approval_trust_store || {})) {
+      if (typeof keyId !== "string" || typeof pem !== "string" || pem.length > 8192) throw new Error("invalid approval trust key");
+      approvalTrustStore.set(keyId, crypto.createPublicKey(pem));
+    }
+    return { trustStore, approvalTrustStore, acceptedLicenses: boundedPolicyList(raw.accepted_licenses),
+      acceptedModerationPolicies: boundedPolicyList(raw.accepted_moderation_policies),
+      currentProtocolVersion: String(raw.current_protocol_version || ""),
+      revokedSignerIds: boundedPolicyList(raw.revoked_signer_ids),
+      revokedPackageDigests: boundedPolicyList(raw.revoked_package_digests) };
+  } catch (error) {
+    console.warn(`Companion trust policy rejected; package authority remains fail-closed: ${cleanError(error)}`);
+    return {};
+  }
+}
+
+function boundedPolicyList(value) {
+  if (!Array.isArray(value) || value.length > 1000 || value.some((item) => typeof item !== "string" || item.length > 200)) {
+    throw new Error("invalid bounded policy list");
+  }
+  return [...value];
+}
+
+function profileOptionsFromAuthorityScope(scope) {
+  const [kind, deviceId = ""] = String(scope).split(":", 2);
+  return { scope: kind === "device" ? "device" : "global", deviceId: kind === "device" ? normalizeDeviceId(deviceId) : "" };
+}
+
+function applyVerifiedCompanionPatch(patch, scope) {
+  const options = profileOptionsFromAuthorityScope(scope);
+  const effective = agentProfile.effective(options);
+  const before = { version: agentProfile.currentVersion(options),
+    values: Object.fromEntries(Object.keys(patch).map((key) => [key, effective[key]])) };
+  agentProfile.patch(patch, { source: "verified-companion-package", reason: "verified-package-apply",
+    scope: options.scope, deviceId: options.deviceId });
+  const after = { version: agentProfile.currentVersion(options), values: agentProfile.effective(options) };
+  return { before, after, receipt_id: randomId("companion_effect") };
+}
+
+function restoreVerifiedCompanionPatch(before, scope, expectedAfter) {
+  const options = profileOptionsFromAuthorityScope(scope);
+  if (String(agentProfile.currentVersion(options)) !== String(expectedAfter.version)) {
+    throw new Error("profile changed after companion apply; rollback requires review");
+  }
+  agentProfile.patch(before.values, { source: "verified-companion-package", reason: "verified-package-rollback",
+    scope: options.scope, deviceId: options.deviceId });
+  return { receipt_id: randomId("companion_rollback"), version: agentProfile.currentVersion(options) };
+}
+
+function appendCompanionRuntimeReceipt(record) {
+  const target = path.join(DATA_DIR, "companion-runtime-receipts.jsonl");
+  fs.appendFileSync(target, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+function loadCompanionRuntimeState(key) {
+  const file = path.join(DATA_DIR, "companion-runtime-state.json");
+  try { return JSON.parse(fs.readFileSync(file, "utf8"))[key] || null; } catch { return null; }
+}
+
+function saveCompanionRuntimeState(key, state) {
+  const file = path.join(DATA_DIR, "companion-runtime-state.json");
+  let all = {};
+  try { all = JSON.parse(fs.readFileSync(file, "utf8")); } catch { all = {}; }
+  all[key] = state;
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(all)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporary, file);
+}
+
+function loadBillingRuntimeAuthority() {
+  const policyPath = path.join(DATA_DIR, "billing-runtime-policy.json");
+  if (!fs.existsSync(policyPath)) return null;
+  try {
+    const input = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+    const domain = createBillingDomain({ tenantId: String(input.tenant_id || "") });
+    for (const fact of input.price_versions || []) domain.appendPriceVersion(fact);
+    for (const fact of input.budget_versions || []) domain.appendBudgetVersion(fact);
+    for (const fact of input.entitlements || []) domain.appendEntitlement(fact);
+    return createBillingRuntimeAuthority({ domain, entitlementId: input.runtime?.entitlement_id,
+      budgetId: input.runtime?.budget_id, budgetVersion: input.runtime?.budget_version,
+      priceId: input.runtime?.price_id, priceVersion: input.runtime?.price_version,
+      meter: input.runtime?.meter });
+  } catch (error) {
+    console.warn(`Billing runtime policy rejected; resource authority remains fail-closed: ${cleanError(error)}`);
+    return null;
+  }
+}
+
+async function handleBillingRuntime(request, response, recordUsage) {
+  if (!billingRuntimeAuthority) {
+    sendJson(response, 503, { allowed: false, reason: "billing_runtime_unconfigured", charged: false });
+    return;
+  }
+  try {
+    const body = await readJsonBody(request);
+    const result = recordUsage ? billingRuntimeAuthority.recordUsage(body || {}) : billingRuntimeAuthority.authorize(body || {});
+    appendBillingRuntimeReceipt({ operation: recordUsage ? "usage" : "authorize", result });
+    sendJson(response, result.allowed ? 200 : 402, { ...result, charged: false, mode: billingRuntimeAuthority.mode });
+  } catch (error) {
+    sendJson(response, 400, { allowed: false, reason: "billing_authority_rejected", charged: false, error: cleanError(error) });
+  }
+}
+
+function appendBillingRuntimeReceipt(record) {
+  fs.appendFileSync(path.join(DATA_DIR, "billing-runtime-receipts.jsonl"), `${JSON.stringify({ recorded_at: new Date().toISOString(), ...record })}\n`,
+    { encoding: "utf8", mode: 0o600 });
 }
 
 function summarizePreviewProfile(before, after) {
@@ -6608,9 +6972,12 @@ async function handleVoiceTurn(request, response) {
       !contextArtifact ? legacyRecallContext : "",
       screenContext ? voiceSystemContext(screenContext) : "",
     ].filter(Boolean);
-    const modelMessages = systemBlocks.length
-      ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
-      : messages;
+    const modelMessages = buildAdmittedAnswerMessages({
+      systemBlocks,
+      messages,
+      action: voiceEffectiveAction,
+      fallbackText: transcript,
+    });
     // Browser-sourced turns get one bounded tool round so "hide the sidebar" or
     // "make the text bigger" can propose a page_tweak action; every other source
     // (and Vertex/unconfigured providers) gets a plain chat reply.
@@ -8950,6 +9317,28 @@ function voiceMessages(body, transcript, limit) {
     messages.push({ role: "user", content: transcript });
   }
   return messages.slice(-safeLimit);
+}
+
+function currentUserTurnOnly(messages, fallbackText = "") {
+  const lastUser = [...(Array.isArray(messages) ? messages : [])].reverse().find((message) => message.role === "user");
+  const content = String(lastUser?.content || fallbackText || "").trim();
+  return content ? [{ role: "user", content }] : [];
+}
+
+function scopeClientMessagesForAdmission(messages, action, fallbackText = "") {
+  return normalizeContextAction(action) === "continue"
+    ? (Array.isArray(messages) ? messages.slice() : [])
+    : currentUserTurnOnly(messages, fallbackText);
+}
+
+function buildAdmittedAnswerMessages({ systemBlocks = [], messages = [], action = "continue", fallbackText = "" } = {}) {
+  const scopedMessages = scopeClientMessagesForAdmission(messages, action, fallbackText);
+  const admittedSystemBlocks = Array.isArray(systemBlocks)
+    ? systemBlocks.filter((content) => typeof content === "string" && content.length > 0)
+    : [];
+  return admittedSystemBlocks.length
+    ? admittedSystemBlocks.map((content) => ({ role: "system", content })).concat(scopedMessages)
+    : scopedMessages;
 }
 
 // Resolve the per-request context turn limit. Accepts an optional requested
@@ -13093,6 +13482,49 @@ function fetchWithTimeout(url, options, timeoutMs) {
   }).finally(() => clearTimeout(timeout));
 }
 
+async function fetchBoundedResponseText(url, options, { timeoutMs, maxBytes, label }) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error(`${label} timeout after ${timeoutMs}ms`));
+  }, timeoutMs);
+  timeout.unref?.();
+  let reader = null;
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      const error = new Error(`${label} response exceeded ${maxBytes} bytes`);
+      controller.abort(error);
+      throw error;
+    }
+    if (!response.body) return { response, text: "" };
+    reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      size += chunk.length;
+      if (size > maxBytes) {
+        const error = new Error(`${label} response exceeded ${maxBytes} bytes`);
+        controller.abort(error);
+        throw error;
+      }
+      chunks.push(chunk);
+    }
+    return { response, text: Buffer.concat(chunks, size).toString("utf8") };
+  } catch (error) {
+    if (timedOut) throw new Error(`${label} timeout after ${timeoutMs}ms`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    try { reader?.releaseLock(); } catch {}
+  }
+}
+
 function withTimeout(promise, timeoutMs, label) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -13365,15 +13797,19 @@ async function serviceAccountAccessToken(serviceAccount) {
   const unsigned = `${base64urlJson(header)}.${base64urlJson(payload)}`;
   const signature = crypto.sign("RSA-SHA256", Buffer.from(unsigned), serviceAccount.private_key);
   const assertion = `${unsigned}.${base64url(signature)}`;
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion,
-    }),
-  });
-  return parseGoogleTokenResponse(response, "service account token exchange");
+  const result = await fetchBoundedResponseText(
+    googleOauthTokenUrl(),
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion,
+      }),
+    },
+    { timeoutMs: 10000, maxBytes: 64 * 1024, label: "service account token exchange" },
+  );
+  return parseGoogleTokenResponse(result.response, result.text, "service account token exchange");
 }
 
 async function authorizedUserAccessToken(credential) {
@@ -13381,21 +13817,24 @@ async function authorizedUserAccessToken(credential) {
   if (missing.length > 0) {
     throw new Error(`authorized-user ADC is missing ${missing.join(", ")}`);
   }
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: credential.client_id,
-      client_secret: credential.client_secret,
-      refresh_token: credential.refresh_token,
-      grant_type: "refresh_token",
-    }),
-  });
-  return parseGoogleTokenResponse(response, "authorized-user token refresh");
+  const result = await fetchBoundedResponseText(
+    googleOauthTokenUrl(),
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: credential.client_id,
+        client_secret: credential.client_secret,
+        refresh_token: credential.refresh_token,
+        grant_type: "refresh_token",
+      }),
+    },
+    { timeoutMs: 10000, maxBytes: 64 * 1024, label: "authorized-user token refresh" },
+  );
+  return parseGoogleTokenResponse(result.response, result.text, "authorized-user token refresh");
 }
 
-async function parseGoogleTokenResponse(response, label) {
-  const text = await response.text();
+function parseGoogleTokenResponse(response, text, label) {
   if (!response.ok) {
     throw new Error(`${label} failed (${response.status}): ${truncate(text, 400)}`);
   }
@@ -13413,6 +13852,13 @@ async function parseGoogleTokenResponse(response, label) {
     value,
     expiresAt: Date.now() + Math.max(1, Number(token.expires_in || 3600) - 300) * 1000,
   };
+}
+
+function googleOauthTokenUrl() {
+  if (process.env.NODE_ENV === "test" && process.env.MOA_TEST_GOOGLE_OAUTH_TOKEN_URL) {
+    return String(process.env.MOA_TEST_GOOGLE_OAUTH_TOKEN_URL);
+  }
+  return "https://oauth2.googleapis.com/token";
 }
 
 function base64urlJson(value) {
@@ -13457,6 +13903,71 @@ function readJsonBody(request) {
       } catch (error) {
         reject(new Error("request body must be valid JSON"));
       }
+    });
+    request.on("error", reject);
+  });
+}
+
+function readProactiveJsonBody(request) {
+  const declaredLength = Number(request.headers["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > PROACTIVE_TURN_MAX_BODY_BYTES) {
+    request.resume();
+    return Promise.reject(new ProactiveTurnValidationError("body_too_large", 413));
+  }
+
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let tooLarge = false;
+    const chunks = [];
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > PROACTIVE_TURN_MAX_BODY_BYTES) {
+        tooLarge = true;
+        chunks.length = 0;
+        return;
+      }
+      if (!tooLarge) chunks.push(chunk);
+    });
+    request.on("end", () => {
+      if (tooLarge) {
+        reject(new ProactiveTurnValidationError("body_too_large", 413));
+        return;
+      }
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!raw.trim()) {
+        reject(new ProactiveTurnValidationError("invalid_json", 400));
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(new ProactiveTurnValidationError("invalid_json", 400));
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function readBoundedJsonBody(request, maxBytes, ErrorType) {
+  const declaredLength = Number(request.headers["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    request.resume();
+    return Promise.reject(new ErrorType("body_too_large", 413));
+  }
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let tooLarge = false;
+    const chunks = [];
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) { tooLarge = true; chunks.length = 0; return; }
+      if (!tooLarge) chunks.push(chunk);
+    });
+    request.on("end", () => {
+      if (tooLarge) { reject(new ErrorType("body_too_large", 413)); return; }
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!raw.trim()) { reject(new ErrorType("invalid_json", 400)); return; }
+      try { resolve(JSON.parse(raw)); } catch { reject(new ErrorType("invalid_json", 400)); }
     });
     request.on("error", reject);
   });
@@ -14273,13 +14784,7 @@ function runContextLifecycleTestHook(event) {
 function stashContextDecision(sessionId, turnId, decision) {
   const key = `${sanitizeOptionalId(sessionId, "default")}:${String(turnId || "")}`;
   contextDecisionStash.set(key, { decision, at: Date.now() });
-  // Bound the stash so a dropped turn can never leak memory.
-  if (contextDecisionStash.size > 500) {
-    const cutoff = Date.now() - 5 * 60_000;
-    for (const [existingKey, value] of contextDecisionStash) {
-      if (value.at < cutoff) contextDecisionStash.delete(existingKey);
-    }
-  }
+  pruneContextDecisionStash();
 }
 function takeContextDecision(sessionId, turnId) {
   const key = `${sanitizeOptionalId(sessionId, "default")}:${String(turnId || "")}`;
@@ -14287,6 +14792,17 @@ function takeContextDecision(sessionId, turnId) {
   if (!entry) return null;
   contextDecisionStash.delete(key);
   return entry.decision;
+}
+function pruneContextDecisionStash(now = Date.now()) {
+  const cutoff = now - 5 * 60_000;
+  for (const [existingKey, value] of contextDecisionStash) {
+    if (!value || value.at < cutoff) contextDecisionStash.delete(existingKey);
+  }
+  while (contextDecisionStash.size > 500) {
+    const oldestKey = contextDecisionStash.keys().next().value;
+    if (!oldestKey) break;
+    contextDecisionStash.delete(oldestKey);
+  }
 }
 
 // Pure filing plan. It captures the exact identity and fork cutoff used for
@@ -15016,6 +15532,14 @@ function authorized(request) {
     return runtimeMode.protectedRoutesOpenWithoutToken;
   }
   return request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
+}
+
+// Unlike legacy local-mode routes, proactive turns can create provider cost
+// from a browser origin. They are always closed unless an exact bearer token is
+// configured and presented, including on loopback/local gateways.
+function authorizedProactiveTurn(request) {
+  return Boolean(MOA_GATEWAY_TOKEN)
+    && request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
 }
 
 function authorizedVoiceSessionUpgrade(request, url) {

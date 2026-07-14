@@ -1,14 +1,12 @@
 name: Deploy VPS gateway
 
-# Automatic promotion of the DigitalOcean gateway (api.agee.app), pull-based.
+# Candidate verification for the DigitalOcean gateway. This workflow does not
+# confer apply authority: runtime promotion requires an M4 evidence manifest.
 #
-# GitHub runners cannot reach port 22 on the droplet (cloud firewall), so CI
-# never SSHes in. Instead: this workflow verifies the gateway, then
-# fast-forwards the `vps-deploy` ref to the verified SHA. A systemd timer on
-# the droplet (scripts/vps/auto-update.sh) polls origin/vps-deploy every two
-# minutes and promotes through scripts/vps/update.sh, whose backup +
-# restore-check data gate aborts before touching the active service if
-# either fails. Broken commits never move vps-deploy, so they never deploy.
+# GitHub runners cannot reach the isolated runtime preview or the droplet, so
+# CI stops at candidate verification. An operator/control-plane worker may
+# advance a candidate only after producing the exact-commit M4 evidence
+# manifest consumed by scripts/vps/update.sh.
 
 on:
   push:
@@ -27,7 +25,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   deploy:
@@ -37,10 +35,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -50,12 +48,12 @@ jobs:
           set -euo pipefail
           cd gateway
           npm install --no-audit --no-fund
-          npm run check
+          npm test
 
-      - name: Publish vps-deploy ref
+      - name: Record verified candidate (not promotion authority)
         shell: bash
         run: |
           set -euo pipefail
-          git push origin "HEAD:refs/heads/vps-deploy" --force
-          echo "vps-deploy -> $(git rev-parse HEAD)"
-          echo "The droplet timer promotes this SHA within ~2 minutes."
+          mkdir -p candidate-evidence
+          printf '%s\n' "$(git rev-parse HEAD)" > candidate-evidence/commit-sha.txt
+          printf '%s\n' "Verification is not preview/apply authority." > candidate-evidence/README.txt

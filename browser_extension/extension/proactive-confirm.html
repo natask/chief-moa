@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A.G. — Confirm proactive text turn</title>
+    <link rel="stylesheet" href="proactive-confirm.css" />
+    <script src="proactive-confirm.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="boundary">EXTENSION-OWNED CONFIRMATION</span>
+        <h1>Send this packaged text turn?</h1>
+        <p>
+          This window belongs to A.G., not the web page. The page cannot change
+          this disclosure or press Allow.
+        </p>
+      </header>
+
+      <section aria-labelledby="request-heading">
+        <h2 id="request-heading">Exact request</h2>
+        <dl>
+          <dt>URL</dt>
+          <dd id="request-url">Loading…</dd>
+          <dt>Method</dt>
+          <dd id="request-method">—</dd>
+          <dt>Redirects</dt>
+          <dd id="request-redirect">—</dd>
+          <dt>Content-Type</dt>
+          <dd id="request-content-type">—</dd>
+          <dt>Authorization</dt>
+          <dd id="request-authorization">—</dd>
+          <dt>SHA-256 body digest</dt>
+          <dd id="request-digest" class="digest">—</dd>
+        </dl>
+        <h3>Body</h3>
+        <pre id="request-body" aria-label="Exact JSON request body">Loading…</pre>
+      </section>
+
+      <section aria-labelledby="privacy-heading">
+        <h2 id="privacy-heading">Privacy boundary</h2>
+        <p id="request-exclusions">Loading…</p>
+        <p id="request-persistence">Loading…</p>
+        <p id="background-connectivity">Loading…</p>
+      </section>
+
+      <p id="status" role="status" aria-live="polite">Loading immutable request details…</p>
+      <div class="actions">
+        <button id="cancel" type="button">Cancel</button>
+        <button id="allow" class="primary" type="button" disabled>Allow one text request</button>
+      </div>
+    </main>
+  </body>
+</html>

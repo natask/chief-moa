@@ -92,7 +92,7 @@ async function main() {
         "provider session-config preserves requested honorific/style prompt instructions and adds the address-preference rule",
         "a completed Gemini Live transcript 'use the Charon voice' is stored as profile_control, persists voice=Charon, and corrects a provider refusal",
         "a text_turn sample session sends Gemini clientContent with a session-only voice override",
-        "companion manifest list/create/preview/apply, saved pet agents, bookmarks, active pet lookup, and spoken 'I want you to be ...' companion apply work",
+        "companion discovery/drafting remain non-mutating and legacy pet apply is rejected without verified package approval",
       ],
     }, null, 2));
   } finally {
@@ -476,7 +476,13 @@ async function assertCompanionCatalog(baseUrl) {
     scope: "global",
     source: "voice-profile-smoke",
   });
-  assert.equal(petApply.status, 200, `pet apply must succeed: ${JSON.stringify(petApply.json)}`);
+  assert.equal(petApply.status, 404, `legacy pet apply must fail closed: ${JSON.stringify(petApply.json)}`);
+  assert.match(petApply.json.error, /verified companion package approval/);
+  const afterRejectedLegacyApply = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(afterRejectedLegacyApply.profile_version, beforeAgentCreate.profile_version,
+    "unverified legacy pet apply must not mutate profile state");
+  return;
+  /* Verified package lifecycle coverage lives in runtime-authority.test.js. */
   assert.equal(petApply.json.profile.active_companion_id, savedAgent.json.agent.companion_id);
   assert.equal(
     petApply.json.profile.voice,

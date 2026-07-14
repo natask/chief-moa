@@ -1,0 +1,30 @@
+name: Windows surface shell
+
+on:
+  push:
+    paths: ["windows_app/**", ".github/workflows/windows-surface-shell.yml"]
+  pull_request:
+    paths: ["windows_app/**", ".github/workflows/windows-surface-shell.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  authority-and-shell:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Test authority core
+        working-directory: windows_app/core
+        run: cargo test --locked
+      - name: Lint authority core
+        working-directory: windows_app/core
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build unsigned WinUI scaffold
+        run: dotnet build windows_app/Aggie.Windows/Aggie.Windows.csproj -p:Platform=x64 -p:AppxPackageSigningEnabled=false

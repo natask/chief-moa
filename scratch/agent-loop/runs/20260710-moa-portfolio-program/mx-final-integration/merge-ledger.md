@@ -12,3 +12,15 @@
 No product branch was merged. No preview, artifact publication, active browser
 reload, OTA, deployment ref, database, queue, worker or live application was
 mutated.
+
+## Current-head repair lane (`caba6a1` base)
+
+| Step | Evidence | Result |
+|---|---|---|
+| Broad source quality gate | gateway 234/0/0; Swift 7/0; Rust 15/0; clippy; context/Aggie quality | manager PASS |
+| Disposable Postgres | helper exit 77: no Docker engine or local Postgres tools | explicit SKIP; DB proof remains BLOCK |
+| Promotion bypass repair | mandatory exact-commit evidence; no CI ref push; no backup skip; smoke-failure rollback | source/local hostile gate PASS; runtime unproven |
+
+This section records only evidence measured in the repair worktree. It does not
+replace the older `a8595eb` audit snapshot and does not claim integration into
+the main staging branch.

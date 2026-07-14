@@ -1,0 +1,27 @@
+<Window
+    x:Class="Aggie.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Aggie local approval">
+  <Grid Padding="32" MaxWidth="720">
+    <StackPanel Spacing="18">
+      <TextBlock Text="Aggie local approval" Style="{StaticResource TitleTextBlockStyle}"
+                 AutomationProperties.AutomationId="aggie.approval.heading" />
+      <TextBlock x:Name="Status" Text="Review this action" Style="{StaticResource SubtitleTextBlockStyle}"
+                 AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="aggie.approval.status" />
+      <TextBlock Text="Opening https://example.com was proposed. Confirm only if you recognize it."
+                 TextWrapping="Wrap" AutomationProperties.AutomationId="aggie.approval.detail" />
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <Button Content="Deny" Click="Deny_Click" AccessKey="D"
+                AutomationProperties.HelpText="Rejects the proposal without running a local action"
+                AutomationProperties.AutomationId="aggie.approval.deny" />
+        <Button Content="Approve locally" Click="Approve_Click" AccessKey="A"
+                AutomationProperties.HelpText="Approves only for final local checks and does not bypass permissions"
+                AutomationProperties.AutomationId="aggie.approval.approve" />
+      </StackPanel>
+      <InfoBar IsOpen="True" Severity="Informational" Title="Safe scaffold"
+               Message="No network, OS action, signing, install, or provider credential authority is present."
+               AutomationProperties.AutomationId="aggie.approval.boundary" />
+    </StackPanel>
+  </Grid>
+</Window>

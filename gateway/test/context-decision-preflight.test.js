@@ -8,6 +8,10 @@ const {
   parseOpenAiContextPreflight,
   parseVertexContextPreflight,
   buildCanonicalContextArtifact,
+  buildAdmittedAnswerMessages,
+  scopeClientMessagesForAdmission,
+  stashContextDecision,
+  takeContextDecision,
   planTurnFilingThread,
   prepareContextDecision,
   brain,
@@ -90,4 +94,73 @@ test("standing-only artifact excludes recency, semantic recall, runs, and tasks"
     brain.recallStandingFacts = originalStanding;
     brain.recall = originalRecall;
   }
+});
+
+test("new and incognito chat answers keep only the current admitted user turn", () => {
+  const hostileHistory = [
+    { role: "user", content: "OLDER_CLIENT_HISTORY_SENTINEL" },
+    { role: "assistant", content: "OLDER_ASSISTANT_SENTINEL" },
+    { role: "user", content: "current admitted user turn" },
+  ];
+  const modelMessages = buildAdmittedAnswerMessages({
+    systemBlocks: ["AUTHORITATIVE_ARTIFACT_SENTINEL"],
+    messages: hostileHistory,
+    action: "new",
+    fallbackText: "current admitted user turn",
+  });
+  const serialized = JSON.stringify(modelMessages);
+  assert.match(serialized, /AUTHORITATIVE_ARTIFACT_SENTINEL/);
+  assert.match(serialized, /current admitted user turn/);
+  assert.doesNotMatch(serialized, /OLDER_CLIENT_HISTORY_SENTINEL/);
+  assert.doesNotMatch(serialized, /OLDER_ASSISTANT_SENTINEL/);
+
+  const incognitoMessages = buildAdmittedAnswerMessages({
+    systemBlocks: ["AUTHORITATIVE_ARTIFACT_SENTINEL"],
+    messages: hostileHistory,
+    action: "incognito",
+    fallbackText: "current admitted user turn",
+  });
+  assert.equal(incognitoMessages.filter((message) => message.role === "user").length, 1);
+  assert.equal(incognitoMessages.at(-1).content, "current admitted user turn");
+});
+
+test("fork and HTTP voice answer payloads drop caller-supplied history after admission", () => {
+  const hostileVoiceMessages = [
+    { role: "user", content: "VOICE_HISTORY_SENTINEL" },
+    { role: "assistant", content: "VOICE_ASSISTANT_SENTINEL" },
+    { role: "user", content: "fresh transcript turn" },
+  ];
+  const scoped = scopeClientMessagesForAdmission(hostileVoiceMessages, "fork", "fresh transcript turn");
+  assert.deepEqual(scoped, [{ role: "user", content: "fresh transcript turn" }]);
+
+  const modelMessages = buildAdmittedAnswerMessages({
+    systemBlocks: ["FORK_ARTIFACT_SENTINEL"],
+    messages: hostileVoiceMessages,
+    action: "fork",
+    fallbackText: "fresh transcript turn",
+  });
+  const serialized = JSON.stringify(modelMessages);
+  assert.match(serialized, /FORK_ARTIFACT_SENTINEL/);
+  assert.match(serialized, /fresh transcript turn/);
+  assert.doesNotMatch(serialized, /VOICE_HISTORY_SENTINEL/);
+  assert.doesNotMatch(serialized, /VOICE_ASSISTANT_SENTINEL/);
+});
+
+test("continue preserves the bounded caller-supplied message list", () => {
+  const messages = [
+    { role: "user", content: "previous question" },
+    { role: "assistant", content: "previous answer" },
+    { role: "user", content: "current question" },
+  ];
+  assert.deepEqual(scopeClientMessagesForAdmission(messages, "continue", "current question"), messages);
+});
+
+test("context decision stash hard-bounds to 500 fresh dropped turns", () => {
+  for (let index = 0; index < 505; index += 1) {
+    stashContextDecision("stash-bound-session", `turn-${index}`, { decision: { action: "continue" }, thread: { branch_id: "default" } });
+  }
+  assert.equal(takeContextDecision("stash-bound-session", "turn-0"), null);
+  assert.equal(takeContextDecision("stash-bound-session", "turn-4"), null);
+  assert.deepEqual(takeContextDecision("stash-bound-session", "turn-5"), { decision: { action: "continue" }, thread: { branch_id: "default" } });
+  assert.deepEqual(takeContextDecision("stash-bound-session", "turn-504"), { decision: { action: "continue" }, thread: { branch_id: "default" } });
 });

@@ -203,6 +203,9 @@ fn additive_benign_data_is_ignored_but_authority_is_rejected() {
         "provider-secret",
         "privateKey",
         "authorization",
+        "token_value",
+        "authorization_hint",
+        "client_secret_material",
     ] {
         let mut value: Value = serde_json::from_slice(&benign).unwrap();
         value[key] = json!("secret-value");

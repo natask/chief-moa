@@ -28,7 +28,20 @@ const ACTION_KINDS = new Set(["open_url", "open_app", "dial", "browser_task", "p
 const APPROVAL_CLASSES = new Set(["none", "confirm", "sensitive"]);
 const RECEIPT_OUTCOMES = new Set(["executed", "rejected", "expired", "stale", "failed", "canceled"]);
 const RUN_STATUSES = new Set(["queued", "running", "needs_approval", "completed", "failed"]);
-const EXECUTABLE_KEYS = new Set(["script", "javascript", "shell", "command", "css", "code"]);
+const EXECUTABLE_KEY_ROOTS = new Set(["script", "scripts", "javascript", "shell", "command", "commands", "css", "code", "executable", "exec", "cmd", "cmdline"]);
+const BENIGN_CODE_QUALIFIERS = new Set(["status", "error", "resource", "context", "country", "language", "locale", "http", "response", "reason", "result", "exit", "time"]);
+const BENIGN_SCRIPT_QUALIFIERS = new Set(["language", "writing", "unicode"]);
+const BENIGN_AUTHORITY_METADATA_SUFFIXES = new Set(["confidence", "description", "direction", "label", "name", "value", "format", "version", "source"]);
+const BENIGN_COMPACT_AUTHORITY_LIKE = [
+  /^(?:transcript|transcription|description|descriptive|scripture|scriptural|manuscript)(?:reference|count|text|value|label|name)?$/,
+  /^[a-z]*scriptions?(?:reference|count|text|value|label|name)?$/,
+  /^(?:shellfish|eggshell)(?:count|name|value)?$/,
+  /^(?:commander|commandment)(?:count|name|value)?$/,
+  /^(?:codec|codecs|sourcecodec|sourcecodecs|encode|encoder|decode|decoder|unicode|barcode|postcode|zipcode|geocode|timecode|codepoint)(?:name|value|label|version|confidence|description)?$/,
+  /^(?:status|error|resource|context|country|language|locale|http|response|reason|result|exit)code(?:confidence|description|direction|label|name|value|format|version|source)?$/,
+  /^language(?:script|code)(?:confidence|description|direction|label|name|value|format|version|source)?$/,
+];
+const COMPACT_EXECUTABLE_AUTHORITY = /(?:javascript|script|shell|command|css|code|executable|exec|cmdline|toolcalls?|functioncalls?)/;
 const SECRET_KEYS = new Set(["api_key", "apikey", "access_token", "refresh_token", "client_secret", "provider_key", "authorization"]);
 const SECRET_KEY_SUFFIXES = ["token", "privatekey", "apikey", "clientsecret", "providerkey", "authorization", "password"];
 const SERVER_REPLAY_TYPES = new Set([
@@ -427,11 +440,36 @@ function requireBoundedString(value, maxBytes, field) { if (typeof value !== "st
 function requireDigest(value, field) { if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw protocolError("invalid_digest", `${field} must be lowercase sha256 hex`); return value; }
 function assertBoundedJson(value, maxBytes, field) { let size; try { size = jsonBytes(value); } catch { throw protocolError("invalid_json", `${field} must be JSON serializable`); } if (size > maxBytes) throw protocolError("too_large", `${field} exceeds ${maxBytes} bytes`); }
 function assertSafeData(value, field, depth = 0) { if (depth > 8) throw protocolError("too_deep", `${field} exceeds depth 8`); if (value === null || typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return; if (Array.isArray(value)) { if (value.length > 64) throw protocolError("too_many_items", `${field} exceeds 64 items`); value.forEach((item, index) => assertSafeData(item, `${field}[${index}]`, depth + 1)); return; } if (!isRecord(value)) throw protocolError("unsafe_value", `${field} contains a non-data value`); if (Object.keys(value).length > 64) throw protocolError("too_many_fields", `${field} exceeds 64 fields`); assertNoExecutableKeys(value, field); for (const [key, item] of Object.entries(value)) { if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(key)) throw protocolError("invalid_field", `${field} contains invalid field name`); assertSafeData(item, `${field}.${key}`, depth + 1); } }
-function assertNoExecutableKeys(value, field) { for (const key of Object.keys(value)) { const normalized = key.toLowerCase(); if (EXECUTABLE_KEYS.has(normalized)) throw protocolError("executable_payload", `${field} contains forbidden executable field ${key}`); if (isCredentialAuthorityKey(normalized)) throw protocolError("secret_payload", `${field} contains forbidden credential field ${key}`); } }
+function assertNoExecutableKeys(value, field) { for (const key of Object.keys(value)) { const normalized = normalizeAuthorityKey(key); if (isExecutableAuthorityKey(key)) throw protocolError("executable_payload", `${field} contains forbidden executable field ${key}`); if (isCredentialAuthorityKey(normalized)) throw protocolError("secret_payload", `${field} contains forbidden credential field ${key}`); } }
+function normalizeAuthorityKey(key) { return String(key || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+function isExecutableAuthorityKey(key) {
+  const raw = String(key || "");
+  if (raw.length > 80) return false;
+  const tokens = raw
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (tokens.length === 1 && EXECUTABLE_KEY_ROOTS.has(tokens[0])) return true;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const previous = tokens[index - 1];
+    const next = tokens[index + 1];
+    if ((token === "tool" || token === "function") && (next === "call" || next === "calls")) return true;
+    if (!EXECUTABLE_KEY_ROOTS.has(token)) continue;
+    const suffixes = tokens.slice(index + 1);
+    if (token === "code" && BENIGN_CODE_QUALIFIERS.has(previous) && suffixes.every((item) => BENIGN_AUTHORITY_METADATA_SUFFIXES.has(item))) continue;
+    if ((token === "script" || token === "scripts") && BENIGN_SCRIPT_QUALIFIERS.has(previous) && suffixes.every((item) => BENIGN_AUTHORITY_METADATA_SUFFIXES.has(item))) continue;
+    return true;
+  }
+  if (tokens.length !== 1) return false;
+  const compact = tokens[0];
+  if (BENIGN_COMPACT_AUTHORITY_LIKE.some((pattern) => pattern.test(compact))) return false;
+  return COMPACT_EXECUTABLE_AUTHORITY.test(compact);
+}
 function isCredentialAuthorityKey(key) {
   if (SECRET_KEYS.has(key)) return true;
-  const compact = key.replace(/[^a-z0-9]/g, "");
-  return compact.length <= 80 && SECRET_KEY_SUFFIXES.some((suffix) => compact === suffix || compact.endsWith(suffix));
+  return key.length <= 80 && SECRET_KEY_SUFFIXES.some((suffix) => key === suffix || key.endsWith(suffix));
 }
 function assertNoDangerousData(value, field, depth = 0) {
   if (depth > 12) throw protocolError("too_deep", `${field} exceeds security scan depth 12`);

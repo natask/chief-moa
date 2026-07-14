@@ -2,14 +2,15 @@
 
 ## Purpose
 
-Moa is a local delegated-action assistant. Its core loop is:
+Chief Moa is a local delegated-action product and surface family. Its core loop
+is platform-neutral:
 
 ```text
-phone overlay or full app
-  -> captures voice, text, and optional screen context
+permission-scoped Surface (Android, browser, macOS, Windows, iOS, ...)
+  -> captures explicitly granted voice, text, and optional local context
   -> sends a structured turn to the self-hosted gateway
   -> receives an answer, run status, or action proposal
-  -> applies local policy before any phone-local action
+  -> the Surface applies local policy before any platform-local action
   -> records observable state for the user and future agents
 ```
 
@@ -31,6 +32,15 @@ Browser extension
   engine URL and session token. It must not hold provider API keys or
   subscriptions, and it is not the deployment target for user-specific
   customizations.
+
+Native desktop surfaces
+  Own: platform UI, Accessibility/UI Automation permission, product observation
+  grants, local redaction, outbound preview, native action validation and
+  approval, semantic execution, and canonical local receipts. macOS and Windows
+  use separate supported platform adapters and never inherit authority merely
+  from sharing an Aggie session. `MoaMac` may release bounded AX context and an
+  independently enabled focused-window screenshot only to the user's configured
+  Aggie gateway during an explicit visible grant.
 
 Website
   Owns: the public marketing surface and static account/customization tools
@@ -101,6 +111,24 @@ and actual profile apply wait for identity and Aggie/MX protocol authority.
 Public trust roots, accepted licenses, moderation/appeals, offline revocation
 freshness and client rollback remain intentionally unwired.
 
+Gateway runtime companion mutation now sits behind an additional authority
+boundary. Preview accepts only a verified package under an operator-owned trust,
+license, moderation, compatibility and revocation policy. Apply requires an
+Ed25519 approval from an operator-configured device/approver key and binds that
+approval to the package digest, preview receipt, exact profile version and
+global/device scope. Apply and rollback require profile-effect receipts and are
+idempotent. The older catalog/pet identifiers remain useful for discovery and
+drafting but cannot directly mutate the active profile. With no operator policy,
+the runtime boundary denies all package apply operations.
+
+The billing runtime seam likewise defaults to deny. When an operator supplies
+tenant-owned immutable sandbox facts, authorization requires the latest active
+entitlement and a budget reservation against an exact version; usage must match
+the immutable price calculation before it is recorded. These routes always
+report `sandbox_no_charge` and never invoke a payment provider. JSONL receipts
+are operational audit evidence, not a substitute for the existing relational
+billing migration or proof of cross-process transactional authority.
+
 ## Telemetry and observability boundary
 
 Canonical product events remain the source of truth. Operational telemetry is a
@@ -145,20 +173,58 @@ to proposal-message correlation. It does not authenticate a device or actor;
 transport authentication, device signing and native execution remain outside
 this module and must not be inferred from those correlation checks.
 
-### Apple native surface seam
+### Apple native surface and authority seam
 
-`apple_surfaces` is a shared macOS/iOS Swift library that consumes the same
-bounded Aggie N/N-1 proposal contract. It owns only local decoding, explicit
-approval coordination, final expiry/state revalidation, bounded replay and
-local receipt formation. Stateful authority is actor-isolated and any effect is
-available only through an injected executor after all local checks pass.
+`apple_surfaces` is a shared, portable macOS/iOS Swift authority library that
+consumes the same bounded Aggie N/N-1 proposal contract. It owns only local
+decoding, explicit approval coordination, final expiry/state revalidation,
+bounded replay and local receipt formation. Stateful authority is
+actor-isolated and any effect is available only through an injected executor
+after all local checks pass.
 
-This seam has no transport, provider credential, canonical conversation store,
-Keychain policy, OS action implementation, SwiftUI product shell, signing,
-update or distribution authority. An unsigned macOS or iOS Simulator build is
-compilation evidence only; it does not establish device behavior, security,
-accessibility, energy use, signing or production readiness. Permanent companion
-versus seamless-assistant UX remains an explicit product decision.
+The library seam has no transport, provider credential, canonical conversation
+store, Keychain policy, OS action implementation, SwiftUI product shell,
+signing, update or distribution authority. The `AggieSurfaceApp` product is a
+static SwiftUI demo shell over this seam; an unsigned macOS or iOS Simulator
+build is compilation evidence only and does not establish device behavior,
+security, accessibility, energy use, signing or production readiness. Permanent
+companion versus seamless-assistant UX remains an explicit product decision.
+
+The macOS-only `MoaMac` product adds the native proactive surface:
+
+```text
+Paused launch (no AX read, screen capture, or network)
+  -> user selects the verified frontmost process
+  -> user chooses local_only, ask_each_time, or trusted_server_15m
+  -> optional focused-window screenshot is enabled separately
+  -> visible 15-minute grant starts scoped AX observation
+  -> bounded/redacted observation becomes a local suggestion or an immutable
+     POST /v1/proactive/macos request to the configured Aggie origin
+  -> bounded inert suggestion card; no action executes from that response
+```
+
+The grant is memory-only and binds bundle id, PID, launch date/process
+generation, and verified signing identity. Pause/Stop, expiry, app/process
+change, permission loss, or asynchronous generation change invalidates queued
+work. AX traversal is bounded to 128 nodes/depth 8/16 KiB and suppresses secure
+subtrees/editable values. ScreenCaptureKit is off by default and may capture
+only the same process's focused window, re-encoded and size-bounded. Neither
+macOS permission alone starts observation or release.
+
+There is no packaged gateway destination. Network modes require a canonical
+user-configured HTTPS origin (HTTP only on loopback) and a Keychain bearer token.
+Ask mode binds exact serialized bytes and SHA-256 to a final approval;
+trusted-server mode displays the origin/evidence/screenshot scope and expiry.
+The gateway route requires exact bearer authentication, treats AX/pixels as
+untrusted evidence, exposes no tools, returns `{version,suggestion,actions:[]}`
+only, and does not persist a conversation, task, run, or broker event.
+
+The public semantic AX action vocabulary and Aggie approval coordinator compile,
+but live native mutation remains disabled until gateway proposal ingestion,
+element/state fingerprint binding, and fsync-backed pending/terminal receipts
+are wired and audited. The current ad-hoc-signed QA bundle is compilation and
+package evidence only; it has not been launched or TCC-tested and is not a
+production signing/notarization artifact.
 
 ## Runtime Flows
 
@@ -573,18 +639,21 @@ while it starts the next microphone turn. That overlap is scoped to the active
 page-agent owner: starting a browser agent or voice turn from another tab revokes
 other-tab voice sessions, stops queued assistant playback in those tabs, and
 cancels their browser-local task cues. The active browser-agent owner is shared
-extension/gateway-facing state keyed by the stable browser session, current tab,
-page URL/title, cue/voice-session ids, and latest status/result; it is not
-content-script-local memory. It must not use browser Web Speech APIs as the
-production voice path, and it must not hold raw Gemini/OpenAI/Anthropic provider
-credentials.
+extension-local state keyed by the stable browser session, current tab,
+cue/voice-session ids, and latest status/result; it is not content-script-local
+memory. Page URL/title may be used locally while coordinating explicitly invoked
+page work, but the privacy migration scrubs them and device heartbeat never
+includes them or the owner object. The browser voice path must not use browser
+Web Speech APIs in production, and the extension must not hold raw
+Gemini/OpenAI/Anthropic provider credentials.
 
 Gateway-originated browser work uses the same ownership boundary. The gateway
 stores `/v1/browser/tasks` records and Live/tool agents may enqueue bounded
-browser work, but the Chrome extension must claim the task, run allowlisted CDP
-methods locally through `chrome.debugger`, and POST a receipt back to the
-gateway. The gateway records that receipt against the task and linked agent run;
-it does not execute browser CDP itself.
+browser work, but the Chrome extension claims those records only after the user
+has granted current, versioned background-automation consent. It runs
+allowlisted CDP methods locally through `chrome.debugger` and POSTs a receipt
+back to the gateway. The gateway records that receipt against the task and
+linked agent run; it does not execute browser CDP itself.
 
 Browser-originated chat and describe turns carry the same gateway session and
 branch identifiers as voice turns. The gateway context APIs expose bounded
@@ -596,6 +665,71 @@ Browser continuous/ambient mode is explicit start/stop. When active, the
 extension samples page context and posts a frame to `POST /v1/voice/frames` on a
 200 ms target interval. The gateway stores those frames as session evidence only;
 this path does not run model calls on the 200 ms cadence.
+
+### Privacy-first proactive browser assistance
+
+Proactive help is a distinct local mode, not an alias for continuous/ambient
+upload. It starts only after the user grants the current tab/document for at
+most ten minutes. The content script samples bounded structural affordance
+counts while the page is visible, rejects sensitive surfaces, and feeds a
+deterministic packaged classifier. It does not read page body, title, selected
+text, form values, pixels, accessibility data, or cross-tab history. At most one
+generic card is created per grant. Observation, suppression, expiry, and
+dismissal make no gateway request.
+
+The on-page card is a non-authoritative preview in an untrusted DOM. Every
+proactive page control requires trusted activation. Review may only open
+`proactive-confirm.html`; page script/CSS cannot authorize a request or change
+the canonical disclosure. The extension-owned confirmation shows the exact URL,
+`POST`, JSON content type, authorization presence with its value hidden,
+`redirect: error`, exact body and SHA-256 digest, Chief Moa retention boundary,
+configured-provider processing warning, exclusions, and the independent
+`enabled`/`disabled` background-connectivity state. Only its trusted Allow
+activation can proceed.
+
+The worker binds both transitions to the exact top-level tab/document/frame. It
+revalidates document/frame and sensitivity before opening confirmation and again
+after Allow, then verifies expiry, destination/body digests, and record identity.
+It atomically consumes and removes the grant, marks the confirmation as inert
+in-flight status, and prevents any second decision before sending at most one
+`POST /v1/proactive/turns` body tagged `proactive_accept_v1` with redirects
+blocked. It does not attach screen/page evidence, observed structural counts,
+actions, tasks, workflows, broker instructions, or agent instructions.
+
+The gateway endpoint enforces an exact body and packaged-prompt allowlist,
+requires a configured exact bearer token even in local mode, then calls the
+configured model provider directly under a text-only contract. Provider
+requests use one fixed system message plus one allowlisted prompt, no tool
+schema, hard output/response limits, and a timeout covering body consumption;
+Vertex token exchange is timed and bounded. It does
+not enter voice/browser routing, expose tools, start an agent/task/workflow,
+publish a broker event, or persist a conversation/turn. Chief Moa's
+non-persistence does not imply provider non-retention: the configured provider
+still processes the packaged prompt under its own data policy. Any returned
+action/proposal key—including null/deep fields—or a truncated bounded response
+scan is refused as an unnegotiated protocol violation and creates only a
+bounded, content-free, serialized local receipt.
+
+The ordinary injected command composer remains light DOM and is not a
+confidential surface: the host page can inspect or interfere with it. Sensitive
+command entry belongs in the extension-owned side panel. The proactive preview
+does not render gateway origin or background-consent state into the host DOM;
+those facts appear only in `proactive-confirm.html`.
+
+Navigation, reload, history/hash change, tab close, service-worker restart,
+destination change, expiry, newly detected sensitivity, or entry into a normal
+command, voice, ambient, or browser-agent workflow revokes the grant and pending
+confirmation. Classification is one bounded event-driven traversal; a no-card
+result stops observation rather than polling indefinitely. Contract:
+`reference/openspec/changes/privacy-first-browser-proactive-helper`.
+
+The browser has no passive gateway startup path. A fresh install does not save
+or contact a packaged hosted destination. The privacy migration preserves an
+existing user-saved destination locally while disabling legacy polling. A
+separate current-version consent gates every background task, agent-task, and
+tool-request claim plus device heartbeat; missing/unreadable consent fails
+closed. When enabled, heartbeat contains operational device/surface
+identity and the local manifest only—never active-owner or page metadata.
 
 The extension is a stable packaged client, not a per-user deployment unit. Chrome
 Manifest V3 forbids remotely hosted executable code in privileged extension
@@ -629,9 +763,10 @@ emits code strings, so no CSS or JS ever reaches privileged extension code.
 The extension validates every proposed action against its own local allowlist
 before executing it; an unknown kind is a hard reject, not a best-effort
 execute. The task's tab is never activated, so background work never steals
-focus from the user. A settings toggle, `ageeBackgroundAutomationEnabled`
-(default on), gates the whole background-automation poll, alongside the
-legacy batch `browser_task` poll. Model context in this first version is
+focus from the user. A settings toggle plus versioned consent,
+`ageeBackgroundAutomationEnabled` (default off), gates the whole
+background-automation poll, the tool-request poll, heartbeat, and the legacy
+batch `browser_task` poll. Model context in this first version is
 text-only (page title, url, a bounded element list, optional page text, and
 at most the latest screenshot); step history older than the last 8 steps is
 summarized to one line each so a long-running task stays inside the model's
@@ -923,9 +1058,9 @@ they cannot directly execute phone actions.
 ### Cross-Device Tool Hub
 
 ```text
-Android or browser client
+Android or explicitly connected browser client
   -> heartbeats to the gateway with device id, surface type, session id, and
-     local tool manifest
+     local tool manifest (never browser page/owner metadata)
 other surface or agent
   -> creates a gateway tool_request for a target device or surface
 target client
@@ -994,16 +1129,38 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
 
 ## Product Primitives
 
+- `Chief Moa`: the product/platform and family of permission-scoped user
+  surfaces. It is not the assistant persona or a canonical chat session.
+- `Aggie`: the canonical personal-agent identity and cross-surface
+  session/routing/policy contract. `A.G.` is a display/spoken alias; historical
+  `Agee` spellings are legacy compatibility names.
+- `surface`: a platform-specific input/output and local-authority adapter such
+  as Moa Browser, Android, macOS, Windows, iOS, CLI, or messaging. Surfaces
+  advertise different capabilities; they do not pretend platform parity.
+- `observation`: ephemeral, locally scoped evidence from a page, accessibility
+  tree, voice, or explicitly captured screen. It is not intent or instruction,
+  and remote retention requires an explicit policy/release boundary.
+- `assistance_suggestion`: a visible, expiring proposal to help, derived from an
+  observation. It cannot execute, become durable intent, create a task, or
+  launch a run until the user accepts it.
+- `project`: a durable bounded area of focus with goals, assets, participants,
+  and history, orthogonal to sessions and threads. Nesting uses
+  `parent_project_id`; there is no separate subproject type.
+- `workstream`: a durable line of progress or goal that may cross projects.
+  This replaces ambiguous product use of “flow”; `workflow` remains a reusable
+  procedure/package.
 - `device`: a registered Android device with local permissions and settings.
 - `device_client`: a connected Android, browser, or future desktop surface that
   heartbeats its online state and local tool manifest to the gateway.
 - `session`: a coherent work session. The gateway owns one canonical shared
-  default session per account (`GET /v1/sessions/default`); chat, voice, and
-  browser turns that omit a session id resolve to it, and Android and the
-  browser extension adopt it on startup so every surface continues the same
-  stored conversation. Threads inside the shared session stay separated by
+  default session per account (`GET /v1/sessions/default`); chat and voice turns
+  that omit a session id resolve to it. Android may adopt it through its own
+  lifecycle, while the browser extension adopts it only after an explicit
+  connected action or current background-connectivity consent, never merely on
+  service-worker startup. Threads inside the shared session stay separated by
   `branch`.
-- `branch`: a thread of work inside a session, initially `default`. A branch
+- `branch`: the wire/storage name for a user-facing conversation `thread`
+  inside a session, initially `default`. A branch
   carries lifecycle metadata in the thread store: kind (default/new/fork/
   incognito), a label, and, for a fork, `parent_branch_id` + `fork_point`. New
   branches are minted as `thr-`, forks as `fork-`, and incognito branches as
@@ -1027,8 +1184,11 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
 - `route_decision`: an inspectable broker decision with target, action,
   confidence, reason, context refs, workflow directory refs, and cancellation
   behavior.
-- `agent_run`: a gateway-created execution-machine job with lifecycle events.
-- `agent_fork`: a turn-linked async `agent_run` that can continue while later
+- `agent_run`: one execution attempt linked to an intent, task, or internal work
+  node by a gateway-selected execution machine, with lifecycle events and
+  artifacts. A retry is a new run.
+- `agent_fork`: a legacy name for a turn-linked async `agent_run` that can
+  continue while later
   user turns create or update other forks.
 - `voice_evidence`: replayable user/assistant audio and transcript artifacts
   attached to a turn, profile version, provider version, and test criteria.
@@ -1081,8 +1241,9 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   status and summary. Unlike `browser_task`'s single claim/execute/receipt
   request, a `browser_agent_task` is a multi-step, model-planned loop bounded
   by `max_steps`.
-- `work_task`: the user-facing durable unit of intent in the work-history
-  control plane, linking broker event, session, runs, and status events.
+- `work_task`: the user-facing durable desired outcome, linking broker event,
+  project/workstream/thread context, runs, and status events. Internal work
+  nodes are decomposition/transport, not peer user-facing tasks.
 - `repo_snapshot_ref`: a worker-recorded before/after/checkpoint codebase state
   (branch, commit sha, dirty state) attached to a claimed run.
 - `diff_ref`: the before->after link between two repo snapshots with changed
@@ -1105,9 +1266,14 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
 - `account_connection`: a gateway-owned link between one user and one provider
   account or subscription, with encrypted server-side credentials, health
   state, and reauth actions.
-- `action_proposal`: structured server output asking the phone to perform work.
-- `approval`: a local user decision for non-trivial actions.
-- `receipt`: local audit record for executed phone actions.
+- `action_proposal`: structured server output asking a specific Surface to
+  perform bounded platform-local work; it is inert until that Surface validates
+  it.
+- `approval`: the owning Surface's local user/policy decision for a non-trivial
+  action.
+- `receipt`: the owning Surface's local audit record for an executed, refused,
+  deferred, or failed action; optional gateway sync never replaces local
+  authority.
 - `self_extension_artifact`: a persistent, inspectable customization or
   capability artifact proposed from user intent. Examples include
   `avatar_behavior`, `theme_spec`, `view_spec`, `workflow_spec`,
@@ -1116,6 +1282,26 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   can try parallel looks or behaviors without losing older versions.
 - `self_extension_runtime`: the bounded gateway projection of currently active
   artifacts that clients fetch and interpret. It is data, not privileged code.
+
+Canonical promotion boundary and optional routing branches:
+
+```text
+local observation
+  -> assistance_suggestion
+  -> explicit user acceptance
+  -> broker_event (intent)
+  -> route_decision
+       |-> direct answer
+       |-> link/create work_task
+       |-> select reusable workflow
+       |-> explicitly launch agent_run (linked to intent, task, or work node)
+                |-> artifact
+                `-> action_proposal -> Surface-local approval + receipt
+```
+
+Use verbs that preserve these boundaries: continue/fork a thread, split a task,
+spawn/retry a run, and invoke a workflow. Do not use “fork” for every kind of
+parallel work or “flow” for both durable progress and a reusable procedure.
 
 Every new feature should attach to at least one primitive above. If it does not,
 the architecture is still fuzzy.
@@ -1148,7 +1334,17 @@ queues.
   accessibility-backed screen context and visible UI operations.
 - `gateway/server.js`: HTTP API, voice router, model calls,
   conversation storage, agent-run execution, device-client registry, and
-  cross-device tool-request queue.
+  cross-device tool-request queue. Its separate `POST /v1/proactive/turns`
+  handler enforces the packaged browser prompt allowlist and calls the configured
+  model directly without router/tool/agent/durable-work capabilities or turn
+  persistence.
+- `gateway/lib/proactive-turn.js`: exact proactive request/client validators,
+  four packaged prompt allowlist, fixed no-tools system contract, bounded inert
+  response shape, and deterministic no-provider fallbacks.
+- `gateway/scripts/smoke-proactive-turn.js`: isolated-port/data-store acceptance
+  smoke for the proactive endpoint's exact request schema, rejection matrix,
+  bounded text response, and unchanged conversation/task/workflow/broker-event/
+  agent-run stores (`npm run smoke:proactive-turn`).
 - `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
 - `gateway/public/credential-panel.html`: gateway-served credential-autopilot
@@ -1222,7 +1418,11 @@ queues.
 - `browser_extension/extension`: thin browser client for command,
   voice, page context, settings, engine-served UI spec rendering, and
   engine-routed browser actions, including the background agent-loop poll
-  (`pollBrowserAgentTasks`). UI spec smoke:
+  (`pollBrowserAgentTasks`) behind versioned, default-off consent and a local,
+  explicit-grant proactive helper whose observe/dismiss path has no network and
+  whose final authorization is isolated in extension-owned
+  `proactive-confirm.html`. Its accepted request uses only the gateway's strict
+  `POST /v1/proactive/turns` text capability. UI spec smoke:
   `browser_extension/scripts/smoke-ui-spec.mjs` (`npm run smoke:ui-spec`).
   Agent-loop smoke:
   `browser_extension/scripts/smoke-agent-loop.mjs`

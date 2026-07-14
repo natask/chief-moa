@@ -16,14 +16,6 @@ const STALE_GATEWAY_HOST_MESSAGES = new Map([
     "This points at the local Mac gateway. Use the VPS URL for mobile/browser onboarding.",
   ],
 ]);
-const SAVED_ENDPOINT_PATHS = new Set([
-  "/health",
-  "/v1/chat",
-  "/v1/voice/turns",
-  "/v1/voice/sessions",
-  "/v1/voice/session-ticket",
-]);
-
 let bakedCache = null;
 
 function normalizeGatewayUrl(value) {
@@ -56,13 +48,38 @@ function gatewayUrlDiagnostic(value) {
     };
   }
 
+  if (url.username || url.password) {
+    return {
+      ok: false,
+      severity: "error",
+      code: "credentials",
+      message: "Save only the gateway origin; credentials do not belong in the URL.",
+    };
+  }
+
   const endpointPath = url.pathname.replace(/\/+$/, "") || "/";
-  if (endpointPath !== "/" && (SAVED_ENDPOINT_PATHS.has(endpointPath) || endpointPath.startsWith("/v1/"))) {
+  if (endpointPath !== "/") {
     return {
       ok: false,
       severity: "error",
       code: "endpoint_path",
       message: "Save only the gateway origin, not an endpoint path.",
+    };
+  }
+  if (url.search || url.hash) {
+    return {
+      ok: false,
+      severity: "error",
+      code: "query_or_fragment",
+      message: "Save only the gateway origin, without a query or fragment.",
+    };
+  }
+  if (raw !== url.origin) {
+    return {
+      ok: false,
+      severity: "error",
+      code: "non_canonical_origin",
+      message: "Save exactly the canonical gateway origin, without empty query or fragment delimiters.",
     };
   }
 
@@ -83,14 +100,20 @@ function isKnownStaleGatewayUrl(value) {
 
 function normalizeDefaultGatewayUrl(value) {
   const url = normalizeGatewayUrl(value);
-  if (!url || isKnownStaleGatewayUrl(url)) return DEFAULT_GATEWAY_URL;
+  if (!url) return "";
+  if (!gatewayUrlDiagnostic(url).ok) return "";
+  if (isKnownStaleGatewayUrl(url)) return DEFAULT_GATEWAY_URL;
   return url;
 }
 
 function effectiveGatewayUrl(storedValue, bakedValue, userOwnsUrl = false) {
   const stored = normalizeGatewayUrl(storedValue);
-  if (!stored) return bakedValue;
-  if (!userOwnsUrl && isKnownStaleGatewayUrl(stored)) return bakedValue;
+  const baked = normalizeDefaultGatewayUrl(bakedValue);
+  // A user-owned blank is an explicit disconnect. It must not fall through to
+  // a packaged URL (or its token) merely because the stored string is empty.
+  if (userOwnsUrl) return stored && gatewayUrlDiagnostic(stored).ok ? stored : "";
+  if (!userOwnsUrl && isKnownStaleGatewayUrl(stored)) return baked;
+  if (!stored || !gatewayUrlDiagnostic(stored).ok) return baked;
   return stored;
 }
 
@@ -109,40 +132,20 @@ async function getBakedConfig() {
       return bakedCache;
     }
   } catch {
-    // Missing local config is normal on a fresh checkout. The gateway URL still
-    // defaults to the hosted endpoint; the token can be added later.
+    // Missing local config is normal. The hosted URL remains an Options-page
+    // suggestion, not an implicitly configured destination.
   }
-  bakedCache = { gatewayUrl: DEFAULT_GATEWAY_URL, gatewayToken: "" };
+  bakedCache = { gatewayUrl: "", gatewayToken: "" };
   return bakedCache;
 }
 
 async function seedGatewayConfig() {
-  const baked = await getBakedConfig();
-  const cur = await chrome.storage.local.get([
-    "ageeGatewayUrl",
-    "ageeGatewayToken",
-    "ageeGatewayUserSet",
-  ]);
-  const curUrl = normalizeGatewayUrl(cur.ageeGatewayUrl);
-  const patch = {};
-  // Adopt the baked gateway config unless the user picked the URL by hand.
-  // The stored value is otherwise just a previously-seeded default, so a new
-  // baked URL (from `npm run configure`, e.g. pointing at a local gateway)
-  // must win instead of the extension clinging to the old seeded URL.
-  const userOwnsUrl = cur.ageeGatewayUserSet === true;
-  const shouldAdoptBaked =
-    !curUrl ||
-    (!userOwnsUrl && (isKnownStaleGatewayUrl(curUrl) || curUrl !== baked.gatewayUrl));
-  if (shouldAdoptBaked) {
-    patch.ageeGatewayUrl = baked.gatewayUrl;
-    // Carry the matching token so auth tracks the gateway we just adopted;
-    // a stale token from the old gateway would 401 against the new one.
-    patch.ageeGatewayToken = baked.gatewayToken || "";
-  } else if (!cur.ageeGatewayToken && baked.gatewayToken) {
-    patch.ageeGatewayToken = baked.gatewayToken;
-  }
-  if (Object.keys(patch).length) await chrome.storage.local.set(patch);
-  return patch;
+  // Retained as a compatibility surface for older callers. Fresh installs do
+  // not persist an implicit hosted gateway; explicit Options save owns that
+  // consent boundary. A generated agee.config.json remains readable for
+  // explicit turns without copying it into chrome.storage.
+  await getBakedConfig();
+  return {};
 }
 
 async function getEffectiveGatewayConfig() {
@@ -159,7 +162,13 @@ async function getEffectiveGatewayConfig() {
   const usingStoredUrl = Boolean(storedUrl) && gatewayUrl === storedUrl;
   return {
     gatewayUrl,
-    gatewayToken: String(usingStoredUrl && hasStoredToken ? stored.ageeGatewayToken || "" : baked.gatewayToken || ""),
+    gatewayToken: gatewayUrl
+      ? String(
+          userOwnsUrl
+            ? (hasStoredToken ? stored.ageeGatewayToken || "" : "")
+            : (usingStoredUrl && hasStoredToken ? stored.ageeGatewayToken || "" : baked.gatewayToken || "")
+        )
+      : "",
   };
 }
 
