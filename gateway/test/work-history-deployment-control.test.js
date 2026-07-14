@@ -292,16 +292,20 @@ test("an expired preview claim can be replaced and rebound before verification",
     const store = makeStore(tempDir, "deploy-preview-recovery");
     const request = await store.requestDeployment({ target: "gateway", source_turn_id: "preview-recovery-turn" });
     await store.reviewDeploymentRequest({ request_id: request.request_id, decision: "approved" });
+    // Lease must comfortably outlive the recordDeployment write below even on a
+    // saturated CPU; expiry is then awaited off the actual timestamp instead of
+    // a fixed sleep so the test is load-independent.
+    const leaseExpiresAt = Date.now() + 400;
     const original = await store.claimDeploymentRequest({
       request_id: request.request_id, operation: "preview", worker_id: "preview-original",
-      claim_id: "preview-original-claim", lease_expires_at: new Date(Date.now() + 30).toISOString(),
+      claim_id: "preview-original-claim", lease_expires_at: new Date(leaseExpiresAt).toISOString(),
     });
     await store.recordDeployment({
       request_id: request.request_id, deployment_id: "preview-recovery-deployment", target: "gateway",
       mode: "preview", status: "available", preview_url: "https://preview.example.test/rebound",
       worker_id: "preview-original", claim_id: original.claim_id,
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, leaseExpiresAt - Date.now()) + 40));
     await assert.rejects(
       store.recordDeploymentVerification({
         request_id: request.request_id, deployment_id: "preview-recovery-deployment", operation: "preview",
