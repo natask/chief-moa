@@ -74,3 +74,43 @@ mv "$tmp_dir" "$out_dir"
 trap - EXIT
 echo "Backup written to $out_dir"
 echo "Verify it with: $SCRIPT_DIR/restore-check.sh $out_dir"
+
+# Retention: keep the most recent MOA_BACKUP_RETENTION complete backups on this
+# host so the droplet disk does not fill (voice PCM turn files are the bulk).
+# Off-host mirrors (scripts/vps/pull-backups.sh) keep their own history and are
+# never touched by this prune. Only complete, non-temp backups are counted, and
+# the backup just written is always among those kept.
+prune_old_backups() {
+  local retention="${MOA_BACKUP_RETENTION:-14}"
+  case "$retention" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ "$retention" -gt 0 ] || return 0
+
+  local -a complete=()
+  local candidate
+  for candidate in "$BACKUP_DIR"/*/; do
+    candidate="${candidate%/}"
+    [ -d "$candidate" ] || continue
+    case "$candidate" in
+      *.tmp) continue ;;
+    esac
+    [ -f "$candidate/data-dir.tar.gz" ] || continue
+    [ -f "$candidate/postgres-dump.sql" ] || continue
+    complete+=("$candidate")
+  done
+
+  local total="${#complete[@]}"
+  [ "$total" -gt "$retention" ] || return 0
+
+  # Timestamped names sort chronologically; drop the oldest overflow.
+  IFS=$'\n' complete=($(printf '%s\n' "${complete[@]}" | sort)); unset IFS
+  local remove_count=$(( total - retention ))
+  local i
+  for (( i = 0; i < remove_count; i++ )); do
+    echo "Pruning old backup (retention=$retention): ${complete[$i]}"
+    rm -rf "${complete[$i]}"
+  done
+}
+
+prune_old_backups
