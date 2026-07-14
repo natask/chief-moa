@@ -258,6 +258,7 @@ test("POST rollback repoints current to the previous release", async () => {
   assert.equal(res.json.from_release_id, "ai.moa.assistant-11");
   assert.equal(res.json.to_release_id, "ai.moa.assistant-10");
   assert.equal(res.json.manifest.version_code, 10);
+  assert.match(res.json.manifest.download_url, /^https?:\/\/[^/]+\/v1\/android\/updates\/latest\.apk$/);
   assert.equal(androidOta.currentReleaseId(HTTP_OTA_DIR), "ai.moa.assistant-10");
 });
 
@@ -283,5 +284,11 @@ test("GET latest manifest includes rollback metadata over HTTP", async () => {
   assert.equal(res.json.rollback_available, true);
   assert.equal(res.json.rollback.release_id, "ai.moa.assistant-10");
   assert.equal(res.json.rollback.requires_reinstall, true);
-  assert.match(res.json.download_url, /\/v1\/android\/updates\/latest\.apk$/);
+  // Both download URLs must be absolute http(s): the Android client's
+  // parseRollback silently drops the rollback object for non-absolute URLs.
+  assert.match(res.json.download_url, /^https?:\/\/[^/]+\/v1\/android\/updates\/latest\.apk$/);
+  assert.match(
+    res.json.rollback.download_url,
+    /^https?:\/\/[^/]+\/v1\/android\/updates\/releases\/ai\.moa\.assistant-10\.apk$/,
+  );
 });

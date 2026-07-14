@@ -14144,6 +14144,23 @@ function readAndroidOtaManifest() {
   }
 }
 
+// The module stores download URLs as gateway-relative paths; absolutization
+// against the request origin belongs here at the serving layer. The Android
+// client requires absolute http(s) URLs and drops rollback metadata otherwise.
+function absolutizeAndroidOtaManifest(manifest, origin) {
+  const served = {
+    ...manifest,
+    download_url: `${origin}/v1/android/updates/latest.apk`,
+  };
+  if (manifest.rollback && typeof manifest.rollback === "object") {
+    served.rollback = {
+      ...manifest.rollback,
+      download_url: `${origin}${manifest.rollback.download_url}`,
+    };
+  }
+  return served;
+}
+
 function sendAndroidOtaManifest(request, response) {
   const manifest = readAndroidOtaManifest();
   if (!manifest) {
@@ -14155,10 +14172,7 @@ function sendAndroidOtaManifest(request, response) {
   }
 
   const origin = externalOriginForRequest(request);
-  sendJson(response, 200, {
-    ...manifest,
-    download_url: `${origin}/v1/android/updates/latest.apk`,
-  });
+  sendJson(response, 200, absolutizeAndroidOtaManifest(manifest, origin));
 }
 
 function sendAndroidOtaApk(response) {
@@ -14236,10 +14250,7 @@ async function handleAndroidOtaRollback(request, response) {
     rolled_back: true,
     from_release_id: result.from_release_id,
     to_release_id: result.to_release_id,
-    manifest: {
-      ...result.manifest,
-      download_url: `${origin}/v1/android/updates/latest.apk`,
-    },
+    manifest: absolutizeAndroidOtaManifest(result.manifest, origin),
   });
 }
 
