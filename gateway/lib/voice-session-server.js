@@ -1059,6 +1059,11 @@ class VoiceSessionConnection {
     if (!transcriptSource || (transcriptSource === "synthetic" && transcript)) {
       transcriptSource = transcript ? "stt" : "synthetic";
     }
+    // The cascaded/text commit paths reach here without closing the assistant
+    // PCM stream; flush it before the canonical record claims stored bytes,
+    // or the record can reference a not-yet-flushed (0-byte) file. Idempotent
+    // for the live path, which already closed via completeLiveTurn.
+    await closeAssistantAudioStream(turn);
     const canonicalRecord = await this.recordCompletedTurn(turn, providerResult, {
       transcript,
       transcriptSource,
