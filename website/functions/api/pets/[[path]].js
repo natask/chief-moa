@@ -13,8 +13,9 @@ const ROUTES = new Map([
   // Shared character library (companion-character-voice-library task 5.2).
   // The website feature-detects these on 404 and hides the library UI, so it
   // is safe for the site to deploy before or after the gateway routes land.
+  // Publish and voice-clone are per-pet (/api/pets/:id/publish,
+  // /api/pets/:id/voice-clone) — see upstreamPathFor below.
   ["shared", "/v1/agent/pets/shared"],
-  ["publish", "/v1/agent/pets/publish"],
   ["install", "/v1/agent/pets/install"],
 ]);
 
@@ -77,6 +78,9 @@ function upstreamPathFor(key) {
   if (ROUTES.has(key)) return ROUTES.get(key);
   if (/^agents\/[^/]+$/.test(key)) return `/v1/agent/pets/${key}`;
   if (/^bookmarks\/[^/]+$/.test(key)) return `/v1/agent/pets/${key}`;
+  // Per-pet library + voice actions: /api/pets/:id/publish, :id/voice-clone.
+  if (/^[^/]+\/publish$/.test(key)) return `/v1/agent/pets/${key}`;
+  if (/^[^/]+\/voice-clone$/.test(key)) return `/v1/agent/pets/${key}`;
   return "";
 }
 
