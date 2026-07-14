@@ -16,6 +16,9 @@ const LOCK_PROCESS_INSTANCE_ID = crypto.randomUUID();
 const LOCK_CLEANUP_ATTEMPTS = 3;
 const MAX_LOCK_ARTIFACT_SCAN = 256;
 const PROCESS_OWNED_JSON_LOCKS = new Map();
+// In-process fairness gate for withStreamLock so same-process callers queue
+// before contending for the cross-process file lock. Keyed by lock path.
+const JSON_STREAM_LOCK_QUEUE = new Map();
 
 class EventStreamVersionConflictError extends Error {
   constructor({ originId, streamId, expectedVersion, actualVersion }) {
@@ -95,7 +98,36 @@ function createJsonEventSubstrateStore(options = {}) {
     };
   }
 
-  return { appendEvent, listEvents, getEvent, storageInfo };
+  // Serialized per-stream critical section. Callers pass a logical stream id and
+  // run a read-modify-append transition with the guarantee that no other
+  // withStreamLock caller for the same stream runs concurrently. Same-process
+  // callers queue on a promise chain first; a lightweight atomic-mkdir lock
+  // then guards across processes. This stays deliberately fast (no per-acquire
+  // fsync) because a transition holds it around another durable append and the
+  // deployment control plane binds it to short operation leases.
+  async function withStreamLock(streamId, fn) {
+    if (typeof fn !== "function") throw new Error("withStreamLock requires a function");
+    const key = normalizeOptionalText(streamId, 240) || "default";
+    const lockDir = `${eventsPath}.stream-${crypto.createHash("sha256").update(key).digest("hex").slice(0, 20)}.lock`;
+    const previous = JSON_STREAM_LOCK_QUEUE.get(lockDir) || Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => { release = resolve; });
+    // Chain past the prior holder regardless of how it settled so one failed
+    // transition cannot wedge the stream.
+    const queued = previous.then(() => current, () => current);
+    JSON_STREAM_LOCK_QUEUE.set(lockDir, queued);
+    try { await previous; } catch { /* prior holder failure must not block us */ }
+    await acquireJsonStreamDirLock(lockDir, lockOptions);
+    try {
+      return await fn();
+    } finally {
+      try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      release();
+      if (JSON_STREAM_LOCK_QUEUE.get(lockDir) === queued) JSON_STREAM_LOCK_QUEUE.delete(lockDir);
+    }
+  }
+
+  return { appendEvent, listEvents, getEvent, storageInfo, withStreamLock };
 }
 
 function createPostgresEventSubstrateStore(options = {}) {
@@ -177,7 +209,29 @@ function createPostgresEventSubstrateStore(options = {}) {
     };
   }
 
-  return { appendEvent, listEvents, getEvent, storageInfo };
+  // Serialized per-stream critical section. Holds a session-level advisory lock
+  // on a dedicated connection for the whole transition. The key is namespaced
+  // apart from appendEvent's per-stream xact advisory lock so an append issued
+  // from inside fn (on a pool connection) can never self-deadlock against the
+  // transition lock this holds.
+  async function withStreamLock(streamId, fn) {
+    if (typeof fn !== "function") throw new Error("withStreamLock requires a function");
+    await ready();
+    const client = await pool.connect();
+    const key = `stream-transition:${originId}:${normalizeOptionalText(streamId, 240)}`;
+    try {
+      await client.query("select pg_advisory_lock(hashtext($1))", [key]);
+      return await fn();
+    } finally {
+      try {
+        await client.query("select pg_advisory_unlock(hashtext($1))", [key]);
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  return { appendEvent, listEvents, getEvent, storageInfo, withStreamLock };
 }
 
 async function appendEventOnClient(client, input = {}, options = {}) {
@@ -551,6 +605,35 @@ function boundedPositiveInteger(value, fallback, minimum, maximum) {
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < minimum || number > maximum) return fallback;
   return number;
+}
+
+// Lightweight atomic-mkdir lock backing withStreamLock. mkdir is atomic across
+// processes on POSIX and needs no fsync, so acquisition is cheap. A holder that
+// crashes leaves the directory behind; a bounded stale age lets a successor
+// reclaim it rather than block forever.
+async function acquireJsonStreamDirLock(lockDir, options) {
+  const deadline = Date.now() + options.timeoutMs;
+  while (true) {
+    try {
+      fs.mkdirSync(lockDir);
+      return;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        const stat = fs.statSync(lockDir);
+        if (Date.now() - stat.mtimeMs >= options.staleMs) {
+          fs.rmSync(lockDir, { recursive: true, force: true });
+          continue;
+        }
+      } catch { /* raced with another reclaimer; retry the mkdir */ }
+      if (Date.now() >= deadline) {
+        const error = new Error(`timed out acquiring event stream lock: ${path.basename(lockDir)}`);
+        error.code = "EVENT_SUBSTRATE_LOCK_TIMEOUT";
+        throw error;
+      }
+      await delay(options.retryMs);
+    }
+  }
 }
 
 async function withJsonAppendLock(eventsPath, options, task) {
@@ -983,5 +1066,6 @@ module.exports = {
   createEventSubstrateStore,
   EventStreamVersionConflictError,
   normalizeEvent,
+  normalizeEventType,
   withTransaction,
 };

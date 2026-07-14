@@ -1,0 +1,46 @@
+services:
+  gateway:
+    image: ${MOA_PREVIEW_IMAGE_REF:?immutable preview image required}
+    restart: "no"
+    labels: &preview-labels
+      moa.preview.project: ${MOA_PREVIEW_PROJECT:?}
+      moa.preview.hostname: ${MOA_PREVIEW_HOSTNAME:?}
+      moa.preview.database: ${MOA_PREVIEW_DATABASE:?}
+      moa.preview.queue: ${MOA_PREVIEW_QUEUE:?}
+      moa.preview.storage: ${MOA_PREVIEW_STORAGE:?}
+      moa.preview.worker_pool: ${MOA_PREVIEW_WORKER_POOL:?}
+      moa.preview.image_ref: ${MOA_PREVIEW_IMAGE_REF:?}
+      moa.preview.database_image_ref: ${MOA_PREVIEW_DATABASE_IMAGE_REF:?}
+      moa.preview.queue_status: disabled-but-isolated
+      moa.preview.worker_pool_status: disabled-but-isolated
+    environment:
+      DATABASE_URL: postgres://preview:${MOA_PREVIEW_DB_PASSWORD:?}@database:5432/${MOA_PREVIEW_DATABASE:?}
+      MOA_QUEUE_NAMESPACE: ${MOA_PREVIEW_QUEUE:?}
+      MOA_QUEUE_STATUS: disabled-but-isolated
+      MOA_STORAGE_NAMESPACE: ${MOA_PREVIEW_STORAGE:?}
+      MOA_WORKER_POOL: ${MOA_PREVIEW_WORKER_POOL:?}
+      MOA_WORKER_POOL_STATUS: disabled-but-isolated
+      DATA_DIR: /app/data/preview
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      - preview-storage:/app/data/preview
+  database:
+    image: ${MOA_PREVIEW_DATABASE_IMAGE_REF:?immutable database image required}
+    restart: "no"
+    labels: *preview-labels
+    environment:
+      POSTGRES_USER: preview
+      POSTGRES_PASSWORD: ${MOA_PREVIEW_DB_PASSWORD:?}
+      POSTGRES_DB: ${MOA_PREVIEW_DATABASE:?}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U preview -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - preview-db:/var/lib/postgresql/data
+volumes:
+  preview-db:
+  preview-storage:

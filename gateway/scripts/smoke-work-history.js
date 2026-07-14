@@ -26,6 +26,9 @@ const { spawn } = require("node:child_process");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "work-history-smoke-token";
+const PREVIEW_TOKEN = "work-history-preview-token";
+const REVIEWER_TOKEN = "work-history-reviewer-token";
+const PROMOTER_TOKEN = "work-history-promoter-token";
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -82,6 +85,25 @@ async function main() {
 async function assertAuthRequired(baseUrl) {
   const response = await fetch(`${baseUrl}/v1/work-history/status`);
   assert.equal(response.status, 401);
+  const scoped = await getJson(`${baseUrl}/v1/work-history/status`, PREVIEW_TOKEN);
+  assert.equal(scoped.status, 403, "preview credential cannot access non-deployment work history");
+  const telemetryAnonymous = await fetch(`${baseUrl}/v1/work-history/telemetry`);
+  assert.equal(telemetryAnonymous.status, 401);
+  const telemetryScoped = await getJson(`${baseUrl}/v1/work-history/telemetry`, PREVIEW_TOKEN);
+  assert.equal(telemetryScoped.status, 403, "preview credential cannot read or post semantic telemetry");
+  const telemetryUser = await getJson(`${baseUrl}/v1/work-history/telemetry?limit=999`, TOKEN);
+  assert.equal(telemetryUser.status, 200);
+  assert.deepEqual(telemetryUser.json.events, []);
+  for (const eventType of ["telemetry.semantic.v1", "TELEMETRY.SEMANTIC.V1", "telemetry semantic v1", "telemetry///semantic///v1", ".telemetry...semantic...v1."]) {
+    const forgedTelemetry = await postJson(`${baseUrl}/v1/events`, {
+      event_type: eventType,
+      stream_id: "telemetry:semantic",
+      actor: { kind: "gateway", id: "semantic-telemetry" },
+      payload: { schema: "moa.semantic_telemetry", schema_version: 1 },
+    });
+    assert.equal(forgedTelemetry.status, 400, `generic event API must reserve semantic telemetry alias ${eventType}`);
+    assert.match(forgedTelemetry.json.error, /reserved/);
+  }
 }
 
 async function assertVoiceCreate(baseUrl, dataDir) {
@@ -263,13 +285,96 @@ async function assertCancellationFlow(baseUrl, runId) {
 }
 
 async function assertDeploymentLinks(baseUrl) {
-  await postJson(`${baseUrl}/v1/work-history/deployments`, {
+  const request = await postJson(`${baseUrl}/v1/work-history/deployments/requests`, {
+    target: "gateway", reason: "scoped authority smoke", source_turn_id: "turn_scoped_authority_smoke",
+  });
+  assert.equal(request.status, 202, JSON.stringify(request.json));
+  const requestId = request.json.request.request_id;
+  const forgedReview = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/review`, {
+    decision: "approved", reviewed_by_actor: "forged-reviewer", actor: { kind: "reviewer", id: "forged-reviewer" },
+  });
+  assert.equal(forgedReview.status, 400, "the general gateway token cannot review deployments");
+  const review = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/review`, {
+    decision: "approved", reviewed_by_actor: "forged-reviewer", actor: { kind: "reviewer", id: "forged-reviewer" },
+  }, REVIEWER_TOKEN);
+  assert.equal(review.status, 200, JSON.stringify(review.json));
+  assert.equal(review.json.review.reviewed_by_actor, "deployment-reviewer");
+  const broadList = await getJson(`${baseUrl}/v1/work-history/deployments/requests`, TOKEN);
+  assert.equal(broadList.status, 400, "the general gateway token cannot list preview work");
+  const reviewerList = await getJson(`${baseUrl}/v1/work-history/deployments/requests`, REVIEWER_TOKEN);
+  assert.equal(reviewerList.status, 400, "the reviewer credential cannot list preview work");
+  const previewList = await getJson(`${baseUrl}/v1/work-history/deployments/requests`, PREVIEW_TOKEN);
+  assert.equal(previewList.status, 200, JSON.stringify(previewList.json));
+  assert.deepEqual(previewList.json.requests.map((item) => item.request_id), [requestId]);
+  const unassignedDetail = await getJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}`, PREVIEW_TOKEN);
+  assert.equal(unassignedDetail.status, 400, "preview credential cannot read an unassigned request detail");
+  const guessedDetail = await getJson(`${baseUrl}/v1/work-history/deployments/requests/not-a-real-request`, PREVIEW_TOKEN);
+  assert.equal(guessedDetail.status, 404, "preview credential cannot discover guessed request details");
+  const previewBroadHistory = await getJson(`${baseUrl}/v1/work-history/deployments`, PREVIEW_TOKEN);
+  assert.equal(previewBroadHistory.status, 400, "preview credential cannot list broad deployment history");
+  const forgedClaim = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/claim`, {
+    operation: "preview", worker_id: "forged-worker", claim_id: "scoped-smoke-claim",
+  });
+  assert.equal(forgedClaim.status, 400, "the general gateway token cannot claim deployment work");
+  const claim = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/claim`, {
+    operation: "preview", worker_id: "forged-worker", claim_id: "scoped-smoke-claim",
+  }, PREVIEW_TOKEN);
+  assert.equal(claim.status, 200, JSON.stringify(claim.json));
+  assert.equal(claim.json.worker_id, "preview-deployer");
+  const assignedDetail = await getJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}`, PREVIEW_TOKEN);
+  assert.equal(assignedDetail.status, 200, JSON.stringify(assignedDetail.json));
+  assert.equal(assignedDetail.json.preview_claim.worker_id, "preview-deployer");
+  assert.equal(Object.hasOwn(assignedDetail.json, "latest_applied"), false, "preview detail must redact apply state");
+  assert.equal(Object.hasOwn(assignedDetail.json, "receipts"), false, "preview detail must redact receipts");
+
+  for (const status of ["requested", "building", "superseded", "available", "failed"]) {
+    const intermediate = await postJson(`${baseUrl}/v1/work-history/deployments`, {
+      target: "gateway", mode: "preview", status,
+      preview_url: status === "available" ? `https://preview.example.test/unbound-${status}` : "",
+    }, PREVIEW_TOKEN);
+    assert.equal(intermediate.status, 201, JSON.stringify(intermediate.json));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const afterUnbound = await getJson(`${baseUrl}/v1/work-history/telemetry?limit=10`, TOKEN);
+  assert.deepEqual(afterUnbound.json.events.map((event) => event.name), ["preview.claimed"], "unbound and intermediate preview records emit no lifecycle telemetry");
+
+  const preview = await postJson(`${baseUrl}/v1/work-history/deployments`, {
+    request_id: requestId,
+    claim_id: claim.json.claim_id,
     target: "gateway",
     mode: "preview",
     status: "available",
     preview_url: "https://preview.example.test/build-7",
     commit_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  }, PREVIEW_TOKEN);
+  assert.equal(preview.status, 201, JSON.stringify(preview.json));
+  assert.equal(preview.json.deployment.worker_id, "preview-deployer", "request-body identity must be ignored");
+  const verification = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/verification`, {
+    operation: "preview",
+    claim_id: claim.json.claim_id,
+    deployment_id: preview.json.deployment.deployment_id,
+    status: "passed",
+    surface: "deploy",
+    summary: "isolated smoke passed",
+  }, PREVIEW_TOKEN);
+  assert.equal(verification.status, 201, JSON.stringify(verification.json));
+  let semantic;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    semantic = await getJson(`${baseUrl}/v1/work-history/telemetry?limit=10`, TOKEN);
+    if ((semantic.json.events || []).length >= 3) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(new Set(semantic.json.events.map((event) => event.name)), new Set(["preview.claimed", "preview.available", "preview.verification.completed"]));
+  assert.equal(JSON.stringify(semantic.json).includes(requestId), false, "telemetry must not expose raw deployment request identity");
+  const broadPreview = await postJson(`${baseUrl}/v1/work-history/deployments`, {
+    target: "gateway", mode: "preview", status: "available", preview_url: "https://preview.example.test/forged",
+    worker_id: "forged-worker",
   });
+  assert.equal(broadPreview.status, 400, "the general gateway token cannot act as a preview deployer");
+  const previewApply = await postJson(`${baseUrl}/v1/work-history/deployments`, {
+    target: "gateway", mode: "applied", status: "applied", active_url: "https://app.example.test/forged",
+  }, PREVIEW_TOKEN);
+  assert.equal(previewApply.status, 400, "the preview credential cannot promote production");
   const badApplied = await postJson(`${baseUrl}/v1/work-history/deployments`, {
     target: "gateway",
     mode: "applied",
@@ -365,6 +470,9 @@ async function startGateway({ port, dataDir }) {
       PORT: String(port),
       DATA_DIR: dataDir,
       MOA_GATEWAY_TOKEN: TOKEN,
+      MOA_DEPLOY_REVIEWER_TOKEN: REVIEWER_TOKEN,
+      MOA_PREVIEW_DEPLOYER_TOKEN: PREVIEW_TOKEN,
+      MOA_PRODUCTION_PROMOTER_TOKEN: PROMOTER_TOKEN,
       MODEL_PROVIDER: "openai-compatible",
       MODEL_API_KEY: "",
       VOICE_PROVIDER: "loopback",
@@ -407,11 +515,11 @@ function freePort() {
   });
 }
 
-async function postJson(url, body) {
+async function postJson(url, body, token = TOKEN) {
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${TOKEN}`,
+      authorization: `Bearer ${token}`,
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
@@ -423,9 +531,9 @@ async function postJson(url, body) {
   };
 }
 
-async function getJson(url) {
+async function getJson(url, token = TOKEN) {
   const response = await fetch(url, {
-    headers: { authorization: `Bearer ${TOKEN}` },
+    headers: { authorization: `Bearer ${token}` },
   });
   const text = await response.text();
   return {

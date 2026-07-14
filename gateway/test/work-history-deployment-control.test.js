@@ -164,7 +164,7 @@ test("crash-after-effect requires audited adoption before a replacement worker c
       worker_id: "apply-worker-recovery",
       operation: "apply",
       claim_id: "claim_apply_recovery_original",
-      lease_expires_at: new Date(Date.now() + 40).toISOString(),
+      lease_expires_at: new Date(Date.now() + 1000).toISOString(),
     });
     const applyEffect = await store.observeDeploymentOperationEffect({
       request_id: request.request_id,
@@ -217,7 +217,8 @@ test("crash-after-effect requires audited adoption before a replacement worker c
       /effect is already observed; use explicit adoption/,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    const waitForExpiryMs = Math.max(0, new Date(applyClaim.lease_expires_at).getTime() - Date.now() + 25);
+    await new Promise((resolve) => setTimeout(resolve, waitForExpiryMs));
 
     const adopted = await store.adoptDeploymentOperationEffect({
       request_id: request.request_id,
@@ -438,6 +439,93 @@ test("deployment projections rebuild beyond 500 deployment events", async () => 
     assert.ok(links.open_requests.some((item) => item.request_id === requestIds[0]));
     const rebuiltDetail = await rebuilt.deploymentRequestDetail(requestIds[500]);
     assert.equal(rebuiltDetail.request.request_id, requestIds[500]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("concurrent distinct deployment claimants serialize and the loser appends no event", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-work-history-deploy-race-"));
+  try {
+    const storeA = makeStore(tempDir, "deploy-claim-race");
+    const storeB = makeStore(tempDir, "deploy-claim-race");
+    const request = await storeA.requestDeployment({
+      target: "gateway", reason: "race", source_turn_id: "turn_claim_race",
+    });
+    await storeA.reviewDeploymentRequest({ request_id: request.request_id, decision: "approved" });
+    const settled = await Promise.allSettled([
+      storeA.claimDeploymentRequest({ request_id: request.request_id, operation: "preview", worker_id: "worker-a", claim_id: "claim-a" }),
+      storeB.claimDeploymentRequest({ request_id: request.request_id, operation: "preview", worker_id: "worker-b", claim_id: "claim-b" }),
+    ]);
+    assert.equal(settled.filter((item) => item.status === "fulfilled").length, 1);
+    assert.equal(settled.filter((item) => item.status === "rejected").length, 1);
+    const events = await createEventSubstrateStore({ dataDir: tempDir, originId: "deploy-claim-race" }).listEvents({
+      stream_id: `deployment:${request.request_id}`, event_type: "deployment.claimed", order: "asc",
+    });
+    assert.equal(events.length, 1);
+    assert.ok(["worker-a", "worker-b"].includes(events[0].payload.worker_id));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("concurrent distinct effect attempts preserve one authority and append no losing effect", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-work-history-effect-race-"));
+  try {
+    const storeA = makeStore(tempDir, "deploy-effect-race");
+    const storeB = makeStore(tempDir, "deploy-effect-race");
+    const { request, previewClaim } = await createReadyPreview(storeA, "effect-race");
+    const attempts = await Promise.allSettled([
+      storeA.observeDeploymentOperationEffect({ request_id: request.request_id, operation: "preview", worker_id: previewClaim.worker_id, claim_id: previewClaim.claim_id, effect_id: "effect-a", deployment_id: "dep_preview_effect-race", preview_url: "https://preview.example.test/effect-race" }),
+      storeB.observeDeploymentOperationEffect({ request_id: request.request_id, operation: "preview", worker_id: "intruder", claim_id: "intruder-claim", effect_id: "effect-b", deployment_id: "dep_preview_effect-race", preview_url: "https://preview.example.test/effect-race" }),
+    ]);
+    assert.equal(attempts.filter((item) => item.status === "fulfilled").length, 1);
+    const events = await createEventSubstrateStore({ dataDir: tempDir, originId: "deploy-effect-race" }).listEvents({
+      stream_id: `deployment:${request.request_id}`, event_type: "deployment.effect_observed", order: "asc",
+    });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].payload.worker_id, previewClaim.worker_id);
+    assert.equal(events[0].payload.effect_id, "effect-a");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("concurrent recovery adopters serialize to one claim and one adoption", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-work-history-adopt-race-"));
+  try {
+    const storeA = makeStore(tempDir, "deploy-adopt-race");
+    const storeB = makeStore(tempDir, "deploy-adopt-race");
+    const { request, previewClaim } = await createReadyPreview(storeA, "adopt-race");
+    await storeA.recordDeploymentVerification({
+      request_id: request.request_id, deployment_id: "dep_preview_adopt-race", operation: "preview",
+      worker_id: previewClaim.worker_id, claim_id: previewClaim.claim_id, status: "passed",
+    });
+    const original = await storeA.claimDeploymentRequest({
+      request_id: request.request_id, operation: "apply", worker_id: "original-worker",
+      claim_id: "original-claim", lease_expires_at: new Date(Date.now() + 25).toISOString(),
+    });
+    await storeA.observeDeploymentOperationEffect({
+      request_id: request.request_id, operation: "apply", worker_id: "original-worker",
+      claim_id: original.claim_id, effect_id: "adopt-race-effect", deployment_id: "adopt-race-live",
+      active_url: "https://app.example.test/adopt-race", artifact_refs: ["artifact://adopt-race"],
+      backup_record_ref: "backup://adopt-race", restore_check_ref: "restore://adopt-race",
+      smoke_artifact_ref: "smoke://adopt-race", rollback_ref: "rollback://adopt-race",
+      drain_status: "drained", compatibility_status: "compatible",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const settled = await Promise.allSettled([
+      storeA.adoptDeploymentOperationEffect({ request_id: request.request_id, operation: "apply", effect_id: "adopt-race-effect", worker_id: "replacement-a", claim_id: "replacement-claim-a" }),
+      storeB.adoptDeploymentOperationEffect({ request_id: request.request_id, operation: "apply", effect_id: "adopt-race-effect", worker_id: "replacement-b", claim_id: "replacement-claim-b" }),
+    ]);
+    assert.equal(settled.filter((item) => item.status === "fulfilled").length, 1);
+    assert.equal(settled.filter((item) => item.status === "rejected").length, 1);
+    const substrate = createEventSubstrateStore({ dataDir: tempDir, originId: "deploy-adopt-race" });
+    const claims = await substrate.listEvents({ stream_id: `deployment:${request.request_id}`, event_type: "deployment.claimed", order: "asc" });
+    const adoptions = await substrate.listEvents({ stream_id: `deployment:${request.request_id}`, event_type: "deployment.effect_adopted", order: "asc" });
+    assert.equal(claims.filter((event) => event.payload.claim_id.startsWith("replacement-claim-")).length, 1);
+    assert.equal(adoptions.length, 1);
+    assert.equal(adoptions[0].payload.adopted_claim_id, claims.at(-1).payload.claim_id);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

@@ -10,6 +10,7 @@
     "check:context-quality": "node scripts/check-context-quality.js",
     "test": "node --test \"test/**/*.test.js\"",
     "test:billing": "node --test test/billing-domain.test.js",
+    "test:worker-workspace": "node --test test/worker-workspace.test.js",
     "test:companion-package": "node --test test/companion-package.test.js",
     "test:aggie-protocol": "node --test test/aggie-surface-protocol.test.js",
     "quality:aggie-protocol": "node scripts/check-aggie-protocol-quality.js",

@@ -84,6 +84,8 @@ function createWorkerPullStore(options = {}) {
       name: truncate(workerBody.name || registration.name || "Moa worker", 120),
       version: truncate(workerBody.version || "", 120),
       machine_label: truncate(workerBody.machine_label || workerBody.machineLabel || "", 120),
+      machine_id: sanitizeId(workerBody.machine_id || workerBody.machineId || ""),
+      platform: capability(workerBody.platform || ""),
       capabilities: capabilities(workerBody.capabilities || {}),
       tokens: [{
         token_id: tokenId,
@@ -420,7 +422,12 @@ function capabilities(value) {
     transports: list(input.transports || [], (item) => ["long_poll", "websocket"].includes(String(item)) ? String(item) : "", 10),
     harnesses: Array.isArray(input.harnesses) ? input.harnesses.slice(0, 20).map((item) => ({ id: sanitizeHarness(item?.id || item?.name || ""), version: truncate(item?.version || "", 120), supports_resume: item?.supports_resume === true || item?.supportsResume === true })).filter((item) => item.id) : [],
     projects: Array.isArray(input.projects) ? input.projects.slice(0, 50).map((item) => ({ id: sanitizeId(item?.id || ""), local_alias: localAlias(item?.local_alias || item?.localAlias || item?.id || ""), path_policy: "local_allowlist" })).filter((item) => item.id) : [],
+    machine: list(input.machine || [], capability, 50),
   };
+}
+
+function capability(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_.:-]/g, "-").slice(0, 80);
 }
 
 function requireScope(auth, scope) {

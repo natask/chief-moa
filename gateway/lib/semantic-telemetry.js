@@ -21,6 +21,10 @@ const ALLOWED_EVENT_NAMES = new Set([
   "voice.stage.completed",
   "agent.run.transitioned",
   "client.crash.observed",
+  "preview.claimed",
+  "preview.available",
+  "preview.verification.completed",
+  "preview.failed",
 ]);
 const ALLOWED_ATTRIBUTES = new Set([
   "environment",
@@ -35,7 +39,7 @@ const ALLOWED_ATTRIBUTES = new Set([
 ]);
 const ALLOWED_ATTRIBUTE_VALUES = Object.freeze({
   environment: new Set(["local", "test", "preview", "staging", "production"]),
-  operation: new Set(["canary", "http_request", "voice_stage", "agent_run", "client_crash"]),
+  operation: new Set(["canary", "http_request", "voice_stage", "agent_run", "client_crash", "preview_claim", "preview_available", "preview_verification", "preview_failure"]),
   outcome: new Set(["ok", "error", "cancelled", "dropped", "timeout"]),
   pipeline: new Set(["cascaded", "legacy_live", "unknown"]),
   provider_family: new Set(["google", "openai", "anthropic", "local", "other", "unknown"]),
@@ -199,6 +203,7 @@ function normalizeCorrelation(value) {
     trace_id: OPAQUE_ID_PREFIXES.trace_id,
     parent_event_id: OPAQUE_ID_PREFIXES.parent_event_id,
     canary_id: OPAQUE_ID_PREFIXES.canary_id,
+    lifecycle_id: "lifecycle",
   })) {
     const normalized = normalizeOpaqueId(value[key], key, prefix);
     if (normalized) output[key] = normalized;

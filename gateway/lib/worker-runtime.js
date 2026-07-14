@@ -8,8 +8,10 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn, spawnSync } = require("node:child_process");
+const { createWorkerWorkspace, loadWorkerProjectConfig } = require("./worker-workspace");
 
 class WorkerRuntimeError extends Error {
   constructor(code, message, { status = 0, retryable = false } = {}) {
@@ -33,67 +35,112 @@ async function echoHarness(run) {
 }
 
 const DEFAULT_HARNESSES = { echo: echoHarness };
-const FORBIDDEN_CLAIM_KEYS = new Set(["command", "args", "shell", "env", "credentials", "credential"]);
+const FORBIDDEN_CLAIM_KEYS = new Set([
+  "command", "args", "shell", "env", "credentials", "credential",
+  "path", "cwd", "repo_url", "repourl", "default_ref", "defaultref",
+  "workspace_root", "workspaceroot", "executable", "bin",
+  "paths", "workdir", "working_path", "workingpath", "working_directory",
+]);
 
 // Real CLI harnesses. Each runs a locally-installed agent CLI against the
 // claimed run's PROMPT ONLY - the gateway never supplies command, args, paths,
 // or env (FORBIDDEN_CLAIM_KEYS enforces that upstream). The CLI executes in a
-// fresh worker-local temp directory and inherits this machine's credentials,
+// durable worker-local Git worktree and inherits this machine's credentials,
 // which never leave the machine. A harness is registered only when its binary
 // answers a version probe, so the worker's hello advertises exactly what this
 // machine can actually execute.
-function cliHarness(command, argsFor, { parseOutput } = {}) {
-  return async function runCliHarness(run, { isCanceled } = {}) {
-    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-worker-run-"));
-    const timeoutMs = clamp(run.timeout_ms, 10_000, 30 * 60_000, 10 * 60_000);
-    try {
-      return await new Promise((resolve, reject) => {
+function cliHarness(command, argsFor, { parseOutput, terminationGraceMs = 2000, cancelPollMs = 100, minTimeoutMs = 10_000 } = {}) {
+  const harness = async function runCliHarness(run, { isCanceled, workDir } = {}) {
+    if (!workDir || !path.isAbsolute(workDir)) throw new WorkerRuntimeError("workspace_required", "CLI harness requires a prepared worker-local worktree");
+    const timeoutMs = clamp(run.timeout_ms, minTimeoutMs, 30 * 60_000, 10 * 60_000);
+    return await new Promise((resolve, reject) => {
         let stdout = "";
         let stderr = "";
+        let stdoutTail = "";
+        let stderrTail = "";
         let settled = false;
         let child;
+        let terminationReason = "";
+        let killTimer = null;
+        let timer = null;
+        let cancelPoll = null;
+        let graceElapsed = false;
+        let closeRecord = null;
         const finish = (fn, value) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
           clearInterval(cancelPoll);
+          clearTimeout(killTimer);
           fn(value);
         };
-        const kill = () => {
-          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        const signalTree = (signal) => {
+          if (!child?.pid) return;
+          try {
+            if (process.platform === "win32") child.kill(signal);
+            else process.kill(-child.pid, signal);
+          } catch {
+            try { child.kill(signal); } catch { /* already gone */ }
+          }
         };
-        const timer = setTimeout(kill, timeoutMs);
-        const cancelPoll = setInterval(() => {
-          if (typeof isCanceled === "function" && isCanceled()) kill();
-        }, 2000);
+        const terminate = (reason) => {
+          if (terminationReason) return;
+          terminationReason = reason;
+          signalTree("SIGTERM");
+          killTimer = setTimeout(() => {
+            graceElapsed = true;
+            signalTree("SIGKILL");
+            if (closeRecord) resolveClose();
+          }, clamp(terminationGraceMs, 0, 30_000, 2000));
+        };
+        const resolveClose = () => {
+          if (!closeRecord) return;
+          const parsed = typeof parseOutput === "function" ? parseOutput(stdout) : null;
+          finish(resolve, {
+            exit_code: closeRecord.code == null ? null : Number(closeRecord.code),
+            output: truncate(String(parsed?.output || stdout.trim() || stderr.trim()), 120_000),
+            stdout_tail: stdoutTail,
+            stderr_tail: stderrTail,
+            signal: closeRecord.signal || "",
+            timed_out: terminationReason === "timeout",
+            canceled: Boolean(terminationReason && terminationReason !== "timeout"),
+            cancellation_reason: terminationReason,
+          });
+        };
         try {
           child = spawn(command, argsFor(run, workDir), {
             cwd: workDir,
             env: process.env,
             shell: false,
+            detached: process.platform !== "win32",
             stdio: ["ignore", "pipe", "pipe"],
           });
         } catch (error) {
           finish(reject, error);
           return;
         }
-        child.stdout.on("data", (chunk) => { stdout += String(chunk); });
-        child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-        child.on("error", (error) => finish(reject, error));
-        child.on("close", (code) => {
-          const parsed = typeof parseOutput === "function" ? parseOutput(stdout) : null;
-          finish(resolve, {
-            exit_code: code == null ? null : Number(code),
-            output: truncate(String(parsed?.output || stdout.trim() || stderr.trim()), 120_000),
-            stdout_tail: truncate(stdout.slice(-16_000), 16_000),
-            stderr_tail: truncate(stderr.slice(-16_000), 16_000),
-          });
+        timer = setTimeout(() => terminate("timeout"), timeoutMs);
+        cancelPoll = setInterval(() => {
+          const reason = typeof isCanceled === "function" ? isCanceled() : false;
+          if (reason) terminate(typeof reason === "string" ? reason : "canceled");
+        }, clamp(cancelPollMs, 20, 2000, 100));
+        child.stdout.on("data", (chunk) => {
+          stdout = appendHead(stdout, chunk, 120_000);
+          stdoutTail = appendBoundedTail(stdoutTail, chunk, 16_000);
         });
-      });
-    } finally {
-      fs.rmSync(workDir, { recursive: true, force: true });
-    }
+        child.stderr.on("data", (chunk) => {
+          stderr = appendHead(stderr, chunk, 120_000);
+          stderrTail = appendBoundedTail(stderrTail, chunk, 16_000);
+        });
+        child.on("error", (error) => finish(reject, error));
+        child.on("close", (code, signal) => {
+          closeRecord = { code, signal };
+          if (!terminationReason || graceElapsed) resolveClose();
+        });
+    });
   };
+  harness.requiresWorkspace = true;
+  return harness;
 }
 
 // Claude with --output-format json prints { result, session_id, ... }; unwrap
@@ -189,11 +236,16 @@ function detectHarnesses(env = process.env) {
 function createWorkerRuntime(options = {}) {
   const gatewayUrl = normalizeGatewayUrl(options.gatewayUrl);
   if (!gatewayUrl) throw new WorkerRuntimeError("invalid_config", "gatewayUrl is required (http or https)");
-  const harnesses = options.harnesses && typeof options.harnesses === "object"
+  const localConfig = options.projectConfig || loadWorkerProjectConfig(options.projectConfigFile, { workspaceRoot: options.workspaceRoot });
+  const workspace = localConfig.projects.length ? createWorkerWorkspace(localConfig, { gitBin: options.gitBin }) : null;
+  const availableHarnesses = options.harnesses && typeof options.harnesses === "object"
     ? options.harnesses
     : detectHarnesses();
+  const harnesses = workspace
+    ? availableHarnesses
+    : Object.fromEntries(Object.entries(availableHarnesses).filter(([, harness]) => harness?.requiresWorkspace !== true));
   const projectAliases = [...new Set(listOf(options.projectAliases).map(sanitizeAlias).filter(Boolean))];
-  const configuredProjects = Array.isArray(options.projects)
+  const configuredProjects = localConfig.projects.length ? localConfig.projects.map((item) => ({ id: item.id, local_alias: item.local_alias })) : Array.isArray(options.projects)
     ? options.projects.map((item) => ({ id: sanitizeId(item?.id || ""), local_alias: sanitizeAlias(item?.local_alias || item?.localAlias || item?.id || "") })).filter((item) => item.id)
     : [];
   const projects = configuredProjects.length
@@ -201,20 +253,25 @@ function createWorkerRuntime(options = {}) {
     : projectAliases.map((aliasValue) => ({ id: aliasValue, local_alias: aliasValue }));
   const stateFile = options.stateFile ? path.resolve(String(options.stateFile)) : "";
   const name = truncate(options.name || "Moa worker", 120);
-  const machineLabel = truncate(options.machineLabel || "", 120);
+  const machineLabel = String(options.machineLabel || "").trim().replace(/[^a-zA-Z0-9_.: -]/g, "-").slice(0, 120);
+  const machineId = machineIdentifier(options.machineId, machineLabel);
+  const platform = normalizeCapability(options.platform || defaultPlatform());
+  const machineCapabilities = normalizeCapabilities(options.machineCapabilities);
   const once = options.once === true;
   const maxIdleMs = clamp(options.maxIdleMs, 0, 24 * 3600_000, 0);
   const idleDelayMs = clamp(options.idleDelayMs, 100, 60_000, 1000);
   const claimWaitMs = clamp(options.claimWaitMs, 0, 55_000, 25_000);
   const requestTimeoutMs = clamp(options.requestTimeoutMs, 1000, 120_000, 30_000);
   const maxRequestRetries = clamp(options.maxRequestRetries, 0, 10, 3);
+  const lockWaitMs = clamp(options.lockWaitMs, 0, 10 * 60_000, 30_000);
+  const lockRetryMs = clamp(options.lockRetryMs, 20, 5000, 250);
   const log = typeof options.log === "function" ? options.log : (line) => process.stdout.write(`${line}\n`);
   const fetchFn = typeof options.fetch === "function" ? options.fetch : fetch;
 
   let credentials = {
     worker_id: sanitizeId(options.workerId || ""),
     token: String(options.token || "").trim(),
-    heartbeat_interval_ms: 15_000,
+    heartbeat_interval_ms: clamp(options.heartbeatIntervalMs, 100, 300_000, 15_000),
   };
 
   async function ensureCredentials() {
@@ -237,10 +294,13 @@ function createWorkerRuntime(options = {}) {
         name,
         version: "moa-worker/0.1.0",
         machine_label: machineLabel,
+        machine_id: machineId,
+        platform,
         capabilities: {
           transports: ["long_poll"],
           harnesses: Object.keys(harnesses).map((id) => ({ id, version: id === "echo" ? "builtin" : "local-profile", supports_resume: false })),
           projects: projects.map((item) => ({ ...item, path_policy: "local_allowlist" })),
+          machine: machineCapabilities,
         },
       },
     };
@@ -300,8 +360,9 @@ function createWorkerRuntime(options = {}) {
 
   async function processClaim({ claim, run }) {
     const ids = { worker_id: credentials.worker_id, claim_id: claim.claim_id };
-    const runId = run.id;
-    const localAlias = sanitizeAlias(run.working_dir?.local_alias || "");
+    const runId = exactClaimId(run.id, "run id");
+    const projectId = exactClaimId(run.working_dir?.project_id || run.work?.project_id || "", "project id");
+    const localAlias = exactClaimAlias(run.working_dir?.local_alias || "", "project alias");
     log(`[worker] claimed run ${runId} harness=${run.harness} alias=${localAlias} attempt=${claim.attempt}`);
 
     const forbiddenKeys = forbiddenClaimKeys(run);
@@ -314,11 +375,13 @@ function createWorkerRuntime(options = {}) {
     }
 
     const harnessFn = harnesses[String(run.harness || "")];
+    const configuredProject = projects.find((item) => item.id === projectId && item.local_alias === localAlias);
     const aliasAllowed = !projectAliases.length || projectAliases.includes(localAlias);
-    if (typeof harnessFn !== "function" || !aliasAllowed) {
+    const projectAllowed = Boolean(configuredProject) || (projects.length === 0 && harnessFn?.requiresWorkspace !== true);
+    if (typeof harnessFn !== "function" || !aliasAllowed || !projectAllowed) {
       const reason = typeof harnessFn !== "function"
         ? `harness ${String(run.harness || "")} is not in the local allowlist`
-        : `project alias ${localAlias} is not in the local allowlist`;
+        : `project ${projectId}/${localAlias} is not in the local allowlist`;
       await reportEvents(runId, ids, [{ seq: 1, event_id: `wevt_${runId}_local_rejection`, type: "local_rejection", data: { reason } }]);
       await reportResult(runId, ids, { status: "failed", error: reason, retryable: false, exit_code: null });
       log(`[worker] rejected run ${runId} locally: ${reason}`);
@@ -326,67 +389,163 @@ function createWorkerRuntime(options = {}) {
     }
 
     let cancelRequested = false;
+    let staleAuthority = false;
     const observeCancel = (payload) => {
       if (payload?.cancel_requested === true) cancelRequested = true;
     };
-    observeCancel(await reportHeartbeat(runId, ids, { phase: "start", message: `running ${run.harness}` }));
+    const observeAuthorityError = (error) => {
+      if (error?.status === 409) {
+        staleAuthority = true;
+        return true;
+      }
+      return false;
+    };
+    try {
+      observeCancel(await reportHeartbeat(runId, ids, { phase: "start", message: `running ${run.harness}` }));
+    } catch (error) {
+      if (!observeAuthorityError(error)) throw error;
+      return { run_id: runId, status: "stale-authority" };
+    }
 
     let seq = 0;
     const sendEvent = async (type, data) => {
       seq += 1;
-      const response = await reportEvents(runId, ids, [{ seq, event_id: `wevt_${runId}_${seq}`, type, data }]);
-      observeCancel(response);
-      return response;
+      try {
+        const response = await reportEvents(runId, ids, [{ seq, event_id: `wevt_${runId}_${seq}`, type, data }]);
+        observeCancel(response);
+        return response;
+      } catch (error) {
+        if (observeAuthorityError(error)) return null;
+        throw error;
+      }
     };
 
     await sendEvent("started", { harness: run.harness, local_project_alias: localAlias });
+    if (staleAuthority) return { run_id: runId, status: "stale-authority" };
 
     let outcome = null;
     let harnessError = "";
+    let runLock = null;
+    let lockWaitExpired = false;
     if (!cancelRequested) {
-      const beat = startHeartbeat(runId, ids, observeCancel);
+      const beat = startHeartbeat(runId, ids, observeCancel, observeAuthorityError);
       try {
-        outcome = await harnessFn(run, { isCanceled: () => cancelRequested });
+        let workDir = "";
+        if (harnessFn.requiresWorkspace === true) {
+          if (!workspace) throw new WorkerRuntimeError("project_config_required", "real CLI harnesses require a worker-local project config");
+          runLock = await waitForRunLock({
+            projectId,
+            alias: localAlias,
+            runId,
+            claimId: ids.claim_id,
+            attempt: claim.attempt,
+            workerId: ids.worker_id,
+            machineId,
+          }, () => staleAuthority || cancelRequested);
+          if (!runLock && !staleAuthority && !cancelRequested) {
+            lockWaitExpired = true;
+          } else if (runLock) {
+            const prepared = workspace.prepareRun({ projectId, alias: localAlias, runId });
+            workDir = prepared.work_dir;
+            await sendEvent("workspace_ready", { project_id: projectId, local_project_alias: localAlias, reused: prepared.reused });
+          }
+        }
+        if (!staleAuthority && !cancelRequested && !lockWaitExpired) outcome = await harnessFn(run, { isCanceled: () => staleAuthority ? "stale-authority" : cancelRequested ? "canceled" : false, workDir });
       } catch (error) {
         harnessError = truncate(error?.message || String(error), 4000);
       } finally {
-        beat.stop();
+        await beat.stop();
+        if (runLock) runLock.release();
       }
+    }
+
+    if (staleAuthority || outcome?.cancellation_reason === "stale-authority") {
+      log(`[worker] run ${runId} stopped after stale claim authority`);
+      return { run_id: runId, status: "stale-authority" };
+    }
+
+    if (lockWaitExpired) {
+      log(`[worker] run ${runId} lock wait expired; leaving lease expiry/requeue authoritative`);
+      return { run_id: runId, status: "lock-wait-expired" };
     }
 
     if (outcome && !cancelRequested) {
       await sendEvent("stdout", { text: truncate(outcome.stdout_tail || "", 16_000) });
     }
 
+    if (staleAuthority) {
+      log(`[worker] run ${runId} lost claim authority before terminal reporting`);
+      return { run_id: runId, status: "stale-authority" };
+    }
+
     if (cancelRequested) {
       await sendEvent("cancellation_observed", {});
-      await reportResult(runId, ids, { status: "canceled", error: "", retryable: false, exit_code: null });
+      if (staleAuthority) return { run_id: runId, status: "stale-authority" };
+      const result = await reportResult(runId, ids, { status: "canceled", error: "", retryable: false, exit_code: null });
+      if (!result) return { run_id: runId, status: "stale-authority" };
       log(`[worker] run ${runId} canceled`);
       return { run_id: runId, status: "canceled" };
     }
     if (!outcome) {
-      await reportResult(runId, ids, { status: "failed", error: harnessError || "harness produced no result", retryable: false, exit_code: null });
+      const result = await reportResult(runId, ids, { status: "failed", error: harnessError || "harness produced no result", retryable: false, exit_code: null });
+      if (!result) return { run_id: runId, status: "stale-authority" };
       log(`[worker] run ${runId} failed locally`);
       return { run_id: runId, status: "failed", reason: harnessError };
     }
-    await reportResult(runId, ids, {
-      status: "completed",
-      exit_code: Number.isFinite(Number(outcome.exit_code)) ? Number(outcome.exit_code) : 0,
+    const exitCode = outcome.exit_code == null || !Number.isFinite(Number(outcome.exit_code)) ? null : Number(outcome.exit_code);
+    const terminalStatus = outcome.timed_out ? "timed-out" : exitCode === 0 ? "completed" : "failed";
+    const result = await reportResult(runId, ids, {
+      status: terminalStatus,
+      error: terminalStatus === "failed" ? truncate(outcome.stderr_tail || `harness exited with ${exitCode == null ? "no exit code" : exitCode}`, 4000) : terminalStatus === "timed-out" ? "harness timed out" : "",
+      exit_code: exitCode,
+      signal: outcome.signal || "",
       output: truncate(outcome.output || "", 120_000),
       stdout_tail: truncate(outcome.stdout_tail || "", 16_000),
       stderr_tail: truncate(outcome.stderr_tail || "", 16_000),
     });
-    log(`[worker] run ${runId} completed`);
-    return { run_id: runId, status: "completed" };
+    if (!result) return { run_id: runId, status: "stale-authority" };
+    log(`[worker] run ${runId} ${terminalStatus}`);
+    return { run_id: runId, status: terminalStatus };
   }
 
-  function startHeartbeat(runId, ids, observeCancel) {
-    const interval = setInterval(() => {
-      reportHeartbeat(runId, ids, { phase: "running", message: "harness in progress" })
+  async function waitForRunLock(identity, isStopped) {
+    const deadline = Date.now() + lockWaitMs;
+    let attempt = 0;
+    for (;;) {
+      if (isStopped()) return null;
+      try {
+        return workspace.acquireRunLock(identity);
+      } catch (error) {
+        if (error?.code !== "run_locked") throw error;
+      }
+      if (Date.now() >= deadline) return null;
+      attempt += 1;
+      const delay = Math.min(lockRetryMs * (2 ** Math.min(attempt - 1, 4)), 250, Math.max(0, deadline - Date.now()));
+      await sleep(delay);
+    }
+  }
+
+  function startHeartbeat(runId, ids, observeCancel, observeAuthorityError) {
+    let stopped = false;
+    const pending = new Set();
+    const tick = () => {
+      if (stopped) return;
+      const request = reportHeartbeat(runId, ids, { phase: "running", message: "harness in progress" })
         .then(observeCancel)
-        .catch((error) => log(`[worker] heartbeat error ${error.code || error.message}`));
-    }, clamp(credentials.heartbeat_interval_ms, 1000, 300_000, 15_000));
-    return { stop: () => clearInterval(interval) };
+        .catch((error) => {
+          if (!observeAuthorityError(error)) log(`[worker] heartbeat error ${error.code || error.message}`);
+        })
+        .finally(() => pending.delete(request));
+      pending.add(request);
+    };
+    const interval = setInterval(tick, clamp(credentials.heartbeat_interval_ms, 100, 300_000, 15_000));
+    return {
+      async stop() {
+        stopped = true;
+        clearInterval(interval);
+        await Promise.allSettled([...pending]);
+      },
+    };
   }
 
   function reportHeartbeat(runId, ids, progress) {
@@ -525,6 +684,38 @@ function sanitizeAlias(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_.:-]/g, "-").slice(0, 120);
 }
 
+function exactClaimId(value, label) {
+  const text = String(value || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/.test(text)) throw new WorkerRuntimeError("unsafe_claim", `${label} is invalid`);
+  return text;
+}
+
+function exactClaimAlias(value, label) {
+  const text = String(value || "").trim();
+  if (!/^[a-z0-9][a-z0-9_.:-]{0,119}$/.test(text)) throw new WorkerRuntimeError("unsafe_claim", `${label} is invalid`);
+  return text;
+}
+
+function normalizeCapability(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_.:-]/g, "-").slice(0, 80);
+}
+
+function normalizeCapabilities(value) {
+  return [...new Set(listOf(value).map(normalizeCapability).filter(Boolean))].slice(0, 50);
+}
+
+function defaultPlatform() {
+  const osName = process.platform === "darwin" ? "macos" : process.platform;
+  const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x86_64" : process.arch;
+  return `${osName}-${arch}`;
+}
+
+function machineIdentifier(value, label) {
+  const explicit = String(value || "").trim();
+  if (explicit) return exactClaimId(explicit, "machine id");
+  return `machine_${crypto.createHash("sha256").update(`${process.platform}:${process.arch}:${os.hostname()}:${label || "default"}`).digest("hex").slice(0, 20)}`;
+}
+
 function clamp(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -536,8 +727,18 @@ function truncate(value, max) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+function appendHead(current, chunk, max) {
+  if (current.length >= max) return current;
+  return `${current}${String(chunk)}`.slice(0, max);
+}
+
+function appendBoundedTail(current, chunk, max) {
+  const next = `${current}${String(chunk)}`;
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = { WorkerRuntimeError, createWorkerRuntime, echoHarness, detectHarnesses, cliHarness };
+module.exports = { WorkerRuntimeError, createWorkerRuntime, echoHarness, detectHarnesses, cliHarness, forbiddenClaimKeys };

@@ -301,3 +301,106 @@ test("process-instance recovery honors configured age and never reaps the exact 
     fs.rmSync(exactInstanceDir, { recursive: true, force: true });
   }
 });
+
+// withStreamLock: serialized per-stream critical section used by the deployment
+// control plane so a read-modify-append transition runs without interleaving.
+
+function makeStore(prefix) {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `moa-stream-lock-${prefix}-`));
+  return { dataDir, store: createEventSubstrateStore({ dataDir }) };
+}
+
+test("withStreamLock serializes concurrent critical sections on the same stream", async () => {
+  const { dataDir, store } = makeStore("serialize");
+  try {
+    const observed = [];
+    let active = 0;
+    let maxActive = 0;
+    const critical = async (tag) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      observed.push(`enter:${tag}`);
+      await sleep(25);
+      observed.push(`exit:${tag}`);
+      active -= 1;
+    };
+    await Promise.all([
+      store.withStreamLock("deployment:same", () => critical("a")),
+      store.withStreamLock("deployment:same", () => critical("b")),
+      store.withStreamLock("deployment:same", () => critical("c")),
+    ]);
+    assert.equal(maxActive, 1, "no two critical sections may overlap for one stream");
+    // Each enter must be immediately followed by its own exit (no interleave).
+    for (let i = 0; i < observed.length; i += 2) {
+      assert.equal(observed[i].split(":")[0], "enter");
+      assert.equal(observed[i + 1].split(":")[0], "exit");
+      assert.equal(observed[i].split(":")[1], observed[i + 1].split(":")[1]);
+    }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("withStreamLock makes read-modify-append atomic under contention", async () => {
+  const { dataDir, store } = makeStore("atomic");
+  try {
+    // Ten concurrent transitions each read the current count and append the
+    // next one. Without serialization they would collide on stream_version.
+    const runs = Array.from({ length: 10 }, (_unused, index) =>
+      store.withStreamLock("counter:one", async () => {
+        const events = await store.listEvents({ stream_id: "counter:one", order: "asc", limit: 500 });
+        const next = events.length + 1;
+        return store.appendEvent({
+          event_type: "counter.ticked",
+          stream_id: "counter:one",
+          idempotency_key: `tick-${index}`,
+          payload: { next },
+        });
+      }),
+    );
+    await Promise.all(runs);
+    const finalEvents = await store.listEvents({ stream_id: "counter:one", order: "asc", limit: 500 });
+    assert.equal(finalEvents.length, 10);
+    const versions = finalEvents.map((event) => event.stream_version).sort((a, b) => a - b);
+    assert.deepEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "no lost update or duplicated version");
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("withStreamLock allows distinct streams to proceed independently", async () => {
+  const { dataDir, store } = makeStore("distinct");
+  try {
+    let releaseFirst;
+    const firstHeld = new Promise((resolve) => { releaseFirst = resolve; });
+    let markEntered;
+    const firstEntered = new Promise((resolve) => { markEntered = resolve; });
+    const firstDone = store.withStreamLock("stream:one", async () => {
+      markEntered();
+      await firstHeld;
+    });
+    await firstEntered;
+    // A different stream must not be blocked by the still-held first lock.
+    const secondRan = await store.withStreamLock("stream:two", async () => "ran");
+    assert.equal(secondRan, "ran");
+    releaseFirst();
+    await firstDone;
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("withStreamLock releases the stream after a failed transition", async () => {
+  const { dataDir, store } = makeStore("release-on-error");
+  try {
+    await assert.rejects(
+      store.withStreamLock("stream:err", async () => { throw new Error("transition failed"); }),
+      /transition failed/,
+    );
+    // The next caller must acquire immediately rather than time out on a wedged lock.
+    const recovered = await store.withStreamLock("stream:err", async () => "recovered");
+    assert.equal(recovered, "recovered");
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
