@@ -84,7 +84,10 @@ fi
 
 # 5. Build and launch.
 cd "$APP_DIR"
-compose up -d --build
+MOA_BUILD_SHA="$(git -C "$APP_DIR" rev-parse HEAD)" \
+MOA_BUILD_REF="$(git -C "$APP_DIR" symbolic-ref --short HEAD 2>/dev/null || echo unknown)" \
+MOA_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  compose up -d --build
 
 domain="$(env_value MOA_DOMAIN)"
 port="$(env_value GATEWAY_PORT)"

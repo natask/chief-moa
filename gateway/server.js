@@ -61,6 +61,7 @@ const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
 const { createEventSubstrateStore, normalizeEventType } = require("./lib/event-substrate");
 const { resolveRemoteMode } = require("./lib/remote-mode");
+const { buildIdentity } = require("./lib/build-identity");
 const { createWorkHistoryStore } = require("./lib/work-history");
 const { createSemanticTelemetryStore, opaqueLifecycleId } = require("./lib/semantic-telemetry-store");
 const { createIntentRuntime } = require("./lib/intent-runtime");
@@ -132,6 +133,7 @@ const { createExaSearchTool } = require("./lib/exa-search");
 //   hosted     self-host plus per-user accounts and backup expectations
 // Mode sets defaults only; each default stays overridable by its own env var.
 const runtimeMode = resolveRemoteMode(process.env);
+const BUILD_IDENTITY = buildIdentity(process.env);
 if (!runtimeMode.valid) {
   console.error(`Gateway configuration error: ${runtimeMode.issues.join("; ")}`);
   if (runtimeMode.remote) {
@@ -567,6 +569,7 @@ const server = http.createServer(async (request, response) => {
       const profileStatus = agentProfileRuntimeStatus();
       sendJson(response, 200, {
         ok: true,
+        build: BUILD_IDENTITY,
         mode: runtimeMode.mode,
         gateway_mode: runtimeMode.health(),
         remote_mode: REMOTE_MODE,

@@ -70,6 +70,9 @@ written to the mounted volume.
 - [x] 2.4 Add health/runtime fields that report mode, auth requirement,
   Postgres/event-store status, public base URL when configured, and voice
   runtime summary without leaking secrets.
+- [x] 2.5 Inject the immutable Git SHA, deployment ref, and build time when the
+  gateway image is built, and expose only validated values through `/health`
+  with a deterministic `unknown` fallback for direct local launches.
 
 Acceptance: starting in `self-host` mode without `DATABASE_URL` exits with a
 clear error; starting with required remote env binds for the remote deployment

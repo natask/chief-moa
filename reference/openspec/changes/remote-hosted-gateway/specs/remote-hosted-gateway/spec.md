@@ -143,6 +143,29 @@ Voice SHALL run as one sticky instance until scaling is designed.
 - **THEN** it runs as a single instance holding its own sessions, and
   multi-instance voice scaling is out of scope
 
+### Requirement: Observable Deployment Identity
+
+The gateway SHALL report a non-sensitive immutable build identity through
+`GET /health` without reading Git state while handling a request.
+
+#### Scenario: Image metadata is injected
+
+- **WHEN** the deployment builds a gateway image from a reviewed Git ref
+- **THEN** health reports the validated full Git SHA, deployment ref, and UTC
+  build time embedded in that image
+
+#### Scenario: Build metadata is unavailable
+
+- **WHEN** the gateway starts without injected build metadata
+- **THEN** health reports `unknown` values with the same stable response shape
+
+#### Scenario: Build metadata is malformed
+
+- **WHEN** an injected build metadata value does not match its constrained
+  public format
+- **THEN** health reports `unknown` for that value instead of returning
+  arbitrary environment content
+
 ### Requirement: Backup Before Promotion
 
 Any promotion that changes the active URL or restarts the active service SHALL

@@ -38,6 +38,7 @@ async function main() {
       "remote modes require DATABASE_URL and auth",
       "self-host startup failures name missing remote-mode requirements",
       "/health reports active mode without exposing secrets",
+      "/health reports immutable build metadata with a safe unknown fallback",
       "PUBLIC_GATEWAY_URL drives OTA and voice WebSocket public URLs",
     ],
   }, null, 2));
@@ -79,6 +80,11 @@ async function assertLocalHealthSurfacesMode() {
     assert.equal(health.gateway_mode.token_auth_configured, true);
     assert.equal(health.bind.host, "127.0.0.1");
     assert.equal(health.trust_proxy, false);
+    assert.deepEqual(health.build, {
+      git_sha: "unknown",
+      git_ref: "unknown",
+      built_at: "unknown",
+    });
     assertVoiceActivityHealth(health);
   } finally {
     await stopGateway(server);
@@ -90,6 +96,9 @@ async function assertSelfHostHealthSurfacesRemoteDefaults() {
     MOA_MODE: "self-host",
     MOA_GATEWAY_TOKEN: TOKEN,
     DATABASE_URL: "postgres://moa:moa@127.0.0.1:1/moa_gateway",
+    MOA_BUILD_SHA: "0123456789abcdef0123456789abcdef01234567",
+    MOA_BUILD_REF: "vps-deploy",
+    MOA_BUILD_TIME: "2026-07-13T08:09:10Z",
   });
   try {
     const health = await getJson(`${server.baseUrl}/health`);
@@ -102,6 +111,11 @@ async function assertSelfHostHealthSurfacesRemoteDefaults() {
     assert.equal(health.bind.host, "0.0.0.0");
     assert.equal(health.trust_proxy, true);
     assert.equal(health.event_substrate.postgres_configured, true);
+    assert.deepEqual(health.build, {
+      git_sha: "0123456789abcdef0123456789abcdef01234567",
+      git_ref: "vps-deploy",
+      built_at: "2026-07-13T08:09:10.000Z",
+    });
     assertVoiceActivityHealth(health);
   } finally {
     await stopGateway(server);

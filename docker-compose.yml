@@ -16,6 +16,10 @@ services:
     build:
       context: ./gateway
       dockerfile: Dockerfile
+      args:
+        MOA_BUILD_SHA: ${MOA_BUILD_SHA:-unknown}
+        MOA_BUILD_REF: ${MOA_BUILD_REF:-unknown}
+        MOA_BUILD_TIME: ${MOA_BUILD_TIME:-unknown}
     image: chief-moa-gateway:${GATEWAY_IMAGE_TAG:-local}
     init: true
     restart: unless-stopped

@@ -7,11 +7,18 @@
 
 FROM node:22-bookworm-slim AS runtime
 
+ARG MOA_BUILD_SHA=unknown
+ARG MOA_BUILD_REF=unknown
+ARG MOA_BUILD_TIME=unknown
+
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8787 \
     DATA_DIR=/data \
-    ANDROID_OTA_DIR=/data/android-ota
+    ANDROID_OTA_DIR=/data/android-ota \
+    MOA_BUILD_SHA=$MOA_BUILD_SHA \
+    MOA_BUILD_REF=$MOA_BUILD_REF \
+    MOA_BUILD_TIME=$MOA_BUILD_TIME
 
 WORKDIR /app
 

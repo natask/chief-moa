@@ -53,7 +53,10 @@ git -C "$APP_DIR" checkout --force --detach "origin/$REF" 2>/dev/null \
 new_sha="$(git -C "$APP_DIR" rev-parse --short HEAD)"
 
 # 3. Rebuild and recreate only the gateway. Volumes and other services stay.
-compose build gateway
+MOA_BUILD_SHA="$(git -C "$APP_DIR" rev-parse HEAD)" \
+MOA_BUILD_REF="$REF" \
+MOA_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  compose build gateway
 compose up -d --no-deps gateway
 
 port="$(env_value GATEWAY_PORT)"

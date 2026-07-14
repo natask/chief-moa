@@ -130,6 +130,9 @@ GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
   runtime profile edits, prompt history, sessions, and agent runs. The page
   loads without a token; protected API calls require `MOA_GATEWAY_TOKEN`.
 - `GET /health` checks gateway, provider, agent-loop, and harness configuration.
+  Its `build` object reports the image's `git_sha`, `git_ref`, and `built_at`;
+  direct local launches safely report `unknown` when no build metadata was
+  injected.
 - `POST /v1/chat` accepts `{ "conversation_id": "...", "messages": [{ "role": "user", "content": "..." }] }` and returns `{ "conversation_id": "...", "text": "..." }`.
 - `POST /v1/voice/turns` accepts `{ "session_id": "...", "turn_id": "...", "transcript": "...", "screen": {...} }`, stores the voice turn, and returns `{ "classification": "chat|profile_control|agent_run|multi_agent|control", "speak": "...", "display": "...", "agent_runs": [] }`. Profile-control utterances such as `your name is Moa` persist gateway-owned profile state and return a short deterministic confirmation.
 - `POST /v1/proactive/turns` is the browser helper's separate text-only acceptance path. It always requires a configured, exact bearer token (including local mode), accepts only the four packaged category prompts in an exact, context-free request shape, calls the configured provider/fallback without tools or routing under end-to-end timeout/body/output bounds, returns inert text plus `"actions": []`, and stores no turn, session, task, broker event, or agent run.
