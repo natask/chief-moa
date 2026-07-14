@@ -466,6 +466,23 @@ loopback stays for transport QA. The legacy Chirp STT-only path (transcript
 routed back to the durable voice-turn router) is preserved: it is the same
 provider without the hosted-TTS leg.
 
+An off-by-default hybrid trial keeps the registry-selected `native_live`
+implementer as the reasoning and spoken-response path while composing it with
+an independent transcript implementer. With
+`VOICE_TRANSCRIPT_SIDECAR=chirp`, every gateway-received PCM frame fans out to
+both the selected duplex-audio provider and Chirp 3 streaming recognition. The
+duplex provider reasons directly over audio and may emit bounded tool proposals;
+Chirp partials alone drive the visible live transcript so two competing
+transcript streams do not flicker in the client. On commit, a successful Chirp
+final becomes the canonical transcript and the duplex provider's input
+transcription is retained as comparison evidence; an unavailable, empty, or
+failed sidecar falls back to the duplex provider without failing the
+speech-to-speech turn. Cancel, turn replacement/barge-in, and socket close tear
+down both upstream streams. Client `session_start`, `commit_turn`, `cancel_turn`,
+touch/keyboard gestures, and local approval events remain authoritative control
+signals rather than audio-derived model guesses. Contract:
+`reference/openspec/changes/provider-agnostic-voice-agent-runtime/native-audio-transcript-sidecar-trial.md`.
+
 ### Cascaded voice pipeline and the switch
 
 ```text

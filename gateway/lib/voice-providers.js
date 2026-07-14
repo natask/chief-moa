@@ -10,6 +10,7 @@ const { voiceOptionsPayload } = require("./profile-options");
 const { createSttStage, createReasonerStage, createTtsStage } = require("./voice-stages");
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
+const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition");
 
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
@@ -20,16 +21,7 @@ const DEFAULT_GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 const DEFAULT_VERTEX_LIVE_MODEL = "gemini-live-2.5-flash-native-audio";
 const DEFAULT_VERTEX_LIVE_LOCATION = "us-central1";
 const DEFAULT_CHIRP_MODEL = "chirp_3";
-// On Chirp, true language-restricted recognition is a primary code plus AT MOST
-// one alternate. Passing more codes (or combining codes with auto-decoding)
-// demotes them to hints and auto-detection still runs. We cap to two so the
-// STT request restricts recognition instead of hinting it.
 const CHIRP_MAX_RESTRICTED_LANGUAGE_CODES = 2;
-// Languages that only exist on Chirp 3 (Preview). If one of these is configured
-// but the model is an older Chirp, recognition would silently fall back, so the
-// provider asserts model=chirp_3 before a recognize call. This is the full Chirp 3
-// preview set (am-ET / Amharic is one of them); the GA languages work on both
-// chirp and chirp_3.
 const CHIRP_3_ONLY_LANGUAGE_CODES = [
   "af-ZA", "sq-AL", "am-ET", "ar-DZ", "ar-BH", "ar-EG", "ar-IL", "ar-JO",
   "ar-KW", "ar-LB", "ar-MR", "ar-MA", "ar-OM", "ar-QA", "ar-SA", "ar-PS",
@@ -129,8 +121,6 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
         language_hints: true,
       },
       configured: chirpConfigured,
-      // The chirp STT anchor instantiates the whole cascaded composition
-      // (STT -> injected gateway reasoner -> hosted TTS stages).
       create: (options) => new CascadedVoiceProvider(options),
     }),
   }),
@@ -181,21 +171,11 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
   }),
 });
 
-// Cloud TTS has no Amharic (am-ET) voice under any type; it does have en-US HD
-// voices. The cascaded pipeline synthesizes hosted audio for languages that
-// have a voice and falls back to device-side (android-tts) playback otherwise.
 const CLOUD_TTS_DEFAULT_VOICES = Object.freeze({
   "en-us": "en-US-Chirp3-HD-Aoede",
 });
-// Languages Cloud TTS cannot speak today, so the cascaded path returns the
-// reply as text and lets the device speak it (android-tts).
 const CLOUD_TTS_UNSUPPORTED_LANGUAGES = Object.freeze(new Set(["am-et", "am"]));
 const CLOUD_TTS_SAMPLE_RATE = 24000;
-// Gemini TTS rides the same Cloud TTS text:synthesize endpoint, selected by
-// voice.modelName. Unlike classic Cloud TTS voices it follows the pinned
-// languageCode for any language the model speaks (including am-ET), so the
-// cascaded pipeline can synthesize hosted audio instead of falling back to
-// text-only replies. Gemini 3.x TTS models may only exist on v1beta1.
 const GEMINI_TTS_DEFAULT_MODEL = "gemini-3.1-flash-tts-preview";
 const GEMINI_TTS_DEFAULT_VOICE = "Kore";
 const CLOUD_TTS_ENDPOINT = "https://texttospeech.googleapis.com/v1/text:synthesize";
@@ -209,11 +189,6 @@ const PROVIDER_ALIASES_TTS = Object.freeze({
   "gemini-tts-preview": "gemini-tts",
 });
 
-// Thrown by the session server's audio hooks when a barge-in replaced the turn
-// mid-emission. The streaming pipeline catches it BY CLASS and aborts silently:
-// no tts_error, no client events for the dead turn, and it must never surface
-// as a turn error (the 2026-07-06 crash-loop rule: a voice-turn fault never
-// takes the process or the session down).
 class TurnSupersededError extends Error {
   constructor(message) {
     super(message || "voice turn superseded");
@@ -225,13 +200,6 @@ function isTurnSupersededError(error) {
   return error instanceof TurnSupersededError || error?.name === "TurnSupersededError";
 }
 
-// In-process streaming circuit breaker. The env kill switch (VOICE_STREAMING=0)
-// needs a container recreate on the droplet, so it is a rollback path, not a
-// fast breaker. This is the fast path: three streaming-path faults in one
-// process (an error escaping the pipeline guard, an SSE fallback that itself
-// failed, or a TurnSupersededError reaching the wrong layer) latch streaming
-// OFF for every later turn and the gateway serves the non-streaming path
-// instead of crash-looping.
 const VOICE_STREAMING_FAULT_LIMIT = 3;
 const voiceStreamingBreaker = { faults: 0, tripped: false };
 
@@ -252,24 +220,44 @@ function voiceStreamingTripped() {
   return voiceStreamingBreaker.tripped;
 }
 
-// Test-only: smokes exercise the latch without poisoning later cases.
 function resetVoiceStreamingBreakerForTests() {
   voiceStreamingBreaker.faults = 0;
   voiceStreamingBreaker.tripped = false;
 }
 
-// Registry-driven instantiation: resolve the selected provider names to one
-// registry entry and let its create() factory build the transport provider.
-// Adding a provider is now a registry entry (id, label, capabilities,
-// configured, create), not another if/else branch here.
 function createVoiceProvider(options) {
   const env = options?.env || process.env;
   const names = voiceProviderNames(env);
   const entry = resolveProviderEntry(names);
   if (entry?.create) {
-    return entry.create(options);
+    return composeVoiceProvider(entry.create(options), options);
   }
   return new UnsupportedVoiceProvider(options, names);
+}
+
+function composeVoiceProvider(primary, options) {
+  const env = options?.env || process.env;
+  const sidecarId = registryProviderId(env.VOICE_TRANSCRIPT_SIDECAR || env.VOICE_LIVE_TRANSCRIPT_SIDECAR || "");
+  if (!sidecarId || typeof primary?.createLiveTurnSession !== "function") {
+    return primary;
+  }
+  const sidecarEntry = providerDefinition("stt", sidecarId);
+  if (!sidecarEntry?.create) {
+    return primary;
+  }
+  const sidecar = sidecarEntry.create({
+    ...(options || {}),
+    env: {
+      ...env,
+      VOICE_PROVIDER: sidecarId,
+      VOICE_STT_PROVIDER: sidecarId,
+      VOICE_REASONING_PROVIDER: "gateway",
+      VOICE_LLM_PROVIDER: "gateway",
+      VOICE_TTS_PROVIDER: "none",
+    },
+    reasoner: null,
+  });
+  return new TranscriptSidecarVoiceProvider(primary, sidecar, sidecarId);
 }
 
 function resolveProviderEntry(names) {
@@ -549,8 +537,6 @@ class LoopbackVoiceProvider {
   }
 
   async processTurn(turn, hooks) {
-    // Mirror the cascaded provider's typed-turn contract so deterministic
-    // smokes can exercise text_turn without audio or credentials.
     const typedText = String(turn.syntheticText || "").trim();
     const transcript = typedText || "Fake transcript for the streaming voice MVP.";
     const assistantText = typedText
@@ -602,8 +588,6 @@ class UnsupportedVoiceProvider {
   }
 }
 
-// The cascaded composition: Chirp STT stage -> injected gateway reasoner
-// stage -> hosted TTS stage (formerly ChirpSttVoiceProvider).
 class CascadedVoiceProvider {
   constructor(options) {
     const env = options?.env || process.env;
@@ -623,25 +607,13 @@ class CascadedVoiceProvider {
     this.serviceAccountKeyFile = env.CHIRP_SERVICE_ACCOUNT_KEY_FILE || env.GOOGLE_APPLICATION_CREDENTIALS || "";
     this.tokenCache = { value: "", expiresAt: 0 };
     this.sttProviderId = "chirp";
-    // Streaming STT (Google Speech v2 streamingRecognize). Gated by
-    // VOICE_STT_STREAMING (default ON, "0" -> pure batch :recognize path). The
-    // gRPC client is built lazily and can be injected for tests so nothing hits
-    // Google in `npm run check`. Rotation keeps a session under the ~5-min gRPC
-    // cap so speech length is effectively unbounded.
     this.streamingSttClientFactory = typeof options?.streamingSttClientFactory === "function"
       ? options.streamingSttClientFactory
       : null;
     this.streamingSttRotateAfterMs = Math.max(10000, numberFrom(env.VOICE_STT_STREAM_ROTATE_MS, DEFAULT_ROTATE_AFTER_MS));
     this._streamingSttClient = null;
-    // Cascaded pipeline wiring. `reasoner` is injected by the gateway; when set,
-    // the provider runs STT -> reasoner (the gateway's durable LLM turn) -> TTS
-    // in one turn instead of STT-only. When unset, it stays STT-only so the
-    // legacy transcript-then-android-TTS path and the STT smoke keep working.
     this.reasoner = typeof options?.reasoner === "function" ? options.reasoner : null;
     this.agentProfile = options?.agentProfile || null;
-    // Short reason the LAST hosted-TTS attempt failed (empty when it spoke or was
-    // deliberately text-only). Threaded into the next turn's reasoner input so the
-    // model can truthfully explain why the previous reply was not spoken.
     this.lastTtsError = "";
     this.ttsProviderId = registryProviderId(this.names.tts);
     if (this.ttsProviderId === "gemini-tts") {
@@ -651,9 +623,6 @@ class CascadedVoiceProvider {
       this.ttsVoice = String(env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim();
       this.ttsModel = String(env.CHIRP_TTS_MODEL || "").trim();
     }
-    // Formal stage seam (lib/voice-stages.js): STT stage -> reasoner stage ->
-    // TTS stage. Stage bodies delegate to the provider methods so GCP auth and
-    // the token cache stay shared across stages.
     this.sttStage = createSttStage({
       id: "chirp",
       capabilities: { partial_transcripts: this.streamingSttFlagEnabled(), language_hints: true },
@@ -679,9 +648,6 @@ class CascadedVoiceProvider {
       : null;
   }
 
-  // The cascaded pipeline is active when a reasoner is wired AND a hosted TTS
-  // provider is selected. Otherwise the provider is STT-only (transcript back to
-  // the gateway, device speaks the reply).
   cascaded() {
     return Boolean(this.reasonerStage) && Boolean(this.ttsStage);
   }
@@ -690,14 +656,6 @@ class CascadedVoiceProvider {
     return chirpConfigured(this.env);
   }
 
-  // The recognizer is constrained to EXACTLY the profile's `input_languages` set
-  // (the languages the user says they speak), nothing hardcoded. `input_language_primary`
-  // reorders that set so the primary code goes first — this is the "right now I
-  // want to speak X" switch: the model sets input_language_primary to a code
-  // already inside the understood set and the next turn's STT leads with it. The
-  // env CHIRP_LANGUAGE_CODES is only the boot fallback used when no runtime
-  // profile is wired. am-ET and other Chirp-3-only languages require model=chirp_3,
-  // asserted before the recognize call.
   sttLanguageCodes() {
     if (this.agentProfile && typeof this.agentProfile.effective === "function") {
       const profile = this.agentProfile.effective();
@@ -4062,6 +4020,7 @@ function cleanError(error) {
 module.exports = {
   CLIENT_AUDIO_FORMAT,
   TurnSupersededError,
+  composeVoiceProvider,
   isTurnSupersededError,
   createTranscriptSettleGate,
   createVoiceProviderRegistry,

@@ -155,3 +155,25 @@
       --strict`; and `openspec validate streaming-cascaded-voice --strict`.
       Paid/live eval and
       phone/browser QA remain explicitly NOT MEASURED until run.
+
+## 16. Native-Audio Transcript Sidecar Trial
+
+- [x] 16.1 Record current native-audio candidates, dual-consumer
+      microphone flow, client control signals, trust boundary, and manual QA in
+      `native-audio-transcript-sidecar-trial.md`.
+- [x] 16.2 Add an off-by-default `VOICE_TRANSCRIPT_SIDECAR=chirp` gateway trial
+      that composes the selected duplex-audio provider with Chirp streaming STT
+      and sends each live PCM frame to both concurrently.
+- [x] 16.3 Make Chirp partial/final output the visible and canonical transcript
+      while retaining the duplex provider's input transcription as comparison
+      evidence; fall back to that provider when the sidecar is unavailable or
+      fails.
+- [x] 16.4 Prove cancel, replacement, socket close, and manual interruption tear
+      down both upstream streams without granting the model local execution
+      authority.
+- [ ] 16.5 Run focused deterministic coverage and `cd gateway && npm run check`;
+      then run an isolated paid-provider preview over the stored Amharic,
+      English, and mixed-language voice evidence before considering promotion.
+      Deterministic coverage, gateway checks, browser verify/smoke, and Android
+      assemble passed 2026-07-14. OpenSpec CLI was unavailable. Paid-provider
+      preview and real phone/browser QA remain not measured.

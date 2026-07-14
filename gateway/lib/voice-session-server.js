@@ -11,13 +11,11 @@ const {
   createVoiceProvider,
   generatePcm16Tone: generateProviderTone,
 } = require("./voice-providers");
+const { mergeTranscriptSidecar } = require("./voice-provider-composition");
 const { canonicalVoice } = require("./profile-options");
 
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
-// Leading audio frames can race session_start processing on the same socket.
-// They are buffered per connection (bounded by size and age) and flushed into
-// the turn once it is ready, so the start of the utterance is never dropped.
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
 const EARLY_AUDIO_MAX_AGE_MS = 3000;
 const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "closed", "interrupted", "replaced", "no_speech"]);
@@ -43,11 +41,7 @@ function createVoiceSessionServer(options) {
   const voiceProvider = options?.voiceProvider || createVoiceProvider({
     env: options?.env || process.env,
     systemPrompt: options?.systemPrompt,
-    // Pass the runtime agent profile so the provider reads the effective `voice`
-    // per session — the agent can change its own spoken voice by talking.
     agentProfile: options?.agentProfile,
-    // The cascaded voice provider (Chirp STT -> gateway LLM -> Cloud TTS) calls
-    // this to run the gateway's durable, model-agnostic reply turn after STT.
     reasoner: typeof options?.reasoner === "function" ? options.reasoner : null,
   });
   fs.mkdirSync(sessionsDir, { recursive: true });
@@ -112,19 +106,11 @@ class VoiceSessionConnection {
     this.responding = false;
     this.earlyAudio = [];
     this.earlyAudioBytes = 0;
-    // The session server is the SOLE owner of the turn_progress keepalive: one
-    // interval per connection, started for the active committed turn and cleared
-    // on every terminal path (turn_done, error, cancel, socket close, teardown)
-    // so a progress tick can never fire after the turn ends.
     this.turnProgressTimer = null;
     this.turnProgressStage = "";
     this.turnProgressIntervalMs = normalizeTurnProgressIntervalMs(options.turnProgressIntervalMs);
   }
 
-  // Start (or re-stage) the keepalive for the active committed turn. Called via
-  // the onTurnProgress provider hook (cascaded reasoner/TTS legs) and directly at
-  // commit for the Live/native path. Idempotent: a running interval only updates
-  // the stage; it never starts a second timer.
   startTurnProgress(turn, stage) {
     const nextStage = normalizeProgressStage(stage);
     if (nextStage) {
@@ -140,17 +126,12 @@ class VoiceSessionConnection {
       return;
     }
     this.turnProgressTimer = setInterval(() => {
-      // Respect the socket-write guard, never write after close, and stop the
-      // moment the active turn changes or reaches a terminal status.
       if (this.ws.readyState !== WebSocket.OPEN
           || this.turn !== turn
           || TERMINAL_TURN_STATUSES.has(turn.status)) {
         this.stopTurnProgress();
         return;
       }
-      // Streaming turns: audio frames are their own liveness signal. Skip the
-      // tick while a frame flowed within the interval; keep the interval armed
-      // for inter-chunk gaps.
       if (turn.streamingAudio && turn.lastAssistantAudioAt) {
         const lastAudioMs = Date.parse(turn.lastAssistantAudioAt);
         if (Number.isFinite(lastAudioMs) && Date.now() - lastAudioMs < intervalMs) {
@@ -264,18 +245,10 @@ class VoiceSessionConnection {
     }
 
     if (!this.turn) {
-      // A leading frame can race session_start processing on this socket.
-      // Buffer it (bounded) so the start of the utterance survives; the next
-      // turn flushes it. Frames older than the age bound are stale capture
-      // tails, not utterance starts, and get dropped on flush.
       this.bufferEarlyAudio(chunk);
       return;
     }
     if (this.turn.status !== "recording") {
-      // Mobile/browser capture can deliver a final buffered PCM chunk after the
-      // client has committed the turn or after a live reply has completed. That
-      // frame is stale input, not a session failure; sending an error here makes
-      // clients tear down continuous voice after one response.
       return;
     }
 
@@ -284,11 +257,6 @@ class VoiceSessionConnection {
 
   writeTurnAudio(turn, chunk) {
     if (!turn.audioStream) {
-      // completeLiveTurn nulls the stream before the turn reaches a terminal
-      // status, so a continuously-captured frame can land in that window while
-      // status still reads "recording". It is stale input; dropping it must not
-      // throw, or the whole gateway process dies mid-turn and every open voice
-      // session hangs with no terminating event.
       return;
     }
     turn.audioBytes += chunk.length;
@@ -298,10 +266,6 @@ class VoiceSessionConnection {
     if (turn.liveSession) {
       turn.liveSession.sendAudio(chunk);
     }
-    // Tee to the streaming STT recognizer (cascaded path). The disk write above
-    // stays the source of truth; this is an additive fan-out that produces live
-    // partial transcripts and the final transcript without re-reading the file.
-    // push() never throws — a streaming fault degrades to the batch path.
     if (turn.sttStream) {
       turn.sttStream.push(chunk);
     }
@@ -384,18 +348,10 @@ class VoiceSessionConnection {
       metadata: {},
       audioStream: null,
       assistantAudioStream: null,
-      // Latched by closeAssistantAudioStream: once the assistant PCM stream is
-      // finalized, a late streamed chunk is DROPPED — never re-created with
-      // flags:"w", which would wipe the stored artifact back to zero bytes.
       assistantAudioClosed: false,
-      // Set when the provider declares a pipelined multi-frame audio stream;
-      // the turn_progress keepalive then keeps running and skips ticks only
-      // while audio frames are flowing.
       streamingAudio: false,
       providerEvents: null,
       liveSession: null,
-      // Streaming STT recognizer session (cascaded path), teed audio frames.
-      // null until session_start wires it and when streaming is disabled.
       sttStream: null,
       completing: false,
       recordedCanonical: false,
@@ -419,12 +375,6 @@ class VoiceSessionConnection {
     this.turn = turn;
     if (typeof this.voiceProvider.createLiveTurnSession === "function") {
       turn.providerEvents = this.createProviderEvents(turn);
-      // createLiveTurnSession opens the provider socket but returns immediately;
-      // it does not block on provider readiness, so session_ready below is not
-      // gated on the Live cold start. Inbound audio is buffered client-side
-      // until session_ready and, once the live session exists, queued behind the
-      // provider's own readiness promise. A synchronous throw here (misconfig,
-      // bad auth) must fail this turn with a visible error, not a generic catch.
       try {
         turn.liveSession = this.voiceProvider.createLiveTurnSession(turn, this.providerHooks(turn, turn.providerEvents));
       } catch (error) {
@@ -450,19 +400,17 @@ class VoiceSessionConnection {
       turn.liveSession.done
         .then((providerResult) => this.completeLiveTurn(turn, providerResult))
         .catch((error) => this.failLiveTurn(turn, error));
-    } else if (typeof this.voiceProvider.createStreamingSttSession === "function") {
-      // Cascaded/STT-only path: open a streaming recognizer so audio frames are
-      // transcribed AS THEY ARRIVE and partial transcripts stream back to the
-      // client. Provider events are created up front so the same set threads
-      // through commit. A null result (streaming disabled/unsupported) simply
-      // leaves the turn on the batch path — this never blocks session_ready and
-      // never throws (a streaming fault must not fail the turn).
+    }
+    if (typeof this.voiceProvider.createStreamingSttSession === "function") {
       turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
       try {
         turn.sttStream = this.voiceProvider.createStreamingSttSession(
           turn,
           this.providerHooks(turn, turn.providerEvents),
         );
+        if (turn.liveSession && turn.sttStream) {
+          turn.sttStreamRole = "transcript_sidecar";
+        }
       } catch (error) {
         turn.sttStream = null;
         writeTurnMetadata(turn, { stt_stream_error: cleanError(error) });
@@ -987,6 +935,14 @@ class VoiceSessionConnection {
   }
 
   async completeTurnWithProviderResult(turn, providerEvents, providerResult) {
+    providerResult = await mergeTranscriptSidecar({
+      turn,
+      providerResult,
+      provider: turn.providerStatus?.transcript_sidecar?.provider || "transcript_sidecar",
+      finalize: () => this.voiceProvider.finalizeStreamingSttSession(turn),
+      record: (type, payload) => this.recordProviderEvent(turn, providerEvents, type, payload),
+      cleanError: (error) => cleanErrorSummary(cleanError(error)),
+    });
     // Merge streaming partials into the final transcript: if the provider result
     // is missing a transcript (or, from an older provider, carries the legacy
     // "Voice captured." placeholder) but a real transcript_partial /
@@ -1315,6 +1271,8 @@ class VoiceSessionConnection {
         completed_at: nowIso(),
         transcript: completed.transcript,
         transcript_source: completed.transcriptSource || providerResult?.transcript_source || "",
+        transcript_provider: providerResult?.transcript_provider || "",
+        native_input_transcript: providerResult?.native_input_transcript || "",
         assistant_text: completed.assistantText,
         provider: providerResult?.provider || this.voiceProvider.status().provider,
         model: providerResult?.model || this.voiceProvider.status().model,
