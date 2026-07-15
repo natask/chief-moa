@@ -1,4 +1,5 @@
 const MAX_ELEMENTS = 100;
+const MAX_OBSERVATION_LIMITATIONS = 100;
 
 function normalizeBrowserSnapshot(snapshot, options = {}) {
   const raw = snapshot && typeof snapshot === "object" ? snapshot : {};
@@ -12,6 +13,14 @@ function normalizeBrowserSnapshot(snapshot, options = {}) {
     });
   const randomUUID = options.randomUUID || globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
   const now = options.now || (() => new Date());
+  const observation = raw.observation && typeof raw.observation === "object" && !Array.isArray(raw.observation)
+    ? raw.observation
+    : null;
+  const observationLimitations = Array.isArray(raw.observationLimitations || raw.observation_limitations)
+    ? (raw.observationLimitations || raw.observation_limitations)
+      .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+      .slice(0, MAX_OBSERVATION_LIMITATIONS)
+    : [];
   return {
     ...raw,
     url: String(raw.url || ""),
@@ -22,6 +31,8 @@ function normalizeBrowserSnapshot(snapshot, options = {}) {
     viewport: raw.viewport && typeof raw.viewport === "object" ? raw.viewport : null,
     capturedAt: raw.capturedAt || raw.captured_at || now().toISOString(),
     elementSummaries,
+    observation,
+    observationLimitations,
   };
 }
 
@@ -41,6 +52,10 @@ function browserEvidencePage(snapshot) {
     snapshot_id: snapshot.snapshotId || "",
     captured_at: snapshot.capturedAt || "",
     viewport: snapshot.viewport || null,
+    observation: snapshot.observation || null,
+    observation_limitations: Array.isArray(snapshot.observationLimitations)
+      ? snapshot.observationLimitations.slice(0, MAX_OBSERVATION_LIMITATIONS)
+      : [],
   };
 }
 
@@ -55,6 +70,10 @@ function browserInlineEvidence(snapshot, screenshot) {
       element_summaries: snapshot.elementSummaries.slice(0, MAX_ELEMENTS),
       viewport: snapshot.viewport,
       captured_at: snapshot.capturedAt,
+      observation: snapshot.observation || null,
+      observation_limitations: Array.isArray(snapshot.observationLimitations)
+        ? snapshot.observationLimitations.slice(0, MAX_OBSERVATION_LIMITATIONS)
+        : [],
     },
     screenshot,
   };

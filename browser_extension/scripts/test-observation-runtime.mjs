@@ -71,6 +71,11 @@ const runtime = api.createObservationRuntime({
 const button = element("BUTTON", { "aria-label": "Stable target", text: "Stable target" });
 const first = runtime.observe(button, { snapshotId: "snap_one" });
 const second = runtime.observe(button, { snapshotId: "snap_two" });
+function reverseObjectKeys(value) {
+  if (Array.isArray(value)) return value.map(reverseObjectKeys);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).reverse().map((key) => [key, reverseObjectKeys(value[key])]));
+}
 assert.equal(first.schema_version, "moa.observation-anchor.v1");
 assert.equal(first.snapshot_id, "snap_one");
 assert.equal(first.element_ref.local_id, second.element_ref.local_id);
@@ -78,6 +83,7 @@ assert.equal(first.element_ref.role, "button");
 assert.equal(first.captured_at, "2026-07-15T00:00:00.000Z");
 assert.deepEqual(first.frame_path, ["top"]);
 assert.deepEqual(first.geometry.document_rect, { x: 40, y: 200, width: 180, height: 44 });
+assert.equal(runtime.revalidate(reverseObjectKeys(first)).valid, true, "semantic JSON key order must not change issued evidence identity");
 
 view.scrollY = 100;
 view.visualViewport.pageTop = 100;

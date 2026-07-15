@@ -64,8 +64,21 @@
     return hashText(JSON.stringify([tag, type, roleFor(element), nameFor(element)]));
   }
 
+  function stableCanonical(value) {
+    if (value === null) return "null";
+    if (Array.isArray(value)) return `[${value.map(stableCanonical).join(",")}]`;
+    switch (typeof value) {
+      case "string": return `string:${JSON.stringify(value)}`;
+      case "boolean": return `boolean:${value}`;
+      case "number": return Number.isFinite(value) ? `number:${Object.is(value, -0) ? "-0" : value}` : `invalid-number:${value}`;
+      case "undefined": return "undefined:";
+      case "object": return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableCanonical(value[key])}`).join(",")}}`;
+      default: return `${typeof value}:${String(value)}`;
+    }
+  }
+
   function canonicalEvidence(anchor) {
-    return JSON.stringify({
+    return stableCanonical({
       schema_version: anchor?.schema_version,
       anchor_id: anchor?.anchor_id,
       snapshot_id: anchor?.snapshot_id,

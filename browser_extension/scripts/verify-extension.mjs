@@ -136,12 +136,21 @@ if (
   !/MAX_REGISTERED_ANCHORS = 100/.test(observationRuntimeSource) ||
   !/new WeakReference\(element\)/.test(observationRuntimeSource) ||
   !/entry\.evidence !== canonicalEvidence\(anchor\)/.test(observationRuntimeSource) ||
+  !/Object\.keys\(value\)\.sort\(\)/.test(observationRuntimeSource) ||
   !/tombstoneRemovedNodes/.test(observationRuntimeSource) ||
   !/MAX_OBSERVATION_ANCHORS = 100/.test(contentSource) ||
   !/revalidateObservationAnchor/.test(contentSource) ||
   !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("observation runtime must load before content.js in declared and dynamic injection paths");
+}
+if (
+  !/observation_limitations/.test(browserTurnProtocolSource) ||
+  !/observation:\s*snapshot\.observation \|\| null/.test(browserTurnProtocolSource) ||
+  !/const inlineEvidence = browserInlineEvidence\(snapshot, screenshotEvidence\)/.test(backgroundSource) ||
+  !/page: browserEvidencePage\(snapshot\),\s*\.\.\.inlineEvidence/.test(backgroundSource)
+) {
+  throw new Error("browser initial and legacy evidence must propagate observation epochs, limitations, anchors, and screenshot evidence");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
