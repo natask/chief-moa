@@ -296,6 +296,12 @@
       event fallback, and clock tests plus broker and research integration smokes.
       Enforce a focused 90% line/branch/function gate, verified at 100% lines,
       98.41% branches, and 100% functions. Reduce `server.js` to 12,962 lines.
+- [x] 2.52 Extract authenticated audio/video-note collection, metadata, byte
+      stream, and deletion routing from `server.js`; add focused unsupported
+      method/path, authorization, async creation, collection, stream-precedence,
+      metadata, and delete dispatch tests plus audio- and video-note integration
+      smokes. Enforce a focused 90% line/branch/function gate, verified at 100%
+      for all three metrics. Reduce `server.js` to 12,889 lines.
 
 ## 3. Other Oversized Surfaces
 
