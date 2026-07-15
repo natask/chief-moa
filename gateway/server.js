@@ -81,6 +81,7 @@ const { createEventProjectHandlers } = require("./lib/event-project-handlers");
 const { createDeviceToolHandlers } = require("./lib/device-tool-handlers");
 const { createBrowserTaskHandlers } = require("./lib/browser-task-handlers");
 const { createBrowserTurnHandlers } = require("./lib/browser-turn-handlers");
+const { createAccountConnectionHandlers } = require("./lib/account-connection-handlers");
 const { createEventSubstrateStore, normalizeEventType } = require("./lib/event-substrate");
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { buildIdentity } = require("./lib/build-identity");
@@ -648,6 +649,11 @@ const accountConnections = createAccountConnectionStore({
   // The store owns the durable notification; this only mirrors it onto the
   // /v1/tool/requests queue and links the two by id.
   onUserActionNotification: bridgeCredentialNotificationToDeviceHub,
+});
+const { routeAccountConnections } = createAccountConnectionHandlers({
+  accountConnections, authorizedAgent, agentAuthError, accountUserId,
+  readJsonBody, readFormOrJsonBody, sendJson, sendAccountHtml,
+  sendAccountSecretForm, escapeHtml, cleanError,
 });
 
 // Turn a freshly queued credential notification into a device-hub tool request.
@@ -1508,8 +1514,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/account-providers" || url.pathname.startsWith("/v1/account-connections")) {
-      await handleAccountConnectionRoutes(request, response, url);
+    if (await routeAccountConnections(request, response, url)) {
       return;
     }
 
@@ -1649,145 +1654,6 @@ async function handlePresentationEvaluate(request, response) {
     turns_seen: turns.length,
     ...result,
   });
-}
-
-// All /v1/account-providers and /v1/account-connections* routes. Two auth
-// classes: browser-facing flows (OAuth start/callback, gateway secret form)
-// authenticate with a short-lived single-purpose token carried in the URL,
-// because the user's browser has no gateway bearer token; every other route
-// requires the gateway token like the agent endpoints. Raw provider secrets
-// enter only through the OAuth callback and the gateway-served secret form,
-// and no route ever returns one.
-async function handleAccountConnectionRoutes(request, response, url) {
-  const { method } = request;
-  const pathname = url.pathname;
-  try {
-    if (method === "GET" && pathname === "/v1/account-connections/oauth/start") {
-      const redirect = accountConnections.oauthStartRedirect(url.searchParams.get("state") || "");
-      response.writeHead(302, { location: redirect, "cache-control": "no-store" });
-      response.end();
-      return;
-    }
-
-    if (method === "GET" && pathname === "/v1/account-connections/oauth/callback") {
-      const result = await accountConnections.completeOauthCallback({
-        state: url.searchParams.get("state") || "",
-        code: url.searchParams.get("code") || "",
-        error: url.searchParams.get("error") || "",
-      });
-      sendAccountHtml(response, 200, "Account connected", `${escapeHtml(result.connection.provider_label)} ("${escapeHtml(result.connection.label)}") is connected. You can close this window.`);
-      return;
-    }
-
-    if (method === "GET" && pathname === "/v1/account-connections/secret-form") {
-      const info = accountConnections.secretFormInfo(url.searchParams.get("token") || "");
-      sendAccountSecretForm(response, info);
-      return;
-    }
-
-    if (method === "POST" && pathname === "/v1/account-connections/secret-form") {
-      const { body, isForm } = await readFormOrJsonBody(request);
-      const result = accountConnections.submitSecretForm(String(body.token || ""), body);
-      if (isForm) {
-        sendAccountHtml(response, 200, "Credential stored", `${escapeHtml(result.connection.provider_label)} ("${escapeHtml(result.connection.label)}") is connected. The secret is stored encrypted on the gateway. You can close this window.`);
-      } else {
-        sendJson(response, 200, result);
-      }
-      return;
-    }
-
-    if (!authorizedAgent(request)) {
-      sendJson(response, 401, agentAuthError());
-      return;
-    }
-    const userId = accountUserId();
-
-    if (method === "GET" && pathname === "/v1/account-providers") {
-      sendJson(response, 200, { providers: accountConnections.catalog() });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/v1/account-connections") {
-      sendJson(response, 200, { connections: accountConnections.list(userId) });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/v1/account-connections") {
-      const body = await readJsonBody(request);
-      const result = accountConnections.create(userId, body);
-      sendJson(response, result.statusCode, { connection: result.connection, reauth_action: result.reauth_action });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/v1/account-connections/notifications") {
-      sendJson(response, 200, {
-        notifications: accountConnections.listNotifications({
-          userId,
-          deviceId: url.searchParams.get("device_id") || "",
-          status: url.searchParams.get("status") || "",
-        }),
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname.startsWith("/v1/account-connections/notifications/") && pathname.endsWith("/receipt")) {
-      const id = pathname.slice("/v1/account-connections/notifications/".length, -"/receipt".length);
-      const body = await readJsonBody(request);
-      sendJson(response, 200, { notification: accountConnections.recordNotificationReceipt(userId, id, body) });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/v1/account-connections/health/run") {
-      sendJson(response, 200, { summary: await accountConnections.runHealthChecks() });
-      return;
-    }
-
-    const remainder = pathname.startsWith("/v1/account-connections/")
-      ? pathname.slice("/v1/account-connections/".length)
-      : "";
-    const [connectionId, action, extra] = remainder.split("/");
-    if (!connectionId || extra) {
-      sendJson(response, 404, { error: "not found" });
-      return;
-    }
-
-    if (method === "GET" && !action) {
-      sendJson(response, 200, { connection: accountConnections.get(userId, connectionId) });
-      return;
-    }
-
-    if (method === "PATCH" && !action) {
-      const body = await readJsonBody(request);
-      sendJson(response, 200, { connection: accountConnections.patch(userId, connectionId, body) });
-      return;
-    }
-
-    if (method === "POST" && action === "refresh") {
-      const result = await accountConnections.requestRefresh(userId, connectionId);
-      sendJson(response, result.statusCode, { connection: result.connection });
-      return;
-    }
-
-    if (method === "POST" && action === "reauth") {
-      sendJson(response, 200, accountConnections.requestReauth(userId, connectionId));
-      return;
-    }
-
-    if (method === "POST" && action === "disable") {
-      sendJson(response, 200, { connection: accountConnections.disable(userId, connectionId) });
-      return;
-    }
-
-    if (method === "POST" && action === "disconnect") {
-      sendJson(response, 200, { connection: await accountConnections.disconnect(userId, connectionId) });
-      return;
-    }
-
-    sendJson(response, 404, { error: "not found" });
-  } catch (error) {
-    const status = Number(error?.statusCode) || 500;
-    sendJson(response, status, { error: cleanError(error), ...(error?.payload || {}) });
-  }
 }
 
 // Connections are scoped to an authenticated user. Until the better-auth user
