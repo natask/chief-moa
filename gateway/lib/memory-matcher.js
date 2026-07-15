@@ -17,8 +17,8 @@ const I_AM_NAME = /\bi(?:'m| am) ([\p{L}][\p{L}\p{N} .'-]{0,40})$/iu;
 // "remember that ..." / "please remember ..."
 const REMEMBER_THAT = /\b(?:please )?remember(?: that)? (.+)/iu;
 // "i prefer ..." / "i like ..." / "i'd like you to ..." / "i want you to ..."
-const I_PREFER = /\bi (?:prefer|like|would prefer|'d prefer)\b (.+)/iu;
-const I_WANT_YOU = /\bi (?:want|'d like|would like) you to (.+)/iu;
+const I_PREFER = /\bi(?: (?:prefer|like|would prefer)|'d prefer)\b (.+)/iu;
+const I_WANT_YOU = /\bi(?: (?:want|would like)|'d like) you to (.+)/iu;
 
 // Persona-style requests: how the assistant should sound. These steer the
 // PERSONA the Steward recalls; they are stored as memories (the operational
@@ -109,23 +109,22 @@ function personaPhrase(text) {
 }
 
 function cleanName(raw) {
-  let name = String(raw || "").trim().replace(/[.?!,]+$/, "").trim();
+  let name = String(raw).trim().replace(/[.?!,]+$/, "").trim();
   // Strip a trailing clause if the user kept talking ("call me Bob and ...").
   name = name.split(/\b(?:and|but|please|because|so)\b/i)[0].trim();
   name = name.replace(/\s+/g, " ").slice(0, 60).trim();
-  if (!name || name.length < 1) return "";
+  if (!name) return "";
   return name;
 }
 
 function clip(raw) {
-  return String(raw || "").trim().replace(/\s+/g, " ").replace(/[.?!]+$/, "").slice(0, 240).trim();
+  return String(raw).trim().replace(/\s+/g, " ").replace(/[.?!]+$/, "").slice(0, 240).trim();
 }
 
 function capitalize(text) {
-  const s = String(text || "").trim();
-  if (!s) return s;
+  const s = String(text).trim();
   const out = s.charAt(0).toUpperCase() + s.slice(1);
-  return /[.?!]$/.test(out) ? out : `${out}.`;
+  return `${out}.`;
 }
 
 module.exports = { matchMemoryStatement };

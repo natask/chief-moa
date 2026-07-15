@@ -91,6 +91,10 @@
       fail-soft process failure, and legacy-row tests for the Brain with a
       focused 90% line/branch/function coverage gate. Verified at 99.47% lines,
       95.86% branches, and 100% functions.
+- [x] 2.17 Add an exhaustive identity, persona, preference, note, rejection,
+      normalization, and bound matrix for deterministic memory matching; repair
+      the promised `I'd like`/`I'd prefer` patterns and remove unreachable helper
+      branches. Verified at 100% line/branch/function coverage.
 
 ## 3. Other Oversized Surfaces
 
