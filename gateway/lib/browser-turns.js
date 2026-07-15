@@ -26,7 +26,7 @@ function createBrowserTurnLifecycle({ answerBrowserEvidence, now = () => new Dat
   return {
     async completeBrowserTurnRecord(record, options = {}) {
       const completedAt = options.completedAt || record.completed_at || now();
-      const response = await answerBrowserEvidence(record);
+      const response = await answerBrowserEvidence(record, options.answerContext || {});
       return {
         ...record,
         status: "completed",
@@ -60,6 +60,8 @@ function browserLifecyclePayload(record, options = {}) {
     page_ref: record.page_ref || {},
     evidence_refs: arrayOrEmpty(record.evidence_refs),
     evidence_summary: record.evidence_summary || null,
+    evidence_media: record.evidence_media || null,
+    evidence_delivery: response.evidence_delivery || null,
     status: record.status,
     broker_event_id: record.broker_event_id || "",
     route_decision_id: record.route_decision_id || "",
@@ -107,6 +109,7 @@ function summarizeBrowserTurn(record) {
     execution: record.execution || null,
     delegation_envelope: record.delegation_envelope || null,
     page_ref: record.page_ref || {},
+    evidence_media: record.evidence_media || null,
     evidence_request_ids: arrayOrEmpty(record.evidence_request_ids),
     evidence_refs: arrayOrEmpty(record.evidence_refs),
     task_ids: arrayOrEmpty(record.task_ids),

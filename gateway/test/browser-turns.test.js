@@ -41,14 +41,17 @@ test("needs-evidence lifecycle is inert and requests browser-owned evidence", ()
 test("completion lifecycle awaits the injected answer and preserves explicit timestamps", async () => {
   const seen = [];
   const lifecycle = createBrowserTurnLifecycle({
-    answerBrowserEvidence: async (record) => {
-      seen.push(record.id);
+    answerBrowserEvidence: async (record, context) => {
+      seen.push([record.id, context]);
       return { display: "answer", actions: [] };
     },
     now: () => "2026-01-01T00:00:00.000Z",
   });
-  const completed = await lifecycle.completeBrowserTurnRecord({ id: "one", updated_at: "" });
-  assert.deepEqual(seen, ["one"]);
+  const completed = await lifecycle.completeBrowserTurnRecord(
+    { id: "one", updated_at: "", evidence_media: { image: { status: "available" } } },
+    { answerContext: { inlineImage: { data_base64: "jpeg" } } },
+  );
+  assert.deepEqual(seen, [["one", { inlineImage: { data_base64: "jpeg" } }]]);
   assert.equal(completed.status, "completed");
   assert.equal(completed.completed_at, "2026-01-01T00:00:00.000Z");
   assert.equal(completed.updated_at, "2026-01-01T00:00:00.000Z");
@@ -88,6 +91,8 @@ test("lifecycle payload returns bounded defaults and a nested summary", () => {
   assert.equal(payload.follow_up_expected, true);
   assert.equal(payload.end_of_turn, false);
   assert.equal(payload.legacy_surface, "browser");
+  assert.equal(payload.evidence_media, null);
+  assert.equal(payload.evidence_delivery, null);
   assert.equal(payload.browser_turn.completed_at, "");
 });
 
@@ -100,6 +105,7 @@ test("lifecycle payload prefers display and preserves populated arrays", () => {
     modality: "voice",
     response: { display: "display" },
     page_ref: { url: "https://example.com" },
+    evidence_media: { image: { status: "available" } },
     evidence_refs: ["evidence"],
     evidence_request_ids: ["request"],
     agent_run_ids: ["run"],
@@ -114,6 +120,7 @@ test("lifecycle payload prefers display and preserves populated arrays", () => {
   assert.equal(payload.end_of_turn, true);
   assert.equal(payload.legacy_surface, undefined);
   assert.deepEqual(payload.actions, [{ type: "proposal" }]);
+  assert.equal(payload.browser_turn.evidence_media.image.status, "available");
   assert.deepEqual(summarizeBrowserTurn(record).proposal_ids, ["proposal"]);
   assert.equal(summarizeBrowserTurn(record).deleted_at, "deleted");
 });
