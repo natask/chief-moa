@@ -184,6 +184,7 @@ Generated page evaluation uses `moa.browser-program.v2`:
   "schema": "moa.browser-program.v2",
   "artifact_id": "script-...",
   "revision": 3,
+  "source_turn_id": "turn-...",
   "name": "Label the chart",
   "purpose": "Draw grounded explanatory labels",
   "source": "/* complete inspectable source */",
@@ -199,12 +200,12 @@ Generated page evaluation uses `moa.browser-program.v2`:
     "excludes": []
   },
   "authority": {
-    "profile": "reviewed_standalone_v1|delegated_runtime_v1",
-    "role": "delegate",
-    "task_id": "task-...",
-    "run_id": "run-...",
-    "delegation_envelope_id": "envelope-...",
-    "approval_id": "approval-..."
+    "profile": "reviewed_standalone_v1",
+    "standalone": {
+      "approval_id": "approval-...",
+      "approved_source_sha256": "sha256:...",
+      "approved_scope_digest": "sha256:..."
+    }
   },
   "bridge_capabilities": [],
   "limits": {"timeout_ms": 5000, "max_result_bytes": 16384},
@@ -212,9 +213,34 @@ Generated page evaluation uses `moa.browser-program.v2`:
 }
 ```
 
-The source digest, exact target, world, profile, permission state, authority,
-checkpoint state, and resource limits are revalidated locally immediately
-before every execution/registration.
+The authority object is profile-discriminated, not a bag of optional Delegate
+fields. A delegated program replaces `standalone` with:
+
+```json
+{
+  "profile": "delegated_runtime_v1",
+  "delegated": {
+    "role": "delegate",
+    "task_id": "task-...",
+    "run_id": "run-...",
+    "delegation_envelope_id": "envelope-...",
+    "grant_ids": ["grant-script-evaluate", "grant-origin"],
+    "checkpoint_approval_id": null
+  }
+}
+```
+
+`source_turn_id` and creator/provenance metadata belong to the common artifact
+envelope, not the authority discriminator. `reviewed_standalone_v1` requires the
+standalone approval plus approved source and scope digests and SHALL NOT invent
+a Delegate role, task, run, envelope, or grant. `delegated_runtime_v1` requires
+the typed Delegate role, task, run, envelope, and exact grants; a checkpoint
+approval is present only when the envelope reaches an approval checkpoint.
+Validators reject mixed, missing, or unknown authority variants.
+
+The source digest, exact target, world, profile-discriminated authority,
+permission state, applicable grant/checkpoint state, and resource limits are
+revalidated locally immediately before every execution/registration.
 
 ### `reviewed_standalone_v1`
 
@@ -258,8 +284,9 @@ action even when JavaScript performs it. Representation never downgrades risk.
 
 Every program attempt creates a canonical local receipt binding artifact,
 revision, source hash, execution profile/executor, world, target
-tab/document/frame/origin, selected role, envelope/approval/grants, before/after
-evidence refs, bounded result/error/console summary, registration read-back,
+tab/document/frame/origin, the exact standalone-approval or
+Delegate-envelope/grant authority variant, before/after evidence refs, bounded
+result/error/console summary, registration read-back,
 cleanup/rollback/removal result, timestamps, and status. Gateway sync is an
 audit copy, not execution authority. Stop/review/rollback controls remain in
 packaged extension UI outside the page.

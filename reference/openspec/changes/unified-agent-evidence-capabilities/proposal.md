@@ -48,8 +48,8 @@ request can resolve it.
 ### Modified Capabilities
 
 - `browser-situated-agent-experience`: Generated page programs use an explicit
-  execution profile and delegation authority rather than an implicit universal
-  policy.
+  execution profile and profile-specific authority rather than an implicit
+  universal policy.
 - `extension-ui-self-extension`: The older Tier C rules become the
   `reviewed_standalone_v1` profile; the accepted Tweeks direction uses the
   separately opted-in `delegated_runtime_v1` profile.
