@@ -15,8 +15,15 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# One dependency truth: the committed pnpm-lock.yaml drives dev, CI verify,
+# and this image identically. corepack pins pnpm from package.json's
+# packageManager field. package-lock.json remains in-repo only as the npm-ci
+# rollback path for this switch.
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable \
+  && corepack prepare --activate \
+  && pnpm install --frozen-lockfile --prod \
+  && pnpm store prune
 
 COPY server.js schema.sql agent-launcher-profiles.json ./
 COPY lib ./lib
