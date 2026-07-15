@@ -85,6 +85,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/presentation-evaluator.js",
   "scripts/smoke-presentation.js",
   "lib/ui-spec.js",
+  "lib/ui-spec-handlers.js",
   "scripts/smoke-ui-spec.js",
   "scripts/smoke-vertex-answer-policy.js",
   "scripts/smoke-vertex-live-endpoint.js",

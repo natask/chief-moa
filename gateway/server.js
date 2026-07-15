@@ -40,6 +40,7 @@ const { createAgentWorkerHandlers } = require("./lib/agent-worker-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
+const { createUiSpecHandlers } = require("./lib/ui-spec-handlers");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createSelfExtensionHandlers } = require("./lib/self-extension-handlers");
 const { createBrain } = require("./lib/brain");
@@ -459,6 +460,16 @@ const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 // code. The client live-refreshes on change (storage.onChanged pattern).
 const uiSpecStores = new Map();
 const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_DIR });
+const { routeUiSpec } = createUiSpecHandlers({
+  authorizedAgent,
+  agentAuthError,
+  accountUserId,
+  uiSpecForUser,
+  uiSpecPayload,
+  readJsonBody,
+  sendJson,
+  cleanError,
+});
 const { routeSelfExtensions } = createSelfExtensionHandlers({
   artifacts: selfExtensionArtifacts,
   authorizedAgent,
@@ -864,34 +875,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    // Engine-served declarative UI spec (tier A). The thin client GETs this and
-    // renders it; a PUT is a "deployment" -- the client live-refreshes, package
-    // unchanged. See thin-client-gateway-architecture/design.md.
-    if (url.pathname === "/v1/ui/spec" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, uiSpecPayload(accountUserId()));
-      return;
-    }
-
-    if (url.pathname === "/v1/ui/spec" && request.method === "PUT") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleUiSpecPut(request, response, accountUserId());
-      return;
-    }
-
-    if (url.pathname === "/v1/ui/spec/reset" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      uiSpecForUser(accountUserId()).reset();
-      sendJson(response, 200, uiSpecPayload(accountUserId()));
+    if (await routeUiSpec(request, response, url)) {
       return;
     }
 
@@ -4215,18 +4199,6 @@ function cleanMachine(value) {
 
 function cleanModel(value) {
   return String(value || "").replace(/[^A-Za-z0-9._@:-]+/g, "").trim();
-}
-
-async function handleUiSpecPut(request, response, userId = accountUserId()) {
-  const body = await readJsonBody(request);
-  // Accept either a bare spec or { spec: {...} }.
-  const incoming = body && typeof body === "object" ? (body.spec || body) : {};
-  try {
-    uiSpecForUser(userId).replace(incoming);
-    sendJson(response, 200, uiSpecPayload(userId));
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
 }
 
 // Append a history entry whenever the effective profile actually changed. We log
