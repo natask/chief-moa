@@ -1214,4 +1214,16 @@ module.exports = {
   // store.withStreamLock instead.
   acquireJsonStreamDirLock,
   releaseJsonStreamDirLock,
+  eventSubstrateTestInternals: Object.freeze({
+    createPostgresEventSubstrateStore,
+    jsonAppendLockIsStale,
+    listJsonLockArtifacts,
+    lockObservation,
+    processIsAlive,
+    quarantineStreamLockDir,
+    readRegularFileSnapshot,
+    retrySync,
+    sameFileIdentity,
+    unlinkArtifactWithIdentity,
+  }),
 };
