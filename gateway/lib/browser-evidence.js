@@ -1,6 +1,10 @@
 "use strict";
 
+const crypto = require("node:crypto");
+const jpeg = require("jpeg-js");
 const { sanitizeLooseId, screenNodeLabel } = require("./input-utils");
+
+const BROWSER_INLINE_JPEG_MAX_BASE64_CHARS = 420 * 1024;
 
 function truncate(value, max) {
   const text = String(value || "");
@@ -26,6 +30,7 @@ function browserEvidenceSummaryFromBody(body) {
   for (const value of [
     body.evidence,
     body.evidence_summary,
+    body.snapshot,
     body.screen,
     body.context?.screen,
     body.page_context,
@@ -70,11 +75,17 @@ function browserVisibleTextFromValue(value) {
     value.selected_text,
     value.selectedText,
   ].map((item) => Array.isArray(item) ? item.join("\n") : String(item || "").trim()).filter(Boolean);
-  const nodeText = Array.isArray(value.nodes) ? value.nodes.map(screenNodeLabel).filter(Boolean).join("\n") : "";
+  const nodes = Array.isArray(value.nodes) ? value.nodes : (Array.isArray(value.elements) ? value.elements : []);
+  const nodeText = nodes.map(screenNodeLabel).filter(Boolean).join("\n");
+  const elementSummaries = Array.isArray(value.element_summaries)
+    ? value.element_summaries.map((item) => String(item || "").trim()).filter(Boolean).join("\n")
+    : Array.isArray(value.elementSummaries)
+      ? value.elementSummaries.map((item) => String(item || "").trim()).filter(Boolean).join("\n")
+      : "";
   const headings = Array.isArray(value.headings)
     ? value.headings.map((item) => typeof item === "string" ? item : String(item?.text || item?.label || "")).filter(Boolean).join("\n")
     : "";
-  return [direct.join("\n"), nodeText, headings].filter(Boolean).join("\n");
+  return [direct.join("\n"), nodeText, elementSummaries, headings].filter(Boolean).join("\n");
 }
 
 function mergeBrowserEvidenceSummaries(...summaries) {
@@ -102,12 +113,90 @@ function browserPageRefFromBody(body) {
     browserPageRefFromValue(body.page_ref),
     browserPageRefFromValue(body.page),
     browserPageRefFromValue(body.page_context),
+    browserPageRefFromValue(body.snapshot),
     browserPageRefFromValue(body.context?.page),
     browserPageRefFromValue(body.context?.browser_page),
     browserPageRefFromValue(body.evidence),
     browserPageRefFromValue(body.screen),
     browserPageRefFromValue(body.context?.screen),
   );
+}
+
+function browserInlineScreenshotFromBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  return body.screenshot || body.snapshot?.screenshot || body.evidence?.screenshot || null;
+}
+
+function sanitizeBrowserInlineScreenshot(value) {
+  if (value == null) {
+    return {
+      audit: { media_type: "image/jpeg", status: "missing", bytes: 0, reason: "no inline JPEG supplied" },
+      provider: null,
+    };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return omittedInlineScreenshot("invalid screenshot shape");
+  }
+  if (value.omitted === true || String(value.encoding || "").toLowerCase() === "omitted") {
+    return omittedInlineScreenshot(String(value.reason || "screenshot omitted by browser"), Number(value.bytes) || 0);
+  }
+  const mediaType = String(value.media_type || value.mediaType || value.mime_type || "").toLowerCase();
+  if (mediaType !== "image/jpeg") return omittedInlineScreenshot("inline screenshot must be image/jpeg");
+  const encoding = String(value.encoding || "base64").toLowerCase();
+  if (encoding !== "base64" && encoding !== "base64_jpeg") return omittedInlineScreenshot("unsupported screenshot encoding");
+  const data = String(value.data || value.data_base64 || "");
+  if (!data || data.length > BROWSER_INLINE_JPEG_MAX_BASE64_CHARS || !canonicalBase64(data)) {
+    return omittedInlineScreenshot(data.length > BROWSER_INLINE_JPEG_MAX_BASE64_CHARS
+      ? "inline screenshot exceeds the gateway cap"
+      : "invalid inline screenshot base64");
+  }
+  const bytes = Buffer.from(data, "base64");
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes.at(-2) !== 0xff || bytes.at(-1) !== 0xd9) {
+    return omittedInlineScreenshot("inline screenshot is not a JPEG", bytes.length);
+  }
+  let decoded;
+  try {
+    decoded = jpeg.decode(bytes, {
+      useTArray: true,
+      formatAsRGBA: false,
+      tolerantDecoding: false,
+      maxResolutionInMP: 16,
+      maxMemoryUsageInMB: 64,
+    });
+  } catch {
+    return omittedInlineScreenshot("inline screenshot JPEG is invalid", bytes.length);
+  }
+  const declaredBytes = Number(value.bytes);
+  if (Number.isFinite(declaredBytes) && declaredBytes > 0 && declaredBytes !== bytes.length) {
+    return omittedInlineScreenshot("inline screenshot byte count does not match", bytes.length);
+  }
+  const audit = {
+    media_type: "image/jpeg",
+    status: "available",
+    bytes: bytes.length,
+    width: decoded.width,
+    height: decoded.height,
+    sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+    reason: "",
+  };
+  return { audit, provider: { mime_type: "image/jpeg", data_base64: data } };
+}
+
+function canonicalBase64(value) {
+  return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+    && Buffer.from(value, "base64").toString("base64") === value;
+}
+
+function omittedInlineScreenshot(reason, bytes = 0) {
+  return {
+    audit: {
+      media_type: "image/jpeg",
+      status: "omitted",
+      bytes: Number.isFinite(bytes) && bytes > 0 ? Math.floor(bytes) : 0,
+      reason: truncate(String(reason || "inline screenshot omitted"), 200),
+    },
+    provider: null,
+  };
 }
 
 function browserPageRefFromValue(value) {
@@ -185,6 +274,7 @@ function browserTurnStatusUrl(id) {
 module.exports = {
   browserEvidenceSummaryFromBody,
   browserEvidenceSummaryFromValue,
+  browserInlineScreenshotFromBody,
   browserOriginFromUrl,
   browserPageRefFromBody,
   browserPageRefFromValue,
@@ -197,6 +287,7 @@ module.exports = {
   mergeBrowserPageRefs,
   normalizeWhitespace,
   sanitizeBrowserClientMetadata,
+  sanitizeBrowserInlineScreenshot,
   sanitizeBrowserIdList,
   sanitizeBrowserPageRef,
 };

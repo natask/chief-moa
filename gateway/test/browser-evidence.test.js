@@ -2,9 +2,11 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const jpeg = require("jpeg-js");
 const {
   browserEvidenceSummaryFromBody,
   browserEvidenceSummaryFromValue,
+  browserInlineScreenshotFromBody,
   browserOriginFromUrl,
   browserPageRefFromBody,
   browserPageRefFromValue,
@@ -17,6 +19,7 @@ const {
   mergeBrowserPageRefs,
   normalizeWhitespace,
   sanitizeBrowserClientMetadata,
+  sanitizeBrowserInlineScreenshot,
   sanitizeBrowserIdList,
   sanitizeBrowserPageRef,
 } = require("../lib/browser-evidence");
@@ -125,4 +128,70 @@ test("evidence merging ignores malformed inputs and keeps first provenance", () 
   assert.equal(merged.source_ref, "first");
   assert.equal(merged.source_kind, "screen");
   assert.equal(merged.visible_text, "evidence");
+});
+
+test("inline browser JPEG is decoded, bounded, hashed, and separated from audit metadata", () => {
+  const bytes = jpeg.encode({ data: Buffer.from([20, 40, 60, 255]), width: 1, height: 1 }, 80).data;
+  const data = bytes.toString("base64");
+  const result = sanitizeBrowserInlineScreenshot({
+    media_type: "image/jpeg",
+    encoding: "base64",
+    data,
+    bytes: bytes.length,
+  });
+  assert.equal(result.audit.status, "available");
+  assert.equal(result.audit.bytes, bytes.length);
+  assert.equal(result.audit.width, 1);
+  assert.equal(result.audit.height, 1);
+  assert.match(result.audit.sha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(result.provider, { mime_type: "image/jpeg", data_base64: data });
+  assert.equal("data_base64" in result.audit, false);
+
+  const aliases = sanitizeBrowserInlineScreenshot({ mime_type: "image/jpeg", encoding: "base64_jpeg", data_base64: data });
+  assert.equal(aliases.audit.status, "available");
+});
+
+test("inline screenshot lookup supports one-shot snapshot/evidence aliases", () => {
+  const shot = { encoding: "omitted" };
+  assert.equal(browserInlineScreenshotFromBody({ screenshot: shot }), shot);
+  assert.equal(browserInlineScreenshotFromBody({ snapshot: { screenshot: shot } }), shot);
+  assert.equal(browserInlineScreenshotFromBody({ evidence: { screenshot: shot } }), shot);
+  assert.equal(browserInlineScreenshotFromBody(null), null);
+  assert.equal(browserInlineScreenshotFromBody([]), null);
+});
+
+test("invalid or oversized inline screenshots are safely omitted", () => {
+  const cases = [
+    [null, "missing"],
+    ["bad", "omitted"],
+    [[], "omitted"],
+    [{ omitted: true, bytes: 4, reason: "client omitted" }, "omitted"],
+    [{ encoding: "omitted" }, "omitted"],
+    [{ media_type: "image/png", data: "AAAA" }, "omitted"],
+    [{ media_type: "image/jpeg", encoding: "hex", data: "AAAA" }, "omitted"],
+    [{ media_type: "image/jpeg", data: "" }, "omitted"],
+    [{ media_type: "image/jpeg", data: "A".repeat(420 * 1024 + 1) }, "omitted"],
+    [{ media_type: "image/jpeg", data: "not+canonical=" }, "omitted"],
+    [{ media_type: "image/jpeg", data: Buffer.from("not jpeg").toString("base64") }, "omitted"],
+  ];
+  for (const [value, status] of cases) {
+    const result = sanitizeBrowserInlineScreenshot(value);
+    assert.equal(result.audit.status, status);
+    assert.equal(result.provider, null);
+    assert.equal("data" in result.audit, false);
+  }
+});
+
+test("corrupt JPEGs and mismatched byte declarations are omitted", () => {
+  const corrupt = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64");
+  assert.match(sanitizeBrowserInlineScreenshot({ media_type: "image/jpeg", data: corrupt }).audit.reason, /invalid/);
+
+  const bytes = jpeg.encode({ data: Buffer.from([1, 2, 3, 255]), width: 1, height: 1 }, 70).data;
+  const mismatch = sanitizeBrowserInlineScreenshot({
+    mediaType: "image/jpeg",
+    data: bytes.toString("base64"),
+    bytes: bytes.length + 1,
+  });
+  assert.match(mismatch.audit.reason, /byte count/);
+  assert.equal(mismatch.audit.bytes, bytes.length);
 });

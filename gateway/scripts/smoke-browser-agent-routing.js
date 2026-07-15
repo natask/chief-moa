@@ -8,6 +8,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const jpeg = require("jpeg-js");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "browser-agent-routing-smoke-token";
@@ -33,7 +34,10 @@ async function main() {
     await step("auth required", () => assertAuthRequired(baseUrl));
     const needsEvidence = await step("missing page evidence returns lifecycle request", () => assertNeedsEvidence(baseUrl, sessionId));
     await step("posted evidence completes the pending turn", () => assertEvidenceCompletesTurn(baseUrl, dataDir, needsEvidence));
-    await step("inline evidence completes an explicit browser turn", () => assertInlineEvidenceTurn(baseUrl, sessionId));
+    await step("inline multimodal evidence reaches the provider once", () => assertInlineEvidenceTurn(baseUrl, dataDir, sessionId, modelServer));
+    await step("valid image-only evidence does not request a second round trip", () => assertImageOnlyInlineTurn(baseUrl, sessionId));
+    await step("oversized inline image is omitted without blocking text evidence", () => assertOversizedInlineImage(baseUrl, sessionId, modelServer));
+    await step("unsupported provider image input retries explicitly as text-only", () => assertUnsupportedImageRetry(baseUrl, sessionId, modelServer));
     await step("browser-shaped chat delegates to browser turn path", () => assertChatDelegates(baseUrl, sessionId));
     await step("browser-shaped voice delegates to browser turn path", () => assertVoiceDelegates(baseUrl, sessionId));
     await step("browser turns appear in session context", () => assertSessionContextIncludesBrowserTurns(baseUrl, sessionId));
@@ -47,7 +51,10 @@ async function main() {
         "missing evidence returns classification=browser_page_question and status=needs_evidence",
         "GET /v1/browser/turns/:id/status reflects pending and completed lifecycle state",
         "POST /v1/browser/evidence links to the evidence request and completes the turn",
-    "inline evidence produces a model-backed browser answer when a model is configured",
+    "one-shot snapshot text and the exact bounded JPEG reach the provider together without raw base64 persistence",
+    "valid image-only evidence completes immediately instead of returning needs_evidence",
+    "oversized image evidence is explicitly omitted while bounded text still works",
+    "an adapter image rejection retries once as text-only and reports the degradation",
     "browser-shaped /v1/chat and /v1/voice/turns delegate to the same browser turn path",
     "browser voice profile-control with screen context does not get stolen by the browser turn adapter",
     "browser turns are stored under DATA_DIR and visible in session context",
@@ -151,7 +158,10 @@ async function assertEvidenceCompletesTurn(baseUrl, dataDir, pending) {
   assert.equal(storedEvidence.screenshot.data, undefined, "stored browser evidence must not persist screenshot base64 data");
 }
 
-async function assertInlineEvidenceTurn(baseUrl, sessionId) {
+async function assertInlineEvidenceTurn(baseUrl, dataDir, sessionId, modelServer) {
+  const imageBytes = jpeg.encode({ data: Buffer.from([12, 34, 56, 255]), width: 1, height: 1 }, 80).data;
+  const imageBase64 = imageBytes.toString("base64");
+  const requestCount = modelServer.requests.length;
   const turn = await postJson(`${baseUrl}/v1/browser/turns`, {
     source: "browser-agent-routing-smoke",
     session_id: sessionId,
@@ -161,20 +171,98 @@ async function assertInlineEvidenceTurn(baseUrl, sessionId) {
     client: { platform: "browser", id: "smoke-extension" },
     input: { type: "voice", text: "Summarize this visible page." },
     text: "Summarize this visible page.",
-    page_ref: {
+    snapshot: {
       title: "Gateway Status",
       url: "https://example.test/status",
+      page_text: "Gateway status is healthy. Browser turn routing is active. No extension-local action has run.",
+      element_summaries: ["[0] <button> Refresh status"],
+      captured_at: "2026-07-15T12:00:00.000Z",
     },
-    evidence: {
-      visible_text: "Gateway status is healthy. Browser turn routing is active. No extension-local action has run.",
-    },
+    screenshot: { media_type: "image/jpeg", encoding: "base64", data: imageBase64, bytes: imageBytes.length },
   });
   assert.equal(turn.status, 200);
   assert.equal(turn.json.modality, "voice");
   assert.equal(turn.json.status, "completed");
   assert.match(turn.json.display, /MODEL_BROWSER_ANSWER/);
   assert.match(turn.json.display, /Browser turn routing is active/);
+  assert.equal(turn.json.evidence_media.image.status, "available");
+  assert.equal(turn.json.response, undefined);
   assert.deepEqual(turn.json.task_ids, [], "first slice must not create browser tasks");
+
+  assert.equal(modelServer.requests.length, requestCount + 1, "valid inline evidence should use one provider request");
+  const providerBody = modelServer.requests.at(-1);
+  const lastUser = [...providerBody.messages].reverse().find((message) => message.role === "user");
+  assert.ok(Array.isArray(lastUser.content), "OpenAI-compatible adapter must receive multimodal content parts");
+  assert.match(lastUser.content[0].text, /Browser turn routing is active/);
+  assert.equal(lastUser.content[1].image_url.url, `data:image/jpeg;base64,${imageBase64}`);
+
+  const storedRaw = fs.readFileSync(path.join(dataDir, "browser-turns", "browser_inline_evidence.json"), "utf8");
+  assert.equal(storedRaw.includes(imageBase64), false, "browser turn audit must not persist raw base64");
+  const stored = JSON.parse(storedRaw);
+  assert.equal(stored.evidence_media.image.sha256.length, 64);
+  assert.equal(stored.evidence_media.image.bytes, imageBytes.length);
+}
+
+async function assertOversizedInlineImage(baseUrl, sessionId, modelServer) {
+  const requestCount = modelServer.requests.length;
+  const turn = await postJson(`${baseUrl}/v1/browser/turns`, {
+    session_id: sessionId,
+    branch_id: "page",
+    turn_id: "browser_oversized_inline_image",
+    client: { platform: "browser", id: "smoke-extension" },
+    text: "Summarize the text even if the screenshot is unavailable.",
+    snapshot: { title: "Text fallback", page_text: "TEXT_ONLY_BROWSER_EVIDENCE" },
+    screenshot: { media_type: "image/jpeg", encoding: "base64", data: "A".repeat(420 * 1024 + 1) },
+  });
+  assert.equal(turn.status, 200);
+  assert.equal(turn.json.status, "completed");
+  assert.equal(turn.json.evidence_media.image.status, "omitted");
+  assert.match(turn.json.evidence_media.image.reason, /exceeds/);
+  assert.equal(modelServer.requests.length, requestCount + 1);
+  const lastUser = [...modelServer.requests.at(-1).messages].reverse().find((message) => message.role === "user");
+  assert.equal(typeof lastUser.content, "string", "omitted image must degrade to a text-only provider request");
+  assert.match(lastUser.content, /TEXT_ONLY_BROWSER_EVIDENCE/);
+  assert.equal(turn.json.evidence_delivery.image, "text_only");
+}
+
+async function assertImageOnlyInlineTurn(baseUrl, sessionId) {
+  const bytes = jpeg.encode({ data: Buffer.from([120, 130, 140, 255]), width: 1, height: 1 }, 70).data;
+  const turn = await postJson(`${baseUrl}/v1/browser/turns`, {
+    session_id: sessionId,
+    branch_id: "page",
+    turn_id: "browser_image_only_inline",
+    client: { platform: "browser", id: "smoke-extension" },
+    text: "What is visible in this image?",
+    screenshot: { media_type: "image/jpeg", encoding: "base64", data: bytes.toString("base64") },
+  });
+  assert.equal(turn.status, 200);
+  assert.equal(turn.json.status, "completed");
+  assert.deepEqual(turn.json.evidence_request_ids, []);
+  assert.equal(turn.json.follow_up_expected, false);
+  assert.equal(turn.json.evidence_delivery.image, "multimodal");
+}
+
+async function assertUnsupportedImageRetry(baseUrl, sessionId, modelServer) {
+  const bytes = jpeg.encode({ data: Buffer.from([90, 80, 70, 255]), width: 1, height: 1 }, 70).data;
+  const requestCount = modelServer.requests.length;
+  const turn = await postJson(`${baseUrl}/v1/browser/turns`, {
+    session_id: sessionId,
+    branch_id: "page",
+    turn_id: "browser_provider_image_fallback",
+    client: { platform: "browser", id: "smoke-extension" },
+    text: "PROVIDER_REJECT_IMAGE answer from the snapshot text.",
+    snapshot: { page_text: "The text-only retry remains useful." },
+    screenshot: { media_type: "image/jpeg", encoding: "base64", data: bytes.toString("base64") },
+  });
+  assert.equal(turn.status, 200);
+  assert.equal(turn.json.status, "completed");
+  assert.equal(turn.json.evidence_delivery.image, "text_only");
+  assert.match(turn.json.evidence_delivery.reason, /did not accept inline JPEG/);
+  assert.equal(modelServer.requests.length, requestCount + 2, "image rejection should trigger exactly one text-only retry");
+  const first = [...modelServer.requests.at(-2).messages].reverse().find((message) => message.role === "user");
+  const second = [...modelServer.requests.at(-1).messages].reverse().find((message) => message.role === "user");
+  assert.ok(Array.isArray(first.content));
+  assert.equal(typeof second.content, "string");
 }
 
 async function assertChatDelegates(baseUrl, sessionId) {
@@ -335,6 +423,7 @@ async function startGateway({ port, dataDir, modelBaseUrl }) {
 }
 
 async function startFakeModelServer() {
+  const requests = [];
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
@@ -352,10 +441,18 @@ async function startFakeModelServer() {
       try {
         body = JSON.parse(raw || "{}");
       } catch {}
+      requests.push(body);
       const lastUser = Array.isArray(body.messages)
         ? [...body.messages].reverse().find((message) => message.role === "user")
         : null;
-      const prompt = String(lastUser?.content || "");
+      const prompt = Array.isArray(lastUser?.content)
+        ? lastUser.content.filter((part) => part?.type === "text").map((part) => String(part.text || "")).join("\n")
+        : String(lastUser?.content || "");
+      if (Array.isArray(lastUser?.content) && prompt.includes("PROVIDER_REJECT_IMAGE")) {
+        res.writeHead(415, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "image input unsupported by fixture" }));
+        return;
+      }
       const answer = [
         "MODEL_BROWSER_ANSWER",
         prompt.includes("Chief Moa") ? "Chief Moa" : "",
@@ -375,7 +472,7 @@ async function startFakeModelServer() {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
-  return { server, baseUrl: `http://127.0.0.1:${port}/v1` };
+  return { server, baseUrl: `http://127.0.0.1:${port}/v1`, requests };
 }
 
 function closeHttpServer(server) {

@@ -49,6 +49,7 @@ const { createThreadStore, isIncognitoBranch, newBranchId } = require("./lib/thr
 const { buildContextArtifact, contextArtifactReceipt } = require("./lib/context-artifact");
 const {
   browserEvidenceSummaryFromBody,
+  browserInlineScreenshotFromBody,
   browserPageRefFromBody,
   browserRouteRef,
   browserTurnStatusUrl,
@@ -58,10 +59,12 @@ const {
   mergeBrowserPageRefs,
   normalizeWhitespace,
   sanitizeBrowserClientMetadata,
+  sanitizeBrowserInlineScreenshot,
   sanitizeBrowserIdList,
 } = require("./lib/browser-evidence");
 const { sanitizeLooseId, screenNodeLabel } = require("./lib/input-utils");
 const browserTurns = require("./lib/browser-turns");
+const { attachOpenAiBrowserImage, attachVertexBrowserImage } = require("./lib/browser-multimodal");
 const { browserAgentRoleCatalog, browserAgentRoleFromBody } = require("./lib/browser-agent-roles");
 const { validateBrowserDelegationEnvelope } = require("./lib/browser-delegation-envelope");
 const { createBrokerRouter } = require("./lib/broker-router");
@@ -2903,7 +2906,10 @@ async function buildBrowserTurnRecord(body, options = {}) {
   const refSummaries = browserEvidenceSummariesFromRefs(evidenceRefs);
   const inlineSummary = browserEvidenceSummaryFromBody(body);
   const evidenceSummary = mergeBrowserEvidenceSummaries(refSummaries, inlineSummary);
-  const hasEvidence = evidenceRefs.length > 0 || Boolean(evidenceSummary.visible_text || evidenceSummary.source_ref);
+  const inlineScreenshot = sanitizeBrowserInlineScreenshot(browserInlineScreenshotFromBody(body));
+  const hasEvidence = evidenceRefs.length > 0
+    || Boolean(evidenceSummary.visible_text || evidenceSummary.source_ref)
+    || inlineScreenshot.audit.status === "available";
   const evidenceRequestIds = sanitizeBrowserIdList(body.evidence_request_ids || body.evidence_request_id || body.request_id);
   const agentRole = browserAgentRoleFromBody(body);
   const pageRef = mergeBrowserPageRefs(browserPageRefFromBody(body), evidenceSummary.page_ref);
@@ -2925,6 +2931,7 @@ async function buildBrowserTurnRecord(body, options = {}) {
     page_ref: pageRef,
     evidence_refs: evidenceRefs,
     evidence_summary: evidenceSummary.visible_text || evidenceSummary.source_ref ? evidenceSummary : null,
+    evidence_media: { image: inlineScreenshot.audit },
     status: hasEvidence ? "completed" : "needs_evidence",
     broker_event_id: browserRouteRef(body.broker_event_id || body.brokerEventId),
     route_decision_id: browserRouteRef(body.route_decision_id || body.routeDecisionId),
@@ -2949,7 +2956,10 @@ async function buildBrowserTurnRecord(body, options = {}) {
     response: null,
   };
   if (!hasEvidence) return browserTurns.browserNeedsEvidenceRecord(base);
-  return attachBrowserRoleExecution(await browserTurnLifecycle.completeBrowserTurnRecord(base, { completedAt: now }));
+  return attachBrowserRoleExecution(await browserTurnLifecycle.completeBrowserTurnRecord(base, {
+    completedAt: now,
+    answerContext: { inlineImage: inlineScreenshot.provider },
+  }));
 }
 
 function attachBrowserRoleExecution(record) {
@@ -3013,10 +3023,19 @@ function attachBrowserRoleExecution(record) {
   }
 }
 
-async function browserEvidenceAnswer(record) {
+async function browserEvidenceAnswer(record, options = {}) {
   const fallback = deterministicBrowserEvidenceAnswer(record);
+  const inlineImage = options.inlineImage || null;
   if (!providerConfigured()) {
-    return fallback;
+    return {
+      ...fallback,
+      evidence_delivery: {
+        image: "text_only",
+        reason: inlineImage
+          ? "reasoning provider is unavailable; inline JPEG was not sent"
+          : (record.evidence_media?.image?.reason || "no valid inline JPEG supplied"),
+      },
+    };
   }
   const page = record.page_ref || {};
   const summary = record.evidence_summary || {};
@@ -3046,14 +3065,35 @@ async function browserEvidenceAnswer(record) {
     "</page_evidence>",
   ].join("\n");
 
+  const effectiveProfile = agentProfile.effectiveWithOverrides(null, profileOptions);
   try {
-    const answer = await callModel([{ role: "user", content: prompt }], agentProfile.effectiveWithOverrides(null, profileOptions));
+    let answer;
+    let evidenceDelivery;
+    if (inlineImage) {
+      try {
+        answer = await callModel([{ role: "user", content: prompt }], effectiveProfile, { imagePart: inlineImage });
+        evidenceDelivery = { image: "multimodal", reason: "" };
+      } catch {
+        answer = await callModel([{ role: "user", content: prompt }], effectiveProfile);
+        evidenceDelivery = {
+          image: "text_only",
+          reason: "provider did not accept inline JPEG; retried without image",
+        };
+      }
+    } else {
+      answer = await callModel([{ role: "user", content: prompt }], effectiveProfile);
+      evidenceDelivery = {
+        image: "text_only",
+        reason: record.evidence_media?.image?.reason || "no valid inline JPEG supplied",
+      };
+    }
     const response = {
       display: answer,
       text: answer,
       speak: capSpeakText(answer, VOICE_TTS_MAX_CHARS),
       actions: [],
       model_backed: true,
+      evidence_delivery: evidenceDelivery,
     };
     return role.id === "collaborate" ? withBrowserCollaborationProposal(response, answer) : response;
   } catch (error) {
@@ -3061,6 +3101,12 @@ async function browserEvidenceAnswer(record) {
       ...fallback,
       model_backed: false,
       model_error: cleanError(error),
+      evidence_delivery: {
+        image: "text_only",
+        reason: inlineImage
+          ? `multimodal and text-only provider calls failed: ${cleanError(error)}`
+          : (record.evidence_media?.image?.reason || "no valid inline JPEG supplied"),
+      },
     };
     return role.id === "collaborate" ? withBrowserCollaborationProposal(response, response.display) : response;
   }
@@ -5922,7 +5968,7 @@ function providerConfiguredFor(provider) {
   return MODEL_API_KEY.length > 0 || !MODEL_BASE_URL.includes("api.openai.com");
 }
 
-async function callModel(messages, profile) {
+async function callModel(messages, profile, options = {}) {
   const effective = profile || agentProfile.effective();
   const provider = resolveReasoningProvider(effective);
   if (!providerConfiguredFor(provider)) {
@@ -5933,15 +5979,18 @@ async function callModel(messages, profile) {
   }
 
   if (provider === "vertex") {
-    return callVertexModel(messages, effective);
+    return callVertexModel(messages, effective, options);
   }
+
+  const providerMessages = [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
+  if (options.imagePart) attachOpenAiBrowserImage(providerMessages, options.imagePart);
 
   const upstreamResponse = await fetchWithTimeout(`${MODEL_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: modelHeaders(),
     body: JSON.stringify({
       model: effective.model || MODEL_ID,
-      messages: [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages),
+      messages: providerMessages,
       temperature: effective.temperature,
       stream: false,
     }),
@@ -12393,6 +12442,9 @@ function vertexPayload(messages, profile, options = {}) {
     } else {
       contents.push({ role: "user", parts: [options.videoPart, { text: "" }] });
     }
+  }
+  if (options.imagePart) {
+    attachVertexBrowserImage(contents, options.imagePart);
   }
   return {
     systemInstruction: system.filter(Boolean).join("\n\n"),
