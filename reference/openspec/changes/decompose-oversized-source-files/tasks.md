@@ -75,6 +75,10 @@
       SemVer, and hostile-input tests for the release registry with a focused
       90% line/branch/function coverage gate. Verified at 100% lines and
       functions and 94.88% branches.
+- [x] 2.13 Add exhaustive envelope, provider-payload, executable-output,
+      response-bound, and fallback tests for proactive browser turns with a
+      focused 90% line/branch/function coverage gate. Verified at 100% for all
+      three metrics.
 
 ## 3. Other Oversized Surfaces
 
