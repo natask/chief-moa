@@ -22,6 +22,10 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { resolveBrowserAgentRole } = require("./browser-agent-roles");
+const {
+  browserActionAllowedByEnvelope,
+  validateBrowserDelegationEnvelope,
+} = require("./browser-delegation-envelope");
 
 const MAX_STEPS_CEILING = 40;
 const DEFAULT_MAX_STEPS = 24;
@@ -429,6 +433,7 @@ function createBrowserAgentLoopStore(options = {}) {
       agent_role: task.agent_role || resolveBrowserAgentRole("delegate", { explicit: true }),
       authority: task.authority || "bounded_browser_actions",
       execution_policy: task.execution_policy || "multi_step_claim_receipt",
+      delegation_envelope: task.delegation_envelope || null,
       max_steps: task.max_steps,
       step_count: task.step_count || 0,
       steps: opts.includeSteps ? (task.steps || []) : undefined,
@@ -454,6 +459,13 @@ function createBrowserAgentLoopStore(options = {}) {
     if (agentRole.id !== "delegate") {
       throw new Error("browser agent tasks require the delegate role");
     }
+    const delegation = validateBrowserDelegationEnvelope(body.delegation_envelope, {
+      turnText: instruction,
+      pageUrl: body.url,
+    });
+    if (!delegation.ok) {
+      throw new Error(`confirmed delegation_envelope is required: ${delegation.errors.join("; ")}`);
+    }
     const task = {
       id: randomId("bagent"),
       status: "pending",
@@ -467,7 +479,8 @@ function createBrowserAgentLoopStore(options = {}) {
       agent_role: agentRole,
       authority: agentRole.authority,
       execution_policy: agentRole.execution_policy,
-      max_steps: clampMaxSteps(body.max_steps),
+      max_steps: delegation.envelope.max_steps,
+      delegation_envelope: delegation.envelope,
       step_count: 0,
       steps: [],
       claimed_by: "",
@@ -556,6 +569,15 @@ function createBrowserAgentLoopStore(options = {}) {
         }
       }
       action = sanitizeAgentAction(proposed) || deterministicFallbackAction(stepIndex, observation);
+    }
+
+    const policy = browserActionAllowedByEnvelope(action, task.delegation_envelope, observation);
+    if (!policy.ok) {
+      action = {
+        kind: "finish",
+        status: "blocked",
+        summary: sanitizeText(policy.reason, 2000),
+      };
     }
 
     const nowMs = Date.now();

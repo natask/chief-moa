@@ -51,6 +51,7 @@ const {
 const { sanitizeLooseId, screenNodeLabel } = require("./lib/input-utils");
 const browserTurns = require("./lib/browser-turns");
 const { browserAgentRoleCatalog, browserAgentRoleFromBody } = require("./lib/browser-agent-roles");
+const { validateBrowserDelegationEnvelope } = require("./lib/browser-delegation-envelope");
 const { createBrokerRouter } = require("./lib/broker-router");
 const { createBrokerLauncher } = require("./lib/broker-launcher");
 const {
@@ -3316,6 +3317,10 @@ async function buildBrowserTurnRecord(body, options = {}) {
   const hasEvidence = evidenceRefs.length > 0 || Boolean(evidenceSummary.visible_text || evidenceSummary.source_ref);
   const evidenceRequestIds = sanitizeBrowserIdList(body.evidence_request_ids || body.evidence_request_id || body.request_id);
   const agentRole = browserAgentRoleFromBody(body);
+  const pageRef = mergeBrowserPageRefs(browserPageRefFromBody(body), evidenceSummary.page_ref);
+  const delegationValidation = agentRole.id === "delegate" && agentRole.explicit
+    ? validateBrowserDelegationEnvelope(body.delegation_envelope, { turnText: text, pageUrl: pageRef.url })
+    : { ok: false, errors: [], envelope: null };
   const base = {
     id: turnId,
     turn_id: turnId,
@@ -3328,7 +3333,7 @@ async function buildBrowserTurnRecord(body, options = {}) {
     modality,
     transcript: modality === "voice" ? text : "",
     text,
-    page_ref: mergeBrowserPageRefs(browserPageRefFromBody(body), evidenceSummary.page_ref),
+    page_ref: pageRef,
     evidence_refs: evidenceRefs,
     evidence_summary: evidenceSummary.visible_text || evidenceSummary.source_ref ? evidenceSummary : null,
     status: hasEvidence ? "completed" : "needs_evidence",
@@ -3340,6 +3345,8 @@ async function buildBrowserTurnRecord(body, options = {}) {
     authority: agentRole.authority,
     execution_policy: agentRole.execution_policy,
     execution: null,
+    delegation_envelope: delegationValidation.envelope,
+    delegation_validation: { ok: delegationValidation.ok, errors: delegationValidation.errors },
     status_url: browserTurnStatusUrl(turnId),
     task_ids: sanitizeBrowserIdList(body.task_ids || body.task_id),
     agent_run_ids: sanitizeBrowserIdList(body.agent_run_ids || body.agent_run_id),
@@ -3361,6 +3368,26 @@ function attachBrowserRoleExecution(record) {
   if (role.id !== "delegate" || role.explicit !== true || (record.task_ids || []).length > 0) {
     return record;
   }
+  if (!record.delegation_envelope || record.delegation_validation?.ok !== true) {
+    const errors = Array.isArray(record.delegation_validation?.errors) && record.delegation_validation.errors.length
+      ? record.delegation_validation.errors
+      : ["a confirmed delegation_envelope is required"];
+    const execution = { type: "browser_agent_task", status: "needs_confirmation" };
+    return {
+      ...record,
+      execution,
+      response: {
+        ...(record.response || {}),
+        proposals: [{
+          type: "delegation_confirmation",
+          executable: false,
+          requires_user_confirmation: true,
+          errors,
+        }],
+        execution,
+      },
+    };
+  }
   try {
     const launched = launchBrowserAgentTaskInternal({
       instruction: record.text || record.transcript,
@@ -3370,6 +3397,7 @@ function attachBrowserRoleExecution(record) {
       branch_id: record.branch_id,
       role: "delegate",
       turn_id: record.turn_id || record.id,
+      delegation_envelope: record.delegation_envelope,
     });
     const taskId = launched.task.id;
     const runId = launched.run.id;
@@ -6721,6 +6749,7 @@ async function handleVoiceTurn(request, response) {
     ...(body.browser_agent_role ? { browser_agent_role: String(body.browser_agent_role) } : {}),
     ...(body.browser_authority ? { browser_authority: String(body.browser_authority) } : {}),
     ...(body.browser_execution_policy ? { browser_execution_policy: String(body.browser_execution_policy) } : {}),
+    ...(body.delegation_envelope ? { delegation_envelope: body.delegation_envelope } : {}),
     profile_overrides: body.profile_overrides && typeof body.profile_overrides === "object"
       ? Object.keys(body.profile_overrides)
       : [],
@@ -9040,6 +9069,7 @@ function createAgentRun(body) {
     browser_agent_role: run.browser_agent_role,
     browser_authority: run.browser_authority,
     browser_execution_policy: run.browser_execution_policy,
+    delegation_envelope: run.delegation_envelope,
     work_node_id: run.work_node_id,
     context_pack_ref: run.context_pack_ref,
     input_artifact_refs: run.input_artifact_refs,
@@ -10712,6 +10742,13 @@ function launchBrowserAgentTaskInternal(body = {}) {
     throw new Error("instruction is required");
   }
   const url = String(body.url || "").trim();
+  const delegation = validateBrowserDelegationEnvelope(body.delegation_envelope, {
+    turnText: instruction,
+    pageUrl: url,
+  });
+  if (!delegation.ok) {
+    throw new Error(`confirmed delegation_envelope is required: ${delegation.errors.join("; ")}`);
+  }
   const sessionId = body.conversation_id ? sanitizeId(body.conversation_id) : (body.session_id ? sanitizeId(body.session_id) : "");
   const branchId = body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default";
   const prompt = [
@@ -10733,6 +10770,7 @@ function launchBrowserAgentTaskInternal(body = {}) {
     browser_agent_role: "delegate",
     browser_authority: "bounded_browser_actions",
     browser_execution_policy: "multi_step_claim_receipt",
+    delegation_envelope: delegation.envelope,
     turn_id: body.turn_id || "",
     harness: "echo",
     prompt: agentPromptWithSessionContext(prompt, { sessionId, branchId }),
@@ -10746,13 +10784,15 @@ function launchBrowserAgentTaskInternal(body = {}) {
     agent_run_id: run.id,
     turn_id: body.turn_id || "",
     role: "delegate",
-    max_steps: body.max_steps,
+    max_steps: delegation.envelope.max_steps,
+    delegation_envelope: delegation.envelope,
   });
   appendAgentEvent(run.id, "browser_agent_task_queued", {
     browser_agent_task_id: task.id,
     instruction: truncate(instruction, 2000),
     url,
     max_steps: task.max_steps,
+    delegation_envelope: task.delegation_envelope,
   });
   return { task, run };
 }
@@ -12295,7 +12335,7 @@ function surfaceSkillDeps() {
   return {
     createToolRequest,
     readToolRequest: (id) => (fs.existsSync(toolRequestPath(id)) ? readToolRequest(id) : null),
-    launchBrowserAgentTask: ({ instruction, url, call }) => {
+    launchBrowserAgentTask: ({ instruction, url, call, delegation_envelope }) => {
       const created = launchBrowserAgentTaskInternal({
         instruction,
         url,
@@ -12303,6 +12343,7 @@ function surfaceSkillDeps() {
         conversation_id: (call && (call.conversation_id || call.session_id)) || "",
         branch_id: (call && call.branch_id) || "default",
         profile_version: call && call.profile_version,
+        ...(delegation_envelope ? { delegation_envelope } : {}),
       });
       return { task_id: created.task.id, agent_run_id: created.run.id, task: created.task };
     },

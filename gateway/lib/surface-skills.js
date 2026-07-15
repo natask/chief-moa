@@ -186,7 +186,12 @@ async function launchBrowserAgentTask(call, deps, args) {
   }
   const url = String((args && args.url) || "").trim();
   try {
-    const created = await deps.launchBrowserAgentTask({ instruction, url, call });
+    const created = await deps.launchBrowserAgentTask({
+      instruction,
+      url,
+      call,
+      delegation_envelope: call && call.delegation_envelope,
+    });
     return {
       ok: true,
       type: "browser_agent_task",
@@ -211,7 +216,7 @@ function surfaceExecuteCapabilities(call, deps) {
     };
   }
   capabilities.browser_agent_task = {
-    description: "Start a background browser agent that opens tabs the user does not see and works a multi-step task. Args: { instruction: string, url?: string }. Returns { task_id, agent_run_id }.",
+    description: "Start a background browser agent only when the trusted turn carries a confirmed delegation envelope. Args: { instruction: string, url?: string }. Returns { task_id, agent_run_id }.",
     run: (args) => launchBrowserAgentTask(call, deps, args || {}),
   };
   return capabilities;

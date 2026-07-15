@@ -31,9 +31,11 @@ durably rather than silently collapsed into an explanation-first roadmap.
       and stored browser turns/tasks/runs carry typed role and authority.
 
 Acceptance: deterministic gateway smoke proves only an explicit Delegate turn
-links a browser task/run; Help and Explain remain read-only; Collaborate returns
-one non-executable proposal. Browser voice-session routing is recorded as a
-follow-up rather than simulated with a prompt prefix.
+with a valid confirmed `moa.browser-delegation.v1` envelope links a browser
+task/run; prose-only Delegate returns a non-executable confirmation proposal;
+Help and Explain remain read-only; Collaborate returns one non-executable
+proposal. Browser voice-session routing is recorded as a follow-up rather than
+simulated with a prompt prefix.
 
 - [ ] 1.1 Add four direct browser entry points for Explain, Help, Collaborate,
       and Delegate and carry the selected `agent` as typed data on every browser

@@ -42,7 +42,14 @@ async function main() {
   try {
     server = await startGateway({ port, dataDir });
     const deps = makeDeps(baseUrl);
-    const call = { source: "agee-extension-smoke", conversation_id: "surface_smoke_session", branch_id: "default" };
+    const instruction = "Open the docs and find the install command.";
+    const url = "https://example.test/";
+    const call = {
+      source: "agee-extension-smoke",
+      conversation_id: "surface_smoke_session",
+      branch_id: "default",
+      delegation_envelope: confirmedEnvelope(instruction, url),
+    };
 
     await step("resolveTurnSurface canonicalizes sources", () => assertSurfaceResolution());
     await step("android client heartbeats with phone tools", () => heartbeatAndroid(baseUrl));
@@ -208,16 +215,32 @@ function makeDeps(baseUrl) {
       const list = await getJson(`${baseUrl}/v1/tool/requests?limit=100`);
       return (list.requests || []).find((req) => req.id === id) || null;
     },
-    launchBrowserAgentTask: async ({ instruction, url }) => {
+    launchBrowserAgentTask: async ({ instruction, url, delegation_envelope }) => {
       const response = await postJson(`${baseUrl}/v1/browser/agent-tasks`, {
         instruction,
         url,
         source: "surface-skills-smoke",
+        delegation_envelope,
       });
       assert.equal(response.status, 202, `launchBrowserAgentTask failed: ${JSON.stringify(response.json)}`);
       return { task_id: response.json.task.id, agent_run_id: response.json.task.agent_run_id };
     },
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  };
+}
+
+function confirmedEnvelope(intent, url) {
+  return {
+    version: "moa.browser-delegation.v1",
+    confirmation: { confirmed: true, user_intent: intent },
+    goal: intent,
+    scope: { page_url: url, allowed_origins: [new URL(url).origin] },
+    allowed_action_classes: ["click", "type", "wait"],
+    approval_policy: { preauthorized: ["click", "type", "wait"], always_ask: [] },
+    checkpoints: ["before submit"],
+    stop_conditions: ["goal complete", "scope changed"],
+    max_steps: 5,
+    completion_evidence: ["install command"],
   };
 }
 

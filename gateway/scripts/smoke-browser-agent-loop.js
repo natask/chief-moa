@@ -74,7 +74,7 @@ async function main() {
         "finish folds the summary into the linked agent_run output and appends browser_agent_task_finished",
         "the finished task record carries the contract fields (status, steps, summary, timestamps)",
         "GET /v1/browser/roles defaults the selector to delegate while omitted turn roles remain explain",
-        "only explicit delegate turns link visible browser task/run ids; collaborate is one-step proposal-only",
+        "only confirmed-envelope delegate turns link visible browser task/run ids; prose-only delegate requests confirmation",
       ],
     }, null, 2));
   } finally {
@@ -98,18 +98,21 @@ async function assertAuthRequired(baseUrl) {
 }
 
 async function assertCreate(baseUrl, dataDir) {
+  const instruction = "Find the pricing page and summarize the tiers.";
+  const url = "https://example.test/";
   const created = await postJson(`${baseUrl}/v1/browser/agent-tasks`, {
-    instruction: "Find the pricing page and summarize the tiers.",
-    url: "https://example.test/",
+    instruction,
+    url,
     source: "browser-agent-loop-smoke",
     conversation_id: "bal_smoke_session",
     max_steps: 5,
+    delegation_envelope: confirmedEnvelope(instruction, url, 5),
   });
   assert.equal(created.status, 202, `create must return 202: ${JSON.stringify(created.json)}`);
   const task = created.json.task;
   assert.ok(task.id, "task must have an id");
   assert.equal(task.status, "pending");
-  assert.equal(task.instruction, "Find the pricing page and summarize the tiers.");
+  assert.equal(task.instruction, instruction);
   assert.equal(task.url, "https://example.test/");
   assert.equal(task.max_steps, 5, "max_steps must be honored");
   assert.equal(task.step_count, 0);
@@ -117,6 +120,7 @@ async function assertCreate(baseUrl, dataDir) {
   assert.equal(task.agent_role.id, "delegate");
   assert.equal(task.authority, "bounded_browser_actions");
   assert.equal(task.execution_policy, "multi_step_claim_receipt");
+  assert.equal(task.delegation_envelope.confirmation.confirmed, true);
   assert.deepEqual(task.steps, [], "a fresh task has no steps");
 
   // The linked agent_run exists and carries browser_agent_task_queued.
@@ -164,17 +168,42 @@ async function assertRoleContract(baseUrl, dataDir) {
   assert.deepEqual(collaborate.json.task_ids, []);
 
   const delegated = await postJson(`${baseUrl}/v1/browser/turns`, { ...common, role: "delegate" });
-  assert.equal(delegated.status, 200);
-  assert.equal(delegated.json.authority, "bounded_browser_actions");
-  assert.equal(delegated.json.execution.status, "pending");
-  assert.equal(delegated.json.task_ids.length, 1);
-  assert.equal(delegated.json.agent_run_ids.length, 1);
-  const task = JSON.parse(fs.readFileSync(path.join(dataDir, "browser-agent-tasks", `${delegated.json.task_ids[0]}.json`), "utf8"));
-  const run = JSON.parse(fs.readFileSync(path.join(dataDir, "agent-runs", `${delegated.json.agent_run_ids[0]}.json`), "utf8"));
-  assert.equal(task.turn_id, delegated.json.turn_id);
+  assert.equal(delegated.json.execution.status, "needs_confirmation");
+  assert.equal(delegated.json.proposals[0].type, "delegation_confirmation");
+  assert.equal(delegated.json.proposals[0].executable, false);
+  assert.deepEqual(delegated.json.task_ids, []);
+  const confirmed = await postJson(`${baseUrl}/v1/browser/turns`, {
+    ...common,
+    role: "delegate",
+    delegation_envelope: confirmedEnvelope(common.text, common.page.url, 5),
+  });
+  assert.equal(confirmed.status, 200);
+  assert.equal(confirmed.json.authority, "bounded_browser_actions");
+  assert.equal(confirmed.json.execution.status, "pending");
+  assert.equal(confirmed.json.task_ids.length, 1);
+  assert.equal(confirmed.json.agent_run_ids.length, 1);
+  const task = JSON.parse(fs.readFileSync(path.join(dataDir, "browser-agent-tasks", `${confirmed.json.task_ids[0]}.json`), "utf8"));
+  const run = JSON.parse(fs.readFileSync(path.join(dataDir, "agent-runs", `${confirmed.json.agent_run_ids[0]}.json`), "utf8"));
+  assert.equal(task.turn_id, confirmed.json.turn_id);
   assert.equal(task.agent_role.id, "delegate");
   assert.equal(run.browser_agent_role, "delegate");
-  assert.equal(run.turn_id, delegated.json.turn_id);
+  assert.equal(run.turn_id, confirmed.json.turn_id);
+  assert.equal(run.delegation_envelope.version, "moa.browser-delegation.v1");
+}
+
+function confirmedEnvelope(intent, url, maxSteps = 5) {
+  return {
+    version: "moa.browser-delegation.v1",
+    confirmation: { confirmed: true, user_intent: intent },
+    goal: intent,
+    scope: { page_url: url, allowed_origins: [new URL(url).origin] },
+    allowed_action_classes: ["click", "type", "wait"],
+    approval_policy: { preauthorized: ["click", "type", "wait"], always_ask: [] },
+    checkpoints: ["before external submit"],
+    stop_conditions: ["goal complete", "scope changed", "evidence stale"],
+    max_steps: maxSteps,
+    completion_evidence: ["requested result is visible"],
+  };
 }
 
 async function assertHealth(baseUrl, expected) {

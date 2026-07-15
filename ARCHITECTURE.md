@@ -745,9 +745,15 @@ The authenticated browser-turn contract exposes the separately addressable
 `GET /v1/browser/roles` and accepts an explicit `role` on
 `POST /v1/browser/turns`. The catalog puts Delegate first for new selector UI,
 while an omitted role remains Explain/read-only for legacy-client safety. The
-gateway stores the role identity, authority, and execution policy on the turn;
-an explicit Delegate turn may link a bounded `/v1/browser/agent-tasks` task and
-its observable agent run. Help and Explain emit no action or task, and
+gateway stores the role identity, authority, and execution policy on the turn.
+An explicit Delegate turn still cannot launch from role plus prose: it must
+carry a validated `moa.browser-delegation.v1` envelope binding confirmation and
+the exact user intent to a goal, current page and allowed origins, action and
+approval classes, checkpoints, stop conditions, maximum steps, and completion
+evidence. Without it the turn returns a non-executable confirmation proposal
+and no task/run. A valid envelope is persisted on the turn, bounded
+`/v1/browser/agent-tasks` task, and observable agent run; the planner blocks
+out-of-origin, disallowed, and non-preauthorized actions. Help and Explain emit no action or task, and
 Collaborate emits at most one non-executable, confirmation-required step
 proposal. Role prose cannot change this typed authority. Browser voice
 `session_start` does not yet consume this contract: provider-native/cascaded
