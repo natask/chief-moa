@@ -11,6 +11,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/browser-turn-protocol.js",
   "extension/config.js",
   "extension/content.js",
+  "extension/document-context.js",
   "extension/livekit-voice.js",
   "extension/offscreen-audio-worklet.js",
   "extension/offscreen-livekit.js",

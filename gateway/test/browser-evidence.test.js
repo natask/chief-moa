@@ -44,12 +44,12 @@ test("browser evidence is bounded context and never gains execution fields", () 
 test("browser evidence merges deterministically and caps visible text", () => {
   const merged = mergeBrowserEvidenceSummaries(
     browserEvidenceSummaryFromValue({ url: "https://example.com/a", visible_text: "first", id: "one" }),
-    browserEvidenceSummaryFromValue({ title: "Title", visible_text: "x".repeat(7000), id: "two" }),
+    browserEvidenceSummaryFromValue({ title: "Title", visible_text: "x".repeat(21_000), id: "two" }),
   );
   assert.equal(merged.page_ref.url, "https://example.com/a");
   assert.equal(merged.page_ref.title, "Title");
   assert.equal(merged.source_ref, "one");
-  assert.equal(merged.visible_text.length, 6003);
+  assert.equal(merged.visible_text.length, 20_003);
   assert.match(merged.visible_text, /\.\.\.$/);
 });
 
@@ -108,7 +108,18 @@ test("browser evidence sanitizers cover empty, invalid, and bounded values", () 
   assert.equal(compactVisibleTextSummary(""), "No visible text summary was provided.");
   assert.equal(compactVisibleTextSummary("x".repeat(800)).length, 703);
   assert.equal(normalizeWhitespace(null), "");
-  assert.deepEqual(emptyBrowserEvidenceSummary(), { page_ref: { url: "", title: "", origin: "" }, visible_text: "", source_ref: "", source_kind: "" });
+  assert.deepEqual(emptyBrowserEvidenceSummary(), {
+    page_ref: { url: "", title: "", origin: "" },
+    visible_text: "",
+    source_ref: "",
+    source_kind: "",
+    context_scope: "",
+    context_coverage: "",
+    context_complete: null,
+    context_truncated: false,
+    source_parts_total: null,
+    source_parts_included: null,
+  });
   assert.deepEqual(sanitizeBrowserPageRef(null), {});
   assert.deepEqual(sanitizeBrowserClientMetadata([]), {});
   assert.equal(browserTurnStatusUrl(""), "/v1/browser/turns/browserturn/status");
@@ -125,4 +136,65 @@ test("evidence merging ignores malformed inputs and keeps first provenance", () 
   assert.equal(merged.source_ref, "first");
   assert.equal(merged.source_kind, "screen");
   assert.equal(merged.visible_text, "evidence");
+});
+
+test("browser snapshot evidence preserves whole-document coverage metadata and removes duplicate fallback text", () => {
+  const summary = browserEvidenceSummaryFromBody({
+    snapshot: {
+      page_text: "top middle bottom",
+      document_context: {
+        scope: "whole_rendered_document",
+        coverage: "distributed_sample",
+        complete: false,
+        truncated: true,
+        source_parts_total: 500,
+        source_parts_included: 100,
+      },
+    },
+    screen: { summary: "top middle bottom" },
+  });
+  assert.equal(summary.visible_text, "top middle bottom");
+  assert.equal(summary.context_scope, "whole_rendered_document");
+  assert.equal(summary.context_coverage, "distributed_sample");
+  assert.equal(summary.context_complete, false);
+  assert.equal(summary.context_truncated, true);
+  assert.equal(summary.source_parts_total, 500);
+  assert.equal(summary.source_parts_included, 100);
+});
+
+test("document-context metadata rejects invalid counts and merges conservative coverage", () => {
+  const complete = browserEvidenceSummaryFromValue({
+    visible_text: "middle",
+    documentContext: {
+      scope: "whole_rendered_document",
+      coverage: "complete",
+      complete: true,
+      truncated: false,
+      source_parts_total: "3",
+      source_parts_included: null,
+    },
+  });
+  assert.equal(complete.context_complete, true);
+  assert.equal(complete.context_truncated, false);
+  assert.equal(complete.source_parts_total, 3);
+  assert.equal(complete.source_parts_included, null);
+
+  const partial = browserEvidenceSummaryFromValue({
+    visible_text: "top middle bottom",
+    document_context: {
+      complete: false,
+      truncated: true,
+      source_parts_total: -1,
+      source_parts_included: 1.5,
+    },
+  });
+  const merged = mergeBrowserEvidenceSummaries(complete, partial, browserEvidenceSummaryFromValue({ document_context: [] }));
+  assert.equal(merged.visible_text, "top middle bottom");
+  assert.equal(merged.context_complete, false);
+  assert.equal(merged.context_truncated, true);
+  assert.equal(merged.source_parts_total, 3);
+  assert.equal(merged.source_parts_included, null);
+
+  const unknown = browserEvidenceSummaryFromValue({ document_context: { complete: "yes" } });
+  assert.equal(unknown.context_complete, null);
 });

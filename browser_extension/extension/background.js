@@ -97,7 +97,6 @@ let proactiveReceiptWrite = Promise.resolve();
 let privacyMigrationInFlight = null;
 const BROWSER_AGENT_PROGRESS_TEXT = {
   collecting_page_context: "collecting page context",
-  capturing_screenshot: "capturing screenshot",
   sending_to_gateway: "sending to gateway",
   waiting_for_answer: "waiting for answer",
   done: "done",
@@ -105,9 +104,6 @@ const BROWSER_AGENT_PROGRESS_TEXT = {
 };
 const BROWSER_TURN_STATUS_TIMEOUT_MS = 30000;
 const BROWSER_TURN_STATUS_POLL_MS = 400;
-// Keep evidence requests well below the gateway's 1 MiB JSON body cap. Text,
-// element summaries, and envelope metadata still need room in the same request.
-const MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS = 420 * 1024;
 const VOICE_AUTO_COMMIT_ENABLED = true;
 // 750 (was 900): aligned toward Android's 700ms; this hold is a flat serial
 // add to every turn's time-to-first-audio, so keep it as tight as VAD allows.
@@ -3288,28 +3284,6 @@ async function captureScreenshotViaDebugger(tabId) {
   }
 }
 
-function browserScreenshotEvidence(base64) {
-  const data = String(base64 || "");
-  if (!data) return null;
-  const bytes = Math.ceil((data.length * 3) / 4);
-  if (data.length > MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS) {
-    return {
-      media_type: "image/jpeg",
-      encoding: "omitted",
-      omitted: true,
-      bytes,
-      max_base64_chars: MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS,
-      reason: "screenshot too large for gateway evidence payload",
-    };
-  }
-  return {
-    media_type: "image/jpeg",
-    encoding: "base64",
-    data,
-    bytes,
-  };
-}
-
 function elementsText(snap) {
   const lines = (snap.elements || []).slice(0, MAX_ELEMENTS).map((e) => `[${e.i}] <${e.tag}${e.type ? " " + e.type : ""}> ${e.label}`);
   const pageText = truncate(String(snap.pageText || snap.page_text || "").trim(), 2800);
@@ -3464,10 +3438,6 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   throwIfAborted(signal);
   const snapshot = await collectBrowserSnapshot(tabId);
 
-  await noteBrowserAgentProgress(tabId, cueId, text, 1, "capturing_screenshot");
-  throwIfAborted(signal);
-  const screenshot = await captureScreenshot(tabId);
-  const screenshotEvidence = browserScreenshotEvidence(screenshot);
   const delegationEnvelope = role === "delegate" && options.delegationConfirmed === true
     ? browserDelegationEnvelope(text, snapshot.url)
     : null;
@@ -3485,7 +3455,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
     client,
   };
 
-  await noteBrowserAgentProgress(tabId, cueId, text, 2, "sending_to_gateway");
+  await noteBrowserAgentProgress(tabId, cueId, text, 1, "sending_to_gateway");
   throwIfAborted(signal);
   let started = await callGateway(cfg, "/v1/browser/turns", {
     signal,
@@ -3502,7 +3472,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
     },
   });
 
-  await noteBrowserAgentProgress(tabId, cueId, text, 3, "waiting_for_answer");
+  await noteBrowserAgentProgress(tabId, cueId, text, 2, "waiting_for_answer");
   throwIfAborted(signal);
   let evidenceId = "";
   if (browserTurnNeedsEvidence(started)) {
@@ -3520,12 +3490,12 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
           url: snapshot.url,
           title: snapshot.title,
           page_text: snapshot.pageText,
+          document_context: snapshot.documentContext,
           elements: snapshot.elements.slice(0, MAX_ELEMENTS),
           element_summaries: snapshot.elementSummaries.slice(0, MAX_ELEMENTS),
           viewport: snapshot.viewport,
           captured_at: snapshot.capturedAt,
         },
-        screenshot: screenshotEvidence,
         screen: snapToScreen(snapshot),
       },
     });
@@ -3543,7 +3513,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   await saveTaskState(cueId, {
     status: "done",
     instruction: text,
-    step: 4,
+    step: 3,
     tabId,
     browserTurnId: browserTurnId(data) || browserTurnId(started) || null,
     evidenceId: evidenceId || null,

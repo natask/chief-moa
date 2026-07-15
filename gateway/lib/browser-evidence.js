@@ -26,6 +26,7 @@ function browserEvidenceSummaryFromBody(body) {
   for (const value of [
     body.evidence,
     body.evidence_summary,
+    body.snapshot,
     body.screen,
     body.context?.screen,
     body.page_context,
@@ -47,11 +48,29 @@ function browserEvidenceSummaryFromValue(value) {
   }
   if (typeof value !== "object" || Array.isArray(value)) return emptyBrowserEvidenceSummary();
   const sourceRef = String(value.id || value.ref || value.evidence_ref || value.evidence_id || "").trim();
+  const documentContext = browserDocumentContextFromValue(value);
   return {
     page_ref: browserPageRefFromValue(value),
     visible_text: normalizeWhitespace(browserVisibleTextFromValue(value)),
     source_ref: sourceRef ? truncate(sourceRef, 200) : "",
     source_kind: truncate(String(value.kind || value.type || ""), 80),
+    ...documentContext,
+  };
+}
+
+function browserDocumentContextFromValue(value) {
+  const raw = value?.document_context || value?.documentContext;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const scope = truncate(String(raw.scope || ""), 80);
+  const coverage = truncate(String(raw.coverage || ""), 80);
+  const finiteCount = (item) => item != null && Number.isSafeInteger(Number(item)) && Number(item) >= 0 ? Number(item) : null;
+  return {
+    context_scope: scope,
+    context_coverage: coverage,
+    context_complete: raw.complete === true ? true : raw.complete === false ? false : null,
+    context_truncated: raw.truncated === true,
+    source_parts_total: finiteCount(raw.source_parts_total),
+    source_parts_included: finiteCount(raw.source_parts_included),
   };
 }
 
@@ -83,16 +102,43 @@ function mergeBrowserEvidenceSummaries(...summaries) {
   for (const summary of summaries) {
     if (!summary || typeof summary !== "object") continue;
     next.page_ref = mergeBrowserPageRefs(next.page_ref, summary.page_ref);
-    if (summary.visible_text) texts.push(String(summary.visible_text));
+    if (summary.visible_text) addDistinctEvidenceText(texts, summary.visible_text);
     if (!next.source_ref && summary.source_ref) next.source_ref = String(summary.source_ref);
     if (!next.source_kind && summary.source_kind) next.source_kind = String(summary.source_kind);
+    if (!next.context_scope && summary.context_scope) next.context_scope = String(summary.context_scope);
+    if (!next.context_coverage && summary.context_coverage) next.context_coverage = String(summary.context_coverage);
+    if (summary.context_complete === false) next.context_complete = false;
+    else if (next.context_complete == null && summary.context_complete === true) next.context_complete = true;
+    if (summary.context_truncated === true) next.context_truncated = true;
+    if (next.source_parts_total == null && summary.source_parts_total != null) next.source_parts_total = Number(summary.source_parts_total);
+    if (next.source_parts_included == null && summary.source_parts_included != null) next.source_parts_included = Number(summary.source_parts_included);
   }
-  next.visible_text = truncate(normalizeWhitespace(texts.join("\n")), 6000);
+  next.visible_text = truncate(normalizeWhitespace(texts.join("\n")), 20_000);
   return next;
 }
 
+function addDistinctEvidenceText(texts, value) {
+  const text = normalizeWhitespace(value);
+  if (!text) return;
+  if (texts.some((existing) => existing.includes(text))) return;
+  const containedIndex = texts.findIndex((existing) => text.includes(existing));
+  if (containedIndex >= 0) texts[containedIndex] = text;
+  else texts.push(text);
+}
+
 function emptyBrowserEvidenceSummary(pageRef = {}) {
-  return { page_ref: sanitizeBrowserPageRef(pageRef), visible_text: "", source_ref: "", source_kind: "" };
+  return {
+    page_ref: sanitizeBrowserPageRef(pageRef),
+    visible_text: "",
+    source_ref: "",
+    source_kind: "",
+    context_scope: "",
+    context_coverage: "",
+    context_complete: null,
+    context_truncated: false,
+    source_parts_total: null,
+    source_parts_included: null,
+  };
 }
 
 function browserPageRefFromBody(body) {

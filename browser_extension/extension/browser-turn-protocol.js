@@ -21,6 +21,9 @@ function normalizeBrowserSnapshot(snapshot, options = {}) {
     snapshotId: raw.snapshotId || raw.snapshot_id || `snap_${randomUUID?.() || now().getTime().toString(36)}`,
     viewport: raw.viewport && typeof raw.viewport === "object" ? raw.viewport : null,
     capturedAt: raw.capturedAt || raw.captured_at || now().toISOString(),
+    documentContext: raw.documentContext && typeof raw.documentContext === "object"
+      ? raw.documentContext
+      : raw.document_context && typeof raw.document_context === "object" ? raw.document_context : null,
     elementSummaries,
   };
 }

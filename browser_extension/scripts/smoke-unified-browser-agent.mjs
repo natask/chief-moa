@@ -18,7 +18,7 @@ const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `unified-browser-agent-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
 const TOKEN = "unified-browser-agent-smoke-token";
-const MAX_SCREENSHOT_BASE64_CHARS = 420 * 1024;
+const OFFSCREEN_MARKER = "OFFSCREEN_DOCUMENT_CONTEXT_MARKER";
 
 let latestChromeStderr = "";
 
@@ -365,6 +365,17 @@ async function main() {
     await pageCdp.send("Page.enable");
     await pageCdp.send("Page.navigate", { url: demoUrl });
     await waitForEval(pageCdp, `location.href.startsWith(${JSON.stringify(demoUrl)}) && document.readyState === "complete"`);
+    await evaluate(pageCdp, `
+      (() => {
+        const spacer = document.createElement("div");
+        spacer.style.height = "2400px";
+        const marker = document.createElement("p");
+        marker.id = "offscreen-document-context-marker";
+        marker.textContent = ${JSON.stringify(OFFSCREEN_MARKER)};
+        document.body.append(spacer, marker);
+        return marker.getBoundingClientRect().top > innerHeight;
+      })()
+    `);
 
     workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
     await workerCdp.send("Runtime.enable");
@@ -390,6 +401,15 @@ async function main() {
     await evaluate(workerCdp, `chrome.tabs.sendMessage(${tabId}, { cmd: "open" })`);
     await waitForEval(pageCdp, `Boolean(document.querySelector("#agee-input"))`);
     const contentCtx = await resolveContentContext(pageCdp, isolatedContexts);
+    await evaluate(pageCdp, `
+      (() => {
+        const select = document.querySelector("#agee-mode-select");
+        if (!select) return false;
+        select.value = "explain";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        return select.value === "explain";
+      })()
+    `, { contextId: contentCtx });
 
     await evaluate(pageCdp, installProgressRecorderExpr(), { contextId: contentCtx });
     await evaluate(pageCdp, submitTypedExpr("summarize this page"), { contextId: contentCtx });
@@ -397,10 +417,13 @@ async function main() {
     if (typed.kind !== "done" || !typed.text.includes("Unified browser turn answer")) {
       throw new Error(`typed page-context turn did not render answer: ${JSON.stringify(typed)}`);
     }
-    for (const state of ["collecting page context", "capturing screenshot", "sending to gateway", "waiting for answer"]) {
+    for (const state of ["collecting page context", "sending to gateway", "waiting for answer"]) {
       if (!typed.progress.some((text) => text.includes(state))) {
         throw new Error(`missing progress state "${state}": ${JSON.stringify(typed.progress)}`);
       }
+    }
+    if (typed.progress.some((text) => text.includes("capturing screenshot"))) {
+      throw new Error(`ordinary page context unexpectedly captured a screenshot: ${JSON.stringify(typed.progress)}`);
     }
     if (!typed.text.includes("not executed in this slice")) {
       throw new Error(`action proposal was not rendered as inert: ${JSON.stringify(typed)}`);
@@ -432,16 +455,7 @@ async function main() {
       throw new Error(`page-context turns incorrectly used /v1/voice/turns: ${JSON.stringify(voiceCalls)}`);
     }
     for (const call of evidenceCalls) {
-      const screenshot = call.body.screenshot;
-      if (!screenshot || typeof screenshot !== "object") {
-        throw new Error(`browser evidence did not include screenshot status: ${JSON.stringify(call.body)}`);
-      }
-      if (screenshot.encoding === "base64" && String(screenshot.data || "").length > MAX_SCREENSHOT_BASE64_CHARS) {
-        throw new Error(`inline screenshot exceeded cap: ${String(screenshot.data || "").length}`);
-      }
-      if (screenshot.encoding === "omitted" && screenshot.data) {
-        throw new Error(`omitted screenshot still included base64 data: ${JSON.stringify(screenshot)}`);
-      }
+      if ("screenshot" in call.body) throw new Error(`ordinary browser evidence included a screenshot: ${JSON.stringify(call.body.screenshot)}`);
     }
 
     const firstEvidence = evidenceCalls[0].body;
@@ -451,7 +465,10 @@ async function main() {
       !firstEvidence?.snapshot?.captured_at ||
       !Array.isArray(firstEvidence?.snapshot?.element_summaries) ||
       !firstEvidence.snapshot.element_summaries.length ||
-      !String(firstEvidence?.snapshot?.page_text || "").includes("Use this page for a low-risk extension smoke test")
+      !String(firstEvidence?.snapshot?.page_text || "").includes("Use this page for a low-risk extension smoke test") ||
+      !String(firstEvidence.snapshot.page_text).includes(OFFSCREEN_MARKER) ||
+      firstEvidence?.snapshot?.document_context?.scope !== "whole_rendered_document" ||
+      firstEvidence?.snapshot?.document_context?.complete !== true
     ) {
       throw new Error(`browser evidence payload is missing snapshot fields: ${JSON.stringify(firstEvidence)}`);
     }

@@ -32,6 +32,16 @@ bounding geometry or stable reference is returned. The side panel is currently
 a voice/text conversation surface rather than the persistent workspace, and
 Tier A generated UI supports only card/list/map/stat components.
 
+Page-question evidence also needs a reading/action separation. Reading context
+is a bounded semantic projection of the whole currently rendered DOM and must
+declare when it is sampled or truncated. The interactive element index remains
+limited to the current viewport until the anchor/action contract can revalidate
+offscreen targets. Ordinary reading context does not capture pixels. A future
+explicit visual-evidence request may capture the verified target tab for
+canvas, diagram, cross-origin-frame, or appearance questions, but it is a
+separate evidence class and must never be an ambient prerequisite for page
+understanding.
+
 ## Considered Shapes
 
 ### A. Tutorial-first state machine

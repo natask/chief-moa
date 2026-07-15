@@ -27,6 +27,7 @@ test("snapshot normalization creates bounded canonical browser evidence", () => 
     snapshotId: "snap_snapshot-1",
     viewport: null,
     capturedAt: "2026-07-15T12:00:00.000Z",
+    documentContext: null,
     elementSummaries: [],
   });
 
@@ -47,6 +48,7 @@ test("snapshot normalization creates bounded canonical browser evidence", () => 
   assert.equal(raw.pageText, "fallback text");
   assert.equal(raw.snapshotId, "snapshot-existing");
   assert.equal(raw.capturedAt, "captured-existing");
+  assert.equal(raw.documentContext, null);
   assert.deepEqual(raw.elementSummaries, ["[0] <button submit> Send", "[1] <a>"]);
 
   const supplied = normalizeBrowserSnapshot({
@@ -60,6 +62,11 @@ test("snapshot normalization creates bounded canonical browser evidence", () => 
   assert.deepEqual(supplied.elements, []);
   assert.deepEqual(supplied.elementSummaries, ["one", "", ""]);
   assert.equal(supplied.viewport, null);
+
+  const withDocumentContext = normalizeBrowserSnapshot({
+    document_context: { scope: "whole_rendered_document", complete: true },
+  }, { now });
+  assert.deepEqual(withDocumentContext.documentContext, { scope: "whole_rendered_document", complete: true });
 
   const timeFallback = normalizeBrowserSnapshot({}, { randomUUID: () => "", now });
   assert.equal(timeFallback.snapshotId, `snap_${now().getTime().toString(36)}`);
