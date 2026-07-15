@@ -107,6 +107,7 @@ const { createSupervisorHandlers } = require("./lib/supervisor-handlers");
 const { createSessionReadHandlers } = require("./lib/session-read-handlers");
 const { createThreadSwitchHandlers } = require("./lib/thread-switch-handlers");
 const { createBrokerResearchHandlers } = require("./lib/broker-research-handlers");
+const { createMediaNoteHandlers } = require("./lib/media-note-handlers");
 const {
   normalizeSpeech,
   isStopLike,
@@ -385,6 +386,9 @@ const videoNoteHandlers = createVideoNoteHandlers({
   store: videoNotes,
   maxBytes: VIDEO_NOTE_MAX_BODY_BYTES,
   recordCreated: recordVideoNoteProductEventBestEffort,
+});
+const { routeMediaNotes } = createMediaNoteHandlers({
+  authorized, sendJson, audioNoteHandlers, videoNoteHandlers,
 });
 const mediaBookmarks = createMediaBookmarkStore({ dataDir: DATA_DIR });
 const { routeMediaBookmarks } = createMediaBookmarkHandlers({
@@ -1083,84 +1087,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/v1/audio-notes") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await audioNoteHandlers.create(request, response);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/audio-notes") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      audioNoteHandlers.list(response, url);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/audio-notes/") && url.pathname.endsWith("/audio")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await audioNoteHandlers.sendAudio(response, url);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/audio-notes/")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      audioNoteHandlers.get(response, url);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/video-notes") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await videoNoteHandlers.create(request, response);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/video-notes") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      videoNoteHandlers.list(response, url);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/video-notes/") && url.pathname.endsWith("/video")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await videoNoteHandlers.sendVideo(response, url);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/video-notes/")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      videoNoteHandlers.get(response, url);
-      return;
-    }
-
-    if (request.method === "DELETE" && url.pathname.startsWith("/v1/video-notes/")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await videoNoteHandlers.remove(response, url);
+    if (await routeMediaNotes(request, response, url)) {
       return;
     }
 
