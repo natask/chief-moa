@@ -112,4 +112,11 @@
 - [x] 11.7 Place Android draft controls beside the orb instead of in the voice card.
 - [x] 11.8 Give the browser voice-first mascot matching side controls and prevent
       a later mascot click from silently sending the draft.
-- [ ] 11.9 Verify and package the browser extension parity slice.
+- [x] 11.9 Verify and package the browser extension parity slice.
+
+Release note: commit `5106d52` produced Android artifact
+`android-ota-5106d52d7fcc527ee05b0c2197c1b8b38124eb52-1` and browser artifact
+`agee-chrome-0.1.35-5106d52d7fcc527ee05b0c2197c1b8b38124eb52`.
+Stable Android publication remains blocked because the protected publish job is
+not configured to run, and the Chrome Web Store upload gate was skipped; the
+local unpacked-extension reload signal completed without a client acknowledgement.
