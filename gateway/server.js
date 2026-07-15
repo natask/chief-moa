@@ -74,6 +74,9 @@ const {
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
 const { createWorkGraphHandlers } = require("./lib/work-graph-handlers");
+const { createProjectStore, promptWithProjectBrief } = require("./lib/project-store");
+const { createEventProjectHandlers } = require("./lib/event-project-handlers");
+const { createDeviceToolHandlers } = require("./lib/device-tool-handlers");
 const { createEventSubstrateStore, normalizeEventType } = require("./lib/event-substrate");
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { buildIdentity } = require("./lib/build-identity");
@@ -308,9 +311,17 @@ const browserTurnStore = browserTurns.createBrowserTurnStore({ turnsDir: BROWSER
 const browserTurnLifecycle = browserTurns.createBrowserTurnLifecycle({
   answerBrowserEvidence: browserEvidenceAnswer,
 });
+const projectStore = createProjectStore({
+  filePath: PROJECTS_FILE,
+  sanitizeId,
+  resolveWorkingDir: resolveHarnessWorkingDir,
+  sanitizeHarness,
+  defaultHarness: DEFAULT_HARNESS,
+  randomId,
+});
 const brokerRouter = createBrokerRouter({
   listSessions: () => sessionSummaryPayload(50, { sources: ["voice"] }).sessions,
-  listProjects,
+  listProjects: projectStore.list,
   listAgentRuns: listAllAgentRuns,
   isTerminalRunStatus,
   randomId,
@@ -321,7 +332,7 @@ const brokerLauncher = createBrokerLauncher({
   contextPacksDir: BROKER_CONTEXT_PACKS_DIR,
   routerDefaultHarness: ROUTER_DEFAULT_HARNESS,
   maxAgentPromptBytes: MAX_AGENT_PROMPT_BYTES,
-  durableSessionContextBlock, readAgentRun, summarizeAgentRun, readAgentEvents, findProject,
+  durableSessionContextBlock, readAgentRun, summarizeAgentRun, readAgentEvents, findProject: projectStore.find,
   listAgentRuns: listAllAgentRuns,
   isTerminalRunStatus, randomId, truncate, truncateToBytes, startAgentRun,
   appendAgentEvent, cleanError, sanitizeOptionalId,
@@ -515,6 +526,19 @@ const eventSubstrate = createEventSubstrateStore({
   databaseUrl: process.env.DATABASE_URL,
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
   originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
+});
+const { routeEventProjects, eventStatus } = createEventProjectHandlers({
+  eventSubstrate, normalizeEventType, authorized, authorizedAgent, agentAuthError,
+  projectStore, readJsonBody, sendJson, cleanError,
+  databaseConfigured: Boolean(process.env.DATABASE_URL),
+});
+const { routeDeviceTools } = createDeviceToolHandlers({
+  authorized, sendJson, readJsonBody, listDeviceClients, listToolRequests,
+  upsertDeviceClient, claimableToolRequestsForDevice, cleanError,
+  createToolRequest, recordToolRequestProductEvent, summarizeToolRequest,
+  normalizeDeviceId, readDeviceClientsMap, claimNextToolRequest, sanitizeId,
+  toolRequestExists: (id) => fs.existsSync(toolRequestPath(id)), readToolRequest,
+  randomId, truncate, sanitizeToolJson, updateToolRequest,
 });
 const workerPull = createWorkerPullStore({
   dataDir: DATA_DIR,
@@ -772,7 +796,7 @@ const server = http.createServer(async (request, response) => {
           worker_pull: workerPull.status(),
         },
         android_ota: androidOtaHealth(),
-        event_substrate: await eventSubstrateStatus(),
+        event_substrate: await eventStatus(),
         device_hub: {
           registry_file: DEVICE_CLIENTS_FILE,
           tool_requests_dir: TOOL_REQUESTS_DIR,
@@ -1078,69 +1102,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/device-clients" && request.method === "GET") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, { devices: listDeviceClients() });
-      return;
-    }
-
-    if (url.pathname === "/v1/device-clients/heartbeat" && request.method === "POST") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleDeviceClientHeartbeat(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/tool/requests" && request.method === "GET") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, {
-        requests: listToolRequests({
-          status: url.searchParams.get("status") || "",
-          targetDeviceId: url.searchParams.get("target_device_id") || url.searchParams.get("device_id") || "",
-          sourceDeviceId: url.searchParams.get("source_device_id") || "",
-          limit: Number(url.searchParams.get("limit") || 25),
-        }),
-      });
-      return;
-    }
-
-    if (url.pathname === "/v1/tool/requests" && request.method === "POST") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleCreateToolRequest(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/tool/requests/claim" && request.method === "POST") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleClaimToolRequest(request, response);
-      return;
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/tool/requests/") &&
-      url.pathname.endsWith("/receipts")
-    ) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const id = url.pathname.slice("/v1/tool/requests/".length, -"/receipts".length);
-      await handleToolRequestReceipt(request, response, id);
+    if (await routeDeviceTools(request, response, url)) {
       return;
     }
 
@@ -1153,41 +1115,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/events/status" && request.method === "GET") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, { event_substrate: await eventSubstrateStatus() });
-      return;
-    }
-
-    if (url.pathname === "/v1/events" && request.method === "GET") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, {
-        events: await eventSubstrate.listEvents({
-          event_type: url.searchParams.get("event_type") || url.searchParams.get("eventType") || "",
-          event_type_prefix: url.searchParams.get("event_type_prefix") || url.searchParams.get("eventTypePrefix") || "",
-          stream_id: url.searchParams.get("stream_id") || url.searchParams.get("streamId") || "",
-          origin_id: url.searchParams.get("origin_id") || url.searchParams.get("originId") || "",
-          correlation_id: url.searchParams.get("correlation_id") || url.searchParams.get("correlationId") || "",
-          idempotency_key: url.searchParams.get("idempotency_key") || url.searchParams.get("idempotencyKey") || "",
-          order: url.searchParams.get("order") || "",
-          limit: Number(url.searchParams.get("limit") || 100),
-        }),
-      });
-      return;
-    }
-
-    if (url.pathname === "/v1/events" && request.method === "POST") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleCreateProductEvent(request, response);
+    if (await routeEventProjects(request, response, url)) {
       return;
     }
 
@@ -1195,32 +1123,6 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/projects" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, { projects: listProjects() });
-      return;
-    }
-
-    if (url.pathname === "/v1/projects" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateProject(request, response);
-      return;
-    }
-
-    if (request.method === "PATCH" && url.pathname.startsWith("/v1/projects/")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleUpdateProject(request, response, decodeURIComponent(url.pathname.slice("/v1/projects/".length)));
-      return;
-    }
 
     if (await routeRouterActivations(request, response, url)) {
       return;
@@ -4193,58 +4095,6 @@ function defaultVoiceProviderProfile() {
   };
 }
 
-async function handleCreateProductEvent(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const requestedType = normalizeEventType(body.event_type || body.eventType || body.type);
-    if (requestedType === "telemetry.semantic.v1") {
-      throw new Error("semantic telemetry event type is reserved for the internal validated exporter");
-    }
-    const event = await eventSubstrate.appendEvent({
-      ...body,
-      actor: body.actor || { kind: "gateway", id: "api" },
-    });
-    sendJson(response, 201, { event });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function eventSubstrateStatus() {
-  try {
-    return await eventSubstrate.storageInfo();
-  } catch (error) {
-    return {
-      mode: "error",
-      error: cleanError(error),
-      postgres_configured: Boolean(process.env.DATABASE_URL),
-    };
-  }
-}
-
-async function handleCreateProject(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    sendJson(response, 201, { project: createProject(body) });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleUpdateProject(request, response, id) {
-  const body = await readJsonBody(request);
-  try {
-    const project = updateProject(id, body);
-    if (!project) {
-      sendJson(response, 404, { error: "project not found" });
-      return;
-    }
-    sendJson(response, 200, { project });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
 function cancelAgentRunById(id) {
   let safeId;
   try {
@@ -6922,7 +6772,7 @@ function createAgentRun(body) {
   // A run can target a saved project (resolves its working dir + default
   // harness) or pass working_dir/harness directly. Explicit fields win.
   const requestedProjectId = body.project_id ? sanitizeOptionalBlankId(body.project_id) : "";
-  const project = requestedProjectId ? findProject(requestedProjectId) : null;
+  const project = requestedProjectId ? projectStore.find(requestedProjectId) : null;
   if (requestedProjectId && !project && !useWorkerPullForAgentRuns()) {
     throw new Error(`unknown project: ${body.project_id}`);
   }
@@ -7012,107 +6862,6 @@ function createAgentRun(body) {
     screen: run.screen,
   });
   return run;
-}
-
-// --- Projects store -------------------------------------------------------
-// A project is the durable object the user manages. Its brief records the
-// problem, desired outcome, current state, and next viable step independently
-// of any disposable agent session. Stored flat in PROJECTS_FILE. The working
-// dir is validated against the harness root the same way a run's working_dir
-// is, so a project can never escape the sandbox.
-
-function listProjects() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(PROJECTS_FILE, "utf8"));
-    return Array.isArray(raw) ? raw : [];
-  } catch {
-    return [];
-  }
-}
-
-function findProject(id) {
-  const safe = sanitizeId(id);
-  return listProjects().find((project) => project.id === safe) || null;
-}
-
-function writeProjects(projects) {
-  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2));
-}
-
-function createProject(body) {
-  const name = String(body.name || "").trim().slice(0, 120);
-  if (!name) {
-    throw new Error("name is required");
-  }
-  // resolveHarnessWorkingDir validates the path exists and stays in the root.
-  const workingDir = resolveHarnessWorkingDir(body.working_dir || body.cwd || "");
-  const defaultHarness = sanitizeHarness(body.default_harness || DEFAULT_HARNESS);
-  const projects = listProjects();
-  const now = new Date().toISOString();
-  const project = {
-    id: randomId("proj"),
-    name,
-    working_dir: workingDir,
-    default_harness: defaultHarness,
-    brief: sanitizeProjectBrief(body.brief || body),
-    created_at: now,
-    updated_at: now,
-  };
-  projects.push(project);
-  writeProjects(projects);
-  return project;
-}
-
-function updateProject(id, body) {
-  const safeId = sanitizeId(id);
-  const projects = listProjects();
-  const index = projects.findIndex((project) => project.id === safeId);
-  if (index < 0) {
-    return null;
-  }
-  const previous = projects[index];
-  const incoming = body && typeof body.brief === "object" ? body.brief : body;
-  const brief = sanitizeProjectBrief({
-    ...(previous.brief && typeof previous.brief === "object" ? previous.brief : {}),
-    ...(incoming && typeof incoming === "object" ? incoming : {}),
-  });
-  const now = new Date().toISOString();
-  const project = { ...previous, brief, updated_at: now };
-  projects[index] = project;
-  writeProjects(projects);
-  return project;
-}
-
-function sanitizeProjectBrief(value) {
-  const input = value && typeof value === "object" ? value : {};
-  return {
-    problem: truncate(String(input.problem || "").trim(), 4000),
-    desired_outcome: truncate(String(input.desired_outcome || input.outcome || "").trim(), 4000),
-    current_state: truncate(String(input.current_state || input.state || "").trim(), 12000),
-    next_step: truncate(String(input.next_step || "").trim(), 4000),
-  };
-}
-
-function promptWithProjectBrief(prompt, project) {
-  const brief = sanitizeProjectBrief(project?.brief);
-  const fields = [
-    ["Problem", brief.problem],
-    ["Desired outcome", brief.desired_outcome],
-    ["Current state", brief.current_state],
-    ["Next viable step", brief.next_step],
-  ].filter(([, value]) => value);
-  if (!fields.length) {
-    return prompt;
-  }
-  return [
-    "User instruction:",
-    prompt,
-    "",
-    `Durable project brief (${project.name || project.id}):`,
-    ...fields.map(([label, value]) => `${label}: ${value}`),
-    "",
-    "Use the brief as project context. Advance the user instruction and leave durable evidence; do not manage or narrate agent identities.",
-  ].join("\n");
 }
 
 async function executeAgentRun(runId, active) {
@@ -8812,109 +8561,6 @@ async function handleBrowserAgentTaskFinish(request, response, id) {
     });
   }
   sendJson(response, 200, { task: result.task });
-}
-
-async function handleDeviceClientHeartbeat(request, response) {
-  const body = await readJsonBody(request);
-  let device;
-  try {
-    device = upsertDeviceClient(body);
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-  sendJson(response, 200, {
-    device,
-    pending_request_count: claimableToolRequestsForDevice(device).length,
-    requests_endpoint: "/v1/tool/requests/claim",
-  });
-}
-
-async function handleCreateToolRequest(request, response) {
-  const body = await readJsonBody(request);
-  let toolRequest;
-  try {
-    toolRequest = createToolRequest(body);
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-  await recordToolRequestProductEvent(toolRequest, "queued");
-  sendJson(response, 202, { request: summarizeToolRequest(toolRequest, { includeInput: true }) });
-}
-
-async function handleClaimToolRequest(request, response) {
-  const body = await readJsonBody(request);
-  const deviceId = normalizeDeviceId(body.device_id || body.deviceId || body.client_id || body.clientId || "");
-  if (!deviceId) {
-    sendJson(response, 400, { error: "device_id is required" });
-    return;
-  }
-
-  let device = readDeviceClientsMap()[deviceId];
-  if (!device && (body.surface_type || body.surfaceType || body.local_tool_manifest || body.tool_manifest || body.capabilities)) {
-    try {
-      device = upsertDeviceClient(body);
-    } catch (error) {
-      sendJson(response, 400, { error: cleanError(error) });
-      return;
-    }
-  }
-  if (!device) {
-    sendJson(response, 404, { error: "device client has not heartbeated" });
-    return;
-  }
-
-  const task = claimNextToolRequest(device);
-  if (!task) {
-    sendJson(response, 204, {});
-    return;
-  }
-  await recordToolRequestProductEvent(task, "claimed");
-  sendJson(response, 200, { request: summarizeToolRequest(task, { includeInput: true }) });
-}
-
-async function handleToolRequestReceipt(request, response, id) {
-  const requestId = sanitizeId(id);
-  if (!fs.existsSync(toolRequestPath(requestId))) {
-    sendJson(response, 404, { error: "tool request not found" });
-    return;
-  }
-
-  const body = await readJsonBody(request);
-  const current = readToolRequest(requestId);
-  const deviceId = normalizeDeviceId(body.device_id || body.deviceId || "");
-  if (deviceId && current.target_device_id && deviceId !== current.target_device_id) {
-    sendJson(response, 403, { error: "receipt device_id does not match request target" });
-    return;
-  }
-  if (deviceId && current.claimed_by && deviceId !== current.claimed_by) {
-    sendJson(response, 403, { error: "receipt device_id does not match request claimant" });
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const ok = body.ok !== false && !body.error;
-  const receipt = {
-    id: randomId("receipt"),
-    ts: now,
-    ok,
-    device_id: deviceId || current.claimed_by || current.target_device_id || "",
-    summary: truncate(String(body.summary || ""), 2000),
-    error: body.error ? truncate(String(body.error), 2000) : "",
-    result: sanitizeToolJson(body.result ?? body.output ?? null),
-    local_receipt: sanitizeToolJson(body.local_receipt || body.localReceipt || null),
-  };
-  const receipts = Array.isArray(current.receipts) ? current.receipts.concat([receipt]) : [receipt];
-  const next = updateToolRequest(requestId, {
-    status: ok ? "completed" : "failed",
-    updated_at: now,
-    finished_at: now,
-    receipts,
-    error: receipt.error,
-  });
-  await recordToolRequestProductEvent(next, "receipt", receipt);
-  sendJson(response, 200, { request: summarizeToolRequest(next), receipt });
 }
 
 async function recordBrowserTaskProductEvent(task, stage, receipt = null) {
