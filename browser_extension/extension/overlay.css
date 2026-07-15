@@ -1087,12 +1087,80 @@ button.agee-ui-list-row:hover {
   display: none;
 }
 
+/* Local page grounding stays visible at the top of the compact surface. The
+   canonical conversation remains gateway-owned and is fetched only when the
+   user opens History. */
+#agee-page-context {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 12px 2px;
+}
+#agee-page-identity {
+  color: var(--agee-muted);
+  flex: 1;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#agee-history-button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--agee-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+#agee-history-button:hover,
+#agee-history-button:focus-visible,
+#agee-history-button[aria-expanded="true"] {
+  color: var(--agee-text);
+}
+#agee-history-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+#agee-history[hidden] {
+  display: none;
+}
+#agee-history {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  max-height: 38vh;
+  overflow-y: auto;
+  padding: 4px 12px 8px;
+}
+.agee-history-turn {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 8px 0;
+}
+.agee-history-turn:first-child {
+  border-top: 0;
+}
+.agee-history-turn p,
+.agee-history-empty {
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.agee-history-you {
+  color: var(--agee-muted);
+  margin-bottom: 4px !important;
+}
+.agee-history-assistant {
+  color: #e7e7ea;
+}
+
 /* ---- Result stack: cue cards ---------------------------------------------- */
-/* The log sits above the composer and holds the answer cards. It shows
-   whenever it has content, so replies stack right above where you type. Cards
-   persist until the user dismisses one (see .agee-cue-dismiss) instead of
-   fading on their own — the log is scrollable and height-capped so it never
-   swallows the page. */
+/* The log sits above the composer and holds transient answer cards. Terminal
+   cards linger briefly or can be dismissed immediately; canonical history is
+   opened separately. The log is height-capped so it never swallows the page. */
 #agee-log {
   display: none;
   max-height: 38vh;
@@ -1233,6 +1301,9 @@ button.agee-ui-list-row:hover {
 }
 .agee-cue-running .agee-cue-name::after {
   content: " · thinking";
+}
+.agee-cue-done.agee-cue-steered .agee-cue-name::after {
+  content: " · steered";
 }
 .agee-cue-done .agee-cue-name {
   color: #b7c7bd;
