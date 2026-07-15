@@ -119,6 +119,19 @@ test("evidence requires a locator, an existing turn, and visible evidence", asyn
   response = {};
   await state.handlers.handleBrowserEvidence(request("POST", { browser_turn_id: "turn-1" }), response);
   assert.deepEqual(response, { status: 400, payload: { error: "evidence or screen visible text is required" } });
+
+  state = harness({
+    browserEvidenceSummaryFromBody: () => ({
+      visible_text: "",
+      source_ref: "",
+      context_scope: "whole_rendered_document",
+      context_complete: true,
+      page_ref: {},
+    }),
+  });
+  response = {};
+  await state.handlers.handleBrowserEvidence(request("POST", { turn_id: "turn-1" }), response);
+  assert.equal(response.status, 200);
 });
 
 test("evidence lookup by request id completes, dedupes, persists, and projects aliases", async () => {

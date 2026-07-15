@@ -61,7 +61,7 @@ function createBrowserTurnHandlers(deps) {
       : browserTurnStore.findBrowserTurnByEvidenceRequestId(requestedEvidenceRequestId);
     if (!turn) { sendJson(response, 404, { error: "browser turn not found" }); return; }
     const summary = browserEvidenceSummaryFromBody(body);
-    if (!summary.visible_text && !summary.source_ref) {
+    if (!summary.visible_text && !summary.source_ref && !summary.context_scope) {
       sendJson(response, 400, { error: "evidence or screen visible text is required" }); return;
     }
     const timestamp = now();
