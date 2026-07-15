@@ -866,7 +866,9 @@ if (
 if (
   !/isLivekitVoiceEnabled\(\)/.test(backgroundSource) ||
   !/startLivekitVoiceSession\(/.test(backgroundSource) ||
-  !/if \(tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
+  !/const branchBound = Boolean\(String\(opts\.branchId \|\| ""\)\.trim\(\)\);/.test(backgroundSource) ||
+  !/const threadSwitchBound = \["new", "fork", "incognito"\]\.includes\(contextAction\);/.test(backgroundSource) ||
+  !/if \(!branchBound && !threadSwitchBound && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
   !/return startVoiceSessionProxy\(tabId, opts\);/.test(backgroundSource)
 ) {
   throw new Error("background.js must gate LiveKit voice behind the flag and fall back to the WS startVoiceSessionProxy path");

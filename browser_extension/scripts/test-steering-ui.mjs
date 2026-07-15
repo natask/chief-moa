@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const contentSource = readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
+const backgroundSource = readFileSync(new URL("../extension/background.js", import.meta.url), "utf8");
 
 function extractFunction(source, name) {
   const signature = `function ${name}(`;
@@ -24,11 +25,17 @@ const helperNames = [
   "compactPageIdentityPart",
   "formatPageIdentity",
   "formatSteeredAssistantText",
-  "selectResolvedCueIds",
+  "normalizeRoutingContext",
+  "projectSessionLanes",
+  "routingReceiptText",
+  "selectedBranchRouting",
 ];
 const helperSource = helperNames.map((name) => extractFunction(contentSource, name)).join("\n");
-const context = vm.createContext({ STEERING_BOUNDARY_MARKER: "— steered here; prior response stopped —" });
-vm.runInContext(`${helperSource}\nglobalThis.helpers = { formatPageIdentity, formatSteeredAssistantText, selectResolvedCueIds };`, context);
+const context = vm.createContext({
+  STEERING_BOUNDARY_MARKER: "— steered here; prior response stopped —",
+  ROUTING_ACTIONS: new Set(["continue", "new", "fork", "incognito"]),
+});
+vm.runInContext(`${helperSource}\nglobalThis.helpers = { formatPageIdentity, formatSteeredAssistantText, normalizeRoutingContext, projectSessionLanes, routingReceiptText, selectedBranchRouting };`, context);
 const { helpers } = context;
 
 assert.equal(
@@ -55,21 +62,50 @@ assert.equal(
   `Already visible\n\n${marker}\n\nA replacement chunk`,
 );
 
+const projected = helpers.projectSessionLanes([
+  { cueId: "main-1", context: { action: "continue", branch_id: "main", thread_label: "Main", persisted: true } },
+  { cueId: "fork-1", context: { action: "fork", branch_id: "fork-a", thread_label: "Research", persisted: true } },
+  { cueId: "fork-2", context: { action: "continue", branch_id: "fork-a", thread_label: "Research", persisted: true } },
+], "main");
+assert.deepEqual(JSON.parse(JSON.stringify(projected.visibleCardIds)), ["main-1"]);
+assert.equal(projected.lanes.length, 2);
+assert.equal(projected.lanes.find((lane) => lane.id === "main").current, true);
+assert.deepEqual(JSON.parse(JSON.stringify(projected.lanes.find((lane) => lane.id === "fork-a").cardIds)), ["fork-1", "fork-2"]);
+assert.equal(helpers.normalizeRoutingContext({ action: "new" }).action, "new");
+assert.equal(helpers.normalizeRoutingContext({ action: "fork" }).action, "fork");
+assert.equal(helpers.routingReceiptText({ action: "continue", thread_label: "Main" }), "Continued · Main");
+assert.equal(helpers.routingReceiptText({ action: "new" }), "New thread");
+assert.equal(helpers.routingReceiptText({ action: "fork" }), "Forked");
 assert.deepEqual(
-  [...helpers.selectResolvedCueIds([
-    { id: "done-1", active: false },
-    { id: "running", active: true },
-    { id: "steered", active: false, protected: true },
-    { id: "done-2", active: false },
-  ])],
-  ["done-1", "done-2"],
+  JSON.parse(JSON.stringify(helpers.selectedBranchRouting({ action: "" }, "branch-main"))),
+  { contextAction: "continue", branchId: "branch-main" },
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(helpers.selectedBranchRouting({ action: "new" }, "branch-main"))),
+  { contextAction: "new", branchId: "" },
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(helpers.selectedBranchRouting({ action: "incognito" }, "branch-main"))),
+  { contextAction: "incognito", branchId: "" },
 );
 
 assert.match(contentSource, /origin === "single"\) beginCurrentThreadSteeringCapture\(\)/);
 assert.match(contentSource, /if \(state\.assistantSpeechSuppressed\) return;/);
 assert.match(contentSource, /sendLiveVoiceControl\(state, liveCancelTurnMessage\(state,/);
 assert.match(contentSource, /state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/);
-assert.match(contentSource, /scheduleCueRetirement\(cueId\)/);
+assert.doesNotMatch(contentSource, /scheduleCueRetirement\(cueId\)/);
+assert.match(contentSource, /lane\.timeline\.appendChild\(card\)/);
+assert.match(contentSource, /if \(msg\.context\) applyCueRoutingContext\(msg\.cueId, msg\.context\)/);
+assert.match(backgroundSource, /context: browserContextReceipt\(data\)/);
+assert.match(backgroundSource, /context_action: contextAction/);
+assert.match(contentSource, /branchId: branchRouting\.branchId/);
+assert.match(backgroundSource, /branch_id: branchId \|\| cueId/);
+assert.match(contentSource, /const branchRouting = selectedBranchRouting\(context, selectedLaneId\);[\s\S]*?cmd: "voiceSessionStart"[\s\S]*?branchId: branchRouting\.branchId/);
+assert.match(backgroundSource, /const branchBound = Boolean\(String\(opts\.branchId \|\| ""\)\.trim\(\)\);/);
+assert.match(backgroundSource, /const threadSwitchBound = \["new", "fork", "incognito"\]\.includes\(contextAction\);/);
+assert.match(backgroundSource, /if \(!branchBound && !threadSwitchBound && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/);
+assert.match(backgroundSource, /let branchForSession = String\(branchId \|\| ""\)\.trim\(\) \|\| cueId;/);
+assert.ok((backgroundSource.match(/branchId: msg\.branchId/g) || []).length >= 2);
 assert.match(contentSource, /safeRuntimeSendMessage\(\{ cmd: "history" \}\)/);
 
 console.log("browser steering UI tests passed");

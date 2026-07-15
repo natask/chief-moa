@@ -31,6 +31,8 @@
     voiceButton,
     recordButton,
     stopButton,
+    laneNav,
+    laneTabs,
     log,
     historyButton,
     historyView,
@@ -264,6 +266,8 @@
   const cues = new Map();
   const activeCues = new Set();
   const revokedCueIds = new Set();
+  const sessionLanes = new Map();
+  let selectedLaneId = "foreground";
 
   // Client thread controls. "/new [label]" arms a one-shot fresh thread for the
   // next turn; "/incognito" toggles a persistent no-persistence mode. The
@@ -366,6 +370,9 @@
         <div id="agee-ui-surface" aria-live="polite"></div>
         <div id="agee-lang-chip" class="agee-lang-chip" hidden aria-live="polite"></div>
         <div id="agee-history" hidden></div>
+        <nav id="agee-lane-nav" aria-label="Session branches" hidden>
+          <div id="agee-lane-tabs" role="tablist" aria-label="Session branches"></div>
+        </nav>
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
@@ -395,6 +402,8 @@
     recordButton = root.querySelector("#agee-record");
     stopButton = root.querySelector("#agee-stop");
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
+    laneNav = root.querySelector("#agee-lane-nav");
+    laneTabs = root.querySelector("#agee-lane-tabs");
     log = root.querySelector("#agee-log");
     historyButton = root.querySelector("#agee-history-button");
     historyView = root.querySelector("#agee-history");
@@ -406,6 +415,7 @@
 
     setupOverlayTooltips();
     setupCueLogInteractions();
+    ensureSessionLane("foreground", { label: "Current" });
     restoreLauncherPosition();
     restoreMascotScale();
     restoreUiChimePreference();
@@ -1563,11 +1573,10 @@
   }
 
   // Show the result stack whenever it holds anything (running, done, error, or
-  // confirm rows), so answers sit above the composer until their linger timer
-  // removes them.
+  // confirm rows), so answers sit above the composer in the selected lane.
   function syncLogVisibility() {
     if (!root || !log) return;
-    const hasVisibleWork = log.children.length > 0;
+    const hasVisibleWork = Boolean(log.querySelector(".agee-cue, .agee-row"));
     root.classList.toggle("agee-has-log", hasVisibleWork);
   }
 
@@ -2307,6 +2316,145 @@
   }
 
   // ---- Cue cards --------------------------------------------------------
+  const ROUTING_ACTIONS = new Set(["continue", "new", "fork", "incognito"]);
+
+  function normalizeRoutingContext(context = {}) {
+    const actionValue = String(context?.action || "continue").trim().toLowerCase();
+    const action = ROUTING_ACTIONS.has(actionValue) ? actionValue : "continue";
+    return {
+      action,
+      branchId: String(context?.branch_id || context?.branchId || "").trim(),
+      threadLabel: String(context?.thread_label || context?.threadLabel || "").trim().slice(0, 80),
+      persisted: context?.persisted !== false,
+    };
+  }
+
+  // Pure acceptance projection: group result cards into horizontal branch lanes
+  // while exposing only the selected lane's vertical timeline.
+  function projectSessionLanes(results, requestedLaneId = "") {
+    const lanesById = new Map();
+    for (const result of Array.isArray(results) ? results : []) {
+      const context = normalizeRoutingContext(result?.context);
+      const laneId = context.branchId || String(result?.laneId || "foreground");
+      if (!lanesById.has(laneId)) {
+        lanesById.set(laneId, {
+          id: laneId,
+          label: context.threadLabel || (context.action === "continue" ? "Current" : context.action),
+          action: context.action,
+          persisted: context.persisted,
+          cardIds: [],
+        });
+      }
+      lanesById.get(laneId).cardIds.push(String(result?.cueId || ""));
+    }
+    const lanes = [...lanesById.values()];
+    const selected = lanesById.has(requestedLaneId) ? requestedLaneId : (lanes.at(-1)?.id || "foreground");
+    return {
+      currentLaneId: selected,
+      lanes: lanes.map((lane) => ({ ...lane, current: lane.id === selected })),
+      visibleCardIds: lanesById.get(selected)?.cardIds || [],
+    };
+  }
+
+  function compactLaneLabel(value, fallback = "Current") {
+    const text = String(value || fallback).replace(/\s+/g, " ").trim();
+    return text.length > 24 ? `${text.slice(0, 23).trimEnd()}…` : text;
+  }
+
+  function ensureSessionLane(laneId, { label = "", action = "continue", persisted = true } = {}) {
+    const id = String(laneId || "foreground");
+    let lane = sessionLanes.get(id);
+    if (lane) {
+      if (label) lane.label = compactLaneLabel(label);
+      lane.action = action || lane.action;
+      lane.persisted = persisted !== false;
+      renderSessionLaneSelection();
+      return lane;
+    }
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "agee-lane-tab";
+    tab.dataset.lane = id;
+    tab.setAttribute("role", "tab");
+    tab.addEventListener("click", () => selectSessionLane(id));
+    const timeline = document.createElement("section");
+    timeline.className = "agee-lane-timeline";
+    timeline.dataset.lane = id;
+    timeline.setAttribute("role", "tabpanel");
+    log?.appendChild(timeline);
+    laneTabs?.appendChild(tab);
+    lane = { id, label: compactLaneLabel(label), action, persisted, tab, timeline };
+    sessionLanes.set(id, lane);
+    renderSessionLaneSelection();
+    return lane;
+  }
+
+  function selectSessionLane(laneId) {
+    if (!sessionLanes.has(laneId)) return;
+    selectedLaneId = laneId;
+    renderSessionLaneSelection();
+    sessionLanes.get(laneId)?.timeline?.scrollTo?.({ top: sessionLanes.get(laneId).timeline.scrollHeight });
+  }
+
+  function renderSessionLaneSelection() {
+    if (laneNav) laneNav.hidden = sessionLanes.size < 2;
+    for (const lane of sessionLanes.values()) {
+      const current = lane.id === selectedLaneId;
+      lane.tab.textContent = `${current ? "Foreground · " : ""}${lane.label}`;
+      lane.tab.setAttribute("aria-selected", current ? "true" : "false");
+      lane.tab.title = `${lane.action}${lane.persisted ? "" : " · not saved"}`;
+      lane.timeline.hidden = !current;
+    }
+  }
+
+  function routingReceiptText(context) {
+    const routed = normalizeRoutingContext(context);
+    const labels = { continue: "Continued", new: "New thread", fork: "Forked", incognito: "Incognito" };
+    return `${labels[routed.action]}${routed.threadLabel ? ` · ${routed.threadLabel}` : ""}${routed.persisted ? "" : " · not saved"}`;
+  }
+
+  function selectedBranchRouting(context = {}, laneId = "") {
+    const action = String(context?.action || "").trim().toLowerCase();
+    if (action === "new" || action === "incognito") return { contextAction: action, branchId: "" };
+    const selected = String(laneId || "").trim();
+    if (selected && selected !== "foreground" && !selected.startsWith("pending:")) {
+      return { contextAction: "continue", branchId: selected };
+    }
+    return { contextAction: action, branchId: "" };
+  }
+
+  function applyCueRoutingContext(cueId, context) {
+    const entry = cues.get(cueId);
+    if (!entry) return;
+    const routed = normalizeRoutingContext(context);
+    const laneId = routed.branchId || entry.laneId || selectedLaneId;
+    const lane = ensureSessionLane(laneId, {
+      label: routed.threadLabel || (routed.action === "continue" ? entry.laneLabel || "Current" : routed.action),
+      action: routed.action,
+      persisted: routed.persisted,
+    });
+    const priorLaneId = entry.laneId;
+    if (priorLaneId !== laneId && entry.cardEl) lane.timeline.appendChild(entry.cardEl);
+    entry.laneId = laneId;
+    if (entry.routingEl) entry.routingEl.textContent = routingReceiptText(context);
+    else if (entry.cardEl) {
+      const receipt = document.createElement("div");
+      receipt.className = `agee-routing-receipt agee-routing-${routed.action}`;
+      receipt.textContent = routingReceiptText(context);
+      entry.cardEl.appendChild(receipt);
+      entry.routingEl = receipt;
+    }
+    if (priorLaneId && priorLaneId !== laneId) {
+      const priorLane = sessionLanes.get(priorLaneId);
+      if (priorLane && !priorLane.timeline.querySelector(".agee-cue") && sessionLanes.size > 1) {
+        priorLane.tab.remove();
+        priorLane.timeline.remove();
+        sessionLanes.delete(priorLaneId);
+      }
+    }
+    selectSessionLane(laneId);
+  }
+
   // Each cue gets a card: the user's line plus a live status line that moves
   // from "thinking…" through progress to a final answer/error.
   function newCueId() {
@@ -2314,51 +2462,11 @@
     return `c_${cueSeq}_${Date.now().toString(36)}`;
   }
 
-  // The overlay is a transient steering surface, not the canonical conversation
-  // history. A resolved result remains briefly readable, disappears when the
-  // next turn begins, and can always be recovered through the explicit History
-  // affordance backed by the gateway's stored session turns.
-  const MAX_CUE_CARDS = 6;
-  const TERMINAL_CUE_LINGER_MS = 12000;
+  // Terminal cards remain in their branch timeline until the user dismisses
+  // them. The lane viewport bounds height instead of time-retiring results.
 
-  function selectResolvedCueIds(cards) {
-    return (Array.isArray(cards) ? cards : [])
-      .filter((card) => card?.id && card.active !== true && card.protected !== true)
-      .map((card) => card.id);
-  }
-
-  function retireResolvedCueCards() {
-    if (!log) return;
-    const cards = [...log.querySelectorAll(".agee-cue")].map((card) => ({
-      id: card.dataset.cue,
-      active: activeCues.has(card.dataset.cue),
-      protected: card.classList.contains("agee-cue-steered"),
-    }));
-    for (const cueId of selectResolvedCueIds(cards)) dismissCue(cueId);
-  }
-
-  function scheduleCueRetirement(cueId) {
-    const entry = cues.get(cueId);
-    if (!entry || activeCues.has(cueId)) return;
-    if (entry.dismissTimer) clearTimeout(entry.dismissTimer);
-    entry.cardEl.dataset.retireAfterMs = String(TERMINAL_CUE_LINGER_MS);
-    entry.dismissTimer = setTimeout(() => dismissCue(cueId), TERMINAL_CUE_LINGER_MS);
-  }
-  function pruneCueCards() {
-    if (!log) return;
-    const cards = [...log.querySelectorAll(".agee-cue")];
-    let removable = cards.length - MAX_CUE_CARDS;
-    for (const card of cards) {
-      if (removable <= 0) break;
-      const id = card.dataset.cue;
-      if (activeCues.has(id)) continue;
-      removeCueCard(id);
-      removable -= 1;
-    }
-  }
-
-  // Explicit dismiss remains available during the short terminal linger. It
-  // also cascades through older resolved cards, while running cards stay safe.
+  // Explicit dismiss cascades through older resolved cards in the same visible
+  // lane, while running cards stay safe.
 
   // Pure selection helper for the dismiss-and-cascade gesture (✕ button or
   // horizontal swipe): given the ordered list of cue cards (oldest first, the
@@ -2405,7 +2513,8 @@
   // Shared by the ✕ button and the swipe gesture below.
   function cascadeDismissFromCard(clickedId) {
     if (!log || !clickedId) return;
-    const cards = [...log.querySelectorAll(".agee-cue")].map((card) => ({
+    const timeline = cues.get(clickedId)?.cardEl?.closest(".agee-lane-timeline") || log;
+    const cards = [...timeline.querySelectorAll(".agee-cue")].map((card) => ({
       id: card.dataset.cue,
       active: activeCues.has(card.dataset.cue),
     }));
@@ -2608,15 +2717,15 @@
     setTimeout(() => revokedCueIds.delete(cueId), 30000);
   }
 
-  function createCue(cueId, label, { presentation = "card" } = {}) {
-    retireResolvedCueCards();
+  function createCue(cueId, label, { presentation = "card", laneId = selectedLaneId, laneLabel = "" } = {}) {
     if (presentation === "icon") {
       currentCueId = cueId;
-      cues.set(cueId, { presentation, label: String(label || "") });
+      cues.set(cueId, { presentation, label: String(label || ""), laneId, laneLabel });
       activeCues.add(cueId);
       refreshStatus();
       return;
     }
+    cues.set(cueId, { presentation, label: String(label || ""), laneId, laneLabel });
     materializeCue(cueId, label, "thinking...");
   }
 
@@ -2624,8 +2733,8 @@
     if (!log) return null;
     let entry = cues.get(cueId);
     if (entry?.cardEl && entry?.statusEl) return entry;
-    retireResolvedCueCards();
     currentCueId = cueId;
+    const lane = ensureSessionLane(entry?.laneId || selectedLaneId, { label: entry?.laneLabel || "Current" });
     const card = document.createElement("div");
     card.className = "agee-cue agee-cue-running";
     card.dataset.cue = cueId;
@@ -2666,7 +2775,7 @@
     card.appendChild(skeleton);
     card.appendChild(status);
     card.appendChild(dismissBtn);
-    log.appendChild(card);
+    lane.timeline.appendChild(card);
     entry = {
       ...(entry || {}),
       statusEl: status,
@@ -2674,12 +2783,12 @@
       labelEl: you,
       presentation: "card",
       label: you.textContent,
+      laneId: lane.id,
     };
     cues.set(cueId, entry);
     activeCues.add(cueId);
-    pruneCueCards();
     syncLogVisibility();
-    log.scrollTop = log.scrollHeight;
+    lane.timeline.scrollTop = lane.timeline.scrollHeight;
     refreshStatus();
     return entry;
   }
@@ -2744,11 +2853,10 @@
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
-      // Turning off "running" reveals the explicit dismiss control and starts
-      // the bounded terminal linger.
+      // Turning off "running" reveals explicit dismiss. Terminal cards remain
+      // in this branch lane until the user removes them.
       const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
       if (dismissBtn) dismissBtn.disabled = false;
-      scheduleCueRetirement(cueId);
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
@@ -2989,8 +3097,14 @@
 
   function dispatchInstruction(instruction, displayText, role, delegationConfirmed) {
     const cueId = newCueId();
+    const context = consumeContextControls();
+    const branchRouting = selectedBranchRouting(context, selectedLaneId);
+    const startsSeparateLane = context.action === "new" || context.action === "incognito";
+    const laneId = startsSeparateLane ? `pending:${cueId}` : selectedLaneId;
+    const laneLabel = context.label || (context.action === "incognito" ? "Incognito" : startsSeparateLane ? "New thread" : "Current");
     openTextSurface({ fresh: false });
-    createCue(cueId, displayText, { presentation: "card" });
+    createCue(cueId, displayText, { presentation: "card", laneId, laneLabel });
+    if (startsSeparateLane) selectSessionLane(laneId);
     // Keep the composer as a draft buffer. Responses render above it and must
     // not clear or replace whatever the user is typing.
     setSurfacePhase("editing");
@@ -3001,14 +3115,14 @@
       setAgentState("thinking");
     }
     input.focus();
-    const context = consumeContextControls();
     safeRuntimeSendMessage({
       cmd: "run",
       instruction,
       cueId,
       agentRole: role,
       delegationConfirmed,
-      contextAction: context.action,
+      contextAction: branchRouting.contextAction,
+      branchId: branchRouting.branchId,
       threadLabel: context.label,
     }).then(() => {
       if (extensionContextInvalidated) removeCueCard(cueId);
@@ -3225,6 +3339,7 @@
     // the ticket. Incognito is persistent (re-armed each turn); the new-thread
     // arm is one-shot and consumed here.
     const context = consumeContextControls();
+    const branchRouting = selectedBranchRouting(context, selectedLaneId);
 
     const state = {
       cueId,
@@ -3262,7 +3377,8 @@
         assistantOverlap: assistantSpeechOverlap === true,
         capture: "extension-offscreen",
         autoCommit: options.autoCommit !== false,
-        contextAction: context.action,
+        contextAction: branchRouting.contextAction,
+        branchId: branchRouting.branchId,
         threadLabel: context.label,
       });
       if (extensionContextInvalidated) {
@@ -4704,6 +4820,7 @@
         );
         return false;
       case "done":
+        if (msg.context) applyCueRoutingContext(msg.cueId, msg.context);
         updateCue(msg.cueId, msg.summary, "done");
         // A page_tweak apply carries pageTweak: the done cue gets a small
         // "Changes on this page" review affordance (list + undo).
