@@ -131,6 +131,7 @@ async function main() {
   let worker;
   let page;
   let details;
+  let runtimePage;
   try {
     const port = Number((await waitForFile(join(profilePath, "DevToolsActivePort"))).split("\n")[0]);
     const workerTarget = await waitForTarget(
@@ -175,46 +176,116 @@ async function main() {
     }
     if (state.state !== "available") throw new Error(`real Chrome userScripts unavailable after isolated toggle attempt: ${JSON.stringify(state)}`);
 
-    const tabId = await evaluate(worker, `(async () => {
+    const runtimeTargetId = (await browser.send("Target.createTarget", {
+      url: `chrome-extension://${extensionId}/options.html`,
+    })).targetId;
+    const runtimeTarget = await waitForTarget(port, (target) => target.id === runtimeTargetId);
+    runtimePage = new Cdp(runtimeTarget.webSocketDebuggerUrl);
+    await runtimePage.send("Runtime.enable");
+    await waitForValue(runtimePage, "document.readyState === 'complete'");
+
+    const tabId = await evaluate(runtimePage, `(async () => {
       const tabs = await chrome.tabs.query({});
       return tabs.find((tab) => tab.url === ${JSON.stringify(fixtureUrl)})?.id || null;
     })()`);
     if (!Number.isInteger(tabId)) throw new Error("fixture tab id unavailable");
-    const scriptId = "moa_real_smoke";
-    const registration = {
-      id: scriptId,
-      matches: [`http://127.0.0.1:${server.address().port}/*`],
-      js: [{ code: "document.documentElement.dataset.moaUserScriptsRegistered = 'yes';" }],
-      runAt: "document_idle",
-      world: "USER_SCRIPT",
-      allFrames: false,
-    };
-    const result = await evaluate(worker, `(async () => {
-      const registration = ${JSON.stringify(registration)};
-      await chrome.userScripts.register([registration]);
-      const readBack = await chrome.userScripts.getScripts({ ids: [registration.id] });
-      await chrome.userScripts.execute({
-        target: { tabId: ${tabId}, frameIds: [0] },
-        js: [{ code: "document.documentElement.dataset.moaUserScriptsImmediate = 'yes';" }],
-        world: "USER_SCRIPT",
-      });
-      return readBack;
+    const result = await evaluate(runtimePage, `(async () => {
+      const runtimeModule = await import(chrome.runtime.getURL("user-scripts-runtime.js"));
+      await chrome.storage.local.set({ ageeReviewedUserScriptsEnabled: true });
+      const runtime = runtimeModule.createUserScriptsRuntime({ chromeApi: chrome, chromeMajor: 143 });
+      const documentProbe = await chrome.scripting.executeScript({ target: { tabId: ${tabId} }, func: () => null });
+      const documentId = documentProbe[0]?.documentId;
+      if (!documentId) throw new Error("fixture document id unavailable");
+      async function reviewedProgram(artifactId, revision, source, mode, target) {
+        const program = {
+          schema: "moa.browser-program.v2",
+          artifact_id: artifactId,
+          revision,
+          source,
+          source_sha256: await runtimeModule.sourceDigest(source),
+          mode,
+          world: "USER_SCRIPT",
+          run_at: "document_idle",
+          target,
+          authority: null,
+        };
+        program.authority = {
+          profile: runtimeModule.REVIEWED_PROFILE,
+          standalone: {
+            approval_id: "approval-" + artifactId,
+            approved_source_sha256: program.source_sha256,
+            approved_scope_digest: await runtimeModule.programScopeDigest(program),
+          },
+        };
+        return program;
+      }
+      function approval(program) {
+        return { approval: {
+          approval_id: program.authority.standalone.approval_id,
+          source_sha256: program.source_sha256,
+          scope_digest: program.authority.standalone.approved_scope_digest,
+          current: true,
+        } };
+      }
+      const immediate = await reviewedProgram(
+        "real-smoke-immediate",
+        1,
+        "document.documentElement.dataset.moaUserScriptsImmediate = 'yes';",
+        "immediate",
+        {
+          tab_id: ${tabId}, document_id: documentId, frame_scope: "top",
+          origins: [${JSON.stringify(`http://127.0.0.1:${server.address().port}`)}], matches: [], excludes: [],
+        },
+      );
+      const persistent = await reviewedProgram(
+        "real-smoke-persistent",
+        1,
+        "document.documentElement.dataset.moaUserScriptsRegistered = 'yes';",
+        "persistent",
+        {
+          tab_id: null, document_id: null, frame_scope: "top",
+          origins: [${JSON.stringify(`http://127.0.0.1:${server.address().port}`)}],
+          matches: [${JSON.stringify(`http://127.0.0.1:${server.address().port}/*`)}], excludes: [],
+        },
+      );
+      const executed = await runtime.execute(immediate, approval(immediate));
+      const registered = await runtime.register(persistent, approval(persistent));
+      globalThis.__moaUserScriptsSmoke = { runtime, persistent };
+      const stored = await chrome.storage.local.get(["ageeUserScriptExecutionHistory", "ageeUserScriptPrograms"]);
+      return {
+        executeStatus: executed.status,
+        registerStatus: registered.status,
+        registrationId: registered.registration?.id,
+        immediateHasActiveRegistration: stored.ageeUserScriptExecutionHistory?.[0]?.active_registration !== undefined,
+        persistentActiveRevision: stored.ageeUserScriptPrograms?.moa_real_smoke_persistent?.active_registration?.revision,
+      };
     })()`);
-    if (result.length !== 1 || result[0].id !== scriptId || result[0].world !== "USER_SCRIPT") throw new Error("registration read-back mismatch");
+    if (
+      result.executeStatus !== "succeeded" || result.registerStatus !== "succeeded" ||
+      result.registrationId !== "moa_real_smoke_persistent" || result.immediateHasActiveRegistration ||
+      result.persistentActiveRevision !== 1
+    ) throw new Error(`packaged runtime result mismatch: ${JSON.stringify(result)}`);
     await waitForValue(page, "document.documentElement.dataset.moaUserScriptsImmediate === 'yes'");
     await page.send("Page.reload");
     await waitForValue(page, "document.readyState === 'complete'");
     await waitForValue(page, "document.documentElement.dataset.moaUserScriptsRegistered === 'yes'");
-    const removed = await evaluate(worker, `(async () => {
-      await chrome.userScripts.unregister({ ids: [${JSON.stringify(scriptId)}] });
-      return (await chrome.userScripts.getScripts({ ids: [${JSON.stringify(scriptId)}] })).length;
+    const removed = await evaluate(runtimePage, `(async () => {
+      const state = globalThis.__moaUserScriptsSmoke;
+      const removal = await state.runtime.unregister(state.persistent.artifact_id);
+      const disabled = await state.runtime.setProfileEnabled("reviewed_standalone_v1", false);
+      return {
+        removalOk: removal.ok,
+        disabledState: disabled.state,
+        remaining: (await chrome.userScripts.getScripts({ ids: ["moa_real_smoke_persistent"] })).length,
+      };
     })()`);
-    if (removed !== 0) throw new Error("registration removal was not verified");
+    if (!removed.removalOk || removed.disabledState !== "disabled" || removed.remaining !== 0) throw new Error("runtime removal/disable was not verified");
     const workerMarker = await evaluate(worker, "globalThis.document?.documentElement?.dataset?.moaUserScriptsImmediate || null");
     if (workerMarker != null) throw new Error("generated source appeared in the service worker");
-    console.log(`userScripts real Chrome smoke passed: state=${state.state}, execute/read-back/reload/removal verified, extension=${extensionId}`);
+    console.log(`userScripts real Chrome smoke passed through packaged runtime: state=${state.state}, execute/history/read-back/reload/removal/disable verified, extension=${extensionId}`);
   } finally {
     details?.close();
+    runtimePage?.close();
     page?.close();
     worker?.close();
     browser?.close();

@@ -4,6 +4,7 @@ import {
   CAPABILITY_STATES,
   DELEGATED_OPT_IN_KEY,
   DELEGATED_PROFILE,
+  EXECUTION_HISTORY_KEY,
   IDEMPOTENCY_STORE_KEY,
   PROGRAM_STORE_KEY,
   RECEIPT_STORE_KEY,
@@ -28,12 +29,18 @@ function createHarness({ enabled = false, delegated = false, permission = true, 
   const storage = {
     async get(query) {
       if (typeof query === "string") return { [query]: clone(values[query]) };
+      if (Array.isArray(query)) {
+        return Object.fromEntries(query.filter((key) => key in values).map((key) => [key, clone(values[key])]));
+      }
       const result = {};
       for (const [key, fallback] of Object.entries(query || {})) result[key] = key in values ? clone(values[key]) : clone(fallback);
       return result;
     },
     async set(patch) {
       Object.assign(values, clone(patch));
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) delete values[key];
     },
   };
   const userScripts = supported ? {
@@ -77,6 +84,7 @@ function createHarness({ enabled = false, delegated = false, permission = true, 
     chromeApi,
     registrations,
     runtime: createUserScriptsRuntime({ chromeApi, chromeMajor, now: () => new Date("2026-07-15T12:00:00.000Z") }),
+    storage,
     values,
   };
 }
@@ -243,7 +251,7 @@ test("persistent registration succeeds only after exact Chrome read-back and sto
   assert.deepEqual(result.registration.matches, ["https://example.test/*"]);
   assert.equal(harness.calls.register.length, 1);
   assert.ok(harness.calls.getScripts.length >= 3);
-  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_revision, 1);
+  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_registration.revision, 1);
   assert.equal(harness.values[RECEIPT_STORE_KEY].length, 1);
   assert.equal(JSON.stringify(harness.values[RECEIPT_STORE_KEY]).includes(program.source), false);
 
@@ -275,7 +283,7 @@ test("failed update preserves the prior registration and failed first register r
   assert.equal(failedUpdate.ok, false);
   assert.equal(failedUpdate.rollback, "preserved");
   assert.equal(preserve.registrations.get("moa_script_demo").js[0].code, revisionOne.source);
-  assert.equal(preserve.values[PROGRAM_STORE_KEY].moa_script_demo.active_revision, 1);
+  assert.equal(preserve.values[PROGRAM_STORE_KEY].moa_script_demo.active_registration.revision, 1);
 
   const remove = createHarness({ enabled: true });
   const originalRegister = remove.chromeApi.userScripts.register;
@@ -297,17 +305,18 @@ test("successful update can roll back to retained approved source and profile di
   assert.equal((await harness.runtime.register(revisionOne, reviewedAuthorization(revisionOne))).ok, true);
   assert.equal((await harness.runtime.update(revisionTwo, reviewedAuthorization(revisionTwo), { expected_revision: 1 })).ok, true);
   assert.equal(harness.registrations.get("moa_script_demo").js[0].code, revisionTwo.source);
-  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_revision, 2);
+  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_registration.revision, 2);
 
   const rollback = await harness.runtime.rollback(revisionOne.artifact_id, 1, reviewedAuthorization(revisionOne));
   assert.equal(rollback.ok, true);
   assert.equal(harness.registrations.get("moa_script_demo").js[0].code, revisionOne.source);
-  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_revision, 1);
+  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_registration.revision, 1);
 
   const state = await harness.runtime.setProfileEnabled(REVIEWED_PROFILE, false);
   assert.equal(state.state, CAPABILITY_STATES.DISABLED);
   assert.equal(harness.registrations.size, 0);
   assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.disabled, true);
+  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_registration, null);
   assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.revisions.length, 2);
 });
 
@@ -325,6 +334,22 @@ test("immediate execution uses userScripts only and MAIN requires a separate del
   assert.equal(delegated.calls.execute[0].world, "MAIN");
   assert.equal("scripting" in delegated.chromeApi, false);
   assert.equal("debugger" in delegated.chromeApi, false);
+});
+
+test("immediate execution records history without creating persistent registration state", async () => {
+  const harness = createHarness({ enabled: true });
+  const immediate = await reviewedProgram({ mode: "immediate" });
+  assert.equal((await harness.runtime.execute(immediate, reviewedAuthorization(immediate))).ok, true);
+  assert.equal(harness.values[PROGRAM_STORE_KEY], undefined);
+  assert.equal(harness.values[EXECUTION_HISTORY_KEY].length, 1);
+  assert.equal(harness.values[EXECUTION_HISTORY_KEY][0].program.mode, "immediate");
+  assert.equal(harness.values[EXECUTION_HISTORY_KEY][0].active_registration, undefined);
+  const disabled = await harness.runtime.setProfileEnabled(REVIEWED_PROFILE, false);
+  assert.equal(disabled.state, CAPABILITY_STATES.DISABLED);
+  assert.equal(harness.calls.unregister.length, 0);
+  assert.equal(harness.values[PROGRAM_STORE_KEY], undefined);
+  assert.equal(harness.values[EXECUTION_HISTORY_KEY].length, 1);
+  assert.equal((await harness.runtime.capability(REVIEWED_PROFILE)).state, CAPABILITY_STATES.DISABLED);
 });
 
 test("authority discriminator rejects mixed, incomplete, and substituted profile authority", async () => {
@@ -465,11 +490,11 @@ test("receipts redact untrusted results and API errors while binding exact profi
 
   const errorHarness = createHarness({ enabled: true });
   errorHarness.chromeApi.userScripts.execute = async () => {
-    throw new Error("Bearer secret-api-error");
+    throw new Error("sk_live_secret");
   };
   const rejected = await errorHarness.runtime.execute(immediate, reviewedAuthorization(immediate));
   assert.equal(rejected.reason, "user_scripts_api_error");
-  assert.equal(JSON.stringify(errorHarness.values[RECEIPT_STORE_KEY]).includes("secret-api-error"), false);
+  assert.equal(JSON.stringify(errorHarness.values[RECEIPT_STORE_KEY]).includes("sk_live_secret"), false);
   const ambiguousRetry = await errorHarness.runtime.execute(immediate, reviewedAuthorization(immediate));
   assert.equal(ambiguousRetry.status, "indeterminate");
   assert.equal(ambiguousRetry.reason, "operation_already_started");
@@ -498,7 +523,102 @@ test("failed unregister and profile disable preserve registration and never repo
     if (operation === "profile_disable") assert.equal(result.state, CAPABILITY_STATES.AVAILABLE);
     assert.equal(harness.values[REVIEWED_OPT_IN_KEY], true);
     assert.equal(harness.registrations.get("moa_script_demo").js[0].code, program.source);
-    assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_revision, 1);
+    assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_registration.revision, 1);
     assert.equal(JSON.stringify(harness.values[RECEIPT_STORE_KEY]).includes("removal-secret"), false);
   }
+});
+
+test("storage failure rolls back exact program, profile, and registration state", async () => {
+  for (const operation of ["program_disable", "profile_disable"]) {
+    const harness = createHarness({ enabled: true });
+    const program = await reviewedProgram();
+    assert.equal((await harness.runtime.register(program, reviewedAuthorization(program))).ok, true);
+    const programSnapshot = clone(harness.values[PROGRAM_STORE_KEY]);
+    const profileSnapshot = harness.values[REVIEWED_OPT_IN_KEY];
+    const originalSet = harness.storage.set.bind(harness.storage);
+    let failed = false;
+    harness.storage.set = async (patch) => {
+      const isCommit = operation === "profile_disable"
+        ? patch[REVIEWED_OPT_IN_KEY] === false
+        : patch[PROGRAM_STORE_KEY]?.moa_script_demo?.active_registration === null;
+      if (!failed && isCommit) {
+        failed = true;
+        await originalSet(patch);
+        throw new Error("sk_live_secret");
+      }
+      return originalSet(patch);
+    };
+    const result = operation === "profile_disable"
+      ? await harness.runtime.setProfileEnabled(REVIEWED_PROFILE, false)
+      : await harness.runtime.disable(program.artifact_id);
+    assert.equal(result.ok, false, operation);
+    assert.equal(result.rollback, "preserved", operation);
+    assert.equal(result.reason, "user_scripts_api_error", operation);
+    assert.deepEqual(harness.values[PROGRAM_STORE_KEY], programSnapshot, operation);
+    assert.equal(harness.values[REVIEWED_OPT_IN_KEY], profileSnapshot, operation);
+    assert.equal(harness.registrations.get("moa_script_demo").js[0].code, program.source, operation);
+    assert.equal(JSON.stringify(harness.values[RECEIPT_STORE_KEY]).includes("sk_live_secret"), false, operation);
+  }
+});
+
+test("failed storage rollback reports blocked and a second disable removes live registration before disabled", async () => {
+  const harness = createHarness({ enabled: true });
+  const program = await reviewedProgram();
+  assert.equal((await harness.runtime.register(program, reviewedAuthorization(program))).ok, true);
+  const originalSet = harness.storage.set.bind(harness.storage);
+  let failure = 0;
+  harness.storage.set = async (patch) => {
+    if (patch[REVIEWED_OPT_IN_KEY] === false && failure === 0) {
+      failure += 1;
+      await originalSet(patch);
+      throw new Error("commit_failed");
+    }
+    if (patch[REVIEWED_OPT_IN_KEY] === true && failure === 1) {
+      failure += 1;
+      throw new Error("rollback_failed");
+    }
+    return originalSet(patch);
+  };
+  const blocked = await harness.runtime.setProfileEnabled(REVIEWED_PROFILE, false);
+  assert.equal(blocked.state, "disable_blocked");
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.registration_live, true);
+  assert.equal(harness.registrations.size, 1);
+
+  const completed = await harness.runtime.setProfileEnabled(REVIEWED_PROFILE, false);
+  assert.equal(completed.state, CAPABILITY_STATES.DISABLED);
+  assert.equal(completed.ok, true);
+  assert.equal(harness.registrations.size, 0);
+  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo.active_registration, null);
+  assert.equal(harness.values[REVIEWED_OPT_IN_KEY], false);
+});
+
+test("profile disable removes an orphaned live Moa registration after metadata rollback failure", async () => {
+  const harness = createHarness({ enabled: true });
+  const program = await reviewedProgram();
+  assert.equal((await harness.runtime.register(program, reviewedAuthorization(program))).ok, true);
+  const originalSet = harness.storage.set.bind(harness.storage);
+  let failure = 0;
+  harness.storage.set = async (patch) => {
+    if (patch[PROGRAM_STORE_KEY] && !patch[PROGRAM_STORE_KEY].moa_script_demo && failure === 0) {
+      failure += 1;
+      await originalSet(patch);
+      throw new Error("commit_failed");
+    }
+    if (patch[PROGRAM_STORE_KEY]?.moa_script_demo && failure === 1) {
+      failure += 1;
+      throw new Error("rollback_failed");
+    }
+    return originalSet(patch);
+  };
+  const blocked = await harness.runtime.unregister(program.artifact_id);
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.registration_live, true);
+  assert.equal(harness.values[PROGRAM_STORE_KEY].moa_script_demo, undefined);
+
+  const disabled = await harness.runtime.setProfileEnabled(REVIEWED_PROFILE, false);
+  assert.equal(disabled.state, CAPABILITY_STATES.DISABLED);
+  assert.equal(disabled.ok, true);
+  assert.equal(harness.registrations.size, 0);
+  assert.equal(harness.values[REVIEWED_OPT_IN_KEY], false);
 });

@@ -3,6 +3,7 @@ const DELEGATED_PROFILE = "delegated_runtime_v1";
 const REVIEWED_OPT_IN_KEY = "ageeReviewedUserScriptsEnabled";
 const DELEGATED_OPT_IN_KEY = "ageeDelegatedUserScriptsEnabled";
 const PROGRAM_STORE_KEY = "ageeUserScriptPrograms";
+const EXECUTION_HISTORY_KEY = "ageeUserScriptExecutionHistory";
 const RECEIPT_STORE_KEY = "ageeUserScriptReceipts";
 const IDEMPOTENCY_STORE_KEY = "ageeUserScriptIdempotency";
 const RECEIPT_LIMIT = 100;
@@ -10,6 +11,23 @@ const SOURCE_MAX_BYTES = 128 * 1024;
 const RESULT_MAX_BYTES = 16 * 1024;
 const MAX_PATTERNS = 16;
 const sharedOperationQueues = new WeakMap();
+const INTERNAL_REASON_CODES = new Set([
+  "approval_invalid", "approval_missing", "approval_scope_mismatch", "approval_source_mismatch",
+  "artifact_already_registered", "artifact_id_invalid", "authority_id_invalid", "authority_variant_invalid",
+  "checkpoint_invalid", "checkpoint_unexpected", "chrome_toggle_required", "delegated_grants_invalid",
+  "delegation_effect_rejected", "delegation_invalid", "delegation_role_invalid", "delegation_scope_mismatch",
+  "delegation_world_mismatch", "disabled", "excludes_duplicate", "excludes_invalid", "excludes_origin_drift",
+  "immediate_scope_invalid", "main_world_grant_required", "match_invalid", "match_origin_not_exact",
+  "matches_duplicate", "matches_invalid", "matches_origin_drift", "mode_invalid", "mode_not_immediate",
+  "mode_not_persistent", "operation_already_started", "origin_invalid", "origin_not_exact",
+  "permission_revoked", "persistent_scope_invalid", "profile_disable_removal_unverified", "profile_unsupported",
+  "program_not_found", "registration_id_conflict", "registration_missing", "registration_read_back_mismatch",
+  "registration_removal_unverified", "registration_state_mismatch", "reviewed_world_rejected",
+  "revision_immutable_conflict", "revision_invalid", "rollback_revision_not_found", "schema_invalid",
+  "sha256_unavailable", "source_digest_mismatch", "source_invalid", "target_origins_invalid",
+  "storage_commit_unverified", "target_scope_invalid", "timing_invalid", "unsupported", "update_precondition_required",
+  "update_revision_precondition_failed", "world_invalid",
+]);
 
 const CAPABILITY_STATES = Object.freeze({
   DISABLED: "disabled",
@@ -320,7 +338,7 @@ function programFingerprint(program) {
 
 function safeReason(error) {
   const message = String(error?.message || error || "rejected");
-  return /^[a-z][a-z0-9_]{0,63}$/.test(message) ? message : "user_scripts_api_error";
+  return INTERNAL_REASON_CODES.has(message) ? message : "user_scripts_api_error";
 }
 
 function receiptResult(value) {
@@ -381,6 +399,35 @@ function createUserScriptsRuntime({
 
   async function writePrograms(programs) {
     await storage.set({ [PROGRAM_STORE_KEY]: programs });
+  }
+
+  async function storedExecutionHistory() {
+    const stored = await storage.get({ [EXECUTION_HISTORY_KEY]: [] });
+    return Array.isArray(stored[EXECUTION_HISTORY_KEY]) ? stored[EXECUTION_HISTORY_KEY] : [];
+  }
+
+  async function storageSnapshot(keys) {
+    const stored = await storage.get(keys);
+    return Object.fromEntries(keys.map((key) => [key, {
+      present: Object.hasOwn(stored, key),
+      value: Object.hasOwn(stored, key) ? structuredClone(stored[key]) : undefined,
+    }]));
+  }
+
+  async function restoreStorageSnapshot(snapshot) {
+    const setValues = {};
+    const removeKeys = [];
+    for (const [key, entry] of Object.entries(snapshot)) {
+      if (entry.present) setValues[key] = structuredClone(entry.value);
+      else removeKeys.push(key);
+    }
+    if (Object.keys(setValues).length) await storage.set(setValues);
+    if (removeKeys.length) await storage.remove(removeKeys);
+    const restored = await storage.get(Object.keys(snapshot));
+    return Object.entries(snapshot).every(([key, entry]) => (
+      entry.present === Object.hasOwn(restored, key) &&
+      (!entry.present || stableJson(restored[key]) === stableJson(entry.value))
+    ));
   }
 
   async function idempotencyRecords() {
@@ -529,7 +576,9 @@ function createUserScriptsRuntime({
     }
     const programs = await storedPrograms();
     const stored = programs[registrationId(program.artifact_id)];
-    const sameRevision = stored?.revisions?.find((entry) => entry.revision === program.revision);
+    const history = await storedExecutionHistory();
+    const sameRevision = stored?.revisions?.find((entry) => entry.revision === program.revision) ||
+      history.find((entry) => entry.artifact_id === program.artifact_id && entry.revision === program.revision)?.program;
     if (sameRevision && programFingerprint(sameRevision) !== programFingerprint(program)) {
       return { result: await rejected(operation, program, "revision_immutable_conflict") };
     }
@@ -566,7 +615,7 @@ function createUserScriptsRuntime({
           target: program.target,
           result: receiptResult(result),
         });
-        await saveSuccessfulProgram(program);
+        await saveImmediateHistory(program);
         await markOperationComplete(key, record);
         return { ok: true, status: "succeeded", result: boundedResult(result), receipt: record };
       } catch (error) {
@@ -575,13 +624,33 @@ function createUserScriptsRuntime({
     });
   }
 
-  async function saveSuccessfulProgram(program) {
+  async function savePersistentProgram(program) {
     const programs = await storedPrograms();
     const id = registrationId(program.artifact_id);
-    const previous = programs[id] || { artifact_id: program.artifact_id, active_revision: null, revisions: [] };
+    const previous = programs[id] || { artifact_id: program.artifact_id, active_registration: null, revisions: [] };
     const revisions = previous.revisions.filter((entry) => entry.revision !== program.revision);
-    programs[id] = { ...previous, active_revision: program.revision, disabled: false, revisions: [...revisions, program].slice(-10) };
+    programs[id] = {
+      ...previous,
+      active_registration: { revision: program.revision, registration_id: id },
+      disabled: false,
+      revisions: [...revisions, program].slice(-10),
+    };
     await writePrograms(programs);
+  }
+
+  async function saveImmediateHistory(program) {
+    const history = await storedExecutionHistory();
+    await storage.set({
+      [EXECUTION_HISTORY_KEY]: [
+        ...history.filter((entry) => !(entry.artifact_id === program.artifact_id && entry.revision === program.revision)),
+        {
+          artifact_id: program.artifact_id,
+          revision: program.revision,
+          executed_at: now().toISOString(),
+          program,
+        },
+      ].slice(-receiptLimit),
+    });
   }
 
   async function restoreRegistration(before, id) {
@@ -613,11 +682,11 @@ function createUserScriptsRuntime({
         }
         if (
           !Number.isInteger(precondition.expected_revision) ||
-          stored?.active_revision !== precondition.expected_revision ||
+          stored?.active_registration?.revision !== precondition.expected_revision ||
           program.revision !== precondition.expected_revision + 1
         ) return rejected(operation, program, "update_revision_precondition_failed", { validated: true });
       }
-      if (operation === "register" && stored?.active_revision != null && stored.active_revision !== program.revision) {
+      if (operation === "register" && stored?.active_registration != null && stored.active_registration.revision !== program.revision) {
         return rejected(operation, program, "artifact_already_registered", { validated: true });
       }
       const expected = registrationFor(program);
@@ -632,7 +701,7 @@ function createUserScriptsRuntime({
         else if (!registrationMatches(before, expected)) await chromeApi.userScripts.update([expected]);
         const after = await readBack(expected.id);
         if (!registrationMatches(after, expected)) throw new Error("registration_read_back_mismatch");
-        await saveSuccessfulProgram(program);
+        await savePersistentProgram(program);
         const record = await receipt({
           operation,
           status: "succeeded",
@@ -674,46 +743,71 @@ function createUserScriptsRuntime({
       const programs = await storedPrograms();
       const stored = programs[id];
       if (!stored || stored.artifact_id !== artifactId) return rejected(operation, { artifact_id: artifactId }, "program_not_found");
+      const activeRevision = stored.active_registration?.revision ?? null;
+      const active = stored.revisions?.find((program) => program.revision === activeRevision);
+      const authorityProgram = active || stored.revisions?.at(-1);
+      if (!authorityProgram) return rejected(operation, { artifact_id: artifactId, revision: activeRevision }, "registration_missing");
+      const profileKey = profileOptInKey(authorityProgram.authority.profile);
+      const snapshot = await storageSnapshot([PROGRAM_STORE_KEY, profileKey]);
       let before;
       try {
         before = await readBack(id);
-        const activeProgram = stored.revisions?.find((program) => program.revision === stored.active_revision);
-        if (before && (!activeProgram || !registrationMatches(before, registrationFor(activeProgram)))) {
+        const beforeMatches = active
+          ? registrationMatches(before, registrationFor(active))
+          : stored.revisions.some((program) => program.mode === "persistent" && registrationMatches(before, registrationFor(program)));
+        if (before && !beforeMatches) {
           throw new Error("registration_state_mismatch");
         }
         await chromeApi.userScripts.unregister({ ids: [id] });
         if (await readBack(id)) throw new Error("registration_removal_unverified");
         if (removeSource) delete programs[id];
-        else programs[id] = { ...stored, active_revision: null, disabled: true };
-        await writePrograms(programs);
+        else programs[id] = { ...stored, active_registration: null, disabled: true };
+        await storage.set({ [PROGRAM_STORE_KEY]: programs });
+        const committed = await storage.get([PROGRAM_STORE_KEY, profileKey]);
+        if (
+          stableJson(committed[PROGRAM_STORE_KEY]) !== stableJson(programs) ||
+          snapshot[profileKey].present !== Object.hasOwn(committed, profileKey) ||
+          (snapshot[profileKey].present && stableJson(committed[profileKey]) !== stableJson(snapshot[profileKey].value))
+        ) throw new Error("storage_commit_unverified");
         const record = await receipt({
           operation,
           status: "succeeded",
           artifact_id: artifactId,
-          revision: stored.active_revision,
+          revision: activeRevision ?? authorityProgram.revision,
           registration_id: id,
           removal_verified: true,
           source_removed: removeSource,
-          authority: stored.revisions?.find((program) => program.revision === stored.active_revision)
-            ? receiptAuthority(stored.revisions.find((program) => program.revision === stored.active_revision))
-            : null,
+          authority: receiptAuthority(authorityProgram),
         });
         return { ok: true, status: "succeeded", receipt: record };
       } catch (error) {
-        let rollback = "failed";
+        let registrationRollback = false;
+        let storageRollback = false;
         try {
-          rollback = await restoreRegistration(before, id) ? "preserved" : "failed";
+          registrationRollback = await restoreRegistration(before, id);
         } catch {
-          rollback = "failed";
+          registrationRollback = false;
         }
-        const active = stored.revisions?.find((program) => program.revision === stored.active_revision);
+        try {
+          storageRollback = await restoreStorageSnapshot(snapshot);
+        } catch {
+          storageRollback = false;
+        }
+        const rollback = registrationRollback && storageRollback ? "preserved" : "failed";
         const result = await rejected(
           operation,
-          active || { artifact_id: artifactId, revision: stored.active_revision },
+          authorityProgram,
           error,
-          { validated: Boolean(active) },
+          { validated: true },
         );
-        return { ...result, rollback };
+        const live = await readBack(id).catch(() => null);
+        return {
+          ...result,
+          status: rollback === "preserved" ? "rejected" : "blocked",
+          rollback,
+          still_enabled: snapshot[profileKey].value === true,
+          registration_live: Boolean(live),
+        };
       }
     });
   }
@@ -733,53 +827,84 @@ function createUserScriptsRuntime({
         await storage.set({ [key]: true });
         return capability(profile);
       }
-      const programs = await storedPrograms();
-      const ids = Object.entries(programs)
-        .filter(([, record]) => record.active_revision != null && record.revisions?.some((program) => program.authority?.profile === profile))
-        .map(([id]) => id);
-      const authorities = ids.map((id) => {
-        const record = programs[id];
-        return receiptAuthority(record.revisions.find((program) => program.revision === record.active_revision));
+      const snapshot = await storageSnapshot([PROGRAM_STORE_KEY, key]);
+      const programs = snapshot[PROGRAM_STORE_KEY].present ? structuredClone(snapshot[PROGRAM_STORE_KEY].value) : {};
+      const entries = Object.entries(programs)
+        .filter(([, record]) => record.revisions?.some((program) => program.mode === "persistent" && program.authority?.profile === profile));
+      let ids = entries.map(([id]) => id);
+      const authorities = entries.map(([, record]) => {
+        const activeRevision = record.active_registration?.revision;
+        const program = record.revisions.find((candidate) => candidate.revision === activeRevision) || record.revisions.at(-1);
+        return receiptAuthority(program);
       });
-      if (!ids.length) {
-        await storage.set({ [key]: false });
-        return { state: CAPABILITY_STATES.DISABLED, profile };
+      if (ids.length && !supportedApi()) {
+        return { state: "disable_blocked", profile, ok: false, status: "blocked", reason: "unsupported", still_enabled: snapshot[key].value === true };
       }
-      if (!supportedApi()) return { ...(await capability(profile)), ok: false, status: "rejected", reason: "unsupported" };
       let before = [];
       try {
-        before = await chromeApi.userScripts.getScripts({ ids });
-        for (const id of ids) {
-          const record = programs[id];
-          const activeProgram = record.revisions.find((program) => program.revision === record.active_revision);
-          const actual = before.find((registration) => registration.id === id);
-          if (!actual || !registrationMatches(actual, registrationFor(activeProgram))) throw new Error("registration_state_mismatch");
+        if (supportedApi()) {
+          const allMoaRegistrations = (await chromeApi.userScripts.getScripts()).filter((registration) => registration.id.startsWith("moa_"));
+          const knownOtherProfileIds = new Set(Object.entries(programs)
+            .filter(([, record]) => record.revisions?.some((program) => program.mode === "persistent" && program.authority?.profile !== profile))
+            .map(([id]) => id));
+          const orphanIds = allMoaRegistrations
+            .map((registration) => registration.id)
+            .filter((id) => !knownOtherProfileIds.has(id) && !ids.includes(id));
+          ids = [...new Set([...ids, ...orphanIds])];
+          before = allMoaRegistrations.filter((registration) => ids.includes(registration.id));
         }
-        await chromeApi.userScripts.unregister({ ids });
-        const remaining = await chromeApi.userScripts.getScripts({ ids });
-        if (remaining.length) throw new Error("profile_disable_removal_unverified");
-        for (const id of ids) programs[id] = { ...programs[id], active_revision: null, disabled: true };
-        await writePrograms(programs);
-        await storage.set({ [key]: false });
+        for (const registration of before) {
+          const record = programs[registration.id];
+          if (!record) continue;
+          const matched = record?.revisions?.some((program) => (
+            program.mode === "persistent" &&
+            program.authority.profile === profile &&
+            registrationMatches(registration, registrationFor(program))
+          ));
+          if (!matched) throw new Error("registration_state_mismatch");
+        }
+        const liveIds = before.map((registration) => registration.id);
+        if (liveIds.length) await chromeApi.userScripts.unregister({ ids: liveIds });
+        if (ids.length && (await chromeApi.userScripts.getScripts({ ids })).length) throw new Error("profile_disable_removal_unverified");
+        for (const [id] of entries) programs[id] = { ...programs[id], active_registration: null, disabled: true };
+        const commitPatch = { [key]: false };
+        if (snapshot[PROGRAM_STORE_KEY].present) commitPatch[PROGRAM_STORE_KEY] = programs;
+        await storage.set(commitPatch);
+        const committed = await storage.get([PROGRAM_STORE_KEY, key]);
+        if (
+          snapshot[PROGRAM_STORE_KEY].present !== Object.hasOwn(committed, PROGRAM_STORE_KEY) ||
+          (snapshot[PROGRAM_STORE_KEY].present && stableJson(committed[PROGRAM_STORE_KEY]) !== stableJson(programs)) ||
+          committed[key] !== false
+        ) throw new Error("storage_commit_unverified");
         await receipt({ operation: "profile_disable", status: "succeeded", profile, authorities, registration_ids: ids, removal_verified: true });
         return { state: CAPABILITY_STATES.DISABLED, profile, ok: true, status: "succeeded" };
       } catch (error) {
-        let rollback = "failed";
+        let registrationRollback = false;
+        let storageRollback = false;
         try {
-          const current = await chromeApi.userScripts.getScripts({ ids });
-          const currentById = new Map(current.map((registration) => [registration.id, registration]));
-          for (const registration of before) {
-            if (currentById.has(registration.id)) await chromeApi.userScripts.update([registration]);
-            else await chromeApi.userScripts.register([registration]);
+          if (!ids.length) registrationRollback = true;
+          else {
+            const current = await chromeApi.userScripts.getScripts({ ids });
+            const currentById = new Map(current.map((registration) => [registration.id, registration]));
+            for (const registration of before) {
+              if (currentById.has(registration.id)) await chromeApi.userScripts.update([registration]);
+              else await chromeApi.userScripts.register([registration]);
+            }
+            const restored = await chromeApi.userScripts.getScripts({ ids });
+            registrationRollback = before.length === restored.length && before.every((registration) => {
+              const actual = restored.find((candidate) => candidate.id === registration.id);
+              return registrationMatches(actual, registration);
+            });
           }
-          const restored = await chromeApi.userScripts.getScripts({ ids });
-          rollback = before.length === restored.length && before.every((registration) => {
-            const actual = restored.find((candidate) => candidate.id === registration.id);
-            return registrationMatches(actual, registration);
-          }) ? "preserved" : "failed";
         } catch {
-          rollback = "failed";
+          registrationRollback = false;
         }
+        try {
+          storageRollback = await restoreStorageSnapshot(snapshot);
+        } catch {
+          storageRollback = false;
+        }
+        const rollback = registrationRollback && storageRollback ? "preserved" : "failed";
         const record = await receipt({
           operation: "profile_disable",
           status: "rejected",
@@ -789,7 +914,27 @@ function createUserScriptsRuntime({
           reason: safeReason(error),
           rollback,
         });
-        return { ...(await capability(profile)), ok: false, status: "rejected", reason: safeReason(error), rollback, receipt: record };
+        if (rollback === "preserved") {
+          return { ...(await capability(profile)), ok: false, status: "rejected", reason: safeReason(error), rollback, still_enabled: snapshot[key].value === true, receipt: record };
+        }
+        let registrationLive = null;
+        try {
+          registrationLive = ids.length ? (await chromeApi.userScripts.getScripts({ ids })).length > 0 : false;
+        } catch {
+          registrationLive = null;
+        }
+        const current = await storage.get({ [key]: false });
+        return {
+          state: "disable_blocked",
+          profile,
+          ok: false,
+          status: "blocked",
+          reason: safeReason(error),
+          rollback,
+          still_enabled: current[key] === true,
+          registration_live: registrationLive,
+          receipt: record,
+        };
       }
     });
   }
@@ -810,6 +955,7 @@ export {
   CAPABILITY_STATES,
   DELEGATED_OPT_IN_KEY,
   DELEGATED_PROFILE,
+  EXECUTION_HISTORY_KEY,
   IDEMPOTENCY_STORE_KEY,
   PROGRAM_STORE_KEY,
   RECEIPT_STORE_KEY,

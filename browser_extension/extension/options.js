@@ -147,6 +147,7 @@ function userScriptStateLabel(state) {
     [CAPABILITY_STATES.CHROME_TOGGLE_REQUIRED]: "Chrome's Allow User Scripts toggle is off",
     [CAPABILITY_STATES.PERMISSION_REVOKED]: "Permission or exact site access was revoked",
     [CAPABILITY_STATES.UNSUPPORTED]: "Unsupported by this Chrome version",
+    disable_blocked: "Disable blocked; a registration may still be live",
   })[state] || "Unavailable";
 }
 
@@ -165,8 +166,11 @@ for (const control of USER_SCRIPT_CONTROLS) {
   });
   control.element.addEventListener("change", async () => {
     control.element.disabled = true;
+    let refresh = true;
     try {
       const result = await userScriptsRuntime.setProfileEnabled(control.profile, control.element.checked === true);
+      refresh = result.state !== "disable_blocked";
+      control.element.checked = result.state !== CAPABILITY_STATES.DISABLED;
       control.status.textContent = userScriptStateLabel(result.state);
       control.status.style.color = result.state === CAPABILITY_STATES.AVAILABLE ? "#35a35a" : "#777";
     } catch {
@@ -174,7 +178,7 @@ for (const control of USER_SCRIPT_CONTROLS) {
       control.status.style.color = "#c0392b";
     } finally {
       control.element.disabled = false;
-      await refreshUserScriptControl(control).catch(() => {});
+      if (refresh) await refreshUserScriptControl(control).catch(() => {});
     }
   });
 }
