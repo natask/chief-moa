@@ -102,11 +102,13 @@ jobs:
           digest="$(sha256sum "$package_path" | awk '{print $1}')"
           size="$(stat -c '%s' "$package_path")"
           printf '%s  %s\n' "$digest" "$(basename "$package_path")" > "${package_path}.sha256"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "package_path=browser_extension/$package_path" >> "$GITHUB_OUTPUT"
-          echo "checksum_path=browser_extension/${package_path}.sha256" >> "$GITHUB_OUTPUT"
-          echo "package_sha256=$digest" >> "$GITHUB_OUTPUT"
-          echo "package_size=$size" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "package_path=browser_extension/$package_path"
+            echo "checksum_path=browser_extension/${package_path}.sha256"
+            echo "package_sha256=$digest"
+            echo "package_size=$size"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "### Browser extension artifact"
             echo "- Version: \`$version\`"
