@@ -41,6 +41,7 @@ const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = requi
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
+const { createSelfExtensionHandlers } = require("./lib/self-extension-handlers");
 const { createBrain } = require("./lib/brain");
 const { createThreadStore, isIncognitoBranch, newBranchId } = require("./lib/thread-store");
 const { buildContextArtifact, contextArtifactReceipt } = require("./lib/context-artifact");
@@ -461,6 +462,15 @@ const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 // code. The client live-refreshes on change (storage.onChanged pattern).
 const uiSpecStores = new Map();
 const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_DIR });
+const { routeSelfExtensions } = createSelfExtensionHandlers({
+  artifacts: selfExtensionArtifacts,
+  authorizedAgent,
+  agentAuthError,
+  readJsonBody,
+  sendJson,
+  cleanError,
+  recordProductEventBestEffort,
+});
 
 // The Brain: a fail-soft memory layer over the installed gbrain CLI. The
 // Steward recalls the user's facts/persona from here before every model turn so
@@ -889,52 +899,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/self-extension/artifacts" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, {
-        artifacts: selfExtensionArtifacts.list({
-          type: url.searchParams.get("type") || "",
-          status: url.searchParams.get("status") || "",
-          limit: Number(url.searchParams.get("limit") || 100),
-        }),
-        active: selfExtensionArtifacts.runtime().active,
-        known: selfExtensionArtifacts.known(),
-      });
-      return;
-    }
-
-    if (url.pathname === "/v1/self-extension/artifacts" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateSelfExtensionArtifact(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/self-extension/runtime" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, { runtime: selfExtensionArtifacts.runtime() });
-      return;
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/self-extension/artifacts/") &&
-      url.pathname.endsWith("/apply")
-    ) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.slice("/v1/self-extension/artifacts/".length, -"/apply".length);
-      await handleApplySelfExtensionArtifact(request, response, id);
+    if (await routeSelfExtensions(request, response, url)) {
       return;
     }
 
@@ -4266,155 +4231,6 @@ async function handleUiSpecPut(request, response, userId = accountUserId()) {
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
   }
-}
-
-async function handleCreateSelfExtensionArtifact(request, response) {
-  const body = await readJsonBody(request);
-  const incoming = body && typeof body === "object" ? (body.artifact || body) : {};
-  try {
-    const artifact = selfExtensionArtifacts.createCandidate(incoming);
-    recordProductEventBestEffort({
-      event_type: "self_extension.artifact.created",
-      stream_id: `self-extension:${artifact.type}`,
-      idempotency_key: `self-extension-artifact-created:${artifact.id}`,
-      occurred_at: artifact.created_at,
-      actor: { kind: "agent", id: "self-extension" },
-      correlation_id: artifact.variant_group_id,
-      payload: {
-        id: artifact.id,
-        type: artifact.type,
-        title: artifact.title,
-        status: artifact.status,
-        variant_group_id: artifact.variant_group_id,
-        parent_id: artifact.parent_id,
-        prompt: artifact.prompt,
-        spec: artifact.spec,
-        preview: artifact.preview,
-        validation: artifact.validation,
-        created_at: artifact.created_at,
-      },
-    });
-    sendJson(response, 201, { artifact });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleApplySelfExtensionArtifact(request, response, id) {
-  const body = await readJsonBody(request);
-  const applyContext = selfExtensionApplyContextFromBody(body);
-  if (!applyContext.ok) {
-    sendJson(response, 400, { error: `invalid self-extension apply metadata: ${applyContext.errors.join("; ")}` });
-    return;
-  }
-  try {
-    const artifact = selfExtensionArtifacts.apply(id, applyContext.context);
-    if (!artifact) {
-      sendJson(response, 404, { error: "self-extension artifact not found" });
-      return;
-    }
-    const runtime = selfExtensionArtifacts.runtime();
-    recordProductEventBestEffort({
-      event_type: "self_extension.artifact.applied",
-      stream_id: `self-extension:${artifact.type}`,
-      idempotency_key: `self-extension-artifact-applied:${artifact.id}:${artifact.applied_at}`,
-      occurred_at: artifact.applied_at,
-      actor: selfExtensionApplyActor(artifact.apply_context),
-      correlation_id: artifact.variant_group_id,
-      payload: {
-        id: artifact.id,
-        type: artifact.type,
-        title: artifact.title,
-        variant_group_id: artifact.variant_group_id,
-        spec: artifact.spec,
-        preview: artifact.preview,
-        applied_at: artifact.applied_at,
-        apply_context: artifact.apply_context,
-        runtime: runtime.active[artifact.type],
-      },
-    });
-    sendJson(response, 200, { artifact, runtime });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-function selfExtensionApplyActor(applyContext) {
-  const mode = cleanSelfExtensionToken(applyContext?.approval?.mode, 40);
-  const approvedBy = cleanSelfExtensionText(applyContext?.approval?.approved_by, 120);
-  if (mode === "explicit_user") {
-    return { kind: "user", id: approvedBy || "unknown" };
-  }
-  return { kind: "agent", id: approvedBy || "self-extension", mode: mode || "unknown" };
-}
-
-function selfExtensionApplyContextFromBody(body) {
-  const input = body && typeof body === "object" && !Array.isArray(body) ? body : {};
-  const source = input.source && typeof input.source === "object" && !Array.isArray(input.source)
-    ? input.source
-    : input.provenance && typeof input.provenance === "object" && !Array.isArray(input.provenance)
-      ? input.provenance
-      : {};
-  const approval = input.approval && typeof input.approval === "object" && !Array.isArray(input.approval)
-    ? input.approval
-    : {};
-  const sourceKind = cleanSelfExtensionToken(source.kind || input.source_kind, 40);
-  const approvalMode = cleanSelfExtensionToken(approval.mode || input.approval_mode, 40);
-  const errors = [];
-  const sourceKinds = ["user_turn", "agent_run", "manual_api", "smoke"];
-  const approvalModes = ["explicit_user", "developer", "test"];
-  if (!sourceKind) {
-    errors.push("source.kind is required");
-  } else if (!sourceKinds.includes(sourceKind)) {
-    errors.push(`source.kind must be one of: ${sourceKinds.join(", ")}`);
-  }
-  if (!approvalMode) {
-    errors.push("approval.mode is required");
-  } else if (!approvalModes.includes(approvalMode)) {
-    errors.push(`approval.mode must be one of: ${approvalModes.join(", ")}`);
-  }
-  const approvedBy = cleanSelfExtensionText(approval.approved_by || approval.approvedBy || input.approved_by, 120);
-  if (!approvedBy) {
-    errors.push("approval.approved_by is required");
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors, context: {} };
-  }
-  return {
-    ok: true,
-    errors: [],
-    context: {
-      source: {
-        kind: sourceKind,
-        turn_id: cleanSelfExtensionToken(source.turn_id || source.turnId, 120),
-        broker_event_id: cleanSelfExtensionToken(source.broker_event_id || source.brokerEventId, 120),
-        agent_run_id: cleanSelfExtensionToken(source.agent_run_id || source.agentRunId, 120),
-        session_id: cleanSelfExtensionToken(source.session_id || source.sessionId, 120),
-        branch_id: cleanSelfExtensionToken(source.branch_id || source.branchId, 120),
-        device_id: cleanSelfExtensionToken(source.device_id || source.deviceId, 120),
-        surface: cleanSelfExtensionToken(source.surface, 80),
-      },
-      approval: {
-        mode: approvalMode,
-        approved_by: approvedBy,
-        approval_id: cleanSelfExtensionToken(approval.approval_id || approval.approvalId, 120),
-        policy: "self_extension_apply_requires_source_and_approval",
-      },
-      reason: cleanSelfExtensionText(input.reason || approval.reason || source.reason, 240),
-      requested_by: cleanSelfExtensionText(input.requested_by || input.requestedBy || "", 120),
-      recorded_at: new Date().toISOString(),
-    },
-  };
-}
-
-function cleanSelfExtensionToken(value, max) {
-  return typeof value === "string"
-    ? value.trim().replace(/[^a-zA-Z0-9_:-]/g, "").slice(0, max)
-    : "";
-}
-
-function cleanSelfExtensionText(value, max) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 // Append a history entry whenever the effective profile actually changed. We log
