@@ -78,6 +78,7 @@ const { createProjectStore, promptWithProjectBrief } = require("./lib/project-st
 const { createEventProjectHandlers } = require("./lib/event-project-handlers");
 const { createDeviceToolHandlers } = require("./lib/device-tool-handlers");
 const { createBrowserTaskHandlers } = require("./lib/browser-task-handlers");
+const { createBrowserTurnHandlers } = require("./lib/browser-turn-handlers");
 const { createEventSubstrateStore, normalizeEventType } = require("./lib/event-substrate");
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { buildIdentity } = require("./lib/build-identity");
@@ -311,6 +312,14 @@ fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 const browserTurnStore = browserTurns.createBrowserTurnStore({ turnsDir: BROWSER_TURNS_DIR, evidenceDir: BROWSER_EVIDENCE_DIR });
 const browserTurnLifecycle = browserTurns.createBrowserTurnLifecycle({
   answerBrowserEvidence: browserEvidenceAnswer,
+});
+const { routeBrowserTurns, handleBrowserTurnBody } = createBrowserTurnHandlers({
+  authorized, sendJson, readJsonBody, browserAgentRoleCatalog, browserTurnStore,
+  browserTurns, browserTurnModality, browserTurnInputText, buildBrowserTurnRecord,
+  cleanError, browserEvidenceSummaryFromBody, sanitizeOptionalId, randomId,
+  sanitizeLooseId, sanitizeBrowserClientMetadata, mergeBrowserPageRefs,
+  browserPageRefFromBody, sanitizeBrowserScreenshot, browserTurnLifecycle,
+  mergeBrowserEvidenceSummaries, attachBrowserRoleExecution,
 });
 const projectStore = createProjectStore({
   filePath: PROJECTS_FILE,
@@ -945,49 +954,7 @@ const server = http.createServer(async (request, response) => {
     }
 
 
-    if (url.pathname === "/v1/browser/roles" && request.method === "GET") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, browserAgentRoleCatalog());
-      return;
-    }
-
-    if (url.pathname === "/v1/browser/turns" && request.method === "POST") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleBrowserTurn(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/browser/evidence" && request.method === "POST") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleBrowserEvidence(request, response);
-      return;
-    }
-
-    if (
-      request.method === "GET" &&
-      url.pathname.startsWith("/v1/browser/turns/") &&
-      url.pathname.endsWith("/status")
-    ) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const id = decodeURIComponent(url.pathname.slice("/v1/browser/turns/".length, -"/status".length));
-      const record = browserTurnStore.readBrowserTurnRecord(id);
-      if (!record) {
-        sendJson(response, 404, { error: "browser turn not found" });
-        return;
-      }
-      sendJson(response, 200, browserTurns.browserLifecyclePayload(record));
+    if (await routeBrowserTurns(request, response, url)) {
       return;
     }
 
@@ -2428,94 +2395,6 @@ async function writeCompletedVoiceTurnRecord(record) {
   await recordVoiceTurnCompletedProductEvent(record);
   // Rolling summary upkeep for the voice paths (async, never adds latency).
   maybeScheduleThreadSummaryAfterTurn(record.session_id, record.branch_id);
-}
-
-async function handleBrowserTurn(request, response) {
-  const body = await readJsonBody(request);
-  await handleBrowserTurnBody(response, body, {
-    modality: browserTurnModality(body),
-    legacy: "browser",
-  });
-}
-
-async function handleBrowserTurnBody(response, body, options = {}) {
-  const text = browserTurnInputText(body);
-  if (!text) {
-    sendJson(response, 400, { error: "text or transcript is required" });
-    return;
-  }
-
-  let record;
-  try {
-    record = await buildBrowserTurnRecord(body, {
-      modality: options.modality || browserTurnModality(body),
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-  browserTurnStore.writeBrowserTurnRecord(record);
-  sendJson(response, browserTurns.browserTurnHttpStatus(record), browserTurns.browserLifecyclePayload(record, { legacy: options.legacy }));
-}
-
-async function handleBrowserEvidence(request, response) {
-  const body = await readJsonBody(request);
-  const requestedTurnId = String(body.turn_id || body.browser_turn_id || body.browserTurnId || "").trim();
-  const requestedEvidenceRequestId = String(body.evidence_request_id || body.request_id || body.requestId || "").trim();
-  if (!requestedTurnId && !requestedEvidenceRequestId) {
-    sendJson(response, 400, { error: "turn_id or evidence_request_id is required" });
-    return;
-  }
-
-  const turn = requestedTurnId
-    ? browserTurnStore.readBrowserTurnRecord(requestedTurnId)
-    : browserTurnStore.findBrowserTurnByEvidenceRequestId(requestedEvidenceRequestId);
-  if (!turn) {
-    sendJson(response, 404, { error: "browser turn not found" });
-    return;
-  }
-
-  const summary = browserEvidenceSummaryFromBody(body);
-  if (!summary.visible_text && !summary.source_ref) {
-    sendJson(response, 400, { error: "evidence or screen visible text is required" });
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const evidence = {
-    id: sanitizeOptionalId(body.evidence_id || body.id, randomId("evidence")),
-    turn_id: turn.id,
-    evidence_request_id: requestedEvidenceRequestId
-      ? sanitizeLooseId(requestedEvidenceRequestId)
-      : String((turn.evidence_request_ids || [])[0] || ""),
-    session_id: turn.session_id,
-    conversation_id: turn.conversation_id,
-    branch_id: turn.branch_id,
-    source: String(body.source || body.client?.source || "browser-extension").slice(0, 80),
-    client: sanitizeBrowserClientMetadata(body.client),
-    page_ref: mergeBrowserPageRefs(turn.page_ref, summary.page_ref, browserPageRefFromBody(body)),
-    screenshot: sanitizeBrowserScreenshot(body.screenshot),
-    summary,
-    created_at: now,
-  };
-  browserTurnStore.writeBrowserEvidenceRecord(evidence);
-
-  const evidenceRefs = Array.from(new Set([].concat(turn.evidence_refs || [], evidence.id).filter(Boolean)));
-  let completed = await browserTurnLifecycle.completeBrowserTurnRecord({
-    ...turn,
-    page_ref: mergeBrowserPageRefs(turn.page_ref, evidence.page_ref),
-    evidence_refs: evidenceRefs,
-    evidence_summary: mergeBrowserEvidenceSummaries(turn.evidence_summary, summary),
-    updated_at: now,
-  }, {
-    completedAt: now,
-  });
-  completed = attachBrowserRoleExecution(completed);
-  browserTurnStore.writeBrowserTurnRecord(completed);
-  sendJson(response, 200, {
-    ...browserTurns.browserLifecyclePayload(completed),
-    evidence,
-  });
 }
 
 function shouldDelegateToBrowserTurn(body) {
