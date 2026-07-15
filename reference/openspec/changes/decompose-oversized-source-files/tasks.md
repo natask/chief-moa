@@ -87,6 +87,10 @@
       trust-proxy, and invalid-mode policy matrix with a focused 90%
       line/branch/function coverage gate. Verified at 100% lines and functions
       and 96.77% branches.
+- [x] 2.16 Add isolated file-fallback, fake-gbrain CLI, recall parsing,
+      fail-soft process failure, and legacy-row tests for the Brain with a
+      focused 90% line/branch/function coverage gate. Verified at 99.47% lines,
+      95.86% branches, and 100% functions.
 
 ## 3. Other Oversized Surfaces
 
