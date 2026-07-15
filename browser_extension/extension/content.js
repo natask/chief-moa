@@ -1309,6 +1309,9 @@
 
   function toggleVoiceFirstCapture(origin) {
     if (voiceFirstCaptureActive()) {
+      // Capture toggles are provenance-matched. A single click cannot send a
+      // fresh-thread turn that was intentionally started with a double-click.
+      if (voiceFirstCaptureOrigin !== origin) return "noop";
       voiceFirstCaptureOrigin = null;
       commitLiveVoiceTurn();
       syncTalkModeUi();

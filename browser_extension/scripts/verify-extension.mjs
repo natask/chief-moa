@@ -948,6 +948,7 @@ if (
   !/armVoiceFirstChainReset\(\(\) => resolveVoiceFirstTapChain\(chain\)\)/.test(voiceFirstTapBody) ||
   !/function toggleVoiceFirstCapture\(/.test(contentSource) ||
   !/function toggleFreshThreadVoiceCapture\(/.test(contentSource) ||
+  !/voiceFirstCaptureOrigin !== origin[\s\S]{0,40}return "noop"/.test(contentSource) ||
   !/voiceFirstCaptureOrigin === "double"/.test(contentSource) ||
   !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
   !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}openTextSurface/.test(contentSource)
