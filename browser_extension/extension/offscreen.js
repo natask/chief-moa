@@ -133,6 +133,7 @@ async function startCapture(voiceSessionId) {
 // blob straight to the gateway so megabytes never ride runtime messages.
 
 let activeVideoCapture = null;
+const terminalizingVideoCaptures = new Map();
 
 function pickVideoMimeType() {
   const candidates = [
@@ -157,22 +158,34 @@ function stopVideoTracks(capture) {
 }
 
 function discardVideoCapture(sessionId = null) {
-  const capture = activeVideoCapture;
+  let capture = activeVideoCapture;
+  if ((!capture || (sessionId && capture.videoSessionId !== sessionId)) && sessionId) {
+    capture = terminalizingVideoCaptures.get(sessionId) || null;
+  }
   if (!capture) return;
   if (sessionId && capture.videoSessionId !== sessionId) return;
   capture.discarded = true;
-  if (capture.maxTimer) clearTimeout(capture.maxTimer);
+  capture.acceptingData = false;
+  capture.uploadController?.abort();
+  if (capture.maxTimer) {
+    clearTimeout(capture.maxTimer);
+    capture.maxTimer = null;
+  }
   try {
     if (capture.recorder && capture.recorder.state !== "inactive") capture.recorder.stop();
   } catch {}
   stopVideoTracks(capture);
   capture.chunks = [];
-  activeVideoCapture = null;
+  capture.totalBytes = 0;
+  if (activeVideoCapture === capture) activeVideoCapture = null;
 }
 
 async function startVideoCapture({ videoSessionId, streamId, maxMs, maxBytes }) {
   if (!videoSessionId) throw new Error("missing video session id");
   if (!streamId) throw new Error("missing desktop capture stream id");
+  if (terminalizingVideoCaptures.has(videoSessionId)) {
+    throw new Error("video session is already finishing");
+  }
   discardVideoCapture();
 
   let screenStream = null;
@@ -225,6 +238,8 @@ async function startVideoCapture({ videoSessionId, streamId, maxMs, maxBytes }) 
       maxTimer: null,
       stopWaiters: [],
       recorderStopped: false,
+      acceptingData: true,
+      uploadController: null,
     };
     activeVideoCapture = capture;
 
@@ -232,23 +247,30 @@ async function startVideoCapture({ videoSessionId, streamId, maxMs, maxBytes }) 
       // MediaRecorder queues its final dataavailable before stop. Manual stop
       // clears the active slot so another capture can start while this one
       // uploads, but the terminal chunk still belongs to this capture.
-      if (capture.discarded || capture.recorderStopped) return;
+      if (capture.discarded || capture.recorderStopped || !capture.acceptingData) return;
       if (!event.data || event.data.size <= 0) return;
       capture.chunks.push(event.data);
       capture.totalBytes += event.data.size;
-      if (capture.totalBytes >= capture.maxBytes && recorder.state === "recording") {
-        // Size cap reached: finish the recording with what we have. The user's
-        // stop click will find the recorder already stopped and just upload.
+      if (capture.totalBytes >= capture.maxBytes) {
         capture.capped = true;
-        try {
-          recorder.stop();
-        } catch {}
+        // Stop near the cap, then validate the complete WebM after the required
+        // terminal chunk arrives. An oversized recording is rejected whole;
+        // byte truncation would corrupt its container.
+        if (recorder.state === "recording") {
+          try {
+            recorder.stop();
+          } catch {}
+        }
       }
     };
     recorder.onstop = () => {
       if (capture.recorderStopped) return;
       capture.recorderStopped = true;
-      if (capture.maxTimer) clearTimeout(capture.maxTimer);
+      capture.acceptingData = false;
+      if (capture.maxTimer) {
+        clearTimeout(capture.maxTimer);
+        capture.maxTimer = null;
+      }
       stopVideoTracks(capture);
       for (const resolve of capture.stopWaiters.splice(0)) resolve();
     };
@@ -303,39 +325,70 @@ async function stopAndUploadVideoCapture(msg) {
   if (!capture || (msg.videoSessionId && capture.videoSessionId !== msg.videoSessionId)) {
     return { stored: false, error: "No video recording is in progress." };
   }
+  terminalizingVideoCaptures.set(capture.videoSessionId, capture);
   activeVideoCapture = null;
-  await waitForVideoRecorderStop(capture);
-  const durationMs = Date.now() - capture.startedAt;
-  const blob = new Blob(capture.chunks, { type: capture.recorder?.mimeType || "video/webm" });
-  capture.chunks = [];
-  if (blob.size <= 0) {
-    return { stored: false, error: "No video was captured." };
-  }
-  if (!msg.gatewayUrl) {
-    return { stored: false, error: "No gateway URL set. Open A.G. Options and set the Agent gateway URL." };
-  }
-  const headers = {
-    "content-type": blob.type || "video/webm",
-    "x-moa-surface": "agee-extension",
-    "x-moa-duration-ms": String(durationMs),
-  };
-  if (msg.sessionId) headers["x-moa-session-id"] = msg.sessionId;
-  if (msg.gatewayToken) headers.authorization = `Bearer ${msg.gatewayToken}`;
-  let resp;
   try {
-    resp = await fetch(`${msg.gatewayUrl}/v1/video-notes`, { method: "POST", headers, body: blob });
-  } catch (error) {
-    return { stored: false, error: `Video note upload failed: ${String(error?.message || error)}` };
+    await waitForVideoRecorderStop(capture);
+    if (capture.discarded) {
+      return { stored: false, error: "Video recording was discarded." };
+    }
+    const durationMs = Date.now() - capture.startedAt;
+    const blob = new Blob(capture.chunks, { type: capture.recorder?.mimeType || "video/webm" });
+    if (blob.size <= 0) {
+      return { stored: false, error: "No video was captured." };
+    }
+    if (blob.size > capture.maxBytes) {
+      return {
+        stored: false,
+        capped: true,
+        error: `Video recording exceeded the ${capture.maxBytes}-byte limit and was not uploaded.`,
+      };
+    }
+    if (!msg.gatewayUrl) {
+      return { stored: false, error: "No gateway URL set. Open A.G. Options and set the Agent gateway URL." };
+    }
+    const headers = {
+      "content-type": blob.type || "video/webm",
+      "x-moa-surface": "agee-extension",
+      "x-moa-duration-ms": String(durationMs),
+    };
+    if (msg.sessionId) headers["x-moa-session-id"] = msg.sessionId;
+    if (msg.gatewayToken) headers.authorization = `Bearer ${msg.gatewayToken}`;
+    capture.uploadController = new AbortController();
+    let resp;
+    let text;
+    try {
+      resp = await fetch(`${msg.gatewayUrl}/v1/video-notes`, {
+        method: "POST",
+        headers,
+        body: blob,
+        signal: capture.uploadController.signal,
+      });
+      text = await resp.text();
+    } catch (error) {
+      if (capture.discarded) return { stored: false, error: "Video recording was discarded." };
+      return { stored: false, error: `Video note upload failed: ${String(error?.message || error)}` };
+    }
+    if (capture.discarded) return { stored: false, error: "Video recording was discarded." };
+    if (!resp.ok) {
+      return { stored: false, error: `Video note upload failed (HTTP ${resp.status}): ${text.slice(0, 300)}` };
+    }
+    let payload = null;
+    try {
+      payload = JSON.parse(text);
+    } catch {}
+    return { stored: true, note: payload?.note || null, durationMs, capped: capture.capped === true };
+  } finally {
+    capture.acceptingData = false;
+    capture.chunks = [];
+    capture.totalBytes = 0;
+    capture.uploadController = null;
+    if (capture.maxTimer) clearTimeout(capture.maxTimer);
+    stopVideoTracks(capture);
+    if (terminalizingVideoCaptures.get(capture.videoSessionId) === capture) {
+      terminalizingVideoCaptures.delete(capture.videoSessionId);
+    }
   }
-  const text = await resp.text();
-  if (!resp.ok) {
-    return { stored: false, error: `Video note upload failed (HTTP ${resp.status}): ${text.slice(0, 300)}` };
-  }
-  let payload = null;
-  try {
-    payload = JSON.parse(text);
-  } catch {}
-  return { stored: true, note: payload?.note || null, durationMs, capped: capture.capped === true };
 }
 // ---- End video note capture -------------------------------------------------
 
