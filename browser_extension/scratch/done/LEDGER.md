@@ -1,1 +1,2 @@
+- Added a default-off, approval-bound Chrome userScripts runtime with exact validation, read-back, rollback/removal, bounded receipts, and settings-only onboarding — agent: codex/gpt-5 — 5754bfce
 - Video notes (extension half): shift-click record = screen+mic WebM via desktopCapture picker + offscreen MediaRecorder (120s/20MiB caps), direct upload to /v1/video-notes, then a /v1/voice/turns video turn whose reply lands on the note's cue; Stop-sharing bar auto-finishes; voice/audio-note/video-note mutually refuse the mic — agent: claude-code/fable-5 — 1865dc3
