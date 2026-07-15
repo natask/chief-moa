@@ -61,6 +61,7 @@
     "test:coverage:browser-task-handlers": "node --experimental-test-coverage --test-coverage-include='lib/browser-task-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/browser-task-handlers.test.js",
     "test:coverage:browser-turn-handlers": "node --experimental-test-coverage --test-coverage-include='lib/browser-turn-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/browser-turn-handlers.test.js",
     "test:coverage:account-connection-handlers": "node --experimental-test-coverage --test-coverage-include='lib/account-connection-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/account-connection-handlers.test.js",
+    "test:coverage:android-ota-handlers": "node --experimental-test-coverage --test-coverage-include='lib/android-ota-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/android-ota-handlers.test.js",
     "check:context-quality": "node scripts/check-context-quality.js",
     "test": "node --test \"test/**/*.test.js\"",
     "test:billing": "node --test test/billing-domain.test.js",
