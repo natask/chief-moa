@@ -121,6 +121,10 @@
       stream, inline-part, raw-body, HTTP handler, deletion, and error-bound
       tests with a focused 90% line/branch/function coverage gate. Verified at
       100% lines, 93.24% branches, and 95.56% functions.
+- [x] 2.24 Add exhaustive account-provider catalog, OAuth configuration,
+      authorize, exchange, refresh, revoke, provider-error, and deterministic
+      fixture-lifecycle tests with a focused 90% line/branch/function coverage
+      gate. Verified at 100% lines and functions and 96.51% branches.
 
 ## 3. Other Oversized Surfaces
 
