@@ -1,2 +1,3 @@
+- Pending video-note stops remain discardable, late recorder events stay capture-local, and over-cap WebM recordings fail without upload — agent: codex/gpt-5 — 12cdbf39
 - Video note manual stop now waits for MediaRecorder's final chunk before one upload, with deterministic stop, cap, discard, and track-ended regression coverage — agent: codex/gpt-5 — 0638abf4
 - Video notes (extension half): shift-click record = screen+mic WebM via desktopCapture picker + offscreen MediaRecorder (120s/20MiB caps), direct upload to /v1/video-notes, then a /v1/voice/turns video turn whose reply lands on the note's cue; Stop-sharing bar auto-finishes; voice/audio-note/video-note mutually refuse the mic — agent: claude-code/fable-5 — 1865dc3
