@@ -57,6 +57,7 @@ const requiredFiles = [
   "scripts/smoke-ui-spec.mjs",
   "scripts/smoke-unified-browser-agent.mjs",
   "scripts/smoke-proactive.mjs",
+  "scripts/smoke-user-scripts.mjs",
   "scripts/test-proactive-helper.mjs",
   "scripts/test-voice-sampler-lifecycle.mjs",
   "scripts/test-cue-dismiss.mjs",
