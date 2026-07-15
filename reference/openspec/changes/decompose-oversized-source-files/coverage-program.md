@@ -109,6 +109,12 @@ deleting, or excluding meaningful failure-path and integration tests.
 - Apple: the ad-hoc signed QA bundle was created at
   `apple_surfaces/dist/MoaMac.app`; packaging did not launch it or request TCC
   permissions.
+- Browser extension: version `0.1.45` was verified, smoke-tested in real
+  headless Chromium, and packaged as
+  `browser_extension/dist/A.G.-0.1.45.zip` (418,213 bytes). The dev-reload
+  bridge received no poll during its bounded 40-second window, so reload of an
+  already-loaded unpacked extension remains unverified; one manual reload at
+  `chrome://extensions` is required to enable confirmation for later deploys.
 - Gateway: the complete production-only run passed 1014 tests with one skip, but
   no isolated preview, backup/restore evidence, or state-compatibility rollout
   was established. The branch was therefore not pushed through the
