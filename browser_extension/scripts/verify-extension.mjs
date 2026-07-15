@@ -103,9 +103,10 @@ if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");
 }
 
-if (manifest.version !== "0.1.35") {
-  throw new Error(`reviewable voice controls release must use manifest 0.1.35, got ${manifest.version}`);
-}
+// No hardcoded version pin here: the release workflow already refuses
+// packaged-source changes without a manifest bump, and a duplicate exact-value
+// check only adds a second trip-wire that must be hand-moved every release.
+// Pick the next version with scripts/release/next-extension-version.sh.
 
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
 if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js")) {
