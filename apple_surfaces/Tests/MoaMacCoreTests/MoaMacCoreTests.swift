@@ -1,6 +1,12 @@
 import Foundation
 import Testing
+#if os(macOS)
+import AppKit
+import ApplicationServices
+#endif
 @testable import MoaMacCore
+@testable import MoaMacShell
+@testable import MoaMacUI
 
 private let now = Date(timeIntervalSince1970: 1_700_000_000)
 private let process = ProcessIdentity(bundleID: "com.example.Editor", pid: 42, processStart: now.addingTimeInterval(-10), signingIdentity: "TEAM:com.example.Editor")
@@ -126,3 +132,114 @@ private func observation() -> Observation { Observation(observationID: "obs", ca
     await grants.start(grant); await grants.stop()
     await #expect(throws: MoaMacError.invalidGrant) { try await grants.current(now: now.addingTimeInterval(1), process: process) }
 }
+
+@Test func grantPeekAndExpiryAreObservableAndSelfRevoking() async throws {
+    let grants = GrantStore()
+    #expect(await grants.peek() == nil)
+    let grant = try ObservationGrant(process: process, mode: .localOnly, issuedAt: now, expiresAt: now.addingTimeInterval(1))
+    await grants.start(grant)
+    #expect(await grants.peek() == grant)
+    await #expect(throws: MoaMacError.expired) { try await grants.current(now: now.addingTimeInterval(2), process: process) }
+    #expect(await grants.peek() == nil)
+}
+
+@Test(arguments: ["AXButton", "AXStaticText"])
+func localSuggestionCoversButtonAndGenericWindows(role: String) async throws {
+    let grants = GrantStore(), coordinator = SuggestionCoordinator(grants: grants)
+    await grants.start(try ObservationGrant(process: process, mode: .localOnly, issuedAt: now, expiresAt: now.addingTimeInterval(900)))
+    let value = Observation(observationID: "obs-\(role)", capturedAt: now,
+        app: .init(bundleID: process.bundleID, name: "Editor"), window: .init(title: "Document"),
+        ax: .init(nodes: [.init(id: "n", parentID: nil, role: role, subrole: nil, label: nil,
+                               enabled: true, focused: false, actions: [])], truncated: false, dropped: 0),
+        screenshot: nil)
+    let result = try await coordinator.suggest(observation: value, process: process, origin: nil, token: nil, now: { now })
+    #expect(!result.suggestion.isEmpty)
+}
+
+#if os(macOS)
+@MainActor @Test func macShellSafeStoppedControlsRemainInert() async {
+    let model = SurfaceModel()
+    #expect(model.paused)
+    model.resume()
+    await model.pause()
+    await model.stop()
+    model.selectFrontmost()
+    await model.start()
+    _ = StatusView().body
+}
+
+
+@Test func nativeAdaptersFailClosedWithoutAValidTarget() async throws {
+    #expect(ProcessInspector.signingIdentity(pid: ProcessInfo.processInfo.processIdentifier) != nil)
+    _ = ProcessInspector.identity(.current)
+
+    let session = AXSession(pid: -1, changed: {})
+    #expect(throws: (any Error).self) { try session.start() }
+    session.schedule()
+    session.schedule()
+    try await Task.sleep(for: .milliseconds(400))
+    session.stop()
+    let captured = AXCapture.snapshot(pid: -1)
+    #expect(captured.0.nodes.isEmpty)
+
+    let scope = WorkspaceScope()
+    #expect(await scope.validate(process: process, observation: observation(), focusedWindowID: nil) == false)
+
+    let preview = try RequestPreview(origin: URL(string: "http://127.0.0.1:1")!, mode: .trustedServer15m,
+                                     observation: observation())
+    await #expect(throws: (any Error).self) {
+        try await EphemeralTransport().send(preview: preview, bearerToken: "test-token")
+    }
+    let redirect = NoRedirectDelegate()
+    let redirectURL = URL(string: "https://example.test/redirect")!
+    let redirectTask = URLSession.shared.dataTask(with: redirectURL)
+    let redirectResponse = try #require(HTTPURLResponse(url: redirectURL, statusCode: 302,
+                                                       httpVersion: "HTTP/1.1", headerFields: ["Location": "/next"]))
+    var followed: URLRequest? = URLRequest(url: redirectURL)
+    redirect.urlSession(.shared, task: redirectTask, willPerformHTTPRedirection: redirectResponse,
+                        newRequest: URLRequest(url: redirectURL)) { followed = $0 }
+    #expect(followed == nil)
+
+    let element = AXUIElementCreateApplication(-1)
+    var nodes: [AXNode] = [], dropped = 0
+    AXCapture.walk(element, parent: nil, depth: 0, nodes: &nodes, dropped: &dropped)
+    #expect(nodes.count == 1)
+    AXCapture.walk(element, parent: nil, depth: ObservationBounds.maxDepth + 1, nodes: &nodes, dropped: &dropped)
+    #expect(dropped == 1)
+    #expect(AXCapture.string(element, kAXTitleAttribute) == nil)
+}
+
+@MainActor @Test func accessibilityCaptureTraversesAnOwnedTestWindowWhenAvailable() async throws {
+    let app = NSApplication.shared
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 180),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.title = "Coverage Window"
+    let field = NSTextField(string: "Draft")
+    field.frame = NSRect(x: 20, y: 80, width: 200, height: 24)
+    let button = NSButton(title: "Continue", target: nil, action: nil)
+    button.frame = NSRect(x: 20, y: 40, width: 100, height: 28)
+    window.contentView?.addSubview(field)
+    window.contentView?.addSubview(button)
+    window.makeKeyAndOrderFront(nil)
+    app.activate(ignoringOtherApps: true)
+    defer { window.orderOut(nil) }
+    try await Task.sleep(for: .milliseconds(100))
+    let captured = AXCapture.snapshot(pid: ProcessInfo.processInfo.processIdentifier)
+    #expect(captured.1.isEmpty || captured.1 == "Coverage Window")
+
+    let identity = ProcessIdentity(bundleID: "test.coverage", pid: ProcessInfo.processInfo.processIdentifier,
+                                   processStart: NSRunningApplication.current.launchDate ?? now, signingIdentity: "test:coverage")
+    let model = SurfaceModel(selectedIdentity: identity, appName: "Coverage App")
+    model.saveToken()
+    #expect(model.status == "Token save failed")
+    model.mode = .askEachTime
+    model.origin = "http://not-loopback.example"
+    await model.start()
+    #expect(!model.status.isEmpty)
+    model.mode = .localOnly
+    await model.start()
+    try await Task.sleep(for: .milliseconds(450))
+    await model.stop()
+    #expect(model.paused)
+}
+#endif

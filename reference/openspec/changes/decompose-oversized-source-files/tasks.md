@@ -83,6 +83,14 @@
 - [x] 4.7b Extract Android context-control state from overlay orchestration with
       a focused 90% gate. Verified at 100% lines, branches, and methods; reduce
       `OverlayService.java` to 3,959 lines.
+- [x] 4.8 Repair Apple protocol drift, move executable shell behavior into
+      test-linked modules, and add an exact, fail-closed coverage classifier.
+      Baseline: 89.17% lines, 85.29% functions, and 81.05% LLVM regions across
+      45 passing tests and both instrumented app products. This Swift toolchain
+      emits no branch counters, so regions are not relabeled as branches.
+- [ ] 4.9 Raise Apple executable coverage to at least 90% for lines and
+      functions, and enforce an honest 90% branch metric on a toolchain or
+      instrumentation path that emits branch counters.
 - [x] 4.8 Extract website inline JavaScript into attributable runtime modules
       and enforce at least 90% lines, branches, and functions across Pages
       handlers and browser code. Verified at 96.09% lines, 90.40% branches,

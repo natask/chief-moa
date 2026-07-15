@@ -1,0 +1,22 @@
+# One classification per tracked Apple-surface source or tooling file.
+# executable entries must appear in the combined LLVM coverage report.
+executable Sources/AggieAppleSurface/AggieAppleSurface.swift
+executable Sources/AggieAppleSurface/ApprovalUXState.swift
+executable Sources/AggieAppleSurface/MacSurfaceAdapter.swift
+executable Sources/AggieAppleSurface/MacUpdateAdapter.swift
+executable Sources/AggieSurfaceApp/AggieSurfaceApp.swift
+executable Sources/MoaMac/main.swift
+executable Sources/MoaMacCore/MoaMacCore.swift
+executable Sources/MoaMacShell/MoaMacShell.swift
+ui Sources/AggieSurfaceUI/ApprovalSurfaceView.swift
+ui Sources/MoaMacUI/StatusView.swift
+test Tests/AggieAppleSurfaceTests/AggieAppleSurfaceTests.swift
+test Tests/AggieAppleSurfaceTests/MacSurfaceAdapterTests.swift
+test Tests/MoaMacCoreTests/MoaMacCoreTests.swift
+operational Package.swift
+operational .gitignore
+operational coverage-scope.txt
+operational scripts/coverage.sh
+operational scripts/package-moa-mac.sh
+fixture Resources/Info.plist
+vendor THIRD_PARTY_NOTICES.md
