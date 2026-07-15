@@ -13,6 +13,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/content.js",
   "extension/livekit-voice.js",
   "extension/observation-runtime.js",
+  "extension/page-observation-runtime.js",
   "extension/offscreen-audio-worklet.js",
   "extension/offscreen-livekit.js",
   "extension/offscreen.js",

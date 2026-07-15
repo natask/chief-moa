@@ -14,6 +14,7 @@ const requiredFiles = [
   "extension/config.js",
   "extension/content.js",
   "extension/observation-runtime.js",
+  "extension/page-observation-runtime.js",
   "extension/proactive-helper.js",
   "extension/proactive-confirm.html",
   "extension/proactive-confirm.css",
@@ -87,6 +88,7 @@ const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const observationRuntimeSource = readFileSync("extension/observation-runtime.js", "utf8");
+const pageObservationRuntimeSource = readFileSync("extension/page-observation-runtime.js", "utf8");
 const proactiveHelperSource = readFileSync("extension/proactive-helper.js", "utf8");
 const proactiveConfirmHtmlSource = readFileSync("extension/proactive-confirm.html", "utf8");
 const proactiveConfirmCssSource = readFileSync("extension/proactive-confirm.css", "utf8");
@@ -132,15 +134,19 @@ if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 
 if (
   mainContentScript.js.indexOf("observation-runtime.js") < 0 ||
   mainContentScript.js.indexOf("observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  mainContentScript.js.indexOf("page-observation-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("page-observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   !/AgeeObservationRuntime/.test(observationRuntimeSource) ||
   !/MAX_REGISTERED_ANCHORS = 100/.test(observationRuntimeSource) ||
   !/new WeakReference\(element\)/.test(observationRuntimeSource) ||
   !/entry\.evidence !== canonicalEvidence\(anchor\)/.test(observationRuntimeSource) ||
   !/Object\.keys\(value\)\.sort\(\)/.test(observationRuntimeSource) ||
   !/tombstoneRemovedNodes/.test(observationRuntimeSource) ||
-  !/MAX_OBSERVATION_ANCHORS = 100/.test(contentSource) ||
+  !/MAX_OBSERVATION_ANCHORS = 100/.test(pageObservationRuntimeSource) ||
+  !/createPageObservationRuntime/.test(pageObservationRuntimeSource) ||
+  !/AgeePageObservationRuntime/.test(contentSource) ||
   !/revalidateObservationAnchor/.test(contentSource) ||
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "observation-runtime\.js", "page-observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("observation runtime must load before content.js in declared and dynamic injection paths");
 }
@@ -226,7 +232,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "observation-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "observation-runtime\.js", "page-observation-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
@@ -522,7 +528,11 @@ if (
   throw new Error("browser agent role controls must route explicit overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
 }
 
-if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {
+if (
+  !/function visiblePageText/.test(pageObservationRuntimeSource) ||
+  !/pageText:\s*visiblePageText\(\)/.test(pageObservationRuntimeSource) ||
+  !/pageObservation\.snapshot\(\)/.test(contentSource)
+) {
   throw new Error("content snapshot must include visible page text, not only actionable elements");
 }
 
@@ -724,11 +734,12 @@ if (
 }
 
 if (
-  !/snapshotId/.test(contentSource) ||
-  !/viewport:\s*\{/.test(contentSource) ||
-  !/const capturedAt = new Date\(\)\.toISOString\(\)/.test(contentSource) ||
-  !/capturedAt,/.test(contentSource) ||
-  !/elementSummaries:\s*elements\.map/.test(contentSource)
+  !/snapshotId/.test(pageObservationRuntimeSource) ||
+  !/viewport:\s*\{/.test(pageObservationRuntimeSource) ||
+  !/const capturedAt = clock\(\)\.toISOString\(\)/.test(pageObservationRuntimeSource) ||
+  !/capturedAt,/.test(pageObservationRuntimeSource) ||
+  !/elementSummaries:\s*elements\.map/.test(pageObservationRuntimeSource) ||
+  !/pageObservation\.snapshot\(\)/.test(contentSource)
 ) {
   throw new Error("content snapshot must include snapshotId, viewport, capturedAt, and element summaries without removing the existing shape");
 }
@@ -1088,6 +1099,7 @@ for (const file of [
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content.js",
+  "extension/page-observation-runtime.js",
   "extension/proactive-helper.js",
   "extension/proactive-confirm.js",
   "extension/offscreen.js",
