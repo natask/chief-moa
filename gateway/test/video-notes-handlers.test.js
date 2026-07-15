@@ -56,12 +56,12 @@ test("store exposes byte streams and fails soft for missing blobs", async (t) =>
   const blob = store.videoPath(note.id);
   fs.rmSync(blob);
   fs.mkdirSync(blob);
-  assert.equal(store.readBytes(note.id), null);
+  assert.equal(await store.readBytes(note.id), null);
   fs.rmSync(blob, { recursive: true });
   assert.equal(store.videoPath(note.id), "");
-  assert.equal(store.readBytes(note.id), null);
+  assert.equal(await store.readBytes(note.id), null);
   assert.equal(store.readStream(note.id), null);
-  assert.equal(store.remove(note.id), true);
+  assert.equal(await store.remove(note.id), true);
   assert.equal(store.status().total_bytes, 0);
 });
 
@@ -149,7 +149,7 @@ test("create handler rejects empty, oversized, stream-error, and storage-error b
   });
 });
 
-test("metadata list, get, and delete handlers cover found and missing notes", () => {
+test("metadata list, get, and delete handlers cover found and missing notes", async () => {
   const notes = new Map([["note one", { id: "note one" }]]);
   const store = {
     list: (filter) => [{ limit: filter.limit }],
@@ -170,10 +170,10 @@ test("metadata list, get, and delete handlers cover found and missing notes", ()
   handlers.get(response, { pathname: "/v1/video-notes/%E0%A4%A" });
   assert.equal(response.status, 404);
   response = captureResponse();
-  handlers.remove(response, new URL("https://gateway.test/v1/video-notes/note%20one"));
+  await handlers.remove(response, new URL("https://gateway.test/v1/video-notes/note%20one"));
   assert.deepEqual(response.json, { deleted: true, id: "note one" });
   response = captureResponse();
-  handlers.remove(response, new URL("https://gateway.test/v1/video-notes/note%20one/extra"));
+  await handlers.remove(response, new URL("https://gateway.test/v1/video-notes/note%20one/extra"));
   assert.equal(response.status, 404);
 });
 
@@ -187,34 +187,51 @@ test("video handler distinguishes metadata, blob, non-file, and successful strea
   const handlers = createVideoNoteHandlers({ store: {
     get: (id) => id === "note" ? note : null,
     videoPath: () => filePath,
+    stream: async () => {
+      if (!filePath) return null;
+      let stat;
+      try {
+        stat = fs.statSync(filePath);
+      } catch {
+        return null;
+      }
+      if (!stat.isFile()) return null;
+      return {
+        stream: fs.createReadStream(filePath),
+        size: stat.size,
+        contentType: note.content_type || "application/octet-stream",
+      };
+    },
   } });
 
   let response = captureResponse();
-  handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/missing/video"));
+  await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/missing/video"));
   assert.equal(response.status, 404);
   response = captureResponse();
-  handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/bad/extra/video"));
+  await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/bad/extra/video"));
   assert.equal(response.status, 404);
   filePath = "";
   response = captureResponse();
-  handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
+  await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
   assert.equal(response.json.error, "video note video not found");
   filePath = dir;
   response = captureResponse();
-  handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
+  await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
   assert.equal(response.status, 404);
   filePath = blob;
   response = captureResponse();
-  handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
-  await once(response, "finish");
+  const firstFinish = once(response, "finish");
+  await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
+  await firstFinish;
   assert.equal(response.status, 200);
   assert.equal(response.headers["content-length"], 5);
   assert.equal(response.body.toString(), "bytes");
 
   note.content_type = "";
   response = captureResponse();
-  handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
-  await once(response, "finish");
+  const secondFinish = once(response, "finish");
+  await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
+  await secondFinish;
   assert.equal(response.headers["content-type"], "application/octet-stream");
 });
 

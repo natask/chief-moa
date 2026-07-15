@@ -203,6 +203,11 @@ test("sendAudio streams bytes with fallback content type", async (t) => {
     store: {
       get: () => ({ id: "note", content_type: "" }),
       audioPath: () => filePath,
+      stream: async () => ({
+        stream: fs.createReadStream(filePath),
+        size: 2,
+        contentType: "application/octet-stream",
+      }),
     },
   });
   const response = new MemoryResponse();
