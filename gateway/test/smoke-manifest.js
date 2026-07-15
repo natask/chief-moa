@@ -45,6 +45,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/thread-switch-handlers.js",
   "lib/broker-research-handlers.js",
   "lib/media-note-handlers.js",
+  "lib/voice-control-handlers.js",
   "lib/project-store.js",
   "lib/intent-runtime.js",
   "lib/intent-runtime-router.js",
