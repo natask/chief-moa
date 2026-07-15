@@ -99,6 +99,10 @@
       ownership, finalization, merge, fallback, and error tests with a focused
       90% line/branch/function coverage gate. Verified at 100% lines and
       functions and 97.14% branches.
+- [x] 2.19 Add exhaustive Exa tool construction, request validation, provider
+      response, timeout, network-error, URL filtering, and metadata-bound tests
+      with a focused 90% line/branch/function coverage gate. Verified at 100%
+      lines and functions and 90.28% branches.
 
 ## 3. Other Oversized Surfaces
 
