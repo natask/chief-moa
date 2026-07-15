@@ -55,6 +55,11 @@
       functions with 27 passing tests.
 - [ ] 4.2 Add a separate 90% line/branch/method report for the WinUI C# shell on
       a Windows runner.
+- [x] 4.3 Add an exact browser-extension runtime classifier and non-vacuous
+      production coverage ratchet that counts unloaded eligible files as zero.
+      Baseline: 14.99% lines, 4.87% branches, and 6.73% functions.
+- [ ] 4.4 Merge Node and Chromium target coverage and raise the browser hard
+      gate to at least 90% lines, branches, and functions.
 
 ## Verification
 

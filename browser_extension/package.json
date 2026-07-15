@@ -27,8 +27,15 @@
     "smoke:proactive": "node scripts/smoke-proactive.mjs",
     "test:proactive": "node scripts/test-proactive-helper.mjs",
     "test:browser-context": "node scripts/test-browser-context-adapter.mjs",
-    "verify": "node scripts/test-aggie-protocol-adapter.mjs && node scripts/test-browser-context-adapter.mjs && node scripts/test-browser-agent-role-runtime.mjs && node scripts/verify-extension.mjs",
+    "test:unit": "node --test scripts/test-*.mjs",
+    "test:coverage": "node scripts/coverage-extension.mjs",
+    "verify": "npm run test:unit && node scripts/verify-extension.mjs",
     "package": "node scripts/package-extension.mjs",
     "deploy:browser": "node scripts/poke-dev-reload.mjs"
+  },
+  "devDependencies": {
+    "c8": "11.0.0",
+    "istanbul-lib-coverage": "3.2.2",
+    "istanbul-lib-instrument": "6.0.3"
   }
 }

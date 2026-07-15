@@ -59,6 +59,11 @@ const requiredFiles = [
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-browser-context-adapter.mjs",
   "scripts/test-browser-agent-role-runtime.mjs",
+  "scripts/test-extension-production-sources.mjs",
+  "scripts/test-runtime-intent-modules.mjs",
+  "scripts/extension-production-sources.mjs",
+  "scripts/coverage-extension.mjs",
+  "scripts/coverage-ratchet.json",
 ];
 
 for (const file of requiredFiles) {
@@ -116,6 +121,13 @@ if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
+}
+if (
+  packageJson.scripts?.["test:unit"] !== "node --test scripts/test-*.mjs" ||
+  packageJson.scripts?.["test:coverage"] !== "node scripts/coverage-extension.mjs" ||
+  packageJson.scripts?.verify !== "npm run test:unit && node scripts/verify-extension.mjs"
+) {
+  throw new Error("verification must run every focused unit script and expose the production coverage ratchet");
 }
 
 if (
@@ -1060,6 +1072,10 @@ for (const file of [
   "scripts/test-voice-sampler-lifecycle.mjs",
   "scripts/test-proactive-helper.mjs",
   "scripts/test-cue-dismiss.mjs",
+  "scripts/test-extension-production-sources.mjs",
+  "scripts/test-runtime-intent-modules.mjs",
+  "scripts/extension-production-sources.mjs",
+  "scripts/coverage-extension.mjs",
   "scripts/chrome-for-testing.mjs",
 ]) {
   execFileSync(process.execPath, ["--check", file], { stdio: "inherit" });

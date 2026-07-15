@@ -13,7 +13,7 @@ markup, and styles never contribute production coverage.
 | --- | ---: | ---: | ---: | --- |
 | Gateway | 72.28% | 68.75% | 76.76% | Node production-only run over `server.js` and `lib/**/*.js`; 525/527 tests passed, one skipped, and one work-history lease smoke expired while a duplicate coverage run was competing. |
 | Android | 15.87% | 17.67% | 21.30% | AGP/JaCoCo unit report over 8,027 executable lines, 4,471 branches, and 1,089 methods; all 118 JVM tests passed. |
-| Browser extension | about 4.70% | not yet valid | not yet valid | Full-source `c8 --all` line denominator over 23 runtime files. Unloaded scripts do not currently produce trustworthy branch/function denominators. |
+| Browser extension | 14.99% | 4.87% | 6.73% | Exact 23-file runtime classifier; 10 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. The checked-in ratchet prevents regression while decomposition/CDP coverage proceeds. |
 | LiveKit worker | at most 17.5% | unmeasured | unmeasured | Only `config.ts` has tests; 756 of 916 production lines are currently outside the test link/import path. |
 | Website | unmeasured | unmeasured | unmeasured | No test runner exists and about 2,315 executable JavaScript lines remain embedded in HTML. |
 | Apple surfaces | blocked | blocked | blocked | `swift test --enable-code-coverage` is blocked by typed protocol drift; executable shells are not linked into the SwiftPM test product. |
