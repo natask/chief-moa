@@ -14,6 +14,9 @@
 - [ ] 1.7 Classify every owned source file exactly once as executable, UI,
       operational tooling, migration/schema, generated/vendor, test, or fixture.
 - [ ] 1.8 Add per-surface PR coverage reporting and changed-line ratchets.
+- [x] 1.9 Record audited per-surface baselines, exact scope rules, staged
+      implementation tickets, and non-vacuous acceptance checks in
+      `coverage-program.md`.
 
 ## 2. Gateway Decomposition
 
