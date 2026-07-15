@@ -15,7 +15,7 @@ Behind an experimental flag, off by default, the Android surface uses the
 review-before-send v4 contract:
 
 - Single click/tap: start a reviewable draft in the current voice thread. The
-  compact voice card immediately shows `X` on the left to discard and `+` on
+  compact voice card immediately shows `X` on the left to discard and `↑` on
   the right as the one affirmative Send action. A later orb tap never commits
   the draft; disposition stays visible and reversible.
 - Double-click, quick: start a fresh voice thread. If the first click armed
@@ -107,7 +107,7 @@ Flags:
 - Browser extension: `cd browser_extension && npm run verify && npm run smoke`.
 - Android: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`.
 - Android manual QA with the flag on: single click starts a draft with visible
-  `X` and `+`; only `+` sends; `X` discards; a later orb tap does not send;
+  `X` and `↑`; only `↑` sends; `X` discards; a later orb tap does not send;
   double-click starts a new voice thread; triple-click opens chat; hold-to-talk
   release commits; open cards remain wholly above or below the moved orb; and
   dragging onto Remove hides the orb. Flag off restores the legacy gestures.

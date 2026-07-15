@@ -931,7 +931,7 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
-        voiceSendControl = voiceDraftControl("+", "Send voice draft", true);
+        voiceSendControl = voiceDraftControl("↑", "Send voice draft", true);
         voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
         LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(42), dp(42));
         sendParams.leftMargin = dp(10);

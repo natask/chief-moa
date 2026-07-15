@@ -101,7 +101,7 @@
 
 ## 11. Reviewable Mobile Overlay Controls
 
-- [x] 11.1 Show `X` and `+` controls for every tap-started Android voice draft.
+- [x] 11.1 Show `X` and `↑` controls for every tap-started Android voice draft.
 - [x] 11.2 Prevent single-, double-, triple-, and fourth-tap resolution from
       silently committing a draft; keep hold-release as the fast commit path.
 - [x] 11.3 Keep chat and voice cards mutually exclusive and dock the open card

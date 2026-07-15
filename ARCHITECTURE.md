@@ -297,7 +297,7 @@ gateway voice turn without stopping already queued assistant audio.
 An experimental voice-first gesture mode (off by default; browser flag
 `ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
 the primary surface toward voice. Android uses the reviewable v4 contract:
-Single click starts a draft with visible `X` (discard) and `+` (the single Send
+Single click starts a draft with visible `X` (discard) and `↑` (the single Send
 action); later orb taps never commit it. Double-click cancels the current draft
 and starts a fresh voice thread that does not use the current thread's replies,
 and triple-click cancels voice and opens the demoted chat surface. A still
