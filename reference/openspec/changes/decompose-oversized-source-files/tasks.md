@@ -203,6 +203,14 @@
       line/branch/function gates, verified at 100% for handlers and 99.68%
       lines, 93.75% branches, and 100% functions for the declarative store.
       Reduce `server.js` to 14,626 lines.
+- [x] 2.39 Extract the fail-closed billing runtime authorize and usage routes
+      from `server.js`; add exhaustive authorization, configuration, denial,
+      receipt, immutable-price, budget, numeric-bound, approval-window,
+      signature, signer, profile-effect, rollback-effect, idempotency, and
+      persistence-recovery tests. Enforce focused 90% line/branch/function
+      gates, verified at 100% lines, 95.24% branches, and 100% functions for
+      handlers and 100% lines, 93.40% branches, and 100% functions for runtime
+      authority. Reduce `server.js` to 14,613 lines.
 
 ## 3. Other Oversized Surfaces
 
