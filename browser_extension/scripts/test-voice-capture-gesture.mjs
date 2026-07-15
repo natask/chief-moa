@@ -34,6 +34,42 @@ assertEqual(gesture.resolveTapAction({ tapCount: 1, listening: true, conversatio
 assertEqual(gesture.resolveTapAction({ tapCount: 2, listening: false, conversationActive: false }), "new_voice", "double tap action");
 assertEqual(gesture.resolveTapAction({ tapCount: 3, listening: false, conversationActive: false }), "open_text", "triple tap action");
 
+assertEqual(
+  gesture.resolveVoiceFirstTransition({ tapCount: 1, capturing: false }),
+  "start_current",
+  "single starts current-thread capture"
+);
+assertEqual(
+  gesture.resolveVoiceFirstTransition({ tapCount: 1, capturing: true, captureOrigin: "single" }),
+  "commit_current",
+  "single sends active current-thread capture"
+);
+assertEqual(
+  gesture.resolveVoiceFirstTransition({ tapCount: 2, capturing: false }),
+  "start_new",
+  "double starts fresh-thread capture"
+);
+assertEqual(
+  gesture.resolveVoiceFirstTransition({ tapCount: 2, capturing: true, captureOrigin: "double" }),
+  "commit_new",
+  "second double sends its fresh-thread capture"
+);
+assertEqual(
+  gesture.resolveVoiceFirstTransition({ tapCount: 2, capturing: true, captureOrigin: "single" }),
+  "cancel_then_start_new",
+  "double cancels a single-started capture before starting fresh"
+);
+assertEqual(
+  gesture.resolveVoiceFirstTransition({ tapCount: 3, capturing: true, captureOrigin: "double" }),
+  "cancel_then_open_chat",
+  "triple opens chat without sending active capture"
+);
+assertEqual(
+  gesture.resolveVoiceFirstTransition({ tapCount: 4, capturing: true, captureOrigin: "single" }),
+  "noop",
+  "fourth click stays inert"
+);
+
 const mutableAdmission = { voiceFirstEnabled: true, draftControlsEnabled: true };
 const latchedAdmission = gesture.latchAdmission(mutableAdmission);
 mutableAdmission.voiceFirstEnabled = false;

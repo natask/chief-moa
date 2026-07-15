@@ -925,15 +925,21 @@ if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*f
   throw new Error("voice button click must open the input surface and prime audio before starting live voice");
 }
 
+const voiceFirstTapBody = sourceBetween(
+  contentSource,
+  /function handleVoiceFirstTap\(/,
+  /function armVoiceFirstChainReset\(/,
+  "voice-first tap chain"
+);
 if (
-  !/id="agee-draft-cancel"[\s\S]{0,240}id="agee-draft-send"/.test(contentSource) ||
-  !/function reviewableVoiceDraftActive\(\)/.test(contentSource) ||
-  !/function sendReviewableVoiceDraft\(\)/.test(contentSource) ||
-  !/autoCommit: false/.test(contentSource) ||
-  !/A later mascot click never owns disposition/.test(contentSource) ||
-  !/#agee-root \.agee-draft-control/.test(overlayCssSource)
+  !/armVoiceFirstChainReset\(\(\) => resolveVoiceFirstTapChain\(chain\)\)/.test(voiceFirstTapBody) ||
+  !/function toggleVoiceFirstCapture\(/.test(contentSource) ||
+  !/function toggleFreshThreadVoiceCapture\(/.test(contentSource) ||
+  !/voiceFirstCaptureOrigin === "double"/.test(contentSource) ||
+  !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
+  !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}openTextSurface/.test(contentSource)
 ) {
-  throw new Error("voice-first browser drafts must use visible X—mascot—Send controls without click-to-send or silence auto-commit");
+  throw new Error("voice-first gestures must defer collision-safe single/double/triple actions and preserve fresh-thread capture provenance");
 }
 
 const launcherClickBody = sourceBetween(
