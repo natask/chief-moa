@@ -52,16 +52,33 @@ if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
 fi
 log "waiting for checks on PR #${pr_number} (branch-side CI: the same workflows master runs)"
 
-# --watch exits non-zero on any failed check; also handles the no-checks case
-# (a docs-only diff triggers no workflows — nothing to wait for).
+# Does this diff touch any path that triggers a CI workflow? If yes, checks
+# MUST appear — "no checks reported" right after PR creation is a scheduling
+# race, not a green light. Only a diff outside every workflow path may proceed
+# without checks.
+expects_checks=false
+if ! git diff --quiet origin/master HEAD -- \
+  gateway docker-compose.yml docker-compose.vps.yml scripts/vps \
+  browser_extension android_app .github/workflows; then
+  expects_checks=true
+fi
+
+if [ "$expects_checks" = true ]; then
+  log "diff touches CI-verified paths; waiting for checks to be scheduled"
+  deadline=$((SECONDS + 300))
+  until gh pr checks "$pr_number" >/dev/null 2>&1; do
+    [ "$SECONDS" -lt "$deadline" ] || fail "CI checks never appeared on PR #${pr_number} after 5 minutes; investigate before releasing. master was NOT moved."
+    sleep 10
+  done
+fi
+
+# --watch exits non-zero on any failed check.
 if ! gh pr checks "$pr_number" --watch; then
-  checks="$(gh pr checks "$pr_number" 2>/dev/null || true)"
-  if [ -z "$checks" ]; then
-    log "no CI checks were triggered by this diff; continuing"
-  else
-    echo "$checks" >&2
+  if [ "$expects_checks" = true ]; then
+    gh pr checks "$pr_number" >&2 || true
     fail "branch CI is red; fix on the branch and rerun. master was NOT moved."
   fi
+  log "no CI checks were triggered by this docs-only diff; continuing"
 fi
 
 git fetch origin master --quiet
