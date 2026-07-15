@@ -1,5 +1,45 @@
 ## ADDED Requirements
 
+### Requirement: One Durable Conversation Host Owns User-Facing Speech
+
+The system SHALL treat Aggie as the durable conversation host even when each
+message uses a fresh router or launcher invocation. Each invocation SHALL
+receive bounded session context and current managed-run state. Worker agents
+SHALL publish progress and results to gateway-owned run/event state and SHALL
+NOT independently claim the user-facing speaker floor.
+
+#### Scenario: Fresh launcher continues the same host
+
+- **WHEN** a new message creates a fresh launcher invocation
+- **THEN** its context identifies Aggie as the conversation host
+- **AND** it includes the bounded session handoff and active managed-run ids
+- **AND** the user experiences it as another turn from the same host
+
+#### Scenario: Background worker completes while the user is drafting
+
+- **WHEN** a detached worker publishes completion while a voice or text draft is active
+- **THEN** the completion is queued for the conversation host
+- **AND** no worker speaks directly
+- **AND** the current draft is neither cleared nor replaced
+
+### Requirement: Output Stop Is Separate From Work Cancellation
+
+The system SHALL revoke or supersede only the current assistant output when the
+user stops speech or begins a new foreground turn. Detached work SHALL continue
+unless the user issues an explicit run-control request that targets the run.
+
+#### Scenario: User stops spoken output
+
+- **WHEN** the user stops the current spoken reply
+- **THEN** current audio and late output for that turn are suppressed
+- **AND** agent runs launched by that turn continue
+
+#### Scenario: User explicitly cancels a worker
+
+- **WHEN** the user asks to cancel a specific managed run
+- **THEN** the conversation host routes an explicit targeted run-control request
+- **AND** the cancellation is not inferred merely from a new message or stopped audio
+
 ### Requirement: Gateway-Owned Voice Classification
 The gateway SHALL classify each completed voice turn into one of `chat`, `agent_run`, `multi_agent`, `profile_control`, or `control`.
 

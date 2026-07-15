@@ -71,6 +71,25 @@ Voice-started agent work must return quickly with a run ID and status. The phone
 
 Alternative considered: block the phone until the harness finishes. Rejected because mobile voice interaction must stay responsive and the log explicitly calls for agents to continue working unless stopped.
 
+### Decision: Aggie Owns The Speaker Floor
+
+Aggie is the durable conversation host and the only agent identity that speaks
+to the user. Router/launcher invocations may be fresh for every message, but
+they inherit bounded session context and current run/event summaries from the
+gateway-owned management store. Worker agents report into that store; they do
+not speak directly or replace the user's draft.
+
+Stopping the current spoken reply revokes only its output floor. Starting a new
+foreground turn supersedes the old reply while detached work continues.
+Canceling a worker is a separate explicit control targeted at its run id.
+Background completion waits in the host's queue while the user is recording or
+drafting, and the host may later display it or speak a short summary when idle
+and background speech is enabled.
+
+Alternative considered: make every launcher or completed worker an independent
+speaker. Rejected because concurrent agents would interrupt one another, draft
+state would become fragile, and stopping audio would ambiguously cancel work.
+
 ### Decision: Action Proposals Are Not Commands
 
 The gateway may propose structured actions, but the Android app validates them against local capability manifests, current screen/package state, and approval rules before execution.

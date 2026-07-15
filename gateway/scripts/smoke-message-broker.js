@@ -75,6 +75,7 @@ async function main() {
         "broker stores a canonical message event",
         "explicit session_id returns a continue_session decision",
         "broker decisions create launcher context packs",
+        "launcher context keeps Aggie as the sole host and separates speech stop from run cancellation",
         "research/report message returns a landscape-research workflow decision",
         "test/verify message returns a QA workflow decision",
         "security, simplification, and fuzzing intents return their principal workflow decisions",
@@ -181,6 +182,13 @@ async function assertContinuationRoute(baseUrl, dataDir, sessionId) {
   assert.equal(pack.workflow_directory, "gateway/agent-workflows/direct-answer");
   assert.equal(pack.instruction_file, "gateway/agent-workflows/direct-answer/WORKFLOW.md");
   assert.match(pack.inputs.session_context, /browser extension broker routing/);
+  assert.equal(pack.conversation_host?.version, "moa.conversation-host.v1");
+  assert.equal(pack.conversation_host?.host_id, "aggie");
+  assert.equal(pack.conversation_host?.speaker_owner, "conversation_host");
+  assert.equal(pack.conversation_host?.worker_output, "gateway_run_events_only");
+  assert.equal(pack.conversation_host?.handoff?.session_context_attached, true);
+  assert.equal(pack.conversation_host?.control?.stop_speaking, "revoke_current_output_only");
+  assert.equal(pack.conversation_host?.control?.cancel_run, "explicit_targeted_run_control_only");
   assert.ok(
     Array.isArray(response.json.context_packs) && response.json.context_packs.some((candidate) => candidate.id === route.context_pack_id),
     "broker response must include the generated context pack",

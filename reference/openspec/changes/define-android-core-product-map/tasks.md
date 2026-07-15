@@ -136,3 +136,15 @@ local unpacked-extension reload signal completed without a client acknowledgemen
       real voice round-trip QA.
 - [ ] 12.7 Publish collision-free Android OTA and browser-extension artifacts,
       then promote only if the no-interruption and rollback gates pass.
+
+## 13. Conversation Host And Speaker Floor
+
+- [x] 13.1 Define Aggie as the sole durable user-facing conversation host while
+      router/launcher invocations remain turn-scoped.
+- [x] 13.2 Attach the host identity, bounded session handoff, active run ids,
+      background-output policy, and separate output/run controls to every
+      broker launcher context pack.
+- [x] 13.3 Verify that stopping or superseding speech preserves detached runs
+      and that background completions defer rather than replacing a user draft.
+- [ ] 13.4 Have Android and browser surfaces consume queued host presentation
+      events and honor the idle/background-speech gate.

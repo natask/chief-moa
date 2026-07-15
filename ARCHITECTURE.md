@@ -983,6 +983,25 @@ it does not turn an active conversational assistant reply into a queue. A
 current-thread user turn steers that reply by default while detached runs
 continue.
 
+Aggie is the one durable conversation host and the only agent identity that may
+own user-facing speech. The host is a logical gateway/session role, not one
+long-lived model process: each message may use a fresh router or launcher
+invocation, but that invocation receives a bounded session summary plus current
+run/event state and writes its decisions back to the gateway-owned management
+stores. Launched workers never seize the microphone. They publish progress,
+completion, failure, or input-needed events; the host chooses whether to display
+them, queue them, or speak a short summary when the surface is idle and
+background speech is enabled.
+
+Output control and work control are deliberately separate. Stopping speech or
+starting a new foreground turn revokes or supersedes only the current assistant
+output and preserves detached runs. Canceling work requires an explicit control
+request targeted at a run id. Background completion is queued while the user is
+recording or drafting, and it must not clear or replace that draft. A fresh
+launcher invocation therefore behaves like a new turn of the same host, not a
+new person with empty memory and not a parent process whose death implicitly
+kills its children.
+
 A broadcast turn ("update all active agents ...") fans out across active/forked
 runs: runs the message pertains to receive it as `broker_evidence_attached`, and
 each unrelated fork self-dismisses with a `dismiss_irrelevant` route decision

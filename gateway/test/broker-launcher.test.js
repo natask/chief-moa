@@ -5,7 +5,11 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { createBrokerLauncher } = require("../lib/broker-launcher");
+const {
+  CONVERSATION_HOST_CONTRACT_VERSION,
+  conversationHostContract,
+  createBrokerLauncher,
+} = require("../lib/broker-launcher");
 
 function fixture(overrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "moa-broker-launcher-"));
@@ -247,10 +251,20 @@ test("context packs preserve bounded event, session, project, run, and active-ru
     assert.equal(pack.inputs.target_run_events.length, 12);
     assert.equal(pack.inputs.active_runs.some((run) => run.id === "target-run"), false);
     assert.equal(pack.inputs.active_runs.length, 10);
+    assert.equal(pack.conversation_host.version, CONVERSATION_HOST_CONTRACT_VERSION);
+    assert.equal(pack.conversation_host.speaker_owner, "conversation_host");
+    assert.equal(pack.conversation_host.handoff.session_context_attached, true);
+    assert.deepEqual(pack.conversation_host.handoff.active_run_ids.slice(0, 2), ["target-run", "run-12"]);
+    assert.equal(pack.conversation_host.control.stop_speaking, "revoke_current_output_only");
+    assert.equal(pack.conversation_host.control.cancel_run, "explicit_targeted_run_control_only");
     assert.equal(pack.inputs.project.id, "project-1");
     assert.equal(pack.launcher.harness, "gemini");
     assert.match(pack.launcher.prompt, /Target agent run:/);
     assert.match(pack.launcher.prompt, /Project context:/);
+    assert.match(pack.launcher.prompt, /Conversation host contract:/);
+    assert.match(pack.launcher.prompt, /gateway_run_events_only/);
+    assert.match(pack.launcher.prompt, /Worker agents must publish progress and results/);
+    assert.match(pack.launcher.prompt, /Preserve the user's in-progress draft/);
     assert.equal(custom.calls.sessions[0].allBranches, true);
     assert.equal(custom.calls.truncations[0], 60000);
   } finally {
@@ -258,6 +272,30 @@ test("context packs preserve bounded event, session, project, run, and active-ru
   }
   assert.deepEqual(calls.sessions, []);
 }));
+
+test("conversation host is stable across fresh launcher turns and keeps output control separate from run control", () => {
+  const first = conversationHostContract(
+    event({ id: "broker-first", branch_id: "branch-a" }),
+    "prior conversation summary",
+    null,
+    [{ id: "run-a" }],
+  );
+  const next = conversationHostContract(
+    event({ id: "broker-next", branch_id: "branch-a" }),
+    "updated conversation summary",
+    null,
+    [{ id: "run-a" }, { id: "run-b" }],
+  );
+
+  assert.equal(first.host_id, "aggie");
+  assert.equal(next.host_id, first.host_id);
+  assert.equal(next.launcher_lifetime, "turn_scoped");
+  assert.equal(next.state_source, "gateway_session_run_event_store");
+  assert.deepEqual(next.handoff.active_run_ids, ["run-a", "run-b"]);
+  assert.equal(next.presentation.background_completion, "queue_for_host");
+  assert.equal(next.presentation.while_user_drafting, "preserve_draft_and_defer_speech");
+  assert.equal(next.control.start_new_turn, "supersede_current_output_preserve_detached_runs");
+});
 
 test("context helpers fail soft when session, run, or project state is unavailable", () => withFixture(({ launcher }) => {
   const custom = fixture({
