@@ -15,7 +15,7 @@ markup, and styles never contribute production coverage.
 | Android | 17.57% | 21.37% | 22.66% | Exact JaCoCo ratchet passes with 136 JVM tests. The extracted agent-run tracker has 98.96% lines, 95.95% branches, and 100% methods; generated Android classes remain the only exclusions. |
 | Browser extension | 16.65% | 6.57% | 7.86% | Exact 24-file runtime classifier; 11 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. The extracted browser-turn protocol has a permanent 100/95.90/100 focused gate. |
 | LiveKit worker | 99.07% | 90.40% | 92.00% | Hard production-only gate passes with all six compiled runtime modules loaded and 19 tests covering worker, STT, LLM, TTS, auth, streaming, and failure paths. |
-| Website | unmeasured | unmeasured | unmeasured | No test runner exists and about 2,315 executable JavaScript lines remain embedded in HTML. |
+| Website | 96.09% | 90.40% | 97.47% | Hard `c8 --all` gate covers all seven Pages handlers and four extracted public runtime modules with 42 passing tests; owned HTML contains no inline executable JavaScript. |
 | Apple surfaces | blocked | blocked | blocked | `swift test --enable-code-coverage` is blocked by typed protocol drift; executable shells are not linked into the SwiftPM test product. |
 | Windows portable core | 98.56% | 92.07% | 98.15% | Hard Rust gate passes with 27 tests. This does not cover the separate WinUI C# executable. |
 | Windows WinUI shell | unmeasured | unmeasured | unmeasured | Native C#/WinUI instrumentation requires a Windows runner and remains a separate acceptance check. |

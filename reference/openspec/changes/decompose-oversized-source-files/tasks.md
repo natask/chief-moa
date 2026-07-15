@@ -29,7 +29,9 @@
       line/branch/function coverage gate; reduce `server.js` to 14,983 lines.
 - [x] 2.3c Extract work-history handlers with a focused 90% line/branch/function
       coverage gate; reduce `server.js` to 16,061 lines.
-- [ ] 2.4 Extract companion, pet, and profile handlers.
+- [x] 2.4a Extract pet agent/bookmark collection handlers with a focused 90%
+      line/branch/function coverage gate; reduce `server.js` to 15,939 lines.
+- [ ] 2.4b Extract the remaining companion, pet, and profile handlers.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.
 - [ ] 2.7 Extract context, thread, and history assembly.
@@ -75,6 +77,10 @@
 - [x] 4.7a Extract Android agent-run tracking from overlay orchestration with a
       focused 90% gate. Verified at 98.96% lines, 95.95% branches, and 100%
       methods; reduce `OverlayService.java` to 3,981 lines.
+- [x] 4.8 Extract website inline JavaScript into attributable runtime modules
+      and enforce at least 90% lines, branches, and functions across Pages
+      handlers and browser code. Verified at 96.09% lines, 90.40% branches,
+      and 97.47% functions with 42 passing tests.
 
 ## Verification
 

@@ -14,15 +14,18 @@ confirmation email via Resend.
 
 ## Layout
 
-- `public/index.html` — the landing page and waitlist form (one file, no build step)
+- `public/index.html` + `public/landing.js` — the landing page, waitlist form,
+  and floating-agent behavior (native ES module, no bundle step)
 - `public/pets/index.html` — companion pet studio with a "describe it" prompt
   (one line makes a character; the panels refine it), catalog, preview, upload,
   declarative rules, saved agents, bookmarks, apply, generation controls, a
   shared-library browse/install/publish section, and cloned-voice status
+  (`public/pets/studio.js` owns the executable browser behavior)
 - `public/pets/library/index.html` — pet library catalog page: parametric
   Shimeji-style creature renderer, search/tag filters, and a select-preview-
   apply flow over the same `/api/pets/*` proxy; links both ways with the studio
   via `?companion=<id>` / `?agent=<id>`
+  (`public/pets/library/library.js` owns the executable browser behavior)
 - `public/assets/` — deck images and logos
 - `functions/api/waitlist.js` — `POST /api/waitlist`: validate, store, email
 - `functions/api/pets/[[path]].js` — `/api/pets/*`: proxy to token-guarded
@@ -72,6 +75,19 @@ npx wrangler d1 execute chief-moa-waitlist --remote \
 cp .dev.vars.example .dev.vars   # add a real Resend key to test email locally
 npx wrangler pages dev public
 ```
+
+## Test and coverage
+
+```sh
+npm install
+npm test
+npm run test:coverage
+```
+
+The coverage command enumerates every owned Pages Function and extracted public
+runtime script with `c8 --all`, and fails below 90% for lines, branches, or
+functions. HTML, CSS, tests, schema, and third-party scripts do not contribute
+to the production denominator.
 
 For the pet studio, set these in `.dev.vars` locally or as Pages secrets:
 
