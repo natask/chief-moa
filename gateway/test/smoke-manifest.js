@@ -18,6 +18,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/companion-catalog.js",
   "lib/page-tweaks.js",
   "lib/self-extension-artifacts.js",
+  "lib/self-extension-handlers.js",
   "lib/brain.js",
   "lib/memory-matcher.js",
   "lib/voice-intent.js",
