@@ -153,7 +153,12 @@ const {
   surfaceExecuteCapabilities,
   surfaceClassicTools,
 } = require("./lib/surface-skills");
-const { createExaSearchTool } = require("./lib/exa-search");
+const {
+  SEARCH_ROUTES,
+  resolveReasoningProvider: resolveProfileReasoningProvider,
+  selectReasoningSearch,
+  withReasoningSearchTools,
+} = require("./lib/reasoning-search");
 
 // Deployment mode. One image, env-driven modes (see
 // reference/openspec/changes/remote-hosted-gateway):
@@ -818,6 +823,7 @@ const server = http.createServer(async (request, response) => {
           capability_count: Object.keys(cascadedExecuteCapabilities({})).length,
         },
         web_search: {
+          ...reasoningSearchHealth(agentProfile.effective()),
           native_vertex: nativeWebSearchEnabled("vertex"),
           exa_fallback_configured: Boolean(process.env.EXA_API_KEY),
           boundary: "model_tool",
@@ -2238,7 +2244,9 @@ async function handleChat(request, response) {
       transcript: userText,
     };
     const chatToolDefs = cascadedVoiceProfileTools(chatToolCall);
-    const toolTurn = await callModelToolLoop(modelMessages, profile, chatToolDefs);
+    const toolTurn = await callModelToolLoop(modelMessages, profile, chatToolDefs, {
+      searchRoute: SEARCH_ROUTES.CHAT_ANSWER,
+    });
     text = String(toolTurn.text || "");
   }
 
@@ -2905,7 +2913,9 @@ function attachBrowserRoleExecution(record) {
 async function browserEvidenceAnswer(record, options = {}) {
   const fallback = deterministicBrowserEvidenceAnswer(record);
   const inlineImage = options.inlineImage || null;
-  if (!providerConfigured()) {
+  const profileOptions = { scope: record.device_id ? "device" : "global", deviceId: record.device_id || "" };
+  const effectiveProfile = agentProfile.effectiveWithOverrides(null, profileOptions);
+  if (!providerConfiguredFor(resolveReasoningProvider(effectiveProfile))) {
     return {
       ...fallback,
       evidence_delivery: {
@@ -2918,7 +2928,6 @@ async function browserEvidenceAnswer(record, options = {}) {
   }
   const page = record.page_ref || {};
   const summary = record.evidence_summary || {};
-  const profileOptions = { scope: record.device_id ? "device" : "global", deviceId: record.device_id || "" };
   const role = record.agent_role || browserAgentRoleFromBody({});
   const roleInstruction = role.id === "collaborate"
     ? "Propose exactly one practical next step. It is guidance only and must not be represented as executed."
@@ -2944,26 +2953,32 @@ async function browserEvidenceAnswer(record, options = {}) {
     "</page_evidence>",
   ].join("\n");
 
-  const effectiveProfile = agentProfile.effectiveWithOverrides(null, profileOptions);
   let retriedWithoutImage = false;
   try {
     let answer;
     let evidenceDelivery;
     if (inlineImage) {
       try {
-        answer = await callModel([{ role: "user", content: prompt }], effectiveProfile, { imagePart: inlineImage });
+        answer = await callReasoningAnswer([{ role: "user", content: prompt }], effectiveProfile, {
+          imagePart: inlineImage,
+          searchRoute: SEARCH_ROUTES.BROWSER_EVIDENCE,
+        });
         evidenceDelivery = { image: "multimodal", reason: "" };
       } catch (imageError) {
         if (!explicitlyUnsupportedImageError(imageError)) throw imageError;
         retriedWithoutImage = true;
-        answer = await callModel([{ role: "user", content: prompt }], effectiveProfile);
+        answer = await callReasoningAnswer([{ role: "user", content: prompt }], effectiveProfile, {
+          searchRoute: SEARCH_ROUTES.BROWSER_EVIDENCE,
+        });
         evidenceDelivery = {
           image: "text_only",
           reason: "provider did not accept inline JPEG; retried without image",
         };
       }
     } else {
-      answer = await callModel([{ role: "user", content: prompt }], effectiveProfile);
+      answer = await callReasoningAnswer([{ role: "user", content: prompt }], effectiveProfile, {
+        searchRoute: SEARCH_ROUTES.BROWSER_EVIDENCE,
+      });
       evidenceDelivery = {
         image: "text_only",
         reason: record.evidence_media?.image?.reason || "no valid inline JPEG supplied",
@@ -3122,7 +3137,9 @@ async function gatewayResearchRunPass(subQuery, ctx = {}) {
   }
   messages.push({ role: "user", content: String(subQuery) });
   try {
-    const text = await callModelOrFallback(messages, agentProfile.effective());
+    const text = await callReasoningAnswer(messages, agentProfile.effective(), {
+      searchRoute: SEARCH_ROUTES.BROKER_RESEARCH,
+    });
     if (text && text.trim()) {
       return { text: text.trim(), sources: Array.isArray(ctx.sources) ? ctx.sources : [] };
     }
@@ -4881,6 +4898,7 @@ async function handleVoiceTurn(request, response) {
         timeoutMs: VIDEO_TURN_TIMEOUT_MS,
         // Explaining a recording takes more room than a spoken chat reply.
         maxOutputTokens: Number(process.env.VIDEO_TURN_MAX_OUTPUT_TOKENS || 1024),
+        searchRoute: SEARCH_ROUTES.CHAT_ANSWER,
       });
     } else {
       ({ text, action: pageTweakAction } = await chatTurnWithPageTweakTool(modelMessages, profile, source));
@@ -5787,11 +5805,24 @@ function profileClarificationText(subject, options = {}) {
 // middle (reasoning) model swappable per profile at runtime for A/B testing
 // without a gateway restart, matching how profile.model already swaps the id.
 function resolveReasoningProvider(profile) {
-  const requested = String(profile?.reasoning_provider || "").trim().toLowerCase().replace(/_/g, "-");
-  if (requested === "vertex" || requested === "openai-compatible") {
-    return requested;
-  }
-  return MODEL_PROVIDER;
+  return resolveProfileReasoningProvider(profile, MODEL_PROVIDER);
+}
+
+function reasoningSearchPlan(profile, route) {
+  return selectReasoningSearch({
+    profile,
+    defaultProvider: MODEL_PROVIDER,
+    route: route || SEARCH_ROUTES.UNCLASSIFIED,
+    env: process.env,
+  });
+}
+
+function reasoningSearchHealth(profile) {
+  const plan = reasoningSearchPlan(profile, SEARCH_ROUTES.CHAT_ANSWER);
+  return {
+    resolved_provider: plan.provider,
+    active_mode: plan.status,
+  };
 }
 
 function providerConfiguredFor(provider) {
@@ -5865,7 +5896,7 @@ async function callVertexModel(messages, profile, options = {}) {
       thinkingConfig: { thinkingBudget: Number(process.env.VERTEX_THINKING_BUDGET || 0) },
     },
   };
-  const nativeTools = vertexReasoningTools([]);
+  const nativeTools = vertexReasoningTools([], reasoningSearchPlan(effective, options.searchRoute));
   if (nativeTools.length > 0) body.tools = nativeTools;
   const safetySettings = vertexSafetySettings();
   if (safetySettings.length > 0) {
@@ -5926,6 +5957,20 @@ async function callModelOrFallback(messages, profile) {
   return gatewayFallbackReply(lastUser?.content || "");
 }
 
+async function callReasoningAnswer(messages, profile, options = {}) {
+  const effective = profile || agentProfile.effective();
+  const searchRoute = options.searchRoute || SEARCH_ROUTES.CHAT_ANSWER;
+  const plan = reasoningSearchPlan(effective, searchRoute);
+  if (plan.functionTool) {
+    const result = await callModelToolLoop(messages, effective, [], { ...options, searchRoute });
+    if (options.imagePart && result.tool_error) throw new Error(result.tool_error);
+    const text = String(result.text || "").trim();
+    if (!text) throw new Error("model returned an empty reply");
+    return text;
+  }
+  return callModel(messages, effective, { ...options, searchRoute });
+}
+
 // The OpenAI-compatible tool schema for propose_page_tweak, mirroring the Gemini
 // Live declaration so a browser-sourced HTTP turn can offer the same tool to a
 // chat-completions model.
@@ -5964,64 +6009,31 @@ const PAGE_TWEAK_TOOL_SCHEMA = {
 // turn: any tool error degrades to text.
 async function chatTurnWithPageTweakTool(messages, profile, source) {
   const wantsTool = isBrowserSourcedCall({ source });
-  if (!wantsTool || MODEL_PROVIDER === "vertex" || !providerConfigured()) {
-    const text = await callModelOrFallback(messages, profile);
-    return { text, action: null };
-  }
   const effective = profile || agentProfile.effective();
-  let json;
-  try {
-    const upstreamResponse = await fetch(`${MODEL_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: modelHeaders(),
-      body: JSON.stringify({
-        model: effective.model || MODEL_ID,
-        messages: [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages),
-        temperature: effective.temperature,
-        tools: [PAGE_TWEAK_TOOL_SCHEMA],
-        tool_choice: "auto",
-        stream: false,
-      }),
-    });
-    const responseText = await upstreamResponse.text();
-    if (!upstreamResponse.ok) {
-      throw new Error(`model HTTP ${upstreamResponse.status}: ${truncate(responseText, 400)}`);
-    }
-    json = JSON.parse(responseText);
-  } catch (error) {
-    // Tool round failed to reach or parse the model; fall back to a plain reply
-    // so a page-change request still gets an answer instead of an error turn.
-    const text = await callModelOrFallback(messages, profile);
-    return { text, action: null, tool_error: cleanError(error) };
-  }
-
-  const message = json.choices?.[0]?.message || {};
-  const toolCall = Array.isArray(message.tool_calls)
-    ? message.tool_calls.find((c) => c?.function?.name === "propose_page_tweak")
-    : null;
-  if (!toolCall) {
-    const text = String(message.content || json.output_text || "").trim();
+  const provider = resolveReasoningProvider(effective);
+  const searchRoute = wantsTool ? SEARCH_ROUTES.BROWSER_TURN : SEARCH_ROUTES.CHAT_ANSWER;
+  if (!wantsTool || provider === "vertex" || !providerConfiguredFor(provider)) {
+    const text = providerConfiguredFor(provider)
+      ? await callReasoningAnswer(messages, effective, { searchRoute })
+      : await callModelOrFallback(messages, effective);
     return { text, action: null };
   }
-
-  let args = {};
-  try {
-    args = JSON.parse(toolCall.function?.arguments || "{}");
-  } catch {
-    args = {};
+  const tweakFunction = PAGE_TWEAK_TOOL_SCHEMA.function;
+  const toolTurn = await callModelToolLoop(messages, effective, [{
+    name: tweakFunction.name,
+    description: tweakFunction.description,
+    parameters: tweakFunction.parameters,
+    handler: (args) => liveToolProposePageTweak({ source }, args),
+  }], { searchRoute });
+  const tweakResult = (toolTurn.tool_results || []).find((entry) => entry?.name === "propose_page_tweak")?.result;
+  if (!tweakResult?.ok || !tweakResult.action) {
+    const text = String(toolTurn.text || "").trim()
+      || (tweakResult ? "I could not turn that into a change I can safely apply to this page." : "");
+    return { text, action: null, ...(toolTurn.tool_error ? { tool_error: toolTurn.tool_error } : {}) };
   }
-  // Reuse the exact same validation and browser-source gate as the live tool.
-  const result = liveToolProposePageTweak({ source }, args);
-  if (!result.ok || !result.action) {
-    // The model called the tool with an invalid/unknown record. Give a plain
-    // spoken reply rather than surfacing raw tool JSON.
-    const fallbackText = String(message.content || "").trim()
-      || "I could not turn that into a change I can safely apply to this page.";
-    return { text: fallbackText, action: null };
-  }
-  const confirm = String(message.content || "").trim()
-    || `Done — ${result.record.name || result.record.kind} on this page.`;
-  return { text: confirm, action: result.action };
+  const confirm = String(toolTurn.text || "").trim()
+    || `Done — ${tweakResult.record.name || tweakResult.record.kind} on this page.`;
+  return { text: confirm, action: tweakResult.action };
 }
 
 // A bounded (default max 2 rounds) model tool loop for server-side turns that let
@@ -6036,16 +6048,22 @@ async function callModelToolLoop(messages, profile, toolDefs, options = {}) {
   const effective = profile || agentProfile.effective();
   const maxRounds = Math.max(1, Math.min(Number(options.maxRounds || 2), 4));
   const provider = resolveReasoningProvider(effective);
-  if (!Array.isArray(toolDefs) || toolDefs.length === 0 || !providerConfiguredFor(provider)) {
+  const searchPlan = reasoningSearchPlan(effective, options.searchRoute);
+  const resolvedToolDefs = withReasoningSearchTools(toolDefs, searchPlan);
+  if (resolvedToolDefs.length === 0 || !providerConfiguredFor(provider)) {
     const text = await callModelOrFallback(messages, effective);
     return { text, tool_results: [], rounds: 0 };
   }
   try {
     if (provider === "vertex") {
-      return await vertexToolLoop(messages, effective, toolDefs, maxRounds);
+      return await vertexToolLoop(messages, effective, resolvedToolDefs, maxRounds, searchPlan, options);
     }
-    return await openAiToolLoop(messages, effective, toolDefs, maxRounds);
+    return await openAiToolLoop(messages, effective, resolvedToolDefs, maxRounds, options);
   } catch (error) {
+    // Browser evidence may retry without the image only when the typed provider
+    // error proves that the image itself is unsupported. Preserve that error
+    // instead of converting it into a generic tool-loop fallback.
+    if (options.imagePart) throw error;
     // The tool round failed to reach or parse the model. Fall back to a plain
     // reply so the request still gets an answer instead of an error turn.
     const text = await callModelOrFallback(messages, effective);
@@ -6171,7 +6189,7 @@ async function prepareContextDecision({ text, contextAction, profile }) {
   }
 }
 
-async function openAiToolLoop(messages, effective, toolDefs, maxRounds) {
+async function openAiToolLoop(messages, effective, toolDefs, maxRounds, options = {}) {
   const tools = toolDefs.map((tool) => ({
     type: "function",
     function: {
@@ -6181,6 +6199,7 @@ async function openAiToolLoop(messages, effective, toolDefs, maxRounds) {
     },
   }));
   const convo = [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
+  if (options.imagePart) attachOpenAiBrowserImage(convo, options.imagePart);
   const toolResults = [];
   let lastText = "";
   for (let round = 0; round < maxRounds; round += 1) {
@@ -6198,7 +6217,7 @@ async function openAiToolLoop(messages, effective, toolDefs, maxRounds) {
     }, MODEL_FETCH_TIMEOUT_MS);
     const responseText = await upstream.text();
     if (!upstream.ok) {
-      throw new Error(`model HTTP ${upstream.status}: ${truncate(responseText, 400)}`);
+      throw new ModelProviderHttpError("openai-compatible", upstream.status, responseText);
     }
     const json = JSON.parse(responseText);
     const message = json.choices?.[0]?.message || {};
@@ -6230,20 +6249,20 @@ async function openAiToolLoop(messages, effective, toolDefs, maxRounds) {
   return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
 }
 
-async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
+async function vertexToolLoop(messages, effective, toolDefs, maxRounds, searchPlan, options = {}) {
   const functionDeclarations = toolDefs.map((tool) => ({
     name: tool.name,
     description: tool.description || "",
     parameters: toVertexFunctionSchema(tool.parameters),
   }));
-  const { systemInstruction, contents } = vertexPayload(messages, effective);
+  const { systemInstruction, contents } = vertexPayload(messages, effective, options);
   const toolResults = [];
   let lastText = "";
   const accessToken = await vertexAccessToken();
   for (let round = 0; round < maxRounds; round += 1) {
     const body = {
       contents,
-      tools: vertexReasoningTools(functionDeclarations),
+      tools: vertexReasoningTools(functionDeclarations, searchPlan),
       generationConfig: {
         temperature: effective.temperature,
         maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 512),
@@ -6271,7 +6290,7 @@ async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
     }, MODEL_FETCH_TIMEOUT_MS);
     const responseText = await upstream.text();
     if (!upstream.ok) {
-      throw new Error(`vertex HTTP ${upstream.status}: ${truncate(responseText, 400)}`);
+      throw new ModelProviderHttpError("vertex", upstream.status, responseText);
     }
     const json = JSON.parse(responseText);
     const parts = json.candidates?.[0]?.content?.parts || [];
@@ -6376,7 +6395,9 @@ async function callModelToolLoopStreaming(messages, profile, toolDefs, options =
     : null;
 
   const provider = resolveReasoningProvider(effective);
-  if (!Array.isArray(toolDefs) || toolDefs.length === 0 || !providerConfiguredFor(provider)) {
+  const searchPlan = reasoningSearchPlan(effective, options.searchRoute);
+  const resolvedToolDefs = withReasoningSearchTools(toolDefs, searchPlan);
+  if (resolvedToolDefs.length === 0 || !providerConfiguredFor(provider)) {
     const text = await callModelOrFallback(messages, effective);
     reconcile(text);
     return { text, tool_results: [], rounds: 0 };
@@ -6384,8 +6405,8 @@ async function callModelToolLoopStreaming(messages, profile, toolDefs, options =
   const isActive = typeof options.isActive === "function" ? options.isActive : () => true;
   try {
     const result = provider === "vertex"
-      ? await vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound, isActive)
-      : await openAiToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound, isActive);
+      ? await vertexToolLoopStreaming(messages, effective, resolvedToolDefs, maxRounds, emit, onToolRound, isActive, searchPlan)
+      : await openAiToolLoopStreaming(messages, effective, resolvedToolDefs, maxRounds, emit, onToolRound, isActive);
     reconcile(result.text);
     return result;
   } catch (error) {
@@ -6595,7 +6616,7 @@ async function openAiPlainRound(convo, effective, tools) {
   return { text: rawText.trim(), rawText, toolCalls, finishReason: String(json.choices?.[0]?.finish_reason || "") };
 }
 
-async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null, isActive = () => true) {
+async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds, emit, onToolRound = null, isActive = () => true, searchPlan = null) {
   const functionDeclarations = toolDefs.map((tool) => ({
     name: tool.name,
     description: tool.description || "",
@@ -6608,10 +6629,10 @@ async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds,
   for (let round = 0; round < maxRounds; round += 1) {
     let roundOutcome;
     try {
-      roundOutcome = await vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit);
+      roundOutcome = await vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit, searchPlan);
     } catch (streamError) {
       try {
-        roundOutcome = await vertexPlainRound(contents, systemInstruction, effective, functionDeclarations, accessToken);
+        roundOutcome = await vertexPlainRound(contents, systemInstruction, effective, functionDeclarations, accessToken, searchPlan);
       } catch (fallbackError) {
         reportVoiceStreamingFault(`vertex_sse_fallback_failed: ${cleanError(streamError)} / ${cleanError(fallbackError)}`);
         throw fallbackError;
@@ -6633,7 +6654,7 @@ async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds,
         contents.push({ role: "model", parts: continued.mergedParts });
         contents.push({ role: "user", parts: [{ text: AUTOCONTINUE_PROMPT }] });
         try {
-          continued = await vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit);
+          continued = await vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit, searchPlan);
         } catch {
           break;
         }
@@ -6670,10 +6691,10 @@ async function vertexToolLoopStreaming(messages, effective, toolDefs, maxRounds,
   return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
 }
 
-function vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations) {
+function vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations, searchPlan) {
   const body = {
     contents,
-    tools: vertexReasoningTools(functionDeclarations),
+    tools: vertexReasoningTools(functionDeclarations, searchPlan),
     generationConfig: {
       temperature: effective.temperature,
       maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 512),
@@ -6705,12 +6726,12 @@ function vertexRoundHeaders(accessToken) {
 // chunk parses as complete JSON with structured functionCall.args (never split
 // partial JSON); what spans chunks is the round's PART LIST, so consecutive
 // text parts are merged and functionCall parts collected for the replay.
-async function vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit) {
+async function vertexStreamRound(contents, systemInstruction, effective, functionDeclarations, accessToken, emit, searchPlan) {
   const url = `${vertexEndpoint(effective, "streamGenerateContent")}?alt=sse`;
   const upstream = await fetchWithTimeout(url, {
     method: "POST",
     headers: vertexRoundHeaders(accessToken),
-    body: JSON.stringify(vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations)),
+    body: JSON.stringify(vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations, searchPlan)),
   }, MODEL_FETCH_TIMEOUT_MS);
   if (!upstream.ok) {
     const text = await upstream.text();
@@ -6761,11 +6782,11 @@ async function vertexStreamRound(contents, systemInstruction, effective, functio
 }
 
 // The non-streaming per-round Vertex fallback, shaped like one vertexToolLoop round.
-async function vertexPlainRound(contents, systemInstruction, effective, functionDeclarations, accessToken) {
+async function vertexPlainRound(contents, systemInstruction, effective, functionDeclarations, accessToken, searchPlan) {
   const upstream = await fetchWithTimeout(vertexEndpoint(effective), {
     method: "POST",
     headers: vertexRoundHeaders(accessToken),
-    body: JSON.stringify(vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations)),
+    body: JSON.stringify(vertexRoundRequest(contents, systemInstruction, effective, functionDeclarations, searchPlan)),
   }, MODEL_FETCH_TIMEOUT_MS);
   const responseText = await upstream.text();
   if (!upstream.ok) {
@@ -9807,10 +9828,6 @@ async function runCascadedVoiceReasoningInner(input) {
     .concat(cascadedAgentRunTools(toolCall))
     .concat([companionMotionTool()])
     .concat(surfaceClassicTools(toolCall, surfaceSkillDeps()));
-  if (!nativeWebSearchEnabled(resolveReasoningProvider(profile))) {
-    const exaSearch = createExaSearchTool();
-    if (exaSearch) toolDefs.push(exaSearch);
-  }
   if (voiceExecuteToolEnabled()) {
     toolDefs.push(cascadedExecuteToolDef(toolCall));
   }
@@ -9858,11 +9875,14 @@ async function runCascadedVoiceReasoningInner(input) {
     : null;
   const toolTurn = speakSanitizer
     ? await callModelToolLoopStreaming(modelMessages, profile, toolDefs, {
+      searchRoute: SEARCH_ROUTES.CASCADED_REASONING,
       onTextDelta: (delta) => speakSanitizer.push(delta),
       ...(speakToolAck ? { onToolRound: speakToolAck } : {}),
       ...(typeof input?.is_turn_active === "function" ? { isActive: input.is_turn_active } : {}),
     })
-    : await callModelToolLoop(modelMessages, profile, toolDefs);
+    : await callModelToolLoop(modelMessages, profile, toolDefs, {
+      searchRoute: SEARCH_ROUTES.CASCADED_REASONING,
+    });
   if (speakSanitizer) {
     speakSanitizer.end();
   }
@@ -10669,7 +10689,9 @@ async function recordStreamingVoiceTurn(turn) {
       ? systemBlocks.map((content) => ({ role: "system", content })).concat(messages)
       : messages;
     try {
-      display = await callModelOrFallback(modelMessages, profile);
+      display = providerConfiguredFor(resolveReasoningProvider(profile))
+        ? await callReasoningAnswer(modelMessages, profile, { searchRoute: SEARCH_ROUTES.CASCADED_REASONING })
+        : await callModelOrFallback(modelMessages, profile);
     } catch (error) {
       generatedError = cleanError(error);
       display = gatewayFallbackReply(transcript);
@@ -11782,7 +11804,9 @@ async function regenerateThreadSummary(sessionId, branchId, reason = "cadence") 
   }
 
   let summary;
-  if (providerConfigured()) {
+  const summaryProfile = agentProfile.effective();
+  const summaryProviderConfigured = providerConfiguredFor(resolveReasoningProvider(summaryProfile));
+  if (summaryProviderConfigured) {
     const prompt = [
       "Summarize this conversation thread in 2 to 4 sentences for later recall.",
       "Focus on the entities, tasks, decisions, and open questions. No preamble, just the summary.",
@@ -11790,7 +11814,7 @@ async function regenerateThreadSummary(sessionId, branchId, reason = "cadence") 
       recency,
     ].join("\n");
     try {
-      summary = String(await callModelOrFallback([{ role: "user", content: prompt }], agentProfile.effective()) || "").trim();
+      summary = String(await callModelOrFallback([{ role: "user", content: prompt }], summaryProfile) || "").trim();
     } catch (error) {
       console.warn(`thread summary model call failed: ${cleanError(error)}`);
       summary = "";
@@ -11807,7 +11831,7 @@ async function regenerateThreadSummary(sessionId, branchId, reason = "cadence") 
   const record = threadStore.writeSummary(safeSession, safeBranch, summary, {
     turn_count: turnCount,
     last_turn_id: latest.turn_id,
-    source: providerConfigured() ? `model:${reason}` : `extractive:${reason}`,
+    source: summaryProviderConfigured ? `model:${reason}` : `extractive:${reason}`,
   });
   // Index into gbrain so the semantic recall block can surface this thread later.
   brain.remember(summary, {
@@ -12097,13 +12121,13 @@ function nativeWebSearchEnabled(provider = "vertex") {
   return provider === "vertex" && String(process.env.MODEL_NATIVE_WEB_SEARCH || "1").trim() !== "0";
 }
 
-function vertexReasoningTools(functionDeclarations = []) {
+function vertexReasoningTools(functionDeclarations = [], searchPlan = null) {
   const tools = [];
   if (Array.isArray(functionDeclarations) && functionDeclarations.length > 0) {
     tools.push({ functionDeclarations });
   }
-  if (nativeWebSearchEnabled("vertex")) {
-    tools.push({ googleSearch: {} });
+  if (searchPlan?.nativeTool) {
+    tools.push(searchPlan.nativeTool);
   }
   return tools;
 }
