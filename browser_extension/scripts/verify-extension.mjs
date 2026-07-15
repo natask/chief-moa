@@ -5,6 +5,7 @@ const requiredFiles = [
   "package.json",
   "extension/manifest.json",
   "extension/background.js",
+  "extension/browser-agent-loop-policy.js",
   "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
@@ -60,6 +61,7 @@ const requiredFiles = [
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-browser-context-adapter.mjs",
   "scripts/test-browser-agent-role-runtime.mjs",
+  "scripts/test-browser-agent-loop-policy.mjs",
   "scripts/test-browser-turn-protocol.mjs",
   "scripts/test-extension-production-sources.mjs",
   "scripts/test-runtime-intent-modules.mjs",
@@ -75,6 +77,7 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const browserAgentLoopPolicySource = readFileSync("extension/browser-agent-loop-policy.js", "utf8");
 const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
@@ -131,6 +134,16 @@ if (
   packageJson.scripts?.verify !== "npm run test:unit && node scripts/verify-extension.mjs"
 ) {
   throw new Error("verification must run every focused unit script and expose the production coverage ratchet");
+}
+
+if (
+  /function (?:clampAgentLoopMaxSteps|agentLoopScreenshotObservation|validateAgentLoopAction)\(/.test(backgroundSource) ||
+  !/validateAgentLoopAction\(response\?\.action, allowedBrowserTaskUrl\)/.test(backgroundSource) ||
+  !/function buildAgentLoopObservationPayload\(/.test(browserAgentLoopPolicySource) ||
+  !/function validateAgentLoopAction\(/.test(browserAgentLoopPolicySource) ||
+  !/AGENT_LOOP_MAX_TYPE_TEXT = 2000/.test(browserAgentLoopPolicySource)
+) {
+  throw new Error("browser agent-loop observation and action policy must stay extracted, bounded, and URL-policy injected");
 }
 
 if (
@@ -1042,6 +1055,7 @@ if (!/case "ambient":/.test(contentSource) || !/agee-ambient/.test(contentSource
 
 for (const file of [
   "extension/background.js",
+  "extension/browser-agent-loop-policy.js",
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content.js",
@@ -1079,6 +1093,7 @@ for (const file of [
   "scripts/test-extension-production-sources.mjs",
   "scripts/test-runtime-intent-modules.mjs",
   "scripts/test-browser-turn-protocol.mjs",
+  "scripts/test-browser-agent-loop-policy.mjs",
   "scripts/extension-production-sources.mjs",
   "scripts/coverage-extension.mjs",
   "scripts/chrome-for-testing.mjs",

@@ -66,6 +66,9 @@
 - [x] 4.4a Extract the browser turn/evidence protocol from background
       orchestration with a focused 90% gate. Verified at 100% lines, 95.90%
       branches, and 100% functions; reduce `background.js` to 5,543 lines.
+- [x] 4.4b Extract browser agent-loop observation and action policy with a
+      focused 90% gate. Verified at 100% lines, branches, and functions; reduce
+      `background.js` to 5,460 lines.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.

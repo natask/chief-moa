@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "A.G.",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
     "16": "icons/icon-16.png",
