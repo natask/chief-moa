@@ -13,6 +13,7 @@ const requiredFiles = [
   "extension/browser-context-adapter.js",
   "extension/config.js",
   "extension/content.js",
+  "extension/document-context.js",
   "extension/proactive-helper.js",
   "extension/proactive-confirm.html",
   "extension/proactive-confirm.css",
@@ -83,6 +84,7 @@ const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
+const documentContextSource = readFileSync("extension/document-context.js", "utf8");
 const proactiveHelperSource = readFileSync("extension/proactive-helper.js", "utf8");
 const proactiveConfirmHtmlSource = readFileSync("extension/proactive-confirm.html", "utf8");
 const proactiveConfirmCssSource = readFileSync("extension/proactive-confirm.css", "utf8");
@@ -124,6 +126,9 @@ if (manifest.manifest_version !== 3) {
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
 if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js") || mainContentScript.js.indexOf("steering-ui.js") < 0 || mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js")) {
   throw new Error("proactive-helper.js and steering-ui.js must load before content.js");
+}
+if (mainContentScript.js.indexOf("document-context.js") < 0 || mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js")) {
+  throw new Error("document-context.js must load before content.js");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -498,8 +503,8 @@ if (
   throw new Error("browser role intent must have no selector and must route overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
 }
 
-if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {
-  throw new Error("content snapshot must include visible page text, not only actionable elements");
+if (!/function documentPageContext/.test(contentSource) || !/pageText:\s*documentContext\.pageText/.test(contentSource)) {
+  throw new Error("content snapshot must include whole-document reading text, not only actionable elements");
 }
 
 if (!/e\.code === "Comma"/.test(contentSource) || /toLowerCase\(\) === "k"/.test(contentSource)) {
@@ -681,7 +686,6 @@ if (
 if (
   !/BROWSER_AGENT_PROGRESS_TEXT/.test(backgroundSource) ||
   !/collecting page context/.test(backgroundSource) ||
-  !/capturing screenshot/.test(backgroundSource) ||
   !/sending to gateway/.test(backgroundSource) ||
   !/waiting for answer/.test(backgroundSource) ||
   !/case "browserAgentProgress":/.test(contentSource)
@@ -689,22 +693,20 @@ if (
   throw new Error("browser-agent turns must render named progress states through the existing result surface");
 }
 
-if (
-  !/MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS/.test(backgroundSource) ||
-  !/function browserScreenshotEvidence/.test(backgroundSource) ||
-  !/encoding:\s*"omitted"/.test(backgroundSource) ||
-  !/screenshot:\s*screenshotEvidence/.test(backgroundSource)
-) {
-  throw new Error("browser-agent screenshot evidence must be capped or omitted before posting to the gateway");
+if (/captureScreenshot\(|captureScreenshotViaDebugger\(|browserScreenshotEvidence|screenshot:/.test(browserAgentTurnBody)) {
+  throw new Error("ordinary browser-agent page context must not capture or upload screenshot evidence");
 }
 
 if (
   !/snapshotId/.test(contentSource) ||
   !/viewport:\s*\{/.test(contentSource) ||
   !/capturedAt:\s*new Date\(\)\.toISOString\(\)/.test(contentSource) ||
-  !/elementSummaries:\s*out\.map/.test(contentSource)
+  !/elementSummaries:\s*out\.map/.test(contentSource) ||
+  !/documentContext:\s*documentContext\.metadata/.test(contentSource) ||
+  !/scope:\s*"whole_rendered_document"/.test(documentContextSource) ||
+  !/coverage:\s*complete \? "complete" : "distributed_sample"/.test(documentContextSource)
 ) {
-  throw new Error("content snapshot must include snapshotId, viewport, capturedAt, and element summaries without removing the existing shape");
+  throw new Error("content snapshot must include bounded whole-document context plus the existing viewport action shape");
 }
 
 if (!packageJson.scripts?.["smoke:unified-browser-agent"]) {

@@ -4289,9 +4289,7 @@
   // ---- Perception -------------------------------------------------------
   const SELECTOR =
     'a[href], button, input:not([type=hidden]), textarea, select, [role=button], [role=link], [role=tab], [role=menuitem], [contenteditable=""], [contenteditable=true], [onclick]';
-  const MAX_VISIBLE_TEXT_CHARS = 5200;
-  const MAX_VISIBLE_TEXT_PARTS = 140;
-  const TEXT_NODE_EXCLUDED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS"]);
+  const DOCUMENT_TEXT_EXCLUDED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS"]);
 
   function visible(el) {
     const r = el.getBoundingClientRect();
@@ -4301,49 +4299,39 @@
     return s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
   }
 
-  function cleanVisibleText(text) {
-    return String(text || "").replace(/\s+/g, " ").trim();
-  }
-
-  function textNodeVisible(node) {
-    const parent = node?.parentElement;
-    if (!parent || parent.closest("#agee-root") || TEXT_NODE_EXCLUDED_TAGS.has(parent.tagName)) return false;
-    const text = cleanVisibleText(node.nodeValue);
-    if (text.length < 2) return false;
-    const s = getComputedStyle(parent);
-    if (s.visibility === "hidden" || s.display === "none" || s.opacity === "0") return false;
-    try {
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      const rects = Array.from(range.getClientRects());
-      if (typeof range.detach === "function") range.detach();
-      if (!rects.length) return visible(parent);
-      return rects.some((r) => r.width >= 1 && r.height >= 1 && r.bottom >= 0 && r.top <= innerHeight && r.right >= 0 && r.left <= innerWidth);
-    } catch {
-      return visible(parent);
-    }
-  }
-
-  function visiblePageText() {
-    if (!document.body) return "";
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        return textNodeVisible(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-      },
-    });
+  function documentTextParts() {
+    if (!document.body) return [];
     const parts = [];
-    const seen = new Set();
-    let chars = 0;
-    let node;
-    while ((node = walker.nextNode())) {
-      const text = cleanVisibleText(node.nodeValue);
-      if (!text || seen.has(text)) continue;
-      seen.add(text);
-      parts.push(text);
-      chars += text.length + 1;
-      if (parts.length >= MAX_VISIBLE_TEXT_PARTS || chars >= MAX_VISIBLE_TEXT_CHARS) break;
+    for (const node of document.body.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = String(node.nodeValue || "").trim();
+        if (text) parts.push(text);
+        continue;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE || node.id === "agee-root" || DOCUMENT_TEXT_EXCLUDED_TAGS.has(node.tagName)) continue;
+      const text = String(node.innerText || "");
+      for (const line of text.split(/\n+/)) {
+        if (line.trim()) parts.push(line);
+      }
     }
-    return parts.join("\n").slice(0, MAX_VISIBLE_TEXT_CHARS);
+    return parts;
+  }
+
+  function documentPageContext() {
+    const policy = globalThis.AgeeDocumentContextPolicy;
+    const result = policy?.buildDocumentContext
+      ? policy.buildDocumentContext(documentTextParts())
+      : { text: "", metadata: { scope: "whole_rendered_document", coverage: "unavailable", complete: false, truncated: true } };
+    return {
+      pageText: result.text,
+      metadata: {
+        ...result.metadata,
+        text_source: "rendered_dom_inner_text",
+        canvas_count: document.querySelectorAll("canvas").length,
+        frame_count: document.querySelectorAll("iframe,frame").length,
+        virtualized_content_may_require_scroll: document.documentElement.scrollHeight > innerHeight,
+      },
+    };
   }
 
   function label(el) {
@@ -4382,6 +4370,7 @@
   function snapshot() {
     indexed = [];
     const out = [];
+    const documentContext = documentPageContext();
     document.querySelectorAll(SELECTOR).forEach((el) => {
       if (el.closest("#agee-root")) return;
       if (!visible(el)) return;
@@ -4392,7 +4381,8 @@
     return {
       url: location.href,
       title: document.title,
-      pageText: visiblePageText(),
+      pageText: documentContext.pageText,
+      documentContext: documentContext.metadata,
       elements: out,
       snapshotId: `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       viewport: {

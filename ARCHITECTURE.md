@@ -33,6 +33,13 @@ Browser extension
   subscriptions, and it is not the deployment target for user-specific
   customizations.
 
+  On an explicit page question, reading evidence is a bounded semantic
+  projection of the whole currently rendered DOM with scope/completeness
+  metadata. It is distinct from the viewport-bound interactive-element index.
+  Ordinary page questions do not capture pixels; screenshots are a separate
+  explicit visual-evidence class and may not silently broaden local action
+  authority.
+
 Native desktop surfaces
   Own: platform UI, Accessibility/UI Automation permission, product observation
   grants, local redaction, outbound preview, native action validation and

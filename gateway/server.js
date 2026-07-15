@@ -2885,6 +2885,13 @@ async function browserEvidenceAnswer(record) {
     `title: ${page.title || summary.page_ref?.title || ""}`,
     `url: ${page.url || summary.page_ref?.url || ""}`,
     `origin: ${page.origin || summary.page_ref?.origin || ""}`,
+    `context_scope: ${summary.context_scope || "unspecified"}`,
+    `context_coverage: ${summary.context_coverage || "unspecified"}`,
+    `context_complete: ${summary.context_complete == null ? "unknown" : summary.context_complete}`,
+    `context_truncated: ${summary.context_truncated === true}`,
+    summary.source_parts_total == null
+      ? "context_parts: unknown"
+      : `context_parts: ${summary.source_parts_included ?? 0}/${summary.source_parts_total}`,
     "",
     summary.visible_text || "No visible text summary was provided.",
     "</page_evidence>",
