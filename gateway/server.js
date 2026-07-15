@@ -73,6 +73,7 @@ const {
 } = require("./lib/context-decision");
 const { matchMemoryStatement } = require("./lib/memory-matcher");
 const { createWorkGraphStore, effectiveInstruction } = require("./lib/work-graph");
+const { createWorkGraphHandlers } = require("./lib/work-graph-handlers");
 const { createEventSubstrateStore, normalizeEventType } = require("./lib/event-substrate");
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { buildIdentity } = require("./lib/build-identity");
@@ -464,7 +465,6 @@ const { routeBillingRuntime } = createBillingRuntimeHandlers({
   sendJson,
   cleanError,
 });
-
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
 // surfaces from this; a "deployment" is a spec change here, not new extension
 // code. The client live-refreshes on change (storage.onChanged pattern).
@@ -505,6 +505,10 @@ const workGraph = createWorkGraphStore({
   dataDir: DATA_DIR,
   databaseUrl: process.env.DATABASE_URL,
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
+});
+const { routeWorkGraph } = createWorkGraphHandlers({
+  workGraph, authorizedAgent, agentAuthError, sendJson, sendWorkNode,
+  handleCreateWorkNode, handleWorkNodeAction, handleCreateWorkEvent, handleCreateWorkArtifact,
 });
 const eventSubstrate = createEventSubstrateStore({
   dataDir: DATA_DIR,
@@ -1187,91 +1191,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/work/nodes" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const status = url.searchParams.get("status") || "";
-      sendJson(response, 200, { nodes: await workGraph.list(status ? { status } : {}) });
-      return;
-    }
-
-    if (url.pathname === "/v1/work/nodes" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateWorkNode(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/work/events" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, {
-        events: await workGraph.listEvents({
-          node_id: url.searchParams.get("node_id") || url.searchParams.get("nodeId") || "",
-          run_id: url.searchParams.get("run_id") || url.searchParams.get("runId") || "",
-          limit: Number(url.searchParams.get("limit") || 200),
-        }),
-      });
-      return;
-    }
-
-    if (url.pathname === "/v1/work/events" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateWorkEvent(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/work/artifacts" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, {
-        artifacts: await workGraph.listArtifacts({
-          node_id: url.searchParams.get("node_id") || url.searchParams.get("nodeId") || "",
-          run_id: url.searchParams.get("run_id") || url.searchParams.get("runId") || "",
-          kind: url.searchParams.get("kind") || "",
-          q: url.searchParams.get("q") || url.searchParams.get("query") || "",
-          limit: Number(url.searchParams.get("limit") || 100),
-        }),
-      });
-      return;
-    }
-
-    if (url.pathname === "/v1/work/artifacts" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateWorkArtifact(request, response);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/work/nodes/")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.replace("/v1/work/nodes/", "");
-      await sendWorkNode(response, id);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname.startsWith("/v1/work/nodes/")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleWorkNodeAction(request, response, url.pathname.replace("/v1/work/nodes/", ""));
+    if (await routeWorkGraph(request, response, url)) {
       return;
     }
 

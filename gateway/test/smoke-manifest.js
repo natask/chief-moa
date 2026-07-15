@@ -25,6 +25,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/voice-intent.js",
   "lib/voice-router.js",
   "lib/work-graph.js",
+  "lib/work-graph-handlers.js",
   "lib/work-graph-postgres.js",
   "lib/event-substrate.js",
   "lib/intent-runtime.js",
