@@ -99,14 +99,6 @@ function sanitizeHttpUrl(value) {
   }
 }
 
-function clampMaxSteps(value) {
-  const requested = Number(value);
-  if (!Number.isFinite(requested) || requested <= 0) {
-    return DEFAULT_MAX_STEPS;
-  }
-  return Math.max(1, Math.min(Math.floor(requested), MAX_STEPS_CEILING));
-}
-
 function isTerminalStatus(status) {
   return status === "done" || status === "failed" || status === "cancelled";
 }
