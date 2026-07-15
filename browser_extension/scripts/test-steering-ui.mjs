@@ -48,6 +48,8 @@ assert.match(contentSource, /if \(state\.assistantSpeechSuppressed\) return;/);
 assert.match(contentSource, /replacement_kind = replacement\.kind/);
 assert.match(contentSource, /message\.next_turn_id = replacement\.turnId/);
 assert.match(contentSource, /message\.boundary_id = replacement\.boundaryId/);
+assert.match(contentSource, /if \(!state\.voiceSessionId\) state\.pendingSteeringReplacement = replacement/);
+assert.match(contentSource, /if \(state\.pendingSteeringReplacement\) sendLiveVoiceControl\(state, liveCancelTurnMessage\(state, 0, state\.pendingSteeringReplacement\)\)\.finally/);
 assert.match(backgroundSource, /all_branches_context: false/);
 assert.match(backgroundSource, /activeThreadBranch\(cfg\)/);
 assert.doesNotMatch(contentSource, /agee-mode-select|data-agent-mode-control/);

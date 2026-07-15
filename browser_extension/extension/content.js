@@ -2665,6 +2665,7 @@
       ensureVoiceCueCard(state, state.transcript || "Voice", display);
       cues.get(state.cueId)?.cardEl?.classList.add("agee-cue-steered");
       updateCue(state.cueId, display, "done");
+      if (!state.voiceSessionId) state.pendingSteeringReplacement = replacement;
       sendLiveVoiceControl(state, liveCancelTurnMessage(state, state.framesPlayed || 0, replacement))
         .finally(() => closeLiveVoiceSession(state, `steered_generation_${steeringGeneration}`));
       untrackLiveVoiceState(state);
@@ -2684,11 +2685,10 @@
     state.voiceSessionId = voiceSessionId || null;
     if (state.voiceSessionId) {
       liveVoiceBySessionId.set(state.voiceSessionId, state);
-      safeRuntimeSendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId })
-        .catch(() => {});
+      safeRuntimeSendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId }).catch(() => {});
+      if (state.pendingSteeringReplacement) sendLiveVoiceControl(state, liveCancelTurnMessage(state, 0, state.pendingSteeringReplacement)).finally(() => closeLiveVoiceSession(state, `steered_generation_${state.steeredAtGeneration}`));
     }
   }
-
   function untrackLiveVoiceState(state) {
     if (!state) return;
     // Universal terminal chokepoint for a turn: every done/error/recover/route/
