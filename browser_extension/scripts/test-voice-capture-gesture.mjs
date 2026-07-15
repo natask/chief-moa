@@ -49,6 +49,11 @@ assertEqual(
   "single sends active current-thread capture"
 );
 assertEqual(
+  gesture.resolveVoiceFirstTransition({ tapCount: 1, capturing: true, captureOrigin: "double" }),
+  "noop",
+  "single cannot send a fresh-thread capture"
+);
+assertEqual(
   gesture.resolveVoiceFirstTransition({ tapCount: 2, capturing: false }),
   "start_new",
   "double starts fresh-thread capture"
