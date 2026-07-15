@@ -12,6 +12,10 @@ function createAudioNotesStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || "./data");
   const notesDir = path.join(dataDir, "audio-notes");
   fs.mkdirSync(notesDir, { recursive: true });
+  // Optional blob store: when present (BLOB_STORE=gcs), the on-disk note file
+  // is a spool that gets write-behind-uploaded to the bucket, and reads fall
+  // through to the bucket once the spool is pruned. Metadata JSON stays local.
+  const blobStore = options.blobStore || null;
   const maxTotalBytes = normalizeMaxTotalBytes(options.maxTotalBytes);
   // Quota refuses new notes instead of pruning old ones: stored notes are
   // user speech and must never be silently deleted.
@@ -57,6 +61,11 @@ function createAudioNotesStore(options = {}) {
     fs.renameSync(bytesTmp, bytesPath);
     writeNote(notesDir, note);
     totalBytes += bytes.length;
+    if (blobStore) {
+      // Respond as soon as the spool write lands; the uploader owns retries
+      // and the janitor re-enqueues after a crash.
+      blobStore.finalizeSpool(noteBlobKey(note), { contentType });
+    }
     return clone(note);
   }
 
@@ -90,6 +99,27 @@ function createAudioNotesStore(options = {}) {
     return filePath ? fs.createReadStream(filePath) : null;
   }
 
+  // Dual read: spool first, then the bucket. Returns
+  // { stream, size, contentType } or null.
+  async function stream(id) {
+    const note = get(id);
+    if (!note) return null;
+    const contentType = note.content_type || "application/octet-stream";
+    if (blobStore) {
+      const found = await blobStore.getReadStream(noteBlobKey(note));
+      return found ? { stream: found.stream, size: found.size, contentType } : null;
+    }
+    const filePath = audioPathForNote(notesDir, note);
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return null;
+    }
+    if (!stat.isFile()) return null;
+    return { stream: fs.createReadStream(filePath), size: stat.size, contentType };
+  }
+
   function status() {
     return {
       notes_dir: notesDir,
@@ -107,6 +137,7 @@ function createAudioNotesStore(options = {}) {
     get,
     audioPath,
     readStream,
+    stream,
     status,
   };
 }
@@ -167,31 +198,32 @@ function createAudioNoteHandlers(options = {}) {
     sendJson(response, 200, { note });
   }
 
-  function sendAudio(response, url) {
+  async function sendAudio(response, url) {
     const id = audioNoteIdFromPath(url.pathname.replace(/\/audio$/, ""));
     const note = id ? store.get(id) : null;
     if (!note) {
       sendJson(response, 404, { error: "audio note not found" });
       return;
     }
-    const filePath = store.audioPath(id);
-    if (!filePath || !fs.existsSync(filePath)) {
-      sendJson(response, 404, { error: "audio note audio not found" });
+    let found;
+    try {
+      found = await store.stream(id);
+    } catch (error) {
+      sendJson(response, 502, { error: `audio note read failed: ${cleanError(error)}` });
       return;
     }
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
+    if (!found) {
       sendJson(response, 404, { error: "audio note audio not found" });
       return;
     }
     response.writeHead(200, {
-      "content-type": note.content_type || "application/octet-stream",
-      "content-length": stat.size,
+      "content-type": found.contentType,
+      "content-length": found.size,
       "cache-control": "private, no-store",
       "x-moa-audio-note-id": note.id,
       "x-moa-audio-kind": "note",
     });
-    fs.createReadStream(filePath).pipe(response);
+    found.stream.pipe(response);
   }
 
   return {
@@ -230,6 +262,11 @@ function listNoteFiles(notesDir) {
 
 function audioPathForNote(notesDir, note) {
   return path.join(notesDir, `${cleanToken(note.id, 120)}${extensionForContentType(note.content_type)}`);
+}
+
+// DATA_DIR-relative blob-store key for a note's bytes.
+function noteBlobKey(note) {
+  return `audio-notes/${cleanToken(note.id, 120)}${extensionForContentType(note.content_type)}`;
 }
 
 function createNoteId() {

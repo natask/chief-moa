@@ -17,7 +17,7 @@ function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "video-notes-test-"));
 }
 
-test("create stores bytes and metadata, get and readBytes round-trip", () => {
+test("create stores bytes and metadata, get and readBytes round-trip", async () => {
   const dataDir = tempDataDir();
   const store = createVideoNotesStore({ dataDir });
   const bytes = Buffer.from("webm-bytes-placeholder");
@@ -36,7 +36,7 @@ test("create stores bytes and metadata, get and readBytes round-trip", () => {
 
   const loaded = store.get(note.id);
   assert.strictEqual(loaded.id, note.id);
-  assert.deepStrictEqual(store.readBytes(note.id), bytes);
+  assert.deepStrictEqual(await store.readBytes(note.id), bytes);
   // codecs parameter maps to the .webm extension
   assert.ok(store.videoPath(note.id).endsWith(".webm"));
   assert.strictEqual(store.list().length, 1);
@@ -56,17 +56,17 @@ test("empty body is refused and quota refuses instead of pruning", () => {
   assert.strictEqual(store.list().length, 1);
 });
 
-test("remove deletes blob and metadata and frees quota", () => {
+test("remove deletes blob and metadata and frees quota", async () => {
   const dataDir = tempDataDir();
   const store = createVideoNotesStore({ dataDir, maxTotalBytes: 10 });
   const note = store.create({ bytes: Buffer.alloc(8), content_type: "video/webm" });
   const blobPath = store.videoPath(note.id);
   assert.ok(fs.existsSync(blobPath));
 
-  assert.strictEqual(store.remove(note.id), true);
+  assert.strictEqual(await store.remove(note.id), true);
   assert.strictEqual(store.get(note.id), null);
   assert.ok(!fs.existsSync(blobPath));
-  assert.strictEqual(store.remove(note.id), false);
+  assert.strictEqual(await store.remove(note.id), false);
 
   // Quota was freed: a new note fits again.
   const next = store.create({ bytes: Buffer.alloc(8), content_type: "video/webm" });

@@ -71,6 +71,8 @@ const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
 const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
+const { createBlobStore } = require("./lib/blob-store");
+const { createVoiceTurnAudio } = require("./lib/voice-turn-audio");
 const { createVideoNoteHandlers, createVideoNotesStore, videoInlinePart } = require("./lib/video-notes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
@@ -312,9 +314,22 @@ const brokerLauncher = createBrokerLauncher({
   isTerminalRunStatus, randomId, truncate, truncateToBytes, startAgentRun,
   appendAgentEvent, cleanError, sanitizeOptionalId,
 });
+// Blob bytes (voice PCM, audio/video notes) live under DATA_DIR by default;
+// BLOB_STORE=gcs turns the local files into a spool with write-behind upload
+// to a GCS bucket. Metadata JSON always stays local.
+const blobStore = createBlobStore({ dataDir: DATA_DIR });
+blobStore.startJanitor();
+const {
+  voiceTurnAudioRefs,
+  voiceTurnAudioKey,
+  deleteVoiceTurnPcm,
+  sendVoiceAudio,
+  voiceStorageFileProblem,
+} = createVoiceTurnAudio({ dataDir: DATA_DIR, blobStore, sanitizeOptionalId, sendJson, cleanError });
 const audioNotes = createAudioNotesStore({
   dataDir: DATA_DIR,
   maxTotalBytes: process.env.AUDIO_NOTES_MAX_TOTAL_BYTES,
+  blobStore,
 });
 const audioNoteHandlers = createAudioNoteHandlers({
   store: audioNotes,
@@ -324,6 +339,7 @@ const audioNoteHandlers = createAudioNoteHandlers({
 const videoNotes = createVideoNotesStore({
   dataDir: DATA_DIR,
   maxTotalBytes: process.env.VIDEO_NOTES_MAX_TOTAL_BYTES,
+  blobStore,
 });
 const videoNoteHandlers = createVideoNoteHandlers({
   store: videoNotes,
@@ -539,6 +555,7 @@ const voiceSessionServer = createVoiceSessionServer({
   // Cascaded pipeline: after Chirp STT, run the gateway's durable LLM turn so
   // the Cloud TTS leg can speak the reply. Only used by the cascaded provider.
   reasoner: runCascadedVoiceReasoning,
+  blobStore,
 });
 
 const server = http.createServer(async (request, response) => {
@@ -599,6 +616,7 @@ const server = http.createServer(async (request, response) => {
         },
         audio_notes: audioNotes.status(),
         video_notes: videoNotes.status(),
+        blob_store: blobStore.status(),
         voice_stream: {
           sessions_dir: voiceSessionServer.sessionsDir,
           endpoint: voiceSessionServer.endpoint,
@@ -1931,7 +1949,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
         return;
       }
-      audioNoteHandlers.sendAudio(response, url);
+      await audioNoteHandlers.sendAudio(response, url);
       return;
     }
 
@@ -1967,7 +1985,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
         return;
       }
-      videoNoteHandlers.sendVideo(response, url);
+      await videoNoteHandlers.sendVideo(response, url);
       return;
     }
 
@@ -1985,7 +2003,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
         return;
       }
-      videoNoteHandlers.remove(response, url);
+      await videoNoteHandlers.remove(response, url);
       return;
     }
 
@@ -2032,7 +2050,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
         return;
       }
-      sendVoiceAudio(request, response, url);
+      await sendVoiceAudio(request, response, url);
       return;
     }
 
@@ -6970,7 +6988,7 @@ async function handleVoiceTurn(request, response) {
       if (resolveReasoningProvider(profile) !== "vertex") {
         throw new Error("video notes require the Vertex/Gemini provider (set MODEL_PROVIDER=vertex)");
       }
-      const videoBytes = videoNotes.readBytes(videoNote.id);
+      const videoBytes = await videoNotes.readBytes(videoNote.id);
       if (!videoBytes || videoBytes.length <= 0) {
         throw new Error("the stored video note has no bytes");
       }
@@ -11237,8 +11255,10 @@ async function handleVoiceRetranscribe(request, response, url) {
     return;
   }
 
-  const pcmPath = voiceTurnAudioPath(sessionId, turnId, "user");
-  if (!pcmPath || !fs.existsSync(pcmPath)) {
+  // Materialize the PCM locally (spool hit or GCS download) — the windowed
+  // transcriber below reads a file path.
+  const pcmPath = await blobStore.ensureLocal(voiceTurnAudioKey(sessionId, turnId, "user"));
+  if (!pcmPath) {
     sendJson(response, 404, { error: "voice turn audio not found", session_id: sessionId, turn_id: turnId });
     return;
   }
@@ -11799,21 +11819,6 @@ function voiceStorageDiagnosis(record, voiceSession, metadata, audio) {
     canonical_record: canonicalExists,
     metadata: metadataExists,
   };
-}
-
-function voiceStorageFileProblem(sessionId, turnId, kind, expectedBytes) {
-  const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
-  if (!filePath || !fs.existsSync(filePath)) {
-    return `${kind} audio archive missing`;
-  }
-  const stat = fs.statSync(filePath);
-  if (!stat.isFile()) {
-    return `${kind} audio archive is not a file`;
-  }
-  if (stat.size !== expectedBytes) {
-    return `${kind} audio archive size mismatch (${stat.size} != ${expectedBytes})`;
-  }
-  return "";
 }
 
 function voiceSessionMetadataPath(sessionId, turnId) {
@@ -12727,7 +12732,7 @@ async function recordStreamingVoiceTurn(turn) {
   const branchId = stashedContext?.thread?.branch_id
     || (incognito && !isIncognitoBranch(callerBranchId) ? newBranchId("incognito") : callerBranchId);
   if (incognito) {
-    deleteVoiceTurnPcm(sessionId, turnId);
+    await deleteVoiceTurnPcm(sessionId, turnId);
   }
 
   const transcript = truncate(String(turn.transcript || ""), 16000);
@@ -13271,103 +13276,6 @@ function previousUserTranscript(sessionId, branchId, currentTurnId) {
     };
   }
   return { turn_id: "", transcript: "", transcript_source: "" };
-}
-
-function voiceTurnAudioRefs(record) {
-  if (!record || typeof record !== "object") {
-    return {};
-  }
-  const user = voiceTurnAudioRef(record, "user");
-  const assistant = voiceTurnAudioRef(record, "assistant");
-  return {
-    ...(user ? { user } : {}),
-    ...(assistant ? { assistant } : {}),
-  };
-}
-
-function voiceTurnAudioRef(record, kind) {
-  const sessionId = sanitizeOptionalId(record.session_id || record.conversation_id, "");
-  const turnId = sanitizeOptionalId(record.id || record.turn_id, "");
-  if (!sessionId || !turnId) {
-    return null;
-  }
-  const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
-  if (!filePath || !fs.existsSync(filePath)) {
-    return null;
-  }
-  const stat = fs.statSync(filePath);
-  if (!stat.isFile() || stat.size <= 0) {
-    return null;
-  }
-  return {
-    kind,
-    encoding: "pcm16",
-    content_type: "audio/L16; rate=16000; channels=1",
-    bytes: stat.size,
-    href: `/v1/voice/audio/${encodeURIComponent(sessionId)}/${encodeURIComponent(turnId)}?kind=${kind}`,
-  };
-}
-
-function voiceTurnAudioPath(sessionId, turnId, kind) {
-  const safeSessionId = sanitizeOptionalId(sessionId, "default");
-  const safeTurnId = sanitizeOptionalId(turnId, "");
-  if (!safeTurnId) {
-    return "";
-  }
-  const suffix = kind === "assistant" ? ".assistant.pcm" : ".pcm";
-  return path.join(DATA_DIR, "voice-sessions", safeSessionId, `${safeTurnId}${suffix}`);
-}
-
-// Delete both PCM archives for a turn. Used for incognito streaming turns, whose
-// buffered audio must not survive. Best-effort: a missing file is not an error.
-function deleteVoiceTurnPcm(sessionId, turnId) {
-  for (const kind of ["user", "assistant"]) {
-    const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
-    try {
-      if (filePath && fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-    } catch {
-      // Best-effort; the write guards already keep the turn record out of storage.
-    }
-  }
-}
-
-function sendVoiceAudio(request, response, url) {
-  const rest = url.pathname.slice("/v1/voice/audio/".length).split("/");
-  if (rest.length !== 2) {
-    sendJson(response, 404, { error: "voice audio not found" });
-    return;
-  }
-  let sessionId;
-  let turnId;
-  try {
-    sessionId = sanitizeOptionalId(decodeURIComponent(rest[0]), "default");
-    turnId = sanitizeOptionalId(decodeURIComponent(rest[1]), "");
-  } catch {
-    sendJson(response, 404, { error: "voice audio not found" });
-    return;
-  }
-  const kind = url.searchParams.get("kind") === "assistant" ? "assistant" : "user";
-  const filePath = voiceTurnAudioPath(sessionId, turnId, kind);
-  if (!filePath || !fs.existsSync(filePath)) {
-    sendJson(response, 404, { error: "voice audio not found" });
-    return;
-  }
-  const stat = fs.statSync(filePath);
-  if (!stat.isFile()) {
-    sendJson(response, 404, { error: "voice audio not found" });
-    return;
-  }
-  response.writeHead(200, {
-    "content-type": "audio/L16; rate=16000; channels=1",
-    "content-length": stat.size,
-    "cache-control": "private, no-store",
-    "x-moa-session-id": sessionId,
-    "x-moa-turn-id": turnId,
-    "x-moa-audio-kind": kind,
-  });
-  fs.createReadStream(filePath).pipe(response);
 }
 
 function sessionContextPayload({ sessionId, branchId = "default", allBranches = false, turnLimit } = {}) {
