@@ -187,6 +187,15 @@
       already-receipted rollback from a never-applied request. Enforce a focused
       90% line/branch/function gate, verified at 99.80% lines, 91.27% branches,
       and 95.59% functions while retaining the 2,032-line source ceiling.
+- [x] 2.37 Extract the authenticated self-extension collection, runtime, create,
+      and apply routes from `server.js`; add exhaustive routing, authorization,
+      provenance, approval, normalization, persistence, corruption-recovery,
+      filtering, activation, and reload tests. Enforce focused 90%
+      line/branch/function gates, verified at 100% lines, 96.74% branches, and
+      100% functions for handlers and 98.37% lines, 90.68% branches, and 100%
+      functions for the artifact store. Preserve every corrupt-state snapshot
+      with collision-resistant archive names and reduce `server.js` to 14,654
+      lines.
 
 ## 3. Other Oversized Surfaces
 
