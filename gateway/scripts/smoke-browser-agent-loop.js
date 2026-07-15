@@ -57,6 +57,7 @@ async function main() {
     await step("screenshot is stored on the task, not sent to the model", () => assertScreenshotStored(baseUrl, dataDir, created.id));
     await step("finish folds the summary into the linked agent_run", () => assertFinish(baseUrl, dataDir, created));
     await step("finished task record has the expected shape", () => assertFinalRecord(baseUrl, dataDir, created.id));
+    await step("role catalog and turn authority are deterministic", () => assertRoleContract(baseUrl, dataDir));
     assert.equal(claimed.lease_ms >= 100000 && claimed.lease_ms <= 121000, true, `claim lease must be ~120s, got ${claimed.lease_ms}ms`);
 
     console.log(JSON.stringify({
@@ -72,6 +73,8 @@ async function main() {
         "the latest screenshot is stored on the task record only, never in step history",
         "finish folds the summary into the linked agent_run output and appends browser_agent_task_finished",
         "the finished task record carries the contract fields (status, steps, summary, timestamps)",
+        "GET /v1/browser/roles defaults the selector to delegate while omitted turn roles remain explain",
+        "only explicit delegate turns link visible browser task/run ids; collaborate is one-step proposal-only",
       ],
     }, null, 2));
   } finally {
@@ -111,12 +114,18 @@ async function assertCreate(baseUrl, dataDir) {
   assert.equal(task.max_steps, 5, "max_steps must be honored");
   assert.equal(task.step_count, 0);
   assert.ok(task.agent_run_id, "task must link an agent_run");
+  assert.equal(task.agent_role.id, "delegate");
+  assert.equal(task.authority, "bounded_browser_actions");
+  assert.equal(task.execution_policy, "multi_step_claim_receipt");
   assert.deepEqual(task.steps, [], "a fresh task has no steps");
 
   // The linked agent_run exists and carries browser_agent_task_queued.
   const runPath = path.join(dataDir, "agent-runs", `${task.agent_run_id}.json`);
   const eventsPath = path.join(dataDir, "agent-runs", `${task.agent_run_id}.events.jsonl`);
   assert.ok(fs.existsSync(runPath), "linked agent_run file must exist");
+  const run = JSON.parse(fs.readFileSync(runPath, "utf8"));
+  assert.equal(run.browser_agent_role, "delegate");
+  assert.equal(run.browser_authority, "bounded_browser_actions");
   const events = readEvents(eventsPath);
   assert.ok(events.some((event) => event.type === "browser_agent_task_queued" && event.browser_agent_task_id === task.id),
     "run must carry browser_agent_task_queued");
@@ -125,6 +134,47 @@ async function assertCreate(baseUrl, dataDir) {
   const taskPath = path.join(dataDir, "browser-agent-tasks", `${task.id}.json`);
   assert.ok(fs.existsSync(taskPath), "task JSON file must exist under browser-agent-tasks/");
   return { id: task.id, agent_run_id: task.agent_run_id };
+}
+
+async function assertRoleContract(baseUrl, dataDir) {
+  const unauthorized = await fetch(`${baseUrl}/v1/browser/roles`);
+  assert.equal(unauthorized.status, 401);
+  const catalog = await getJson(`${baseUrl}/v1/browser/roles`);
+  assert.equal(catalog.default_role, "delegate");
+  assert.equal(catalog.legacy_omitted_role, "explain");
+  assert.deepEqual(catalog.roles.map((role) => role.id), ["delegate", "help", "collaborate", "explain"]);
+
+  const common = {
+    text: "Inspect the current page.",
+    session_id: "role_smoke_session",
+    page: { title: "Role Fixture", url: "https://example.test/roles" },
+    evidence: { visible_text: "A bounded deterministic browser role fixture." },
+  };
+  const legacy = await postJson(`${baseUrl}/v1/browser/turns`, common);
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.json.agent_role.id, "explain");
+  assert.equal(legacy.json.role_explicit, false);
+  assert.deepEqual(legacy.json.task_ids, []);
+
+  const collaborate = await postJson(`${baseUrl}/v1/browser/turns`, { ...common, role: "collaborate" });
+  assert.equal(collaborate.status, 200);
+  assert.equal(collaborate.json.authority, "proposal_only");
+  assert.equal(collaborate.json.proposals.length, 1);
+  assert.equal(collaborate.json.proposals[0].executable, false);
+  assert.deepEqual(collaborate.json.task_ids, []);
+
+  const delegated = await postJson(`${baseUrl}/v1/browser/turns`, { ...common, role: "delegate" });
+  assert.equal(delegated.status, 200);
+  assert.equal(delegated.json.authority, "bounded_browser_actions");
+  assert.equal(delegated.json.execution.status, "pending");
+  assert.equal(delegated.json.task_ids.length, 1);
+  assert.equal(delegated.json.agent_run_ids.length, 1);
+  const task = JSON.parse(fs.readFileSync(path.join(dataDir, "browser-agent-tasks", `${delegated.json.task_ids[0]}.json`), "utf8"));
+  const run = JSON.parse(fs.readFileSync(path.join(dataDir, "agent-runs", `${delegated.json.agent_run_ids[0]}.json`), "utf8"));
+  assert.equal(task.turn_id, delegated.json.turn_id);
+  assert.equal(task.agent_role.id, "delegate");
+  assert.equal(run.browser_agent_role, "delegate");
+  assert.equal(run.turn_id, delegated.json.turn_id);
 }
 
 async function assertHealth(baseUrl, expected) {

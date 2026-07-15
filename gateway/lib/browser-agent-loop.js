@@ -21,6 +21,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { resolveBrowserAgentRole } = require("./browser-agent-roles");
 
 const MAX_STEPS_CEILING = 40;
 const DEFAULT_MAX_STEPS = 24;
@@ -424,6 +425,10 @@ function createBrowserAgentLoopStore(options = {}) {
       conversation_id: task.conversation_id || "",
       branch_id: task.branch_id || "default",
       agent_run_id: task.agent_run_id || "",
+      turn_id: task.turn_id || "",
+      agent_role: task.agent_role || resolveBrowserAgentRole("delegate", { explicit: true }),
+      authority: task.authority || "bounded_browser_actions",
+      execution_policy: task.execution_policy || "multi_step_claim_receipt",
       max_steps: task.max_steps,
       step_count: task.step_count || 0,
       steps: opts.includeSteps ? (task.steps || []) : undefined,
@@ -445,6 +450,10 @@ function createBrowserAgentLoopStore(options = {}) {
       throw new Error("instruction is required");
     }
     const now = new Date().toISOString();
+    const agentRole = resolveBrowserAgentRole(body.role || "delegate", { explicit: true });
+    if (agentRole.id !== "delegate") {
+      throw new Error("browser agent tasks require the delegate role");
+    }
     const task = {
       id: randomId("bagent"),
       status: "pending",
@@ -454,6 +463,10 @@ function createBrowserAgentLoopStore(options = {}) {
       conversation_id: body.conversation_id ? sanitizeId(body.conversation_id) : "",
       branch_id: body.branch_id ? (sanitizeId(body.branch_id) || "default") : "default",
       agent_run_id: body.agent_run_id ? sanitizeId(body.agent_run_id) : "",
+      turn_id: body.turn_id ? sanitizeId(body.turn_id) : "",
+      agent_role: agentRole,
+      authority: agentRole.authority,
+      execution_policy: agentRole.execution_policy,
       max_steps: clampMaxSteps(body.max_steps),
       step_count: 0,
       steps: [],
