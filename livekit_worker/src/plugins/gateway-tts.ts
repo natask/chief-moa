@@ -109,7 +109,7 @@ class GatewaySynthesizeStream extends tts.SynthesizeStream {
 
 // POST reply text to the gateway synthesize hook and return raw PCM16@16k mono.
 // Prefers the shared reason reply's expressive tts_text / tts_style / language.
-async function synthesizeViaGateway(config: GatewayConfig, session: LiveKitTurnState, text: string): Promise<Buffer> {
+export async function synthesizeViaGateway(config: GatewayConfig, session: LiveKitTurnState, text: string): Promise<Buffer> {
   const reply = session.lastReply;
   const body: Record<string, unknown> = { text };
   if (reply && sameCore(reply.speak, text)) {
@@ -133,12 +133,12 @@ async function synthesizeViaGateway(config: GatewayConfig, session: LiveKitTurnS
   return Buffer.from(await response.arrayBuffer());
 }
 
-function sameCore(a: string, b: string): boolean {
+export function sameCore(a: string, b: string): boolean {
   return String(a || "").trim() === String(b || "").trim();
 }
 
 // Slice raw PCM16 mono into fixed-size AudioFrames, decoding LINEAR16 LE.
-function* framePcm(pcm: Buffer): Generator<AudioFrame> {
+export function* framePcm(pcm: Buffer): Generator<AudioFrame> {
   const totalSamples = Math.floor(pcm.byteLength / 2);
   for (let start = 0; start < totalSamples; start += FRAME_SAMPLES) {
     const count = Math.min(FRAME_SAMPLES, totalSamples - start);

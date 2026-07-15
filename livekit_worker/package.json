@@ -9,9 +9,10 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/agent.js start",
-    "dev": "node dist/agent.js dev",
-    "test": "node --test dist/**/*.test.js"
+    "start": "node dist/main.js start",
+    "dev": "node dist/main.js dev",
+    "test": "node --test dist/**/*.test.js",
+    "test:coverage": "npm run build && node --test --experimental-test-coverage --test-coverage-include='dist/**/*.js' --test-coverage-exclude='dist/**/*.test.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 dist/**/*.test.js"
   },
   "dependencies": {
     "@livekit/agents": "^1.4.0",
