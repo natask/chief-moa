@@ -463,6 +463,15 @@ async function main() {
       if (!call.body.snapshot?.snapshot_id || !call.body.snapshot?.captured_at) {
         throw new Error(`initial browser turn did not include its snapshot: ${JSON.stringify(call.body)}`);
       }
+      if (
+        !call.body.page?.observation?.document_id ||
+        !call.body.snapshot?.observation?.document_id ||
+        !Array.isArray(call.body.page?.observation_limitations) ||
+        !Array.isArray(call.body.snapshot?.observation_limitations) ||
+        !call.body.snapshot.elements.some((element) => element.observation_anchor?.anchor_id)
+      ) {
+        throw new Error(`initial browser turn dropped observation anchors or limitations: ${JSON.stringify(call.body)}`);
+      }
     }
 
     const firstTurn = turnCalls[0].body;

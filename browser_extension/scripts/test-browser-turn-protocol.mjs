@@ -29,6 +29,8 @@ test("snapshot normalization creates bounded canonical browser evidence", () => 
     viewport: null,
     capturedAt: "2026-07-15T12:00:00.000Z",
     elementSummaries: [],
+    observation: null,
+    observationLimitations: [],
   });
 
   const raw = normalizeBrowserSnapshot({
@@ -79,6 +81,8 @@ test("client and page evidence preserve the bounded transport shape", () => {
     snapshot_id: "",
     captured_at: "",
     viewport: null,
+    observation: null,
+    observation_limitations: [],
   });
   assert.deepEqual(browserEvidencePage({
     url: "https://example.test",
@@ -86,17 +90,23 @@ test("client and page evidence preserve the bounded transport shape", () => {
     snapshotId: "snap-1",
     capturedAt: "now",
     viewport: { width: 1 },
+    observation: { document_id: "doc-1", page_epoch: 1 },
+    observationLimitations: [{ kind: "canvas_region", element_identity: false }],
   }), {
     url: "https://example.test",
     title: "Example",
     snapshot_id: "snap-1",
     captured_at: "now",
     viewport: { width: 1 },
+    observation: { document_id: "doc-1", page_epoch: 1 },
+    observation_limitations: [{ kind: "canvas_region", element_identity: false }],
   });
 });
 
 test("inline evidence preserves one bounded snapshot and optional screenshot", () => {
   const elements = Array.from({ length: 105 }, (_, i) => ({ i, tag: "button", label: `Button ${i}` }));
+  const limitations = Array.from({ length: 105 }, (_, i) => ({ kind: `limited_${i}`, element_identity: false }));
+  const observation = { document_id: "doc-inline", page_epoch: 4, layout_epoch: 9 };
   const snapshot = normalizeBrowserSnapshot({
     url: "https://example.test/page",
     title: "Example",
@@ -105,6 +115,8 @@ test("inline evidence preserves one bounded snapshot and optional screenshot", (
     capturedAt: "2026-07-15T12:00:00.000Z",
     viewport: { width: 800, height: 600 },
     elements,
+    observation,
+    observationLimitations: limitations,
   });
   const screenshot = { media_type: "image/jpeg", encoding: "base64", data: "exact-jpeg", bytes: 10 };
   const evidence = browserInlineEvidence(snapshot, screenshot);
@@ -113,6 +125,9 @@ test("inline evidence preserves one bounded snapshot and optional screenshot", (
   assert.equal(evidence.snapshot.page_text, "Visible bounded text");
   assert.equal(evidence.snapshot.elements.length, 100);
   assert.equal(evidence.snapshot.element_summaries.length, 100);
+  assert.equal(evidence.snapshot.observation, observation);
+  assert.equal(evidence.snapshot.observation_limitations.length, 100);
+  assert.deepEqual(evidence.snapshot.observation_limitations[0], limitations[0]);
   assert.equal(evidence.screenshot, screenshot);
   assert.deepEqual(browserInlineEvidence(snapshot, null).screenshot, null);
 });
