@@ -64,6 +64,7 @@
     "test:coverage:android-ota-handlers": "node --experimental-test-coverage --test-coverage-include='lib/android-ota-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/android-ota-handlers.test.js",
     "test:coverage:presentation-handlers": "node --experimental-test-coverage --test-coverage-include='lib/presentation-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/presentation-handlers.test.js",
     "test:coverage:supervisor-handlers": "node --experimental-test-coverage --test-coverage-include='lib/supervisor-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/supervisor-handlers.test.js",
+    "test:coverage:session-read-handlers": "node --experimental-test-coverage --test-coverage-include='lib/session-read-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/session-read-handlers.test.js",
     "check:context-quality": "node scripts/check-context-quality.js",
     "test": "node --test \"test/**/*.test.js\"",
     "test:billing": "node --test test/billing-domain.test.js",
