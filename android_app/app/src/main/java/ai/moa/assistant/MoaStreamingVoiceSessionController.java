@@ -12,6 +12,8 @@ import java.util.UUID;
 
 final class MoaStreamingVoiceSessionController {
     private static final String TAG = "MoaStreamingVoice";
+    static final long DRAFT_READY_TIMEOUT_MS = 10000;
+    static final long DRAFT_CONTROL_ACK_TIMEOUT_MS = 6000;
 
     private static final long AUTO_COMMIT_MIN_RECORDING_MS = 650;
     private static final long AUTO_COMMIT_SILENCE_MS = 700;
