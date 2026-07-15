@@ -90,6 +90,7 @@ const { createIntentRuntime } = require("./lib/intent-runtime");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
+const { createAndroidOtaHandlers } = require("./lib/android-ota-handlers");
 const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
 const { createVideoNoteHandlers, createVideoNotesStore, videoInlinePart } = require("./lib/video-notes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
@@ -310,6 +311,10 @@ fs.mkdirSync(BROKER_RESEARCH_REPORTS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
 fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
+const { routeAndroidOta, health: androidOtaHealth } = createAndroidOtaHandlers({
+  androidOta, otaDir: ANDROID_OTA_DIR, authorized, sendJson, cleanError,
+  externalOriginForRequest, recordProductEventBestEffort,
+});
 const browserTurnStore = browserTurns.createBrowserTurnStore({ turnsDir: BROWSER_TURNS_DIR, evidenceDir: BROWSER_EVIDENCE_DIR });
 const browserTurnLifecycle = browserTurns.createBrowserTurnLifecycle({
   answerBrowserEvidence: browserEvidenceAnswer,
@@ -859,41 +864,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/v1/android/updates/latest") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendAndroidOtaManifest(request, response);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/android/updates/latest.apk") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendAndroidOtaApk(response);
-      return;
-    }
-
-    const releaseApkMatch = request.method === "GET"
-      && url.pathname.match(/^\/v1\/android\/updates\/releases\/([^/]+)\.apk$/);
-    if (releaseApkMatch) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendAndroidOtaReleaseApk(response, decodeURIComponent(releaseApkMatch[1]));
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/android/updates/rollback") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleAndroidOtaRollback(request, response);
+    if (await routeAndroidOta(request, response, url)) {
       return;
     }
 
@@ -11823,147 +11794,6 @@ function sendConversation(response, id) {
     return;
   }
   sendJson(response, 200, JSON.parse(fs.readFileSync(filePath, "utf8")));
-}
-
-function readAndroidOtaManifest() {
-  try {
-    return androidOta.buildLatestManifest(ANDROID_OTA_DIR);
-  } catch (error) {
-    console.warn(`android OTA manifest read failed: ${cleanError(error)}`);
-    return null;
-  }
-}
-
-// The module stores download URLs as gateway-relative paths; absolutization
-// against the request origin belongs here at the serving layer. The Android
-// client requires absolute http(s) URLs and drops rollback metadata otherwise.
-function absolutizeAndroidOtaManifest(manifest, origin) {
-  const served = {
-    ...manifest,
-    download_url: `${origin}/v1/android/updates/latest.apk`,
-  };
-  if (manifest.rollback && typeof manifest.rollback === "object") {
-    served.rollback = {
-      ...manifest.rollback,
-      download_url: `${origin}${manifest.rollback.download_url}`,
-    };
-  }
-  return served;
-}
-
-function sendAndroidOtaManifest(request, response) {
-  const manifest = readAndroidOtaManifest();
-  if (!manifest) {
-    sendJson(response, 404, {
-      error: "android update artifact not found",
-      ota_dir: ANDROID_OTA_DIR,
-    });
-    return;
-  }
-
-  const origin = externalOriginForRequest(request);
-  sendJson(response, 200, absolutizeAndroidOtaManifest(manifest, origin));
-}
-
-function sendAndroidOtaApk(response) {
-  let current;
-  try {
-    current = androidOta.readCurrentRelease(ANDROID_OTA_DIR);
-  } catch (error) {
-    console.warn(`android OTA apk resolve failed: ${cleanError(error)}`);
-    current = null;
-  }
-  if (!current) {
-    sendJson(response, 404, { error: "android update artifact not found" });
-    return;
-  }
-  streamApk(response, current.apk_path);
-}
-
-function sendAndroidOtaReleaseApk(response, releaseId) {
-  if (!androidOta.isValidReleaseId(releaseId)) {
-    sendJson(response, 400, { error: "invalid release_id" });
-    return;
-  }
-  const apkPath = androidOta.resolveReleaseApkPath(ANDROID_OTA_DIR, releaseId);
-  if (!apkPath) {
-    sendJson(response, 400, { error: "invalid release_id" });
-    return;
-  }
-  streamApk(response, apkPath);
-}
-
-function streamApk(response, apkPath) {
-  if (!apkPath || !fs.existsSync(apkPath)) {
-    sendJson(response, 404, { error: "android APK not found" });
-    return;
-  }
-  const stat = fs.statSync(apkPath);
-  response.writeHead(200, {
-    "content-type": "application/vnd.android.package-archive",
-    "content-length": stat.size,
-    "cache-control": "no-store",
-  });
-  fs.createReadStream(apkPath).pipe(response);
-}
-
-async function handleAndroidOtaRollback(request, response) {
-  let result;
-  try {
-    result = androidOta.rollbackToPreviousRelease(ANDROID_OTA_DIR);
-  } catch (error) {
-    sendJson(response, 500, { error: cleanError(error) });
-    return;
-  }
-  if (!result.ok) {
-    const status = result.reason === "no_current_release" ? 404 : 409;
-    sendJson(response, status, {
-      error: "rollback unavailable",
-      reason: result.reason,
-      current_release_id: result.current_release_id || null,
-    });
-    return;
-  }
-
-  recordProductEventBestEffort({
-    stream_id: "android-ota",
-    event_type: "android_ota.rollback",
-    actor: { kind: "gateway", id: "admin" },
-    payload: {
-      from_release_id: result.from_release_id,
-      to_release_id: result.to_release_id,
-    },
-  });
-
-  const origin = externalOriginForRequest(request);
-  sendJson(response, 200, {
-    rolled_back: true,
-    from_release_id: result.from_release_id,
-    to_release_id: result.to_release_id,
-    manifest: absolutizeAndroidOtaManifest(result.manifest, origin),
-  });
-}
-
-function androidOtaHealth() {
-  const manifest = readAndroidOtaManifest();
-  if (!manifest) {
-    return {
-      configured: false,
-      dir: ANDROID_OTA_DIR,
-      endpoint: "/v1/android/updates/latest",
-    };
-  }
-  return {
-    configured: true,
-    dir: ANDROID_OTA_DIR,
-    endpoint: "/v1/android/updates/latest",
-    version_code: manifest.version_code,
-    version_name: manifest.version_name,
-    release_id: manifest.release_id,
-    built_at: manifest.built_at,
-    git_sha: manifest.git_sha,
-    rollback_available: Boolean(manifest.rollback_available),
-  };
 }
 
 function listAgentRuns(limit) {
