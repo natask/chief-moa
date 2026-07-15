@@ -20,6 +20,7 @@ import {
 } from "./browser-agent-loop-policy.js";
 import {
   browserEvidencePage,
+  browserInlineEvidence,
   browserTurnActions,
   browserTurnClient,
   browserTurnEvidenceRequestId,
@@ -3468,6 +3469,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   throwIfAborted(signal);
   const screenshot = await captureScreenshot(tabId);
   const screenshotEvidence = browserScreenshotEvidence(screenshot);
+  const inlineEvidence = browserInlineEvidence(snapshot, screenshotEvidence);
   const delegationEnvelope = role === "delegate" && options.delegationConfirmed === true
     ? browserDelegationEnvelope(text, snapshot.url)
     : null;
@@ -3496,6 +3498,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
       modality: inputKind,
       input: { type: inputKind, text },
       page: browserEvidencePage(snapshot),
+      ...inlineEvidence,
       intent_hint: "browser_page_question",
       ...(role ? { role } : {}),
       ...(delegationEnvelope ? { delegation_envelope: delegationEnvelope } : {}),
@@ -3515,17 +3518,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
         evidence_request_id: evidenceRequestId,
         instruction: text,
         page: browserEvidencePage(snapshot),
-        snapshot: {
-          snapshot_id: snapshot.snapshotId,
-          url: snapshot.url,
-          title: snapshot.title,
-          page_text: snapshot.pageText,
-          elements: snapshot.elements.slice(0, MAX_ELEMENTS),
-          element_summaries: snapshot.elementSummaries.slice(0, MAX_ELEMENTS),
-          viewport: snapshot.viewport,
-          captured_at: snapshot.capturedAt,
-        },
-        screenshot: screenshotEvidence,
+        ...inlineEvidence,
         screen: snapToScreen(snapshot),
       },
     });

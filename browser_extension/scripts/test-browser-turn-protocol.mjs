@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   browserEvidencePage,
+  browserInlineEvidence,
   browserTurnActions,
   browserTurnClient,
   browserTurnEvidenceRequestId,
@@ -92,6 +93,28 @@ test("client and page evidence preserve the bounded transport shape", () => {
     captured_at: "now",
     viewport: { width: 1 },
   });
+});
+
+test("inline evidence preserves one bounded snapshot and optional screenshot", () => {
+  const elements = Array.from({ length: 105 }, (_, i) => ({ i, tag: "button", label: `Button ${i}` }));
+  const snapshot = normalizeBrowserSnapshot({
+    url: "https://example.test/page",
+    title: "Example",
+    pageText: "Visible bounded text",
+    snapshotId: "snap-exact",
+    capturedAt: "2026-07-15T12:00:00.000Z",
+    viewport: { width: 800, height: 600 },
+    elements,
+  });
+  const screenshot = { media_type: "image/jpeg", encoding: "base64", data: "exact-jpeg", bytes: 10 };
+  const evidence = browserInlineEvidence(snapshot, screenshot);
+
+  assert.equal(evidence.snapshot.snapshot_id, "snap-exact");
+  assert.equal(evidence.snapshot.page_text, "Visible bounded text");
+  assert.equal(evidence.snapshot.elements.length, 100);
+  assert.equal(evidence.snapshot.element_summaries.length, 100);
+  assert.equal(evidence.screenshot, screenshot);
+  assert.deepEqual(browserInlineEvidence(snapshot, null).screenshot, null);
 });
 
 test("turn identity and status paths accept protocol aliases without leaking origins", () => {

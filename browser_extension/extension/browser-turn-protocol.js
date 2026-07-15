@@ -44,6 +44,22 @@ function browserEvidencePage(snapshot) {
   };
 }
 
+function browserInlineEvidence(snapshot, screenshot) {
+  return {
+    snapshot: {
+      snapshot_id: snapshot.snapshotId,
+      url: snapshot.url,
+      title: snapshot.title,
+      page_text: snapshot.pageText,
+      elements: snapshot.elements.slice(0, MAX_ELEMENTS),
+      element_summaries: snapshot.elementSummaries.slice(0, MAX_ELEMENTS),
+      viewport: snapshot.viewport,
+      captured_at: snapshot.capturedAt,
+    },
+    screenshot,
+  };
+}
+
 function browserTurnId(data) {
   return data?.id || data?.turn_id || data?.browser_turn_id || data?.turn?.id || data?.turn?.turn_id || null;
 }
@@ -139,6 +155,7 @@ function browserTurnFailed(data) {
 
 export {
   browserEvidencePage,
+  browserInlineEvidence,
   browserTurnActions,
   browserTurnClient,
   browserTurnEvidenceRequestId,

@@ -1,10 +1,10 @@
 // Quiet headless smoke for the unified browser-agent turn path.
 //
 // Loads the REAL extension in Chrome for Testing, points it at a throwaway local
-// gateway, and proves page/current-page turns use /v1/browser/turns +
-// /v1/browser/evidence instead of the generic voice-turn route. The fake
-// gateway returns an inert action proposal; the smoke confirms the page was not
-// acted on.
+// gateway, and proves modern page/current-page turns send their snapshot and
+// optional screenshot in the initial /v1/browser/turns request. A second leg
+// preserves the older needs_evidence negotiation. The fake gateway returns an
+// inert action proposal; the smoke confirms the page was not acted on.
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -103,6 +103,15 @@ function serve() {
       const id = `turn-${turnSeq}`;
       calls.push({ method: req.method, path: url.pathname, body });
       turnById.set(id, body);
+      if (turnSeq === 1) {
+        sendJson(res, 200, {
+          id,
+          status: "completed",
+          text: `Unified browser turn answer: ${body.instruction || body.transcript || "page"}`,
+          actions: [{ action: "click", index: 0, reason: "inert proposal smoke" }],
+        });
+        return;
+      }
       sendJson(res, 202, {
         id,
         status: "needs_evidence",
@@ -390,6 +399,15 @@ async function main() {
     await evaluate(workerCdp, `chrome.tabs.sendMessage(${tabId}, { cmd: "open" })`);
     await waitForEval(pageCdp, `Boolean(document.querySelector("#agee-input"))`);
     const contentCtx = await resolveContentContext(pageCdp, isolatedContexts);
+    await evaluate(pageCdp, `
+      (() => {
+        const select = document.querySelector("#agee-mode-select");
+        if (!select) return false;
+        select.value = "help";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        return select.value === "help";
+      })()
+    `, { contextId: contentCtx });
 
     await evaluate(pageCdp, installProgressRecorderExpr(), { contextId: contentCtx });
     await evaluate(pageCdp, submitTypedExpr("summarize this page"), { contextId: contentCtx });
@@ -417,7 +435,7 @@ async function main() {
       "describe browser turn call",
     );
     await waitForCondition(
-      () => gateway.calls.filter((call) => /^\/v1\/browser\/turns\/turn-\d+\/status$/.test(call.path)).length >= 2,
+      () => gateway.calls.filter((call) => /^\/v1\/browser\/turns\/turn-\d+\/status$/.test(call.path)).length >= 1,
       20000,
       "describe browser turn status poll",
     );
@@ -425,48 +443,64 @@ async function main() {
     const evidenceCalls = gateway.calls.filter((call) => call.path === "/v1/browser/evidence");
     const turnCalls = gateway.calls.filter((call) => call.path === "/v1/browser/turns");
     const voiceCalls = gateway.calls.filter((call) => call.path === "/v1/voice/turns");
-    if (evidenceCalls.length < 2 || turnCalls.length < 2) {
-      throw new Error(`expected evidence+turn calls for typed and describe legs: ${JSON.stringify(gateway.calls)}`);
+    if (evidenceCalls.length !== 1 || turnCalls.length !== 2) {
+      throw new Error(`expected one modern turn leg and one legacy evidence leg: ${JSON.stringify(gateway.calls)}`);
     }
     if (voiceCalls.length) {
       throw new Error(`page-context turns incorrectly used /v1/voice/turns: ${JSON.stringify(voiceCalls)}`);
     }
-    for (const call of evidenceCalls) {
+    for (const call of turnCalls) {
       const screenshot = call.body.screenshot;
-      if (!screenshot || typeof screenshot !== "object") {
-        throw new Error(`browser evidence did not include screenshot status: ${JSON.stringify(call.body)}`);
+      if (!("screenshot" in call.body) || (screenshot !== null && typeof screenshot !== "object")) {
+        throw new Error(`initial browser turn did not include optional screenshot status: ${JSON.stringify(call.body)}`);
       }
-      if (screenshot.encoding === "base64" && String(screenshot.data || "").length > MAX_SCREENSHOT_BASE64_CHARS) {
+      if (screenshot?.encoding === "base64" && String(screenshot.data || "").length > MAX_SCREENSHOT_BASE64_CHARS) {
         throw new Error(`inline screenshot exceeded cap: ${String(screenshot.data || "").length}`);
       }
-      if (screenshot.encoding === "omitted" && screenshot.data) {
+      if (screenshot?.encoding === "omitted" && screenshot.data) {
         throw new Error(`omitted screenshot still included base64 data: ${JSON.stringify(screenshot)}`);
+      }
+      if (!call.body.snapshot?.snapshot_id || !call.body.snapshot?.captured_at) {
+        throw new Error(`initial browser turn did not include its snapshot: ${JSON.stringify(call.body)}`);
       }
     }
 
-    const firstEvidence = evidenceCalls[0].body;
-    if (
-      !firstEvidence?.snapshot?.snapshot_id ||
-      !firstEvidence?.snapshot?.viewport ||
-      !firstEvidence?.snapshot?.captured_at ||
-      !Array.isArray(firstEvidence?.snapshot?.element_summaries) ||
-      !firstEvidence.snapshot.element_summaries.length ||
-      !String(firstEvidence?.snapshot?.page_text || "").includes("Use this page for a low-risk extension smoke test")
-    ) {
-      throw new Error(`browser evidence payload is missing snapshot fields: ${JSON.stringify(firstEvidence)}`);
-    }
     const firstTurn = turnCalls[0].body;
+    if (
+      !firstTurn?.snapshot?.viewport ||
+      !Array.isArray(firstTurn?.snapshot?.element_summaries) ||
+      !firstTurn.snapshot.element_summaries.length ||
+      !String(firstTurn?.snapshot?.page_text || "").includes("Use this page for a low-risk extension smoke test")
+    ) {
+      throw new Error(`initial browser turn payload is missing snapshot fields: ${JSON.stringify(firstTurn)}`);
+    }
     if (firstTurn.input?.text !== "summarize this page" || firstTurn.intent_hint !== "browser_page_question") {
       throw new Error(`browser turn payload did not carry input/intent hint: ${JSON.stringify(firstTurn)}`);
     }
-    if (firstEvidence.turn_id !== "turn-1" || firstEvidence.evidence_request_id !== "evreq-1") {
-      throw new Error(`browser evidence payload was not linked to the turn/request: ${JSON.stringify(firstEvidence)}`);
+    if (firstTurn.role !== "help") {
+      throw new Error(`explicit Help turn lost its browser role: ${JSON.stringify(firstTurn)}`);
+    }
+
+    const legacyTurn = turnCalls[1].body;
+    const legacyEvidence = evidenceCalls[0].body;
+    if (legacyEvidence.turn_id !== "turn-2" || legacyEvidence.evidence_request_id !== "evreq-2") {
+      throw new Error(`legacy evidence payload was not linked to the turn/request: ${JSON.stringify(legacyEvidence)}`);
+    }
+    if (
+      JSON.stringify(legacyEvidence.snapshot) !== JSON.stringify(legacyTurn.snapshot) ||
+      JSON.stringify(legacyEvidence.screenshot) !== JSON.stringify(legacyTurn.screenshot)
+    ) {
+      throw new Error(`legacy fallback did not reuse the exact initial evidence: ${JSON.stringify({ legacyTurn, legacyEvidence })}`);
+    }
+    const modernFollowups = evidenceCalls.filter((call) => call.body.turn_id === "turn-1");
+    if (modernFollowups.length) {
+      throw new Error(`modern completed turn unexpectedly sent follow-up evidence: ${JSON.stringify(modernFollowups)}`);
     }
 
     console.log(
       `unified browser-agent smoke passed: id=${extensionId}, ` +
-        `${evidenceCalls.length} evidence call(s), ${turnCalls.length} browser turn call(s), ` +
-        `status polling used, action proposal stayed inert, no window shown.`,
+        `modern inline turn completed in one request/response leg, legacy needs_evidence reused exact evidence, ` +
+        `action proposal stayed inert, no window shown.`,
     );
   } finally {
     pageCdp?.close();
