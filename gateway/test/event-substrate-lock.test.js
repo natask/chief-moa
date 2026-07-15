@@ -266,6 +266,48 @@ test("stale malformed locks recover but symlink and nonregular boundaries fail c
   }
 });
 
+test("stale reaper claims bind the exact observed lock identity", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-forged-claim-"));
+  try {
+    const owner = {
+      owner_id: "stale-owner",
+      pid: 999_999_999,
+      host: os.hostname(),
+      process_instance_id: "stale-process-instance",
+      acquired_at: new Date(0).toISOString(),
+    };
+    const canonicalPath = lockPath(dataDir);
+    fs.writeFileSync(canonicalPath, `${JSON.stringify(owner)}\n`, { mode: 0o600 });
+    const canonical = fs.statSync(canonicalPath);
+    const claimPath = `${canonicalPath}.claim-${owner.owner_id}-${canonical.dev}-${canonical.ino}`;
+    fs.writeFileSync(claimPath, `${JSON.stringify({
+      owner_id: "forged-claim",
+      pid: process.pid,
+      host: os.hostname(),
+      process_instance_id: "forged-process-instance",
+      acquired_at: new Date().toISOString(),
+      observed_owner_id: owner.owner_id,
+      observed_dev: canonical.dev + 1,
+      observed_ino: canonical.ino,
+    })}\n`, { mode: 0o600 });
+    const old = new Date(Date.now() - 10_000);
+    fs.utimesSync(canonicalPath, old, old);
+
+    const store = createEventSubstrateStore({
+      dataDir,
+      originId: "child-process-test",
+      jsonLockTimeoutMs: 200,
+      jsonLockStaleMs: 100,
+    });
+    await assert.rejects(
+      store.appendEvent(input("forged-reaper-claim", 0)),
+      { code: "EVENT_SUBSTRATE_UNSAFE_PATH" },
+    );
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("process-instance recovery honors configured age and never reaps the exact live instance", async () => {
   const priorInstanceDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-prior-instance-"));
   const exactInstanceDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-exact-instance-"));
