@@ -130,6 +130,11 @@
       corrupt-state tests; make default normalization idempotent so an untouched
       profile is not falsely marked overridden. Verified with a focused gate at
       99.40% lines, 91.76% branches, and 100% functions.
+- [x] 2.26 Add exhaustive account-connection creation, OAuth, secret-form,
+      refresh, health-check, notification, persistence, reauthorization,
+      disable, and disconnect tests; persist notification reasons so duplicate
+      queued notifications coalesce correctly. Verified with a focused gate at
+      99.30% lines, 92.96% branches, and 95.40% functions.
 
 ## 3. Other Oversized Surfaces
 
