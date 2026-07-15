@@ -144,6 +144,11 @@
       projection tests; make pet sprite normalization idempotent and repair
       inline manifest previews. Verified with a focused gate at 98.59% lines,
       90.15% branches, and 98.46% functions.
+- [x] 2.29 Add exhaustive event-substrate normalization, JSON/PostgreSQL,
+      idempotency, compare-and-append, filtering, transaction, stream-lock,
+      stale-reaper, filesystem-boundary, and retry tests with a focused 90%
+      line/branch/function gate. Verified at 97.56% lines, 90.27% branches, and
+      98.06% functions.
 
 ## 3. Other Oversized Surfaces
 
