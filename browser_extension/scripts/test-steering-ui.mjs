@@ -62,6 +62,7 @@ assert.match(contentSource, /if \(state\.commitWhenReady\) commitLiveVoiceTurn\(
 assert.match(backgroundSource, /all_branches_context: false/);
 assert.match(contentSource, /contextAction: state\.contextControls\.action/);
 assert.match(backgroundSource, /options\.contextAction \? \{ context_action: options\.contextAction, all_branches_context: false \}/);
+assert.match(backgroundSource, /files: \["ui-spec-runtime\.js", "proactive-helper\.js", "steering-ui\.js", "content\.js"\]/);
 assert.match(backgroundSource, /activeThreadBranch\(cfg\)/);
 assert.doesNotMatch(contentSource, /agee-mode-select|data-agent-mode-control/);
 assert.match(contentSource, /state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/);

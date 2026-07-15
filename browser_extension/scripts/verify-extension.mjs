@@ -122,8 +122,8 @@ if (manifest.manifest_version !== 3) {
 // Pick the next version with scripts/release/next-extension-version.sh.
 
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
-if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js")) {
-  throw new Error("proactive-helper.js must load before content.js");
+if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js") || mainContentScript.js.indexOf("steering-ui.js") < 0 || mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js")) {
+  throw new Error("proactive-helper.js and steering-ui.js must load before content.js");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -199,7 +199,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "steering-ui\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
