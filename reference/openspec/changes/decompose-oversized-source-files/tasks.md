@@ -168,6 +168,11 @@
       missing-audio, non-file, and byte-stream tests with a focused 90%
       line/branch/function gate. Verified at 100% lines, 90.44% branches, and
       97.56% functions.
+- [x] 2.34 Add exhaustive voice-chunker option, punctuation, Latin-guard,
+      hard-split, bracket-atomicity, force-break, style, tag, literal-bracket,
+      code-fence, and dynamic-cap tests with a focused 90%
+      line/branch/function gate. Verified at 97.08% lines, 91.82% branches, and
+      97.22% functions.
 
 ## 3. Other Oversized Surfaces
 
