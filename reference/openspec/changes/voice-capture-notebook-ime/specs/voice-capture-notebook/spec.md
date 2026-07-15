@@ -115,6 +115,9 @@ coaching overlay while preserving the saved base persona.
 - **WHEN** an authenticated client reads a Note selection before capture
 - **THEN** the gateway returns `/v1/audio-notes` as the capture endpoint
 - **AND** reports that provider work, assistant replies, and agent launch are forbidden
+- **AND** a streaming-session attempt terminates with the same storage-only
+  guidance before provider construction, provider socket startup, streaming STT,
+  or conversational audio-file creation
 
 #### Scenario: Coach reverts cleanly to Ask
 - **WHEN** a device changes from Coach to Ask

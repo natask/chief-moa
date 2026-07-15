@@ -13,6 +13,7 @@ const {
 } = require("./voice-providers");
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
 const { canonicalVoice } = require("./profile-options");
+const { createVoiceSessionAdmission } = require("./voice-session-admission");
 
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
@@ -38,11 +39,15 @@ function createVoiceSessionServer(options) {
   const agentProfile = options?.agentProfile || null;
   const contextProvider = typeof options?.contextProvider === "function" ? options.contextProvider : null;
   const toolHandler = typeof options?.toolHandler === "function" ? options.toolHandler : null;
-  const voiceProvider = options?.voiceProvider || createVoiceProvider({
-    env: options?.env || process.env,
-    systemPrompt: options?.systemPrompt,
-    agentProfile: options?.agentProfile,
-    reasoner: typeof options?.reasoner === "function" ? options.reasoner : null,
+  const sessionAdmission = createVoiceSessionAdmission({
+    ...options,
+    sanitizeId,
+    defaultVoiceProviderFactory: () => createVoiceProvider({
+      env: options?.env || process.env,
+      systemPrompt: options?.systemPrompt,
+      agentProfile: options?.agentProfile,
+      reasoner: typeof options?.reasoner === "function" ? options.reasoner : null,
+    }),
   });
   fs.mkdirSync(sessionsDir, { recursive: true });
 
@@ -56,7 +61,7 @@ function createVoiceSessionServer(options) {
       request,
       sessionsDir,
       providerEventsFile,
-      voiceProvider,
+      sessionAdmission,
       agentProfile,
       contextProvider,
       toolHandler,
@@ -75,7 +80,7 @@ function createVoiceSessionServer(options) {
     sessionsDir,
     providerEventsFile,
     status() {
-      return voiceProvider.status();
+      return sessionAdmission.status();
     },
     activityStatus() {
       return summarizeVoiceActivity(connections);
@@ -97,8 +102,10 @@ class VoiceSessionConnection {
     this.request = options.request;
     this.sessionsDir = options.sessionsDir;
     this.providerEventsFile = options.providerEventsFile;
-    this.voiceProvider = options.voiceProvider;
-    this.agentProfile = options.agentProfile || null;
+    this.sessionAdmission = options.sessionAdmission || createVoiceSessionAdmission({
+      voiceProvider: options.voiceProvider, agentProfile: options.agentProfile, sanitizeId,
+    });
+    this.voiceProvider = null;
     this.contextProvider = options.contextProvider || null;
     this.toolHandler = options.toolHandler || null;
     this.onTurnCompleted = options.onTurnCompleted || null;
@@ -177,23 +184,6 @@ class VoiceSessionConnection {
     this.ws.on("error", () => {
       void this.closeCurrentTurn("error");
     });
-  }
-
-  profileVersion(deviceId = "") {
-    const value = this.agentProfile && typeof this.agentProfile.currentVersion === "function"
-      ? this.agentProfile.currentVersion(deviceId ? { deviceId } : {})
-      : "profile_v0001";
-    try {
-      return sanitizeId(value, "profile_version");
-    } catch {
-      return "profile_v0001";
-    }
-  }
-
-  effectiveProfile(deviceId = "") {
-    return this.agentProfile && typeof this.agentProfile.effective === "function"
-      ? this.agentProfile.effective(deviceId ? { deviceId } : {})
-      : null;
   }
 
   async handleText(data) {
@@ -309,10 +299,20 @@ class VoiceSessionConnection {
     const playbackPolicy = normalizePlaybackPolicy(event.playback_policy || event.playbackPolicy);
     const allBranchesContext = event.all_branches_context === true || event.allBranchesContext === true;
     const deviceId = sanitizeLooseId(event.device_id || event.deviceId || event.client?.device_id || event.client?.deviceId || "");
+    const admitted = await this.sessionAdmission.admit({
+      deviceId, sessionId, branchId, turnId, sendEvent: (payload) => this.sendEvent(payload),
+      onDenied: () => { this.earlyAudio = []; this.earlyAudioBytes = 0; },
+    });
+    if (!admitted.provider) {
+      return;
+    }
     const startedAt = nowIso();
-    const profileVersion = this.profileVersion(deviceId);
-    const effectiveProfile = effectiveProfileForSession(this.effectiveProfile(deviceId), event);
+    const profileVersion = this.sessionAdmission.profileVersion(deviceId);
+    const effectiveProfile = this.sessionAdmission.applyProfile(
+      effectiveProfileForSession(this.sessionAdmission.effectiveProfile(deviceId), event), admitted.admission,
+    );
     const persona = personaForSession(event);
+    this.voiceProvider = admitted.provider;
     const providerStatus = this.voiceProvider.status();
     fs.mkdirSync(turnDir, { recursive: true });
 
@@ -2257,8 +2257,6 @@ function estimatePcmBytes(pcmMs, format) {
   return Math.round((ms / 1000) * sampleRate * channels * 2);
 }
 
-// Only the two turn_progress stages the clients understand are accepted; an
-// unknown stage is ignored so the running stage is left unchanged.
 function normalizeProgressStage(stage) {
   const value = String(stage || "").trim().toLowerCase();
   return value === "reasoning" || value === "tts" ? value : "";
@@ -2273,7 +2271,5 @@ module.exports = {
   TurnSupersededError,
   createVoiceSessionServer,
   generatePcm16Tone: generateProviderTone,
-  // Exported for in-process smoke tests that drive the connection without a real
-  // HTTP upgrade. Not part of the runtime API surface.
   VoiceSessionConnection,
 };

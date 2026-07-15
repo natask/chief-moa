@@ -567,14 +567,14 @@ if (ACCOUNT_HEALTH_INTERVAL_MS > 0) {
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
   systemPrompt: SYSTEM_PROMPT,
-  // The voice provider reads the effective profile's `voice` per session, so a
-  // spoken "switch to a female voice" takes effect on the next turn, no restart.
   agentProfile,
+  voiceModeAdmission: (deviceId) => deviceId
+    ? voiceModes.admit(deviceId)
+    : { mode: "ask", version: "voice_mode_default", routing: routingFor("ask") },
+  applyVoiceModeToProfile: (profile, admission) => voiceModes.applyToProfile(profile, admission),
   contextProvider: voiceLiveContextPrompt,
   toolHandler: handleLiveVoiceToolCall,
   onTurnCompleted: recordStreamingVoiceTurn,
-  // Cascaded pipeline: after Chirp STT, run the gateway's durable LLM turn so
-  // the Cloud TTS leg can speak the reply. Only used by the cascaded provider.
   reasoner: runCascadedVoiceReasoning,
 });
 
