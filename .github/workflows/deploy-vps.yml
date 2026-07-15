@@ -86,4 +86,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git push --atomic --force origin "${GITHUB_SHA}:refs/heads/vps-deploy"
+          git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
+          test "$(git rev-parse refs/remotes/origin/master)" = "$GITHUB_SHA"
+          git push --atomic origin "${GITHUB_SHA}:refs/heads/vps-deploy"
