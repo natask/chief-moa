@@ -231,6 +231,13 @@
       tests plus the end-to-end device-hub smoke. Enforce a focused 90%
       line/branch/function gate, verified at 100% lines, 98.86% branches, and
       100% functions. Reduce `server.js` to 14,179 lines.
+- [x] 2.43 Extract authenticated legacy CDP and multi-step browser-agent task
+      list, create, claim, item-read, step, finish, and receipt routing from
+      `server.js`; add exhaustive authorization, query, validation, empty-queue,
+      run-projection, receipt, planner-failure, typed-error, fallback, path, and
+      default-clock tests plus both browser-task end-to-end smokes. Enforce a
+      focused 90% line/branch/function gate, verified at 100% lines, 96.61%
+      branches, and 100% functions. Reduce `server.js` to 13,893 lines.
 
 ## 3. Other Oversized Surfaces
 
