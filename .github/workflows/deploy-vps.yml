@@ -1,18 +1,17 @@
 name: Deploy VPS gateway
 
-# Candidate verification for the DigitalOcean gateway. This workflow does not
-# confer apply authority: runtime promotion requires an M4 evidence manifest.
+# Candidate verification and publication for the DigitalOcean gateway.
 #
-# GitHub runners cannot reach the isolated runtime preview or the droplet, so
-# CI stops at candidate verification. An operator/control-plane worker may
-# advance a candidate only after producing the exact-commit M4 evidence
-# manifest consumed by scripts/vps/update.sh.
+# Pull requests are verify-only. A successful master push atomically advances
+# `vps-deploy` to the exact verified commit. The droplet still requires the M4
+# evidence manifest consumed by scripts/vps/update.sh before active mutation.
 
 on:
   push:
     branches:
       - master
     paths:
+      - ".github/scripts/assert-deploy-vps-contract.rb"
       - ".github/workflows/deploy-vps.yml"
       - "gateway/**"
       - "docker-compose.yml"
@@ -22,6 +21,7 @@ on:
   # branch green before master ever moves; only the ref publish is push-gated.
   pull_request:
     paths:
+      - ".github/scripts/assert-deploy-vps-contract.rb"
       - ".github/workflows/deploy-vps.yml"
       - "gateway/**"
       - "docker-compose.yml"
@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   deploy:
-    name: Verify gateway and mark deployable
+    name: Verify gateway
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -50,6 +50,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+
+      - name: Assert deployment workflow contract
+        shell: bash
+        run: ruby .github/scripts/assert-deploy-vps-contract.rb
 
       - name: Verify gateway
         shell: bash
@@ -63,11 +67,23 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run check
 
+  publish:
+    name: Publish verified gateway ref
+    needs: deploy
+    if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out verified commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+
       - name: Publish vps-deploy ref
-        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p candidate-evidence
-          printf '%s\n' "$(git rev-parse HEAD)" > candidate-evidence/commit-sha.txt
-          printf '%s\n' "Verification is not preview/apply authority." > candidate-evidence/README.txt
+          git push --atomic --force origin "${GITHUB_SHA}:refs/heads/vps-deploy"
