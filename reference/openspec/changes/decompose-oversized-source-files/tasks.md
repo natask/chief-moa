@@ -163,6 +163,11 @@
       active-collision, polling-bound, timeout, sleep, abort, cleanup, and
       aggregate-failure tests with a focused 90% line/branch/function gate.
       Verified at 100% lines, 91.30% branches, and 100% functions.
+- [x] 2.33 Add exhaustive audio-note format, metadata, reload, quota,
+      corruption, request-stream, body-limit, product-event, malformed-ID,
+      missing-audio, non-file, and byte-stream tests with a focused 90%
+      line/branch/function gate. Verified at 100% lines, 90.44% branches, and
+      97.56% functions.
 
 ## 3. Other Oversized Surfaces
 
