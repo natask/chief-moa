@@ -224,11 +224,15 @@ async function startVideoCapture({ videoSessionId, streamId, maxMs, maxBytes }) 
       maxBytes: Number(maxBytes) > 0 ? Number(maxBytes) : 20 * 1024 * 1024,
       maxTimer: null,
       stopWaiters: [],
+      recorderStopped: false,
     };
     activeVideoCapture = capture;
 
     recorder.ondataavailable = (event) => {
-      if (activeVideoCapture !== capture || capture.discarded) return;
+      // MediaRecorder queues its final dataavailable before stop. Manual stop
+      // clears the active slot so another capture can start while this one
+      // uploads, but the terminal chunk still belongs to this capture.
+      if (capture.discarded || capture.recorderStopped) return;
       if (!event.data || event.data.size <= 0) return;
       capture.chunks.push(event.data);
       capture.totalBytes += event.data.size;
@@ -242,6 +246,8 @@ async function startVideoCapture({ videoSessionId, streamId, maxMs, maxBytes }) 
       }
     };
     recorder.onstop = () => {
+      if (capture.recorderStopped) return;
+      capture.recorderStopped = true;
       if (capture.maxTimer) clearTimeout(capture.maxTimer);
       stopVideoTracks(capture);
       for (const resolve of capture.stopWaiters.splice(0)) resolve();
@@ -280,12 +286,13 @@ async function startVideoCapture({ videoSessionId, streamId, maxMs, maxBytes }) 
 }
 
 function waitForVideoRecorderStop(capture) {
-  if (!capture.recorder || capture.recorder.state === "inactive") return Promise.resolve();
+  if (!capture.recorder || capture.recorderStopped) return Promise.resolve();
   return new Promise((resolve) => {
     capture.stopWaiters.push(resolve);
     try {
       if (capture.recorder.state !== "inactive") capture.recorder.stop();
     } catch {
+      capture.stopWaiters = capture.stopWaiters.filter((waiter) => waiter !== resolve);
       resolve();
     }
   });
