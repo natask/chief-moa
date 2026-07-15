@@ -72,6 +72,9 @@
       128 passing JVM tests.
 - [ ] 4.7 Merge JVM and emulator/device evidence and raise the Android hard gate
       to at least 90% lines, branches, and methods.
+- [x] 4.7a Extract Android agent-run tracking from overlay orchestration with a
+      focused 90% gate. Verified at 98.96% lines, 95.95% branches, and 100%
+      methods; reduce `OverlayService.java` to 3,981 lines.
 
 ## Verification
 

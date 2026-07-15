@@ -154,11 +154,10 @@ public final class OverlayService extends Service {
     private boolean currentStreamingTurnCommitRequested;
     private String currentStreamingTranscript = "";
     private final MoaSpeechTranscriptAccumulator streamingTranscriptAccumulator = new MoaSpeechTranscriptAccumulator();
-    private final Map<String, AgentRunState> activeAgentRuns = new HashMap<>();
+    private final MoaAgentRunTracker agentRuns = new MoaAgentRunTracker();
     private boolean agentRunPolling;
     private boolean nextManualVoiceFollowsActiveRun;
     private boolean nextStreamingTurnFollowsActiveRun;
-    private String lastActiveAgentRunId = "";
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
     // Set when a voice-first tap starts the loop, cleared once the first turn
@@ -2447,51 +2446,13 @@ public final class OverlayService extends Service {
         if (response == null) {
             return;
         }
-
-        JSONObject run = response.optJSONObject("run");
-        if (run != null) {
-            trackAgentRun(run);
-        }
-
-        JSONObject singleRun = response.optJSONObject("agent_run");
-        if (singleRun != null) {
-            trackAgentRun(singleRun);
-        }
-
-        JSONArray runs = response.optJSONArray("agent_runs");
-        if (runs != null) {
-            for (int i = 0; i < runs.length(); i++) {
-                JSONObject item = runs.optJSONObject(i);
-                if (item != null) {
-                    trackAgentRun(item);
-                }
-            }
-        }
-
+        agentRuns.trackResponse(response);
         updateAgentRunStatus();
         ensureAgentRunPolling();
     }
 
-    private void trackAgentRun(JSONObject run) {
-        String id = safe(run.optString("id", ""));
-        if (id.isEmpty()) {
-            return;
-        }
-
-        AgentRunState state = activeAgentRuns.get(id);
-        if (state == null) {
-            state = new AgentRunState(id);
-            activeAgentRuns.put(id, state);
-        }
-        lastActiveAgentRunId = id;
-        state.harness = safe(run.optString("harness", state.harness));
-        state.status = safe(run.optString("status", state.status));
-        state.outputPreview = safe(run.optString("output_preview", state.outputPreview));
-        state.active = run.optBoolean("active", isActiveRunStatus(state.status));
-    }
-
     private void ensureAgentRunPolling() {
-        if (agentRunPolling || activeAgentRuns.isEmpty()) {
+        if (agentRunPolling || !agentRuns.hasRuns()) {
             return;
         }
         agentRunPolling = true;
@@ -2499,56 +2460,36 @@ public final class OverlayService extends Service {
     }
 
     private void pollAgentRunsOnce() {
-        if (activeAgentRuns.isEmpty()) {
+        if (!agentRuns.hasRuns()) {
             agentRunPolling = false;
             updateAgentRunStatus();
             return;
         }
 
-        List<String> ids = new ArrayList<>(activeAgentRuns.keySet());
+        List<String> ids = agentRuns.ids();
         new Thread(() -> {
-            List<AgentRunState> updates = new ArrayList<>();
+            List<MoaAgentRunTracker.State> updates = new ArrayList<>();
             for (String id : ids) {
                 try {
                     JSONObject response = gatewayClient().agentRunDetail(id);
                     JSONObject run = response.optJSONObject("run");
                     if (run != null) {
-                        AgentRunState state = new AgentRunState(id);
-                        state.harness = safe(run.optString("harness", ""));
-                        state.status = safe(run.optString("status", ""));
-                        state.outputPreview = safe(run.optString("output_preview", ""));
-                        state.active = run.optBoolean("active", isActiveRunStatus(state.status));
-                        updates.add(state);
+                        updates.add(MoaAgentRunTracker.pollUpdate(id, run));
                     }
                 } catch (Exception error) {
-                    AgentRunState state = new AgentRunState(id);
-                    state.status = "unknown";
-                    state.outputPreview = cleanError(error);
-                    state.active = false;
-                    updates.add(state);
+                    updates.add(MoaAgentRunTracker.failedPollUpdate(id, cleanError(error)));
                 }
             }
             mainHandler.post(() -> applyAgentRunUpdates(updates));
         }, "moa-agent-run-poll").start();
     }
 
-    private void applyAgentRunUpdates(List<AgentRunState> updates) {
-        for (AgentRunState update : updates) {
-            AgentRunState previous = activeAgentRuns.get(update.id);
-            if (previous == null) {
-                continue;
-            }
-            previous.harness = update.harness.isEmpty() ? previous.harness : update.harness;
-            previous.status = update.status.isEmpty() ? previous.status : update.status;
-            previous.outputPreview = update.outputPreview;
-            previous.active = update.active;
-            if (isTerminalRunStatus(previous.status)) {
-                addMessage(true, agentRunCompletionText(previous));
-                activeAgentRuns.remove(previous.id);
-            }
+    private void applyAgentRunUpdates(List<MoaAgentRunTracker.State> updates) {
+        for (String completion : agentRuns.applyUpdates(updates)) {
+            addMessage(true, completion);
         }
         updateAgentRunStatus();
-        if (activeAgentRuns.isEmpty()) {
+        if (!agentRuns.hasRuns()) {
             agentRunPolling = false;
         } else {
             mainHandler.postDelayed(this::pollAgentRunsOnce, 2500);
@@ -2568,53 +2509,11 @@ public final class OverlayService extends Service {
     }
 
     private String activeFollowUpRunId() {
-        if (!lastActiveAgentRunId.isEmpty() && activeAgentRuns.containsKey(lastActiveAgentRunId)) {
-            return lastActiveAgentRunId;
-        }
-        for (String id : activeAgentRuns.keySet()) {
-            return id;
-        }
-        return "";
+        return agentRuns.activeFollowUpRunId();
     }
 
     private String agentRunStatusText() {
-        if (activeAgentRuns.isEmpty()) {
-            return "Ready";
-        }
-
-        int running = 0;
-        for (AgentRunState state : activeAgentRuns.values()) {
-            if (state.active || isActiveRunStatus(state.status)) {
-                running++;
-            }
-        }
-        int count = running > 0 ? running : activeAgentRuns.size();
-        return count == 1 ? "1 run active" : count + " runs active";
-    }
-
-    private String agentRunCompletionText(AgentRunState state) {
-        String id = state.id.length() > 10 ? state.id.substring(0, 10) : state.id;
-        String base = "Run " + id + " " + state.status + ".";
-        if (!state.outputPreview.isEmpty()) {
-            return base + "\n" + state.outputPreview;
-        }
-        return base;
-    }
-
-    private boolean isActiveRunStatus(String status) {
-        String value = safe(status);
-        return value.isEmpty() || "queued".equals(value) || "running".equals(value);
-    }
-
-    private boolean isTerminalRunStatus(String status) {
-        String value = safe(status);
-        return "completed".equals(value)
-                || "failed".equals(value)
-                || "timed-out".equals(value)
-                || "timed_out".equals(value)
-                || "timeout".equals(value)
-                || "canceled".equals(value)
-                || "unknown".equals(value);
+        return agentRuns.statusText();
     }
 
     private void updateConversationId(String returnedConversationId) {
@@ -2746,7 +2645,7 @@ public final class OverlayService extends Service {
             if (orbView != null) {
                 orbView.setHeld(true);
             }
-            nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+            nextStreamingTurnFollowsActiveRun = agentRuns.hasRuns();
             nextManualVoiceFollowsActiveRun = false;
             startStreamingVoiceTurn(false, false);
             return;
@@ -2880,7 +2779,7 @@ public final class OverlayService extends Service {
         if (value.isEmpty() || currentStreamingTurnRouted) {
             return false;
         }
-        if (nextStreamingTurnFollowsActiveRun || !activeAgentRuns.isEmpty()) {
+        if (nextStreamingTurnFollowsActiveRun || agentRuns.hasRuns()) {
             currentStreamingTurnRouted = true;
             currentStreamingTurnCommitRequested = false;
             nextStreamingTurnFollowsActiveRun = false;
@@ -3191,8 +3090,8 @@ public final class OverlayService extends Service {
         if (orbView != null) {
             orbView.setHeld(true);
         }
-        nextManualVoiceFollowsActiveRun = !activeAgentRuns.isEmpty();
-        nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+        nextManualVoiceFollowsActiveRun = agentRuns.hasRuns();
+        nextStreamingTurnFollowsActiveRun = agentRuns.hasRuns();
         resetVoiceTurnTranscript();
         showTranscriptOverlay("");
         setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
@@ -3481,7 +3380,7 @@ public final class OverlayService extends Service {
                 String transcript = safe(streamingTranscriptAccumulator.update(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
-                    if (nextStreamingTurnFollowsActiveRun || !activeAgentRuns.isEmpty()) {
+                    if (nextStreamingTurnFollowsActiveRun || agentRuns.hasRuns()) {
                         currentStreamingTurnRouted = true;
                         nextStreamingTurnFollowsActiveRun = false;
                         addMessage(false, transcript);
@@ -4076,18 +3975,6 @@ public final class OverlayService extends Service {
             this.success = success;
             this.summary = summary == null ? "" : summary.trim();
             this.receipt = receipt;
-        }
-    }
-
-    private static final class AgentRunState {
-        final String id;
-        String harness = "";
-        String status = "queued";
-        String outputPreview = "";
-        boolean active = true;
-
-        AgentRunState(String id) {
-            this.id = id == null ? "" : id.trim();
         }
     }
 

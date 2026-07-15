@@ -16,7 +16,7 @@ const EXCLUDED_PARTS = new Set(["node_modules", "build", "dist", "coverage", "ve
 // Existing debt may shrink but may not grow. Lower these ceilings after every
 // extraction; remove the entry once the file is at or below MAX_SOURCE_LINES.
 const LEGACY_DEBT_CEILINGS = Object.freeze({
-  "android_app/app/src/main/java/ai/moa/assistant/OverlayService.java": 4094,
+  "android_app/app/src/main/java/ai/moa/assistant/OverlayService.java": 3981,
   "browser_extension/extension/background.js": 5543,
   "browser_extension/extension/content.js": 4614,
   "gateway/lib/voice-drafts.js": 5950,
