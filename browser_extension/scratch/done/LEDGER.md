@@ -1,3 +1,4 @@
+- Steering release 0.1.42 removes visible role selectors, resolves the active branch, keeps fresh context branch-scoped, and sends durable replacement identity before immediate cancellation — agent: Codex/GPT-5 — integration candidate
 - Browser overlay now shows current-page identity, retires transient results into on-demand history, and single-click steering freezes accepted text while superseding stale speech — agent: codex/gpt-5 — b3d63250
 - Browser voice toggles now require matching capture provenance, so a single click cannot send a fresh-thread capture started by double-click — agent: codex/gpt-5 — 5ff04790
 - Browser gesture parity release candidate allocated collision-free manifest version 0.1.41 — agent: codex/gpt-5 — b892145d

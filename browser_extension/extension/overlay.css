@@ -628,20 +628,6 @@
   background: rgba(38, 120, 74, 0.32);
   color: #b2f5cf;
 }
-#agee-mode-select {
-  appearance: none;
-  align-self: center;
-  width: 82px;
-  height: 34px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--agee-ink);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  padding: 0 10px;
-}
 #agee-input {
   width: 100%;
   min-width: 0;
@@ -1560,12 +1546,6 @@ button.agee-ui-list-row:hover {
     min-width: 44px;
     height: 32px;
     padding: 0 5px;
-    font-size: 10px;
-  }
-  #agee-mode-select {
-    width: 64px;
-    height: 32px;
-    padding-inline: 7px;
     font-size: 10px;
   }
   #agee-voice,

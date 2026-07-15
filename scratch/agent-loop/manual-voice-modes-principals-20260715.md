@@ -37,11 +37,13 @@ No lane in this unit authorizes deployment or automatic repair fanout.
 ## Steering Amendment — 2026-07-15
 
 - Single-click during an active response is steer: immediately stop playback,
-  cancel provider generation, freeze the accepted reply prefix with an
-  interruption marker, ignore late output, and begin replacement capture
-  without waiting for cancellation acknowledgement.
+  pre-generate the replacement/boundary identity, cancel provider generation,
+  freeze the accepted reply prefix with an interruption marker, ignore late
+  output, and begin replacement capture without waiting for cancellation
+  acknowledgement. The gateway retains the relation across socket closure.
 - Double-click starts an independent branch/trace from a frozen context
-  snapshot. It does not inherit a mutable provider session.
+  snapshot. It does not inherit a mutable provider session or all-branch voice
+  context.
 - Queue is explicit only. An ordinary interruption never silently becomes a
   follow-up queued behind stale work.
 - Triple-click cancels without sending and opens chat.

@@ -2354,9 +2354,6 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
 }
 
-// Set the active thread for the shared session, or mint a new/fork/incognito
-// branch, and return the resolved branch id. Streaming voice must do this before
-// opening the WS session because the socket branch is fixed at session start.
 async function switchThreadBranch(cfg, action, label) {
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
@@ -2371,7 +2368,12 @@ async function switchThreadBranch(cfg, action, label) {
   });
   return String(data?.thread?.branch_id || data?.active?.branch_id || data?.branch_id || "").trim();
 }
-
+async function activeThreadBranch(cfg) {
+  const sessionId = await getStableSessionId();
+  const path = `/v1/threads/active?session_id=${encodeURIComponent(sessionId)}&surface=agee-extension`;
+  const data = await callGateway(cfg, path, { method: "GET" });
+  return String(data?.active?.branch_id || data?.branch_id || "default").trim() || "default";
+}
 async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
@@ -2422,14 +2424,11 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
   };
 
   let cfg;
-  let branchForSession = cueId;
+  let branchForSession = "default";
   let ticket;
+  const action = String(contextAction || "").trim();
   try {
     cfg = await getConfig();
-    // Resolve the thread branch for an incognito / new-thread voice turn before
-    // minting the ticket, so the WS session opens on the right branch. An incognito
-    // switch that fails must not fall back to a persisted branch — fail the start.
-    const action = String(contextAction || "").trim();
     if (action === "incognito" || action === "new" || action === "fork") {
       let resolvedBranch = "";
       try {
@@ -2444,14 +2443,14 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       } else if (action === "incognito") {
         throw abortSetup("Could not start a private voice turn: the gateway did not return an incognito branch.");
       }
+    } else {
+      try { branchForSession = await activeThreadBranch(cfg); }
+      catch { branchForSession = "default"; }
     }
     ticket = await createVoiceSessionTicket(cfg);
     if (voiceSessions.get(id) !== session || session.closed) {
       throw new Error(session.setupErrorMessage || "Voice session closed during setup.");
     }
-    // Re-check after the awaits above: a record session that slipped in before
-    // the mutex was visible must win. Abort this voice start cleanly instead of
-    // stealing the microphone from the in-flight audio note.
     if (activeRecordSession()) {
       throw abortSetup("An audio note recording is in progress. Stop recording before starting voice.");
     }
@@ -2515,7 +2514,8 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         conversation_id: ticket.conversation_id || ticket.session_id,
         branch_id: branchForSession,
         turn_id: turnId,
-        all_branches_context: true,
+        all_branches_context: false,
+        ...(action ? { context_action: action } : {}),
         client: {
           platform: "browser",
           source: "agee-extension",

@@ -365,7 +365,7 @@ const voiceProxySetupBody = sourceBetween(
 const voiceStartBody = sourceBetween(
   backgroundSource,
   /async function startVoiceSessionProxy\(/,
-  /\/\/ Set the active thread/,
+  /async function switchThreadBranch\(/,
   "voice proxy mutex wrapper"
 );
 if (voiceProxySetupBody.indexOf("startOffscreenVoiceCapture(id)") < 0) {
@@ -471,19 +471,22 @@ if (
 }
 const sidepanelSource = readFileSync("extension/sidepanel.js", "utf8");
 const browserAgentRoleRuntimeSource = readFileSync("extension/browser-agent-role-runtime.js", "utf8");
+const steeringUiSource = readFileSync("extension/steering-ui.js", "utf8");
 if (
   !/chrome\.runtime\.connect\(\{ name: "agee-panel" \}\)/.test(sidepanelSource) ||
   !/"extension-offscreen"/.test(sidepanelSource) ||
   !/cmd: "browserRoleTurn"/.test(sidepanelSource) ||
-  !/data-agent-mode-option/.test(sidepanelSource) ||
+  !/function roleForInstruction/.test(sidepanelSource) ||
   !/commit_turn/.test(sidepanelSource) ||
   !/documentPictureInPicture/.test(sidepanelSource)
 ) {
-  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture for commit_turn, route typed turns through browserRoleTurn, expose role selection, and offer the document PiP float");
+  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture for commit_turn, route typed turns through conversational role intent, and offer the document PiP float");
 }
 
 if (
-  !/id="agee-mode-select"/.test(contentSource) ||
+  /id="agee-mode-select"/.test(contentSource) ||
+  /data-agent-mode-option/.test(sidepanelSource) ||
+  !/function roleForInstruction/.test(steeringUiSource) ||
   !/agentRole: role/.test(contentSource) ||
   !/delegationConfirmed/.test(contentSource) ||
   !/agentRole: msg\.agentRole/.test(backgroundSource) ||
@@ -492,7 +495,7 @@ if (
   !/delegation_envelope: delegationEnvelope/.test(backgroundSource) ||
   !/moa\.browser-delegation\.v1/.test(browserAgentRoleRuntimeSource)
 ) {
-  throw new Error("browser agent role controls must route explicit overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
+  throw new Error("browser role intent must have no selector and must route overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
 }
 
 if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {

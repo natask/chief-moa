@@ -24,7 +24,6 @@
     launcher,
     panel,
     input,
-    agentModeSelect,
     proactiveButton,
     proactiveCardEl,
     proactiveIndicator,
@@ -119,8 +118,6 @@
   const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
   const UI_SPEC_CACHE_KEY = "ageeUiSpec";
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
-  const BROWSER_AGENT_ROLE_KEY = "ageeBrowserAgentRole";
-  const BROWSER_AGENT_ROLES = new Set(["delegate", "help", "collaborate", "explain"]);
   const PROFILE_CACHE_KEY = "ageeProfileCache";
   // Language chip: what A.G. currently hears (STT) and speaks (reply), read
   // from the cached gateway profile and kept live across a running turn.
@@ -370,12 +367,6 @@
         <div id="agee-bar">
           <span id="agee-dot"></span>
           <textarea id="agee-input" rows="1" placeholder="Ask A.G." autocomplete="off" spellcheck="true"></textarea>
-          <select id="agee-mode-select" data-agent-mode-control aria-label="Browser agent role">
-            <option value="delegate" selected>Delegate</option>
-            <option value="help">Help</option>
-            <option value="collaborate">Collaborate</option>
-            <option value="explain">Explain</option>
-          </select>
           <button id="proactiveHelp" type="button" data-agee-proactive="grant" data-agee-tip="Local suggestions for this tab" aria-label="Local suggestions for this tab">Local</button>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
@@ -387,7 +378,6 @@
     launcher = root.querySelector("#agee-launcher");
     panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
-    agentModeSelect = root.querySelector("#agee-mode-select");
     proactiveButton = root.querySelector("#proactiveHelp");
     proactiveCardEl = root.querySelector("#agee-proactive-card");
     proactiveIndicator = root.querySelector("#agee-proactive-indicator");
@@ -409,14 +399,12 @@
     restoreLauncherPosition();
     restoreMascotScale();
     restoreUiChimePreference();
-    restoreBrowserAgentRole();
     restoreVoiceFirstGestures();
     loadAvatarBehaviorRuntime();
     loadUiSpec();
     loadActiveCompanionPet();
     loadLanguageChip();
-    renderPageIdentity();
-    observePageIdentity();
+    AgeeSteeringUi.observePageIdentity({ element: pageIdentityEl, document, location, window });
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
@@ -432,10 +420,9 @@
     launcher.addEventListener("pointerdown", startLauncherDrag);
     launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
     window.addEventListener("resize", handleViewportResize);
-    agentModeSelect.addEventListener("change", () => {
-      chrome.storage.local.set({ [BROWSER_AGENT_ROLE_KEY]: selectedBrowserAgentRole() }).catch(() => {});
-    });
-    historyButton.addEventListener("click", () => toggleHistorySnapshot());
+    historyButton.addEventListener("click", () => AgeeSteeringUi.toggleHistorySnapshot({
+      view: historyView, button: historyButton, sendMessage: safeRuntimeSendMessage, positionPanel, document,
+    }));
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -495,109 +482,6 @@
     });
 
     // Explicit voice playback primes audio from the voice path itself.
-  }
-
-  function compactPageIdentityPart(value, maxLength) {
-    const text = String(value || "").replace(/\s+/g, " ").trim();
-    if (text.length <= maxLength) return text;
-    return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
-  }
-
-  function formatPageIdentity({ title = "", hostname = "", pathname = "" } = {}) {
-    const safeTitle = compactPageIdentityPart(title, 72);
-    const safeHost = compactPageIdentityPart(hostname, 48);
-    const safePath = compactPageIdentityPart(pathname === "/" ? "" : pathname, 48);
-    const locationPart = [safeHost, safePath].filter(Boolean).join("");
-    if (safeTitle && locationPart && safeTitle.toLowerCase() !== safeHost.toLowerCase()) {
-      return `${safeTitle} · ${locationPart}`;
-    }
-    return safeTitle || locationPart || "Current page";
-  }
-
-  function currentPageIdentity() {
-    return formatPageIdentity({
-      title: document.title,
-      hostname: location.hostname,
-      pathname: location.pathname,
-    });
-  }
-
-  function renderPageIdentity() {
-    if (!pageIdentityEl) return;
-    const identity = currentPageIdentity();
-    pageIdentityEl.textContent = identity;
-    pageIdentityEl.title = identity;
-  }
-
-  function observePageIdentity() {
-    window.addEventListener("popstate", renderPageIdentity, { capture: true });
-    window.addEventListener("hashchange", renderPageIdentity, { capture: true });
-    const head = document.head;
-    if (!head || typeof MutationObserver === "undefined") return;
-    new MutationObserver(renderPageIdentity).observe(head, {
-      subtree: true,
-      childList: true,
-      characterData: true,
-    });
-  }
-
-  function historyTurnText(turn, fieldNames) {
-    for (const field of fieldNames) {
-      const value = String(turn?.[field] || "").trim();
-      if (value) return value;
-    }
-    return "";
-  }
-
-  function renderHistorySnapshot(turns) {
-    if (!historyView) return;
-    historyView.replaceChildren();
-    const recent = Array.isArray(turns) ? turns.slice(-20) : [];
-    if (!recent.length) {
-      const empty = document.createElement("p");
-      empty.className = "agee-history-empty";
-      empty.textContent = "No saved conversation history.";
-      historyView.appendChild(empty);
-      return;
-    }
-    for (const turn of recent) {
-      const transcript = historyTurnText(turn, ["transcript", "user_text", "instruction"]);
-      const reply = historyTurnText(turn, ["reply", "assistant_text", "display", "text"]);
-      const item = document.createElement("article");
-      item.className = "agee-history-turn";
-      if (transcript) {
-        const you = document.createElement("p");
-        you.className = "agee-history-you";
-        you.textContent = transcript;
-        item.appendChild(you);
-      }
-      if (reply) {
-        const assistant = document.createElement("p");
-        assistant.className = "agee-history-assistant";
-        assistant.textContent = reply;
-        item.appendChild(assistant);
-      }
-      if (item.childElementCount) historyView.appendChild(item);
-    }
-  }
-
-  async function toggleHistorySnapshot() {
-    if (!historyView || !historyButton) return;
-    if (!historyView.hidden) {
-      historyView.hidden = true;
-      historyButton.setAttribute("aria-expanded", "false");
-      return;
-    }
-    historyButton.disabled = true;
-    try {
-      const response = await safeRuntimeSendMessage({ cmd: "history" });
-      renderHistorySnapshot(response?.ok ? response.turns : []);
-      historyView.hidden = false;
-      historyButton.setAttribute("aria-expanded", "true");
-    } finally {
-      historyButton.disabled = false;
-      positionPanel();
-    }
   }
 
   // ---- Privacy-first local suggestions ---------------------------------
@@ -1405,12 +1289,12 @@
 
   function startVoiceFirstCapture(origin, { freshThread = false } = {}) {
     primeAudio();
-    // A current-thread single click is steering: freeze accepted text, silence
-    // stale audio, and supersede old gateway work without waiting for its cancel
-    // acknowledgement. Fresh-thread capture keeps the isolated cancel path.
-    if (origin === "single") beginCurrentThreadSteeringCapture();
+    const replacement = { kind: freshThread ? "fresh_thread" : "steering",
+      turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      boundaryId: `steer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}` };
+    if (origin === "single") beginCurrentThreadSteeringCapture(replacement);
     else {
-      if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
+      if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel", replacement);
       stopSpeaking();
     }
     if (freshThread) {
@@ -1423,6 +1307,7 @@
       conversation: false,
       autoCommit: false,
       openText: false,
+      turnId: replacement.turnId,
     });
     if (liveVoice) liveVoice.tapTalk = true;
     syncTalkModeUi();
@@ -2314,19 +2199,8 @@
     return `c_${cueSeq}_${Date.now().toString(36)}`;
   }
 
-  // The overlay is a transient steering surface, not the canonical conversation
-  // history. A resolved result remains briefly readable, disappears when the
-  // next turn begins, and can always be recovered through the explicit History
-  // affordance backed by the gateway's stored session turns.
   const MAX_CUE_CARDS = 6;
   const TERMINAL_CUE_LINGER_MS = 12000;
-
-  function selectResolvedCueIds(cards) {
-    return (Array.isArray(cards) ? cards : [])
-      .filter((card) => card?.id && card.active !== true && card.protected !== true)
-      .map((card) => card.id);
-  }
-
   function retireResolvedCueCards() {
     if (!log) return;
     const cards = [...log.querySelectorAll(".agee-cue")].map((card) => ({
@@ -2334,7 +2208,7 @@
       active: activeCues.has(card.dataset.cue),
       protected: card.classList.contains("agee-cue-steered"),
     }));
-    for (const cueId of selectResolvedCueIds(cards)) dismissCue(cueId);
+    for (const cueId of AgeeSteeringUi.selectResolvedCueIds(cards)) dismissCue(cueId);
   }
 
   function scheduleCueRetirement(cueId) {
@@ -2356,9 +2230,6 @@
       removable -= 1;
     }
   }
-
-  // Explicit dismiss remains available during the short terminal linger. It
-  // also cascades through older resolved cards, while running cards stay safe.
 
   // Pure selection helper for the dismiss-and-cascade gesture (✕ button or
   // horizontal swipe): given the ordered list of cue cards (oldest first, the
@@ -2744,8 +2615,6 @@
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
-      // Turning off "running" reveals the explicit dismiss control and starts
-      // the bounded terminal linger.
       const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
       if (dismissBtn) dismissBtn.disabled = false;
       scheduleCueRetirement(cueId);
@@ -2780,21 +2649,7 @@
     if (agentState === "speaking") setAgentState("idle");
   }
 
-  const STEERING_BOUNDARY_MARKER = "— steered here; prior response stopped —";
-
-  function formatSteeredAssistantText(latestText, boundaryText = "") {
-    const latest = String(latestText || "").trim();
-    const boundary = String(boundaryText || "").trim();
-    if (!boundary) return [STEERING_BOUNDARY_MARKER, latest].filter(Boolean).join("\n\n");
-    if (!latest || latest === boundary) return `${boundary}\n\n${STEERING_BOUNDARY_MARKER}`;
-    if (latest.startsWith(boundary)) {
-      const rest = latest.slice(boundary.length).trimStart();
-      return [boundary, STEERING_BOUNDARY_MARKER, rest].filter(Boolean).join("\n\n");
-    }
-    return [boundary, STEERING_BOUNDARY_MARKER, latest].filter(Boolean).join("\n\n");
-  }
-
-  function beginCurrentThreadSteeringCapture() {
+  function beginCurrentThreadSteeringCapture(replacement) {
     let silencedTurns = 0;
     steeringGeneration += 1;
     for (const state of liveVoiceStates) {
@@ -2806,12 +2661,12 @@
       stopLivePlayback(state);
       state.playbackTime = audioCtx?.currentTime || 0;
       state.pendingAssistantAudioSegments.length = 0;
-      const display = formatSteeredAssistantText(state.assistantText, state.steeringBoundaryText);
+      const display = AgeeSteeringUi.formatSteeredAssistantText(state.assistantText, state.steeringBoundaryText);
       ensureVoiceCueCard(state, state.transcript || "Voice", display);
       cues.get(state.cueId)?.cardEl?.classList.add("agee-cue-steered");
       updateCue(state.cueId, display, "done");
-      sendLiveVoiceControl(state, liveCancelTurnMessage(state, state.framesPlayed || 0));
-      closeLiveVoiceSession(state, `steered_generation_${steeringGeneration}`);
+      sendLiveVoiceControl(state, liveCancelTurnMessage(state, state.framesPlayed || 0, replacement))
+        .finally(() => closeLiveVoiceSession(state, `steered_generation_${steeringGeneration}`));
       untrackLiveVoiceState(state);
       silencedTurns += 1;
     }
@@ -2819,12 +2674,10 @@
     window.__ageeLastSteeringBoundary = { generation: steeringGeneration, silencedTurns, at: Date.now() };
     return silencedTurns;
   }
-
   function trackLiveVoiceState(state) {
     if (!state) return;
     liveVoiceStates.add(state);
   }
-
   function attachLiveVoiceSession(state, voiceSessionId) {
     if (!state) return;
     if (state.voiceSessionId) liveVoiceBySessionId.delete(state.voiceSessionId);
@@ -2974,7 +2827,7 @@
       input.focus();
       return;
     }
-    const role = selectedBrowserAgentRole();
+    const role = AgeeSteeringUi.roleForInstruction(instruction);
     if (role === "delegate") {
       const host = location.hostname || "this page";
       askInlineConfirm(
@@ -3015,19 +2868,6 @@
     }).catch((error) => {
       showCueError(cueId, error?.message || error, { react: false });
     });
-  }
-
-  function selectedBrowserAgentRole() {
-    const role = String(agentModeSelect?.value || "delegate").trim().toLowerCase();
-    return BROWSER_AGENT_ROLES.has(role) ? role : "delegate";
-  }
-
-  function restoreBrowserAgentRole() {
-    chrome.storage.local.get({ [BROWSER_AGENT_ROLE_KEY]: "delegate" }).then((stored) => {
-      if (!agentModeSelect) return;
-      const role = String(stored[BROWSER_AGENT_ROLE_KEY] || "delegate").trim().toLowerCase();
-      agentModeSelect.value = BROWSER_AGENT_ROLES.has(role) ? role : "delegate";
-    }).catch(() => {});
   }
 
   function describePage() {
@@ -3228,7 +3068,7 @@
 
     const state = {
       cueId,
-      turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      turnId: options.turnId || `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       voiceSessionId: null,
       sessionReady: false,
       committed: false,
@@ -3282,8 +3122,6 @@
   }
 
   function handleLiveVoiceMessage(state, payload) {
-    // A steering capture revokes the old generation synchronously. Ignore any
-    // JSON or buffered audio that races with the asynchronous cancel/close.
     if (state?.steeredAtGeneration && state.steeredAtGeneration <= steeringGeneration) return;
     // Any inbound voice-session event (audio chunk or JSON event) proves the turn
     // is still alive, so push the post-commit watchdog out. No-op until the turn
@@ -3372,7 +3210,7 @@
       if (!text) return;
       state.assistantText = text;
       const displayText = state.assistantSpeechSuppressed
-        ? formatSteeredAssistantText(text, state.steeringBoundaryText)
+        ? AgeeSteeringUi.formatSteeredAssistantText(text, state.steeringBoundaryText)
         : text;
       // The assistant is now replying: flip the mark to speaking as soon as text
       // starts rendering, not only when spoken audio starts. Covers text-first
@@ -3547,7 +3385,7 @@
       cmd: "run",
       instruction: transcript,
       cueId: state.cueId,
-      agentRole: pageContextTurn ? selectedBrowserAgentRole() : undefined,
+      agentRole: pageContextTurn ? AgeeSteeringUi.roleForInstruction(transcript) : undefined,
       contextAction: state.incognito ? "incognito" : "",
     }).then(() => {
       if (extensionContextInvalidated) removeCueCard(state.cueId);
@@ -3573,11 +3411,11 @@
     if (agentState !== "idle") setAgentState("idle");
   }
 
-  function stopAllLiveVoiceTurns(mode = "stop") {
+  function stopAllLiveVoiceTurns(mode = "stop", replacement = null) {
     conversationActive = false;
     voiceFirstCaptureOrigin = null;
     for (const state of [...liveVoiceStates]) {
-      stopLiveVoiceState(state, mode);
+      stopLiveVoiceState(state, mode, replacement);
     }
     liveVoice = null;
     setVoiceState(false);
@@ -3635,15 +3473,19 @@
     if (agentState !== "idle") setAgentState("idle");
   }
 
-  function stopLiveVoiceState(state, mode = "stop") {
+  function stopLiveVoiceState(state, mode = "stop", replacement = null) {
     if (!isLiveVoiceStateActive(state)) return;
     stopLiveCapture(state);
     // Capture fully-played segments before stopLivePlayback stop()s the sources.
     const playedSegments = state.framesPlayed || 0;
     sendFinalPlaybackProgress(state);
     stopLivePlayback(state);
-    if (mode === "cancel") sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments));
-    closeLiveVoiceSession(state, mode);
+    if (mode === "cancel") {
+      sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments,
+        state.committed ? replacement : null)).finally(() => closeLiveVoiceSession(state, mode));
+    } else {
+      closeLiveVoiceSession(state, mode);
+    }
     if (mode === "revoked") {
       rememberRevokedCue(state.cueId);
       removeCueCard(state.cueId);
@@ -3686,22 +3528,24 @@
     root.dataset.ageeOwnerResult = browserAgentOwner?.last_result || "";
   }
 
-  function liveCancelTurnMessage(state, playedSegments) {
-    // Additive: gateway records where speech stopped from played_segments. When
-    // the counter is absent (older state / never played), send cancel_turn as-is.
+  function liveCancelTurnMessage(state, playedSegments, replacement = null) {
     const message = { type: "cancel_turn", turn_id: state.turnId };
     const played = Number.isFinite(playedSegments) ? playedSegments : state?.framesPlayed;
     if (Number.isFinite(played) && played >= 0) message.played_segments = played;
+    if (replacement?.turnId && replacement?.boundaryId) {
+      message.replacement_kind = replacement.kind === "fresh_thread" ? "fresh_thread" : "steering";
+      message.next_turn_id = replacement.turnId;
+      message.boundary_id = replacement.boundaryId;
+    }
     return message;
   }
-
   function sendLiveVoiceControl(state, message) {
-    if (!state?.voiceSessionId) return;
-    safeRuntimeSendMessage({
+    if (!state?.voiceSessionId) return Promise.resolve({ ok: false });
+    return safeRuntimeSendMessage({
       cmd: "voiceSessionControl",
       voiceSessionId: state.voiceSessionId,
       message,
-    }).catch(() => {});
+    }).catch(() => ({ ok: false }));
   }
 
   function closeLiveVoiceSession(state, reason) {
@@ -3847,7 +3691,7 @@
 
     if (!isLiveVoiceStateActive(state)) return;
     const displaySummary = state.assistantSpeechSuppressed
-      ? formatSteeredAssistantText(summary, state.steeringBoundaryText)
+      ? AgeeSteeringUi.formatSteeredAssistantText(summary, state.steeringBoundaryText)
       : summary;
     ensureVoiceCueCard(state, state.transcript || "Voice", displaySummary);
     updateCue(state.cueId, displaySummary, "done");

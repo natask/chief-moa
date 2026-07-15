@@ -78,6 +78,8 @@ final class MoaStreamingVoiceSessionController {
     private final String gatewayToken;
     private final boolean playbackEnabled;
     private final String requestedSessionId;
+    private String requestedTurnId = "";
+    private String deviceId = "";
     private final String branchId;
     private final boolean autoCommitOnSilence;
     private final Callback callback;
@@ -164,6 +166,13 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
+    void setTurnIdentity(String nextTurnId, String nextDeviceId) {
+        synchronized (lock) {
+            requestedTurnId = safe(nextTurnId);
+            deviceId = safe(nextDeviceId);
+        }
+    }
+
     void startSession() {
         synchronized (lock) {
             if (active) {
@@ -182,7 +191,7 @@ final class MoaStreamingVoiceSessionController {
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
             sessionId = requestedSessionId.isEmpty() ? "mobile-" + UUID.randomUUID().toString() : requestedSessionId;
-            turnId = "turn_" + UUID.randomUUID().toString();
+            turnId = requestedTurnId.isEmpty() ? "turn_" + UUID.randomUUID().toString() : requestedTurnId;
             assistantOutputState.begin(turnId);
             playbackController = new MoaAudioPlaybackController(new PlaybackCallback());
             // Adopt a gesture-warmed mic when one was handed over; otherwise a
@@ -306,6 +315,43 @@ final class MoaStreamingVoiceSessionController {
         post(() -> callback.onSessionClosed());
     }
 
+    /** Cancel immediately while persisting the identity of the replacement turn. */
+    void cancelForReplacement(String nextTurnId, String boundaryId, String replacementKind) {
+        MoaAudioCaptureController capture;
+        MoaAudioPlaybackController playback;
+        MoaVoiceGatewaySocket socket;
+        String currentTurnId;
+        synchronized (lock) {
+            capture = captureController;
+            playback = playbackController;
+            socket = gatewaySocket;
+            currentTurnId = turnId;
+            active = false;
+            assistantOutputState.suppressSpeech();
+            committed = false;
+            pendingCommitAfterSessionReady = false;
+        }
+        mainHandler.removeCallbacks(autoCommitCheck);
+        mainHandler.removeCallbacks(pendingCommitTimeout);
+        if (capture != null) capture.stop();
+        long playedPcmFrames = 0L;
+        if (playback != null) {
+            playback.stop();
+            playedPcmFrames = playback.playedPcmFrames();
+        }
+        MoaAssistantAudioProgressTracker.PlaybackProgress progress;
+        synchronized (lock) {
+            progress = assistantAudioProgress.snapshot(playedPcmFrames);
+        }
+        maybeSendFinalPlaybackProgress(socket, currentTurnId, progress, "steer");
+        if (socket != null) {
+            socket.sendReplacementCancel(currentTurnId,
+                    playback == null ? -1 : playback.lastPlayedMs(),
+                    nextTurnId, boundaryId, replacementKind);
+            socket.close();
+        }
+    }
+
     void destroy() {
         MoaAudioCaptureController capture;
         MoaAudioPlaybackController playback;
@@ -364,7 +410,8 @@ final class MoaStreamingVoiceSessionController {
             currentTurnId = turnId;
         }
 
-        if (socket == null || !socket.sendSessionStart(currentSessionId, currentTurnId, branchId)) {
+        if (socket == null || !socket.sendSessionStart(currentSessionId, currentTurnId, branchId,
+                null, "android-overlay", deviceId)) {
             reportError("Could not send session_start to voice gateway.", null);
             return;
         }

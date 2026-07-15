@@ -54,7 +54,7 @@ test("a relation requires a stable boundary id and no active turn yields none", 
   assert.throws(() => planVoiceTurnRelation(active, { turnId: "next" }), /boundaryId is required/);
 });
 
-test("a new same-thread turn interrupts promptly, persists the partial, and rejects stale output", async (t) => {
+test("a new browser socket steers the prior socket, persists the partial, and rejects stale output", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-steering-test-"));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const oldProviderReleased = deferred();
@@ -82,8 +82,11 @@ test("a new same-thread turn interrupts promptly, persists the partial, and reje
     },
   };
   const records = [];
-  const ws = new FakeWebSocket();
-  const connection = new VoiceSessionConnection(ws, {
+  const oldWs = new FakeWebSocket();
+  const newWs = new FakeWebSocket();
+  const peers = new Set();
+  const pendingReplacements = new Map();
+  const shared = {
     sessionsDir: path.join(dataDir, "voice-sessions"),
     providerEventsFile: path.join(dataDir, "provider-events.jsonl"),
     sessionAdmission: admissionFor(provider),
@@ -92,18 +95,33 @@ test("a new same-thread turn interrupts promptly, persists the partial, and reje
       .map((record) => record.assistant_text)
       .join("\n"),
     onTurnCompleted: async (record) => { records.push(record); return record; },
-  });
+    peerConnections: peers,
+    pendingReplacements,
+  };
+  const oldConnection = new VoiceSessionConnection(oldWs, shared);
+  const newConnection = new VoiceSessionConnection(newWs, shared);
+  peers.add(oldConnection);
+  peers.add(newConnection);
 
-  await connection.handleSessionStart(sessionStart("turn-old", "default"));
-  const oldTurnPromise = connection.handleTextTurn({ turn_id: "turn-old", text: "original user request" });
+  await oldConnection.handleSessionStart(sessionStart("turn-old", "default"));
+  const oldTurnPromise = oldConnection.handleTextTurn({ turn_id: "turn-old", text: "original user request" });
   await oldProviderStarted.promise;
-  const binaryBeforeSteering = ws.binary.length;
+  const binaryBeforeSteering = oldWs.binary.length;
 
-  await connection.handleSessionStart(sessionStart("turn-steer", "default"));
+  await oldConnection.handleCancelTurn({
+    turn_id: "turn-old",
+    replacement_kind: "steering",
+    next_turn_id: "turn-steer",
+    boundary_id: "steer-browser-socket",
+    played_segments: 0,
+  });
+  peers.delete(oldConnection);
+  await newConnection.handleSessionStart(sessionStart("turn-steer", "default"));
   assert.equal(released, false, "new turn admission must not wait for the superseded provider to finish");
-  assert.equal(connection.turn.turnId, "turn-steer");
-  assert.match(connection.turn.contextPrompt, /partial assistant answer/);
-  const ready = ws.json.find((event) => event.type === "session_ready" && event.turn_id === "turn-steer");
+  assert.equal(oldConnection.turn, null);
+  assert.equal(newConnection.turn.turnId, "turn-steer");
+  assert.match(newConnection.turn.contextPrompt, /partial assistant answer/);
+  const ready = newWs.json.find((event) => event.type === "session_ready" && event.turn_id === "turn-steer");
   assert.equal(ready.turn_relation.kind, "steering");
   assert.equal(ready.turn_relation.superseded_turn_id, "turn-old");
 
@@ -116,15 +134,17 @@ test("a new same-thread turn interrupts promptly, persists the partial, and reje
   oldProviderReleased.resolve();
   await oldTurnPromise;
   assert.equal(staleAudioRejected, true);
-  assert.equal(ws.binary.length, binaryBeforeSteering, "superseded audio must never reach the new turn");
-  assert.equal(ws.json.some((event) => event.text === "stale provider tail"), false);
-  await connection.closeCurrentTurn("closed");
+  assert.equal(oldWs.binary.length, binaryBeforeSteering, "superseded audio must never reach either turn");
+  assert.equal(newWs.binary.length, 0);
+  assert.equal(oldWs.json.some((event) => event.text === "stale provider tail"), false);
+  assert.equal(newWs.json.some((event) => event.text === "stale provider tail"), false);
+  await newConnection.closeCurrentTurn("closed");
 });
 
 function sessionStart(turnId, branchId) {
   return {
     type: "session_start", session_id: "session-a", conversation_id: "session-a",
-    branch_id: branchId, turn_id: turnId,
+    branch_id: branchId, turn_id: turnId, device_id: "device-a",
     format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
   };
 }

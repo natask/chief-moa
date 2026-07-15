@@ -335,14 +335,17 @@ as a canonical conversation turn (marked incomplete) with whatever transcript
 and assistant text the provider produced before the cutoff. That partial turn
 flows into the next session's context pack, so a user can interrupt the model on
 one device and resume the thread on another against the same dataset.
-When a new current-thread `session_start` arrives while the assistant turn is
-committed or playing, it is steering rather than queued work. The gateway stops
-future audio for the old turn, persists its partial text on that old turn, and
-correlates both records with an additive `turn_relation` boundary. Provider
+Before a steering replacement opens, the client sends `cancel_turn` with a
+pre-generated boundary and next-turn identity. The gateway immediately stops
+provider work, persists the partial text on the old turn, and retains a bounded
+pending relation across socket closure. It consumes that relation only for the
+exact session, conversation, and non-empty device identity when the replacement
+opens. Both records carry the additive `turn_relation` boundary. Provider
 output arriving after cancellation is dropped; it is never attached to the new
 turn. A different branch or explicit `context_action` of `new`, `fork`, or
 `incognito` records a `fresh_thread` boundary with
-`inherit_partial_context:false`. A bare `cancel_turn` has no admitted successor.
+`inherit_partial_context:false`; streaming fresh-thread context remains
+branch-scoped. A bare `cancel_turn` has no admitted successor.
 Queueing is a separate, explicit spoken/typed backlog action and is not the
 default for interruption; its execution path remains staged. These conversation
 semantics do not cancel detached `agent_run` work.

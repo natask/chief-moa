@@ -188,8 +188,8 @@ function assertVoicePlaybackStopContract() {
   if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(source)) {
     throw new Error("voice button click must open the input surface and prime audio before starting live voice");
   }
-  if (!/origin === "single"\) beginCurrentThreadSteeringCapture\(\)/.test(source)) {
-    throw new Error("single-click current-thread capture must use the non-cancelling steering boundary");
+  if (!/origin === "single"\) beginCurrentThreadSteeringCapture\(replacement\)/.test(source)) {
+    throw new Error("single-click current-thread capture must use an explicit steering boundary");
   }
   if (!/if \(state\.assistantSpeechSuppressed\) return;/.test(source)) {
     throw new Error("steered stale turns must suppress later assistant PCM locally");
@@ -197,8 +197,11 @@ function assertVoicePlaybackStopContract() {
   if (!/formatSteeredAssistantText\(text, state\.steeringBoundaryText\)/.test(source)) {
     throw new Error("steered stale turns must retain a visible accepted-text boundary");
   }
-  if (!/sendLiveVoiceControl\(state, liveCancelTurnMessage\(state,[\s\S]{0,120}closeLiveVoiceSession\(state, `steered_generation_/.test(source)) {
-    throw new Error("steering must asynchronously cancel and close the superseded provider turn");
+  const steeringBody = source.match(/function beginCurrentThreadSteeringCapture\(replacement\)[\s\S]*?return silencedTurns;/)?.[0] || "";
+  if (!/sendLiveVoiceControl/.test(steeringBody) || !/closeLiveVoiceSession/.test(steeringBody)
+      || !/message\.next_turn_id = replacement\.turnId/.test(source)
+      || !/message\.boundary_id = replacement\.boundaryId/.test(source)) {
+    throw new Error("steering must cancel immediately with durable replacement identity");
   }
   if (!/state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/.test(source)) {
     throw new Error("late stale voice events must fail closed at the steering generation boundary");

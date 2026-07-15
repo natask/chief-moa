@@ -14,7 +14,7 @@ const {
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
 const { canonicalVoice } = require("./profile-options");
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
-const { planVoiceTurnRelation } = require("./voice-turn-steering");
+const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
 
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
@@ -22,12 +22,6 @@ const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
 const EARLY_AUDIO_MAX_AGE_MS = 3000;
 const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "closed", "interrupted", "replaced", "no_speech"]);
 const ACTIVE_PLAYBACK_PROGRESS_STATUSES = new Set(["committed", "playback"]);
-// A committed turn can spend seconds between transcript_final and turn_done while
-// the reasoner (LLM/tool turn) and TTS run with no stream events. Clients run
-// inactivity watchdogs and tear those slow-but-healthy turns down as false
-// timeouts, discarding the real answer. The session server emits an additive
-// turn_progress keepalive on this cadence while a committed turn has no other
-// events flowing, so a client watchdog sees the turn is alive.
 const DEFAULT_TURN_PROGRESS_INTERVAL_MS = 5000;
 const PROVIDER_EVENT_ERROR_MAX_CHARS = 240;
 const PROVIDER_EVENT_VALUE_MAX_CHARS = 400;
@@ -37,6 +31,8 @@ function createVoiceSessionServer(options) {
   const sessionsDir = path.join(dataDir, "voice-sessions");
   const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
   const connections = new Set();
+  const pendingReplacements = new Map();
+  const steeringCoordinator = createVoiceTurnSteeringCoordinator({ connections, pending: pendingReplacements });
   const agentProfile = options?.agentProfile || null;
   const contextProvider = typeof options?.contextProvider === "function" ? options.contextProvider : null;
   const toolHandler = typeof options?.toolHandler === "function" ? options.toolHandler : null;
@@ -66,6 +62,7 @@ function createVoiceSessionServer(options) {
       agentProfile,
       contextProvider,
       toolHandler,
+      steeringCoordinator,
       turnProgressIntervalMs: options?.turnProgressIntervalMs,
       onTurnCompleted: typeof options?.onTurnCompleted === "function" ? options.onTurnCompleted : null,
     });
@@ -110,6 +107,8 @@ class VoiceSessionConnection {
     this.contextProvider = options.contextProvider || null;
     this.toolHandler = options.toolHandler || null;
     this.onTurnCompleted = options.onTurnCompleted || null;
+    this.steeringCoordinator = options.steeringCoordinator || createVoiceTurnSteeringCoordinator(
+      { connections: options.peerConnections || new Set(), pending: options.pendingReplacements || new Map() });
     this.turn = null;
     this.responding = false;
     this.earlyAudio = [];
@@ -288,20 +287,24 @@ class VoiceSessionConnection {
     const conversationId = sanitizeId(event.conversation_id || sessionId, "conversation_id");
     const branchId = sanitizeId(event.branch_id || "default", "branch_id");
     const turnId = sanitizeId(event.turn_id || randomId("turn"), "turn_id");
-    const turnRelation = planVoiceTurnRelation(this.turn, {
-      sessionId, conversationId, branchId, turnId,
-      contextAction: event.context_action || event.contextAction,
-    }, { boundaryId: randomId("steer"), occurredAt: nowIso() });
-    if (turnRelation) {
-      this.turn.turnRelation = turnRelation.prior;
-      await this.closeCurrentTurn(turnRelation.closeStatus);
-      this.responding = false;
+    const nextTurnIdentity = { sessionId, conversationId, branchId, turnId,
+      deviceId: sanitizeLooseId(event.device_id || event.deviceId || event.client?.device_id || event.client?.deviceId || ""),
+      contextAction: event.context_action || event.contextAction };
+    const pendingReplacement = this.steeringCoordinator.take(nextTurnIdentity);
+    const priorConnection = pendingReplacement ? null : this.steeringCoordinator.findActive(this, nextTurnIdentity);
+    const priorTurn = priorConnection?.turn || null;
+    const turnRelation = pendingReplacement ? { next: pendingReplacement.next }
+      : planVoiceTurnRelation(priorTurn, nextTurnIdentity, { boundaryId: randomId("steer"), occurredAt: nowIso() });
+    if (turnRelation && priorConnection) {
+      priorTurn.turnRelation = turnRelation.prior;
+      await priorConnection.closeCurrentTurn(turnRelation.closeStatus);
+      priorConnection.responding = false;
     }
     const turnDir = path.join(this.sessionsDir, sessionId);
     const format = normalizeFormat(event.format);
     const playbackPolicy = normalizePlaybackPolicy(event.playback_policy || event.playbackPolicy);
     const allBranchesContext = event.all_branches_context === true || event.allBranchesContext === true;
-    const deviceId = sanitizeLooseId(event.device_id || event.deviceId || event.client?.device_id || event.client?.deviceId || "");
+    const deviceId = nextTurnIdentity.deviceId;
     const admitted = await this.sessionAdmission.admit({
       deviceId, sessionId, branchId, turnId, sendEvent: (payload) => this.sendEvent(payload),
       onDenied: () => { this.earlyAudio = []; this.earlyAudioBytes = 0; },
@@ -1358,9 +1361,7 @@ class VoiceSessionConnection {
     this.stopTurnProgress();
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
-    if (turn.liveSession) {
-      turn.liveSession.cancel();
-    }
+    if (turn.liveSession) turn.liveSession.cancel();
     abortSttStream(turn);
     const events = providerEvents || this.createProviderEvents(turn);
     const failedStage = events.activeStage
@@ -1423,11 +1424,6 @@ class VoiceSessionConnection {
       return;
     }
 
-    // Additive playback-position report: how far the client actually played
-    // before the user interrupted. Captured BEFORE the turn goes terminal so
-    // the incomplete record can say where speech stopped. Segments is the
-    // count of fully-played audio frames (browser); played_ms is the audio
-    // clock (Android AudioTrack head position). Both optional.
     const playedSegments = Number(event.played_segments);
     if (Number.isFinite(playedSegments) && playedSegments >= 0) {
       turn.clientPlayedSegments = Math.floor(playedSegments);
@@ -1435,6 +1431,31 @@ class VoiceSessionConnection {
     const playedMs = Number(event.played_ms);
     if (Number.isFinite(playedMs) && playedMs >= 0) {
       turn.clientPlayedMs = Math.floor(playedMs);
+    }
+
+    const replacementKind = String(event.replacement_kind || "").trim();
+    if (replacementKind === "steering" || replacementKind === "fresh_thread") {
+      const nextTurnId = sanitizeId(event.next_turn_id, "next_turn_id");
+      const boundaryId = sanitizeId(event.boundary_id, "boundary_id");
+      const relation = planVoiceTurnRelation(turn, {
+        sessionId: turn.sessionId,
+        conversationId: turn.conversationId || turn.sessionId,
+        branchId: replacementKind === "fresh_thread" ? "pending-fresh" : turn.branchId,
+        turnId: nextTurnId,
+        deviceId: turn.deviceId,
+        contextAction: replacementKind === "fresh_thread" ? "new" : "",
+      }, { boundaryId, occurredAt: nowIso() });
+      turn.turnRelation = relation.prior;
+      this.steeringCoordinator.store(nextTurnId, {
+        owner: {
+          sessionId: turn.sessionId,
+          conversationId: turn.conversationId || turn.sessionId,
+          deviceId: turn.deviceId,
+        },
+        next: relation.next,
+      });
+      await this.closeCurrentTurn("interrupted");
+      return;
     }
 
     if (hasPartialEndpointPlayback(turn)) {
@@ -1448,9 +1469,7 @@ class VoiceSessionConnection {
     this.stopTurnProgress();
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
-    if (turn.liveSession) {
-      turn.liveSession.cancel();
-    }
+    if (turn.liveSession) turn.liveSession.cancel();
     abortSttStream(turn);
     await this.recordProviderEvent(turn, turn.providerEvents || this.createProviderEvents(turn), "turn_canceled", {});
     await this.recordIncompleteTurn(turn, "canceled");
@@ -1515,8 +1534,6 @@ class VoiceSessionConnection {
   }
 
   async closeCurrentTurn(status) {
-    // Socket close / interrupt / replace / teardown: stop the keepalive first so
-    // no tick outlives the turn, even when there is no active turn to close.
     this.stopTurnProgress();
     if (!this.turn) {
       return;

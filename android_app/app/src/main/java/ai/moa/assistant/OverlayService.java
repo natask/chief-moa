@@ -136,6 +136,8 @@ public final class OverlayService extends Service {
     private boolean streamingTurnRetried;
     private MoaVoiceController voiceController;
     private MoaStreamingVoiceSessionController streamingVoiceController;
+    private String pendingReplacementTurnId = "";
+    private boolean nextVoiceCaptureFreshThread;
     private MoaVoiceSamplePlayer voiceSamplePlayer;
     private boolean panelOpen;
     private boolean nextVoiceRunsAgent;
@@ -2443,7 +2445,10 @@ public final class OverlayService extends Service {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
-        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD;
+        boolean freshThread = nextVoiceCaptureFreshThread;
+        manualTapCaptureOrigin = freshThread
+                ? MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD
+                : MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD;
         if (recordModeEnabled) {
             startAudioNoteCapture();
             return;
@@ -2454,6 +2459,7 @@ public final class OverlayService extends Service {
         // a failed utterance. Set after the barge-in teardown clears it.
         suppressFirstTapTurnEmptyCue = true;
         startReviewableVoiceDraft();
+        nextVoiceCaptureFreshThread = false;
     }
 
     private void handleOrbStopAndSend() {
@@ -2475,6 +2481,7 @@ public final class OverlayService extends Service {
         }
         contextControls.armNewThread();
         refreshContextControls();
+        nextVoiceCaptureFreshThread = true;
         handleOrbStartTalkLoop();
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
     }
@@ -2499,11 +2506,21 @@ public final class OverlayService extends Service {
         voiceLog.markSteeringBoundary();
         renderVoiceTranscriptRows();
         if (streamingVoiceActive()) {
-            cancelStreamingVoice();
+            pendingReplacementTurnId = "turn_" + UUID.randomUUID().toString();
+            String boundaryId = "steer_" + UUID.randomUUID().toString();
+            MoaStreamingVoiceSessionController superseded = streamingVoiceController;
+            superseded.cancelForReplacement(
+                    pendingReplacementTurnId,
+                    boundaryId,
+                    nextVoiceCaptureFreshThread ? "fresh_thread" : "steering");
+            streamingVoiceController = null;
+            mainHandler.postDelayed(superseded::destroy, 500);
+            streamingVoiceGeneration++;
         }
         cancelVoiceSampler();
         voiceController.stopQuietly();
     }
+
 
     // The escape hatch: a large move after a press-to-talk hold confirmed cancels
     // the capture that hold started (streaming turn or audio note) WITHOUT
@@ -3523,6 +3540,12 @@ public final class OverlayService extends Service {
                 }, 900);
             }
         });
+        if (!pendingReplacementTurnId.isEmpty()) {
+            streamingVoiceController.setTurnIdentity(pendingReplacementTurnId, androidDeviceId());
+            pendingReplacementTurnId = "";
+        } else {
+            streamingVoiceController.setTurnIdentity("", androidDeviceId());
+        }
         // Hand over the gesture-warmed mic (or the mic pre-warmed during the
         // continuous re-arm gap) so the session goes live instantly and, for
         // push-to-talk, drains the pre-roll. Null here means a cold start.

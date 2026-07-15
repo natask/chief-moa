@@ -119,10 +119,14 @@ voice metadata, the interruption provider event, and canonical voice-session
 references. Older clients MAY ignore it.
 
 #### Scenario: Current-thread user input steers an active reply
-- **WHEN** a `session_start` for the same session, conversation, and branch
-  arrives while the assistant turn is committed or playing
+- **WHEN** the client first sends `cancel_turn` with a pre-generated
+  `boundary_id`, `next_turn_id`, and `replacement_kind=steering`, then opens the
+  replacement for the same authenticated session, conversation, device, and
+  branch
 - **THEN** the old turn is closed as `interrupted` with
   `turn_relation.kind` = `steering` and its partial assistant text persisted
+- **AND** provider cancellation starts immediately rather than waiting for the
+  replacement socket to connect
 - **AND** the new `session_ready` carries the same `boundary_id`, names the
   superseded turn, and sets `inherit_partial_context` = true
 - **AND** no later assistant audio or text from the old provider is sent as part
@@ -133,6 +137,8 @@ references. Older clients MAY ignore it.
   `context_action` = `new`, `fork`, or `incognito`
 - **THEN** its relation kind is `fresh_thread`
 - **AND** `inherit_partial_context` is false
+- **AND** the replacement context is branch-scoped rather than assembled from
+  all branches
 - **AND** double-click fresh-thread capture remains an inspectable new/fork
   trace rather than steering the current reply
 
@@ -140,6 +146,15 @@ references. Older clients MAY ignore it.
 - **WHEN** the client sends `cancel_turn` without a new `session_start`
 - **THEN** the active turn closes without creating an admitted-turn relation
 - **AND** no replacement turn is inferred
+
+#### Scenario: Replacement identity survives socket closure
+- **WHEN** the superseded socket closes after its replacement cancel but before
+  the replacement socket connects
+- **THEN** the gateway retains a bounded pending relation keyed by
+  `next_turn_id`
+- **AND** consumes it only for the exact session, conversation, and non-empty
+  device identity
+- **AND** missing device identity is never treated as a cross-surface wildcard
 
 #### Scenario: Queueing requires an explicit backlog action
 - **WHEN** the user explicitly says to queue or backlog an instruction, or uses
