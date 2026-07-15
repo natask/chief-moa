@@ -10,9 +10,9 @@ import java.util.List;
  * The old overlay held exactly two mutable slots (one user line, one assistant
  * line) that every new turn overwrote, so a reply vanished the moment the next
  * turn started or an auto-dismiss timer fired. This log keeps a stacked history
- * instead: each turn appends a fresh user row and a fresh assistant row, older
- * rows stay on screen until the user swipes them away, and the list is silently
- * trimmed to a sane bound so it can never grow without limit.
+ * instead: each turn appends a fresh user row and a fresh assistant row.
+ * Steering keeps the interrupted turn and collapses older resolved rows;
+ * otherwise rows remain swipe-dismissable and silently trim to a sane bound.
  *
  * The rendering and swipe gestures live in {@link OverlayService}; this class is
  * pure Java (no Android types) so the append / trim / cascade-dismiss logic can
@@ -26,6 +26,7 @@ final class MoaVoiceTranscriptLog {
         final Role role;
         String text;
         boolean finalText;
+        boolean interrupted;
 
         Entry(Role role, String text, boolean finalText) {
             this.role = role;
@@ -75,6 +76,21 @@ final class MoaVoiceTranscriptLog {
     void startTurn() {
         currentUser = null;
         currentAssistant = null;
+    }
+
+    /** Mark the assistant being steered away from and discard older resolved rows. */
+    boolean markSteeringBoundary() {
+        boolean marked = currentAssistant != null && !currentAssistant.text.isEmpty();
+        if (marked) {
+            currentAssistant.interrupted = true;
+        }
+        for (int i = entries.size() - 1; i >= 0; i--) {
+            Entry entry = entries.get(i);
+            if (entry != currentUser && entry != currentAssistant) {
+                entries.remove(i);
+            }
+        }
+        return marked;
     }
 
     /** Set / update this turn's user row, appending it on first call. */

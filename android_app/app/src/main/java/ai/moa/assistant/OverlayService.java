@@ -1048,7 +1048,10 @@ public final class OverlayService extends Service {
         for (int i = 0; i < count; i++) {
             MoaVoiceTranscriptLog.Entry entry = voiceLog.get(i);
             boolean assistant = !entry.isUser();
-            View row = voiceMessageRow(assistant, entry.text, entry.finalText);
+            String rowText = entry.interrupted
+                    ? entry.text + "\n\nInterrupted · steering"
+                    : entry.text;
+            View row = voiceMessageRow(assistant, rowText, entry.finalText);
             attachSwipeDismiss(row, entry);
             voiceTranscriptColumn.addView(row);
             boolean newestAssistant = assistant && i == count - 1;
@@ -2493,6 +2496,8 @@ public final class OverlayService extends Service {
     // sampler. A fresh session opens immediately after.
     private void stopAssistantAudioForBargeIn() {
         cancelContinuousVoiceRestart();
+        voiceLog.markSteeringBoundary();
+        renderVoiceTranscriptRows();
         if (streamingVoiceActive()) {
             cancelStreamingVoice();
         }

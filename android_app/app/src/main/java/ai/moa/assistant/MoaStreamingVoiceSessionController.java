@@ -109,6 +109,7 @@ final class MoaStreamingVoiceSessionController {
     private boolean pendingCommitAfterSessionReady;
     private final ArrayDeque<byte[]> pendingAudioChunks = new ArrayDeque<>();
     private final MoaAssistantAudioProgressTracker assistantAudioProgress = new MoaAssistantAudioProgressTracker();
+    private final MoaAssistantOutputState assistantOutputState = new MoaAssistantOutputState();
     private int pendingAudioBytes;
     private long capturedAudioBytes;
     private long recordingStartedAtMs;
@@ -182,6 +183,7 @@ final class MoaStreamingVoiceSessionController {
             lastVoiceActivityAtMs = 0;
             sessionId = requestedSessionId.isEmpty() ? "mobile-" + UUID.randomUUID().toString() : requestedSessionId;
             turnId = "turn_" + UUID.randomUUID().toString();
+            assistantOutputState.begin(turnId);
             playbackController = new MoaAudioPlaybackController(new PlaybackCallback());
             // Adopt a gesture-warmed mic when one was handed over; otherwise a
             // fresh controller cold-starts on the first startCaptureIfNeeded. The
@@ -264,6 +266,7 @@ final class MoaStreamingVoiceSessionController {
             socket = gatewaySocket;
             currentTurnId = turnId;
             active = false;
+            assistantOutputState.suppressSpeech();
             committed = false;
             assistantAudioStarted = false;
             loggedVoiceActivity = false;
@@ -319,6 +322,7 @@ final class MoaStreamingVoiceSessionController {
             playbackController = null;
             gatewaySocket = null;
             active = false;
+            assistantOutputState.suppressSpeech();
             committed = false;
             assistantAudioStarted = false;
             loggedVoiceActivity = false;
@@ -452,6 +456,7 @@ final class MoaStreamingVoiceSessionController {
             currentTurnId = turnId;
             finalPlaybackProgress = assistantAudioProgress.snapshot(playback != null ? playback.playedPcmFrames() : 0L);
             active = false;
+            assistantOutputState.suppressSpeech();
             committed = false;
             assistantAudioStarted = false;
             loggedVoiceActivity = false;
@@ -490,6 +495,7 @@ final class MoaStreamingVoiceSessionController {
             capture = captureController;
             playback = playbackController;
             active = false;
+            assistantOutputState.suppressSpeech();
             committed = false;
             loggedVoiceActivity = false;
             sessionReady = false;
@@ -704,6 +710,7 @@ final class MoaStreamingVoiceSessionController {
             synchronized (lock) {
                 wasActive = active;
                 active = false;
+                assistantOutputState.suppressSpeech();
                 committed = false;
                 loggedVoiceActivity = false;
                 sessionReady = false;
@@ -729,6 +736,7 @@ final class MoaStreamingVoiceSessionController {
                 capture = captureController;
                 playback = playbackController;
                 active = false;
+                assistantOutputState.suppressSpeech();
                 committed = false;
                 assistantAudioStarted = false;
                 loggedVoiceActivity = false;
@@ -794,6 +802,11 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onAssistantText(String assistantTurnId, String text) {
+            synchronized (lock) {
+                if (!assistantOutputState.allowsText(assistantTurnId)) {
+                    return;
+                }
+            }
             Log.i(TAG, "assistantText chars=" + safe(text).length());
             post(() -> callback.onAssistantText(assistantTurnId, text));
         }
@@ -802,12 +815,15 @@ final class MoaStreamingVoiceSessionController {
         public void onAssistantAudioStart(String audioTurnId, JSONObject format, double playbackRate) {
             MoaAudioPlaybackController playback;
             synchronized (lock) {
+                if (!assistantOutputState.allowsSpeech(audioTurnId)) {
+                    return;
+                }
                 playback = playbackController;
                 assistantAudioStarted = true;
-            }
-            Log.i(TAG, "assistantAudioStart playbackRate=" + playbackRate);
-            if (playback != null && playbackEnabled) {
-                playback.start(playbackRate);
+                Log.i(TAG, "assistantAudioStart playbackRate=" + playbackRate);
+                if (playback != null && playbackEnabled) {
+                    playback.start(playbackRate);
+                }
             }
             post(() -> callback.onAssistantAudioStarted(audioTurnId));
         }
@@ -815,6 +831,9 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onAssistantAudioSegment(String audioTurnId, JSONObject segment) {
             synchronized (lock) {
+                if (!assistantOutputState.allowsSpeech(audioTurnId)) {
+                    return;
+                }
                 assistantAudioProgress.onAssistantAudioSegment(segment);
             }
         }
@@ -826,6 +845,9 @@ final class MoaStreamingVoiceSessionController {
             synchronized (lock) {
                 playback = playbackController;
                 currentTurnId = turnId;
+                if (!assistantOutputState.allowsSpeech(currentTurnId)) {
+                    return;
+                }
                 assistantAudioProgress.onAssistantAudioFrame(pcm);
             }
             if (playbackEnabled && playback != null && !playback.write(pcm)) {
@@ -839,7 +861,11 @@ final class MoaStreamingVoiceSessionController {
         public void onAssistantAudioDone(String audioTurnId) {
             MoaAudioPlaybackController playbackToDrain;
             synchronized (lock) {
+                if (!assistantOutputState.allowsSpeech(audioTurnId)) {
+                    return;
+                }
                 playbackToDrain = playbackController;
+                assistantOutputState.suppressSpeech();
             }
             Log.i(TAG, "assistantAudioDone");
             mainHandler.postDelayed(() -> {
