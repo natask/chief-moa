@@ -30,6 +30,11 @@ function createVideoEvidenceContinuationCore(options = {}) {
     ? options.createId
     : () => `video-request-${crypto.randomUUID()}`;
   const records = new Map();
+  const assetClaims = {
+    evidence_id: new Map(),
+    blob_ref: new Map(),
+    sha256: new Map(),
+  };
 
   function proposeFromModel(input = {}) {
     rejectRawMedia(input);
@@ -82,7 +87,7 @@ function createVideoEvidenceContinuationCore(options = {}) {
       }),
       capability_snapshot: Object.freeze({
         id: capabilitySnapshotId,
-        digest: optionalDigest(capabilitySnapshot.digest),
+        digest: digest(capabilitySnapshot.digest, "capability_snapshot.digest"),
       }),
       provider_support: Object.freeze(providerSupport),
       retention: Object.freeze(normalizeRetention(input.retention, createdAt, expiresAt)),
@@ -118,11 +123,16 @@ function createVideoEvidenceContinuationCore(options = {}) {
   }
 
   function recordUploaded(requestId, receipt, options = {}) {
-    return transition(requestId, "uploaded", receipt, options, (record, value) => {
+    let claim = null;
+    const result = transition(requestId, "uploaded", receipt, options, (record, value) => {
       requireTrustedSurfaceReceipt(record, value, "uploaded");
       const evidence = normalizeEvidence(value.evidence, record);
+      assertAssetIdentityAvailable(assetClaims, evidence, record);
+      claim = { evidence, record };
       return { evidence };
     });
+    if (claim) claimAssetIdentity(assetClaims, claim.evidence, claim.record);
+    return result;
   }
 
   function attach(requestId, receipt, options = {}) {
@@ -157,6 +167,7 @@ function createVideoEvidenceContinuationCore(options = {}) {
       },
       evidence_refs: [record.evidence.evidence_id],
       capability_snapshot_id: record.capability_snapshot.id,
+      capability_snapshot: clone(record.capability_snapshot),
       provider_video: clone(record.provider_support),
     };
   }
@@ -169,11 +180,17 @@ function createVideoEvidenceContinuationCore(options = {}) {
       if (value.derivation != null) {
         throw contractError("silent_derivation_forbidden", "frame or transcript derivation is a separate disclosed flow");
       }
+      const providerReceipt = object(value.provider_receipt, "provider_receipt");
+      assertProviderReceipt(record, providerReceipt);
       return {
         processing: {
           provider: record.provider_support.provider,
+          model: record.provider_support.model,
           direct_video_received: true,
-          provider_receipt_ref: token(value.provider_receipt_ref, "provider_receipt_ref"),
+          provider_receipt_ref: token(providerReceipt.receipt_ref, "provider_receipt.receipt_ref"),
+          evidence_id: record.evidence.evidence_id,
+          evidence_sha256: record.evidence.sha256,
+          provider_posture_digest: record.provider_support.posture_digest,
           processed_at: iso(value.at || now(), "processed_at"),
         },
       };
@@ -193,20 +210,28 @@ function createVideoEvidenceContinuationCore(options = {}) {
   function deleteEvidence(requestId, receipt, options = {}) {
     return transition(requestId, "deleted", receipt, options, (record, value) => {
       requireTrustedSurfaceReceipt(record, value, "deleted");
+      if (!record.evidence || !record.evidence.blob_ref) {
+        throw contractError("evidence_required", "deletion requires uploaded video evidence", 409);
+      }
+      const deleteReceipt = object(value.blob_delete_receipt, "blob_delete_receipt");
+      assertBlobDeleteReceipt(record, deleteReceipt);
       return {
-        evidence: record.evidence ? {
+        evidence: {
           evidence_id: record.evidence.evidence_id,
           deleted: true,
           blob_ref: null,
           sha256: record.evidence.sha256,
-        } : null,
+          duration_seconds: record.evidence.duration_seconds,
+          has_audio: record.evidence.has_audio,
+        },
         deletion: {
           reason: boundedText(value.reason, "deletion.reason", 200),
           deleted_at: iso(value.at || now(), "deleted_at"),
-          blob_delete_receipt_ref: optionalToken(value.blob_delete_receipt_ref),
+          deleted_blob_ref: record.evidence.blob_ref,
+          blob_delete_receipt_ref: token(deleteReceipt.receipt_ref, "blob_delete_receipt.receipt_ref"),
         },
       };
-    }, { allowFrom: ["proposed", "user_started", "captured", "uploaded", "attached", "processed", "failed"] });
+    }, { allowFrom: ["uploaded", "attached", "processed", "failed"] });
   }
 
   function expire(requestId, receipt = {}, options = {}) {
@@ -289,6 +314,8 @@ function normalizeProviderSupport(value) {
   const support = object(value, "provider_support");
   const direct = strictBoolean(support.direct_video_input, "provider_support.direct_video_input");
   const provider = token(support.provider, "provider_support.provider");
+  const model = token(support.model, "provider_support.model");
+  const postureDigest = digest(support.posture_digest, "provider_support.posture_digest");
   const reason = boundedText(support.reason, "provider_support.reason", 300);
   if (direct && reason !== "direct_video_supported") {
     throw contractError("provider_support_mismatch", "supported providers must say direct_video_supported");
@@ -296,7 +323,7 @@ function normalizeProviderSupport(value) {
   if (!direct && reason === "direct_video_supported") {
     throw contractError("provider_support_mismatch", "unsupported providers need an honest reason");
   }
-  return { provider, direct_video_input: direct, reason };
+  return { provider, model, direct_video_input: direct, reason, posture_digest: postureDigest };
 }
 
 function normalizeRetention(value, createdAt, requestExpiry) {
@@ -326,10 +353,17 @@ function normalizeEvidence(value, record) {
   const mediaType = enumValue(media.media_type, ALLOWED_VIDEO_TYPES, "evidence.media.media_type");
   const byteCount = integer(media.byte_count, "evidence.media.byte_count", 1, MAX_VIDEO_BYTES);
   const durationSeconds = finiteNumber(media.duration_seconds, "evidence.media.duration_seconds", 0, record.request.max_duration_seconds);
+  const hasAudio = strictBoolean(media.has_audio, "evidence.media.has_audio");
   const capturedAt = iso(evidence.captured_at, "evidence.captured_at");
   const expiresAt = iso(evidence.expires_at, "evidence.expires_at");
   const subject = enumValue(evidence.subject, CAPTURE_SCOPES, "evidence.subject");
-  if (subject !== record.request.capture_scope) throw contractError("scope_mismatch", "video subject differs from proposal");
+  if (subject !== record.capture.capture_scope) throw contractError("scope_mismatch", "video subject differs from trusted capture receipt");
+  if (durationSeconds !== record.capture.duration_seconds) {
+    throw contractError("duration_mismatch", "uploaded duration differs from trusted capture receipt");
+  }
+  if (hasAudio !== record.capture.has_audio) {
+    throw contractError("audio_mismatch", "uploaded audio posture differs from trusted capture receipt");
+  }
   if (Date.parse(capturedAt) < Date.parse(record.created_at) || Date.parse(expiresAt) <= Date.parse(capturedAt)) {
     throw contractError("invalid_evidence_time", "video capture and expiry must be ordered within the request");
   }
@@ -346,6 +380,7 @@ function normalizeEvidence(value, record) {
     media_type: mediaType,
     byte_count: byteCount,
     duration_seconds: durationSeconds,
+    has_audio: hasAudio,
     sha256: digest(evidence.media.sha256, "evidence.media.sha256"),
     blob_ref: token(media.blob_ref, "evidence.media.blob_ref"),
     grant: { class: "user_started_capture", surface_id: record.turn.surface_id, user_initiated: true },
@@ -360,6 +395,11 @@ function requireTrustedSurfaceReceipt(record, receipt, event) {
   if (token(receipt.surface_id, "receipt.surface_id") !== record.turn.surface_id) {
     throw contractError("surface_mismatch", "receipt belongs to another surface", 403);
   }
+  assertExactFields(receipt, {
+    request_id: record.request_id,
+    turn_id: record.turn.turn_id,
+    session_id: record.turn.session_id,
+  }, "surface_receipt_binding_mismatch");
 }
 
 function assertBinding(record, binding) {
@@ -370,10 +410,86 @@ function assertBinding(record, binding) {
     role: record.turn.role,
     original_query: record.turn.original_query,
     query_revision: record.turn.query_revision,
+    source: record.turn.source,
+    surface_id: record.turn.surface_id,
+    delegation_envelope_id: record.turn.delegation_envelope_id,
     capability_snapshot_id: record.capability_snapshot.id,
+    capability_snapshot_digest: record.capability_snapshot.digest,
+    provider: record.provider_support.provider,
+    provider_model: record.provider_support.model,
+    provider_direct_video_input: record.provider_support.direct_video_input,
+    provider_posture_digest: record.provider_support.posture_digest,
+    evidence_id: record.evidence.evidence_id,
+    blob_ref: record.evidence.blob_ref,
+    evidence_sha256: record.evidence.sha256,
   };
   for (const [key, value] of Object.entries(expected)) {
     if (binding[key] !== value) throw contractError("turn_binding_mismatch", `attachment ${key} does not match the originating turn`);
+  }
+}
+
+function assetClaim(record) {
+  return {
+    request_id: record.request_id,
+    turn_id: record.turn.turn_id,
+    session_id: record.turn.session_id,
+  };
+}
+
+function assertAssetIdentityAvailable(claims, evidence, record) {
+  const expected = assetClaim(record);
+  for (const key of ["evidence_id", "blob_ref", "sha256"]) {
+    const existing = claims[key].get(evidence[key]);
+    if (existing && canonical(existing) !== canonical(expected)) {
+      throw contractError("evidence_identity_reuse", `${key} is already bound to another video request`, 409);
+    }
+  }
+}
+
+function claimAssetIdentity(claims, evidence, record) {
+  const claim = Object.freeze(assetClaim(record));
+  for (const key of ["evidence_id", "blob_ref", "sha256"]) claims[key].set(evidence[key], claim);
+}
+
+function assertBlobDeleteReceipt(record, receipt) {
+  if (receipt.authority !== "trusted_blob_store" || receipt.deleted !== true) {
+    throw contractError("trusted_blob_delete_receipt_required", "blob deletion requires a trusted successful store receipt", 403);
+  }
+  assertExactFields(receipt, {
+    request_id: record.request_id,
+    evidence_id: record.evidence.evidence_id,
+    blob_ref: record.evidence.blob_ref,
+    sha256: record.evidence.sha256,
+  }, "blob_delete_binding_mismatch");
+  token(receipt.receipt_ref, "blob_delete_receipt.receipt_ref");
+}
+
+function assertProviderReceipt(record, receipt) {
+  if (receipt.authority !== "trusted_provider_adapter" || receipt.direct_video_received !== true) {
+    throw contractError("trusted_provider_receipt_required", "processing requires a trusted direct-video provider receipt", 403);
+  }
+  assertExactFields(receipt, {
+    request_id: record.request_id,
+    turn_id: record.turn.turn_id,
+    session_id: record.turn.session_id,
+    evidence_id: record.evidence.evidence_id,
+    blob_ref: record.evidence.blob_ref,
+    sha256: record.evidence.sha256,
+    provider: record.provider_support.provider,
+    model: record.provider_support.model,
+    capability_snapshot_id: record.capability_snapshot.id,
+    capability_snapshot_digest: record.capability_snapshot.digest,
+    provider_posture_digest: record.provider_support.posture_digest,
+  }, "provider_receipt_binding_mismatch");
+  if (receipt.direct_video_input !== record.provider_support.direct_video_input) {
+    throw contractError("provider_receipt_binding_mismatch", "provider receipt capability posture does not match the request");
+  }
+  token(receipt.receipt_ref, "provider_receipt.receipt_ref");
+}
+
+function assertExactFields(actual, expected, code) {
+  for (const [key, value] of Object.entries(expected)) {
+    if (actual[key] !== value) throw contractError(code, `${key} does not match the bound video request`);
   }
 }
 
@@ -468,7 +584,6 @@ function digest(value, field) {
   if (!/^sha256:[a-f0-9]{64}$/.test(text)) throw contractError("invalid_input", `${field} is invalid`);
   return text;
 }
-function optionalDigest(value) { return value ? digest(value, "digest") : ""; }
 function clone(value) { return value == null ? value : structuredClone(value); }
 
 function contractError(code, message, statusCode = 400) {

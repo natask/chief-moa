@@ -13,6 +13,8 @@ const {
 } = require("../lib/video-evidence-continuation");
 
 const SHA = `sha256:${"a".repeat(64)}`;
+const SHA_B = `sha256:${"b".repeat(64)}`;
+const POSTURE_SHA = `sha256:${"c".repeat(64)}`;
 
 function harness() {
   let current = "2026-07-15T12:00:00.000Z";
@@ -50,8 +52,10 @@ function proposal(overrides = {}) {
     capability_snapshot: { id: "caps-1", digest: SHA, ...overrides.capability_snapshot },
     provider_support: {
       provider: "vertex",
+      model: "gemini-3-pro",
       direct_video_input: true,
       reason: "direct_video_supported",
+      posture_digest: POSTURE_SHA,
       ...overrides.provider_support,
     },
     retention: { policy: "short_lived", delete_at: "2026-07-15T12:10:00.000Z", ...overrides.retention },
@@ -66,12 +70,16 @@ function trusted(receiptId, extra = {}) {
     authority: "trusted_surface_user_action",
     user_activated: true,
     surface_id: "surface-browser-1",
+    request_id: "video-request-1",
+    turn_id: "turn-1",
+    session_id: "session-1",
     at: "2026-07-15T12:01:00.000Z",
     ...extra,
   };
 }
 
 function uploadedEvidence(extra = {}) {
+  const { media = {}, grant = {}, ...fields } = extra;
   return {
     schema: "evidence_asset.v1",
     evidence_id: "evidence-video-1",
@@ -84,17 +92,18 @@ function uploadedEvidence(extra = {}) {
       media_type: "video/webm",
       byte_count: 1024,
       duration_seconds: 4.5,
+      has_audio: false,
       sha256: SHA,
       blob_ref: "blob-video-1",
-      ...extra.media,
+      ...media,
     },
     grant: {
       class: "user_started_capture",
       surface_id: "surface-browser-1",
       user_initiated: true,
-      ...extra.grant,
+      ...grant,
     },
-    ...extra,
+    ...fields,
   };
 }
 
@@ -106,7 +115,52 @@ function binding(extra = {}) {
     role: "explain",
     original_query: "Why does this chart move when I scroll?",
     query_revision: 3,
+    source: "browser",
+    surface_id: "surface-browser-1",
+    delegation_envelope_id: "envelope-1",
     capability_snapshot_id: "caps-1",
+    capability_snapshot_digest: SHA,
+    provider: "vertex",
+    provider_model: "gemini-3-pro",
+    provider_direct_video_input: true,
+    provider_posture_digest: POSTURE_SHA,
+    evidence_id: "evidence-video-1",
+    blob_ref: "blob-video-1",
+    evidence_sha256: SHA,
+    ...extra,
+  };
+}
+
+function providerReceipt(extra = {}) {
+  return {
+    authority: "trusted_provider_adapter",
+    receipt_ref: "provider-receipt-1",
+    request_id: "video-request-1",
+    turn_id: "turn-1",
+    session_id: "session-1",
+    evidence_id: "evidence-video-1",
+    blob_ref: "blob-video-1",
+    sha256: SHA,
+    provider: "vertex",
+    model: "gemini-3-pro",
+    direct_video_input: true,
+    direct_video_received: true,
+    capability_snapshot_id: "caps-1",
+    capability_snapshot_digest: SHA,
+    provider_posture_digest: POSTURE_SHA,
+    ...extra,
+  };
+}
+
+function blobDeleteReceipt(extra = {}) {
+  return {
+    authority: "trusted_blob_store",
+    receipt_ref: "blob-delete-1",
+    request_id: "video-request-1",
+    evidence_id: "evidence-video-1",
+    blob_ref: "blob-video-1",
+    sha256: SHA,
+    deleted: true,
     ...extra,
   };
 }
@@ -120,12 +174,12 @@ function advanceToCaptured(core) {
   }));
 }
 
-function advanceToAttached(core) {
+function advanceToAttached(core, bindingOverrides = {}) {
   advanceToCaptured(core);
   core.recordUploaded("video-request-1", trusted("upload-1", { evidence: uploadedEvidence() }));
   core.attach("video-request-1", trusted("attach-1", {
     evidence_id: "evidence-video-1",
-    binding: binding(),
+    binding: binding(bindingOverrides),
   }));
 }
 
@@ -165,7 +219,7 @@ test("proposal defaults remain bounded and generated ids do not weaken validatio
       surface_id: undefined,
       delegation_envelope_id: undefined,
     },
-    capability_snapshot: { id: undefined, digest: undefined },
+    capability_snapshot: { id: undefined },
     retention: { delete_at: undefined },
     top: { capability_snapshot_id: "caps-fallback", surface_id: "surface-browser-1" },
   });
@@ -176,7 +230,7 @@ test("proposal defaults remain bounded and generated ids do not weaken validatio
   assert.equal(record.turn.query_revision, 7);
   assert.equal(record.turn.delegation_envelope_id, "");
   assert.equal(record.capability_snapshot.id, "caps-fallback");
-  assert.equal(record.capability_snapshot.digest, "");
+  assert.equal(record.capability_snapshot.digest, SHA);
   assert.equal(record.retention.delete_at, record.request.expires_at);
   assertCode(() => core.proposeFromModel(input), "request_conflict");
 });
@@ -199,6 +253,9 @@ test("model output alone cannot start capture and only a trusted user action adv
   assertCode(() => core.recordUserStarted("video-request-1", trusted("wrong-surface", {
     surface_id: "surface-browser-2",
   })), "surface_mismatch");
+  assertCode(() => core.recordUserStarted("video-request-1", trusted("wrong-turn-binding", {
+    request_id: "video-request-2",
+  })), "surface_receipt_binding_mismatch");
   assert.equal(core.get("video-request-1").status, "proposed");
 
   const started = core.recordUserStarted("video-request-1", trusted("start-ok"));
@@ -225,11 +282,12 @@ test("trusted capture, upload, attachment, and direct processing preserve the or
 
   const processed = core.recordProcessed("video-request-1", {
     receipt_id: "provider-1",
-    provider_receipt_ref: "provider-receipt-1",
+    provider_receipt: providerReceipt(),
     at: "2026-07-15T12:02:00.000Z",
   });
   assert.equal(processed.status, "processed");
   assert.equal(processed.processing.direct_video_received, true);
+  assert.equal(processed.processing.model, "gemini-3-pro");
   assert.equal(processed.evidence.blob_ref, "blob-video-1");
 });
 
@@ -241,7 +299,18 @@ test("attachment rejects cross-turn, cross-session, query, capability, and evide
     ["role", "delegate"],
     ["original_query", "different question"],
     ["query_revision", 4],
+    ["source", "voice"],
+    ["surface_id", "surface-browser-2"],
+    ["delegation_envelope_id", "envelope-2"],
     ["capability_snapshot_id", "caps-2"],
+    ["capability_snapshot_digest", SHA_B],
+    ["provider", "openai-compatible"],
+    ["provider_model", "other-model"],
+    ["provider_direct_video_input", false],
+    ["provider_posture_digest", SHA_B],
+    ["evidence_id", "evidence-video-2"],
+    ["blob_ref", "blob-video-2"],
+    ["evidence_sha256", SHA_B],
   ]) {
     const { core } = harness();
     core.proposeFromModel(proposal());
@@ -288,6 +357,48 @@ test("receipt replay is idempotent and optimistic versions reject concurrent com
   assert.equal(captured.version, 3);
 });
 
+test("evidence id, blob ref, and digest are globally single-owner across requests and turns", () => {
+  const { core } = harness();
+  core.proposeFromModel(proposal());
+  advanceToCaptured(core);
+  core.recordUploaded("video-request-1", trusted("upload-owner", { evidence: uploadedEvidence() }));
+
+  core.proposeFromModel(proposal({
+    model_output: { request_id: "video-request-2" },
+    turn: { turn_id: "turn-2", session_id: "session-2", query: "Second question" },
+  }));
+  const secondTurnReceipt = { request_id: "video-request-2", turn_id: "turn-2", session_id: "session-2" };
+  core.recordUserStarted("video-request-2", trusted("start-2", secondTurnReceipt));
+  core.recordCaptured("video-request-2", trusted("capture-2", {
+    ...secondTurnReceipt,
+    duration_seconds: 4.5,
+    capture_scope: "tab",
+    has_audio: false,
+  }));
+
+  const reuses = [
+    uploadedEvidence(),
+    uploadedEvidence({
+      media: { blob_ref: "blob-video-2", sha256: SHA_B },
+    }),
+    uploadedEvidence({
+      evidence_id: "evidence-video-3",
+      media: { blob_ref: "blob-video-1", sha256: SHA_B },
+    }),
+    uploadedEvidence({
+      evidence_id: "evidence-video-4",
+      media: { blob_ref: "blob-video-4", sha256: SHA },
+    }),
+  ];
+  for (const [index, evidence] of reuses.entries()) {
+    assertCode(() => core.recordUploaded("video-request-2", trusted(`reuse-${index}`, {
+      ...secondTurnReceipt,
+      evidence,
+    })), "evidence_identity_reuse");
+  }
+  assert.equal(core.get("video-request-2").status, "captured");
+});
+
 test("proposal, capture, media, audio, expiry, and retention bounds fail closed", () => {
   const invalidProposals = [
     proposal({ model_output: { max_duration_seconds: 121 } }),
@@ -325,6 +436,8 @@ test("proposal, capture, media, audio, expiry, and retention bounds fail closed"
     uploadedEvidence({ media: { media_type: "video/avi" } }),
     uploadedEvidence({ media: { byte_count: MAX_VIDEO_BYTES + 1 } }),
     uploadedEvidence({ media: { duration_seconds: 31 } }),
+    uploadedEvidence({ media: { duration_seconds: 4.4 } }),
+    uploadedEvidence({ media: { has_audio: true } }),
     { ...uploadedEvidence(), grant: { ...uploadedEvidence().grant, user_initiated: false } },
     { ...uploadedEvidence(), grant: { ...uploadedEvidence().grant, surface_id: "surface-browser-2" } },
     { ...uploadedEvidence(), subject: "screen" },
@@ -396,11 +509,14 @@ test("unsupported providers are explicit and derivation cannot masquerade as dir
       reason: "model_video_input_unavailable",
     },
   }));
-  advanceToAttached(core);
+  advanceToAttached(core, {
+    provider: "openai_compatible",
+    provider_direct_video_input: false,
+  });
   assert.equal(core.createContinuation("video-request-1").provider_video.direct_video_input, false);
   assertCode(() => core.recordProcessed("video-request-1", {
     receipt_id: "provider-unsupported",
-    provider_receipt_ref: "provider-receipt-1",
+    provider_receipt: providerReceipt(),
   }), "video_provider_unsupported");
 
   const direct = harness().core;
@@ -408,9 +524,46 @@ test("unsupported providers are explicit and derivation cannot masquerade as dir
   advanceToAttached(direct);
   assertCode(() => direct.recordProcessed("video-request-1", {
     receipt_id: "provider-derived",
-    provider_receipt_ref: "provider-receipt-2",
+    provider_receipt: providerReceipt({ receipt_ref: "provider-receipt-2" }),
     derivation: "sampled_frames",
   }), "silent_derivation_forbidden");
+});
+
+test("provider processing requires a trusted receipt bound to provider, model, posture, and exact asset", () => {
+  const { core } = harness();
+  core.proposeFromModel(proposal());
+  advanceToAttached(core);
+  const falsifications = [
+    { authority: "model_output" },
+    { direct_video_received: false },
+    { request_id: "video-request-2" },
+    { turn_id: "turn-2" },
+    { session_id: "session-2" },
+    { evidence_id: "evidence-video-2" },
+    { blob_ref: "blob-video-2" },
+    { sha256: SHA_B },
+    { provider: "openai-compatible" },
+    { model: "other-model" },
+    { direct_video_input: false },
+    { capability_snapshot_id: "caps-2" },
+    { capability_snapshot_digest: SHA_B },
+    { provider_posture_digest: SHA_B },
+    { receipt_ref: "" },
+  ];
+  for (const [index, mutation] of falsifications.entries()) {
+    assert.throws(() => core.recordProcessed("video-request-1", {
+      receipt_id: `provider-falsification-${index}`,
+      provider_receipt: providerReceipt(mutation),
+    }));
+    assert.equal(core.get("video-request-1").status, "attached");
+  }
+  const processed = core.recordProcessed("video-request-1", {
+    receipt_id: "provider-bound",
+    provider_receipt: providerReceipt(),
+  });
+  assert.equal(processed.processing.provider_receipt_ref, "provider-receipt-1");
+  assert.equal(processed.processing.evidence_sha256, SHA);
+  assert.equal(processed.processing.provider_posture_digest, POSTURE_SHA);
 });
 
 test("explicit deletion clears the blob reference and keeps a bounded deletion tombstone receipt", () => {
@@ -419,7 +572,7 @@ test("explicit deletion clears the blob reference and keeps a bounded deletion t
   advanceToAttached(core);
   const deleted = core.deleteEvidence("video-request-1", trusted("delete-1", {
     reason: "user requested immediate deletion",
-    blob_delete_receipt_ref: "blob-delete-1",
+    blob_delete_receipt: blobDeleteReceipt(),
     at: "2026-07-15T12:03:00.000Z",
   }));
   assert.equal(deleted.status, "deleted");
@@ -429,10 +582,42 @@ test("explicit deletion clears the blob reference and keeps a bounded deletion t
   assert.equal(deleted.receipts.at(-1).event, "deleted");
   assert.deepEqual(core.deleteEvidence("video-request-1", trusted("delete-1", {
     reason: "user requested immediate deletion",
-    blob_delete_receipt_ref: "blob-delete-1",
+    blob_delete_receipt: blobDeleteReceipt(),
     at: "2026-07-15T12:03:00.000Z",
   })), deleted);
   assertCode(() => core.createContinuation("video-request-1"), "invalid_transition");
+});
+
+test("deletion clears a blob ref only after a trusted store receipt binds the exact asset", () => {
+  const { core } = harness();
+  core.proposeFromModel(proposal());
+  advanceToAttached(core);
+  const falsifications = [
+    null,
+    { authority: "surface_claim" },
+    { deleted: false },
+    { request_id: "video-request-2" },
+    { evidence_id: "evidence-video-2" },
+    { blob_ref: "blob-video-2" },
+    { sha256: SHA_B },
+    { receipt_ref: "" },
+  ];
+  for (const [index, mutation] of falsifications.entries()) {
+    const blobReceipt = mutation === null ? undefined : blobDeleteReceipt(mutation);
+    assert.throws(() => core.deleteEvidence("video-request-1", trusted(`delete-falsification-${index}`, {
+      reason: "delete",
+      blob_delete_receipt: blobReceipt,
+    })));
+    const unchanged = core.get("video-request-1");
+    assert.equal(unchanged.status, "attached");
+    assert.equal(unchanged.evidence.blob_ref, "blob-video-1");
+  }
+  const deleted = core.deleteEvidence("video-request-1", trusted("delete-bound", {
+    reason: "delete",
+    blob_delete_receipt: blobDeleteReceipt(),
+  }));
+  assert.equal(deleted.evidence.blob_ref, null);
+  assert.equal(deleted.deletion.deleted_blob_ref, "blob-video-1");
 });
 
 test("expired proposals cannot advance and become a durable failed expiry receipt", () => {
@@ -447,7 +632,7 @@ test("expired proposals cannot advance and become a durable failed expiry receip
   assert.equal(expired.receipts.at(-1).code, "expired");
 });
 
-test("explicit failure is bounded, versioned, and deletable by the owning surface", () => {
+test("explicit failure is bounded and cannot claim blob deletion without uploaded evidence", () => {
   const { core } = harness();
   core.proposeFromModel(proposal());
   const failed = core.fail("video-request-1", {
@@ -457,7 +642,8 @@ test("explicit failure is bounded, versioned, and deletable by the owning surfac
   });
   assert.equal(failed.status, "failed");
   assert.equal(failed.failure.code, "capture_cancelled");
-  const deleted = core.deleteEvidence("video-request-1", trusted("delete-failed", { reason: "remove request metadata" }));
-  assert.equal(deleted.status, "deleted");
-  assert.equal(deleted.evidence, null);
+  assertCode(() => core.deleteEvidence("video-request-1", trusted("delete-failed", {
+    reason: "remove request metadata",
+    blob_delete_receipt: blobDeleteReceipt(),
+  })), "evidence_required");
 });
