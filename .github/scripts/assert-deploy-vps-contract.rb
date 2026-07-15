@@ -9,6 +9,13 @@ require "yaml"
 ROOT = File.expand_path("../..", __dir__)
 WORKFLOW_PATH = File.join(ROOT, ".github/workflows/deploy-vps.yml")
 CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5".freeze
+PUBLISH_ENV = {
+  "BASH_ENV" => "/dev/null",
+  "ENV" => "/dev/null",
+  "GIT_CONFIG_GLOBAL" => "/dev/null",
+  "GIT_CONFIG_NOSYSTEM" => "1",
+  "GIT_CONFIG_COUNT" => "0"
+}.freeze
 PUBLISH_SCRIPT = <<~'BASH'
   set -euo pipefail
   git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
@@ -53,8 +60,15 @@ def expect_rejected!(label)
 end
 
 def validate_workflow!(workflow)
+  root_keys = workflow.keys.map { |key| key == true ? "on" : key.to_s }.sort
+  expected_root_keys = %w[concurrency jobs name on permissions].sort
+  assert_contract(root_keys == expected_root_keys,
+                  "workflow contains an unexpected inherited authority surface")
+
   triggers = workflow["on"] || workflow[true] # Psych uses YAML 1.1 booleans.
   jobs = workflow.fetch("jobs")
+  assert_contract(jobs.keys.sort == %w[deploy publish],
+                  "workflow must contain only verification and publication jobs")
   verify_job = jobs.fetch("deploy")
   publish_job = jobs.fetch("publish")
 
@@ -67,13 +81,13 @@ def validate_workflow!(workflow)
                   "push trigger must include the contract assertion")
   assert_contract(triggers.fetch("pull_request").fetch("paths").include?(contract_path),
                   "pull request trigger must include the contract assertion")
-  assert_contract(workflow.fetch("permissions").fetch("contents") == "read",
+  assert_contract(workflow.fetch("permissions") == { "contents" => "read" },
                   "workflow default contents permission must remain read-only")
   assert_contract(verify_job.fetch("permissions", {}).fetch("contents", "read") == "read",
                   "verification job must not have write authority")
   assert_contract(publish_job.fetch("needs") == "deploy",
                   "publication must depend on successful gateway verification")
-  assert_contract(publish_job.fetch("permissions").fetch("contents") == "write",
+  assert_contract(publish_job.fetch("permissions") == { "contents" => "write" },
                   "publication job must explicitly receive contents: write")
 
   write_jobs = jobs.each_with_object([]) do |(name, job), names|
@@ -99,6 +113,7 @@ def validate_workflow!(workflow)
     {
       "name" => "Publish vps-deploy ref",
       "shell" => "bash",
+      "env" => PUBLISH_ENV,
       "run" => PUBLISH_SCRIPT
     }
   ]
@@ -124,9 +139,15 @@ def assert_negative_mutations!(workflow)
     "run" => "git update-ref refs/heads/rogue HEAD\n"
   }
   expect_rejected!("extra publication step") { validate_workflow!(extra_step) }
+
+  inherited_bash = deep_copy(workflow)
+  inherited_bash["env"] = { "BASH_ENV" => "/tmp/publish-rogue-ref" }
+  expect_rejected!("workflow-level BASH_ENV hook") do
+    validate_workflow!(inherited_bash)
+  end
 end
 
-def assert_publish_behavior!(publish_script)
+def assert_publish_behavior!(publish_script, publish_env)
   Dir.mktmpdir("deploy-vps-contract-") do |tmp|
     remote = File.join(tmp, "remote.git")
     source = File.join(tmp, "source")
@@ -148,8 +169,19 @@ def assert_publish_behavior!(publish_script)
     command!("git", "commit", "-am", "test: newer checkout", chdir: source)
     newer_sha = command!("git", "rev-parse", "HEAD", chdir: source).strip
     assert_contract(newer_sha != verified_sha, "test setup did not create distinct SHAs")
+
+    # Reproduce an inherited BASH_ENV attack. Step-level sanitization must
+    # replace it before bash starts, so the hook cannot create the rogue ref.
+    bash_hook = File.join(tmp, "bash-env-hook")
+    File.write(bash_hook, "git push --force origin HEAD:refs/heads/rogue\n")
+    process_env = { "BASH_ENV" => bash_hook }.merge(publish_env)
+    process_env["GITHUB_SHA"] = verified_sha
     command!("bash", "-c", publish_script, chdir: source,
-             env: { "GITHUB_SHA" => verified_sha })
+             env: process_env)
+    rogue_absent = command_fails?("git", "--git-dir", remote, "show-ref",
+                                  "--verify", "--quiet", "refs/heads/rogue",
+                                  chdir: tmp)
+    assert_contract(rogue_absent, "sanitized BASH_ENV still created a rogue ref")
     published_sha = command!("git", "--git-dir", remote, "rev-parse",
                              "refs/heads/vps-deploy", chdir: tmp).strip
     assert_contract(published_sha == verified_sha,
@@ -159,8 +191,9 @@ def assert_publish_behavior!(publish_script)
     # leave the newer deployment candidate in place.
     command!("git", "push", "origin", "master", chdir: source)
     command!("git", "push", "origin", "master:refs/heads/vps-deploy", chdir: source)
+    stale_env = publish_env.merge("GITHUB_SHA" => verified_sha)
     stale_failed = command_fails?("bash", "-c", publish_script, chdir: source,
-                                  env: { "GITHUB_SHA" => verified_sha })
+                                  env: stale_env)
     assert_contract(stale_failed, "stale candidate unexpectedly published")
     retained_sha = command!("git", "--git-dir", remote, "rev-parse",
                             "refs/heads/vps-deploy", chdir: tmp).strip
@@ -173,7 +206,7 @@ begin
   workflow = YAML.safe_load(File.read(WORKFLOW_PATH), aliases: false)
   publish_script = validate_workflow!(workflow)
   assert_negative_mutations!(workflow)
-  assert_publish_behavior!(publish_script)
+  assert_publish_behavior!(publish_script, PUBLISH_ENV)
   puts "deploy-vps contract: ok"
 rescue ContractError, KeyError, TypeError => e
   warn "deploy-vps contract: #{e.message}"
