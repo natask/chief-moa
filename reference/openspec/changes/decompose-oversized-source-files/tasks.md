@@ -267,6 +267,13 @@
       deterministic presentation smoke coverage. Enforce a focused 90%
       line/branch/function gate, verified at 100% for all three metrics. Reduce
       `server.js` to 13,418 lines.
+- [x] 2.48 Extract authenticated harness discovery and supervisor status
+      projection from `server.js`; add focused unrelated-route, authorization,
+      catalog, work-status count, active filtering, run sorting, runtime evidence,
+      legacy-storage fallback, empty-field, default-clock, and hard-cap tests plus
+      the existing supervisor lifecycle smoke. Enforce a focused 90%
+      line/branch/function gate, verified at 100% for all three metrics. Reduce
+      `server.js` to 13,341 lines.
 
 ## 3. Other Oversized Surfaces
 
