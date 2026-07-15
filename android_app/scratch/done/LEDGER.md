@@ -1,3 +1,4 @@
+- Marked interrupted Android assistant replies at a compact steering boundary and turn-gated hosted audio so stale callbacks cannot resume speech over the new mic turn — agent: codex/gpt-5 — 0f077607
 - Bound manual voice toggles to their capture origin so a single click cannot send a double-started fresh-thread capture, with resolver and touch-dispatch regressions — agent: codex/gpt-5 — f41f6088
 - Removed the superseded voice-draft X/Send side windows so only orb toggle, fresh-thread, chat, hold-release, and hold-drag gestures own capture disposition — agent: codex/gpt-5 — 1e542437
 - Replaced silence-driven orb voice with manual current/fresh-thread click toggles, hold-release PTT, triple-click chat, preserved drag, and matching notes-mode storage behavior — agent: codex/gpt-5 — 774b21a7
