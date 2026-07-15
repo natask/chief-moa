@@ -344,6 +344,12 @@
 - [x] 4.4b Extract browser agent-loop observation and action policy with a
       focused 90% gate. Verified at 100% lines, branches, and functions; reduce
       `background.js` to 5,460 lines.
+- [x] 4.4c Execute the browser options runtime under Chrome storage, DOM,
+      gateway, microphone, profile, companion, and sparse-optional-state tests;
+      add it to the focused 90% gate. Verified at 99.22% lines, 92.16% branches,
+      and 100% functions. Raise the exact whole-extension ratchet to 27.47%
+      lines, 13.16% branches, and 11.45% functions with 31 passing unit tests
+      and a passing real headless-Chromium smoke.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
