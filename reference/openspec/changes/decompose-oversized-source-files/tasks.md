@@ -159,6 +159,10 @@
       output bounding, markdown, and metadata tests with a focused 90%
       line/branch/function gate. Verified at 100% lines, 97.73% branches, and
       100% functions.
+- [x] 2.32 Add exhaustive preview-adapter provider-shape, inspection-identity,
+      active-collision, polling-bound, timeout, sleep, abort, cleanup, and
+      aggregate-failure tests with a focused 90% line/branch/function gate.
+      Verified at 100% lines, 91.30% branches, and 100% functions.
 
 ## 3. Other Oversized Surfaces
 
