@@ -70,6 +70,14 @@ services:
       GCP_LOCATION: ${GCP_LOCATION:-us}
       CHIRP_MODEL: ${CHIRP_MODEL:-chirp_3}
       CHIRP_LANGUAGE_CODES: ${CHIRP_LANGUAGE_CODES:-en-US}
+      # Blob storage for media bytes: local (default) keeps everything in the
+      # data volume; gcs spools locally and write-behind-uploads to the bucket.
+      BLOB_STORE: ${BLOB_STORE:-local}
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      GCS_PREFIX: ${GCS_PREFIX:-}
+      GCS_PROJECT_ID: ${GCS_PROJECT_ID:-}
+      BLOB_SPOOL_MAX_AGE_MS: ${BLOB_SPOOL_MAX_AGE_MS:-}
+      BLOB_JANITOR_INTERVAL_MS: ${BLOB_JANITOR_INTERVAL_MS:-}
     volumes:
       - moa-gateway-data:/data
     healthcheck:
