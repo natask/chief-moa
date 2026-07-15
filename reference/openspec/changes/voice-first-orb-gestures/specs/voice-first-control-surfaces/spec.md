@@ -1,56 +1,71 @@
 ## ADDED Requirements
 
-### Requirement: Android voice-first tap chords route continue, new, and chat
+### Requirement: Android voice-first gestures manually control capture
 When the Android `voice_first_gestures` preference is enabled, the overlay SHALL
-map quick orb tap chords to distinct user intents: single tap continues the
-current voice thread, double tap starts a fresh voice thread, and triple tap
-opens the chat surface. The default flag-off Android contract SHALL remain tap
-for chat and double-click-and-hold for voice.
+use explicit user gestures to start and stop capture. Silence or assistant/model
+output SHALL NOT dispose a normal manual capture. The gesture that starts a
+toggle capture SHALL be the only toggle gesture that can send it.
 
-#### Scenario: Single tap continues the current voice thread
-- **WHEN** the voice-first Android flag is enabled and the user single-taps the
-  orb while idle
-- **THEN** Android starts hands-free voice on the current active thread
-- **AND** Android shows `X` to the left of the orb and `↑` to its right
-- **AND** a later single tap does not send the current utterance
-- **AND** only the visible `↑` commits the draft
+#### Scenario: Single click toggles current-thread capture
+- **WHEN** the voice-first Android flag is enabled and the user single-clicks
+  the idle orb
+- **THEN** Android starts capture on the current active thread
+- **WHEN** the user later single-clicks that current-thread capture
+- **THEN** Android stops and sends the turn exactly once
 
-#### Scenario: Double tap starts a fresh voice thread
-- **WHEN** the voice-first Android flag is enabled and the user double-taps the
-  orb
-- **THEN** Android cancels any just-started or pending current-thread voice loop
-- **AND** Android starts the next voice turn with the explicit fresh-thread
-  client context action
+#### Scenario: Double-click toggles fresh-thread capture
+- **WHEN** the user double-clicks the idle orb
+- **THEN** Android starts capture with the explicit fresh-thread context action
+- **WHEN** the user later single-clicks that fresh-thread capture
+- **THEN** Android does not send it
+- **WHEN** the user later double-clicks that fresh-thread capture
+- **THEN** Android stops and sends the turn exactly once
 
-#### Scenario: Triple tap opens chat without leaving a hot mic
-- **WHEN** the voice-first Android flag is enabled and the user triple-taps the
-  orb
-- **THEN** Android cancels any milliseconds-old fresh voice loop created by the
-  double tap
-- **AND** Android opens the chat surface
+#### Scenario: Fresh start cannot leak current capture
+- **WHEN** current-thread capture is active and the user double-clicks
+- **THEN** Android cancels that capture without sending
+- **AND** starts a fresh-thread capture
+
+#### Scenario: Hold is same-thread push-to-talk
+- **WHEN** the user presses and holds the still orb past the hold threshold
+- **THEN** Android starts capture on the current thread
+- **AND** release stops and sends exactly once
+- **AND** a large movement after capture starts cancels and escapes into drag
+
+#### Scenario: Triple click opens chat without sending
+- **WHEN** capture is active and the user triple-clicks
+- **THEN** Android cancels it without sending
+- **AND** opens chat with no hot mic
 
 #### Scenario: Flag off preserves the legacy contract
 - **WHEN** the voice-first Android flag is disabled
 - **THEN** a single tap opens chat
 - **AND** double-click-and-hold remains the voice capture gesture
 
-### Requirement: Browser voice-first drafts match Android disposition controls
-The browser extension SHALL, when `ageeVoiceFirstGesturesEnabled` is enabled,
-start a reviewable voice draft whose cancel and Send controls flank the mascot
-and remain independent of the text/result panel.
+### Requirement: Browser voice-first gestures match Android
+When `ageeVoiceFirstGesturesEnabled` is enabled, the browser mascot SHALL expose
+the same single, hold, double, and triple gesture meanings as Android. It SHALL
+NOT expose separate X/Send voice-draft controls.
 
-#### Scenario: Browser click starts a reviewable draft
-- **WHEN** the browser voice-first flag is enabled and the user clicks the idle mascot
-- **THEN** the browser starts a non-auto-committing voice draft
-- **AND** shows `X` to the mascot's left and `↑` to its right
+#### Scenario: Browser single and double toggles are origin matched
+- **WHEN** a single click starts current-thread capture
+- **THEN** only a later single click stops and sends it
+- **WHEN** a double-click starts fresh-thread capture
+- **THEN** a later single click does not send it
+- **AND** only a later double-click stops and sends it
 
-#### Scenario: Browser mascot cannot silently send
-- **WHEN** a browser voice draft is active and the user clicks the mascot again
-- **THEN** the draft remains active
-- **AND** no commit is sent
+#### Scenario: Browser double-click replaces current capture safely
+- **WHEN** current-thread capture is active and the user double-clicks
+- **THEN** the browser cancels it without sending
+- **AND** starts fresh-thread capture
 
-#### Scenario: Browser side controls own disposition
-- **WHEN** the user clicks `X`
-- **THEN** the browser cancels and discards the draft locally
-- **WHEN** the user instead clicks `↑`
-- **THEN** the browser commits that voice turn exactly once
+#### Scenario: Browser hold and triple-click are collision safe
+- **WHEN** the user holds the still mascot
+- **THEN** capture is push-to-talk and release sends exactly once
+- **WHEN** the user triple-clicks while capture is active
+- **THEN** the browser cancels without sending and opens chat
+
+#### Scenario: Removed side controls cannot retain authority
+- **WHEN** voice-first capture is active
+- **THEN** no separate X or Send control is rendered beside the mascot
+- **AND** transcript/chat cards do not own capture disposition
