@@ -5,6 +5,29 @@ Status: contract for the remaining work on tasks.md ticket 1.1. Written
 `a834d948 feat(extension): wire browser agent roles`). Verified by
 inspection; the verification commands below must run before 1.1 is checked.
 
+Status update 2026-07-15 (tick 8): the tests are WRITTEN but UNEXECUTED
+(autonomous runner has no node/npm execution — in-0k4). Section A landed as
+`assertProseCannotRelabel` in `gateway/scripts/smoke-browser-agent-loop.js`
+(all four cases; case 4 reads back both the typed-explain prose turn and
+`assertRoleContract`'s confirmed delegate turn via
+`/v1/browser/turns/:id/status`). Section B.1 is SUPERSEDED by the 2026-07-16
+fleet redesign: the side panel no longer has a role selector at all
+(`748f5128` and its lineage make roles conversational — `roleForInstruction`
+infers the role from prose, delegation always demands an explicit
+confirmation, and master's own `smoke-sidepanel.mjs` asserts
+`#agentModeSelector`/`[data-agent-mode-option]` count is 0). The drafted
+pinned-selector scenario was dropped at rebase instead of being ported,
+because the property it proved ("prose cannot move the typed selection")
+has no UI surface anymore; the surviving client-side safety property
+(delegate-routed prose requires explicit confirmation before any execution)
+is already asserted by master's smoke. The gateway wire contract is
+unchanged — explicit `role` in the body still pins authority and omitted
+role stays legacy explain — so section A remains valid. Section B.2 (chaining
+`smoke:sidepanel` into `npm run smoke`) is deferred to the same change that
+first executes it green — wiring an unexecuted script into the default smoke
+path could redden everyone's loop. Close-out (section D) is unchanged and
+still gates checking 1.1.
+
 ## Finding: 1.1 is substantially implemented — only the acceptance proof is missing
 
 Commit `a834d948` (2026-07-14, ancestor of current HEAD) already ships:

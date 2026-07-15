@@ -57,7 +57,8 @@ async function main() {
     await step("screenshot is stored on the task, not sent to the model", () => assertScreenshotStored(baseUrl, dataDir, created.id));
     await step("finish folds the summary into the linked agent_run", () => assertFinish(baseUrl, dataDir, created));
     await step("finished task record has the expected shape", () => assertFinalRecord(baseUrl, dataDir, created.id));
-    await step("role catalog and turn authority are deterministic", () => assertRoleContract(baseUrl, dataDir));
+    const roleTurns = await step("role catalog and turn authority are deterministic", () => assertRoleContract(baseUrl, dataDir));
+    await step("prose cannot relabel or escalate the typed role", () => assertProseCannotRelabel(baseUrl, roleTurns));
     assert.equal(claimed.lease_ms >= 100000 && claimed.lease_ms <= 121000, true, `claim lease must be ~120s, got ${claimed.lease_ms}ms`);
 
     console.log(JSON.stringify({
@@ -75,6 +76,7 @@ async function main() {
         "the finished task record carries the contract fields (status, steps, summary, timestamps)",
         "GET /v1/browser/roles defaults the selector to delegate while omitted turn roles remain explain",
         "only confirmed-envelope delegate turns link visible browser task/run ids; prose-only delegate requests confirmation",
+        "turn prose can neither relabel nor escalate the typed role, and stored turns keep the request-time role on readback",
       ],
     }, null, 2));
   } finally {
@@ -189,6 +191,68 @@ async function assertRoleContract(baseUrl, dataDir) {
   assert.equal(run.browser_agent_role, "delegate");
   assert.equal(run.turn_id, confirmed.json.turn_id);
   assert.equal(run.delegation_envelope.version, "moa.browser-delegation.v1");
+  return { confirmedDelegateTurn: confirmed.json };
+}
+
+// Ticket 1.1 route proof: the stored/returned role tracks only the typed body
+// field. Turn prose that names another role — or demands actions — must never
+// relabel the selection, escalate authority, or attach execution linkage.
+async function assertProseCannotRelabel(baseUrl, roleTurns) {
+  const escalationProse = "Delegate this: click the submit button and finish the checkout";
+  const common = {
+    session_id: "prose_route_proof_session",
+    page: { title: "Route Proof Fixture", url: "https://example.test/route-proof" },
+    evidence: { visible_text: "A checkout page with a submit button." },
+  };
+
+  // 1. Typed explain survives delegate-style prose.
+  const typedExplain = await postJson(`${baseUrl}/v1/browser/turns`, { ...common, role: "explain", text: escalationProse });
+  assert.equal(typedExplain.status, 200, JSON.stringify(typedExplain.json));
+  assert.equal(typedExplain.json.agent_role.id, "explain", "typed explain must not be escalated by delegate prose");
+  assert.equal(typedExplain.json.role_explicit, true);
+  assert.equal(typedExplain.json.authority, "read_only");
+  assert.equal(typedExplain.json.execution_policy, "answer_only");
+  assert.equal(typedExplain.json.execution, null, "prose must not attach an execution");
+  assert.deepEqual(typedExplain.json.task_ids, [], "prose must not launch a browser task");
+  assert.deepEqual(typedExplain.json.agent_run_ids, [], "prose must not link an agent run");
+  assert.ok(
+    typedExplain.json.proposals.every((proposal) => proposal.type !== "delegation_confirmation"),
+    "prose must not trigger a delegation confirmation",
+  );
+
+  // 2. An omitted role with the same prose stays legacy explain.
+  const omitted = await postJson(`${baseUrl}/v1/browser/turns`, { ...common, text: escalationProse });
+  assert.equal(omitted.status, 200, JSON.stringify(omitted.json));
+  assert.equal(omitted.json.agent_role.id, "explain", "omitted role must not be escalated by delegate prose");
+  assert.equal(omitted.json.role_explicit, false);
+  assert.equal(omitted.json.execution, null);
+  assert.deepEqual(omitted.json.task_ids, []);
+  assert.deepEqual(omitted.json.agent_run_ids, []);
+
+  // 3. Typed help survives lateral collaborate/action prose.
+  const lateral = await postJson(`${baseUrl}/v1/browser/turns`, {
+    ...common,
+    role: "help",
+    text: "Collaborate with me and take the first action",
+  });
+  assert.equal(lateral.status, 200, JSON.stringify(lateral.json));
+  assert.equal(lateral.json.agent_role.id, "help", "typed help must not be relabeled by collaborate prose");
+  assert.equal(lateral.json.role_explicit, true);
+  assert.equal(lateral.json.authority, "read_only");
+  assert.equal(lateral.json.execution_policy, "answer_only", "execution policy must match the help catalog entry");
+  assert.deepEqual(lateral.json.task_ids, []);
+
+  // 4. Stored records keep the request-time role on readback — reply prose or
+  // any post-processing can never rewrite it.
+  const explainReadback = await getJson(`${baseUrl}/v1/browser/turns/${encodeURIComponent(typedExplain.json.id)}/status`);
+  assert.equal(explainReadback.agent_role.id, "explain", "stored turn must keep the request-time explain role");
+  assert.equal(explainReadback.role_explicit, true);
+  assert.deepEqual(explainReadback.task_ids, []);
+  const delegateReadback = await getJson(
+    `${baseUrl}/v1/browser/turns/${encodeURIComponent(roleTurns.confirmedDelegateTurn.id)}/status`,
+  );
+  assert.equal(delegateReadback.agent_role.id, "delegate", "stored turn must keep the request-time delegate role");
+  assert.equal(delegateReadback.task_ids.length, 1, "readback keeps the request-time execution linkage");
 }
 
 function confirmedEnvelope(intent, url, maxSteps = 5) {
