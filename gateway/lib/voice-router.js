@@ -75,9 +75,6 @@ function withTimeout(promise, timeoutMs) {
     const timer = setTimeout(() => {
       reject(new Error(`voice router model call timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-    if (typeof timer.unref === "function") {
-      timer.unref();
-    }
     Promise.resolve(promise).then(
       (value) => {
         clearTimeout(timer);
