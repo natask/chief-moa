@@ -983,7 +983,11 @@ async function turnProgressStopsAfterCancel(tempDir) {
   const { connection, events } = await setupHungLiveConnection(tempDir, "progress-cancel", 20);
   // Do NOT await: the committed Live turn parks forever on the hung provider done.
   connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_progress-cancel" }).catch(() => {});
-  await delayMs(80);
+  await waitFor(
+    () => events.some((event) => event.type === "turn_progress"),
+    1000,
+    "hung committed Live turn to emit turn_progress",
+  );
   assert.ok(
     events.filter((e) => e.type === "turn_progress").length >= 1,
     "a hung committed Live turn must emit turn_progress keepalives",
@@ -1012,7 +1016,11 @@ async function turnProgressStopsAfterCancel(tempDir) {
 async function turnProgressStopsAfterClose(tempDir) {
   const { connection, events } = await setupHungLiveConnection(tempDir, "progress-close", 20);
   connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_progress-close" }).catch(() => {});
-  await delayMs(80);
+  await waitFor(
+    () => events.some((event) => event.type === "turn_progress"),
+    1000,
+    "hung committed Live turn to emit turn_progress before close",
+  );
   assert.ok(
     events.filter((e) => e.type === "turn_progress").length >= 1,
     "a hung committed Live turn must emit turn_progress before the socket closes",
