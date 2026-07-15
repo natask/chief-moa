@@ -2,10 +2,20 @@
 import MoaMacUI
 import SwiftUI
 
-@main
 struct MoaMacApp: App {
     var body: some Scene {
         WindowGroup { StatusView() }
+    }
+}
+
+@main
+enum MoaMacMain {
+    static func main() {
+        if CommandLine.arguments.contains("--coverage-smoke") {
+            _ = MoaMacApp().body
+            return
+        }
+        MoaMacApp.main()
     }
 }
 #else

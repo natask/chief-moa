@@ -32,6 +32,14 @@
 - [x] 2.4a Extract pet agent/bookmark collection handlers with a focused 90%
       line/branch/function coverage gate; reduce `server.js` to 15,939 lines.
 - [ ] 2.4b Extract the remaining companion, pet, and profile handlers.
+- [x] 2.4b1 Extract pet shared-library, install, publish, and voice-clone
+      handlers with a focused 90% line/branch/function coverage gate. Verified
+      at 100% lines, 98.86% branches, and 90.91% functions; reduce `server.js`
+      to 15,726 lines.
+- [x] 2.4b2 Extract pet catalog, active-profile, create, preview, apply, and
+      generation handlers with a focused 90% line/branch/function coverage
+      gate. Verified at 100% lines, 91.84% branches, and 100% functions; reduce
+      `server.js` to 15,576 lines.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.
 - [ ] 2.7 Extract context, thread, and history assembly.
@@ -85,9 +93,13 @@
       `OverlayService.java` to 3,959 lines.
 - [x] 4.8 Repair Apple protocol drift, move executable shell behavior into
       test-linked modules, and add an exact, fail-closed coverage classifier.
-      Baseline: 89.17% lines, 85.29% functions, and 81.05% LLVM regions across
-      45 passing tests and both instrumented app products. This Swift toolchain
-      emits no branch counters, so regions are not relabeled as branches.
+      Current deterministic baseline: 84.60% lines, 85.42% functions, and
+      78.67% LLVM regions across 45 passing tests and both instrumented app
+      products. This Swift toolchain emits no branch counters, so regions are
+      not relabeled as branches.
+- [x] 4.8a Execute and merge inert bootstrap profiles for both Apple app
+      products instead of counting their entrypoints as unexecuted. Verified
+      without launching a window or requesting TCC permissions.
 - [ ] 4.9 Raise Apple executable coverage to at least 90% for lines and
       functions, and enforce an honest 90% branch metric on a toolchain or
       instrumentation path that emits branch counters.
