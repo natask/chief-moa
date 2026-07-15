@@ -756,11 +756,11 @@ function normalizeVoiceTone(value) {
 // same coercion. Missing values fall back to gateway defaults.
 function normalizeProfile(defaults) {
   const picked = pickProfileFields(defaults);
-  const language = picked.language || picked.language_primary || "";
+  const language = picked.language || picked.language_primary || "en-US";
   const languagePrimary = picked.language_primary || picked.language || "en-US";
   return {
     system_prompt: picked.system_prompt || "",
-    assistant_name: picked.assistant_name || "A.G.",
+    assistant_name: picked.assistant_name || normalizeAssistantName("A.G."),
     user_address: picked.user_address || normalizeUserAddress(process.env.MOA_USER_ADDRESS) || "master",
     user_name: picked.user_name || normalizeUserAddress(process.env.MOA_USER_NAME) || "",
     user_nickname: picked.user_nickname || normalizeUserAddress(process.env.MOA_USER_NICKNAME) || "",
@@ -898,6 +898,11 @@ function withRequiredVoiceStyle(prompt, fallback = "") {
   const lower = value.toLowerCase();
   const hasTerseStyle = lower.includes("terse") || lower.includes("tersely");
   if (hasTerseStyle && hasAddressPreferenceRule(lower)) {
+    const requiredRuleIndex = value.indexOf(REQUIRED_VOICE_STYLE_RULE);
+    if (requiredRuleIndex >= 0) {
+      const prefix = value.slice(0, requiredRuleIndex).trim();
+      return prefix ? [prefix, REQUIRED_VOICE_STYLE_RULE].join("\n\n") : REQUIRED_VOICE_STYLE_RULE;
+    }
     return value;
   }
   return [value, REQUIRED_VOICE_STYLE_RULE].join("\n\n");

@@ -125,6 +125,11 @@
       authorize, exchange, refresh, revoke, provider-error, and deterministic
       fixture-lifecycle tests with a focused 90% line/branch/function coverage
       gate. Verified at 100% lines and functions and 96.51% branches.
+- [x] 2.25 Add exhaustive agent-profile normalization, global/device version,
+      patch, reset, rollback, revert, spoken-guard, migration, persistence, and
+      corrupt-state tests; make default normalization idempotent so an untouched
+      profile is not falsely marked overridden. Verified with a focused gate at
+      99.40% lines, 91.76% branches, and 100% functions.
 
 ## 3. Other Oversized Surfaces
 
