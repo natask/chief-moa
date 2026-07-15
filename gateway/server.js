@@ -34,6 +34,7 @@ const { createPetCoreHandlers } = require("./lib/pet-core-handlers");
 const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
 const { createProfileHandlers } = require("./lib/profile-handlers");
 const { createAgentRunHandlers } = require("./lib/agent-run-handlers");
+const { createAgentWorkerHandlers } = require("./lib/agent-worker-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
@@ -475,6 +476,11 @@ const workerPull = createWorkerPullStore({
     readEvents: readAgentEvents,
     listRunsRaw: listAllAgentRunRecords,
   },
+});
+const { routeAgentWorkers } = createAgentWorkerHandlers({
+  authorizedAgent, agentAuthError, readJsonBody, sendJson,
+  workerPull, WorkerPullError, randomId, cleanError, ownerActor,
+  readAgentRun, rememberRunOutcome, syncWorkGraphFromRun, appendAgentEvent,
 });
 
 // Voice work-history control plane: durable tasks, queued runs, before/after
@@ -919,22 +925,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/workers/registrations" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateWorkerRegistration(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/workers/register" && request.method === "POST") {
-      await handleRegisterWorker(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/workers/claim" && request.method === "POST") {
-      await handleWorkerClaim(request, response);
+    if (await routeAgentWorkers(request, response, url)) {
       return;
     }
 
@@ -961,35 +952,6 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/agent/runs/") &&
-      url.pathname.endsWith("/heartbeat")
-    ) {
-      const id = url.pathname.slice("/v1/agent/runs/".length, -"/heartbeat".length);
-      await handleWorkerHeartbeat(request, response, id);
-      return;
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/agent/runs/") &&
-      url.pathname.endsWith("/events")
-    ) {
-      const id = url.pathname.slice("/v1/agent/runs/".length, -"/events".length);
-      await handleWorkerEvents(request, response, id);
-      return;
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/agent/runs/") &&
-      url.pathname.endsWith("/result")
-    ) {
-      const id = url.pathname.slice("/v1/agent/runs/".length, -"/result".length);
-      await handleWorkerResult(request, response, id);
-      return;
-    }
 
     if (url.pathname === "/v1/browser/roles" && request.method === "GET") {
       if (!authorized(request)) {
@@ -1999,100 +1961,6 @@ module.exports = {
   brain,
   agentProfile,
 };
-
-async function handleCreateWorkerRegistration(request, response) {
-  try {
-    const body = await readJsonBody(request);
-    sendJson(response, 201, workerPull.createRegistration(body, { actor: ownerActor() }));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleRegisterWorker(request, response) {
-  try {
-    const body = await readJsonBody(request);
-    sendJson(response, 201, workerPull.registerWorker(body));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleWorkerClaim(request, response) {
-  try {
-    const auth = workerPull.authenticate(request, "agent_runs:claim");
-    const body = await readJsonBody(request);
-    sendJson(response, 200, workerPull.claim(body, auth));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleWorkerHeartbeat(request, response, id) {
-  try {
-    const auth = workerPull.authenticate(request, "agent_runs:heartbeat");
-    const body = await readJsonBody(request);
-    sendJson(response, 200, workerPull.heartbeat(id, body, auth));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleWorkerEvents(request, response, id) {
-  try {
-    const auth = workerPull.authenticate(request, "agent_runs:append_event");
-    const body = await readJsonBody(request);
-    sendJson(response, 200, workerPull.appendEvents(id, body, auth));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleWorkerResult(request, response, id) {
-  try {
-    const auth = workerPull.authenticate(request, "agent_runs:complete");
-    const body = await readJsonBody(request);
-    const result = workerPull.result(id, body, auth);
-    sendJson(response, 200, result);
-    // Parity with gateway-executed runs (executeAgentRun's finish): a
-    // worker-reported terminal result must also land in the Brain and the work
-    // graph, or worker-run work never pings the session's project state.
-    // Best-effort; the worker's 200 is already sent.
-    try {
-      const run = readAgentRun(id);
-      rememberRunOutcome(run);
-      syncWorkGraphFromRun(run).catch((error) => {
-        appendAgentEvent(id, "work_node_sync_failed", { error: cleanError(error) });
-      });
-    } catch (error) {
-      appendAgentEvent(id, "completion_hooks_failed", { error: cleanError(error) });
-    }
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-function sendWorkerError(response, error) {
-  if (error instanceof WorkerPullError) {
-    sendJson(response, error.status, {
-      error: {
-        code: error.code,
-        message: error.message,
-        retryable: Boolean(error.retryable),
-      },
-      request_id: randomId("req"),
-    });
-    return;
-  }
-  sendJson(response, 400, {
-    error: {
-      code: "invalid_request",
-      message: cleanError(error),
-      retryable: false,
-    },
-    request_id: randomId("req"),
-  });
-}
 
 function ownerUserId() {
   return sanitizeOptionalId(process.env.MOA_OWNER_USER_ID || "usr_owner", "usr_owner");

@@ -53,6 +53,10 @@
       cancel response handlers with a focused 90% line/branch/function coverage
       gate. Verified at 100% for all three metrics; reduce `server.js` to 15,253
       lines.
+- [x] 2.5b Extract worker registration, claim, heartbeat, event, result, and
+      completion-hook handlers with a focused 90% line/branch/function coverage
+      gate. Verified at 100% for all three metrics; reduce `server.js` to 15,121
+      lines.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.
 - [ ] 2.7 Extract context, thread, and history assembly.
 - [ ] 2.8 Extract device-client, browser-task, and tool-request stores.
