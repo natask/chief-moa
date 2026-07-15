@@ -80,6 +80,9 @@
 - [x] 4.7a Extract Android agent-run tracking from overlay orchestration with a
       focused 90% gate. Verified at 98.96% lines, 95.95% branches, and 100%
       methods; reduce `OverlayService.java` to 3,981 lines.
+- [x] 4.7b Extract Android context-control state from overlay orchestration with
+      a focused 90% gate. Verified at 100% lines, branches, and methods; reduce
+      `OverlayService.java` to 3,959 lines.
 - [x] 4.8 Extract website inline JavaScript into attributable runtime modules
       and enforce at least 90% lines, branches, and functions across Pages
       handlers and browser code. Verified at 96.09% lines, 90.40% branches,
