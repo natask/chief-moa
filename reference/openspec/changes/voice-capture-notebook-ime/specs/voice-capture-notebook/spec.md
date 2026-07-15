@@ -102,3 +102,21 @@ capture SHALL NOT silently mutate the user's durable global language profile.
   evidence
 - **AND** subsequent captures retain the same durable language configuration
   until the user explicitly changes it
+
+### Requirement: Voice delivery mode is canonical and device-scoped
+The gateway SHALL persist a versioned Ask, Note, or Coach selection per device
+without changing the device's saved base persona. It SHALL expose authenticated
+mode read, change, and version-history operations. Ask SHALL use normal response
+policy. Note SHALL select the raw-audio storage path and forbid provider/model
+work, assistant replies, and agent launch. Coach SHALL apply a bounded turn-only
+coaching overlay while preserving the saved base persona.
+
+#### Scenario: Note admission prevents provider work
+- **WHEN** an authenticated client reads a Note selection before capture
+- **THEN** the gateway returns `/v1/audio-notes` as the capture endpoint
+- **AND** reports that provider work, assistant replies, and agent launch are forbidden
+
+#### Scenario: Coach reverts cleanly to Ask
+- **WHEN** a device changes from Coach to Ask
+- **THEN** the next turn uses the saved base persona without the coaching overlay
+- **AND** the version history retains both explicit changes

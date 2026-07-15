@@ -683,6 +683,19 @@ listable (`GET /v1/audio-notes`) and playable
 only captures and stores. Contract:
 `reference/openspec/changes/record-mode-audio-notes/proposal.md`.
 
+### Voice delivery modes
+
+Ask, Note, and Coach are canonical versioned selections scoped by `device_id`
+and stored separately from the agent profile. Authenticated clients read or
+change them at `GET|PUT /v1/voice/mode`; version history is available at
+`GET /v1/voice/mode/versions`. Ask admits the normal conversational pipeline.
+Note denies provider/model work and directs raw audio to `/v1/audio-notes` with
+no reply or agent launch. Coach admits conversation with a bounded instruction
+layered onto a cloned effective profile for that turn only, so the stored base
+persona is unchanged and selecting Ask removes the layer. Client-side mode
+selectors and notebook/capture-block behavior are separate implementation
+slices.
+
 ### Browser Extension Thin Client
 
 ```text
