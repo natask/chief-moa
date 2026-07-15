@@ -139,6 +139,11 @@
       tool-capture, persistence, lease, policy, fallback, terminal-state, and
       health-count tests; remove the unreachable max-step helper. Verified with
       a focused gate at 99.85% lines, 90.00% branches, and 100% functions.
+- [x] 2.28 Add exhaustive companion catalog, manifest, voice binding, pet,
+      agent, bookmark, clone-job, consent, publication, persistence, and legacy
+      projection tests; make pet sprite normalization idempotent and repair
+      inline manifest previews. Verified with a focused gate at 98.59% lines,
+      90.15% branches, and 98.46% functions.
 
 ## 3. Other Oversized Surfaces
 
