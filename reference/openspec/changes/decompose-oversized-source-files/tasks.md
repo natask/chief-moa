@@ -36,6 +36,10 @@
       handlers with a focused 90% line/branch/function coverage gate. Verified
       at 100% lines, 98.86% branches, and 90.91% functions; reduce `server.js`
       to 15,726 lines.
+- [x] 2.4b2 Extract pet catalog, active-profile, create, preview, apply, and
+      generation handlers with a focused 90% line/branch/function coverage
+      gate. Verified at 100% lines, 91.84% branches, and 100% functions; reduce
+      `server.js` to 15,576 lines.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.
 - [ ] 2.7 Extract context, thread, and history assembly.

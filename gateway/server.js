@@ -29,6 +29,7 @@ const {
 const voiceL10n = require("./lib/voice-l10n");
 const { createCompanionCatalogStore, COMMAND_VERBS: COMPANION_COMMAND_VERBS } = require("./lib/companion-catalog");
 const { createPetCollectionHandlers } = require("./lib/pet-collection-handlers");
+const { createPetCoreHandlers } = require("./lib/pet-core-handlers");
 const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
@@ -377,6 +378,16 @@ const { routePetCollections } = createPetCollectionHandlers({
   petInputFromBody,
   manifestV2FieldsFromBody,
   petPreviewPayload,
+});
+const { routePetCore } = createPetCoreHandlers({
+  companionCatalog, agentProfile, catalogVersion: PET_CATALOG_VERSION,
+  authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
+  catalogPayload: petCatalogPayload, activePetPayload, profileOptionsFromUrl,
+  profileOptionsFromBody, requireDeviceScope, petInputFromBody,
+  manifestV2FieldsFromBody, companionPetRecord, petPreviewPayload,
+  companionInputFromPetBody, agentProfileRuntimeStatus, summarizePreviewProfile,
+  applyCompanionToProfile, canonicalVoice, petGenerationPlan,
+  petGenerationConfigured, callVertexPetImage,
 });
 const { routePetSharing } = createPetSharingHandlers({
   companionCatalog,
@@ -823,61 +834,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/pets" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, petCatalogPayload(url));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/active" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, activePetPayload(profileOptionsFromUrl(url)));
+    if (await routePetCore(request, response, url)) {
       return;
     }
 
     if (await routePetCollections(request, response, url)) {
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreatePet(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/preview" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handlePetPreview(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/apply" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handlePetApply(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/generate" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handlePetGenerate(request, response);
       return;
     }
 
@@ -4198,31 +4159,6 @@ async function handleCreateCompanion(request, response) {
   }
 }
 
-async function handleCreatePet(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const companion = companionCatalog.createDraft({
-      text: body?.text || body?.request || body?.prompt || body?.description,
-      name: body?.name,
-      voice: body?.voice,
-      pet: petInputFromBody(body),
-      image_data_url: body?.image_data_url || body?.imageDataUrl || body?.source_image || body?.sourceImage,
-      rules: body?.rules,
-      ...manifestV2FieldsFromBody(body),
-    });
-    const preview = companionCatalog.preview({ companion_id: companion.id });
-    sendJson(response, 201, {
-      version: PET_CATALOG_VERSION,
-      pet: companionPetRecord(companion),
-      companion,
-      preview: petPreviewPayload(preview),
-      active_profile_mutated: false,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
 async function handleCompanionPreview(request, response) {
   const body = await readJsonBody(request);
   const profileOptions = profileOptionsFromBody(body, "global");
@@ -4287,54 +4223,6 @@ async function handleCompanionRollback(request, response) {
   catch (error) { sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" }); }
 }
 
-async function handlePetPreview(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const companionInput = companionInputFromPetBody(body || {});
-    const preview = companionCatalog.preview(companionInput);
-    const profileOptions = profileOptionsFromBody(body, "global");
-    const base = agentProfile.effective(profileOptions);
-    const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      ...petPreviewPayload(preview),
-      profile_version: agentProfile.currentVersion(profileOptions),
-      profile_before: agentProfileRuntimeStatus(profileOptions),
-      profile_preview: summarizePreviewProfile(base, merged),
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-async function handlePetApply(request, response) {
-  const body = await readJsonBody(request);
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  try {
-    const companionInput = companionInputFromPetBody(body || {});
-    // Optional voice override: `voice` on the apply body re-applies the
-    // companion with that catalog voice as the profile default (the
-    // dashboard's "set as default voice"). Unknown names are ignored.
-    const requestedVoice = canonicalVoice(String(body?.voice || "")) || "";
-    const result = applyCompanionToProfile(
-      companionInput,
-      profileOptions,
-      body?.source || "pet-studio",
-      requestedVoice ? { voice: requestedVoice } : {},
-    );
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      pet: companionPetRecord(result.companion),
-      ...result,
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
 function companionInputFromPetBody(body = {}) {
   const agentId = body?.agent_id || body?.agentId;
   if (!agentId) return body || {};
@@ -4346,44 +4234,6 @@ function companionInputFromPetBody(body = {}) {
     ...body,
     companion_id: agent.companion_id,
   };
-}
-
-async function handlePetGenerate(request, response) {
-  const body = await readJsonBody(request);
-  const plan = petGenerationPlan(body || {});
-  if (!petGenerationConfigured()) {
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      status: "not_configured",
-      configured: false,
-      mutates_profile: false,
-      message: "Pet image generation is configured on the gateway, but live Vertex calls are disabled or missing credentials.",
-      requirement: "Set MOA_PET_ENABLE_VERTEX_GENERATION=1 with Vertex project and Google ADC on the gateway.",
-      plan,
-    });
-    return;
-  }
-
-  try {
-    const generated = await callVertexPetImage(plan, body || {});
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      status: "generated",
-      configured: true,
-      mutates_profile: false,
-      plan,
-      ...generated,
-    });
-  } catch (error) {
-    sendJson(response, 502, {
-      version: PET_CATALOG_VERSION,
-      status: "generation_failed",
-      configured: true,
-      mutates_profile: false,
-      error: cleanError(error),
-      plan,
-    });
-  }
 }
 
 function applyCompanionToProfile(input, profileOptions, source = "api", overrides = {}) {
