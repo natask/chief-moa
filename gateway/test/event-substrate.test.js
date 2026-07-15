@@ -417,6 +417,27 @@ test("filesystem test primitives fail closed on identity and retry faults", asyn
   assert.throws(() => readRegularFileSnapshot(filePath, "event"), /ENOENT/);
   fs.writeFileSync(filePath, "hello");
   assert.equal(readRegularFileSnapshot(filePath, "event").content, "hello");
+  const originalOpenSync = fs.openSync;
+  try {
+    fs.openSync = function openAfterRetire(target) {
+      if (target === filePath) throw Object.assign(new Error("retired before open"), { code: "ENOENT" });
+      return Reflect.apply(originalOpenSync, this, arguments);
+    };
+    assert.equal(readRegularFileSnapshot(filePath, "event", { allowMissing: true }), null);
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+  const originalLstatSync = fs.lstatSync;
+  let boundaryReads = 0;
+  try {
+    fs.lstatSync = function lstatAfterOpen(target) {
+      if (target === filePath && ++boundaryReads === 2) throw Object.assign(new Error("retired after open"), { code: "ENOENT" });
+      return Reflect.apply(originalLstatSync, this, arguments);
+    };
+    assert.equal(readRegularFileSnapshot(filePath, "event", { allowMissing: true }), null);
+  } finally {
+    fs.lstatSync = originalLstatSync;
+  }
   const target = path.join(root, "target");
   fs.writeFileSync(target, "target");
   const link = path.join(root, "link");
