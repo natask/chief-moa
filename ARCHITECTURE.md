@@ -454,8 +454,12 @@ returns a `page_tweak_rejected` result instead of failing the turn.
 Generated page programs are a separate, explicit private-runtime lane described
 by `moa.browser-program.v2`; they do not weaken the declarative tweak contract.
 Each immutable program revision binds complete inspectable source and digest,
-mode, world, exact tab/document/frame/origin scope, role, execution profile,
-task/run/envelope/approval refs, bridge grants, limits, and rollback metadata.
+mode, world, exact tab/document/frame/origin scope, execution profile,
+profile-discriminated authority, bridge grants, limits, and rollback metadata.
+Standalone authority binds direct approval and approved source/scope digests
+without fabricated Delegate records. Delegated authority binds the typed
+Delegate role, task, run, envelope, exact grants, and an optional checkpoint
+approval when applicable.
 The extension revalidates all bindings immediately before execution or
 registration, owns stop/review/removal, and writes the canonical local receipt.
 Generated source never runs in privileged extension code.

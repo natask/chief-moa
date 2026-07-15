@@ -127,10 +127,15 @@ any derived-frame/transcript substitute SHALL be disclosed honestly.
 
 Every generated page program SHALL use `moa.browser-program.v2` and bind its
 complete source, source digest, immutable revision, purpose, mode, world, exact
-target scope, role, execution profile, task/run/envelope/approval references,
-bridge capabilities, limits, and rollback metadata. The extension SHALL
-revalidate digest, profile, grants, page/document/frame/origin, permissions,
-checkpoint state, and limits immediately before execution or registration.
+target scope, execution profile, profile-discriminated authority, bridge
+capabilities, limits, and rollback metadata. `reviewed_standalone_v1` authority
+SHALL bind direct approval plus the approved source and scope digests without
+fabricating Delegate role/task/run/envelope fields. `delegated_runtime_v1`
+authority SHALL bind the typed Delegate role, task, run, delegation envelope,
+exact grants, and an optional checkpoint approval only when applicable. The
+extension SHALL revalidate digest, profile-specific authority,
+page/document/frame/origin, permissions, applicable grants/checkpoints, and
+limits immediately before execution or registration.
 Generated code SHALL NOT run in privileged extension code.
 
 #### Scenario: Program revision changes after approval
@@ -138,6 +143,20 @@ Generated code SHALL NOT run in privileged extension code.
 - **WHEN** source, hash, target, world, bridge capability, or immutable revision
   differs from its bound authority record
 - **THEN** execution fails closed and no page effect occurs
+
+#### Scenario: Standalone program carries delegated authority fields
+
+- **WHEN** a `reviewed_standalone_v1` program includes a Delegate role, task,
+  run, delegation envelope, or delegated grant set
+- **THEN** validation rejects the mixed authority variant
+- **AND** no execution or registration occurs
+
+#### Scenario: Delegated program lacks its run authority
+
+- **WHEN** a `delegated_runtime_v1` program lacks its typed Delegate role, task,
+  run, envelope, or exact grant bindings
+- **THEN** validation rejects the incomplete authority variant
+- **AND** no standalone approval is inferred as a substitute
 
 #### Scenario: Program performs a destructive site operation
 
@@ -188,8 +207,9 @@ execution.
 
 Every program attempt SHALL produce a bounded canonical local receipt for
 execution, registration, update, rejection, rollback, stop, and removal. The
-receipt binds the program revision/hash, execution profile/executor/world, exact target, role and
-authority refs, before/after evidence, bounded result/error, registration
+receipt binds the program revision/hash, execution profile/executor/world, exact
+target, profile-specific standalone or delegated authority refs, before/after
+evidence, bounded result/error, registration
 read-back, cleanup/removal result, timestamps, and status. Gateway sync SHALL be
 an audit copy only. Program source SHALL remain while installed and as required
 for rollback; deletion SHALL remove source/registration while retaining bounded

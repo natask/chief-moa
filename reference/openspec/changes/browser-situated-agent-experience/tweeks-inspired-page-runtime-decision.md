@@ -165,7 +165,10 @@ mount page UI, and interact with page JavaScript when running in `MAIN`.
 One generated-script shape supports both immediate and persistent execution:
 
 - script id, name, purpose, full source, source digest, and version;
-- source turn, agent role, task/run, and delegation-envelope references;
+- common source-turn and creator provenance, plus profile-discriminated
+  authority: standalone approval/source/scope digests for
+  `reviewed_standalone_v1`, or typed Delegate role/task/run/envelope/grants and
+  optional checkpoint approval for `delegated_runtime_v1`;
 - target tab/document/frame or persistent URL matches/excludes;
 - execution mode (`immediate`, `persistent`, or both);
 - execution world (`USER_SCRIPT` or `MAIN`) and run timing;
