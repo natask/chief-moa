@@ -16,6 +16,10 @@ approval, release, or promotion gates.
 - [x] 0.3 Correct the first vertical slice to explicit agent routing plus one
       bounded delegated browser run, built on observation anchors and existing
       allowlisted browser actions.
+- [ ] 0.4 Align on the tiered page runtime in
+      `tweeks-inspired-page-runtime-decision.md`: packaged effects and anchored
+      overlays by default, bounded mutations behind fresh-anchor policy, and an
+      explicit opt-in `userScripts` lane for long-tail site features.
 
 Acceptance: the user's correction and unresolved surface choice are recorded
 durably rather than silently collapsed into an explanation-first roadmap.
