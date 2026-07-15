@@ -103,8 +103,8 @@ if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");
 }
 
-if (manifest.version !== "0.1.34") {
-  throw new Error(`video-note capture release must use manifest 0.1.34, got ${manifest.version}`);
+if (manifest.version !== "0.1.35") {
+  throw new Error(`reviewable voice controls release must use manifest 0.1.35, got ${manifest.version}`);
 }
 
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
@@ -890,6 +890,17 @@ if (/setInputText\(\s*""/.test(startLiveVoiceTurnBody)) {
 
 if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(contentSource)) {
   throw new Error("voice button click must open the input surface and prime audio before starting live voice");
+}
+
+if (
+  !/id="agee-draft-cancel"[\s\S]{0,240}id="agee-draft-send"/.test(contentSource) ||
+  !/function reviewableVoiceDraftActive\(\)/.test(contentSource) ||
+  !/function sendReviewableVoiceDraft\(\)/.test(contentSource) ||
+  !/autoCommit: false/.test(contentSource) ||
+  !/A later mascot click never owns disposition/.test(contentSource) ||
+  !/#agee-root \.agee-draft-control/.test(overlayCssSource)
+) {
+  throw new Error("voice-first browser drafts must use visible X—mascot—Send controls without click-to-send or silence auto-commit");
 }
 
 const launcherClickBody = sourceBetween(

@@ -100,7 +100,9 @@ voice turn as a reversible draft rather than an implicit submission.
 #### Scenario: Tap starts a draft
 - **WHEN** the user taps the idle orb
 - **THEN** the overlay begins voice capture
-- **AND** immediately shows `X` to discard on the left and `↑` to Send on the right
+- **AND** immediately shows `X` to discard on the left of the orb and `↑` to
+  Send on the right of the orb
+- **AND** those controls remain independent of the transcript card above or below
 
 #### Scenario: User explicitly sends
 - **WHEN** a tap-started draft is active and the user taps `↑`

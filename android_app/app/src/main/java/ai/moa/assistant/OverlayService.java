@@ -113,6 +113,8 @@ public final class OverlayService extends Service {
     private TextView voiceLanguageLine;
     private TextView voiceCancelControl;
     private TextView voiceSendControl;
+    private WindowManager.LayoutParams voiceCancelControlParams;
+    private WindowManager.LayoutParams voiceSendControlParams;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
     // Persistent, stacked transcript. Each turn appends a fresh user + assistant
     // row; older rows stay until the user swipes them away. The scalar mirrors
@@ -350,6 +352,7 @@ public final class OverlayService extends Service {
         cancelStreamingTurnWatchdog();
         voiceLog.clear();
         removeTranscriptOverlay();
+        removeVoiceDraftControls();
         removePanel();
         removeOrbRemoveTarget();
         removeOrb();
@@ -632,6 +635,7 @@ public final class OverlayService extends Service {
     private void updateAnchoredSurfacePositions() {
         positionSurfaceNearOrb(panelView, panelParams);
         positionSurfaceNearOrb(transcriptView, transcriptParams);
+        updateVoiceDraftControlPositions();
     }
 
     private void showOrbRemoveTarget() {
@@ -915,10 +919,6 @@ public final class OverlayService extends Service {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(2), 0, dp(2), dp(4));
 
-        voiceCancelControl = voiceDraftControl("×", "Cancel voice draft", false);
-        voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
-        header.addView(voiceCancelControl);
-
         PulseDot dot = new PulseDot(this);
         LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(9), dp(9));
         dotParams.rightMargin = dp(10);
@@ -931,11 +931,6 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
-        voiceSendControl = voiceDraftControl("↑", "Send voice draft", true);
-        voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
-        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-        sendParams.leftMargin = dp(10);
-        header.addView(voiceSendControl, sendParams);
         container.addView(header);
 
         // A dedicated line that ALWAYS shows the current hear (STT) / speak
@@ -982,15 +977,96 @@ public final class OverlayService extends Service {
 
     private void updateVoiceDraftControls() {
         boolean visible = reviewableVoiceDraftActive();
-        int visibility = visible ? View.VISIBLE : View.GONE;
-        if (voiceCancelControl != null) {
-            voiceCancelControl.setVisibility(visibility);
+        if (!visible) {
+            removeVoiceDraftControls();
+            return;
         }
-        if (voiceSendControl != null) {
-            voiceSendControl.setVisibility(visibility);
-            voiceSendControl.setEnabled(visible);
-            voiceSendControl.setAlpha(visible ? 1f : 0.45f);
+        showVoiceDraftControls();
+        updateVoiceDraftControlPositions();
+    }
+
+    private void showVoiceDraftControls() {
+        if (!Settings.canDrawOverlays(this) || orbView == null) {
+            return;
         }
+        int size = dp(44);
+        if (voiceCancelControl == null) {
+            voiceCancelControl = voiceDraftControl("×", "Cancel voice draft", false);
+            voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
+            voiceCancelControlParams = draftControlWindowParams(size);
+            windowManager.addView(voiceCancelControl, voiceCancelControlParams);
+        }
+        if (voiceSendControl == null) {
+            voiceSendControl = voiceDraftControl("↑", "Send voice draft", true);
+            voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
+            voiceSendControlParams = draftControlWindowParams(size);
+            windowManager.addView(voiceSendControl, voiceSendControlParams);
+        }
+    }
+
+    private WindowManager.LayoutParams draftControlWindowParams(int size) {
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                size,
+                size,
+                overlayType(),
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                android.graphics.PixelFormat.TRANSLUCENT
+        );
+        params.gravity = Gravity.TOP | Gravity.START;
+        return params;
+    }
+
+    private void updateVoiceDraftControlPositions() {
+        if (voiceCancelControl == null || voiceSendControl == null
+                || voiceCancelControlParams == null || voiceSendControlParams == null
+                || orbView == null || orbParams == null) {
+            return;
+        }
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int controlSize = voiceCancelControlParams.width;
+        int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
+        int gap = dp(8);
+        int margin = dp(12);
+
+        // Keep the entire X — orb — Send chord reachable. The orb only moves
+        // inward when a reviewable draft is active, and remains freely draggable
+        // within that safe horizontal lane.
+        int minOrbX = margin + controlSize + gap;
+        int maxOrbX = Math.max(minOrbX, screenWidth - margin - controlSize - gap - orbSize);
+        int safeOrbX = Math.max(minOrbX, Math.min(orbParams.x, maxOrbX));
+        if (safeOrbX != orbParams.x) {
+            orbParams.x = safeOrbX;
+            try {
+                windowManager.updateViewLayout(orbView, orbParams);
+            } catch (IllegalArgumentException ignored) {
+                return;
+            }
+        }
+
+        int controlY = orbParams.y + (orbSize - controlSize) / 2;
+        controlY = Math.max(margin, Math.min(controlY, screenHeight - controlSize - margin));
+        voiceCancelControlParams.x = orbParams.x - gap - controlSize;
+        voiceCancelControlParams.y = controlY;
+        voiceSendControlParams.x = orbParams.x + orbSize + gap;
+        voiceSendControlParams.y = controlY;
+        try {
+            windowManager.updateViewLayout(voiceCancelControl, voiceCancelControlParams);
+            windowManager.updateViewLayout(voiceSendControl, voiceSendControlParams);
+        } catch (IllegalArgumentException ignored) {
+            // A state transition removed the controls while they were moving.
+        }
+    }
+
+    private void removeVoiceDraftControls() {
+        detachView(voiceCancelControl);
+        detachView(voiceSendControl);
+        voiceCancelControl = null;
+        voiceSendControl = null;
+        voiceCancelControlParams = null;
+        voiceSendControlParams = null;
     }
 
     private void discardVoiceDraft() {
@@ -1395,8 +1471,6 @@ public final class OverlayService extends Service {
         transcriptParams = null;
         voiceTranscriptColumn = null;
         voiceTranscriptScroll = null;
-        voiceCancelControl = null;
-        voiceSendControl = null;
         voiceMetaLine = null;
         voiceLanguageLine = null;
         dying.animate()

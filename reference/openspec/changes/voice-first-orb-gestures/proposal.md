@@ -15,9 +15,10 @@ Behind an experimental flag, off by default, the Android surface uses the
 review-before-send v4 contract:
 
 - Single click/tap: start a reviewable draft in the current voice thread. The
-  compact voice card immediately shows `X` on the left to discard and `↑` on
-  the right as the one affirmative Send action. A later orb tap never commits
-  the draft; disposition stays visible and reversible.
+  overlay immediately shows `X — orb/mascot — ↑`, with discard on the left and
+  the one affirmative Send action on the right. A later orb or mascot tap never
+  commits the draft; disposition stays visible and reversible beside the mark,
+  independent of any transcript card above or below it.
 - Double-click, quick: start a fresh voice thread. If the first click armed
   the current thread or deferred a send, that loop is cancelled first; the new
   turn rides the existing one-shot `context_action:"new"` path so it keeps
@@ -39,8 +40,8 @@ review-before-send v4 contract:
 
 The v1 trial mapping (single tap = interrupt, double = talk toggle, triple =
 chat), v2 mapping (single tap = talk toggle, double = chat), and v3
-single-tap start/send toggle are superseded on Android. Browser is a follow-up
-and stays on v2 until its own review-control QA slice lands.
+single-tap start/send toggle are superseded on both Android and the browser
+voice-first path.
 
 ## Accepted Review-Before-Send Revision (2026-07-14)
 
@@ -56,15 +57,16 @@ reversible on Android and in the browser:
 - A still press-and-hold remains push-to-talk; release commits immediately.
   This preserves the fast eyes-free path on both surfaces while the click path
   favors review and correction.
-- Android and browser use the same visible draft states and meanings. Layout
-  may adapt to each surface, but `X` always discards and `Send` always commits.
+- Android and browser use the same visible draft states and meanings:
+  `X — orb/mascot — Send`. `X` always discards and `Send` always commits; a
+  transcript or chat card above or below never owns those actions.
 - Multi-click mappings are not changed by this revision until their collision
   with the new single-click review state is designed and tested. In particular,
   double, triple, and fourth clicks must not accidentally send a pending draft.
 
 The user aligned this revision for Android implementation and deployment on
-2026-07-14. Browser parity remains governed by the same `X` / Send meanings;
-this implementation unit changes only the Android-owned overlay.
+2026-07-14, then clarified that the same geometry and behavior must ship in the
+desktop browser extension.
 
 ### Separate Follow-Up: Clean Voice Into The Current Text Field
 
@@ -111,4 +113,6 @@ Flags:
   double-click starts a new voice thread; triple-click opens chat; hold-to-talk
   release commits; open cards remain wholly above or below the moved orb; and
   dragging onto Remove hides the orb. Flag off restores the legacy gestures.
-- Browser QA remains on the v2 contract until the review-control follow-up lands.
+- Browser manual QA with the flag on: one mascot click starts a draft with
+  `X` and `↑` beside the mascot; another mascot click does not send; `X`
+  discards; `↑` commits once; and hold-release remains push-to-talk.

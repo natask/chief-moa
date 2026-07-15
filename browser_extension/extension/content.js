@@ -22,6 +22,8 @@
   // ---- Overlay UI -------------------------------------------------------
   let root,
     launcher,
+    draftCancelButton,
+    draftSendButton,
     panel,
     input,
     proactiveButton,
@@ -82,8 +84,8 @@
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
   // Voice-first gesture experiment (off by default). When the flag is on the
-  // mark remaps to: single click = talk toggle with barge-in (click again
-  // sends and ends talk mode), still hold = push-to-talk (a large move
+  // mark remaps to: single click = reviewable voice draft with side controls,
+  // still hold = push-to-talk (a large move
   // escapes into a drag), double-click = the text surface. Flag off keeps
   // the legacy contract untouched.
   const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
@@ -343,6 +345,8 @@
           </span>
         </span>
       </button>
+      <button id="agee-draft-cancel" class="agee-draft-control" type="button" data-agee-tip="Discard voice draft" aria-label="Discard voice draft" hidden>×</button>
+      <button id="agee-draft-send" class="agee-draft-control agee-draft-send" type="button" data-agee-tip="Send voice draft" aria-label="Send voice draft" hidden>↑</button>
       <div id="agee-panel" role="dialog" aria-label="A.G. command">
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
@@ -364,6 +368,8 @@
       <div id="agee-tip" role="tooltip" aria-hidden="true"></div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
+    draftCancelButton = root.querySelector("#agee-draft-cancel");
+    draftSendButton = root.querySelector("#agee-draft-send");
     panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
     proactiveButton = root.querySelector("#proactiveHelp");
@@ -403,6 +409,19 @@
     launcher.addEventListener("pointerdown", startLauncherDrag);
     launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
     window.addEventListener("resize", handleViewportResize);
+
+    draftCancelButton.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.isTrusted) return;
+      cancelTalkMode();
+    });
+    draftSendButton.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.isTrusted) return;
+      sendReviewableVoiceDraft();
+    });
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -834,7 +853,7 @@
   // the live data-agee-tip text so state-driven labels stay in sync.
   function setupOverlayTooltips() {
     if (!tipEl) return;
-    for (const target of [launcher, proactiveButton, voiceButton, recordButton, stopButton]) {
+    for (const target of [launcher, draftCancelButton, draftSendButton, proactiveButton, voiceButton, recordButton, stopButton]) {
       if (!target) continue;
       target.addEventListener("mouseenter", () => armTooltip(target));
       target.addEventListener("mouseleave", hideTooltip);
@@ -906,6 +925,7 @@
       resizeRaf = null;
       reclampLauncher();
       if (open) positionPanel();
+      positionVoiceDraftControls();
     });
   }
 
@@ -966,6 +986,7 @@
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
     if (open) positionPanel(); // keep the surface anchored if the mark moves
+    positionVoiceDraftControls();
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
   }
 
@@ -1230,12 +1251,10 @@
     };
     if (count === 1) {
       if (conversationActive || (liveVoice && listening)) {
-        // A click while listening means "send and end talk mode", but the
-        // send waits out the double-click window so a second click (the text
-        // surface) can supersede it. The user has already stopped talking by
-        // then, so the delay is not felt.
-        voiceFirstTapChain.toggled = "send-pending";
-        armVoiceFirstChainReset(() => toggleTalkMode());
+        // A later mascot click never owns disposition of a reviewable draft.
+        // Keep listening until the visible X or Send control is chosen.
+        voiceFirstTapChain.toggled = "draft-open";
+        armVoiceFirstChainReset();
         return;
       }
       // A click while idle or while the assistant is speaking arms the mic
@@ -1247,9 +1266,9 @@
       return;
     }
     if (count === 2) {
-      // Double click is the text surface. Tap 1 either armed the mic (undo
-      // the milliseconds-old session) or deferred a send (its timer was
-      // already cleared at this press-down, so talk mode simply stays on).
+      // Double click is the text surface. Tap 1 either armed the mic (undo the
+      // milliseconds-old session) or found an existing reviewable draft, which
+      // remains under the visible side controls and is never sent here.
       if (prevToggled === "on") cancelTalkMode();
       openTextSurface({ fresh: false });
       armVoiceFirstChainReset();
@@ -1270,11 +1289,10 @@
     }, LAUNCHER_DOUBLE_CLICK_MS);
   }
 
-  // Single-click talk mode: the hands-free conversation loop. On = one
-  // conversation session (silence commits each turn, the mic re-arms after
-  // the reply). Off = commit anything in flight and stop re-arming. The
-  // tapTalk mark lets a tap-armed turn that captured no speech disarm
-  // quietly instead of scolding "didn't catch that".
+  // Single-click review mode. Starting opens a non-auto-committing draft;
+  // disposition belongs to the side controls. The old Off branch remains for
+  // non-gesture callers, but a later mascot click is intercepted above and can
+  // never silently commit. tapTalk keeps an empty first capture quiet.
   function toggleTalkMode() {
     if (conversationActive || (liveVoice && listening)) {
       conversationActive = false;
@@ -1288,7 +1306,10 @@
     if (liveVoice && !(assistantSpeechOverlap === true && liveVoice.committed)) {
       stopLiveVoiceTurn("cancel");
     }
-    startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+    startLiveVoiceTurn({
+      preserveAssistantPlayback: assistantSpeechOverlap === true,
+      autoCommit: false,
+    });
     if (liveVoice) liveVoice.tapTalk = true;
     syncTalkModeUi();
     return "on";
@@ -1300,8 +1321,17 @@
     syncTalkModeUi();
   }
 
+  function sendReviewableVoiceDraft() {
+    if (!reviewableVoiceDraftActive()) return;
+    conversationActive = false;
+    commitLiveVoiceTurn();
+    syncTalkModeUi();
+    syncVoiceDraftControls();
+  }
+
   function syncTalkModeUi() {
     if (root) root.classList.toggle("agee-talk", conversationActive === true);
+    syncVoiceDraftControls();
   }
 
   function restoreVoiceFirstGestures() {
@@ -1317,7 +1347,7 @@
     if (root) root.classList.toggle("agee-voice-first", voiceFirstGestures === true);
     if (launcher) {
       launcher.dataset.ageeTip = voiceFirstGestures
-        ? "Click to talk, click again to send, hold for push-to-talk, double-click to type"
+        ? "Click to talk, then use X or Send; hold for push-to-talk, double-click to type"
         : "Click to type, drag to move, scroll to resize, hold to talk";
     }
     syncTalkModeUi();
@@ -2795,6 +2825,48 @@
       setTooltip(voiceButton, listening ? "Send what you said" : "Speak your request");
       voiceButton.setAttribute("aria-label", listening ? "Send voice" : "Start voice");
     }
+    syncVoiceDraftControls();
+  }
+
+  function reviewableVoiceDraftActive() {
+    return voiceFirstGestures === true
+      && conversationActive === true
+      && listening === true
+      && liveVoice != null
+      && liveVoice.committed !== true;
+  }
+
+  function syncVoiceDraftControls() {
+    if (!draftCancelButton || !draftSendButton || !root) return;
+    const visible = reviewableVoiceDraftActive();
+    draftCancelButton.hidden = !visible;
+    draftSendButton.hidden = !visible;
+    root.classList.toggle("agee-reviewing-voice", visible);
+    if (visible) positionVoiceDraftControls();
+  }
+
+  function positionVoiceDraftControls() {
+    if (!reviewableVoiceDraftActive() || !launcher || !draftCancelButton || !draftSendButton) return;
+    const gap = 10;
+    const margin = 10;
+    let lr = launcher.getBoundingClientRect();
+    const controlWidth = draftCancelButton.offsetWidth || 42;
+    const minLeft = margin + controlWidth + gap;
+    const maxLeft = Math.max(minLeft, window.innerWidth - margin - controlWidth - gap - lr.width);
+    const safeLeft = Math.max(minLeft, Math.min(lr.left, maxLeft));
+    if (Math.abs(safeLeft - lr.left) > 0.5) {
+      placeLauncher(safeLeft, lr.top, false);
+      lr = launcher.getBoundingClientRect();
+    }
+    const controlHeight = draftCancelButton.offsetHeight || 42;
+    const top = Math.max(margin, Math.min(
+      lr.top + (lr.height - controlHeight) / 2,
+      window.innerHeight - controlHeight - margin
+    ));
+    draftCancelButton.style.left = `${Math.round(lr.left - gap - controlWidth)}px`;
+    draftCancelButton.style.top = `${Math.round(top)}px`;
+    draftSendButton.style.left = `${Math.round(lr.right + gap)}px`;
+    draftSendButton.style.top = `${Math.round(top)}px`;
   }
 
   // Drive voice state on the root. The top strip stays hidden; live transcript
@@ -2992,6 +3064,7 @@
     };
     trackLiveVoiceState(state);
     liveVoice = state;
+    syncVoiceDraftControls();
 
     try {
       primeAudio();

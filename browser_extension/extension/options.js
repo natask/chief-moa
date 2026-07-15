@@ -67,8 +67,8 @@ if (livekitVoiceEl) {
 }
 
 // Experimental voice-first mark gestures flag (off by default). Read live by
-// content.js: single click = talk toggle with barge-in, hold = push-to-talk,
-// double-click = text surface. Off keeps the legacy gesture map.
+// content.js: single click = reviewable draft with side controls, hold =
+// push-to-talk, double-click = text surface. Off keeps the legacy gesture map.
 const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
 const voiceFirstGesturesEl = document.getElementById("voiceFirstGestures");
 const voiceFirstGesturesStatusEl = document.getElementById("voiceFirstGesturesStatus");

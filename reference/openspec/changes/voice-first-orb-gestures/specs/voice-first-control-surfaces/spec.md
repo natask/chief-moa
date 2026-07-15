@@ -11,8 +11,9 @@ for chat and double-click-and-hold for voice.
 - **WHEN** the voice-first Android flag is enabled and the user single-taps the
   orb while idle
 - **THEN** Android starts hands-free voice on the current active thread
-- **AND** a later single tap sends the current utterance after the multi-click
-  window if no rapid second tap supersedes it
+- **AND** Android shows `X` to the left of the orb and `↑` to its right
+- **AND** a later single tap does not send the current utterance
+- **AND** only the visible `↑` commits the draft
 
 #### Scenario: Double tap starts a fresh voice thread
 - **WHEN** the voice-first Android flag is enabled and the user double-taps the
@@ -32,3 +33,24 @@ for chat and double-click-and-hold for voice.
 - **WHEN** the voice-first Android flag is disabled
 - **THEN** a single tap opens chat
 - **AND** double-click-and-hold remains the voice capture gesture
+
+### Requirement: Browser voice-first drafts match Android disposition controls
+The browser extension SHALL, when `ageeVoiceFirstGesturesEnabled` is enabled,
+start a reviewable voice draft whose cancel and Send controls flank the mascot
+and remain independent of the text/result panel.
+
+#### Scenario: Browser click starts a reviewable draft
+- **WHEN** the browser voice-first flag is enabled and the user clicks the idle mascot
+- **THEN** the browser starts a non-auto-committing voice draft
+- **AND** shows `X` to the mascot's left and `↑` to its right
+
+#### Scenario: Browser mascot cannot silently send
+- **WHEN** a browser voice draft is active and the user clicks the mascot again
+- **THEN** the draft remains active
+- **AND** no commit is sent
+
+#### Scenario: Browser side controls own disposition
+- **WHEN** the user clicks `X`
+- **THEN** the browser cancels and discards the draft locally
+- **WHEN** the user instead clicks `↑`
+- **THEN** the browser commits that voice turn exactly once
