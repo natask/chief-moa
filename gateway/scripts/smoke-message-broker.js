@@ -3,7 +3,8 @@
 
 // Smoke for the gateway message broker. It proves the broker stores messages,
 // routes explicit continuation to an existing session, recommends research
-// and QA workflow packages when requested, creates focused launcher context packs,
+// and QA workflow packages when requested, routes the three principal profiles,
+// creates focused launcher context packs,
 // launches an explicitly activated broker fork as a non-blocking agent run,
 // attaches evidence to active runs without cancellation, and persists
 // inspectable route decisions.
@@ -45,6 +46,10 @@ async function main() {
       assertResearchRoute(baseUrl, dataDir));
     await step("QA message selects validation workflow", () =>
       assertQaRoute(baseUrl, dataDir));
+    await step("principal intents select bounded workflow profiles", () =>
+      assertPrincipalRoutes(baseUrl, dataDir));
+    await step("explicit principal launch starts one run", () =>
+      assertPrincipalLaunch(baseUrl, dataDir));
     await step("explicit broker launch creates async run", () =>
       assertExplicitBrokerLaunch(baseUrl, dataDir));
     await step("broker attaches evidence to active run", () =>
@@ -72,6 +77,9 @@ async function main() {
         "broker decisions create launcher context packs",
         "research/report message returns a landscape-research workflow decision",
         "test/verify message returns a QA workflow decision",
+        "security, simplification, and fuzzing intents return their principal workflow decisions",
+        "principal context packs carry role-specific execution and handoff policy",
+        "explicit principal activation launches exactly one non-blocking run",
         "explicit broker launch creates a linked wait=false agent run",
         "active run messages append broker_evidence_attached without cancellation",
         "broadcast dismisses irrelevant forks with broker_fork_dismissed (no-op, no cancel)",
@@ -222,6 +230,73 @@ async function assertQaRoute(baseUrl, dataDir) {
   assert.equal(pack.workflow_directory, "gateway/agent-workflows/qa");
   assert.equal(pack.instruction_file, "gateway/agent-workflows/qa/WORKFLOW.md");
   assert.ok(pack.verification.some((item) => item.includes("npm run check")), "QA pack must carry verification commands");
+}
+
+async function assertPrincipalRoutes(baseUrl, dataDir) {
+  const cases = [
+    {
+      id: "security",
+      text: "perform a security audit and find security holes",
+      policy: "audit_only",
+      constraint: /do not edit product code|Audit only/i,
+      handoff: /separate principal|separate repair/i,
+    },
+    {
+      id: "simplification",
+      text: "deslop this code and reduce the lines of code while preserving behavior",
+      policy: "behavior_preserving_changes",
+      constraint: /Preserve externally observable behavior/,
+      handoff: null,
+    },
+    {
+      id: "fuzzing",
+      text: "fuzz the application with adversarial tests",
+      policy: "isolated_evaluation_only",
+      constraint: /isolated workspace|isolated exact candidate/i,
+      handoff: /minimized reproducer|bounded repair/i,
+    },
+  ];
+  for (const item of cases) {
+    const response = await postJson(`${baseUrl}/v1/broker/messages`, {
+      source: "message-broker-smoke",
+      text: item.text,
+    });
+    assert.equal(response.status, 202, JSON.stringify(response.json));
+    assert.equal(response.json.launches.length, 0, "principal selection must not auto-launch");
+    const route = response.json.decisions.find((decision) =>
+      decision.target_type === "workflow" &&
+      decision.target_id === item.id &&
+      decision.action === "invoke_workflow");
+    assert.ok(route, `expected ${item.id} workflow route, got ${JSON.stringify(response.json.decisions)}`);
+    assert.equal(route.launcher_profile_id, item.id);
+    const pack = readContextPack(dataDir, route.context_pack_id);
+    assert.equal(pack.principal_role, item.id);
+    assert.equal(pack.execution_policy, item.policy);
+    assert.equal(pack.workflow_directory, `gateway/agent-workflows/${item.id}`);
+    assert.equal(pack.instruction_file, `gateway/agent-workflows/${item.id}/WORKFLOW.md`);
+    assert.ok(pack.constraints.some((value) => item.constraint.test(value)), JSON.stringify(pack.constraints));
+    if (item.handoff) assert.match(pack.repair_handoff, item.handoff);
+  }
+}
+
+async function assertPrincipalLaunch(baseUrl, dataDir) {
+  const response = await postJson(`${baseUrl}/v1/broker/messages`, {
+    source: "message-broker-smoke",
+    launch_agent: true,
+    harness: "gemini",
+    text: "start a separate security audit for vulnerabilities",
+  });
+  assert.equal(response.status, 202, JSON.stringify(response.json));
+  assert.equal(response.json.launches.length, 1, JSON.stringify(response.json.launches));
+  const launch = response.json.launches[0];
+  assert.equal(launch.launcher_profile_id, "security");
+  assert.equal(launch.wait, false);
+  const pack = readContextPack(dataDir, launch.context_pack_id);
+  assert.equal(pack.principal_role, "security");
+  assert.equal(pack.execution_policy, "audit_only");
+  assert.match(pack.launcher.prompt, /A separate principal implements accepted fixes/);
+  const terminal = await waitForRunTerminal(baseUrl, launch.agent_run_id);
+  assert.equal(terminal.run.status, "completed");
 }
 
 async function assertExplicitBrokerLaunch(baseUrl, dataDir) {

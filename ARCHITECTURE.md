@@ -995,6 +995,19 @@ run id on the route decision and broker event, and appends a `broker_activated`
 event to the run. When a message targets an active run, the gateway appends a
 `broker_evidence_attached` event to that run without canceling it.
 
+Three checked-in principal profiles specialize that same one-run broker path.
+An explicit security-audit intent selects `security`, which is audit-only and
+can emit bounded repair contracts only; accepted repairs and re-verification
+must run separately, with the verifier independent of the repair. Explicit
+deslop, line-count, rearchitecture, or quality-cleanup intent selects
+`simplification`, which may make one behavior-preserving change under frozen
+regression checks. Explicit fuzzing/adversarial-testing intent selects
+`fuzzing`, which runs against one isolated exact candidate, minimizes and
+deduplicates reproduced failures, and emits bounded repair handoffs without
+editing the candidate. This slice has no recurring scheduler, automatic repair
+fanout, or concurrent principal launch; those require later work-graph and
+worker-workspace integration.
+
 Every user turn is a possible fork. A new spoken or typed message can create a
 new `agent_run` without canceling existing active runs, and subsequent user
 turns can be attached as non-interrupting evidence to relevant active runs. The

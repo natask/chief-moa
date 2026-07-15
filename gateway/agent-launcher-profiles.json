@@ -101,5 +101,84 @@
       "check edited docs render/read correctly",
       "do not hand-edit generated CHANGELOG.md"
     ]
+  },
+  "security": {
+    "id": "security",
+    "principal_role": "security",
+    "execution_policy": "audit_only",
+    "description": "Use for explicit security audits, threat reviews, and vulnerability assessment. This principal reports only and never repairs its own findings.",
+    "workflow_directory": "gateway/agent-workflows/security",
+    "instruction_file": "gateway/agent-workflows/security/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "ARCHITECTURE.md",
+      "AGENT_WORKFLOW.md",
+      "reference/openspec/changes/principal-agent-workflows",
+      ".docs/parallel/intent-runtime-20260711/merge-ledger.md"
+    ],
+    "constraints": [
+      "Audit only; do not edit product code or repair findings in this run.",
+      "Bind every finding to the exact candidate and reproducible evidence.",
+      "Require a separate repair run and a different independent re-verification run before acceptance."
+    ],
+    "repair_handoff": "Create bounded repair contracts only. A separate principal implements accepted fixes and a different verifier re-runs the original probes against the repaired candidate.",
+    "expected_output": "A severity-ranked, deduplicated security audit with exact candidate identity, reproducible evidence, affected boundary, and bounded repair contracts.",
+    "verification": [
+      "run the narrowest read-only security checks for the exact candidate",
+      "record PASS or BLOCK without modifying the candidate"
+    ]
+  },
+  "simplification": {
+    "id": "simplification",
+    "principal_role": "simplification",
+    "execution_policy": "behavior_preserving_changes",
+    "description": "Use for deslop, line-count reduction, behavior-preserving rearchitecture, and code-quality leveling.",
+    "workflow_directory": "gateway/agent-workflows/simplification",
+    "instruction_file": "gateway/agent-workflows/simplification/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "ARCHITECTURE.md",
+      "AGENT_WORKFLOW.md",
+      "reference/openspec/changes/principal-agent-workflows",
+      "reference/openspec/changes/decompose-oversized-source-files"
+    ],
+    "constraints": [
+      "Preserve externally observable behavior, public contracts, and trust boundaries.",
+      "Keep one cleanup unit tied to before/after measurements and focused regression checks.",
+      "Do not mix feature work, product-policy changes, or broad rewrites into the cleanup."
+    ],
+    "expected_output": "A narrow behavior-preserving cleanup with before/after line or complexity evidence, focused regression proof, and a Conventional Commit.",
+    "verification": [
+      "run focused behavior-preservation tests",
+      "run the touched surface verification gate",
+      "record before/after line or complexity evidence"
+    ]
+  },
+  "fuzzing": {
+    "id": "fuzzing",
+    "principal_role": "fuzzing",
+    "execution_policy": "isolated_evaluation_only",
+    "description": "Use for fuzzing and adversarial application testing against one exact isolated candidate. This principal produces evidence and repair handoffs, not fixes.",
+    "workflow_directory": "gateway/agent-workflows/fuzzing",
+    "instruction_file": "gateway/agent-workflows/fuzzing/WORKFLOW.md",
+    "context_files": [
+      "README.md",
+      "ARCHITECTURE.md",
+      "AGENT_WORKFLOW.md",
+      "reference/openspec/changes/principal-agent-workflows",
+      "reference/openspec/changes/voice-intent-completion-loop"
+    ],
+    "constraints": [
+      "Run only in an isolated workspace against one exact candidate identity.",
+      "Minimize and deduplicate failures before reporting them.",
+      "Do not repair findings or launch repair fanout in this run."
+    ],
+    "repair_handoff": "For each unique reproduced failure, emit one bounded repair contract naming candidate, seed/input, minimized reproducer, allowed scope, and exact re-verification check.",
+    "expected_output": "Exact-candidate fuzz evidence with corpus/seed identity, minimized and deduplicated findings, and bounded repair handoffs.",
+    "verification": [
+      "replay every minimized finding against the exact candidate",
+      "prove duplicates collapse to one finding identity",
+      "record unreproduced results as inconclusive rather than defects"
+    ]
   }
 }

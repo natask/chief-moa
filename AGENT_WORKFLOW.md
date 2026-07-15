@@ -71,6 +71,12 @@ route decision using those profiles. The pack names the workflow directory,
 instruction file, files, constraints, expected output, and verification. Verify this path with
 `cd gateway && npm run smoke:message-broker`; it must prove context-pack
 creation, QA/research workflow routing, and active-run evidence attachment.
+Explicit security, simplification/deslop, and fuzzing language routes to the
+checked-in `security`, `simplification`, and `fuzzing` principal workflow
+packages. The current broker launches only one selected principal per explicit
+request. Security and fuzzing produce evidence and bounded repair handoffs but
+must not repair their own findings; simplification may edit only while
+preserving the frozen behavior contract.
 
 ## Context Pack Template
 
