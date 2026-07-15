@@ -114,6 +114,41 @@ async function profileDerivedSttLanguages(tempDir) {
   await provider.processTurn(makeTurn(tempDir, "profile-am"), recordingHooks(events));
   const sttCall = calls.find((c) => c.kind === "stt");
   assert.deepEqual(sttCall.body.config.languageCodes, ["am-ET"], "recognize request must be restricted to profile input language");
+
+  const turnScopedCalls = [];
+  stubFetch({ sttTranscript: "hello", calls: turnScopedCalls });
+  const turnScopedProvider = createVoiceProvider({
+    env: {
+      VOICE_PROVIDER: "chirp",
+      GCP_PROJECT_ID: "test-project",
+      CHIRP_ACCESS_TOKEN: "test-token",
+      CHIRP_MODEL: "chirp_3",
+      CHIRP_LANGUAGE_CODES: "en-US,am-ET",
+    },
+    agentProfile: {
+      effective: () => ({
+        input_languages: "en-US",
+        input_language_primary: "en-US",
+        language: "en-US",
+        language_primary: "en-US",
+      }),
+    },
+  });
+  assert.deepEqual(turnScopedProvider.status().language_codes, ["en-US"], "global status stays based on the global profile");
+  await turnScopedProvider.processTurn(makeTurn(tempDir, "profile-turn-am", {
+    effectiveProfile: {
+      input_languages: "am-ET,en-US",
+      input_language_primary: "am-ET",
+      language: "am-ET",
+      language_primary: "am-ET",
+    },
+  }), recordingHooks([]));
+  const turnScopedSttCall = turnScopedCalls.find((c) => c.kind === "stt");
+  assert.deepEqual(
+    turnScopedSttCall.body.config.languageCodes,
+    ["am-ET", "en-US"],
+    "recognize request must prefer the per-turn effective profile over the global profile",
+  );
 }
 
 // Explicit switching ("right now I want to speak X"): the recognizer is
@@ -1676,7 +1711,7 @@ async function stalePlaybackProgressIsRejected(tempDir) {
   await commitPromise;
 }
 
-function makeTurn(tempDir, tag) {
+function makeTurn(tempDir, tag, overrides = {}) {
   const pcmPath = path.join(tempDir, `${tag}.pcm`);
   fs.writeFileSync(pcmPath, generatePcm16Tone({ durationMs: 60, frequencyHz: 200, sampleRate: 16000, volume: 0.2 }));
   return {
@@ -1685,6 +1720,7 @@ function makeTurn(tempDir, tag) {
     format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
     sessionId: "sess",
     turnId: "turn",
+    ...overrides,
   };
 }
 

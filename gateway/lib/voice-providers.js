@@ -656,9 +656,26 @@ class CascadedVoiceProvider {
     return chirpConfigured(this.env);
   }
 
-  sttLanguageCodes() {
-    if (this.agentProfile && typeof this.agentProfile.effective === "function") {
-      const profile = this.agentProfile.effective();
+  profileForTurn(turnOrProfile) {
+    if (turnOrProfile?.effectiveProfile && typeof turnOrProfile.effectiveProfile === "object") {
+      return turnOrProfile.effectiveProfile;
+    }
+    if (turnOrProfile && typeof turnOrProfile === "object" && !Buffer.isBuffer(turnOrProfile)) {
+      const looksLikeProfile = "input_languages" in turnOrProfile
+        || "input_language_primary" in turnOrProfile
+        || "language" in turnOrProfile
+        || "response_modality" in turnOrProfile
+        || "voice" in turnOrProfile;
+      if (looksLikeProfile) return turnOrProfile;
+    }
+    return this.agentProfile && typeof this.agentProfile.effective === "function"
+      ? this.agentProfile.effective()
+      : null;
+  }
+
+  sttLanguageCodes(turnOrProfile) {
+    const profile = this.profileForTurn(turnOrProfile);
+    if (profile) {
       const set = String(profile?.input_languages || profile?.input_language_primary || "").trim();
       const codes = languageCodes(set);
       const primary = String(profile?.input_language_primary || "").trim().toLowerCase();
@@ -760,7 +777,7 @@ class CascadedVoiceProvider {
     if (!this.configured()) {
       throw new Error("chirp STT provider requires GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT plus GCP_SERVICE_ACCOUNT_KEY, GOOGLE_APPLICATION_CREDENTIALS, CHIRP_ACCESS_TOKEN, or gcloud ADC on the gateway machine");
     }
-    const sttLanguageCodes = this.sttLanguageCodes();
+    const sttLanguageCodes = this.sttLanguageCodes(turn);
     this.assertModelSupportsLanguages(sttLanguageCodes);
     // A typed text turn (side panel / text surfaces) carries its transcript in
     // turn.syntheticText and records no audio: skip the STT leg entirely.
@@ -832,17 +849,17 @@ class CascadedVoiceProvider {
     // the effective agent profile (reply language/voice as OUTPUT policy) and
     // returns the spoken reply text plus the reply language. A control/agent-run
     // turn returns no speak text; we then skip TTS.
-    let reasoning = { speak: "", display: transcript, language: this.replyLanguage(), model: this.model, classification: "chat" };
+    let reasoning = { speak: "", display: transcript, language: this.replyLanguage(turn), model: this.model, classification: "chat" };
     if (!transcript) {
       return this.cascadedResult(transcript, reasoning, false, transcription);
     }
-    const modality = this.replyModality();
+    const modality = this.replyModality(turn);
     // Gate hoisting: the reply (OUTPUT) language and modality are pinned ONCE,
     // BEFORE the LLM stream starts, so chunk 1 can synthesize mid-stream with
     // the turn-pinned voice. A mid-turn profile language switch takes effect
     // next turn; a post-stream language divergence is recorded as
     // tts_language_mismatch instead of re-synthesizing.
-    const pinnedLanguage = this.replyLanguage();
+    const pinnedLanguage = this.replyLanguage(turn);
     // Like the language, the TTS voice is pinned ONCE per turn, from the turn's
     // effective profile (which carries a validated session_start voice
     // override), so every streamed chunk speaks with the same voice and a
@@ -1488,10 +1505,8 @@ class CascadedVoiceProvider {
   // The reply-delivery modality from the effective agent profile: "text" (write,
   // no hosted audio), "speech" (speak), or "auto" (default; speak when a hosted
   // voice can synthesize). Read fresh per turn so a spoken change applies next.
-  replyModality() {
-    const profile = this.agentProfile && typeof this.agentProfile.effective === "function"
-      ? this.agentProfile.effective()
-      : null;
+  replyModality(turnOrProfile) {
+    const profile = this.profileForTurn(turnOrProfile);
     return String(profile?.response_modality || "auto").trim().toLowerCase() || "auto";
   }
 
@@ -1507,10 +1522,10 @@ class CascadedVoiceProvider {
     if (!speak || !this.cascaded()) {
       return { spoke: false, tts_error: "" };
     }
-    if (this.replyModality() === "text") {
+    if (this.replyModality(options.profile) === "text") {
       return { spoke: false, tts_error: "", modality: "text" };
     }
-    const language = String(options.language || "").trim() || this.replyLanguage();
+    const language = String(options.language || "").trim() || this.replyLanguage(options.profile);
     if (!this.canSynthesize(language)) {
       return { spoke: false, tts_error: "" };
     }
@@ -1634,12 +1649,10 @@ class CascadedVoiceProvider {
   // The reply (OUTPUT) language from the effective agent profile, falling back to
   // the primary STT language. This is output policy, distinct from the restricted
   // INPUT languages the STT leg recognizes.
-  replyLanguage() {
-    const profile = this.agentProfile && typeof this.agentProfile.effective === "function"
-      ? this.agentProfile.effective()
-      : null;
+  replyLanguage(turnOrProfile) {
+    const profile = this.profileForTurn(turnOrProfile);
     const fromProfile = String(profile?.language || profile?.language_primary || "").trim();
-    return fromProfile || this.sttLanguageCodes()[0] || "en-US";
+    return fromProfile || this.sttLanguageCodes(turnOrProfile)[0] || "en-US";
   }
 
   canSynthesize(language) {
@@ -1815,7 +1828,7 @@ class CascadedVoiceProvider {
   // by the session server; the disk write stays the source of truth. Returns
   // null when streaming is disabled/unsupported so the caller stays batch-only.
   createStreamingSttSession(turn, hooks) {
-    const codes = this.sttLanguageCodes();
+    const codes = this.sttLanguageCodes(turn);
     if (!this.streamingSttEnabled(codes)) {
       return null;
     }
@@ -2739,7 +2752,7 @@ class GeminiLiveVoiceProvider {
           },
           {
             name: "update_agent_profile",
-            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a clear preference about your voice or language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. You understand any language in the supported catalog (every Google Chirp 3 language); call get_profile_options for the exact BCP-47 codes. `input_languages` is the SET of languages you understand — set it when the user says what THEY speak ('I only speak Amharic', 'I can speak English and Amharic'); recognition is constrained to exactly that set (at most two codes). To switch which of the understood languages leads right now ('right now I want to speak Amharic'), set `input_language_primary` to a code already in that set. `language` is what YOU reply in ('speak Amharic', 'answer in English'). Reply language and understood languages are separate settings; do not collapse them. Do not set response_modality='text' for goodbye, bye, stop, hush, or silence requests; those are current-turn controls, not durable profile changes. After calling, confirm briefly in your reply.",
+            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a clear preference about your voice or language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. You understand any language in the supported catalog (every Google Chirp 3 language); call get_profile_options for the exact BCP-47 codes. `input_languages` is the SET of languages you understand — set it when the user says what THEY speak or what language you should hear, listen for, understand, transcribe, or detect ('I only speak Amharic', 'listen for English and Amharic'); recognition is constrained to exactly that set (at most two codes). To switch which of the understood languages leads right now ('right now I want to speak Amharic'), set `input_language_primary` to a code already in that set. `language` is what YOU reply in ('speak Amharic', 'answer in English'). If the user asks for both hearing and replying, set both fields in one call. Reply language and understood languages are separate settings; do not collapse them. Do not set response_modality='text' for goodbye, bye, stop, hush, or silence requests; those are current-turn controls, not durable profile changes. After calling, confirm briefly in the new setting language only.",
             parameters: {
               type: "OBJECT",
               properties: {

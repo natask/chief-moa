@@ -6746,10 +6746,6 @@ async function handleVoiceTurn(request, response) {
     // voice write guards skip persisting it entirely.
     branch_id: filingBranchId,
     profile_version: profileVersion,
-    ...(body.browser_agent_role ? { browser_agent_role: String(body.browser_agent_role) } : {}),
-    ...(body.browser_authority ? { browser_authority: String(body.browser_authority) } : {}),
-    ...(body.browser_execution_policy ? { browser_execution_policy: String(body.browser_execution_policy) } : {}),
-    ...(body.delegation_envelope ? { delegation_envelope: body.delegation_envelope } : {}),
     profile_overrides: body.profile_overrides && typeof body.profile_overrides === "object"
       ? Object.keys(body.profile_overrides)
       : [],
@@ -9026,6 +9022,10 @@ function createAgentRun(body) {
     broker_event_id: body.broker_event_id ? sanitizeOptionalBlankId(body.broker_event_id) : "",
     route_decision_id: body.route_decision_id ? sanitizeOptionalBlankId(body.route_decision_id) : "",
     profile_version: profileVersion,
+    ...(body.browser_agent_role ? { browser_agent_role: String(body.browser_agent_role) } : {}),
+    ...(body.browser_authority ? { browser_authority: String(body.browser_authority) } : {}),
+    ...(body.browser_execution_policy ? { browser_execution_policy: String(body.browser_execution_policy) } : {}),
+    ...(body.delegation_envelope ? { delegation_envelope: body.delegation_envelope } : {}),
     parent_run_id: body.parent_run_id ? sanitizeId(body.parent_run_id) : "",
     project_id: project ? project.id : requestedProjectId,
     project_brief_updated_at: project?.updated_at || "",
@@ -12565,7 +12565,7 @@ function cascadedVoiceProfileTools(call) {
   return [
     {
       name: "update_agent_profile",
-      description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks (recognition is constrained to exactly this set, at most two). Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language leads right now (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `speaking_rate` (0.5–2.0; 1.0 = normal speed) when asked to speak faster or slower, and `voice_tone` (a few words like \"warm, upbeat\"; \"neutral\" clears it) when asked for a different voice mood. Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in your reply after calling.",
+      description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks or wants you to hear, listen for, understand, transcribe, or detect (recognition is constrained to exactly this set, at most two). Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language leads right now (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Set both fields in one call when the user asks you to listen in one language set and respond, speak, or reply in another. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `speaking_rate` (0.5–2.0; 1.0 = normal speed) when asked to speak faster or slower, and `voice_tone` (a few words like \"warm, upbeat\"; \"neutral\" clears it) when asked for a different voice mood. Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in the new setting language only.",
       parameters: {
         type: "object",
         properties: {
