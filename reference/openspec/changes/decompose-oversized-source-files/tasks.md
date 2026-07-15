@@ -281,6 +281,13 @@
       history, thread lifecycle, and chat-turn integration smokes. Enforce a
       focused 90% line/branch/function gate, verified at 100% for all three
       metrics. Reduce `server.js` to 13,184 lines.
+- [x] 2.50 Extract authenticated thread-switch mutation routing from `server.js`;
+      add focused recognition, authorization, explicit continuation, alias,
+      metadata-bound, default, new, fork-parent, fork-point, summary-seeding,
+      existing-summary, incognito-isolation, receipt, and clock tests plus the
+      existing cross-surface thread lifecycle smoke. Enforce a focused 90%
+      line/branch/function gate, verified at 100% lines, 94.44% branches, and
+      100% functions. Reduce `server.js` to 13,111 lines.
 
 ## 3. Other Oversized Surfaces
 
