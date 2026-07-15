@@ -987,4 +987,34 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-export { PROFILE_FIELDS };
+export {
+  PROFILE_FIELDS,
+  applyProfilePatch,
+  applySelectedCompanion,
+  applyTalk,
+  createCompanionFromPrompt,
+  escapeHtml,
+  gatewayConfig,
+  gatewayHeaders,
+  getStableDeviceId,
+  languageLabel,
+  languagePickerConfigs,
+  loadCompanions,
+  loadProfile,
+  loadProfileOptions,
+  microphonePermissionState,
+  networkFailureMessage,
+  parseJsonOrNull,
+  patchFromForm,
+  previewSelectedCompanion,
+  profileQuery,
+  renderCompanions,
+  renderLanguagePicker,
+  renderLanguagePickers,
+  renderProfile,
+  renderProfileOptions,
+  renderSelectedCompanion,
+  selectedCompanion,
+  setLanguageCodes,
+  splitLanguageCodes,
+};
