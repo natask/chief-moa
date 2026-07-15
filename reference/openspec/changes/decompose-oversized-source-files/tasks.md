@@ -79,6 +79,10 @@
       response-bound, and fallback tests for proactive browser turns with a
       focused 90% line/branch/function coverage gate. Verified at 100% for all
       three metrics.
+- [x] 2.14 Add exhaustive worker registration, token authority, claim lease,
+      heartbeat, event, cancellation, retry, and terminal-result tests with a
+      focused 90% line/branch/function coverage gate. Verified at 100% lines,
+      92.09% branches, and 98.55% functions.
 
 ## 3. Other Oversized Surfaces
 
