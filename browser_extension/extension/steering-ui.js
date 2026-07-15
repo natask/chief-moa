@@ -92,11 +92,13 @@
     if (/^(collaborate|work with me|pair with me)\b/.test(value)) return "collaborate";
     return "delegate";
   }
+  const isCurrentLiveVoiceState = (state, current, isActive) => !!state && state === current && isActive(state);
   global.AgeeSteeringUi = Object.freeze({
     formatPageIdentity,
     formatSteeredAssistantText,
     observePageIdentity,
     roleForInstruction,
+    isCurrentLiveVoiceState,
     selectResolvedCueIds: (cards) => (Array.isArray(cards) ? cards : [])
       .filter((card) => card?.id && card.active !== true && card.protected !== true).map((card) => card.id),
     toggleHistorySnapshot,

@@ -19,6 +19,14 @@ assert.equal(
 );
 assert.ok(!helpers.formatPageIdentity({ title: "x".repeat(100), hostname: "example.test" }).includes("x".repeat(73)));
 
+const oldTurn = {};
+const replacementTurn = {};
+let currentTurn = oldTurn;
+const delayedSetup = Promise.resolve().then(() => helpers.isCurrentLiveVoiceState(oldTurn, currentTurn, () => true));
+currentTurn = replacementTurn;
+assert.equal(await delayedSetup, false);
+assert.equal(helpers.isCurrentLiveVoiceState(replacementTurn, currentTurn, () => true), true);
+
 const marker = "— steered here; prior response stopped —";
 assert.equal(
   helpers.formatSteeredAssistantText("First sentence. Second sentence.", "First sentence."),
@@ -50,6 +58,7 @@ assert.match(contentSource, /message\.next_turn_id = replacement\.turnId/);
 assert.match(contentSource, /message\.boundary_id = replacement\.boundaryId/);
 assert.match(contentSource, /if \(!state\.voiceSessionId\) state\.pendingSteeringReplacement = replacement/);
 assert.match(contentSource, /if \(state\.pendingSteeringReplacement\) sendLiveVoiceControl\(state, liveCancelTurnMessage\(state, 0, state\.pendingSteeringReplacement\)\)\.finally/);
+assert.match(contentSource, /if \(state\.commitWhenReady\) commitLiveVoiceTurn\(state\)/);
 assert.match(backgroundSource, /all_branches_context: false/);
 assert.match(backgroundSource, /activeThreadBranch\(cfg\)/);
 assert.doesNotMatch(contentSource, /agee-mode-select|data-agent-mode-control/);

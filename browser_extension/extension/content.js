@@ -3115,7 +3115,7 @@
         throw new Error(session?.error || "gateway did not open a voice session");
       }
       attachLiveVoiceSession(state, session.voiceSessionId);
-      if (state.commitWhenReady) commitLiveVoiceTurn();
+      if (state.commitWhenReady) commitLiveVoiceTurn(state);
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
     }
@@ -3335,9 +3335,8 @@
     state.playbackTime = startAt + audioBuffer.duration / rate;
   }
 
-  async function commitLiveVoiceTurn() {
-    const state = liveVoice;
-    if (!state || !isLiveVoiceStateActive(state)) return;
+  async function commitLiveVoiceTurn(state = liveVoice) {
+    if (!AgeeSteeringUi.isCurrentLiveVoiceState(state, liveVoice, isLiveVoiceStateActive)) return;
     voiceFirstCaptureOrigin = null;
     state.committed = true;
     stopLiveCapture(state);
