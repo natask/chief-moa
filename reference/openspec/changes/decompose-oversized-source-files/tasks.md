@@ -71,6 +71,10 @@
 - [ ] 2.10 Reduce `server.js` below 2,000 lines and remove its debt exemption.
 - [ ] 2.11 Split the durable voice-draft store into bounded state, persistence,
       authority, and recovery modules.
+- [x] 2.12 Add exhaustive immutable-publish, rollout, rollback, file-adapter,
+      SemVer, and hostile-input tests for the release registry with a focused
+      90% line/branch/function coverage gate. Verified at 100% lines and
+      functions and 94.88% branches.
 
 ## 3. Other Oversized Surfaces
 
