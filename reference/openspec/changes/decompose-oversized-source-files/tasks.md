@@ -83,6 +83,10 @@
       heartbeat, event, cancellation, retry, and terminal-result tests with a
       focused 90% line/branch/function coverage gate. Verified at 100% lines,
       92.09% branches, and 98.55% functions.
+- [x] 2.15 Add an exhaustive local, self-host, hosted, token, future-auth,
+      trust-proxy, and invalid-mode policy matrix with a focused 90%
+      line/branch/function coverage gate. Verified at 100% lines and functions
+      and 96.77% branches.
 
 ## 3. Other Oversized Surfaces
 
