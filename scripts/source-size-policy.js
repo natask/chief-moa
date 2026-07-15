@@ -23,7 +23,7 @@ const LEGACY_DEBT_CEILINGS = Object.freeze({
   "gateway/lib/voice-providers.js": 4049,
   "gateway/lib/voice-session-server.js": 2279,
   "gateway/lib/work-history.js": 2032,
-  "gateway/server.js": 16610,
+  "gateway/server.js": 16061,
   "website/public/pets/index.html": 2244,
 });
 
