@@ -108,6 +108,10 @@
       terminal-result, provider-error, and CLI-process tests with a focused 90%
       line/branch/function coverage gate. Verified at 100% lines, 91.36%
       branches, and 97.56% functions.
+- [x] 2.21 Add exhaustive work-graph storage selection, graph mutation,
+      validation, event, artifact, filter, bound, persistence, and corrupt-state
+      recovery tests with a focused 90% line/branch/function coverage gate.
+      Verified at 100% lines and functions and 92.22% branches.
 
 ## 3. Other Oversized Surfaces
 
