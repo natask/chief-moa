@@ -154,6 +154,11 @@
       payload, and language-control tests with a focused 90%
       line/branch/function gate. Verified at 99.28% lines, 93.33% branches, and
       100% functions.
+- [x] 2.31 Add exhaustive research-workflow normalization, pass clamping,
+      query-alias, search/model failure, alternate-output, source deduplication,
+      output bounding, markdown, and metadata tests with a focused 90%
+      line/branch/function gate. Verified at 100% lines, 97.73% branches, and
+      100% functions.
 
 ## 3. Other Oversized Surfaces
 
