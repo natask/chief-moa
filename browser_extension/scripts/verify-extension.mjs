@@ -269,7 +269,7 @@ if (/mediaDevices\.getUserMedia/.test(contentSource)) {
   throw new Error("content scripts must not request microphone permission; offscreen.js owns extension-origin mic capture");
 }
 
-if (!/chrome\.offscreen\.createDocument/.test(backgroundSource) || !/reasons:\s*\[\s*"USER_MEDIA"\s*\]/.test(backgroundSource)) {
+if (!/chrome\.offscreen\.createDocument/.test(backgroundSource) || !/reasons:\s*\[\s*"USER_MEDIA"[\s,\]"A-Z_]*\]/.test(backgroundSource)) {
   throw new Error("background.js must create an offscreen USER_MEDIA document for extension-owned microphone capture");
 }
 

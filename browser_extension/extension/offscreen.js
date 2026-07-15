@@ -126,7 +126,230 @@ async function startCapture(voiceSessionId) {
   }
 }
 
+// ---- Video note capture -----------------------------------------------------
+// Screen recording with mic narration for video notes. The background resolves
+// a desktopCapture streamId (picker UI) and hands it here; this document owns
+// both getUserMedia calls, records a WebM with MediaRecorder, and uploads the
+// blob straight to the gateway so megabytes never ride runtime messages.
+
+let activeVideoCapture = null;
+
+function pickVideoMimeType() {
+  const candidates = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+  ];
+  for (const candidate of candidates) {
+    if (window.MediaRecorder?.isTypeSupported?.(candidate)) return candidate;
+  }
+  return "";
+}
+
+function stopVideoTracks(capture) {
+  for (const stream of [capture?.screenStream, capture?.micStream]) {
+    for (const track of stream?.getTracks?.() || []) {
+      try {
+        track.stop();
+      } catch {}
+    }
+  }
+}
+
+function discardVideoCapture(sessionId = null) {
+  const capture = activeVideoCapture;
+  if (!capture) return;
+  if (sessionId && capture.videoSessionId !== sessionId) return;
+  capture.discarded = true;
+  if (capture.maxTimer) clearTimeout(capture.maxTimer);
+  try {
+    if (capture.recorder && capture.recorder.state !== "inactive") capture.recorder.stop();
+  } catch {}
+  stopVideoTracks(capture);
+  capture.chunks = [];
+  activeVideoCapture = null;
+}
+
+async function startVideoCapture({ videoSessionId, streamId, maxMs, maxBytes }) {
+  if (!videoSessionId) throw new Error("missing video session id");
+  if (!streamId) throw new Error("missing desktop capture stream id");
+  discardVideoCapture();
+
+  let screenStream = null;
+  let micStream = null;
+  try {
+    screenStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        mandatory: {
+          chromeMediaSource: "desktop",
+          chromeMediaSourceId: streamId,
+          maxWidth: 1920,
+          maxHeight: 1080,
+          maxFrameRate: 10,
+        },
+      },
+    });
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    const combined = new MediaStream([
+      ...screenStream.getVideoTracks(),
+      ...micStream.getAudioTracks(),
+    ]);
+    const mimeType = pickVideoMimeType();
+    // Low bitrate on purpose: screen content compresses well at 10fps, and the
+    // blob must stay under the gateway's inline-video cap.
+    const recorder = new MediaRecorder(combined, {
+      ...(mimeType ? { mimeType } : {}),
+      videoBitsPerSecond: 800_000,
+      audioBitsPerSecond: 32_000,
+    });
+
+    const capture = {
+      videoSessionId,
+      recorder,
+      screenStream,
+      micStream,
+      chunks: [],
+      totalBytes: 0,
+      capped: false,
+      discarded: false,
+      startedAt: Date.now(),
+      maxBytes: Number(maxBytes) > 0 ? Number(maxBytes) : 20 * 1024 * 1024,
+      maxTimer: null,
+      stopWaiters: [],
+    };
+    activeVideoCapture = capture;
+
+    recorder.ondataavailable = (event) => {
+      if (activeVideoCapture !== capture || capture.discarded) return;
+      if (!event.data || event.data.size <= 0) return;
+      capture.chunks.push(event.data);
+      capture.totalBytes += event.data.size;
+      if (capture.totalBytes >= capture.maxBytes && recorder.state === "recording") {
+        // Size cap reached: finish the recording with what we have. The user's
+        // stop click will find the recorder already stopped and just upload.
+        capture.capped = true;
+        try {
+          recorder.stop();
+        } catch {}
+      }
+    };
+    recorder.onstop = () => {
+      if (capture.maxTimer) clearTimeout(capture.maxTimer);
+      stopVideoTracks(capture);
+      for (const resolve of capture.stopWaiters.splice(0)) resolve();
+    };
+
+    // The user can end capture from Chrome's own "Stop sharing" bar; treat it
+    // like a stop press so the note still uploads.
+    const videoTrack = screenStream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.addEventListener("ended", () => {
+        if (activeVideoCapture !== capture || capture.discarded) return;
+        chrome.runtime
+          .sendMessage({ cmd: "offscreenVideoEnded", videoSessionId })
+          .catch(() => {});
+      });
+    }
+
+    const cappedMs = Number(maxMs) > 0 ? Number(maxMs) : 120_000;
+    capture.maxTimer = setTimeout(() => {
+      if (activeVideoCapture !== capture || capture.discarded) return;
+      capture.capped = true;
+      try {
+        if (recorder.state === "recording") recorder.stop();
+      } catch {}
+      chrome.runtime
+        .sendMessage({ cmd: "offscreenVideoEnded", videoSessionId })
+        .catch(() => {});
+    }, cappedMs);
+
+    recorder.start(1000);
+  } catch (error) {
+    stopVideoTracks({ screenStream, micStream });
+    if (activeVideoCapture?.videoSessionId === videoSessionId) activeVideoCapture = null;
+    throw error;
+  }
+}
+
+function waitForVideoRecorderStop(capture) {
+  if (!capture.recorder || capture.recorder.state === "inactive") return Promise.resolve();
+  return new Promise((resolve) => {
+    capture.stopWaiters.push(resolve);
+    try {
+      if (capture.recorder.state !== "inactive") capture.recorder.stop();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+async function stopAndUploadVideoCapture(msg) {
+  const capture = activeVideoCapture;
+  if (!capture || (msg.videoSessionId && capture.videoSessionId !== msg.videoSessionId)) {
+    return { stored: false, error: "No video recording is in progress." };
+  }
+  activeVideoCapture = null;
+  await waitForVideoRecorderStop(capture);
+  const durationMs = Date.now() - capture.startedAt;
+  const blob = new Blob(capture.chunks, { type: capture.recorder?.mimeType || "video/webm" });
+  capture.chunks = [];
+  if (blob.size <= 0) {
+    return { stored: false, error: "No video was captured." };
+  }
+  if (!msg.gatewayUrl) {
+    return { stored: false, error: "No gateway URL set. Open A.G. Options and set the Agent gateway URL." };
+  }
+  const headers = {
+    "content-type": blob.type || "video/webm",
+    "x-moa-surface": "agee-extension",
+    "x-moa-duration-ms": String(durationMs),
+  };
+  if (msg.sessionId) headers["x-moa-session-id"] = msg.sessionId;
+  if (msg.gatewayToken) headers.authorization = `Bearer ${msg.gatewayToken}`;
+  let resp;
+  try {
+    resp = await fetch(`${msg.gatewayUrl}/v1/video-notes`, { method: "POST", headers, body: blob });
+  } catch (error) {
+    return { stored: false, error: `Video note upload failed: ${String(error?.message || error)}` };
+  }
+  const text = await resp.text();
+  if (!resp.ok) {
+    return { stored: false, error: `Video note upload failed (HTTP ${resp.status}): ${text.slice(0, 300)}` };
+  }
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {}
+  return { stored: true, note: payload?.note || null, durationMs, capped: capture.capped === true };
+}
+// ---- End video note capture -------------------------------------------------
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.cmd === "offscreenVideoCaptureStart") {
+    startVideoCapture(msg)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "offscreenVideoCaptureStop") {
+    stopAndUploadVideoCapture(msg)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ stored: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "offscreenVideoCaptureDiscard") {
+    discardVideoCapture(msg.videoSessionId || null);
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.cmd === "offscreenVoiceCaptureStart") {
     startCapture(msg.voiceSessionId)
       .then(() => sendResponse({ ok: true }))

@@ -32,6 +32,11 @@ const MAX_QUEUED_VOICE_AUDIO_BYTES = 16000 * 2 * 20;
 // buffer at ~5 minutes of 16 kHz mono PCM16 and stop capture at the cap.
 const recordSessions = new Map();
 const RECORD_MAX_AUDIO_BYTES = 16000 * 2 * 300;
+// Video notes: one active screen+mic recording at a time. Caps keep the WebM
+// under the gateway's inline-video limit (the blob becomes one Gemini part).
+let videoNoteSession = null;
+const VIDEO_NOTE_MAX_MS = 120_000;
+const VIDEO_NOTE_MAX_BYTES = 20 * 1024 * 1024;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
 const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
 const PRIVACY_MIGRATION_VERSION = 1;
@@ -2256,8 +2261,8 @@ async function ensureOffscreenVoiceDocument() {
   if (!creatingOffscreenVoiceDocument) {
     creatingOffscreenVoiceDocument = chrome.offscreen.createDocument({
       url: OFFSCREEN_VOICE_DOCUMENT,
-      reasons: ["USER_MEDIA"],
-      justification: "A.G. captures microphone audio from the extension origin and streams it to the configured gateway.",
+      reasons: ["USER_MEDIA", "DISPLAY_MEDIA"],
+      justification: "A.G. captures microphone audio (voice, notes) and user-picked screen video (video notes) from the extension origin and sends them to the configured gateway.",
     }).finally(() => {
       creatingOffscreenVoiceDocument = null;
     });
@@ -3043,6 +3048,9 @@ async function startRecordSession(tabId) {
   if (activeRecordSession()) {
     return { ok: false, error: "A recording is already in progress." };
   }
+  if (videoNoteSession) {
+    return { ok: false, error: "A video note recording is in progress. Stop it before recording an audio note." };
+  }
   const id = recordSessionKey();
   const session = {
     id,
@@ -3130,6 +3138,153 @@ async function uploadAudioNote(cfg, pcmBytes, durationMs) {
   }
 }
 // ---- End record mode -------------------------------------------------------
+
+// ---- Video notes: screen recording + narration → gateway video turn --------
+// A video note is a screen recording with spoken narration: the user shows and
+// tells what they mean, the blob is stored via /v1/video-notes, then a normal
+// /v1/voice/turns request references it (video_note_id) so Gemini watches the
+// recording and the reply flows back through the existing cue surface. The
+// offscreen document owns capture and upload; this file owns session state,
+// the desktopCapture picker, and the turn.
+
+function chooseDesktopMediaStreamId(tab) {
+  return new Promise((resolve, reject) => {
+    if (!chrome.desktopCapture?.chooseDesktopMedia) {
+      reject(new Error("Screen capture is not supported in this Chrome build."));
+      return;
+    }
+    try {
+      chrome.desktopCapture.chooseDesktopMedia(["screen", "window", "tab"], tab, (streamId) => {
+        if (!streamId) {
+          reject(new Error("Screen selection was cancelled."));
+          return;
+        }
+        resolve(streamId);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function startVideoNoteSession(tabId) {
+  if (voiceStartPending > 0 || voiceSessions.size > 0) {
+    return { ok: false, error: "A voice session is active. Stop voice before recording a video note." };
+  }
+  if (activeRecordSession()) {
+    return { ok: false, error: "An audio note recording is in progress. Stop it before recording a video note." };
+  }
+  if (videoNoteSession) {
+    return { ok: false, error: "A video recording is already in progress." };
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return { ok: false, error: "Could not resolve the current tab for screen capture." };
+  }
+  const id = `video:${crypto.randomUUID()}`;
+  let streamId;
+  try {
+    streamId = await chooseDesktopMediaStreamId(tab);
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error) };
+  }
+  try {
+    await ensureOffscreenVoiceDocument();
+    const response = await chrome.runtime.sendMessage({
+      cmd: "offscreenVideoCaptureStart",
+      videoSessionId: id,
+      streamId,
+      maxMs: VIDEO_NOTE_MAX_MS,
+      maxBytes: VIDEO_NOTE_MAX_BYTES,
+    });
+    if (!response?.ok) {
+      return { ok: false, error: response?.error || extensionMicApprovalMessage("video capture did not start") };
+    }
+  } catch (error) {
+    return { ok: false, error: extensionMicApprovalMessage(error) };
+  }
+  videoNoteSession = { id, tabId, startedAt: Date.now() };
+  return { ok: true, videoSessionId: id };
+}
+
+async function stopVideoNoteSession(tabId, cueId) {
+  const session = videoNoteSession;
+  if (!session) {
+    return { stored: false, error: "No video recording is in progress." };
+  }
+  videoNoteSession = null;
+  let cfg;
+  try {
+    cfg = await getConfig();
+  } catch (error) {
+    return { stored: false, error: String(error?.message || error) };
+  }
+  const sessionId = await getStableSessionId();
+  const result = await chrome.runtime
+    .sendMessage({
+      cmd: "offscreenVideoCaptureStop",
+      videoSessionId: session.id,
+      gatewayUrl: cfg.gatewayUrl,
+      gatewayToken: cfg.gatewayToken,
+      sessionId,
+    })
+    .catch((error) => ({ stored: false, error: String(error?.message || error) }));
+  if (result?.stored && result.note?.id) {
+    // The reply comes back on the same cue via progress/done messages; the
+    // stop response only confirms the note was stored.
+    runVideoNoteTurn(session.tabId ?? tabId, cueId, result.note).catch((error) => {
+      send(session.tabId ?? tabId, {
+        cmd: "error",
+        cueId,
+        text: `Video note turn failed: ${String(error?.message || error)}`,
+      });
+    });
+  }
+  return result || { stored: false, error: "Video capture did not respond." };
+}
+
+function discardVideoNoteSession(_reason = "discarded") {
+  const session = videoNoteSession;
+  if (!session) return;
+  videoNoteSession = null;
+  chrome.runtime
+    .sendMessage({ cmd: "offscreenVideoCaptureDiscard", videoSessionId: session.id })
+    .catch(() => {});
+}
+
+// Send the stored note through the normal conversational turn path with
+// video_note_id attached. The gateway watches the recording (narration rides
+// the video's audio track) and replies like any other turn.
+async function runVideoNoteTurn(tabId, cueId, note) {
+  const cfg = await getConfig();
+  send(tabId, { cmd: "progress", cueId, text: "watching your video…" });
+  const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
+  const data = await callGateway(cfg, "/v1/voice/turns", {
+    body: {
+      source: "agee-extension",
+      device_id: deviceId,
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: cueId,
+      all_branches_context: true,
+      video_note_id: note.id,
+      client: {
+        platform: "browser",
+        source: "agee-extension",
+        device_id: deviceId,
+        input: "video",
+      },
+    },
+  });
+  const reply = String(data.display || data.text || data.speak || "").trim();
+  const speak = String(data.speak || "").trim();
+  send(tabId, { cmd: "done", cueId, summary: reply || "Done.", speak });
+  return data;
+}
+// ---- End video notes --------------------------------------------------------
 
 // Persist per-cue state (keyed by cueId) so concurrent cues don't clobber each
 // other. Falls back to a synthetic key when no id is given.
@@ -4860,11 +5015,38 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((error) => sendResponse({ stored: false, error: String(error?.message || error) }));
     return true;
   }
+  if (msg.cmd === "videoSessionStart" && sender.tab) {
+    revokeProactiveGrant(sender.tab.id, "another_workflow_started");
+    startVideoNoteSession(sender.tab.id)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "videoSessionStop") {
+    stopVideoNoteSession(sender.tab?.id ?? null, msg.cueId || null)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ stored: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "offscreenVideoEnded") {
+    // Chrome's "Stop sharing" bar (or the length cap) ended the capture. Tell
+    // the owning tab so its overlay finishes the note like a stop press.
+    const session = videoNoteSession;
+    if (session && session.id === msg.videoSessionId && session.tabId != null) {
+      send(session.tabId, { cmd: "videoNoteAutoStop" });
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.cmd === "voiceSessionStart" && sender.tab) {
     if (activeRecordSession()) {
       // The offscreen document has one capture slot; starting voice would
       // silently steal the microphone from the in-flight audio note.
       sendResponse({ ok: false, error: "An audio note recording is in progress. Stop recording before starting voice." });
+      return true;
+    }
+    if (videoNoteSession) {
+      sendResponse({ ok: false, error: "A video note recording is in progress. Stop recording before starting voice." });
       return true;
     }
     const tabId = sender.tab.id;
@@ -5096,6 +5278,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
   closeTabVoiceSessions(tabId);
   closeTabRecordSessions(tabId);
+  if (videoNoteSession && videoNoteSession.tabId === tabId) {
+    discardVideoNoteSession("tab closed");
+  }
 });
 
 chrome.windows.onRemoved.addListener((windowId) => {

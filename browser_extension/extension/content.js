@@ -357,7 +357,7 @@
           <textarea id="agee-input" rows="1" placeholder="Ask A.G." autocomplete="off" spellcheck="true"></textarea>
           <button id="proactiveHelp" type="button" data-agee-proactive="grant" data-agee-tip="Local suggestions for this tab" aria-label="Local suggestions for this tab">Local</button>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
-          <button id="agee-record" type="button" data-agee-tip="Capture an audio note" aria-label="Record note"></button>
+          <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
           <button id="agee-stop" type="button" data-agee-tip="Halt the running task" aria-label="Stop current task">Stop</button>
         </div>
       </div>
@@ -443,6 +443,12 @@
     recordButton.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // Shift+click records a video note (screen + narration); a plain click
+      // keeps the audio note. A video recording in progress stops on any click.
+      if (videoNoteActive || e.shiftKey) {
+        toggleVideoNoteMode();
+        return;
+      }
       toggleRecordMode();
     });
 
@@ -3642,7 +3648,7 @@
     if (root) root.classList.toggle("agee-recording", active);
     if (recordButton) {
       recordButton.classList.toggle("recording", active);
-      setTooltip(recordButton, active ? "Finish the recording" : "Capture an audio note");
+      setTooltip(recordButton, active ? "Finish the recording" : "Capture an audio note (⇧click: video note)");
       recordButton.setAttribute("aria-label", active ? "Stop recording" : "Record note");
     }
   }
@@ -3714,6 +3720,90 @@
     });
   }
   // ---- End record mode ---------------------------------------------------
+
+  // ---- Video note mode -----------------------------------------------------
+  // Shift+click on the record button captures a screen recording with mic
+  // narration: show and tell instead of describe. The background owns the
+  // desktopCapture picker, the offscreen recording, the /v1/video-notes upload,
+  // and the follow-up gateway turn; the reply lands on this cue via the normal
+  // progress/done messages, exactly like a typed command.
+  let videoNoteActive = false;
+  let videoNotePending = false;
+
+  function setVideoNoteState(active) {
+    videoNoteActive = active;
+    if (root) root.classList.toggle("agee-recording", active);
+    if (recordButton) {
+      recordButton.classList.toggle("recording", active);
+      setTooltip(recordButton, active ? "Finish the video note" : "Capture an audio note (⇧click: video note)");
+      recordButton.setAttribute("aria-label", active ? "Stop video note" : "Record note");
+    }
+  }
+
+  function toggleVideoNoteMode() {
+    if (videoNotePending || recordPending) return;
+    openTextSurface({ fresh: false });
+    if (videoNoteActive) {
+      stopVideoNoteMode();
+      return;
+    }
+    if (recordActive) {
+      const cueId = newCueId();
+      materializeCue(cueId, "Video note", "");
+      updateCue(cueId, "An audio note is recording. Finish it before starting a video note.", "error");
+      return;
+    }
+    if (liveVoice || listening) {
+      const cueId = newCueId();
+      materializeCue(cueId, "Video note", "");
+      updateCue(cueId, "Voice is active. Stop voice before recording a video note.", "error");
+      return;
+    }
+    startVideoNoteMode();
+  }
+
+  function startVideoNoteMode() {
+    videoNotePending = true;
+    safeRuntimeSendMessage({ cmd: "videoSessionStart" }).then((res) => {
+      videoNotePending = false;
+      if (!res && extensionContextInvalidated) return;
+      if (!res?.ok) {
+        const cueId = newCueId();
+        materializeCue(cueId, "Video note", "");
+        updateCue(cueId, res?.error || "Could not start the video note.", "error");
+        return;
+      }
+      setVideoNoteState(true);
+    }).catch((error) => {
+      videoNotePending = false;
+      const cueId = newCueId();
+      materializeCue(cueId, "Video note", "");
+      updateCue(cueId, String(error?.message || error), "error");
+    });
+  }
+
+  function stopVideoNoteMode() {
+    videoNotePending = true;
+    setVideoNoteState(false);
+    const cueId = newCueId();
+    materializeCue(cueId, "Video note", "storing...");
+    safeRuntimeSendMessage({ cmd: "videoSessionStop", cueId }).then((res) => {
+      videoNotePending = false;
+      if (!res && extensionContextInvalidated) return;
+      if (res?.stored) {
+        // The reply arrives on this same cue as progress/done messages.
+        updateCue(cueId, "video stored — sending to A.G. ...", "running");
+        return;
+      }
+      updateCue(cueId, res?.error || "Video note upload failed.", "error");
+      reactLauncher("error");
+    }).catch((error) => {
+      videoNotePending = false;
+      updateCue(cueId, String(error?.message || error), "error");
+      reactLauncher("error");
+    });
+  }
+  // ---- End video note mode -------------------------------------------------
 
   function clearVoiceHotkeyHoldTimer() {
     if (!voiceHotkeyHoldTimer) return;
@@ -4355,6 +4445,11 @@
         showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible
         setSurfacePhase("editing");
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
+        return false;
+      case "videoNoteAutoStop":
+        // Chrome's "Stop sharing" bar or the length cap ended the capture:
+        // finish the note exactly like a stop press.
+        if (videoNoteActive) stopVideoNoteMode();
         return false;
       case "agentRevoked":
         handleAgentRevoked(msg);
