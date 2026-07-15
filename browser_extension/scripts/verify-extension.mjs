@@ -690,9 +690,10 @@ if (
   !/MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS/.test(backgroundSource) ||
   !/function browserScreenshotEvidence/.test(backgroundSource) ||
   !/encoding:\s*"omitted"/.test(backgroundSource) ||
-  !/screenshot:\s*screenshotEvidence/.test(backgroundSource)
+  !/browserInlineEvidence\(snapshot, screenshotEvidence\)/.test(backgroundSource) ||
+  !/\.\.\.inlineEvidence/.test(backgroundSource)
 ) {
-  throw new Error("browser-agent screenshot evidence must be capped or omitted before posting to the gateway");
+  throw new Error("browser-agent snapshot and capped optional screenshot must be reused from the initial turn through any legacy evidence follow-up");
 }
 
 if (
