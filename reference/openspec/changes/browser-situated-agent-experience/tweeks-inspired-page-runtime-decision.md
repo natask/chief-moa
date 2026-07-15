@@ -2,9 +2,12 @@
 
 ## Status
 
-Accepted direction, corrected by the user on 2026-07-14. Generated userscripts
-and arbitrary page evaluation are primary browser-agent capabilities. Chrome
-Web Store eligibility is not a product constraint for the Quorum-owned runtime.
+Accepted direction, corrected by the user on 2026-07-14 and reconciled with the
+existing Tier C contract on 2026-07-15. Generated userscripts and arbitrary page
+evaluation are primary browser-agent capabilities in the separately opted-in
+`delegated_runtime_v1` profile. The safer `reviewed_standalone_v1` profile
+remains available for individually reviewed scripts. Chrome Web Store
+eligibility is not a product constraint for the Quorum-owned delegated runtime.
 This remains a clean-room design and does not authorize copying third-party
 source.
 
@@ -92,11 +95,48 @@ authority ceiling or mandatory intermediate representation.
 | Packaged helpers | Fast common click/fill/snapshot/tweak/annotation operations | Existing typed records | Packaged extension code |
 | Packaged control plane | Stop, script review, rollback, task status, approvals, and receipts | Extension-owned UI and gateway records | Never delegated to page-generated code |
 
-The user-script permission/toggle is enabled as part of installing the private
-runtime. Per-script manual review is available but not required when the user
-has already delegated a task whose envelope authorizes evaluation or persistent
-site modification. Generated code never executes in the extension service
-worker itself.
+The user-script capability has its own default-off onboarding and must report
+the Chrome toggle/API and exact host-permission state. Per-script manual review
+is required by `reviewed_standalone_v1`. It is available but not redundantly
+required by `delegated_runtime_v1` when a confirmed Delegate envelope already
+preauthorizes the exact effect class and all scope/world/bridge grants remain
+current. Generated code never executes in the extension service worker itself.
+
+## Reconciled Execution Profiles
+
+`moa.browser-program.v2` names one of two profiles. Neither profile may be
+silently substituted for the other.
+
+### `reviewed_standalone_v1`
+
+- Tier C and Chrome userScripts enablement are default-off.
+- The user inspects exact source, digest, origin/match/frame scope, and timing,
+  then directly approves every changed immutable revision.
+- Execution is top-frame `USER_SCRIPT` under exact host access.
+- Registration/update succeeds only after exact read-back; removal verifies
+  absence.
+- `MAIN` and CDP are unavailable and never used as fallbacks.
+
+### `delegated_runtime_v1`
+
+- The private delegated runtime has a separate default-off opt-in.
+- A confirmed Delegate envelope may preauthorize `script.evaluate` and/or
+  `script.persist` within exact effect, origin, frame, checkpoint, and duration
+  bounds.
+- Source remains fully inspectable and every revision remains immutable,
+  hash-bound, locally revalidated, and receipted. No redundant per-revision
+  confirmation is required while it stays inside that envelope.
+- Arbitrary-code authority, site scope, frame scope, `MAIN`, extension bridge
+  handlers, and CDP `Runtime.evaluate` are independent visible grants.
+- `MAIN` and CDP are explicit choices, never silent fallbacks from
+  `USER_SCRIPT`. Scope/world/bridge widening, origin/document change, a
+  checkpoint, destructive application effect, stale evidence, or expired
+  envelope pauses before execution.
+
+Explain and Help remain non-executing; packaged anchor-bound annotations are
+presentation. Collaborate requires action-specific confirmation. Delegate may
+execute only through its confirmed envelope and the selected profile. The
+packaged stop/review/rollback UI remains reachable outside page-generated code.
 
 ## Selected Architecture
 
@@ -111,7 +151,7 @@ content-script observation runtime
        immediate script -> chrome.userScripts.execute
        persistent script -> version/store + chrome.userScripts.register
        packaged helper -> existing content/CDP action runtime
-  -> the browser executes in USER_SCRIPT or MAIN as requested
+  -> the browser executes in the world/executor granted by the selected profile
   -> local receipt is stored and optionally synced to the gateway
 ```
 
@@ -187,9 +227,10 @@ not block execution if the delegated task permits the effect.
 ### Execution worlds and extension capabilities
 
 `USER_SCRIPT` is useful when DOM access is enough and separation from site
-globals avoids accidental collisions. `MAIN` is first-class when the script
-needs page-defined JavaScript state or APIs. Main-world execution is recorded,
-not prohibited or treated as an exceptional developer-only path.
+globals avoids accidental collisions. `MAIN` is first-class only in
+`delegated_runtime_v1` when the script needs page-defined JavaScript state or
+APIs and the independent visible grant is current. Main-world execution is
+recorded and never inferred from arbitrary-code or site-scope authority.
 
 Extension-privileged APIs remain behind a small message bridge so page code does
 not automatically inherit service-worker authority. That bridge can be broad
@@ -223,10 +264,12 @@ observe -> gateway proposes an action or generated script -> extension checks
 selected-agent/task authority -> extension executes -> receipt -> observe
 ```
 
-Arbitrary `evaluate` is a normal browser-agent capability. Prefer
-`chrome.userScripts.execute` because it is expressly designed for user-provided
-code and returns per-frame results. CDP `Runtime.evaluate` remains useful when
-the debugger executor is already attached or page-world behavior requires it.
+Arbitrary `evaluate` is a normal capability only for an authorized
+`delegated_runtime_v1` browser agent. Prefer `chrome.userScripts.execute`
+because it is expressly designed for user-provided code and returns per-frame
+results. CDP `Runtime.evaluate` remains a distinct executor capability when its
+separate visible grant is current; it is never an automatic fallback merely
+because the debugger is attached or userScripts execution fails.
 Packaged click/fill/query/snapshot actions remain available because they are
 cheaper for the model and easier to receipt, not because generated code is
 forbidden.
@@ -259,15 +302,18 @@ forbidden.
 
 ## Smallest Coherent Implementation Order
 
-1. Add and verify the `userScripts` permission/onboarding plus an injected
-   runtime adapter for `execute`, register, update, unregister, and restore.
+1. Add and verify default-off `userScripts` capability onboarding plus an
+   injected runtime adapter for `execute`, register, update, unregister, and
+   restore, with zero registration before explicit enablement.
 2. Add the gateway-owned versioned script artifact and extension install/cache
    projection with code digests and rollback.
-3. Expose immediate `evaluate` and persistent-script creation to the selected
-   browser agent and delegation envelope.
+3. Prove `reviewed_standalone_v1` direct revision approval/read-back/removal,
+   then expose immediate `evaluate` and persistent-script creation through the
+   separately opted-in `delegated_runtime_v1` envelope.
 4. Add script result/error/console receipts and before/after page evidence.
-5. Add generated overlay and persistent-remove fixtures, including `MAIN` and
-   `USER_SCRIPT` execution.
+5. Add generated overlay and persistent-remove fixtures, including
+   `USER_SCRIPT`, separately granted `MAIN`, and independently authorized CDP
+   execution.
 6. Add packaged inspect, enable/disable, rollback, and stop controls that remain
    reachable when a generated page script breaks its own UI.
 7. Move existing typed tweaks and browser actions behind the same script/task
