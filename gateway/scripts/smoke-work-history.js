@@ -416,7 +416,9 @@ async function assertDeploymentLinks(baseUrl) {
   // the adopting worker to the scoped promoter credential, never request JSON.
   const applyClaim = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/claim`, {
     operation: "apply", claim_id: "smoke-apply-original",
-    lease_expires_at: new Date(Date.now() + 75).toISOString(),
+    // Keep enough headroom for instrumented coverage runs while still proving
+    // the crash-recovery path only after the original claim has expired.
+    lease_expires_at: new Date(Date.now() + 2000).toISOString(),
   }, PROMOTER_TOKEN);
   assert.equal(applyClaim.status, 200, JSON.stringify(applyClaim.json));
   const effect = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/effect`, {
@@ -428,7 +430,7 @@ async function assertDeploymentLinks(baseUrl) {
     drain_status: "drained", compatibility_status: "compatible",
   }, PROMOTER_TOKEN);
   assert.equal(effect.status, 201, JSON.stringify(effect.json));
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await new Promise((resolve) => setTimeout(resolve, 2100));
   const adoptionBody = {
     operation: "apply", effect_id: "smoke-apply-effect", claim_id: "smoke-apply-recovery",
     worker_id: "forged-worker", lease_expires_at: new Date(Date.now() + 60000).toISOString(),

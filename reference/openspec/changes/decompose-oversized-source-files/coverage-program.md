@@ -11,7 +11,7 @@ markup, and styles never contribute production coverage.
 
 | Surface | Lines | Branches | Functions/methods | Evidence status |
 | --- | ---: | ---: | ---: | --- |
-| Gateway | 74.27% | 70.16% | 77.77% | Node production-only run over `server.js` and `lib/**/*.js`; 570 tests passed and one skipped at the last whole-surface measurement. Extracted work-history, pet-collection, pet-sharing, pet-core, companion, profile, and agent-run read/cancel handlers each have permanent focused coverage above 90%. |
+| Gateway | 74.35% | 70.22% | 77.83% | Node production-only run over `server.js` and `lib/**/*.js`; 575 tests passed and one skipped at the last whole-surface measurement. Extracted work-history, pet-collection, pet-sharing, pet-core, companion, profile, and agent-run read/cancel handlers each have permanent focused coverage above 90%. |
 | Android | 17.94% | 21.80% | 23.51% | Exact JaCoCo ratchet passes with 144 JVM tests. Extracted agent-run and context-control state modules each have permanent focused coverage above 90%; generated Android classes remain the only exclusions. |
 | Browser extension | 17.85% | 7.71% | 8.29% | Exact 25-file runtime classifier; 12 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. Extracted browser-turn and agent-loop policy modules have permanent focused gates above 90%. |
 | LiveKit worker | 99.07% | 90.40% | 92.00% | Hard production-only gate passes with all six compiled runtime modules loaded and 19 tests covering worker, STT, LLM, TTS, auth, streaming, and failure paths. |
@@ -109,7 +109,7 @@ deleting, or excluding meaningful failure-path and integration tests.
 - Apple: the ad-hoc signed QA bundle was created at
   `apple_surfaces/dist/MoaMac.app`; packaging did not launch it or request TCC
   permissions.
-- Gateway: the complete production-only run passed 543 tests with one skip, but
+- Gateway: the complete production-only run passed 575 tests with one skip, but
   no isolated preview, backup/restore evidence, or state-compatibility rollout
   was established. The branch was therefore not pushed through the
   production-triggering `push-master.sh` path.
