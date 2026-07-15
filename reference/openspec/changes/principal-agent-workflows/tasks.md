@@ -10,6 +10,10 @@
 - [x] 1.4 Preserve selection-without-execution and one-run-only explicit broker
   activation.
 - [x] 1.5 Add focused launcher/router tests and message-broker smoke assertions.
+- [x] 1.6 Make simplification candidate-only: it may edit/test/commit one
+  behavior-preserving worktree candidate but may not weaken checks, self-accept,
+  merge, deploy, promote, publish, push master, or mutate active deployment
+  state; require a separate independent-verification handoff.
 
 Acceptance: each role is selectable from a typed or transcribed broker event;
 its context pack carries the checked-in contract; no selection auto-launches;

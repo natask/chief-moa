@@ -43,8 +43,12 @@ fields SHALL grant no device, merge, deployment, or hidden execution authority.
 #### Scenario: Simplification context pack is created
 
 - **WHEN** the broker materializes a simplification context pack
-- **THEN** the pack requires behavior preservation and before/after evidence
-  for one bounded cleanup unit
+- **THEN** the pack permits editing, testing, and committing one isolated
+  behavior-preserving candidate and requires before/after evidence
+- **AND** it prohibits weakened checks, self-acceptance, merge, deployment,
+  promotion, publication, master push, and active deployment mutation
+- **AND** it hands the commit and unchanged checks to a separate independent
+  verifier before coordinator-owned integration
 
 ### Requirement: First-slice activation launches one principal run
 

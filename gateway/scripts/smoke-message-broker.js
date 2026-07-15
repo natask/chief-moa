@@ -246,7 +246,8 @@ async function assertPrincipalRoutes(baseUrl, dataDir) {
       text: "deslop this code and reduce the lines of code while preserving behavior",
       policy: "behavior_preserving_changes",
       constraint: /Preserve externally observable behavior/,
-      handoff: null,
+      authority_boundary: /Do not merge, deploy, promote, publish, push master/,
+      handoff: /separate independent verifier/,
     },
     {
       id: "fuzzing",
@@ -275,6 +276,10 @@ async function assertPrincipalRoutes(baseUrl, dataDir) {
     assert.equal(pack.workflow_directory, `gateway/agent-workflows/${item.id}`);
     assert.equal(pack.instruction_file, `gateway/agent-workflows/${item.id}/WORKFLOW.md`);
     assert.ok(pack.constraints.some((value) => item.constraint.test(value)), JSON.stringify(pack.constraints));
+    if (item.authority_boundary) {
+      assert.ok(pack.constraints.some((value) => item.authority_boundary.test(value)), JSON.stringify(pack.constraints));
+      assert.match(pack.launcher.prompt, item.authority_boundary);
+    }
     if (item.handoff) assert.match(pack.repair_handoff, item.handoff);
   }
 }

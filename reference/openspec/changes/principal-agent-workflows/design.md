@@ -34,7 +34,11 @@ different verifier replays the original probes against the repaired candidate.
 complexity reduction, behavior-preserving rearchitecture, and quality cleanup.
 Each run freezes focused behavior checks, performs one bounded change, records
 before/after evidence, and stops if the desired result requires a feature or
-policy change.
+policy change. It may edit, test, and commit only that candidate in its isolated
+branch/worktree. It cannot weaken checks, verify or accept its own candidate,
+merge, deploy, promote, publish, push master, or modify active deployment refs
+or services. It hands the commit and unchanged checks to a separate independent
+verifier; only the coordinator may later integrate or release a passing result.
 
 ### Fuzzing
 

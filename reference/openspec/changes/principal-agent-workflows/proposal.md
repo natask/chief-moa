@@ -47,4 +47,6 @@ coordination exists.
 - Security findings require a separate repair plus an independent re-verifier.
 - Fuzzing binds evidence to an isolated exact candidate, minimizes and
   deduplicates findings, and emits bounded repair handoffs.
-- Simplification preserves behavior and reports before/after evidence.
+- Simplification may edit, test, and commit one isolated behavior-preserving
+  candidate and reports before/after evidence, but cannot weaken checks, accept
+  itself, merge, deploy, promote, publish, push master, or change active state.

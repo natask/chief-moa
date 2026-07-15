@@ -311,7 +311,12 @@ function fallbackProfiles() {
       workflow_directory: "gateway/agent-workflows/simplification",
       instruction_file: "gateway/agent-workflows/simplification/WORKFLOW.md",
       context_files: ["README.md", "ARCHITECTURE.md", "AGENT_WORKFLOW.md"],
-      constraints: ["Preserve externally observable behavior and trust boundaries."],
+      constraints: [
+        "Preserve externally observable behavior and trust boundaries.",
+        "May edit, test, and commit one candidate in its isolated branch/worktree only.",
+        "Do not merge, deploy, promote, publish, push master, or weaken verification from this run.",
+      ],
+      repair_handoff: "Hand the committed candidate and unchanged checks to a separate independent verifier; integration and release remain coordinator-owned.",
       expected_output: "A narrow behavior-preserving cleanup with before/after evidence.",
       verification: ["run focused behavior-preservation tests", "run the touched surface verification gate"],
     },

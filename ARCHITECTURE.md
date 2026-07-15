@@ -1011,7 +1011,11 @@ can emit bounded repair contracts only; accepted repairs and re-verification
 must run separately, with the verifier independent of the repair. Explicit
 deslop, line-count, rearchitecture, or quality-cleanup intent selects
 `simplification`, which may make one behavior-preserving change under frozen
-regression checks. Explicit fuzzing/adversarial-testing intent selects
+regression checks in its isolated candidate branch/worktree. It may test and
+commit that candidate but cannot weaken checks, accept its own change, merge,
+deploy, promote, publish, push master, or modify active deployment state; a
+separate independent verifier precedes coordinator-owned integration. Explicit
+fuzzing/adversarial-testing intent selects
 `fuzzing`, which runs against one isolated exact candidate, minimizes and
 deduplicates reproduced failures, and emits bounded repair handoffs without
 editing the candidate. This slice has no recurring scheduler, automatic repair

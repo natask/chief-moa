@@ -16,11 +16,21 @@ reduction, behavior-preserving rearchitecture, or code-quality leveling work.
   behavior is no longer possible.
 - Record before/after measurements, run focused checks and the touched-surface
   gate, then commit the completed unit with a Conventional Commit.
+- Edit, test, and commit only one candidate in this isolated branch/worktree.
+  Do not merge it, deploy it, promote it, publish it, push master, modify a
+  deployment ref/service, or signal an active application to reload.
+- Do not weaken, delete, skip, or bypass a test, acceptance predicate, authority
+  boundary, quality gate, or verification requirement to reduce code.
+- Hand the committed candidate and unchanged checks to a separate independent
+  verifier. This principal cannot accept its own change; integration and
+  release decisions remain coordinator-owned after independent verification.
 
 ## Output
 
 Return the exact candidate, bounded scope, behavior contract, before/after
-measurement, changed paths, verification evidence, and any deferred cleanup.
+measurement, changed paths, verification evidence, independent-verification
+handoff, and any deferred cleanup. Do not claim merge, deployment, promotion,
+publication, or active-target state.
 
 ## Verification
 

@@ -145,8 +145,12 @@
     "constraints": [
       "Preserve externally observable behavior, public contracts, and trust boundaries.",
       "Keep one cleanup unit tied to before/after measurements and focused regression checks.",
-      "Do not mix feature work, product-policy changes, or broad rewrites into the cleanup."
+      "May edit, test, and commit one behavior-preserving candidate in its isolated branch/worktree only.",
+      "Do not mix feature work, product-policy changes, or broad rewrites into the cleanup.",
+      "Do not merge, deploy, promote, publish, push master, or modify active deployment refs or services from this run.",
+      "Do not weaken, delete, skip, or bypass checks, acceptance predicates, authority boundaries, or verification to reduce code."
     ],
+    "repair_handoff": "Hand the committed candidate and unchanged acceptance checks to a separate independent verifier. Integration, merge, push, deployment, and promotion remain coordinator-owned after that verifier passes.",
     "expected_output": "A narrow behavior-preserving cleanup with before/after line or complexity evidence, focused regression proof, and a Conventional Commit.",
     "verification": [
       "run focused behavior-preservation tests",
