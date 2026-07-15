@@ -130,7 +130,7 @@ test("evidence merging ignores malformed inputs and keeps first provenance", () 
   assert.equal(merged.visible_text, "evidence");
 });
 
-test("inline browser JPEG is decoded, bounded, hashed, and separated from audit metadata", () => {
+test("inline browser JPEG is structurally inspected, bounded, hashed, and separated from audit metadata", () => {
   const bytes = jpeg.encode({ data: Buffer.from([20, 40, 60, 255]), width: 1, height: 1 }, 80).data;
   const data = bytes.toString("base64");
   const result = sanitizeBrowserInlineScreenshot({

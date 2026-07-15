@@ -62,6 +62,8 @@ function browserLifecyclePayload(record, options = {}) {
     evidence_summary: record.evidence_summary || null,
     evidence_media: record.evidence_media || null,
     evidence_delivery: response.evidence_delivery || null,
+    model_backed: response.model_backed === true,
+    model_error: String(response.model_error || ""),
     status: record.status,
     broker_event_id: record.broker_event_id || "",
     route_decision_id: record.route_decision_id || "",
