@@ -4387,14 +4387,23 @@
       if (!visible(el)) return;
       const i = indexed.length;
       indexed.push(el);
-      out.push({ i, tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "", label: label(el) });
+      out.push({ i, tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "", label: label(el), element: el });
     });
+    const capturedAt = new Date().toISOString();
+    const snapshotId = `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const observationRuntime = window.__ageeObservationRuntime;
+    const elements = out.map(({ element, ...item }) => ({
+      ...item,
+      observation_anchor: observationRuntime?.observe(element, { snapshotId, capturedAt }) || null,
+    }));
     return {
       url: location.href,
       title: document.title,
       pageText: visiblePageText(),
-      elements: out,
-      snapshotId: `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      elements,
+      snapshotId,
+      observation: observationRuntime?.state() || null,
+      observationLimitations: observationRuntime?.limitations() || [],
       viewport: {
         width: innerWidth,
         height: innerHeight,
@@ -4402,8 +4411,8 @@
         scrollX,
         scrollY,
       },
-      capturedAt: new Date().toISOString(),
-      elementSummaries: out.map(snapshotElementSummary),
+      capturedAt,
+      elementSummaries: elements.map(snapshotElementSummary),
     };
   }
 
@@ -4503,6 +4512,13 @@
         return true;
       case "snapshot":
         reply(snapshot());
+        return true;
+      case "revalidateObservationAnchor":
+        reply(window.__ageeObservationRuntime?.revalidate(msg.anchor) || {
+          valid: false,
+          status: "stale",
+          reason: "runtime_unavailable",
+        });
         return true;
       case "act":
         act(msg).then(reply);
