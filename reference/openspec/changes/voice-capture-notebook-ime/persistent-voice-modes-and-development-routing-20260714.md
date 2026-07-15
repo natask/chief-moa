@@ -67,7 +67,8 @@ Capture mechanics stay stable in every mode:
 - still press-and-hold is push-to-talk and applies the same delivery behavior on
   release;
 - drag moves the orb;
-- cancel is always visibly available while a capture is active.
+- triple-click cancels an active capture without sending; a large movement
+  after hold capture starts also cancels and escapes into drag.
 
 Do not make swipe direction or multi-click count the primary mode selector.
 Those gestures may become accelerators after physical-phone QA, but they should

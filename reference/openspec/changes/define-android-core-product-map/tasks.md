@@ -120,3 +120,19 @@ Release note: commit `5106d52` produced Android artifact
 Stable Android publication remains blocked because the protected publish job is
 not configured to run, and the Chrome Web Store upload gate was skipped; the
 local unpacked-extension reload signal completed without a client acknowledgement.
+
+## 12. Manual Cross-Surface Voice Gestures
+
+- [x] 12.1 Make single click start/stop-and-send current-thread capture.
+- [x] 12.2 Make hold/release push-to-talk in the same thread and preserve
+      hold-drag cancellation.
+- [x] 12.3 Make double-click start/stop-and-send fresh-thread capture; cancel an
+      active current-thread capture without sending before the fresh start.
+- [x] 12.4 Make triple-click cancel without sending and open chat; remove the
+      superseded Android and browser X/Send draft controls.
+- [x] 12.5 Verify Android unit tests and `assembleDebug`, plus browser verify and
+      real headless-Chrome smoke, from the isolated integration candidate.
+- [ ] 12.6 Complete physical-phone timing, touch-slop, interruption, mode, and
+      real voice round-trip QA.
+- [ ] 12.7 Publish collision-free Android OTA and browser-extension artifacts,
+      then promote only if the no-interruption and rollback gates pass.

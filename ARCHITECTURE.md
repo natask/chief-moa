@@ -294,23 +294,20 @@ hold with movement only repositions the mark. Browser voice can opt a session
 into background assistant speech, where starting a new spoken turn opens a new
 gateway voice turn without stopping already queued assistant audio.
 
-An experimental voice-first gesture mode (off by default; browser flag
-`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
-the primary surface toward voice. Android uses the reviewable v4 contract:
-Single click starts a draft with visible `X — orb — ↑` controls (discard and the
-single Send action); later orb taps never commit it. Those controls are separate
-overlay windows beside the orb, so the transcript card above or below the orb is
-never the disposition authority. Double-click cancels the current draft
-and starts a fresh voice thread that does not use the current thread's replies,
-and triple-click cancels voice and opens the demoted chat surface. A still
-first-press hold is push-to-talk (release commits; a large move after the hold
-confirms cancels capture and escapes into a drag). The one open chat/transcript
-card follows the orb and flips wholly above or below it. Dragging into the
-bottom removal target, or choosing Hide in the chat header/foreground
-notification, stops the overlay service and removes all overlay windows. The
-flag off keeps Android's legacy gesture contract. The browser flag uses the
-same `X — mascot — ↑` draft controls and explicit-send rule; its flag-off mapping
-and keyboard shortcuts remain unchanged. Contract:
+The voice-first gesture contract (browser flag
+`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) is manual
+and cross-surface: single click toggles current-thread capture; a still hold is
+push-to-talk in that thread and release sends; double-click toggles capture in a
+fresh thread; triple-click cancels without sending and opens chat. Starting a
+fresh-thread capture cancels an active current-thread capture without sending.
+Large movement after a hold starts cancels capture and escapes into drag. No
+separate X/Send side controls own disposition, and normal manual turns never
+wait for silence detection. The one open chat/transcript card follows the orb
+and flips wholly above or below it. Android drag-to-remove and explicit Hide
+actions keep their existing behavior. Keyboard shortcuts and flag-off legacy
+behavior remain unchanged. Delivery mode is separate from gesture mechanics:
+the gateway owns versioned device-scoped Ask/Note/Coach admission, while client
+mode selectors and preflight are follow-up work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface stays small: it shows the current intent/result and compact
