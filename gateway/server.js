@@ -64,7 +64,14 @@ const {
 } = require("./lib/browser-evidence");
 const { sanitizeLooseId, screenNodeLabel } = require("./lib/input-utils");
 const browserTurns = require("./lib/browser-turns");
-const { attachOpenAiBrowserImage, attachVertexBrowserImage } = require("./lib/browser-multimodal");
+const {
+  ModelProviderHttpError,
+  BrowserTurnBodyError,
+  attachOpenAiBrowserImage,
+  attachVertexBrowserImage,
+  explicitlyUnsupportedImageError,
+  modelProviderErrorSummary,
+} = require("./lib/browser-multimodal");
 const { browserAgentRoleCatalog, browserAgentRoleFromBody } = require("./lib/browser-agent-roles");
 const { validateBrowserDelegationEnvelope } = require("./lib/browser-delegation-envelope");
 const { createBrokerRouter } = require("./lib/broker-router");
@@ -2719,7 +2726,13 @@ async function writeCompletedVoiceTurnRecord(record) {
 }
 
 async function handleBrowserTurn(request, response) {
-  const body = await readJsonBody(request);
+  let body;
+  try {
+    body = await readBoundedJsonBody(request, MAX_BODY_BYTES, BrowserTurnBodyError);
+  } catch (error) {
+    sendJson(response, Number(error.statusCode) || 400, { error: error.code || cleanError(error) });
+    return;
+  }
   await handleBrowserTurnBody(response, body, {
     modality: browserTurnModality(body),
     legacy: "browser",
@@ -2747,19 +2760,49 @@ async function handleBrowserTurnBody(response, body, options = {}) {
 }
 
 async function handleBrowserEvidence(request, response) {
-  const body = await readJsonBody(request);
-  const requestedTurnId = String(body.turn_id || body.browser_turn_id || body.browserTurnId || "").trim();
-  const requestedEvidenceRequestId = String(body.evidence_request_id || body.request_id || body.requestId || "").trim();
-  if (!requestedTurnId && !requestedEvidenceRequestId) {
-    sendJson(response, 400, { error: "turn_id or evidence_request_id is required" });
+  let body;
+  try {
+    body = await readBoundedJsonBody(request, MAX_BODY_BYTES, BrowserTurnBodyError);
+  } catch (error) {
+    sendJson(response, Number(error.statusCode) || 400, { error: error.code || cleanError(error) });
     return;
   }
-
-  const turn = requestedTurnId
-    ? browserTurnStore.readBrowserTurnRecord(requestedTurnId)
-    : browserTurnStore.findBrowserTurnByEvidenceRequestId(requestedEvidenceRequestId);
+  const requestedTurnId = String(body.turn_id || body.browser_turn_id || body.browserTurnId || "").trim();
+  const requestedEvidenceRequestId = String(body.evidence_request_id || body.request_id || body.requestId || "").trim();
+  if (!requestedTurnId || !requestedEvidenceRequestId) {
+    sendJson(response, 400, { error: "turn_id and evidence_request_id are required" });
+    return;
+  }
+  const safeTurnId = sanitizeLooseId(requestedTurnId);
+  const safeEvidenceRequestId = sanitizeLooseId(requestedEvidenceRequestId);
+  if (!safeTurnId || safeTurnId !== requestedTurnId || !safeEvidenceRequestId || safeEvidenceRequestId !== requestedEvidenceRequestId) {
+    sendJson(response, 400, { error: "turn_id or evidence_request_id is invalid" });
+    return;
+  }
+  const turn = browserTurnStore.readBrowserTurnRecord(safeTurnId);
   if (!turn) {
     sendJson(response, 404, { error: "browser turn not found" });
+    return;
+  }
+  if (!(turn.evidence_request_ids || []).includes(safeEvidenceRequestId)) {
+    sendJson(response, 409, { error: "evidence_request_id was not issued for this browser turn" });
+    return;
+  }
+  if (turn.status === "completed" && turn.completed_evidence_request_id === safeEvidenceRequestId) {
+    const storedEvidence = browserTurnStore.readBrowserEvidenceRecord(turn.completed_evidence_id);
+    if (!storedEvidence) {
+      sendJson(response, 409, { error: "stored evidence response is unavailable" });
+      return;
+    }
+    sendJson(response, 200, {
+      ...browserTurns.browserLifecyclePayload(turn),
+      evidence: storedEvidence,
+      idempotent_replay: true,
+    });
+    return;
+  }
+  if (turn.status !== "needs_evidence") {
+    sendJson(response, 409, { error: "browser turn is not awaiting evidence" });
     return;
   }
 
@@ -2770,12 +2813,15 @@ async function handleBrowserEvidence(request, response) {
   }
 
   const now = new Date().toISOString();
+  const evidenceId = sanitizeOptionalId(body.evidence_id || body.id, randomId("evidence"));
+  if (browserTurnStore.readBrowserEvidenceRecord(evidenceId)) {
+    sendJson(response, 409, { error: "evidence_id already exists" });
+    return;
+  }
   const evidence = {
-    id: sanitizeOptionalId(body.evidence_id || body.id, randomId("evidence")),
+    id: evidenceId,
     turn_id: turn.id,
-    evidence_request_id: requestedEvidenceRequestId
-      ? sanitizeLooseId(requestedEvidenceRequestId)
-      : String((turn.evidence_request_ids || [])[0] || ""),
+    evidence_request_id: safeEvidenceRequestId,
     session_id: turn.session_id,
     conversation_id: turn.conversation_id,
     branch_id: turn.branch_id,
@@ -2786,6 +2832,12 @@ async function handleBrowserEvidence(request, response) {
     summary,
     created_at: now,
   };
+  browserTurnStore.writeBrowserTurnRecord({
+    ...turn,
+    status: "routing",
+    processing_evidence_request_id: safeEvidenceRequestId,
+    updated_at: now,
+  });
   browserTurnStore.writeBrowserEvidenceRecord(evidence);
 
   const evidenceRefs = Array.from(new Set([].concat(turn.evidence_refs || [], evidence.id).filter(Boolean)));
@@ -2799,6 +2851,12 @@ async function handleBrowserEvidence(request, response) {
     completedAt: now,
   });
   completed = attachBrowserRoleExecution(completed);
+  completed = {
+    ...completed,
+    processing_evidence_request_id: "",
+    completed_evidence_request_id: safeEvidenceRequestId,
+    completed_evidence_id: evidence.id,
+  };
   browserTurnStore.writeBrowserTurnRecord(completed);
   sendJson(response, 200, {
     ...browserTurns.browserLifecyclePayload(completed),
@@ -2910,7 +2968,6 @@ async function buildBrowserTurnRecord(body, options = {}) {
   const hasEvidence = evidenceRefs.length > 0
     || Boolean(evidenceSummary.visible_text || evidenceSummary.source_ref)
     || inlineScreenshot.audit.status === "available";
-  const evidenceRequestIds = sanitizeBrowserIdList(body.evidence_request_ids || body.evidence_request_id || body.request_id);
   const agentRole = browserAgentRoleFromBody(body);
   const pageRef = mergeBrowserPageRefs(browserPageRefFromBody(body), evidenceSummary.page_ref);
   const delegationValidation = agentRole.id === "delegate" && agentRole.explicit
@@ -2946,7 +3003,7 @@ async function buildBrowserTurnRecord(body, options = {}) {
     status_url: browserTurnStatusUrl(turnId),
     task_ids: sanitizeBrowserIdList(body.task_ids || body.task_id),
     agent_run_ids: sanitizeBrowserIdList(body.agent_run_ids || body.agent_run_id),
-    evidence_request_ids: evidenceRequestIds.length ? evidenceRequestIds : (hasEvidence ? [] : [randomId("evreq")]),
+    evidence_request_ids: hasEvidence ? [] : [randomId("evreq")],
     proposal_ids: sanitizeBrowserIdList(body.proposal_ids || body.proposal_id),
     actions: [],
     created_at: now,
@@ -3066,6 +3123,7 @@ async function browserEvidenceAnswer(record, options = {}) {
   ].join("\n");
 
   const effectiveProfile = agentProfile.effectiveWithOverrides(null, profileOptions);
+  let retriedWithoutImage = false;
   try {
     let answer;
     let evidenceDelivery;
@@ -3073,7 +3131,9 @@ async function browserEvidenceAnswer(record, options = {}) {
       try {
         answer = await callModel([{ role: "user", content: prompt }], effectiveProfile, { imagePart: inlineImage });
         evidenceDelivery = { image: "multimodal", reason: "" };
-      } catch {
+      } catch (imageError) {
+        if (!explicitlyUnsupportedImageError(imageError)) throw imageError;
+        retriedWithoutImage = true;
         answer = await callModel([{ role: "user", content: prompt }], effectiveProfile);
         evidenceDelivery = {
           image: "text_only",
@@ -3097,14 +3157,17 @@ async function browserEvidenceAnswer(record, options = {}) {
     };
     return role.id === "collaborate" ? withBrowserCollaborationProposal(response, answer) : response;
   } catch (error) {
+    const providerError = inlineImage ? modelProviderErrorSummary(error) : cleanError(error);
     const response = {
       ...fallback,
       model_backed: false,
-      model_error: cleanError(error),
+      model_error: providerError,
       evidence_delivery: {
-        image: "text_only",
+        image: inlineImage ? "failed" : "text_only",
         reason: inlineImage
-          ? `multimodal and text-only provider calls failed: ${cleanError(error)}`
+          ? (retriedWithoutImage
+            ? `provider explicitly rejected inline JPEG and the text-only retry failed: ${providerError}`
+            : `inline JPEG provider call failed without retry: ${providerError}`)
           : (record.evidence_media?.image?.reason || "no valid inline JPEG supplied"),
       },
     };
@@ -5998,7 +6061,7 @@ async function callModel(messages, profile, options = {}) {
 
   const responseText = await upstreamResponse.text();
   if (!upstreamResponse.ok) {
-    throw new Error(`model HTTP ${upstreamResponse.status}: ${truncate(responseText, 400)}`);
+    throw new ModelProviderHttpError("openai-compatible", upstreamResponse.status, responseText);
   }
 
   let json;
@@ -6061,7 +6124,7 @@ async function callVertexModel(messages, profile, options = {}) {
 
   const responseText = await upstreamResponse.text();
   if (!upstreamResponse.ok) {
-    throw new Error(`vertex HTTP ${upstreamResponse.status}: ${truncate(responseText, 400)}`);
+    throw new ModelProviderHttpError("vertex", upstreamResponse.status, responseText);
   }
 
   let json;

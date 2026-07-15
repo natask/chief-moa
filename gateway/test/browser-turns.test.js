@@ -93,6 +93,8 @@ test("lifecycle payload returns bounded defaults and a nested summary", () => {
   assert.equal(payload.legacy_surface, "browser");
   assert.equal(payload.evidence_media, null);
   assert.equal(payload.evidence_delivery, null);
+  assert.equal(payload.model_backed, false);
+  assert.equal(payload.model_error, "");
   assert.equal(payload.browser_turn.completed_at, "");
 });
 

@@ -33,11 +33,14 @@ async function main() {
 
     await step("auth required", () => assertAuthRequired(baseUrl));
     const needsEvidence = await step("missing page evidence returns lifecycle request", () => assertNeedsEvidence(baseUrl, sessionId));
-    await step("posted evidence completes the pending turn", () => assertEvidenceCompletesTurn(baseUrl, dataDir, needsEvidence));
+    await step("posted evidence is request-bound and idempotent", () => assertEvidenceCompletesTurn(baseUrl, dataDir, needsEvidence, modelServer));
+    await step("concurrent evidence submissions infer at most once", () => assertConcurrentEvidenceSingleInference(baseUrl, sessionId, modelServer));
     await step("inline multimodal evidence reaches the provider once", () => assertInlineEvidenceTurn(baseUrl, dataDir, sessionId, modelServer));
     await step("valid image-only evidence does not request a second round trip", () => assertImageOnlyInlineTurn(baseUrl, sessionId));
     await step("oversized inline image is omitted without blocking text evidence", () => assertOversizedInlineImage(baseUrl, sessionId, modelServer));
     await step("unsupported provider image input retries explicitly as text-only", () => assertUnsupportedImageRetry(baseUrl, sessionId, modelServer));
+    await step("ambiguous provider failures never trigger a second model call", () => assertAmbiguousImageFailuresDoNotRetry(baseUrl, sessionId, modelServer));
+    await step("oversized browser JSON receives a bounded 413 response", () => assertOversizedBrowserBody(baseUrl));
     await step("browser-shaped chat delegates to browser turn path", () => assertChatDelegates(baseUrl, sessionId));
     await step("browser-shaped voice delegates to browser turn path", () => assertVoiceDelegates(baseUrl, sessionId));
     await step("browser turns appear in session context", () => assertSessionContextIncludesBrowserTurns(baseUrl, sessionId));
@@ -55,6 +58,10 @@ async function main() {
     "valid image-only evidence completes immediately instead of returning needs_evidence",
     "oversized image evidence is explicitly omitted while bounded text still works",
     "an adapter image rejection retries once as text-only and reports the degradation",
+    "HTTP 5xx and generic 400 image-call failures do not retry or duplicate provider cost",
+    "legacy evidence accepts only its issued request id and exact replay returns stored output without re-inference",
+    "concurrent submissions transition the pending turn before inference so only one provider call starts",
+    "browser JSON over the shared 1 MiB ingress cap returns 413 without resetting the socket",
     "browser-shaped /v1/chat and /v1/voice/turns delegate to the same browser turn path",
     "browser voice profile-control with screen context does not get stolen by the browser turn adapter",
     "browser turns are stored under DATA_DIR and visible in session context",
@@ -91,6 +98,7 @@ async function assertNeedsEvidence(baseUrl, sessionId) {
     client: { platform: "browser", id: "smoke-extension" },
     text: "What is this page about?",
     input: { type: "text", text: "What is this page about?" },
+    evidence_request_id: "client_forged_request_id",
     page_ref: {
       title: "Chief Moa",
       url: "https://example.test/chief-moa",
@@ -103,6 +111,7 @@ async function assertNeedsEvidence(baseUrl, sessionId) {
   assert.equal(turn.json.page_ref.title, "Chief Moa");
   assert.ok(Array.isArray(turn.json.evidence_request_ids));
   assert.equal(turn.json.evidence_request_ids.length, 1, "pending turn must ask for page evidence");
+  assert.notEqual(turn.json.evidence_request_ids[0], "client_forged_request_id", "the gateway must issue the request id");
   assert.match(turn.json.status_url, /\/v1\/browser\/turns\/browser_needs_evidence\/status$/);
 
   const status = await getJson(`${baseUrl}${turn.json.status_url}`);
@@ -110,7 +119,7 @@ async function assertNeedsEvidence(baseUrl, sessionId) {
   return turn.json;
 }
 
-async function assertEvidenceCompletesTurn(baseUrl, dataDir, pending) {
+async function assertEvidenceCompletesTurn(baseUrl, dataDir, pending, modelServer) {
   const evidenceRequestId = pending.evidence_request_ids[0];
   const completed = await postJson(`${baseUrl}/v1/browser/evidence`, {
     source: "browser-agent-routing-smoke",
@@ -156,6 +165,32 @@ async function assertEvidenceCompletesTurn(baseUrl, dataDir, pending) {
   assert.equal(storedEvidence.screenshot.encoding, "omitted");
   assert.equal(storedEvidence.screenshot.omitted, true);
   assert.equal(storedEvidence.screenshot.data, undefined, "stored browser evidence must not persist screenshot base64 data");
+
+  const requestCount = modelServer.requests.length;
+  const replay = await postJson(`${baseUrl}/v1/browser/evidence`, {
+    turn_id: pending.turn_id,
+    evidence_request_id: evidenceRequestId,
+    evidence_id: "forged_replay_id",
+    evidence: { visible_text: "Changed replay evidence must not be inferred." },
+  });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.json.idempotent_replay, true);
+  assert.equal(replay.json.evidence.id, "browser_evidence_1");
+  assert.equal(modelServer.requests.length, requestCount, "exact evidence replay must not call the provider again");
+
+  const forged = await postJson(`${baseUrl}/v1/browser/evidence`, {
+    turn_id: pending.turn_id,
+    evidence_request_id: "evreq_forged",
+    evidence: { visible_text: "forged" },
+  });
+  assert.equal(forged.status, 409);
+  assert.match(forged.json.error, /not issued/);
+
+  const missingBinding = await postJson(`${baseUrl}/v1/browser/evidence`, {
+    turn_id: pending.turn_id,
+    evidence: { visible_text: "missing request id" },
+  });
+  assert.equal(missingBinding.status, 400);
 }
 
 async function assertInlineEvidenceTurn(baseUrl, dataDir, sessionId, modelServer) {
@@ -201,6 +236,29 @@ async function assertInlineEvidenceTurn(baseUrl, dataDir, sessionId, modelServer
   const stored = JSON.parse(storedRaw);
   assert.equal(stored.evidence_media.image.sha256.length, 64);
   assert.equal(stored.evidence_media.image.bytes, imageBytes.length);
+}
+
+async function assertConcurrentEvidenceSingleInference(baseUrl, sessionId, modelServer) {
+  const pending = await postJson(`${baseUrl}/v1/browser/turns`, {
+    session_id: sessionId,
+    branch_id: "page",
+    turn_id: "browser_concurrent_evidence",
+    client: { platform: "browser", id: "smoke-extension" },
+    text: "DELAY_EVIDENCE summarize the supplied page evidence.",
+  });
+  assert.equal(pending.status, 202);
+  const requestCount = modelServer.requests.length;
+  const body = {
+    turn_id: pending.json.turn_id,
+    evidence_request_id: pending.json.evidence_request_ids[0],
+    evidence: { visible_text: "concurrent bounded evidence" },
+  };
+  const [one, two] = await Promise.all([
+    postJson(`${baseUrl}/v1/browser/evidence`, { ...body, evidence_id: "concurrent_evidence_one" }),
+    postJson(`${baseUrl}/v1/browser/evidence`, { ...body, evidence_id: "concurrent_evidence_two" }),
+  ]);
+  assert.deepEqual([one.status, two.status].sort(), [200, 409]);
+  assert.equal(modelServer.requests.length, requestCount + 1, "concurrent evidence must infer exactly once");
 }
 
 async function assertOversizedInlineImage(baseUrl, sessionId, modelServer) {
@@ -263,6 +321,39 @@ async function assertUnsupportedImageRetry(baseUrl, sessionId, modelServer) {
   const second = [...modelServer.requests.at(-1).messages].reverse().find((message) => message.role === "user");
   assert.ok(Array.isArray(first.content));
   assert.equal(typeof second.content, "string");
+}
+
+async function assertAmbiguousImageFailuresDoNotRetry(baseUrl, sessionId, modelServer) {
+  const bytes = jpeg.encode({ data: Buffer.from([30, 20, 10, 255]), width: 1, height: 1 }, 70).data;
+  for (const [marker, status] of [["PROVIDER_FAIL_500", 503], ["PROVIDER_GENERIC_400", 400]]) {
+    const requestCount = modelServer.requests.length;
+    const imageBase64 = bytes.toString("base64");
+    const turn = await postJson(`${baseUrl}/v1/browser/turns`, {
+      session_id: sessionId,
+      branch_id: "page",
+      turn_id: `browser_no_retry_${status}`,
+      client: { platform: "browser", id: "smoke-extension" },
+      text: `${marker} answer this request.`,
+      snapshot: { page_text: "bounded text" },
+      screenshot: { media_type: "image/jpeg", encoding: "base64", data: imageBase64 },
+    });
+    assert.equal(turn.status, 200, "existing browser fallback remains fail-soft");
+    assert.equal(turn.json.evidence_delivery.image, "failed");
+    assert.match(turn.json.evidence_delivery.reason, /failed without retry/);
+    assert.equal(modelServer.requests.length, requestCount + 1, `${status} must make exactly one provider call`);
+    assert.equal(JSON.stringify(turn.json).includes(imageBase64), false, "provider failure response must not leak image base64");
+    assert.equal(turn.json.model_error, `openai-compatible HTTP ${status}`);
+  }
+}
+
+async function assertOversizedBrowserBody(baseUrl) {
+  const response = await fetch(`${baseUrl}/v1/browser/turns`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ text: "x", padding: "z".repeat(1024 * 1024) }),
+  });
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), { error: "body_too_large" });
 }
 
 async function assertChatDelegates(baseUrl, sessionId) {
@@ -436,7 +527,7 @@ async function startFakeModelServer() {
     req.on("data", (chunk) => {
       raw += chunk;
     });
-    req.on("end", () => {
+    req.on("end", async () => {
       let body = {};
       try {
         body = JSON.parse(raw || "{}");
@@ -453,6 +544,17 @@ async function startFakeModelServer() {
         res.end(JSON.stringify({ error: "image input unsupported by fixture" }));
         return;
       }
+      if (Array.isArray(lastUser?.content) && prompt.includes("PROVIDER_FAIL_500")) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "temporary upstream failure" }));
+        return;
+      }
+      if (Array.isArray(lastUser?.content) && prompt.includes("PROVIDER_GENERIC_400")) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid request" }));
+        return;
+      }
+      if (prompt.includes("DELAY_EVIDENCE")) await sleep(100);
       const answer = [
         "MODEL_BROWSER_ANSWER",
         prompt.includes("Chief Moa") ? "Chief Moa" : "",

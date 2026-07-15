@@ -1,8 +1,8 @@
 "use strict";
 
 const crypto = require("node:crypto");
-const jpeg = require("jpeg-js");
 const { sanitizeLooseId, screenNodeLabel } = require("./input-utils");
+const { inspectBoundedBrowserJpeg } = require("./browser-multimodal");
 
 const BROWSER_INLINE_JPEG_MAX_BASE64_CHARS = 420 * 1024;
 
@@ -154,16 +154,8 @@ function sanitizeBrowserInlineScreenshot(value) {
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes.at(-2) !== 0xff || bytes.at(-1) !== 0xd9) {
     return omittedInlineScreenshot("inline screenshot is not a JPEG", bytes.length);
   }
-  let decoded;
-  try {
-    decoded = jpeg.decode(bytes, {
-      useTArray: true,
-      formatAsRGBA: false,
-      tolerantDecoding: false,
-      maxResolutionInMP: 16,
-      maxMemoryUsageInMB: 64,
-    });
-  } catch {
+  const dimensions = inspectBoundedBrowserJpeg(bytes);
+  if (!dimensions) {
     return omittedInlineScreenshot("inline screenshot JPEG is invalid", bytes.length);
   }
   const declaredBytes = Number(value.bytes);
@@ -174,8 +166,8 @@ function sanitizeBrowserInlineScreenshot(value) {
     media_type: "image/jpeg",
     status: "available",
     bytes: bytes.length,
-    width: decoded.width,
-    height: decoded.height,
+    width: dimensions.width,
+    height: dimensions.height,
     sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
     reason: "",
   };
