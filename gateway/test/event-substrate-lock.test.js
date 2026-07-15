@@ -200,14 +200,18 @@ test("concurrent stale reapers cannot retire the successor owner's lock", async 
   try {
     const owner = await runChild(dataDir, input("reaper-race-owner", 0), "crash-after-lock");
     assert.equal(owner.code, 71);
-    await sleep(150);
+    const old = new Date(Date.now() - 10_000);
+    fs.utimesSync(lockPath(dataDir), old, old);
 
     const commands = [input("reaper-race-one", 0), input("reaper-race-two", 0)];
-    const results = await Promise.all(commands.map((event) => runChild(dataDir, event)));
+    // Make only the deliberately backdated owner stale. A loaded scheduler
+    // must not age the newly acquired successor lock into a second recovery.
+    const childOptions = { staleMs: 2_000, timeoutMs: 5_000 };
+    const results = await Promise.all(commands.map((event) => runChild(dataDir, event, "append", childOptions)));
     assert.deepEqual(results.map((result) => result.code).sort(), [0, 2]);
     assert.equal(results.find((result) => result.code === 2).json?.error?.code, "EVENT_STREAM_VERSION_CONFLICT");
 
-    const successor = await runChild(dataDir, input("reaper-race-successor", 1));
+    const successor = await runChild(dataDir, input("reaper-race-successor", 1), "append", childOptions);
     assert.equal(successor.code, 0, successor.stderr || successor.stdout);
     assert.equal(successor.json.result.stream_version, 2);
     assert.deepEqual(lockArtifacts(dataDir), []);
