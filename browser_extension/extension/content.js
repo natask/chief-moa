@@ -3084,6 +3084,7 @@
       transcript: "",
       gatewayRouted: false,
       incognito: context.action === "incognito",
+      contextControls: context,
       assistantSpeechOverlap: preserveAssistantPlayback,
       assistantSpeechSuppressed: false,
       steeringBoundaryText: "",
@@ -3385,7 +3386,8 @@
       instruction: transcript,
       cueId: state.cueId,
       agentRole: pageContextTurn ? AgeeSteeringUi.roleForInstruction(transcript) : undefined,
-      contextAction: state.incognito ? "incognito" : "",
+      contextAction: state.contextControls.action,
+      threadLabel: state.contextControls.label,
     }).then(() => {
       if (extensionContextInvalidated) removeCueCard(state.cueId);
     }).catch((error) => {
@@ -3393,7 +3395,6 @@
       if (agentState === "thinking") setAgentState("idle");
     });
   }
-
   function stopLiveVoiceTurn(mode = "stop") {
     // Any explicit stop/cancel/error ends conversation mode so the mark does not
     // re-arm the mic after the current turn tears down.

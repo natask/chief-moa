@@ -60,6 +60,8 @@ assert.match(contentSource, /if \(!state\.voiceSessionId\) state\.pendingSteerin
 assert.match(contentSource, /if \(state\.pendingSteeringReplacement\) sendLiveVoiceControl\(state, liveCancelTurnMessage\(state, 0, state\.pendingSteeringReplacement\)\)\.finally/);
 assert.match(contentSource, /if \(state\.commitWhenReady\) commitLiveVoiceTurn\(state\)/);
 assert.match(backgroundSource, /all_branches_context: false/);
+assert.match(contentSource, /contextAction: state\.contextControls\.action/);
+assert.match(backgroundSource, /options\.contextAction \? \{ context_action: options\.contextAction, all_branches_context: false \}/);
 assert.match(backgroundSource, /activeThreadBranch\(cfg\)/);
 assert.doesNotMatch(contentSource, /agee-mode-select|data-agent-mode-control/);
 assert.match(contentSource, /state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/);

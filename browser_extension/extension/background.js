@@ -3471,7 +3471,6 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   const delegationEnvelope = role === "delegate" && options.delegationConfirmed === true
     ? browserDelegationEnvelope(text, snapshot.url)
     : null;
-
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
   const client = browserTurnClient(deviceId, inputKind);
@@ -3481,7 +3480,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
     session_id: sessionId,
     conversation_id: sessionId,
     branch_id: cueId || "browser-agent",
-    all_branches_context: true,
+    ...(options.contextAction ? { context_action: options.contextAction, all_branches_context: false } : { all_branches_context: true }),
     client,
   };
 
@@ -3645,6 +3644,7 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
         input: "text",
         role: explicitRole,
         delegationConfirmed: contextControls.delegationConfirmed === true,
+        ...contextControls,
       });
       return;
     }
@@ -3661,7 +3661,7 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
       return;
     }
     if (looksLikePageContextQuestion(instruction)) {
-      await runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, { input: "text" });
+      await runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, { input: "text", ...contextControls });
       return;
     }
     await runViaGateway(tabId, instruction, cfg, signal, cueId, contextControls);
