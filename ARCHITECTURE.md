@@ -309,23 +309,26 @@ behavior remain unchanged. Delivery policy is separate from gesture mechanics.
 The gateway owns versioned, device-scoped Ask/Note/Coach admission as internal
 routing state. Clients do not expose a mode selector: the user changes behavior
 conversationally (for example, "take a note" or "coach me") and preflight
-applies the resulting policy before provider work. Contract:
+applies the resulting policy before provider work. Spoken changes and a bounded
+status projection are follow-up work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
-The overlay surface stays small: it shows the current intent/result and compact
-run state, not a full scrollback manager. Browser text replies render in the
-result stack above the command input; replies, errors, and voice state never
-clear or replace the user's current input draft. Browser voice keeps that input
-available, shows partial/final user transcript feedback above it, and streams
-assistant text into the result stack above the input. The gateway still stores
+The overlay surface stays small: it visibly identifies the current page using
+bounded local title/origin/path data and shows transient current intent/result
+plus compact run state, not a full scrollback manager. Resolved cue cards linger
+briefly and retire when the next turn begins; the explicit History affordance
+loads canonical gateway turns on demand instead of making the overlay another
+conversation store. Replies, errors, and voice state never clear or replace the
+user's current input draft. Browser voice keeps that input available, shows
+partial/final user transcript feedback above it, and streams assistant text into
+the result stack above the input. The gateway still stores
 durable session, branch, turn, transcript, provider-event, and agent-run
 history. Realtime providers receive a bounded Moa-owned context pack at session
 start so provider memory is not the product database. The gateway's chat and
 cascaded voice paths assemble that pack through a canonical context-artifact
 envelope with versioned cache identity, stable source ids, ranking rationale,
-and secret-like-text redaction before any provider call. If the user wants
-history, they ask Moa for it through the same intent surface instead of
-browsing visible scrollback.
+and secret-like-text redaction before any provider call. History stays out of
+the transient cue stack and appears only when the user opens History.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript
@@ -725,8 +728,16 @@ session is not ready, and sends the release/commit only after that buffered
 audio has flushed. The visible browser loop is hold to capture, release to send,
 processing, then response. When the user enables background assistant speech for
 the current browser session,
-the extension preserves older voice-session event handling and queued playback
-while it starts the next microphone turn. That overlap is scoped to the active
+the extension may preserve older voice-session event handling and queued
+playback while it starts the next microphone turn. An explicit current-thread
+single-click capture is steering and overrides that playback preference: it
+stops old local speech immediately, preserves the already visible text with a
+local steering marker, asynchronously cancels and closes the old provider turn,
+and ignores late old-generation events while the new capture starts immediately.
+A terminal event already buffered by the gateway may still persist on the old
+canonical turn, but it cannot extend the frozen visible cue. Exact canonical
+text/audio splice offsets remain a staged gateway event-contract ticket. That
+overlap is scoped to the active
 page-agent owner: starting a browser agent or voice turn from another tab revokes
 other-tab voice sessions, stops queued assistant playback in those tabs, and
 cancels their browser-local task cues. The active browser-agent owner is shared

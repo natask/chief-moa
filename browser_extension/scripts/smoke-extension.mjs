@@ -188,6 +188,21 @@ function assertVoicePlaybackStopContract() {
   if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(source)) {
     throw new Error("voice button click must open the input surface and prime audio before starting live voice");
   }
+  if (!/origin === "single"\) beginCurrentThreadSteeringCapture\(\)/.test(source)) {
+    throw new Error("single-click current-thread capture must use the non-cancelling steering boundary");
+  }
+  if (!/if \(state\.assistantSpeechSuppressed\) return;/.test(source)) {
+    throw new Error("steered stale turns must suppress later assistant PCM locally");
+  }
+  if (!/formatSteeredAssistantText\(text, state\.steeringBoundaryText\)/.test(source)) {
+    throw new Error("steered stale turns must retain a visible accepted-text boundary");
+  }
+  if (!/sendLiveVoiceControl\(state, liveCancelTurnMessage\(state,[\s\S]{0,120}closeLiveVoiceSession\(state, `steered_generation_/.test(source)) {
+    throw new Error("steering must asynchronously cancel and close the superseded provider turn");
+  }
+  if (!/state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/.test(source)) {
+    throw new Error("late stale voice events must fail closed at the steering generation boundary");
+  }
   if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(source)) {
     throw new Error("live voice transcript must render in cue cards above the input");
   }
@@ -332,7 +347,9 @@ async function main() {
             const stop = document.querySelector("#agee-stop");
             const log = document.querySelector("#agee-log");
             const voiceState = document.querySelector("#agee-voice-state");
-            if (!root || !panel || !input || !voice || !stop || !log || !voiceState) {
+            const pageIdentity = document.querySelector("#agee-page-identity");
+            const historyButton = document.querySelector("#agee-history-button");
+            if (!root || !panel || !input || !voice || !stop || !log || !voiceState || !pageIdentity || !historyButton) {
               return { ok: false, error: "overlay nodes missing" };
             }
             const panelRect = panel.getBoundingClientRect();
@@ -361,6 +378,8 @@ async function main() {
               panelOverflowX: panel.scrollWidth > panel.clientWidth + 1,
               inputOverflowX: input.scrollWidth > input.clientWidth + 1,
               activeInput: document.activeElement === input,
+              pageIdentity: pageIdentity.textContent || "",
+              historyLabel: historyButton.textContent || "",
             };
           },
         });
@@ -370,6 +389,9 @@ async function main() {
     if (!overlayMetrics?.ok) throw new Error(overlayMetrics?.error || "overlay metrics missing");
     if (overlayMetrics.rootCount !== 1) throw new Error(`expected one Aggie root, got: ${JSON.stringify(overlayMetrics)}`);
     if (!overlayMetrics.open || !overlayMetrics.activeInput) throw new Error(`overlay did not open and focus input: ${JSON.stringify(overlayMetrics)}`);
+    if (!overlayMetrics.pageIdentity.includes("localhost") || overlayMetrics.historyLabel.trim() !== "History") {
+      throw new Error(`overlay did not visibly ground the current page and history path: ${JSON.stringify(overlayMetrics)}`);
+    }
     if (overlayMetrics.panelWidth > Math.min(540, overlayMetrics.viewportWidth - 24) + 1) {
       throw new Error(`overlay panel exceeded compact width: ${JSON.stringify(overlayMetrics)}`);
     }

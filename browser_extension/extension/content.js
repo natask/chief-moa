@@ -32,6 +32,9 @@
     recordButton,
     stopButton,
     log,
+    historyButton,
+    historyView,
+    pageIdentityEl,
     langChip,
     uiSpecSurfaceEl,
     pendingConfirm = null,
@@ -77,6 +80,7 @@
   const assistantPlaybackSources = new Set();
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
+  let steeringGeneration = 0;
   const DOUBLE_CLICK_HOLD_MS = 260;
   const LAUNCHER_DOUBLE_CLICK_MS = 280;
   const LAUNCHER_TAP_MAX_MS = 500;
@@ -350,6 +354,10 @@
         </span>
       </button>
       <div id="agee-panel" role="dialog" aria-label="A.G. command">
+        <div id="agee-page-context">
+          <span id="agee-page-identity" aria-live="polite"></span>
+          <button id="agee-history-button" type="button" aria-expanded="false">History</button>
+        </div>
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
@@ -357,6 +365,7 @@
         <section id="agee-proactive-card" class="agee-proactive-card" aria-live="polite" hidden></section>
         <div id="agee-ui-surface" aria-live="polite"></div>
         <div id="agee-lang-chip" class="agee-lang-chip" hidden aria-live="polite"></div>
+        <div id="agee-history" hidden></div>
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
@@ -387,6 +396,9 @@
     stopButton = root.querySelector("#agee-stop");
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-log");
+    historyButton = root.querySelector("#agee-history-button");
+    historyView = root.querySelector("#agee-history");
+    pageIdentityEl = root.querySelector("#agee-page-identity");
     langChip = root.querySelector("#agee-lang-chip");
     voiceState = root.querySelector("#agee-voice-state");
     transcriptEl = root.querySelector("#agee-transcript");
@@ -403,6 +415,8 @@
     loadUiSpec();
     loadActiveCompanionPet();
     loadLanguageChip();
+    renderPageIdentity();
+    observePageIdentity();
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
@@ -421,6 +435,7 @@
     agentModeSelect.addEventListener("change", () => {
       chrome.storage.local.set({ [BROWSER_AGENT_ROLE_KEY]: selectedBrowserAgentRole() }).catch(() => {});
     });
+    historyButton.addEventListener("click", () => toggleHistorySnapshot());
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -480,6 +495,109 @@
     });
 
     // Explicit voice playback primes audio from the voice path itself.
+  }
+
+  function compactPageIdentityPart(value, maxLength) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+  }
+
+  function formatPageIdentity({ title = "", hostname = "", pathname = "" } = {}) {
+    const safeTitle = compactPageIdentityPart(title, 72);
+    const safeHost = compactPageIdentityPart(hostname, 48);
+    const safePath = compactPageIdentityPart(pathname === "/" ? "" : pathname, 48);
+    const locationPart = [safeHost, safePath].filter(Boolean).join("");
+    if (safeTitle && locationPart && safeTitle.toLowerCase() !== safeHost.toLowerCase()) {
+      return `${safeTitle} · ${locationPart}`;
+    }
+    return safeTitle || locationPart || "Current page";
+  }
+
+  function currentPageIdentity() {
+    return formatPageIdentity({
+      title: document.title,
+      hostname: location.hostname,
+      pathname: location.pathname,
+    });
+  }
+
+  function renderPageIdentity() {
+    if (!pageIdentityEl) return;
+    const identity = currentPageIdentity();
+    pageIdentityEl.textContent = identity;
+    pageIdentityEl.title = identity;
+  }
+
+  function observePageIdentity() {
+    window.addEventListener("popstate", renderPageIdentity, { capture: true });
+    window.addEventListener("hashchange", renderPageIdentity, { capture: true });
+    const head = document.head;
+    if (!head || typeof MutationObserver === "undefined") return;
+    new MutationObserver(renderPageIdentity).observe(head, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  }
+
+  function historyTurnText(turn, fieldNames) {
+    for (const field of fieldNames) {
+      const value = String(turn?.[field] || "").trim();
+      if (value) return value;
+    }
+    return "";
+  }
+
+  function renderHistorySnapshot(turns) {
+    if (!historyView) return;
+    historyView.replaceChildren();
+    const recent = Array.isArray(turns) ? turns.slice(-20) : [];
+    if (!recent.length) {
+      const empty = document.createElement("p");
+      empty.className = "agee-history-empty";
+      empty.textContent = "No saved conversation history.";
+      historyView.appendChild(empty);
+      return;
+    }
+    for (const turn of recent) {
+      const transcript = historyTurnText(turn, ["transcript", "user_text", "instruction"]);
+      const reply = historyTurnText(turn, ["reply", "assistant_text", "display", "text"]);
+      const item = document.createElement("article");
+      item.className = "agee-history-turn";
+      if (transcript) {
+        const you = document.createElement("p");
+        you.className = "agee-history-you";
+        you.textContent = transcript;
+        item.appendChild(you);
+      }
+      if (reply) {
+        const assistant = document.createElement("p");
+        assistant.className = "agee-history-assistant";
+        assistant.textContent = reply;
+        item.appendChild(assistant);
+      }
+      if (item.childElementCount) historyView.appendChild(item);
+    }
+  }
+
+  async function toggleHistorySnapshot() {
+    if (!historyView || !historyButton) return;
+    if (!historyView.hidden) {
+      historyView.hidden = true;
+      historyButton.setAttribute("aria-expanded", "false");
+      return;
+    }
+    historyButton.disabled = true;
+    try {
+      const response = await safeRuntimeSendMessage({ cmd: "history" });
+      renderHistorySnapshot(response?.ok ? response.turns : []);
+      historyView.hidden = false;
+      historyButton.setAttribute("aria-expanded", "true");
+    } finally {
+      historyButton.disabled = false;
+      positionPanel();
+    }
   }
 
   // ---- Privacy-first local suggestions ---------------------------------
@@ -1287,17 +1405,21 @@
 
   function startVoiceFirstCapture(origin, { freshThread = false } = {}) {
     primeAudio();
-    // A deliberate voice-first gesture is always barge-in. The optional
-    // overlapping-assistant-speech preference does not override the user's tap.
-    if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
-    stopSpeaking();
+    // A current-thread single click is steering: freeze accepted text, silence
+    // stale audio, and supersede old gateway work without waiting for its cancel
+    // acknowledgement. Fresh-thread capture keeps the isolated cancel path.
+    if (origin === "single") beginCurrentThreadSteeringCapture();
+    else {
+      if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
+      stopSpeaking();
+    }
     if (freshThread) {
       newThreadArmed = true;
       newThreadLabel = "";
     }
     voiceFirstCaptureOrigin = origin;
     startLiveVoiceTurn({
-      preserveAssistantPlayback: assistantSpeechOverlap === true,
+      suppressAssistantPlayback: origin === "single",
       conversation: false,
       autoCommit: false,
       openText: false,
@@ -2192,9 +2314,36 @@
     return `c_${cueSeq}_${Date.now().toString(36)}`;
   }
 
-  // Cards stack as the user keeps sending. Drop the oldest finished ones past the
-  // cap so the log stays bounded; a running card is never pruned.
-  const MAX_CUE_CARDS = 20;
+  // The overlay is a transient steering surface, not the canonical conversation
+  // history. A resolved result remains briefly readable, disappears when the
+  // next turn begins, and can always be recovered through the explicit History
+  // affordance backed by the gateway's stored session turns.
+  const MAX_CUE_CARDS = 6;
+  const TERMINAL_CUE_LINGER_MS = 12000;
+
+  function selectResolvedCueIds(cards) {
+    return (Array.isArray(cards) ? cards : [])
+      .filter((card) => card?.id && card.active !== true && card.protected !== true)
+      .map((card) => card.id);
+  }
+
+  function retireResolvedCueCards() {
+    if (!log) return;
+    const cards = [...log.querySelectorAll(".agee-cue")].map((card) => ({
+      id: card.dataset.cue,
+      active: activeCues.has(card.dataset.cue),
+      protected: card.classList.contains("agee-cue-steered"),
+    }));
+    for (const cueId of selectResolvedCueIds(cards)) dismissCue(cueId);
+  }
+
+  function scheduleCueRetirement(cueId) {
+    const entry = cues.get(cueId);
+    if (!entry || activeCues.has(cueId)) return;
+    if (entry.dismissTimer) clearTimeout(entry.dismissTimer);
+    entry.cardEl.dataset.retireAfterMs = String(TERMINAL_CUE_LINGER_MS);
+    entry.dismissTimer = setTimeout(() => dismissCue(cueId), TERMINAL_CUE_LINGER_MS);
+  }
   function pruneCueCards() {
     if (!log) return;
     const cards = [...log.querySelectorAll(".agee-cue")];
@@ -2208,12 +2357,8 @@
     }
   }
 
-  // A card is not auto-dismissed once it finishes — the surface is a short
-  // reading log now, not a toast that vanishes while you're still reading it.
-  // Cards persist until the user dismisses one explicitly (see
-  // selectCascadeDismissIds below), and are only ever pruned oldest-first past
-  // MAX_CUE_CARDS. Nothing schedules a timer to remove a finished card anymore;
-  // dismissCue() below is invoked only by an explicit user action.
+  // Explicit dismiss remains available during the short terminal linger. It
+  // also cascades through older resolved cards, while running cards stay safe.
 
   // Pure selection helper for the dismiss-and-cascade gesture (✕ button or
   // horizontal swipe): given the ordered list of cue cards (oldest first, the
@@ -2464,6 +2609,7 @@
   }
 
   function createCue(cueId, label, { presentation = "card" } = {}) {
+    retireResolvedCueCards();
     if (presentation === "icon") {
       currentCueId = cueId;
       cues.set(cueId, { presentation, label: String(label || "") });
@@ -2478,9 +2624,7 @@
     if (!log) return null;
     let entry = cues.get(cueId);
     if (entry?.cardEl && entry?.statusEl) return entry;
-    // Finished cards from earlier turns are left in place — the log persists
-    // until the user dismisses a card (see selectCascadeDismissIds). A new
-    // turn only ever appends.
+    retireResolvedCueCards();
     currentCueId = cueId;
     const card = document.createElement("div");
     card.className = "agee-cue agee-cue-running";
@@ -2600,10 +2744,11 @@
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
-      // No auto-dismiss timer: the card stays until the user dismisses it.
-      // Turning off "running" just reveals and enables its ✕ control.
+      // Turning off "running" reveals the explicit dismiss control and starts
+      // the bounded terminal linger.
       const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
       if (dismissBtn) dismissBtn.disabled = false;
+      scheduleCueRetirement(cueId);
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
@@ -2633,6 +2778,46 @@
   function stopSpeaking() {
     stopAllAssistantPlayback();
     if (agentState === "speaking") setAgentState("idle");
+  }
+
+  const STEERING_BOUNDARY_MARKER = "— steered here; prior response stopped —";
+
+  function formatSteeredAssistantText(latestText, boundaryText = "") {
+    const latest = String(latestText || "").trim();
+    const boundary = String(boundaryText || "").trim();
+    if (!boundary) return [STEERING_BOUNDARY_MARKER, latest].filter(Boolean).join("\n\n");
+    if (!latest || latest === boundary) return `${boundary}\n\n${STEERING_BOUNDARY_MARKER}`;
+    if (latest.startsWith(boundary)) {
+      const rest = latest.slice(boundary.length).trimStart();
+      return [boundary, STEERING_BOUNDARY_MARKER, rest].filter(Boolean).join("\n\n");
+    }
+    return [boundary, STEERING_BOUNDARY_MARKER, latest].filter(Boolean).join("\n\n");
+  }
+
+  function beginCurrentThreadSteeringCapture() {
+    let silencedTurns = 0;
+    steeringGeneration += 1;
+    for (const state of liveVoiceStates) {
+      if (!state?.committed || state.assistantSpeechSuppressed) continue;
+      state.steeringBoundaryText = String(state.assistantText || "").trim();
+      state.assistantSpeechSuppressed = true;
+      state.steeredAtGeneration = steeringGeneration;
+      sendFinalPlaybackProgress(state);
+      stopLivePlayback(state);
+      state.playbackTime = audioCtx?.currentTime || 0;
+      state.pendingAssistantAudioSegments.length = 0;
+      const display = formatSteeredAssistantText(state.assistantText, state.steeringBoundaryText);
+      ensureVoiceCueCard(state, state.transcript || "Voice", display);
+      cues.get(state.cueId)?.cardEl?.classList.add("agee-cue-steered");
+      updateCue(state.cueId, display, "done");
+      sendLiveVoiceControl(state, liveCancelTurnMessage(state, state.framesPlayed || 0));
+      closeLiveVoiceSession(state, `steered_generation_${steeringGeneration}`);
+      untrackLiveVoiceState(state);
+      silencedTurns += 1;
+    }
+    stopAllAssistantPlayback();
+    window.__ageeLastSteeringBoundary = { generation: steeringGeneration, silencedTurns, at: Date.now() };
+    return silencedTurns;
   }
 
   function trackLiveVoiceState(state) {
@@ -3020,7 +3205,9 @@
   }
 
   async function startLiveVoiceTurn(options = {}) {
-    const preserveAssistantPlayback = options.preserveAssistantPlayback === true || assistantSpeechOverlap === true;
+    const preserveAssistantPlayback = options.suppressAssistantPlayback === true
+      ? false
+      : options.preserveAssistantPlayback === true || assistantSpeechOverlap === true;
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
@@ -3058,6 +3245,8 @@
       gatewayRouted: false,
       incognito: context.action === "incognito",
       assistantSpeechOverlap: preserveAssistantPlayback,
+      assistantSpeechSuppressed: false,
+      steeringBoundaryText: "",
     };
     trackLiveVoiceState(state);
     liveVoice = state;
@@ -3093,6 +3282,9 @@
   }
 
   function handleLiveVoiceMessage(state, payload) {
+    // A steering capture revokes the old generation synchronously. Ignore any
+    // JSON or buffered audio that races with the asynchronous cancel/close.
+    if (state?.steeredAtGeneration && state.steeredAtGeneration <= steeringGeneration) return;
     // Any inbound voice-session event (audio chunk or JSON event) proves the turn
     // is still alive, so push the post-commit watchdog out. No-op until the turn
     // is committed (armed) and after it has ended (timer cleared on untrack).
@@ -3179,17 +3371,21 @@
       const text = String(msg.text || "").trim();
       if (!text) return;
       state.assistantText = text;
+      const displayText = state.assistantSpeechSuppressed
+        ? formatSteeredAssistantText(text, state.steeringBoundaryText)
+        : text;
       // The assistant is now replying: flip the mark to speaking as soon as text
       // starts rendering, not only when spoken audio starts. Covers text-first
       // and text-only replies (response_modality text) where assistant_audio_start
       // never arrives, so the mark shows "responding" instead of hanging on
       // "thinking". assistant_audio_start re-asserts speaking; the flip is idempotent.
       if (isCurrentTurn) setAgentState("speaking");
-      ensureVoiceCueCard(state, state.transcript || "Voice", text);
-      updateCue(state.cueId, text, "running");
+      ensureVoiceCueCard(state, state.transcript || "Voice", displayText);
+      updateCue(state.cueId, displayText, "running");
       return;
     }
     if (msg.type === "assistant_audio_segment") {
+      if (state.assistantSpeechSuppressed) return;
       const segment = normalizeAssistantAudioSegment(msg);
       if (segment) state.pendingAssistantAudioSegments.push(segment);
       return;
@@ -3265,6 +3461,7 @@
   function playLiveAssistantPcm(state, buffer) {
     if (!buffer || !buffer.byteLength) return;
     if (!isLiveVoiceStateActive(state)) return;
+    if (state.assistantSpeechSuppressed) return;
     primeAudio();
     if (!audioCtx) return;
     const pcm = new Int16Array(buffer);
@@ -3649,8 +3846,11 @@
     }
 
     if (!isLiveVoiceStateActive(state)) return;
-    ensureVoiceCueCard(state, state.transcript || "Voice", summary);
-    updateCue(state.cueId, summary, "done");
+    const displaySummary = state.assistantSpeechSuppressed
+      ? formatSteeredAssistantText(summary, state.steeringBoundaryText)
+      : summary;
+    ensureVoiceCueCard(state, state.transcript || "Voice", displaySummary);
+    updateCue(state.cueId, displaySummary, "done");
     reactLauncher("done");
     if (!wasCurrentTurn) return;
     setVoiceState(false);

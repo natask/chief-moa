@@ -149,6 +149,32 @@ Acceptance: after an extension service-worker restart, the workspace recovers
 the durable response but marks annotations unavailable until the page is
 observed again.
 
+- [x] 5.3 Make the compact overlay visibly page-grounded and transient: show a
+      bounded local title/origin/path identity, retire resolved cue cards on a
+      deterministic lifecycle, and expose saved gateway history only on demand.
+
+Acceptance: real headless Chrome shows the fixture page identity and History
+affordance; running cues are never retired; a terminal cue retires after the
+declared linger or when the next turn begins; History reads the canonical
+session endpoint without making the overlay itself a second conversation store.
+
+- [ ] 5.4 Add a monotonic streamed-text and steering-boundary event contract.
+      The gateway event envelope must carry `turn_id`, an increasing `sequence`,
+      `text_delta`, and cumulative `text_end_char`; completion must declare the
+      final character count. The existing `assistant_audio_segment` character
+      ranges and client `playback_progress.played_text_char_end` remain the
+      speech ledger. Add a canonical steering event/receipt binding the old
+      `turn_id`, new turn/message id, boundary sequence, displayed character
+      offset, and played character offset.
+
+Acceptance: a deterministic two-turn smoke proves steering freezes accepted old
+text, cancels the superseded provider turn without waiting, schedules no old
+audio after the boundary, and ignores late old-generation events. The visible
+marker is reproduced from canonical offsets after reconnect; reordered,
+duplicate, cross-turn, or regressing deltas fail closed. Until these fields
+exist, the browser uses its last cumulative `assistant_text` as a local-only
+best-effort visual boundary and does not claim a canonical exact splice.
+
 ## 6. Generated Content And Artifacts
 
 - [ ] 6.1 Extend Tier A with bounded `table`, `steps`, `flowchart`, `timeline`,
