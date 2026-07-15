@@ -253,6 +253,13 @@
       smokes. Enforce a focused 90% line/branch/function gate, verified at 100%
       lines, 97.14% branches, and 100% functions. Reduce `server.js` to 13,638
       lines.
+- [x] 2.46 Extract Android OTA manifest, current and versioned APK, rollback,
+      and health routing from `server.js`; add exhaustive authorization,
+      manifest-absolutization, artifact-streaming, invalid-release, missing-file,
+      rollback-outcome, warning, event, and health tests plus the existing OTA
+      HTTP integration suite. Enforce a focused 90% line/branch/function gate,
+      verified at 100% lines, 97.92% branches, and 100% functions. Reduce
+      `server.js` to 13,468 lines.
 
 ## 3. Other Oversized Surfaces
 
