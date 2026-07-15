@@ -175,6 +175,15 @@ duplicate, cross-turn, or regressing deltas fail closed. Until these fields
 exist, the browser uses its last cumulative `assistant_text` as a local-only
 best-effort visual boundary and does not claim a canonical exact splice.
 
+- [x] 5.5 Add a compact browser session carousel over the steering surface:
+      branches navigate horizontally, exactly one foreground lane exposes its
+      vertical card timeline, terminal cards stay until explicit dismissal,
+      and completed text cards show the bounded gateway context-routing receipt.
+
+Acceptance: two mocked branch results project into distinct lanes; selecting a
+lane exposes only its cards; continue versus new/fork routing is visible; long
+card text scrolls within the bounded overlay without replacing the input draft.
+
 ## 6. Generated Content And Artifacts
 
 - [ ] 6.1 Extend Tier A with bounded `table`, `steps`, `flowchart`, `timeline`,

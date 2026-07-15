@@ -314,21 +314,25 @@ status projection are follow-up work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface stays small: it visibly identifies the current page using
-bounded local title/origin/path data and shows transient current intent/result
-plus compact run state, not a full scrollback manager. Resolved cue cards linger
-briefly and retire when the next turn begins; the explicit History affordance
+bounded local title/origin/path data and shows the current branch's bounded,
+vertically scrollable card timeline plus compact run state, not a full
+scrollback manager. A compact horizontal branch rail makes the foreground lane
+explicit and switches one visible timeline at a time. Terminal cards remain in
+their lane until explicitly dismissed; the explicit History affordance still
 loads canonical gateway turns on demand instead of making the overlay another
-conversation store. Replies, errors, and voice state never clear or replace the
-user's current input draft. Browser voice keeps that input available, shows
-partial/final user transcript feedback above it, and streams assistant text into
-the result stack above the input. The gateway still stores
+conversation store. Each completed text turn may show the gateway's bounded
+context-routing receipt (`continue`, `new`, `fork`, or `incognito`, branch and
+label, plus persistence state). Replies, errors, and voice state never clear or
+replace the user's current input draft. Browser voice keeps that input
+available, shows partial/final user transcript feedback above it, and streams
+assistant text into the result stack above the input. The gateway still stores
 durable session, branch, turn, transcript, provider-event, and agent-run
 history. Realtime providers receive a bounded Moa-owned context pack at session
 start so provider memory is not the product database. The gateway's chat and
 cascaded voice paths assemble that pack through a canonical context-artifact
 envelope with versioned cache identity, stable source ids, ranking rationale,
-and secret-like-text redaction before any provider call. History stays out of
-the transient cue stack and appears only when the user opens History.
+and secret-like-text redaction before any provider call. Canonical History stays
+out of the branch lane projection and appears only when the user opens History.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript

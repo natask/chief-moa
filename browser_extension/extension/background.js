@@ -1777,6 +1777,19 @@ function truncate(text, max) {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
+function browserContextReceipt(data) {
+  const source = data?.context || data?.result?.context || data?.turn?.context;
+  if (!source || typeof source !== "object") return null;
+  const action = String(source.action || "").trim().toLowerCase();
+  if (!["continue", "new", "fork", "incognito"].includes(action)) return null;
+  return {
+    action,
+    branch_id: String(source.branch_id || "").trim().slice(0, 160),
+    thread_label: String(source.thread_label || "").trim().slice(0, 120),
+    persisted: source.persisted !== false,
+  };
+}
+
 // One session id per cue. Each cue is its own conversation lane on the gateway —
 // this is what lets the user keep cueing ("do X", "now Y", "also Z") and have
 // each routed independently underneath instead of forced into one thread.
@@ -1990,6 +2003,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
   // model's own context choice. The gateway resolves context_action and returns
   // a context block; an incognito turn is answered but never persisted.
   const contextAction = String(contextControls?.contextAction || "").trim();
+  const branchId = String(contextControls?.branchId || "").trim();
   const threadLabel = String(contextControls?.threadLabel || "").trim();
   const data = await callGateway(cfg, "/v1/voice/turns", {
     signal,
@@ -1998,7 +2012,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
       device_id: deviceId,
       session_id: sessionId,
       conversation_id: sessionId,
-      branch_id: cueId,
+      branch_id: branchId || cueId,
       all_branches_context: true,
       transcript: instruction,
       ...(contextAction ? { context_action: contextAction } : {}),
@@ -2034,7 +2048,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
   if (data?.context && data.context.persisted === false && !summary.endsWith("(not saved)")) {
     summary = `${summary}\n\n(not saved)`;
   }
-  send(tabId, { cmd: "done", cueId, summary, speak });
+  send(tabId, { cmd: "done", cueId, summary, speak, context: browserContextReceipt(data) });
   refreshSelfExtensionRuntime("turn_complete").catch(() => {});
   refreshUiSpec("turn_complete").catch(() => {});
   await saveTaskState(cueId, {
@@ -2313,8 +2327,12 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
 // straight passthrough to the WS path, so verify/smoke stay on the WS pipeline.
 async function startVoiceSessionWithMode(tabId, opts = {}) {
   // livekit-voice.js delivers straight to a tab's content script; panel
-  // sessions must stay on the proxy path, whose events route through send().
-  if (tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
+  // sessions and explicitly selected branches must stay on the WS proxy path,
+  // whose session_start carries the canonical branch id.
+  const branchBound = Boolean(String(opts.branchId || "").trim());
+  const contextAction = String(opts.contextAction || "").trim();
+  const threadSwitchBound = ["new", "fork", "incognito"].includes(contextAction);
+  if (!branchBound && !threadSwitchBound && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
     try {
       const cfg = await getConfig();
       const sessionId = await getStableSessionId();
@@ -2338,7 +2356,7 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   return startVoiceSessionProxy(tabId, opts);
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, branchId, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
   // Hold the capture mutex across the async setup window. recordSessionStart
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
@@ -2348,7 +2366,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, branchId, threadLabel, profileOverride, sampleText, onSessionCreated });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
@@ -2374,7 +2392,7 @@ async function activeThreadBranch(cfg) {
   const data = await callGateway(cfg, path, { method: "GET" });
   return String(data?.active?.branch_id || data?.branch_id || "default").trim() || "default";
 }
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, branchId, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
   const session = {
@@ -2424,7 +2442,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
   };
 
   let cfg;
-  let branchForSession = "default";
+  let branchForSession = String(branchId || "").trim();
   let ticket;
   const action = String(contextAction || "").trim();
   try {
@@ -2443,7 +2461,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       } else if (action === "incognito") {
         throw abortSetup("Could not start a private voice turn: the gateway did not return an incognito branch.");
       }
-    } else {
+    } else if (!branchForSession) {
       try { branchForSession = await activeThreadBranch(cfg); }
       catch { branchForSession = "default"; }
     }
@@ -2512,6 +2530,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         device_id: ticket.device_id || "",
         session_id: ticket.session_id,
         conversation_id: ticket.conversation_id || ticket.session_id,
+        branch_id: branchForSession,
         branch_id: branchForSession,
         turn_id: turnId,
         all_branches_context: false,
@@ -3474,13 +3493,16 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
   const client = browserTurnClient(deviceId, inputKind);
+  const branchId = String(options.branchId || "").trim();
+  const contextAction = String(options.contextAction || "").trim();
+  const threadLabel = String(options.threadLabel || "").trim();
   const common = {
     source: "agee-extension",
     device_id: deviceId,
     session_id: sessionId,
     conversation_id: sessionId,
-    branch_id: cueId || "browser-agent",
-    ...(options.contextAction ? { context_action: options.contextAction, all_branches_context: false } : { all_branches_context: true }),
+    branch_id: branchId || cueId || "browser-agent",
+    ...(contextAction ? { context_action: contextAction, all_branches_context: false } : { all_branches_context: true }),
     client,
   };
 
@@ -3498,6 +3520,8 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
       intent_hint: "browser_page_question",
       ...(role ? { role } : {}),
       ...(delegationEnvelope ? { delegation_envelope: delegationEnvelope } : {}),
+      ...(contextAction ? { context_action: contextAction } : {}),
+      ...(threadLabel ? { thread_label: threadLabel } : {}),
     },
   });
 
@@ -3537,7 +3561,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   const speak = String(data?.speak || data?.result?.speak || "").trim();
   if (options.delivery !== "return") {
     sendBrowserAgentProgress(tabId, cueId, "done");
-    send(tabId, { cmd: "done", cueId, summary, speak });
+    send(tabId, { cmd: "done", cueId, summary, speak, context: browserContextReceipt(data) });
   }
   await saveTaskState(cueId, {
     status: "done",
@@ -4899,6 +4923,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
       autoCommit: msg.autoCommit !== false,
       contextAction: msg.contextAction,
+      branchId: msg.branchId,
       threadLabel: msg.threadLabel,
     })
       .then((session) => {
@@ -5003,6 +5028,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       agentRole: msg.agentRole,
       delegationConfirmed: msg.delegationConfirmed === true,
       contextAction: msg.contextAction,
+      branchId: msg.branchId,
       threadLabel: msg.threadLabel,
     });
   }
@@ -5397,6 +5423,7 @@ async function handlePanelRequest(msg) {
       capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
       autoCommit: msg.autoCommit !== false,
       contextAction: msg.contextAction,
+      branchId: msg.branchId,
       threadLabel: msg.threadLabel,
     });
     if (session?.voiceSessionId) {
