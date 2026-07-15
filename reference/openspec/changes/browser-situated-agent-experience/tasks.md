@@ -1,26 +1,55 @@
 # Tasks: Browser-Situated Agent Experience
 
-No source implementation is authorized until the proposal/design is aligned
-with the user. Once aligned, implement and commit one numbered acceptance unit
-at a time.
+The user corrected and accepted the delegation-first product direction on
+2026-07-14. Implement and commit one numbered acceptance unit at a time. This
+alignment does not authorize unrestricted actions or bypass verification,
+approval, release, or promotion gates.
 
 ## 0. Product Alignment
 
-- [ ] 0.1 Confirm the situated browser workspace as the product architecture:
-      `explain`, `create`, `collaborate`, and `delegate` are general policies;
-      tutorials are workflows over the same primitives.
+- [x] 0.1 Record delegation as the primary browser outcome and Explain, Help,
+      Collaborate, and Delegate as separately addressable agents over shared
+      primitives. Creation is an output capability; tutorials are workflows.
 - [ ] 0.2 Confirm the three surfaces: small on-page companion/annotation layer,
       persistent side-panel workspace, and large artifact canvas/page
       projection.
-- [ ] 0.3 Confirm the first vertical slice is read-only grounded explanation,
-      followed by generated artifacts, then explicitly approved page changes.
+- [x] 0.3 Correct the first vertical slice to explicit agent routing plus one
+      bounded delegated browser run, built on observation anchors and existing
+      allowlisted browser actions.
 
-Acceptance: the user explicitly accepts or corrects the proposed architecture
-and first vertical slice; the decision is recorded here before code changes.
+Acceptance: the user's correction and unresolved surface choice are recorded
+durably rather than silently collapsed into an explanation-first roadmap.
 
-## 1. Observation Anchor Primitive
+## 1. Explicit Agent Selection And Routing
 
-- [ ] 1.1 Add a browser-local observation runtime that assigns page/layout
+- [ ] 1.1 Add four direct browser entry points for Explain, Help, Collaborate,
+      and Delegate and carry the selected `agent` as typed data on every browser
+      turn.
+
+Acceptance: each agent can be addressed without prompt wording; the active
+agent is visible; a deterministic route test proves prose cannot relabel or
+escalate the typed selection.
+
+- [ ] 1.2 Enforce the authority matrix at the browser/gateway boundary:
+      Explain is read-only, Help prepares but does not act, Collaborate proposes
+      one confirmed action at a time, and Delegate can start only from a
+      confirmed bounded envelope.
+
+Acceptance: attempts to execute from Explain or Help fail closed; Collaborate
+cannot enqueue a second action before the first resolves; ambiguous requests do
+not route to Delegate.
+
+Verification:
+
+```sh
+cd browser_extension && npm run verify
+cd browser_extension && npm run smoke
+cd gateway && npm run check
+```
+
+## 2. Observation Anchor Primitive
+
+- [ ] 2.1 Add a browser-local observation runtime that assigns page/layout
       epochs and emits stable element refs with observation-time document and
       viewport geometry, scroll/visual-viewport state, provenance, and capture
       time.
@@ -36,68 +65,92 @@ cd browser_extension && npm run verify
 cd browser_extension && npm run smoke
 ```
 
-- [ ] 1.2 Add deterministic revalidation tests for navigation, scroll, resize,
+- [ ] 2.2 Add deterministic revalidation tests for navigation, scroll, resize,
       zoom/visual viewport, reflow, node replacement, ambiguous identity, and
       cross-origin/canvas limitations.
 
 Acceptance: scroll keeps the anchor valid; navigation and lookalike replacement
 make it stale; reflow either remeasures the same node or makes the anchor stale.
 
-## 2. Grounded On-Page Explanation
+## 3. Bounded Delegated Browser Run
 
-- [ ] 2.1 Render one packaged-code annotation bound to a valid anchor and
+- [ ] 3.1 Define and validate a delegation envelope with goal, tab/origin scope,
+      allowed action classes, approval policy, checkpoints, stop conditions,
+      and completion evidence.
+
+Acceptance: a Delegate run cannot start from prose alone or from an incomplete
+envelope; local browser policy can narrow but never expand its authority.
+
+- [ ] 3.2 Execute one fixture task through the existing allowlisted broker with
+      a visible plan, current step, stop, checkpoint, action receipts, and final
+      completion evidence.
+
+Acceptance: the fixture delegates a multi-step browser outcome, uses only fresh
+anchors and preauthorized action classes, stops before any out-of-envelope
+action, and finishes as completed, blocked, canceled, or failed—never as an
+unreceipted success.
+
+- [ ] 3.3 Prove cancellation and scope-change behavior.
+
+Acceptance: stop prevents any new local action; navigation to an unlisted origin
+pauses the run; continuation requires a newly confirmed envelope.
+
+## 4. Grounded On-Page Explanation
+
+- [ ] 4.1 Render one packaged-code annotation bound to a valid anchor and
       reproject it locally during scroll without a gateway/model call.
 
 Acceptance: in the isolated browser fixture, the annotation remains within 2
 CSS pixels of the remeasured target through a scripted scroll sequence.
 
-- [ ] 2.2 Fail visibly on stale evidence and support an explicit re-ground
+- [ ] 4.2 Fail visibly on stale evidence and support an explicit re-ground
       request.
 
 Acceptance: replacing the target removes/disables the old annotation, labels
 the evidence stale, and never attaches it to the replacement before a new
 observation is accepted.
 
-- [ ] 2.3 Add a typed read-only browser explanation response containing prose
+- [ ] 4.3 Add a typed read-only browser explanation response containing prose
       plus zero or more anchor annotations.
 
 Acceptance: a deterministic gateway smoke returns one explanation and one
 anchor proposal; the extension renders both only when snapshot and epoch
 binding match.
 
-## 3. Persistent Browser Workspace
+## 5. Persistent Browser Workspace
 
-- [ ] 3.1 Turn the existing side panel into a workspace projection with current
-      policy, response blocks, evidence freshness, stop, and artifact area.
+- [ ] 5.1 Turn the existing side panel into a workspace projection with active
+      agent, response blocks, evidence freshness, delegated run state, stop,
+      checkpoints, and artifact area.
 
 Acceptance: one explanation is visible in the workspace while its valid
 annotation appears on-page; changing tabs shows correct ownership and never
 reuses an anchor from another tab.
 
-- [ ] 3.2 Persist response/artifact identity through the gateway session while
+- [ ] 5.2 Persist response/artifact identity through the gateway session while
       keeping live anchors browser-local.
 
 Acceptance: after an extension service-worker restart, the workspace recovers
 the durable response but marks annotations unavailable until the page is
 observed again.
 
-## 4. Generated Content And Artifacts
+## 6. Generated Content And Artifacts
 
-- [ ] 4.1 Extend Tier A with bounded `table`, `steps`, `flowchart`, `timeline`,
+- [ ] 6.1 Extend Tier A with bounded `table`, `steps`, `flowchart`, `timeline`,
       `callout`, and `draft` response components.
 
 Acceptance: validator and renderer tests reject unknown/oversized data and
 render a deterministic artifact without HTML, CSS, JavaScript, or remote URLs.
 
-- [ ] 4.2 Add save, rename, duplicate, and export projections for a gateway-
+- [ ] 6.2 Add save, rename, duplicate, and export projections for a gateway-
       owned generated artifact.
 
 Acceptance: a generated artifact survives browser restart and is linked to its
 source turn and evidence revision.
 
-## 5. Explicit Page Change
+## 7. Explicit Page Change
 
-- [ ] 5.1 Add a narrow `editable_text_change` proposal bound to a current
+- [ ] 7.1 Add a narrow `editable_text_change` proposal bound to a current
       editable-element anchor, with before value/hash, proposed value, approval,
       apply receipt, and undo receipt.
 
@@ -105,42 +158,43 @@ Acceptance: an approved fixture edit applies once and undo restores the exact
 prior value; stale, non-editable, password, or changed-before-apply targets fail
 closed.
 
-- [ ] 5.2 Keep declarative visual tweaks on their existing allowlisted path and
+- [ ] 7.2 Keep declarative visual tweaks on their existing allowlisted path and
       expose both change types in one workspace review history.
 
 Acceptance: the user can distinguish proposed/applied/reverted/rejected state
 without reading logs.
 
-## 6. Companion Control
+## 8. Companion Control
 
-- [ ] 6.1 Project the active companion/profile into the on-page and workspace
-      surfaces with visible policy, stop, hide/show, and customization entry.
+- [ ] 8.1 Project the active companion/profile into the on-page and workspace
+      surfaces with visible agent, direct agent selection, stop, hide/show, and
+      customization entry.
 
 Acceptance: hiding or changing the companion does not lose workspace state or
 change action authority; stop remains reachable from the workspace.
 
-- [ ] 6.2 Bind companion reactions to runtime states using the existing
+- [ ] 8.2 Bind companion reactions to runtime states using the existing
       declarative `avatar_behavior` contract.
 
 Acceptance: listening/thinking/explaining/waiting/acting/done/error reactions
 use known packaged motions only and remain functional with custom appearance.
 
-## 7. Tutorial Workflow
+## 9. Tutorial Workflow
 
-- [ ] 7.1 Define a tutorial as a saved goal, ordered steps, anchor refs,
+- [ ] 9.1 Define a tutorial as a saved goal, ordered steps, anchor refs,
       completion predicates, correction history, and recap artifact over the
       general situated runtime.
 
 Acceptance: a tutorial can call the same explanation, annotation, artifact,
 and approved-action paths; no parallel perception or execution API is added.
 
-## 8. Release Evidence
+## 10. Release Evidence
 
-- [ ] 8.1 Run extension verify/smoke plus the new dynamic-grounding smoke in an
+- [ ] 10.1 Run extension verify/smoke plus the new dynamic-grounding smoke in an
       isolated profile, bump the manifest patch version, and package the unit.
-- [ ] 8.2 Reload the user's unpacked extension only when the active-promotion
+- [ ] 10.2 Reload the user's unpacked extension only when the active-promotion
       gate proves no interruption, and verify the loaded version changed.
-- [ ] 8.3 Record any preview/reload blocker with the artifact path.
+- [ ] 10.3 Record any preview/reload blocker with the artifact path.
 
 Acceptance: verification, commit, package, reload status, and post-reload smoke
 are recorded as distinct evidence; no step is claimed from an earlier one.

@@ -47,24 +47,99 @@ every page-local effect.
 - **THEN** the user can request a fresh observation and re-grounded response
 - **AND** the prior evidence remains distinguishable from the new revision
 
-### Requirement: General browser interaction policies
+### Requirement: Separately addressable browser agents
 
-The browser experience SHALL support `explain`, `create`, `collaborate`, and
-`delegate` as explicit policies over one session, evidence, artifact, proposal,
-and receipt model. A tutorial SHALL be a workflow composed from these policies
-and SHALL NOT require a parallel perception or execution authority.
+The browser experience SHALL present Explain, Help, Collaborate, and Delegate as
+separately user-addressable agents over one session, evidence, artifact,
+proposal, run, and receipt model. The active agent SHALL be visible and carried
+as typed data rather than inferred from generated prose. Creating content SHALL
+be an output capability rather than a fifth authority class. A tutorial SHALL
+be a workflow composed from these agents and SHALL NOT require parallel
+perception or execution authority.
 
 #### Scenario: Explanation without a tutorial
 
 - **WHEN** the user asks how a visible part of the current page works
 - **THEN** the system can return prose, speech, and grounded annotations without
   creating lesson steps or requiring a tutorial state machine
+- **AND** it performs no page action
+
+#### Scenario: User asks the Help agent
+
+- **WHEN** the user selects Help and asks what to do next
+- **THEN** the system may explain, draft, and propose the next step
+- **AND** the user remains the actor on the page
+
+#### Scenario: User collaborates on one action
+
+- **WHEN** the user selects Collaborate and confirms a fresh action proposal
+- **THEN** the browser may execute that one locally validated action
+- **AND** it returns control and the action receipt before proposing another
 
 #### Scenario: Tutorial uses ordinary primitives
 
 - **WHEN** the user starts a guided workflow
 - **THEN** its steps use the same observation anchors, explanations, artifacts,
   local action proposals, and receipts as non-tutorial interactions
+
+### Requirement: Authority-safe agent routing
+
+Direct user agent selection SHALL control routing. Inferred intent or gateway
+recommendation SHALL NOT escalate a turn or run into an agent with greater
+action authority. Every proposal, approval, run, and receipt SHALL retain the
+typed selected-agent identity.
+
+#### Scenario: Ambiguous action request
+
+- **WHEN** a request could mean Help, Collaborate, or Delegate and the user has
+  not explicitly selected one
+- **THEN** the browser remains read-only and asks the user to choose
+- **AND** does not start a delegated run or execute an action
+
+#### Scenario: Gateway recommends delegation
+
+- **WHEN** the active agent is Explain, Help, or Collaborate and the gateway
+  recommends Delegate
+- **THEN** the recommendation is presented as a choice
+- **AND** Delegate authority begins only after explicit user selection and a
+  confirmed delegation envelope
+
+### Requirement: Bounded delegated browser work
+
+Delegate SHALL be the primary outcome-oriented browser agent. A delegated run
+SHALL start only from a user-confirmed envelope containing a goal, browser
+scope, allowed action classes, approval policy, checkpoints, stop conditions,
+and required completion evidence. The browser SHALL intersect the envelope
+with packaged allowlists, current permissions, and fresh page evidence before
+each local effect.
+
+#### Scenario: Delegated task uses preauthorized actions
+
+- **WHEN** a confirmed envelope preauthorizes supported action classes and the
+  next action is within scope with fresh evidence
+- **THEN** Delegate may execute the action without a redundant per-step prompt
+- **AND** records a local receipt and visible run progress
+
+#### Scenario: Delegated task reaches a checkpoint
+
+- **WHEN** the next action is outside the envelope, belongs to an always-ask
+  class, changes origin/scope, or reaches a declared checkpoint
+- **THEN** the run pauses before the effect
+- **AND** shows the decision or approval needed to continue
+
+#### Scenario: Delegated task reports success
+
+- **WHEN** Delegate claims the goal is complete
+- **THEN** the run includes the envelope's required completion evidence and
+  receipts for applied actions
+- **AND** otherwise reports blocked, canceled, or failed rather than success
+
+#### Scenario: User stops delegated work
+
+- **WHEN** the user activates stop from the companion or workspace
+- **THEN** no new browser-local action begins
+- **AND** completed action receipts remain visible
+- **AND** any in-flight outcome is reported honestly
 
 ### Requirement: Coordinated browser-owned surfaces
 
@@ -111,7 +186,7 @@ JavaScript, HTML, CSS, remote URLs, or arbitrary method names.
 
 Generated content SHALL NOT mutate the current page unless it is represented by
 an allowlisted page-change proposal, bound to fresh local evidence, permitted by
-the active interaction policy, and approved where required. Every applied
+the active agent and any delegation envelope, and approved where required. Every applied
 change SHALL produce a local receipt and a defined undo result.
 
 #### Scenario: Approved editable text change
@@ -133,7 +208,7 @@ change SHALL produce a local receipt and a defined undo result.
 ### Requirement: Companion without authority escalation
 
 The companion SHALL project the active profile and browser-session state and
-MAY provide voice, command, policy, stop, attention, hide/show, and
+MAY provide voice, command, active-agent selection, stop, attention, hide/show, and
 customization controls. Companion identity, appearance, motion, or personality
 SHALL NOT grant page, browser, gateway, or execution-machine authority.
 
@@ -141,7 +216,7 @@ SHALL NOT grant page, browser, gateway, or execution-machine authority.
 
 - **WHEN** the user changes or hides the companion
 - **THEN** the workspace, canonical session, artifacts, approvals, and active
-  interaction policy remain intact
+  agent remain intact
 - **AND** no additional action capability becomes available
 
 #### Scenario: Delegated work is active

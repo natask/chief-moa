@@ -2,14 +2,17 @@
 
 ## Intent Resolution
 
-The primary product is a situated browser agent, not a tutorial product. Its
-job is to inhabit the work surface: perceive the current state, explain it,
-create useful output, point to what it means, and perform only locally approved
-changes. Tutorials are saved goal/progress policies over those same primitives.
+The primary product is a situated browser agent for delegated work, not a
+tutorial product and not an explanation tool. Its defining outcome is that the
+user can hand off a bounded browser task and receive a verified result. Explain,
+Help, and Collaborate remain first-class because they represent different
+working relationships, not weaker labels hidden inside Delegate. Tutorials are
+saved workflows over the same primitives.
 
-The first dependency is trustworthy spatial grounding. A polished companion or
-artifact canvas built before grounding would still point at stale pixels or
-ephemeral snapshot indexes.
+The first dependencies are explicit agent routing and trustworthy spatial
+grounding. Delegation without the former can silently gain authority;
+delegation without the latter acts against stale pixels or ephemeral snapshot
+indexes.
 
 ## Current Path And Gap
 
@@ -61,20 +64,65 @@ Coordinate three extension-owned surfaces over one grounded session:
 
 This preserves immediacy without forcing every product state into the mascot.
 
-## Interaction Policies
+## User-Addressable Browser Agents
 
-These policies share context, artifacts, and receipts; they are not separate
-agents or stores.
+The browser presents four distinct agents. They share the gateway session,
+evidence, artifacts, proposals, runs, and receipts so switching agents does not
+fork the user's work. They are separate interaction and authority contracts,
+not necessarily four model processes or four stores.
 
-| Policy | Default authority | Typical output |
-| --- | --- | --- |
-| `explain` | Read-only | Speech, prose, anchored callout, diagram |
-| `create` | Artifact write; page write requires approval | Draft, table, diagram, page-change proposal |
-| `collaborate` | One locally validated action at a time | Explanation plus proposed/approved step |
-| `delegate` | Explicit bounded task only | Visible multi-step run with stop and receipts |
-| `tutorial` | User acts by default | Goal, steps, anchors, predicates, recap |
+| Agent | Working relationship | Authority | Required visible state |
+| --- | --- | --- | --- |
+| `explain` | Agent interprets; user decides what to do | Read-only page evidence and artifact output | Active agent, evidence freshness |
+| `help` | User leads; agent recommends and prepares the next step | Read-only plus drafts/proposals; user performs page actions | Active agent, suggested next step |
+| `collaborate` | User and agent alternate control | One fresh, locally validated action at a time after action-specific confirmation | Active agent, current owner, pending action |
+| `delegate` | Agent owns progress toward a confirmed outcome | Multi-step execution only within a confirmed delegation envelope; checkpoints and approvals still apply | Goal, plan, current step, action status, stop, checkpoints, result evidence |
 
-The gateway may recommend a policy but cannot silently increase authority.
+Creation is an output capability available to all four agents, not a fifth
+working relationship. A tutorial is a workflow which normally uses Help or
+Collaborate and may contain an explicitly delegated subtask.
+
+### Selection and routing
+
+- Direct selection in the UI or an explicit address such as “Delegate this” is
+  authoritative.
+- A typed or spoken request without a selection may be classified only into an
+  equal-or-lower authority contract. If ambiguous, the surface stays read-only
+  and asks the user to choose.
+- The gateway may recommend another agent. Moving from Explain to Help,
+  Collaborate, or Delegate, or from Help/Collaborate to Delegate, requires an
+  explicit user choice. No model response can perform that escalation.
+- The active agent is carried as a typed field on every turn, proposal, run,
+  approval, and receipt. Labels in generated prose have no routing effect.
+- A user can downgrade or stop at any time. Downgrading prevents new actions;
+  it does not falsify or delete completed receipts.
+
+### Delegation envelope
+
+A Delegate run cannot start until the browser and gateway agree on a bounded,
+user-confirmed envelope:
+
+```json
+{
+  "agent": "delegate",
+  "goal": "Create the project and add the three supplied tasks",
+  "scope": { "tab_ids": [42], "origins": ["https://example.test"] },
+  "allowed_action_classes": ["click", "editable_text_change"],
+  "approval_policy": {
+    "preauthorized": ["click", "editable_text_change"],
+    "always_ask": ["submit", "delete", "purchase", "credential"]
+  },
+  "checkpoints": ["before_external_submit"],
+  "stop_conditions": ["goal_complete", "scope_changed", "evidence_stale"],
+  "completion_evidence": ["project_identity", "task_count"]
+}
+```
+
+The shape is illustrative, but every implementation must preserve goal, scope,
+action classes, approval policy, checkpoints, stop conditions, and completion
+evidence. The local browser policy intersects this envelope with packaged
+allowlists and current permissions. An envelope can narrow authority but cannot
+grant an action the extension does not already support.
 
 ## Observation And Anchor Contract
 
@@ -148,16 +196,22 @@ This distinguishes three facts that the current snapshot collapses:
 | Gateway | Reasoning, conversations, goals/workflows, artifacts, proposal records, run state | Canonical durable state |
 | Browser mutation broker | Validate current anchor/preconditions, apply allowlisted mutation, undo, receipt | Local mutation/undo record plus gateway receipt |
 
-## Explanation And Generation Flow
+## Agent Turn And Delegated Run Flow
 
 ```text
-user asks from companion or workspace
+user explicitly selects or addresses an agent
   -> extension captures bounded snapshot + anchors + provenance
-  -> gateway returns response blocks and optional structured proposals
+  -> gateway routes the typed turn under that agent's authority contract
+  -> Explain/Help return response blocks and optional non-executable proposals
+  -> Collaborate may return one action proposal for confirmation
+  -> Delegate creates a bounded run only after envelope confirmation
+  -> Delegate returns plan/progress plus actions within the envelope
   -> extension checks snapshot/page/layout freshness
   -> workspace renders durable response/artifact
   -> on-page layer renders only currently valid anchored blocks
-  -> any page mutation requires explicit policy/approval and a local receipt
+  -> local broker intersects agent + envelope + allowlist + current evidence
+  -> every page mutation returns a local receipt; checkpoints pause visibly
+  -> run ends only with completion evidence, explicit blocker, cancel, or failure
 ```
 
 Response blocks should be typed data: prose, callout, anchor annotation,
@@ -173,9 +227,11 @@ previews until a separate mutation vocabulary and undo contract are approved.
 ## Companion Contract
 
 The companion is the persistent embodiment of the active gateway profile and
-browser session. It may expose voice/command, current policy, stop, attention,
-and customization. Its appearance and behavior use the existing companion,
-pet, profile, and `avatar_behavior` contracts.
+browser session. It may expose voice/command, active agent, stop, attention,
+and customization. The companion or workspace must make the four agents
+separately addressable without hiding the active selection in prose. Appearance
+and behavior use the existing companion, pet, profile, and `avatar_behavior`
+contracts.
 
 The companion never owns conversation memory, artifacts, or authority. A user
 can hide it without stopping the workspace, and stop/delegate controls remain
@@ -183,9 +239,14 @@ available in both the companion and workspace.
 
 ## Failure Behavior
 
-- Gateway unavailable: preserve last-good workspace/artifacts, label them
+- Gateway unavailable: stop any active delegated run before new actions,
+  preserve last-good workspace/artifacts, label them
   stale, and remove/disable action proposals whose page evidence cannot be
   revalidated.
+- Agent selection ambiguous: remain read-only and request an explicit choice;
+  never infer Delegate.
+- Delegation scope changes: pause the run, show the mismatch, and require a new
+  or narrowed envelope before continuing.
 - Page navigation: increment page epoch and retire all prior page anchors.
 - Scroll: reproject and remeasure anchors without a model call.
 - DOM/layout change: mark affected anchors dirty, then revalidate or re-ground.
@@ -201,8 +262,9 @@ available in both the companion and workspace.
 | `browser_extension/extension/page-observation-runtime.js` | Pure epoch, anchor, geometry, and revalidation policy | New focused module, approximately 250-400 lines |
 | `browser_extension/extension/content.js` | Compose observation runtime with DOM and on-page UI | Replace ephemeral-only snapshot indexing; keep DOM authority |
 | `browser_extension/extension/page-annotation-runtime.js` | Render/reproject anchored callouts and stale state | New focused module, approximately 200-300 lines |
-| `browser_extension/extension/sidepanel.html` / `sidepanel.js` | Persistent situated workspace | Extend existing panel, no new UI framework |
-| `browser_extension/extension/background.js` or extracted runtime | Route evidence, response blocks, proposals, receipts | Prefer existing extraction pattern |
+| `browser_extension/extension/sidepanel.html` / `sidepanel.js` | Persistent workspace plus explicit Explain/Help/Collaborate/Delegate selection | Extend existing panel, no new UI framework |
+| `browser_extension/extension/background.js` or extracted runtime | Enforce typed agent routing; route evidence, response blocks, proposals, runs, and receipts | Prefer existing extraction pattern |
+| Gateway broker/run contract | Persist active agent and bounded delegation envelope on turns/runs | Extend existing run owner, no second agent service |
 | Gateway browser-turn runtime | Validate/store typed browser response and proposal envelopes | Extend existing owner, no second browser service |
 | Gateway UI/artifact validators | Add bounded teaching/general artifact components | Extend Tier A before Tier B |
 | Browser smoke fixtures/scripts | Scroll, reflow, replacement, stale, and approval proof | Isolated Chrome profile only |
@@ -223,10 +285,11 @@ the user's loaded extension reloaded.
 
 ## Alignment Decision
 
-Recommended decision: accept the situated browser workspace, make `explain` the
-first read-only vertical slice, and implement observation anchors before richer
-generation, delegation, tutorials, or companion studio work.
-
-Alignment authorizes the tickets in `tasks.md` one at a time. It does not bulk
-authorize later page-mutation vocabularies, Tier B generated UI, recording, or
-active deployment.
+Decision corrected and accepted from the user's direction: delegated browser
+work is primary; Explain, Help, Collaborate, and Delegate are separately
+addressable; and creation/tutorials are capabilities/workflows over their shared
+runtime. The first coherent vertical slice is explicit agent routing plus one
+bounded delegated browser run, built on observation anchors and the existing
+allowlisted action broker. It does not authorize unrestricted autonomy, a new
+page-mutation vocabulary, Tier B generated UI, recording, or bypassing release
+gates.
