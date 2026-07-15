@@ -148,7 +148,10 @@
       idempotency, compare-and-append, filtering, transaction, stream-lock,
       stale-reaper, filesystem-boundary, and retry tests with a focused 90%
       line/branch/function gate. Verified at 97.56% lines, 90.27% branches, and
-      98.06% functions.
+      98.06% functions. Stabilize nondeterministic child-process attribution by
+      including the existing end-to-end smoke and deterministic open-file
+      identity checks; four repeated expanded gates measured 90.29%-91.08%
+      branches.
 - [x] 2.30 Add exhaustive profile-option voice/persona alias, language code,
       native-script, list, mention-routing, rejected-field, model-option,
       payload, and language-control tests with a focused 90%
@@ -158,6 +161,25 @@
       query-alias, search/model failure, alternate-output, source deduplication,
       output bounding, markdown, and metadata tests with a focused 90%
       line/branch/function gate. Verified at 100% lines, 97.73% branches, and
+      100% functions.
+- [x] 2.32 Add exhaustive preview-adapter provider-shape, inspection-identity,
+      active-collision, polling-bound, timeout, sleep, abort, cleanup, and
+      aggregate-failure tests with a focused 90% line/branch/function gate.
+      Verified at 100% lines, 91.30% branches, and 100% functions.
+- [x] 2.33 Add exhaustive audio-note format, metadata, reload, quota,
+      corruption, request-stream, body-limit, product-event, malformed-ID,
+      missing-audio, non-file, and byte-stream tests with a focused 90%
+      line/branch/function gate. Verified at 100% lines, 90.44% branches, and
+      97.56% functions.
+- [x] 2.34 Add exhaustive voice-chunker option, punctuation, Latin-guard,
+      hard-split, bracket-atomicity, force-break, style, tag, literal-bracket,
+      code-fence, and dynamic-cap tests with a focused 90%
+      line/branch/function gate. Verified at 97.08% lines, 91.82% branches, and
+      97.22% functions.
+- [x] 2.35 Add exhaustive voice-router forced-precedence, cancellation,
+      classification, model-action normalization, malformed-JSON, environment,
+      timeout, and heuristic-fallback tests with a focused 90%
+      line/branch/function gate. Verified at 99.47% lines, 96.79% branches, and
       100% functions.
 
 ## 3. Other Oversized Surfaces

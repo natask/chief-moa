@@ -80,4 +80,6 @@ function abortableSleep(ms, signal) {
   });
 }
 
-module.exports = { createPreviewAdapter, validateInspection };
+const previewAdapterTestInternals = Object.freeze({ abortableSleep, abortError });
+
+module.exports = { createPreviewAdapter, validateInspection, previewAdapterTestInternals };
