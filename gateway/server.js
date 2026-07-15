@@ -102,6 +102,7 @@ const { createThreadSwitchHandlers } = require("./lib/thread-switch-handlers");
 const { createBrokerResearchHandlers } = require("./lib/broker-research-handlers");
 const { createMediaNoteHandlers } = require("./lib/media-note-handlers");
 const { createVoiceControlHandlers } = require("./lib/voice-control-handlers");
+const { createGatewayHealthHandlers } = require("./lib/gateway-health-handlers");
 const {
   normalizeSpeech,
   isStopLike,
@@ -773,6 +774,24 @@ const { routeSupervisor } = createSupervisorHandlers({
   providerConfigured, dataDir: DATA_DIR, brain, voiceSessionServer,
   effectiveInstruction, truncate,
 });
+const { routeHealth } = createGatewayHealthHandlers({
+  sendJson, build: BUILD_IDENTITY, runtimeMode, remoteMode: REMOTE_MODE,
+  trustProxy: TRUST_PROXY, host: HOST, port: PORT, publicGatewayUrl: PUBLIC_GATEWAY_URL,
+  provider: MODEL_PROVIDER, model: MODEL_ID, modelBaseUrl: MODEL_BASE_URL,
+  providerConfigured, vertexProject: VERTEX_PROJECT, vertexLocation: VERTEX_LOCATION,
+  vertexCredentialHint, dataDir: DATA_DIR, voiceTurnsDir: VOICE_TURNS_DIR,
+  audioNotes, videoNotes, voiceSessionServer, agentProfileRuntimeStatus,
+  voiceProfileDiagnostics, livekitStatus, androidOtaHealth, eventStatus,
+  deviceClientsFile: DEVICE_CLIENTS_FILE, toolRequestsDir: TOOL_REQUESTS_DIR,
+  listDeviceClients, listToolRequests, voiceExecuteToolEnabled,
+  cascadedExecuteCapabilities, agentRunsDir: AGENT_RUNS_DIR,
+  harnessWorkdir: HARNESS_WORKDIR, defaultHarness: DEFAULT_HARNESS,
+  harnessStatus, allowAgentWithoutToken: ALLOW_AGENT_WITHOUT_TOKEN,
+  workerPullAgentRuns: WORKER_PULL_AGENT_RUNS, workerPull, browserAgentLoop,
+  accountConnections, accountHealthIntervalMs: ACCOUNT_HEALTH_INTERVAL_MS,
+  brain, brainRecallLimit: BRAIN_RECALL_LIMIT, nativeWebSearchEnabled,
+  exaApiKey: process.env.EXA_API_KEY,
+});
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -799,107 +818,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/health") {
-      const voiceProvider = voiceSessionServer.status();
-      const profileStatus = agentProfileRuntimeStatus();
-      sendJson(response, 200, {
-        ok: true,
-        build: BUILD_IDENTITY,
-        mode: runtimeMode.mode,
-        gateway_mode: runtimeMode.health(),
-        remote_mode: REMOTE_MODE,
-        trust_proxy: TRUST_PROXY,
-        bind: {
-          host: HOST,
-          port: PORT,
-        },
-        public_gateway_url: PUBLIC_GATEWAY_URL || undefined,
-        provider: MODEL_PROVIDER,
-        model: MODEL_ID,
-        model_base_url: MODEL_BASE_URL,
-        provider_configured: providerConfigured(),
-        vertex: MODEL_PROVIDER === "vertex" ? {
-          project: VERTEX_PROJECT,
-          location: VERTEX_LOCATION,
-          auth: vertexCredentialHint(),
-        } : undefined,
-        data_dir: DATA_DIR,
-        voice_router: {
-          turns_dir: VOICE_TURNS_DIR,
-          endpoint: "/v1/voice/turns",
-          classification: "heuristic",
-          transport: "transcript_http",
-        },
-        audio_notes: audioNotes.status(),
-        video_notes: videoNotes.status(),
-        voice_stream: {
-          sessions_dir: voiceSessionServer.sessionsDir,
-          endpoint: voiceSessionServer.endpoint,
-          ticket_endpoint: "/v1/voice/session-ticket",
-          provider: voiceProvider,
-          profile_diagnostics: voiceProfileDiagnostics(profileStatus, voiceProvider),
-          activity: voiceSessionServer.activityStatus(),
-          input_format: {
-            encoding: "pcm16",
-            sample_rate: 16000,
-            channels: 1,
-          },
-          assistant_audio_format: voiceProvider.assistant_audio_format || {
-            encoding: "pcm16",
-            sample_rate: 16000,
-            channels: 1,
-          },
-        },
-        agent_profile: profileStatus,
-        // Flag-gated LiveKit voice-transport prototype. Inert (enabled:false)
-        // unless LIVEKIT_URL/KEY/SECRET are set; the default WS pipeline above is
-        // unchanged either way.
-        livekit_voice: livekitStatus(),
-        agent_loop: {
-          runs_dir: AGENT_RUNS_DIR,
-          harness_workdir: HARNESS_WORKDIR,
-          default_harness: DEFAULT_HARNESS,
-          harnesses: harnessStatus(),
-          token_required: !ALLOW_AGENT_WITHOUT_TOKEN,
-          worker_pull_enabled: WORKER_PULL_AGENT_RUNS,
-          worker_pull: workerPull.status(),
-        },
-        android_ota: androidOtaHealth(),
-        event_substrate: await eventStatus(),
-        device_hub: {
-          registry_file: DEVICE_CLIENTS_FILE,
-          tool_requests_dir: TOOL_REQUESTS_DIR,
-          device_count: listDeviceClients().length,
-          pending_tool_requests: listToolRequests({ status: "pending", limit: 100 }).length,
-        },
-        execute_tool: {
-          enabled: voiceExecuteToolEnabled(),
-          capability_count: Object.keys(cascadedExecuteCapabilities({})).length,
-        },
-        web_search: {
-          native_vertex: nativeWebSearchEnabled("vertex"),
-          exa_fallback_configured: Boolean(process.env.EXA_API_KEY),
-          boundary: "model_tool",
-        },
-        browser_agent_tasks: {
-          dir: browserAgentLoop.dir,
-          ...browserAgentLoop.healthCounts(),
-        },
-        account_connections: {
-          ...accountConnections.status(),
-          health_interval_ms: ACCOUNT_HEALTH_INTERVAL_MS,
-          endpoint: "/v1/account-connections",
-        },
-        brain: {
-          available: brain.available() || brain.mode() === "file",
-          mode: brain.mode(),
-          gbrain_available: brain.available(),
-          facts_file: brain.factsFile,
-          recall_limit: BRAIN_RECALL_LIMIT,
-          slug_prefix: brain.slugPrefix,
-          gbrain_home: brain.gbrainHome || "default (~/.gbrain)",
-        },
-      });
+    if (await routeHealth(request, response, url)) {
       return;
     }
 
