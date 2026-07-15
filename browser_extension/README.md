@@ -125,10 +125,11 @@ it, and holding Cmd/Ctrl+. or the second mark click captures only for the hold
 and commits on release. The Moa mark mirrors Android for text and movement:
 single click opens the chat menu, and click-and-hold while moving drags the
 mark.
-With experimental voice-first gestures enabled, one mascot click instead starts
-a reviewable, non-auto-committing draft and shows `X — mascot — ↑`. Only the
-side controls discard or send; another mascot click does not send. A still hold
-keeps the fast push-to-talk path and commits on release.
+With experimental voice-first gestures enabled, one mascot click toggles manual
+capture in the current thread: click once to start, then click again to stop and
+send. Holding the mascot keeps push-to-talk in that thread and sends on release.
+A double-click uses the same start/stop toggle in a fresh thread, while a
+triple-click cancels any pending capture without sending and opens chat.
 If Chrome blocks offscreen microphone capture, the overlay shows a visible
 permission error and opens the A.G. Options page; grant the microphone there or
 set Microphone to Allow for the extension from `chrome://extensions`.

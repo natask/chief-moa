@@ -134,6 +134,15 @@ function createBrokerRouter({ listSessions, listProjects, listAgentRuns, isTermi
 }
 
 function workflowRecommendation(lower) {
+  if (/\b(?:fuzz|fuzzing|fuzzer|property[- ]based|randomi[sz]ed test|adversarial (?:probe|test|testing)|find crashes)\b/.test(lower)) {
+    return { id: "fuzzing", confidence: 0.88, reason: "message explicitly asks for fuzzing or adversarial application testing" };
+  }
+  if (/\b(?:security (?:audit|review|assessment|holes?|principal|agent)|audit (?:the )?security|vulnerabilit(?:y|ies)|threat model|penetration test|pentest|find security holes?)\b/.test(lower)) {
+    return { id: "security", confidence: 0.87, reason: "message explicitly asks for a security audit or vulnerability assessment" };
+  }
+  if (/\b(?:deslop|de[- ]slop|simplif(?:y|ication)|reduc(?:e|ing) (?:the )?(?:lines|line count|loc)|re[- ]?architect(?:ure|ing)?|code quality cleanup|behavior[- ]preserving refactor|level(?:ing| up)? (?:the )?(?:code|code quality|quality))\b/.test(lower)) {
+    return { id: "simplification", confidence: 0.86, reason: "message explicitly asks for behavior-preserving simplification or architecture cleanup" };
+  }
   if (/\b(?:research|search online|look up|landscape|compare|comparison|report|explore|find the best|most optimal|optimal path)\b/.test(lower)) {
     return { id: "landscape-research", confidence: 0.82, reason: "message asks for research/search/comparison/report workflow" };
   }

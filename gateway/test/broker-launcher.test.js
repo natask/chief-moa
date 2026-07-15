@@ -113,7 +113,10 @@ test("profile loading accepts object maps and falls back for invalid files", () 
   assert.deepEqual(launcher.launcherProfiles(), profiles);
 
   fs.writeFileSync(launcherProfilesPath, "[]");
-  assert.deepEqual(Object.keys(launcher.launcherProfiles()), ["direct-answer", "coding"]);
+  const fallback = launcher.launcherProfiles();
+  assert.deepEqual(Object.keys(fallback), ["direct-answer", "coding", "security", "simplification", "fuzzing"]);
+  assert.ok(fallback.simplification.constraints.some((item) => /Do not merge, deploy, promote/.test(item)));
+  assert.match(fallback.simplification.repair_handoff, /separate independent verifier/);
   fs.writeFileSync(launcherProfilesPath, "null");
   assert.equal(launcher.launcherProfiles()["direct-answer"].id, "direct-answer");
   fs.writeFileSync(launcherProfilesPath, "{");
@@ -132,7 +135,7 @@ test("launch flag parsing preserves aliases and accepted string values", () => w
 
 test("profile selection covers workflow, evidence, new-fork, and text categories", () => withFixture(({ launcher }) => {
   const profiles = Object.fromEntries([
-    "direct-answer", "coding", "qa", "design", "writing", "landscape-research",
+    "direct-answer", "coding", "qa", "design", "writing", "landscape-research", "security", "simplification", "fuzzing",
   ].map((id) => [id, profile(id)]));
   assert.equal(launcher.launcherProfileForDecision(decision({ target_type: "workflow", target_id: "qa" }), event(), profiles).id, "qa");
   assert.equal(launcher.launcherProfileForDecision(decision({ action: "attach_as_evidence" }), event(), profiles).id, "coding");
@@ -142,6 +145,9 @@ test("profile selection covers workflow, evidence, new-fork, and text categories
   assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "design the UI" }), profiles).id, "design");
   assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "rewrite the email" }), profiles).id, "writing");
   assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "research comparison" }), profiles).id, "landscape-research");
+  assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "perform a security audit" }), profiles).id, "security");
+  assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "deslop and reduce loc" }), profiles).id, "simplification");
+  assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "fuzz the application" }), profiles).id, "fuzzing");
   assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "hello" }), profiles).id, "direct-answer");
   assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "hello" }), { coding: profile("coding") }).id, "coding");
   assert.equal(launcher.launcherProfileForDecision(decision(), event({ text: "hello" }), {}).id, "direct-answer");
@@ -153,7 +159,11 @@ test("profile normalization bounds arrays and supplies scalar defaults", () => w
       id: 7,
       description: null,
       context_files: Array.from({ length: 25 }, (_, index) => index),
+      constraints: Array.from({ length: 15 }, (_, index) => `constraint-${index}`),
       verification: Array.from({ length: 15 }, (_, index) => index),
+      principal_role: "security",
+      execution_policy: "audit_only",
+      repair_handoff: "separate repair",
     },
   };
   const normalized = launcher.launcherProfileForDecision(
@@ -164,7 +174,56 @@ test("profile normalization bounds arrays and supplies scalar defaults", () => w
   assert.equal(normalized.workflow_directory, "");
   assert.deepEqual(normalized.context_files.slice(0, 2), ["0", "1"]);
   assert.equal(normalized.context_files.length, 20);
+  assert.equal(normalized.constraints.length, 12);
+  assert.equal(normalized.principal_role, "security");
+  assert.equal(normalized.execution_policy, "audit_only");
+  assert.equal(normalized.repair_handoff, "separate repair");
   assert.equal(normalized.verification.length, 12);
+}));
+
+test("principal context packs carry role policy, constraints, and repair handoff", () => withFixture(({ launcher }) => {
+  const security = profile("security", {
+    principal_role: "security",
+    execution_policy: "audit_only",
+    constraints: ["Audit only; do not repair findings in this run."],
+    repair_handoff: "Use a separate repair and independent verifier.",
+  });
+  const pack = launcher.buildContextPack(
+    event({ text: "perform a security audit" }),
+    decision({ target_type: "workflow", target_id: "security", action: "invoke_workflow" }),
+    security,
+  );
+  assert.equal(pack.principal_role, "security");
+  assert.equal(pack.execution_policy, "audit_only");
+  assert.ok(pack.constraints.some((item) => item.startsWith("Audit only")));
+  assert.equal(pack.repair_handoff, "Use a separate repair and independent verifier.");
+  assert.match(pack.launcher.prompt, /Principal role: security/);
+  assert.match(pack.launcher.prompt, /Execution policy: audit_only/);
+  assert.match(pack.launcher.prompt, /separate repair and independent verifier/);
+}));
+
+test("checked-in simplification context is candidate-only with independent verification", () => withFixture(({ launcher }) => {
+  const profiles = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "agent-launcher-profiles.json"), "utf8"));
+  const selected = launcher.launcherProfileForDecision(
+    decision({ target_type: "workflow", target_id: "simplification", action: "invoke_workflow" }),
+    event({ text: "deslop and reduce lines of code" }),
+    profiles,
+  );
+  const pack = launcher.buildContextPack(
+    event({ text: "deslop and reduce lines of code" }),
+    decision({ target_type: "workflow", target_id: "simplification", action: "invoke_workflow" }),
+    selected,
+  );
+  assert.equal(pack.principal_role, "simplification");
+  assert.equal(pack.execution_policy, "behavior_preserving_changes");
+  assert.ok(pack.constraints.some((item) => /edit, test, and commit one behavior-preserving candidate/.test(item)));
+  assert.ok(pack.constraints.some((item) => /Do not merge, deploy, promote, publish, push master/.test(item)));
+  assert.ok(pack.constraints.some((item) => /Do not weaken, delete, skip, or bypass checks/.test(item)));
+  assert.match(pack.repair_handoff, /separate independent verifier/);
+  assert.match(pack.repair_handoff, /Integration, merge, push, deployment, and promotion remain coordinator-owned/);
+  assert.match(pack.launcher.prompt, /Do not merge, deploy, promote, publish, push master/);
+  assert.match(pack.launcher.prompt, /Do not weaken, delete, skip, or bypass checks/);
+  assert.match(pack.launcher.prompt, /separate independent verifier/);
 }));
 
 test("context packs preserve bounded event, session, project, run, and active-run context", () => withFixture(({ calls, launcher, launcherProfilesPath }) => {

@@ -22,8 +22,6 @@
   // ---- Overlay UI -------------------------------------------------------
   let root,
     launcher,
-    draftCancelButton,
-    draftSendButton,
     panel,
     input,
     agentModeSelect,
@@ -85,16 +83,19 @@
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
   // Voice-first gesture experiment (off by default). When the flag is on the
-  // mark remaps to: single click = reviewable voice draft with side controls,
-  // still hold = push-to-talk (a large move
-  // escapes into a drag), double-click = the text surface. Flag off keeps
-  // the legacy contract untouched.
+  // mark remaps to: single click = current-thread capture toggle, still hold =
+  // push-to-talk, double-click = fresh-thread capture toggle, and triple-click
+  // = text chat. Flag off keeps the legacy contract untouched.
   const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
   const VOICE_FIRST_HOLD_MS = 260;
   let voiceFirstGestures = false;
   let voiceFirstHoldTimer = null;
   let voiceFirstTapChain = null;
   let voiceFirstHoldStartedTurn = false;
+  // Preserve how the active capture was admitted so another double-click can
+  // send a double-started turn, while a double-click during a single-started
+  // turn can discard it before opening a fresh thread.
+  let voiceFirstCaptureOrigin = null;
   // Mascot scale: one root scalar (font-size px on #agee-launcher) drives the
   // hit circle, the lion and every animation distance. Scroll on the lion
   // adjusts it; the value persists like the launcher position does.
@@ -348,8 +349,6 @@
           </span>
         </span>
       </button>
-      <button id="agee-draft-cancel" class="agee-draft-control" type="button" data-agee-tip="Discard voice draft" aria-label="Discard voice draft" hidden>×</button>
-      <button id="agee-draft-send" class="agee-draft-control agee-draft-send" type="button" data-agee-tip="Send voice draft" aria-label="Send voice draft" hidden>↑</button>
       <div id="agee-panel" role="dialog" aria-label="A.G. command">
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
@@ -377,8 +376,6 @@
       <div id="agee-tip" role="tooltip" aria-hidden="true"></div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
-    draftCancelButton = root.querySelector("#agee-draft-cancel");
-    draftSendButton = root.querySelector("#agee-draft-send");
     panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
     agentModeSelect = root.querySelector("#agee-mode-select");
@@ -411,8 +408,9 @@
     //   first press + movement  -> drag the mark
     //   double-click and hold   -> manual push-to-talk
     // With the voice-first flag on (ageeVoiceFirstGesturesEnabled) the map
-    // becomes: single click -> talk toggle with barge-in, still hold ->
-    // push-to-talk, double-click -> text surface.
+    // becomes: single click -> current-thread voice toggle, still hold ->
+    // push-to-talk, double-click -> fresh-thread voice toggle, triple-click ->
+    // text chat.
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -422,19 +420,6 @@
     window.addEventListener("resize", handleViewportResize);
     agentModeSelect.addEventListener("change", () => {
       chrome.storage.local.set({ [BROWSER_AGENT_ROLE_KEY]: selectedBrowserAgentRole() }).catch(() => {});
-    });
-
-    draftCancelButton.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!e.isTrusted) return;
-      cancelTalkMode();
-    });
-    draftSendButton.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!e.isTrusted) return;
-      sendReviewableVoiceDraft();
     });
 
     input.addEventListener("keydown", (e) => {
@@ -867,7 +852,7 @@
   // the live data-agee-tip text so state-driven labels stay in sync.
   function setupOverlayTooltips() {
     if (!tipEl) return;
-    for (const target of [launcher, draftCancelButton, draftSendButton, proactiveButton, voiceButton, recordButton, stopButton]) {
+    for (const target of [launcher, proactiveButton, voiceButton, recordButton, stopButton]) {
       if (!target) continue;
       target.addEventListener("mouseenter", () => armTooltip(target));
       target.addEventListener("mouseleave", hideTooltip);
@@ -939,7 +924,6 @@
       resizeRaf = null;
       reclampLauncher();
       if (open) positionPanel();
-      positionVoiceDraftControls();
     });
   }
 
@@ -1000,7 +984,6 @@
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
     if (open) positionPanel(); // keep the surface anchored if the mark moves
-    positionVoiceDraftControls();
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
   }
 
@@ -1228,12 +1211,15 @@
       holdToTalkPointerId = pointerId;
       voiceFirstHoldStartedTurn = false;
       if (!(liveVoice && listening)) {
-        if (liveVoice) stopLiveVoiceTurn("cancel");
+        if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
+        stopSpeaking();
         voiceFirstHoldStartedTurn = true;
+        voiceFirstCaptureOrigin = "hold";
         startLiveVoiceTurn({
           preserveAssistantPlayback: assistantSpeechOverlap === true,
           conversation: false,
           autoCommit: false,
+          openText: false,
         });
       }
     }, VOICE_FIRST_HOLD_MS);
@@ -1253,44 +1239,19 @@
 
   function handleVoiceFirstTap(e, chainCount) {
     const count = chainCount + 1;
-    const prevToggled = voiceFirstTapChain ? voiceFirstTapChain.toggled : null;
     resetVoiceFirstTapChain();
-    voiceFirstTapChain = {
+    const chain = {
       count,
       lastTime: e.timeStamp,
       x: e.clientX,
       y: e.clientY,
-      toggled: null,
       timer: null,
     };
-    if (count === 1) {
-      if (conversationActive || (liveVoice && listening)) {
-        // A later mascot click never owns disposition of a reviewable draft.
-        // Keep listening until the visible X or Send control is chosen.
-        voiceFirstTapChain.toggled = "draft-open";
-        armVoiceFirstChainReset();
-        return;
-      }
-      // A click while idle or while the assistant is speaking arms the mic
-      // immediately; starting the turn already stops assistant playback, so
-      // barge-in is built in. A second click within the window cancels this
-      // sub-300ms-old session and opens the text surface instead.
-      voiceFirstTapChain.toggled = toggleTalkMode();
-      armVoiceFirstChainReset();
-      return;
-    }
-    if (count === 2) {
-      // Double click is the text surface. Tap 1 either armed the mic (undo the
-      // milliseconds-old session) or found an existing reviewable draft, which
-      // remains under the visible side controls and is never sent here.
-      if (prevToggled === "on") cancelTalkMode();
-      openTextSurface({ fresh: false });
-      armVoiceFirstChainReset();
-      return;
-    }
-    // Three or more taps add nothing beyond the double; keep the chain alive
-    // so further rapid taps stay inert instead of re-arming the mic.
-    armVoiceFirstChainReset();
+    voiceFirstTapChain = chain;
+    // Resolve only after the multi-click window. In particular, a single click
+    // that would send an active capture waits long enough for a second or third
+    // click to supersede it, so double/triple collisions never send by accident.
+    armVoiceFirstChainReset(() => resolveVoiceFirstTapChain(chain));
   }
 
   function armVoiceFirstChainReset(onExpire) {
@@ -1303,49 +1264,84 @@
     }, LAUNCHER_DOUBLE_CLICK_MS);
   }
 
-  // Single-click review mode. Starting opens a non-auto-committing draft;
-  // disposition belongs to the side controls. The old Off branch remains for
-  // non-gesture callers, but a later mascot click is intercepted above and can
-  // never silently commit. tapTalk keeps an empty first capture quiet.
-  function toggleTalkMode() {
-    if (conversationActive || (liveVoice && listening)) {
-      conversationActive = false;
-      if (liveVoice && listening) commitLiveVoiceTurn();
-      syncTalkModeUi();
-      return "off";
+  function resolveVoiceFirstTapChain(chain) {
+    if (!chain) return;
+    if (chain.count === 1) {
+      toggleVoiceFirstCapture("single");
+      return;
     }
+    if (chain.count === 2) {
+      toggleFreshThreadVoiceCapture();
+      return;
+    }
+    if (chain.count === 3) {
+      // Chat must never inherit a hot microphone or commit a pending capture.
+      if (liveVoice && listening) cancelTalkMode();
+      openTextSurface({ fresh: false });
+    }
+  }
+
+  function voiceFirstCaptureActive() {
+    return liveVoice != null && listening === true && liveVoice.committed !== true;
+  }
+
+  function startVoiceFirstCapture(origin, { freshThread = false } = {}) {
     primeAudio();
-    // Same teardown rule as toggleVoice(): a lingering non-listening turn is
-    // cancelled unless background speech overlap wants it kept playing.
-    if (liveVoice && !(assistantSpeechOverlap === true && liveVoice.committed)) {
-      stopLiveVoiceTurn("cancel");
+    // A deliberate voice-first gesture is always barge-in. The optional
+    // overlapping-assistant-speech preference does not override the user's tap.
+    if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
+    stopSpeaking();
+    if (freshThread) {
+      newThreadArmed = true;
+      newThreadLabel = "";
     }
+    voiceFirstCaptureOrigin = origin;
     startLiveVoiceTurn({
       preserveAssistantPlayback: assistantSpeechOverlap === true,
+      conversation: false,
       autoCommit: false,
+      openText: false,
     });
     if (liveVoice) liveVoice.tapTalk = true;
     syncTalkModeUi();
     return "on";
   }
 
+  function toggleVoiceFirstCapture(origin) {
+    if (voiceFirstCaptureActive()) {
+      // Capture toggles are provenance-matched. A single click cannot send a
+      // fresh-thread turn that was intentionally started with a double-click.
+      if (voiceFirstCaptureOrigin !== origin) return "noop";
+      voiceFirstCaptureOrigin = null;
+      commitLiveVoiceTurn();
+      syncTalkModeUi();
+      return "off";
+    }
+    return startVoiceFirstCapture(origin);
+  }
+
+  function toggleFreshThreadVoiceCapture() {
+    if (voiceFirstCaptureActive() && voiceFirstCaptureOrigin === "double") {
+      voiceFirstCaptureOrigin = null;
+      commitLiveVoiceTurn();
+      syncTalkModeUi();
+      return "off";
+    }
+    // A double-click supersedes a current-thread capture without sending it,
+    // then starts the new-thread capture. A second double-click sends that turn.
+    if (voiceFirstCaptureActive()) cancelTalkMode();
+    return startVoiceFirstCapture("double", { freshThread: true });
+  }
+
   function cancelTalkMode() {
     conversationActive = false;
+    voiceFirstCaptureOrigin = null;
     stopAllLiveVoiceTurns("cancel");
     syncTalkModeUi();
   }
 
-  function sendReviewableVoiceDraft() {
-    if (!reviewableVoiceDraftActive()) return;
-    conversationActive = false;
-    commitLiveVoiceTurn();
-    syncTalkModeUi();
-    syncVoiceDraftControls();
-  }
-
   function syncTalkModeUi() {
     if (root) root.classList.toggle("agee-talk", conversationActive === true);
-    syncVoiceDraftControls();
   }
 
   function restoreVoiceFirstGestures() {
@@ -1361,7 +1357,7 @@
     if (root) root.classList.toggle("agee-voice-first", voiceFirstGestures === true);
     if (launcher) {
       launcher.dataset.ageeTip = voiceFirstGestures
-        ? "Click to talk, then use X or Send; hold for push-to-talk, double-click to type"
+        ? "Click to start or stop; hold to talk; double-click for a new thread; triple-click for chat"
         : "Click to type, drag to move, scroll to resize, hold to talk";
     }
     syncTalkModeUi();
@@ -2865,51 +2861,9 @@
     if (voiceButton) {
       voiceButton.classList.toggle("listening", listening);
       voiceButton.textContent = "";
-      setTooltip(voiceButton, listening ? "Send what you said" : "Speak your request");
-      voiceButton.setAttribute("aria-label", listening ? "Send voice" : "Start voice");
+      setTooltip(voiceButton, listening ? "Stop and send" : "Start voice");
+      voiceButton.setAttribute("aria-label", listening ? "Stop and send voice" : "Start voice");
     }
-    syncVoiceDraftControls();
-  }
-
-  function reviewableVoiceDraftActive() {
-    return voiceFirstGestures === true
-      && conversationActive === true
-      && listening === true
-      && liveVoice != null
-      && liveVoice.committed !== true;
-  }
-
-  function syncVoiceDraftControls() {
-    if (!draftCancelButton || !draftSendButton || !root) return;
-    const visible = reviewableVoiceDraftActive();
-    draftCancelButton.hidden = !visible;
-    draftSendButton.hidden = !visible;
-    root.classList.toggle("agee-reviewing-voice", visible);
-    if (visible) positionVoiceDraftControls();
-  }
-
-  function positionVoiceDraftControls() {
-    if (!reviewableVoiceDraftActive() || !launcher || !draftCancelButton || !draftSendButton) return;
-    const gap = 10;
-    const margin = 10;
-    let lr = launcher.getBoundingClientRect();
-    const controlWidth = draftCancelButton.offsetWidth || 42;
-    const minLeft = margin + controlWidth + gap;
-    const maxLeft = Math.max(minLeft, window.innerWidth - margin - controlWidth - gap - lr.width);
-    const safeLeft = Math.max(minLeft, Math.min(lr.left, maxLeft));
-    if (Math.abs(safeLeft - lr.left) > 0.5) {
-      placeLauncher(safeLeft, lr.top, false);
-      lr = launcher.getBoundingClientRect();
-    }
-    const controlHeight = draftCancelButton.offsetHeight || 42;
-    const top = Math.max(margin, Math.min(
-      lr.top + (lr.height - controlHeight) / 2,
-      window.innerHeight - controlHeight - margin
-    ));
-    draftCancelButton.style.left = `${Math.round(lr.left - gap - controlWidth)}px`;
-    draftCancelButton.style.top = `${Math.round(top)}px`;
-    draftSendButton.style.left = `${Math.round(lr.right + gap)}px`;
-    draftSendButton.style.top = `${Math.round(top)}px`;
   }
 
   // Drive voice state on the root. The top strip stays hidden; live transcript
@@ -3070,7 +3024,7 @@
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
-    openTextSurface({ fresh: false });
+    if (options.openText !== false) openTextSurface({ fresh: false });
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
@@ -3107,7 +3061,6 @@
     };
     trackLiveVoiceState(state);
     liveVoice = state;
-    syncVoiceDraftControls();
 
     try {
       primeAudio();
@@ -3350,6 +3303,7 @@
   async function commitLiveVoiceTurn() {
     const state = liveVoice;
     if (!state || !isLiveVoiceStateActive(state)) return;
+    voiceFirstCaptureOrigin = null;
     state.committed = true;
     stopLiveCapture(state);
     setVoiceState(false);
@@ -3410,6 +3364,7 @@
     // Any explicit stop/cancel/error ends conversation mode so the mark does not
     // re-arm the mic after the current turn tears down.
     conversationActive = false;
+    voiceFirstCaptureOrigin = null;
     const state = liveVoice;
     if (!state) {
       setVoiceState(false);
@@ -3423,6 +3378,7 @@
 
   function stopAllLiveVoiceTurns(mode = "stop") {
     conversationActive = false;
+    voiceFirstCaptureOrigin = null;
     for (const state of [...liveVoiceStates]) {
       stopLiveVoiceState(state, mode);
     }

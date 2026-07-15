@@ -422,7 +422,7 @@ public final class MainActivity extends Activity {
         addCardTitle(card, "Gestures");
 
         CheckBox voiceFirst = new CheckBox(this);
-        voiceFirst.setText("Voice-first orb gestures (experimental)");
+        voiceFirst.setText("Manual voice orb controls");
         voiceFirst.setTextColor(MoaColors.PAPER);
         voiceFirst.setTextSize(15);
         voiceFirst.setChecked(MoaPrefs.voiceFirstGestures(this));
@@ -447,11 +447,11 @@ public final class MainActivity extends Activity {
     private void populateGestureRows(LinearLayout rows, boolean voiceFirst) {
         rows.removeAllViews();
         if (voiceFirst) {
-            gestureRow(rows, "Tap", "Continue voice");
-            gestureRow(rows, "Tap again", "Send current turn");
-            gestureRow(rows, "Double-tap", "New voice thread");
-            gestureRow(rows, "Triple-tap", "Chat");
-            gestureRow(rows, "Press + hold", "Talk precisely");
+            gestureRow(rows, "Tap", "Start or interrupt");
+            gestureRow(rows, "Tap while listening", "Stop and send/store");
+            gestureRow(rows, "Double-tap", "Toggle a new voice thread");
+            gestureRow(rows, "Triple-tap", "Open chat");
+            gestureRow(rows, "Press + hold", "Talk; release sends");
             gestureRow(rows, "Drag", "Move");
         } else {
             gestureRow(rows, "Tap", "Chat");

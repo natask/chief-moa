@@ -69,6 +69,7 @@
     "smoke:live-durable-routing": "node scripts/smoke-live-durable-routing.js",
     "smoke:live-browser-continuity": "node scripts/smoke-live-browser-continuity.js",
     "smoke:voice-profile": "node scripts/smoke-voice-profile.js",
+    "smoke:voice-modes": "node scripts/smoke-voice-modes.js",
     "smoke:page-tweaks": "node scripts/smoke-page-tweaks.js",
     "smoke:profile-revert": "node scripts/smoke-profile-revert.js",
     "smoke:voice-session-ready": "node scripts/smoke-voice-session-ready.js",

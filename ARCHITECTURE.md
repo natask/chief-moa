@@ -294,23 +294,20 @@ hold with movement only repositions the mark. Browser voice can opt a session
 into background assistant speech, where starting a new spoken turn opens a new
 gateway voice turn without stopping already queued assistant audio.
 
-An experimental voice-first gesture mode (off by default; browser flag
-`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
-the primary surface toward voice. Android uses the reviewable v4 contract:
-Single click starts a draft with visible `X — orb — ↑` controls (discard and the
-single Send action); later orb taps never commit it. Those controls are separate
-overlay windows beside the orb, so the transcript card above or below the orb is
-never the disposition authority. Double-click cancels the current draft
-and starts a fresh voice thread that does not use the current thread's replies,
-and triple-click cancels voice and opens the demoted chat surface. A still
-first-press hold is push-to-talk (release commits; a large move after the hold
-confirms cancels capture and escapes into a drag). The one open chat/transcript
-card follows the orb and flips wholly above or below it. Dragging into the
-bottom removal target, or choosing Hide in the chat header/foreground
-notification, stops the overlay service and removes all overlay windows. The
-flag off keeps Android's legacy gesture contract. The browser flag uses the
-same `X — mascot — ↑` draft controls and explicit-send rule; its flag-off mapping
-and keyboard shortcuts remain unchanged. Contract:
+The voice-first gesture contract (browser flag
+`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) is manual
+and cross-surface: single click toggles current-thread capture; a still hold is
+push-to-talk in that thread and release sends; double-click toggles capture in a
+fresh thread; triple-click cancels without sending and opens chat. Starting a
+fresh-thread capture cancels an active current-thread capture without sending.
+Large movement after a hold starts cancels capture and escapes into drag. No
+separate X/Send side controls own disposition, and normal manual turns never
+wait for silence detection. The one open chat/transcript card follows the orb
+and flips wholly above or below it. Android drag-to-remove and explicit Hide
+actions keep their existing behavior. Keyboard shortcuts and flag-off legacy
+behavior remain unchanged. Delivery mode is separate from gesture mechanics:
+the gateway owns versioned device-scoped Ask/Note/Coach admission, while client
+mode selectors and preflight are follow-up work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface stays small: it shows the current intent/result and compact
@@ -683,6 +680,19 @@ listable (`GET /v1/audio-notes`) and playable
 only captures and stores. Contract:
 `reference/openspec/changes/record-mode-audio-notes/proposal.md`.
 
+### Voice delivery modes
+
+Ask, Note, and Coach are canonical versioned selections scoped by `device_id`
+and stored separately from the agent profile. Authenticated clients read or
+change them at `GET|PUT /v1/voice/mode`; version history is available at
+`GET /v1/voice/mode/versions`. Ask admits the normal conversational pipeline.
+Note denies provider/model work and directs raw audio to `/v1/audio-notes` with
+no reply or agent launch. Coach admits conversation with a bounded instruction
+layered onto a cloned effective profile for that turn only, so the stored base
+persona is unchanged and selecting Ask removes the layer. Client-side mode
+selectors and notebook/capture-block behavior are separate implementation
+slices.
+
 ### Browser Extension Thin Client
 
 ```text
@@ -994,6 +1004,23 @@ strongest workflow or new-fork route as a non-blocking `agent_run`, stores the
 run id on the route decision and broker event, and appends a `broker_activated`
 event to the run. When a message targets an active run, the gateway appends a
 `broker_evidence_attached` event to that run without canceling it.
+
+Three checked-in principal profiles specialize that same one-run broker path.
+An explicit security-audit intent selects `security`, which is audit-only and
+can emit bounded repair contracts only; accepted repairs and re-verification
+must run separately, with the verifier independent of the repair. Explicit
+deslop, line-count, rearchitecture, or quality-cleanup intent selects
+`simplification`, which may make one behavior-preserving change under frozen
+regression checks in its isolated candidate branch/worktree. It may test and
+commit that candidate but cannot weaken checks, accept its own change, merge,
+deploy, promote, publish, push master, or modify active deployment state; a
+separate independent verifier precedes coordinator-owned integration. Explicit
+fuzzing/adversarial-testing intent selects
+`fuzzing`, which runs against one isolated exact candidate, minimizes and
+deduplicates reproduced failures, and emits bounded repair handoffs without
+editing the candidate. This slice has no recurring scheduler, automatic repair
+fanout, or concurrent principal launch; those require later work-graph and
+worker-workspace integration.
 
 Every user turn is a possible fork. A new spoken or typed message can create a
 new `agent_run` without canceling existing active runs, and subsequent user

@@ -82,6 +82,7 @@ const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
 const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
 const { createVideoNoteHandlers, createVideoNotesStore, videoInlinePart } = require("./lib/video-notes");
+const { createVoiceModeHandlers, createVoiceModeStore, routingFor } = require("./lib/voice-modes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
 const {
@@ -369,6 +370,8 @@ const agentProfile = createAgentProfileStore({
     recovery_mode: "normal",
   },
 });
+const voiceModes = createVoiceModeStore({ dataDir: DATA_DIR });
+const voiceModeHandlers = createVoiceModeHandlers({ store: voiceModes, authorized, readJsonBody, sendJson });
 const companionCatalog = createCompanionCatalogStore({
   dataDir: DATA_DIR,
   voiceBinding: companionVoiceBindingOptions(),
@@ -635,14 +638,14 @@ if (ACCOUNT_HEALTH_INTERVAL_MS > 0) {
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
   systemPrompt: SYSTEM_PROMPT,
-  // The voice provider reads the effective profile's `voice` per session, so a
-  // spoken "switch to a female voice" takes effect on the next turn, no restart.
   agentProfile,
+  voiceModeAdmission: (deviceId) => deviceId
+    ? voiceModes.admit(deviceId)
+    : { mode: "ask", version: "voice_mode_default", routing: routingFor("ask") },
+  applyVoiceModeToProfile: (profile, admission) => voiceModes.applyToProfile(profile, admission),
   contextProvider: voiceLiveContextPrompt,
   toolHandler: handleLiveVoiceToolCall,
   onTurnCompleted: recordStreamingVoiceTurn,
-  // Cascaded pipeline: after Chirp STT, run the gateway's durable LLM turn so
-  // the Cloud TTS leg can speak the reply. Only used by the cascaded provider.
   reasoner: runCascadedVoiceReasoning,
 });
 
@@ -656,6 +659,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+    if (await voiceModeHandlers(request, response, url)) return;
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/ui")) {
       sendGatewayUi(response);
       return;
@@ -4888,11 +4892,6 @@ async function reduceWorkNode(nodeId, body = {}) {
 
 async function handleVoiceTurn(request, response) {
   const body = await readJsonBody(request);
-  // A turn may attach a stored video note (video_note_id): the recording IS the
-  // user's question — narration rides the video's audio track — so an empty
-  // transcript is legitimate and the synthetic-transcript refusal does not
-  // apply. Video turns always take the plain chat leg below with the video
-  // attached as a Gemini inline part.
   const videoNote = videoNoteForTurn(body);
   if (!videoNote && String(body.video_note_id || "").trim()) {
     sendJson(response, 404, { error: "video note not found" });
@@ -4903,13 +4902,22 @@ async function handleVoiceTurn(request, response) {
     sendJson(response, 400, { error: "transcript or text is required" });
     return;
   }
-  // A synthetic placeholder is not user speech. Refuse it here so no client can
-  // prompt the model with fabricated transcript text.
   if (!videoNote && normalizeTranscriptSource(body.transcript_source, transcript, "client_stt") === "synthetic") {
     sendJson(response, 422, { error: "no speech was transcribed", code: "no_speech" });
     return;
   }
 
+  const deviceId = profileDeviceIdFromBody(body);
+  const voiceMode = deviceId
+    ? voiceModes.admit(deviceId)
+    : { mode: "ask", version: "voice_mode_default", routing: routingFor("ask") };
+  if (!voiceMode.routing.provider_work_allowed) {
+    sendJson(response, 202, {
+      mode: voiceMode.mode, mode_version: voiceMode.version, routing: voiceMode.routing,
+      classification: "note_capture_required", stored: false, requires_audio_upload: true,
+    });
+    return;
+  }
   if (!videoNote && shouldDelegateVoiceToBrowserTurn(body, transcript)) {
     await handleBrowserTurnBody(response, body, { modality: "voice", legacy: "voice" });
     return;
@@ -4919,7 +4927,6 @@ async function handleVoiceTurn(request, response) {
   const conversationId = sanitizeOptionalId(body.conversation_id || sessionId, sessionId);
   const branchId = sanitizeOptionalId(body.branch_id, "default");
   const turnId = sanitizeOptionalId(body.turn_id, randomId("turn"));
-  const deviceId = profileDeviceIdFromBody(body);
   const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
   const existing = readVoiceTurnRecord(sessionId, turnId);
   if (existing?.response) {
@@ -4928,12 +4935,6 @@ async function handleVoiceTurn(request, response) {
   }
 
   const source = String(body.source || body.client?.source || "android-overlay").slice(0, 80);
-  // Context decision. This HTTP path is tool-less, so the decision is
-  // deterministic: an explicit client context_action or an incognito warrant may
-  // move or skip the thread; phrasing-only new/fork stays continue so a spoken
-  // "let's start" does not fragment the phone conversation. The caller branch
-  // still drives enrichment; only the FILING branch changes (incognito rides an
-  // ephemeral inc- branch that is never persisted).
   const voiceDecision = resolveContextDecision({ text: transcript, contextAction: body.context_action, toolCall: null });
   let voiceEffectiveAction = voiceDecision.action;
   if (voiceEffectiveAction !== "incognito" && voiceDecision.prior_source !== "client") {
@@ -4950,13 +4951,9 @@ async function handleVoiceTurn(request, response) {
   const incognitoTurn = voiceThread.persisted === false;
   const screen = summarizeScreen(body.screen || body.context?.screen);
   const profileVersion = agentProfile.currentVersion(profileOptions);
-  const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
-  // Routing. Default path is the deterministic keyword classifier. When
-  // VOICE_ROUTER_LLM=1 the LLM router produces an ordered action list instead;
-  // its list collapses to the same legacy label for the branches below, and its
-  // dispatch_agent entries (which carry per-run prompt/harness) drive agent
-  // fan-out so one turn can stack several agents. Router failures fall back to
-  // the heuristic inside routeVoiceTurn, so the flag can never harden a turn.
+  const profile = voiceModes.applyToProfile(
+    agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions), voiceMode,
+  );
   let routedActions = null;
   let classification;
   if (videoNote) {
@@ -4974,10 +4971,6 @@ async function handleVoiceTurn(request, response) {
   } else {
     classification = classifyVoiceTurn(body, transcript);
   }
-  // Capture memory-worthy statements ("call me Bob", "talk to me like a baller")
-  // to the Brain deterministically, before we branch on classification, so a
-  // fact lands even when the turn is a control/agent turn that never hits the
-  // model. Best-effort; never blocks the turn. Incognito turns write no memory.
   if (!incognitoTurn && !videoNote) {
     captureMemoryFromTurn(transcript, source);
   }
@@ -4986,8 +4979,6 @@ async function handleVoiceTurn(request, response) {
     id: turnId,
     session_id: sessionId,
     conversation_id: conversationId,
-    // The filing branch: an incognito turn rides an ephemeral inc- branch so the
-    // voice write guards skip persisting it entirely.
     branch_id: filingBranchId,
     profile_version: profileVersion,
     profile_overrides: body.profile_overrides && typeof body.profile_overrides === "object"
@@ -10234,8 +10225,18 @@ async function runCascadedVoiceReasoningInner(input) {
   const transcript = String(input?.transcript || "").trim();
   const deviceId = normalizeDeviceId(input?.device_id || input?.deviceId || "");
   const profileOptions = deviceId ? { deviceId } : {};
-  const profile = agentProfile.effective(profileOptions);
+  const voiceMode = deviceId
+    ? voiceModes.admit(deviceId)
+    : { mode: "ask", version: "voice_mode_default", routing: routingFor("ask") };
+  const profile = voiceModes.applyToProfile(agentProfile.effective(profileOptions), voiceMode);
   const replyLanguage = profile.language_primary || profile.language || "en-US";
+  if (!voiceMode.routing.provider_work_allowed) {
+    return {
+      speak: "", display: "", language: replyLanguage, model: profile.model || MODEL_ID,
+      classification: "note_capture_required", mode: voiceMode.mode, mode_version: voiceMode.version,
+      routing: voiceMode.routing, actions: [{ type: "capture_audio_note", endpoint: "/v1/audio-notes" }],
+    };
+  }
   if (MOA_MODE === "local") {
     const stallMs = Math.max(0, Number(process.env.MOA_TEST_REASONER_STALL_MS || 0));
     if (stallMs > 0) {
@@ -10263,8 +10264,6 @@ async function runCascadedVoiceReasoningInner(input) {
     };
   }
 
-  // Resolve privacy and filing scope before classification. Control and agent
-  // turns must honor explicit/warranted incognito just as chat turns do.
   const prepared = await prepareContextDecision({ text: transcript, contextAction: input?.context_action, profile });
   const contextDecision = prepared.decision;
   const filingThread = planTurnFilingThread({

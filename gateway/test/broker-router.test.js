@@ -41,6 +41,17 @@ test("router validates every injected dependency", () => {
 });
 
 test("workflow recommendation preserves category priority and confidence", () => {
+  assert.deepEqual(workflowRecommendation("fuzz the application with adversarial tests"), {
+    id: "fuzzing",
+    confidence: 0.88,
+    reason: "message explicitly asks for fuzzing or adversarial application testing",
+  });
+  assert.equal(workflowRecommendation("find security holes with a security audit").id, "security");
+  assert.equal(workflowRecommendation("launch the security principal").id, "security");
+  assert.equal(workflowRecommendation("deslop and reduce the lines of code").id, "simplification");
+  assert.equal(workflowRecommendation("reducing lines of code and re-architecting modules").id, "simplification");
+  assert.equal(workflowRecommendation("leveling code quality").id, "simplification");
+  assert.equal(workflowRecommendation("security fuzzing before ordinary tests").id, "fuzzing");
   assert.deepEqual(workflowRecommendation("research and compare tests"), {
     id: "landscape-research",
     confidence: 0.82,
@@ -169,6 +180,17 @@ test("workflow and new-work routing preserve fork fallback behavior", () => {
   assert.deepEqual(distinct.map((item) => item.action), ["invoke_workflow", "create_new_fork"]);
   assert.equal(distinct[1].confidence, 0.48);
   assert.match(distinct[1].target_id, /^session-/);
+
+  for (const [text, target] of [
+    ["run a security review for vulnerabilities", "security"],
+    ["simplify this code with behavior-preserving refactoring", "simplification"],
+    ["start fuzzing the application", "fuzzing"],
+  ]) {
+    const routed = router.routeDecisions({ id: target, text });
+    assert.equal(routed[0].target_type, "workflow");
+    assert.equal(routed[0].target_id, target);
+    assert.equal(routed[0].action, "invoke_workflow");
+  }
 });
 
 test("result caps retain the strongest twelve primary routes and twenty-five dismissals", () => {

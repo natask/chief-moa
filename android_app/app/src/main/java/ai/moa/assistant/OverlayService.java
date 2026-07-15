@@ -108,10 +108,6 @@ public final class OverlayService extends Service {
     private ScrollView voiceTranscriptScroll;
     private TextView voiceMetaLine;
     private TextView voiceLanguageLine;
-    private TextView voiceCancelControl;
-    private TextView voiceSendControl;
-    private WindowManager.LayoutParams voiceCancelControlParams;
-    private WindowManager.LayoutParams voiceSendControlParams;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
     // Persistent, stacked transcript. Each turn appends a fresh user + assistant
     // row; older rows stay until the user swipes them away. The scalar mirrors
@@ -165,6 +161,8 @@ public final class OverlayService extends Service {
     // Record mode: while enabled, double-click-and-hold captures a raw audio
     // note locally and uploads it on release. Never a voice turn.
     private boolean recordModeEnabled;
+    private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin =
+            MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
     private boolean audioNoteActive;
     private MoaAudioCaptureController audioNoteCapture;
     private ByteArrayOutputStream audioNoteBuffer;
@@ -347,7 +345,6 @@ public final class OverlayService extends Service {
         cancelStreamingTurnWatchdog();
         voiceLog.clear();
         removeTranscriptOverlay();
-        removeVoiceDraftControls();
         removePanel();
         removeOrbRemoveTarget();
         removeOrb();
@@ -569,8 +566,9 @@ public final class OverlayService extends Service {
                 this::beginWarmMic,
                 this::discardWarmMic,
                 () -> MoaPrefs.voiceFirstGestures(this),
-                this::isContinuousLoopActive,
+                this::manualTapCaptureOrigin,
                 this::handleOrbStartTalkLoop,
+                this::handleOrbStopAndSend,
                 this::handleOrbStartFreshTalkLoop,
                 this::handleOrbCancelTalkLoop,
                 this::showPanel,
@@ -630,7 +628,6 @@ public final class OverlayService extends Service {
     private void updateAnchoredSurfacePositions() {
         positionSurfaceNearOrb(panelView, panelParams);
         positionSurfaceNearOrb(transcriptView, transcriptParams);
-        updateVoiceDraftControlPositions();
     }
 
     private void showOrbRemoveTarget() {
@@ -937,28 +934,7 @@ public final class OverlayService extends Service {
         container.addView(voiceLanguageLine);
 
         updateVoiceHeaderState();
-        updateVoiceDraftControls();
         return container;
-    }
-
-    private TextView voiceDraftControl(String glyph, String description, boolean affirmative) {
-        TextView control = new TextView(this);
-        control.setText(glyph);
-        control.setContentDescription(description);
-        control.setTextSize(affirmative ? 25 : 24);
-        control.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        control.setGravity(Gravity.CENTER);
-        control.setTextColor(affirmative ? MoaColors.INK : MoaColors.PAPER);
-        control.setBackground(MoaDrawables.circlePressable(
-                affirmative ? MoaColors.GOLD : 0x24FFFFFF,
-                affirmative ? MoaColors.AMBER : 0x3AFFFFFF,
-                affirmative ? 0x33FFFFFF : MoaColors.PANEL_BORDER,
-                dp(1)
-        ));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(42), dp(42));
-        params.rightMargin = dp(10);
-        control.setLayoutParams(params);
-        return control;
     }
 
     private boolean reviewableVoiceDraftActive() {
@@ -970,101 +946,9 @@ public final class OverlayService extends Service {
                     || voiceRuntimeState == VoiceRuntimeState.RECOVERING);
     }
 
-    private void updateVoiceDraftControls() {
-        boolean visible = reviewableVoiceDraftActive();
-        if (!visible) {
-            removeVoiceDraftControls();
-            return;
-        }
-        showVoiceDraftControls();
-        updateVoiceDraftControlPositions();
-    }
-
-    private void showVoiceDraftControls() {
-        if (!Settings.canDrawOverlays(this) || orbView == null) {
-            return;
-        }
-        int size = dp(44);
-        if (voiceCancelControl == null) {
-            voiceCancelControl = voiceDraftControl("×", "Cancel voice draft", false);
-            voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
-            voiceCancelControlParams = draftControlWindowParams(size);
-            windowManager.addView(voiceCancelControl, voiceCancelControlParams);
-        }
-        if (voiceSendControl == null) {
-            voiceSendControl = voiceDraftControl("↑", "Send voice draft", true);
-            voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
-            voiceSendControlParams = draftControlWindowParams(size);
-            windowManager.addView(voiceSendControl, voiceSendControlParams);
-        }
-    }
-
-    private WindowManager.LayoutParams draftControlWindowParams(int size) {
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                size,
-                size,
-                overlayType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                android.graphics.PixelFormat.TRANSLUCENT
-        );
-        params.gravity = Gravity.TOP | Gravity.START;
-        return params;
-    }
-
-    private void updateVoiceDraftControlPositions() {
-        if (voiceCancelControl == null || voiceSendControl == null
-                || voiceCancelControlParams == null || voiceSendControlParams == null
-                || orbView == null || orbParams == null) {
-            return;
-        }
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        int controlSize = voiceCancelControlParams.width;
-        int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
-        int gap = dp(8);
-        int margin = dp(12);
-
-        // Keep the entire X — orb — Send chord reachable. The orb only moves
-        // inward when a reviewable draft is active, and remains freely draggable
-        // within that safe horizontal lane.
-        int minOrbX = margin + controlSize + gap;
-        int maxOrbX = Math.max(minOrbX, screenWidth - margin - controlSize - gap - orbSize);
-        int safeOrbX = Math.max(minOrbX, Math.min(orbParams.x, maxOrbX));
-        if (safeOrbX != orbParams.x) {
-            orbParams.x = safeOrbX;
-            try {
-                windowManager.updateViewLayout(orbView, orbParams);
-            } catch (IllegalArgumentException ignored) {
-                return;
-            }
-        }
-
-        int controlY = orbParams.y + (orbSize - controlSize) / 2;
-        controlY = Math.max(margin, Math.min(controlY, screenHeight - controlSize - margin));
-        voiceCancelControlParams.x = orbParams.x - gap - controlSize;
-        voiceCancelControlParams.y = controlY;
-        voiceSendControlParams.x = orbParams.x + orbSize + gap;
-        voiceSendControlParams.y = controlY;
-        try {
-            windowManager.updateViewLayout(voiceCancelControl, voiceCancelControlParams);
-            windowManager.updateViewLayout(voiceSendControl, voiceSendControlParams);
-        } catch (IllegalArgumentException ignored) {
-            // A state transition removed the controls while they were moving.
-        }
-    }
-
-    private void removeVoiceDraftControls() {
-        detachView(voiceCancelControl);
-        detachView(voiceSendControl);
-        voiceCancelControl = null;
-        voiceSendControl = null;
-        voiceCancelControlParams = null;
-        voiceSendControlParams = null;
-    }
 
     private void discardVoiceDraft() {
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
@@ -1083,6 +967,7 @@ public final class OverlayService extends Service {
         if (!reviewableVoiceDraftActive()) {
             return;
         }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
@@ -1180,7 +1065,6 @@ public final class OverlayService extends Service {
             }
         }
         updateVoiceHeaderState();
-        updateVoiceDraftControls();
         scrollVoiceTranscriptToBottom();
     }
 
@@ -1322,7 +1206,6 @@ public final class OverlayService extends Service {
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
         voiceRuntimeState = state == null ? VoiceRuntimeState.READY : state;
         updateVoiceHeaderState();
-        updateVoiceDraftControls();
         // Single choke point for the orb's response state so the lion visibly
         // reflects thinking / responding / error without touching other call
         // sites. The watchdog + error paths become visible here for free.
@@ -1744,8 +1627,8 @@ public final class OverlayService extends Service {
     private String orbGestureHint() {
         if (MoaPrefs.voiceFirstGestures(this)) {
             return recordModeEnabled
-                    ? "Record mode: press and hold to record a note."
-                    : "Tap to continue. Double-tap for new thread. Triple-tap for chat. Hold to talk. Drag to move.";
+                    ? "Notes mode: tap to start, tap again to store. Hold-release also stores."
+                    : "Tap toggles talk. Double-tap toggles a new thread. Triple-tap opens chat. Hold-release sends.";
         }
         return recordModeEnabled
                 ? "Record mode: double-click and hold to record a note."
@@ -2537,12 +2420,16 @@ public final class OverlayService extends Service {
         showPanel();
     }
 
-    // Whether a reviewable hands-free voice draft is running. A tap while active
-    // is deliberately inert; the visible X / + controls own cancel and send.
-    private boolean isContinuousLoopActive() {
-        return continuousVoiceLoop
-                || pendingContinuousVoiceRestart != null
-                || (streamingVoiceActive() && streamingTurnContinuous);
+    // True only while the user owns an open manual capture. Assistant playback
+    // and reasoning are not capture: tapping then interrupts and starts a new turn.
+    private boolean isManualTapCaptureActive() {
+        return audioNoteActive || reviewableVoiceDraftActive();
+    }
+
+    private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin() {
+        return isManualTapCaptureActive()
+                ? manualTapCaptureOrigin
+                : MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
     }
 
     // VOICE-FIRST single quick tap (draft off) = start a reviewable draft with
@@ -2553,6 +2440,11 @@ public final class OverlayService extends Service {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD;
+        if (recordModeEnabled) {
+            startAudioNoteCapture();
+            return;
+        }
         stopAssistantAudioForBargeIn();
         // Suppress the "didn't catch that" cue for this first turn only: a tap that
         // starts the loop and captures no speech was a barge-in or a stray tap, not
@@ -2561,16 +2453,39 @@ public final class OverlayService extends Service {
         startReviewableVoiceDraft();
     }
 
-    // VOICE-FIRST double quick tap = start a fresh-thread voice turn. The tap
-    // resolver cancels any milliseconds-old or pending current loop first; this
-    // method only arms the one-shot branch choice and opens the normal talk loop.
+    private void handleOrbStopAndSend() {
+        if (audioNoteActive) {
+            finishAudioNoteCapture(false);
+            return;
+        }
+        sendVoiceDraft();
+    }
+
     private void handleOrbStartFreshTalkLoop() {
         if (pushToTalkVoiceTurn || audioNoteActive) {
+            return;
+        }
+        if (recordModeEnabled) {
+            startAudioNoteCapture();
+            manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
             return;
         }
         contextControls.armNewThread();
         refreshContextControls();
         handleOrbStartTalkLoop();
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
+    }
+
+    private void handleOrbCancelTalkLoop() {
+        suppressFirstTapTurnEmptyCue = false;
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+        if (audioNoteActive) {
+            cancelAudioNoteCapture();
+        }
+        discardVoiceDraft();
+        voiceLog.clear();
+        removeTranscriptOverlay();
+        updateMicState();
     }
 
     // Stop any assistant audio so a tap-to-talk starts on a quiet mic. Cancels an
@@ -2583,17 +2498,6 @@ public final class OverlayService extends Service {
         }
         cancelVoiceSampler();
         voiceController.stopQuietly();
-    }
-
-    // VOICE-FIRST double tap after a just-started loop = undo it quietly before
-    // chat opens. The session is milliseconds old with nothing meaningful
-    // captured, so it is torn down without a cue.
-    private void handleOrbCancelTalkLoop() {
-        suppressFirstTapTurnEmptyCue = false;
-        cancelStreamingVoice();
-        voiceLog.clear();
-        removeTranscriptOverlay();
-        updateMicState();
     }
 
     // The escape hatch: a large move after a press-to-talk hold confirmed cancels
@@ -2841,6 +2745,7 @@ public final class OverlayService extends Service {
     // While record mode is on, the same gesture records a raw audio note
     // instead: no voice session, no SpeechRecognizer, no STT/LLM/TTS.
     private void handleOrbDoublePressStart() {
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         if (recordModeEnabled) {
             startAudioNoteCapture();
             return;
@@ -2950,6 +2855,7 @@ public final class OverlayService extends Service {
         if (!audioNoteActive) {
             return;
         }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         audioNoteActive = false;
         MoaAudioCaptureController capture = audioNoteCapture;
         audioNoteCapture = null;
@@ -3154,9 +3060,10 @@ public final class OverlayService extends Service {
             startLocalVoiceTurn(true, true);
             return;
         }
-        // Tap-created drafts never use silence auto-commit. Only the visible +
-        // control can commit; X cancels locally. Continuous here means the draft
-        // remains the active voice surface, not that it auto-rearms after reply.
+        // Tap-created drafts never use silence auto-commit. The matching orb
+        // toggle commits; triple-click cancels locally before opening chat.
+        // Continuous here means the draft remains the active voice surface,
+        // not that it auto-rearms after reply.
         startStreamingVoiceTurn(false, true);
     }
 

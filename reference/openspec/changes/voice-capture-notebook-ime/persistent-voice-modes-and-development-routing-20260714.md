@@ -2,9 +2,10 @@
 
 ## Status
 
-Proposed for product and architecture alignment. This note records current
-runtime evidence and a recommended product shape. It does not authorize app,
-gateway, worker, or deployment implementation.
+The Ask/Note/Coach gateway mode-state slice was authorized on 2026-07-15.
+Client selectors, capture blocks, Dictate, Development routing, video routing,
+worker changes, and deployment remain proposed and are not authorized by this
+slice.
 
 ## Linearized Intent
 
@@ -66,7 +67,8 @@ Capture mechanics stay stable in every mode:
 - still press-and-hold is push-to-talk and applies the same delivery behavior on
   release;
 - drag moves the orb;
-- cancel is always visibly available while a capture is active.
+- triple-click cancels an active capture without sending; a large movement
+  after hold capture starts also cancels and escapes into drag.
 
 Do not make swipe direction or multi-click count the primary mode selector.
 Those gestures may become accelerators after physical-phone QA, but they should
@@ -79,6 +81,25 @@ does not leak into the next note, dictated field, message, or development
 instruction.
 
 ## Mode Contract
+
+The first gateway slice uses this explicit truth table. Mode selection is
+versioned and device-scoped. Coach is a bounded turn-local instruction layered
+over the saved persona; it never rewrites that persona, and selecting Ask
+removes the overlay on the next turn.
+
+| Mode | Storage | Provider/model work | Assistant reply | Agent dispatch |
+| --- | --- | --- | --- | --- |
+| Ask | Normal conversation-turn policy | Allowed through normal routing | Normal response policy | Existing explicit routing only; mode itself launches nothing |
+| Note | Raw audio through `/v1/audio-notes` | Forbidden | None | Forbidden |
+| Coach | Normal conversation-turn policy | Allowed with bounded coaching overlay | Concise coaching response | Existing explicit routing only; mode itself launches nothing |
+
+Clients SHALL read mode admission before opening a provider-backed voice path.
+A Note admission redirects capture to `/v1/audio-notes`; submitting a transcript
+to the conversational turn route while Note is selected also fails closed with
+a storage-only routing decision. Transcript/notebook processing is a later
+capture-block slice.
+
+The broader proposed mode map remains:
 
 | Mode | Stop/release behavior | Canonical result | Must not do |
 | --- | --- | --- | --- |

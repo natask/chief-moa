@@ -36,8 +36,8 @@ final class MoaPrefs {
     private static final String KEY_ACTIVE_COMPANION_JSON = "active_companion_json";
     private static final String KEY_ACTIVE_COMPANION_STALE = "active_companion_stale";
     private static final String KEY_ORB_SCALE_PERCENT = "orb_scale_percent";
-    // Experimental voice-first orb gestures. Off by default: the overlay keeps
-    // today's tap/double-click-and-hold contract until this is turned on.
+    // Manual voice orb controls. On by default for new installs; an explicit
+    // stored choice still preserves the legacy chat-first gesture contract.
     private static final String KEY_VOICE_FIRST_GESTURES = "voice_first_gestures";
     private static final String KEY_DEFERRED_UPDATE_VERSION_CODE = "deferred_update_version_code";
     private static final String KEY_NOTIFIED_UPDATE_VERSION_CODE = "notified_update_version_code";
@@ -64,10 +64,10 @@ final class MoaPrefs {
         prefs(context).edit().putInt(KEY_ORB_SCALE_PERCENT, clamped).apply();
     }
 
-    // Experimental voice-first orb gestures. Off by default. Read live by the
+    // Manual voice orb controls. On by default. Read live by the
     // overlay per gesture, so a toggle change is picked up without a reboot.
     static boolean voiceFirstGestures(Context context) {
-        return prefs(context).getBoolean(KEY_VOICE_FIRST_GESTURES, false);
+        return prefs(context).getBoolean(KEY_VOICE_FIRST_GESTURES, true);
     }
 
     static void setVoiceFirstGestures(Context context, boolean enabled) {
