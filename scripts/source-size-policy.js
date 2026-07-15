@@ -17,7 +17,7 @@ const EXCLUDED_PARTS = new Set(["node_modules", "build", "dist", "coverage", "ve
 // extraction; remove the entry once the file is at or below MAX_SOURCE_LINES.
 const LEGACY_DEBT_CEILINGS = Object.freeze({
   "android_app/app/src/main/java/ai/moa/assistant/OverlayService.java": 4094,
-  "browser_extension/extension/background.js": 5663,
+  "browser_extension/extension/background.js": 5543,
   "browser_extension/extension/content.js": 4614,
   "gateway/lib/voice-drafts.js": 5950,
   "gateway/lib/voice-providers.js": 4049,

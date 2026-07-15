@@ -61,6 +61,9 @@
       Baseline: 14.99% lines, 4.87% branches, and 6.73% functions.
 - [ ] 4.4 Merge Node and Chromium target coverage and raise the browser hard
       gate to at least 90% lines, branches, and functions.
+- [x] 4.4a Extract the browser turn/evidence protocol from background
+      orchestration with a focused 90% gate. Verified at 100% lines, 95.90%
+      branches, and 100% functions; reduce `background.js` to 5,543 lines.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.

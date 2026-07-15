@@ -13,7 +13,7 @@ markup, and styles never contribute production coverage.
 | --- | ---: | ---: | ---: | --- |
 | Gateway | 72.28% | 68.75% | 76.76% | Node production-only run over `server.js` and `lib/**/*.js`; 525/527 tests passed, one skipped, and one work-history lease smoke expired while a duplicate coverage run was competing. |
 | Android | 16.43% | 19.79% | 21.49% | Production-only JaCoCo report over 8,027 executable lines, 4,471 branches, and 1,089 methods; the exact baseline ratchet passes with 128 JVM tests and excludes generated Android classes only. |
-| Browser extension | 14.99% | 4.87% | 6.73% | Exact 23-file runtime classifier; 10 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. The checked-in ratchet prevents regression while decomposition/CDP coverage proceeds. |
+| Browser extension | 16.65% | 6.57% | 7.86% | Exact 24-file runtime classifier; 11 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. The extracted browser-turn protocol has a permanent 100/95.90/100 focused gate. |
 | LiveKit worker | 99.07% | 90.40% | 92.00% | Hard production-only gate passes with all six compiled runtime modules loaded and 19 tests covering worker, STT, LLM, TTS, auth, streaming, and failure paths. |
 | Website | unmeasured | unmeasured | unmeasured | No test runner exists and about 2,315 executable JavaScript lines remain embedded in HTML. |
 | Apple surfaces | blocked | blocked | blocked | `swift test --enable-code-coverage` is blocked by typed protocol drift; executable shells are not linked into the SwiftPM test product. |

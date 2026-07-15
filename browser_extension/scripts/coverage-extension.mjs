@@ -87,6 +87,22 @@ const metrics = Object.fromEntries(
 );
 const ratchet = JSON.parse(readFileSync(join(root, "scripts", "coverage-ratchet.json"), "utf8"));
 const failures = [];
+const focusedThresholds = new Map([
+  ["extension/browser-turn-protocol.js", 90],
+]);
+const focusedResults = [];
+for (const [relative, minimum] of focusedThresholds) {
+  const focused = coverageMap.fileCoverageFor(resolve(root, relative)).toSummary();
+  const result = Object.fromEntries(
+    ["lines", "branches", "functions"].map((name) => [name, Number(focused[name].pct)]),
+  );
+  focusedResults.push({ relative, minimum, result });
+  for (const name of ["lines", "branches", "functions"]) {
+    if (result[name] + 0.005 < minimum) {
+      failures.push(`${relative} ${name} ${result[name].toFixed(2)}% is below focused gate ${minimum}%`);
+    }
+  }
+}
 for (const name of ["lines", "branches", "functions"]) {
   const minimum = Number(ratchet.minimum_percent?.[name]);
   if (!Number.isFinite(minimum)) failures.push(`${name} ratchet is not numeric`);
@@ -102,6 +118,9 @@ for (const name of ["lines", "branches", "functions"]) {
   console.log(`  ${name}: ${metric.pct.toFixed(2)}% (${metric.covered}/${metric.total})`);
 }
 console.log(`  V8-executed sources: ${executedCount}/${RUNTIME_SOURCE_FILES.length}; conservative zero metadata: ${RUNTIME_SOURCE_FILES.length - executedCount}`);
+for (const { relative, minimum, result } of focusedResults) {
+  console.log(`  focused ${relative}: ${result.lines.toFixed(2)}% lines, ${result.branches.toFixed(2)}% branches, ${result.functions.toFixed(2)}% functions (gate ${minimum}%)`);
+}
 console.log(`  goal: ${Number(ratchet.goal_percent).toFixed(0)}%; current ratchet: ${JSON.stringify(ratchet.minimum_percent)}`);
 
 rmSync(temporary, { recursive: true, force: true });

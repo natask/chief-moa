@@ -8,6 +8,7 @@ const requiredFiles = [
   "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
+  "extension/browser-turn-protocol.js",
   "extension/browser-context-adapter.js",
   "extension/config.js",
   "extension/content.js",
@@ -59,6 +60,7 @@ const requiredFiles = [
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-browser-context-adapter.mjs",
   "scripts/test-browser-agent-role-runtime.mjs",
+  "scripts/test-browser-turn-protocol.mjs",
   "scripts/test-extension-production-sources.mjs",
   "scripts/test-runtime-intent-modules.mjs",
   "scripts/extension-production-sources.mjs",
@@ -73,6 +75,7 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
@@ -627,7 +630,7 @@ if (
   !/\/v1\/browser\/evidence/.test(backgroundSource) ||
   !/\/v1\/browser\/turns/.test(backgroundSource) ||
   !/browserTurnStatusPath/.test(backgroundSource) ||
-  !/\/v1\/browser\/turns\/\$\{encodeURIComponent\(id\)\}\/status/.test(backgroundSource)
+  !/\/v1\/browser\/turns\/\$\{encodeURIComponent\(id\)\}\/status/.test(browserTurnProtocolSource)
 ) {
   throw new Error("background.js must expose one runBrowserAgentTurn orchestrator using browser evidence, turn, and status routes");
 }
@@ -635,14 +638,14 @@ if (
 const browserAgentTurnBody = sourceBetween(
   backgroundSource,
   /async function runBrowserAgentTurn\(/,
-  /function browserTurnId\(/,
+  /async function waitForBrowserTurnAnswer\(/,
   "runBrowserAgentTurn"
 );
 if (/executeAction\(|cmd:\s*"act"|Input\.dispatch|Page\.navigate/.test(browserAgentTurnBody)) {
   throw new Error("runBrowserAgentTurn must not execute browser actions, hidden clicks, draws, or navigation in this slice");
 }
 
-if (!/Gateway proposed \$\{actions\.length\} browser action/.test(backgroundSource) || !/not executed in this slice/.test(backgroundSource)) {
+if (!/Gateway proposed \$\{actions\.length\} browser action/.test(browserTurnProtocolSource) || !/not executed in this slice/.test(browserTurnProtocolSource)) {
   throw new Error("browser-agent action proposals must render as inert proposal status, not execute");
 }
 
@@ -1053,6 +1056,7 @@ for (const file of [
   "extension/options.js",
   "extension/settings-intent.js",
   "extension/stop-intent.js",
+  "extension/browser-turn-protocol.js",
   "extension/dev.js",
   "scripts/dev-extension.mjs",
   "scripts/doctor.mjs",
@@ -1074,6 +1078,7 @@ for (const file of [
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-extension-production-sources.mjs",
   "scripts/test-runtime-intent-modules.mjs",
+  "scripts/test-browser-turn-protocol.mjs",
   "scripts/extension-production-sources.mjs",
   "scripts/coverage-extension.mjs",
   "scripts/chrome-for-testing.mjs",

@@ -7,6 +7,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
+  "extension/browser-turn-protocol.js",
   "extension/config.js",
   "extension/content.js",
   "extension/livekit-voice.js",
