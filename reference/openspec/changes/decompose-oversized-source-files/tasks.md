@@ -112,6 +112,11 @@
       validation, event, artifact, filter, bound, persistence, and corrupt-state
       recovery tests with a focused 90% line/branch/function coverage gate.
       Verified at 100% lines and functions and 92.22% branches.
+- [x] 2.22 Add exhaustive PostgreSQL work-graph schema, transaction, rollback,
+      CRUD, mutation, run-reference, filter, bound, and row-normalization tests
+      with a deterministic scripted pool and focused 90% line/branch/function
+      coverage gate. Verified at 98.67% lines, 93.44% branches, and 97.73%
+      functions.
 
 ## 3. Other Oversized Surfaces
 
