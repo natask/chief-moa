@@ -66,6 +66,7 @@
     "test:coverage:supervisor-handlers": "node --experimental-test-coverage --test-coverage-include='lib/supervisor-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/supervisor-handlers.test.js",
     "test:coverage:session-read-handlers": "node --experimental-test-coverage --test-coverage-include='lib/session-read-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/session-read-handlers.test.js",
     "test:coverage:thread-switch-handlers": "node --experimental-test-coverage --test-coverage-include='lib/thread-switch-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/thread-switch-handlers.test.js",
+    "test:coverage:broker-research-handlers": "node --experimental-test-coverage --test-coverage-include='lib/broker-research-handlers.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 --test test/broker-research-handlers.test.js",
     "check:context-quality": "node scripts/check-context-quality.js",
     "test": "node --test \"test/**/*.test.js\"",
     "test:billing": "node --test test/billing-domain.test.js",
