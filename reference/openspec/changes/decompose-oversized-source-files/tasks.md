@@ -196,6 +196,13 @@
       functions for the artifact store. Preserve every corrupt-state snapshot
       with collision-resistant archive names and reduce `server.js` to 14,654
       lines.
+- [x] 2.38 Extract authenticated UI-spec read, replace, and reset routing from
+      `server.js`; add exhaustive authorization, wrapper, error, persistence,
+      corruption-fallback, clone, reset, component, control, coordinate, tone,
+      action, sanitization, and collection-bound tests. Enforce focused 90%
+      line/branch/function gates, verified at 100% for handlers and 99.68%
+      lines, 93.75% branches, and 100% functions for the declarative store.
+      Reduce `server.js` to 14,626 lines.
 
 ## 3. Other Oversized Surfaces
 
