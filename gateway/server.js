@@ -39,6 +39,7 @@ const { createRouterActivationHandlers } = require("./lib/router-activation-hand
 const { createAgentWorkerHandlers } = require("./lib/agent-worker-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
+const { createBillingRuntimeHandlers } = require("./lib/billing-runtime-handlers");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createUiSpecHandlers } = require("./lib/ui-spec-handlers");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
@@ -454,6 +455,15 @@ const { routeRouterActivations } = createRouterActivationHandlers({
   readAgentEvents, summarizeAgentRun,
 });
 const billingRuntimeAuthority = loadBillingRuntimeAuthority();
+const { routeBillingRuntime } = createBillingRuntimeHandlers({
+  authority: billingRuntimeAuthority,
+  authorizedAgent,
+  agentAuthError,
+  readJsonBody,
+  appendReceipt: appendBillingRuntimeReceipt,
+  sendJson,
+  cleanError,
+});
 
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
 // surfaces from this; a "deployment" is a spec change here, not new extension
@@ -847,15 +857,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/billing/runtime/authorize" && request.method === "POST") {
-      if (!authorizedAgent(request)) { sendJson(response, 401, agentAuthError()); return; }
-      await handleBillingRuntime(request, response, false);
-      return;
-    }
-
-    if (url.pathname === "/v1/billing/runtime/usage" && request.method === "POST") {
-      if (!authorizedAgent(request)) { sendJson(response, 401, agentAuthError()); return; }
-      await handleBillingRuntime(request, response, true);
+    if (await routeBillingRuntime(request, response, url)) {
       return;
     }
 
@@ -3961,21 +3963,6 @@ function loadBillingRuntimeAuthority() {
   } catch (error) {
     console.warn(`Billing runtime policy rejected; resource authority remains fail-closed: ${cleanError(error)}`);
     return null;
-  }
-}
-
-async function handleBillingRuntime(request, response, recordUsage) {
-  if (!billingRuntimeAuthority) {
-    sendJson(response, 503, { allowed: false, reason: "billing_runtime_unconfigured", charged: false });
-    return;
-  }
-  try {
-    const body = await readJsonBody(request);
-    const result = recordUsage ? billingRuntimeAuthority.recordUsage(body || {}) : billingRuntimeAuthority.authorize(body || {});
-    appendBillingRuntimeReceipt({ operation: recordUsage ? "usage" : "authorize", result });
-    sendJson(response, result.allowed ? 200 : 402, { ...result, charged: false, mode: billingRuntimeAuthority.mode });
-  } catch (error) {
-    sendJson(response, 400, { allowed: false, reason: "billing_authority_rejected", charged: false, error: cleanError(error) });
   }
 }
 

@@ -5,6 +5,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/remote-mode.js",
   "lib/account-providers.js",
   "lib/account-connections.js",
+  "lib/billing-runtime-handlers.js",
   "lib/audio-notes.js",
   "lib/work-history.js",
   "lib/work-history-intent.js",
