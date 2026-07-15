@@ -28,6 +28,8 @@ const SYNTAX_CHECK_FILES = [
   "lib/work-graph-handlers.js",
   "lib/work-graph-postgres.js",
   "lib/event-substrate.js",
+  "lib/event-project-handlers.js",
+  "lib/project-store.js",
   "lib/intent-runtime.js",
   "lib/intent-runtime-router.js",
   "lib/intent-runtime-rehydration.js",
