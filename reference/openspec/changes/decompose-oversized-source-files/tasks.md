@@ -95,6 +95,10 @@
       normalization, and bound matrix for deterministic memory matching; repair
       the promised `I'd like`/`I'd prefer` patterns and remove unreachable helper
       branches. Verified at 100% line/branch/function coverage.
+- [x] 2.18 Add exhaustive transcript-sidecar status, delegation, stream
+      ownership, finalization, merge, fallback, and error tests with a focused
+      90% line/branch/function coverage gate. Verified at 100% lines and
+      functions and 97.14% branches.
 
 ## 3. Other Oversized Surfaces
 
