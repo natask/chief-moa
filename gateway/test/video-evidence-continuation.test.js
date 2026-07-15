@@ -1,24 +1,45 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
 const test = require("node:test");
 const {
   MAX_DURATION_SECONDS,
   MAX_REQUEST_TTL_MS,
+  MAX_RECEIPT_FUTURE_SKEW_MS,
   MAX_VIDEO_RETENTION_MS,
   MAX_VIDEO_BYTES,
   SCHEMA,
   STATES,
   createVideoEvidenceContinuationCore,
 } = require("../lib/video-evidence-continuation");
+const {
+  MAX_STATE_BYTES,
+  STORE_SCHEMA,
+  createFileVideoEvidenceAdapter,
+  createMemoryVideoEvidenceAdapter,
+} = require("../lib/video-evidence-store");
 
 const SHA = `sha256:${"a".repeat(64)}`;
 const SHA_B = `sha256:${"b".repeat(64)}`;
 const POSTURE_SHA = `sha256:${"c".repeat(64)}`;
 
-function harness() {
+function fixtureAuthorityVerifier() {
+  return {
+    verifySurfaceUserAction: (receipt) => receipt.fixture_authenticated === true,
+    verifyBlobDeleteReceipt: (receipt) => receipt.fixture_authenticated === true,
+    verifyProviderReceipt: (receipt) => receipt.fixture_authenticated === true,
+  };
+}
+
+function harness(options = {}) {
   let current = "2026-07-15T12:00:00.000Z";
   const core = createVideoEvidenceContinuationCore({
+    adapter: options.adapter || createMemoryVideoEvidenceAdapter(),
+    authorityVerifier: options.authorityVerifier || fixtureAuthorityVerifier(),
     now: () => current,
     createId: () => "video-request-generated",
   });
@@ -67,7 +88,8 @@ function proposal(overrides = {}) {
 function trusted(receiptId, extra = {}) {
   return {
     receipt_id: receiptId,
-    authority: "trusted_surface_user_action",
+    assertion_kind: "surface_user_action",
+    fixture_authenticated: true,
     user_activated: true,
     surface_id: "surface-browser-1",
     request_id: "video-request-1",
@@ -133,7 +155,8 @@ function binding(extra = {}) {
 
 function providerReceipt(extra = {}) {
   return {
-    authority: "trusted_provider_adapter",
+    assertion_kind: "provider_processing",
+    fixture_authenticated: true,
     receipt_ref: "provider-receipt-1",
     request_id: "video-request-1",
     turn_id: "turn-1",
@@ -154,7 +177,8 @@ function providerReceipt(extra = {}) {
 
 function blobDeleteReceipt(extra = {}) {
   return {
-    authority: "trusted_blob_store",
+    assertion_kind: "blob_store_delete",
+    fixture_authenticated: true,
     receipt_ref: "blob-delete-1",
     request_id: "video-request-1",
     evidence_id: "evidence-video-1",
@@ -187,6 +211,69 @@ function assertCode(fn, code) {
   assert.throws(fn, (error) => error?.code === code);
 }
 
+function withDurableStore(fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moa-video-evidence-store-"));
+  const stateFile = path.join(root, "video-evidence.json");
+  return Promise.resolve(fn({ root, stateFile })).finally(() => fs.rmSync(root, { recursive: true, force: true }));
+}
+
+function runFileChild(stateFile, suffix) {
+  const fixture = path.join(__dirname, "fixtures", "video-evidence-file-child.js");
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [fixture, stateFile, suffix], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`video evidence child exited ${code}: ${stderr}`));
+      try { resolve(JSON.parse(stdout.trim())); } catch { reject(new Error(`invalid child output: ${stdout} ${stderr}`)); }
+    });
+  });
+}
+
+test("core requires explicit persistence and authenticated-authority seams", () => {
+  assert.throws(() => createVideoEvidenceContinuationCore(), /persistence adapter/);
+  assert.throws(() => createVideoEvidenceContinuationCore({ adapter: createMemoryVideoEvidenceAdapter() }), /authority verifier/);
+  const denied = harness({
+    authorityVerifier: {
+      verifySurfaceUserAction: () => false,
+      verifyBlobDeleteReceipt: () => false,
+      verifyProviderReceipt: () => false,
+    },
+  }).core;
+  denied.proposeFromModel(proposal());
+  assertCode(() => denied.recordUserStarted("video-request-1", trusted("unverified-start")), "surface_receipt_unverified");
+});
+
+test("persistence adapters expose bounded revisions and fail closed on corrupt or unsafe state", () => withDurableStore(({ root, stateFile }) => {
+  const memory = createMemoryVideoEvidenceAdapter();
+  assert.equal(memory.read().revision, 0);
+  memory.transact((state) => { state.records.one = { id: "one" }; });
+  assert.equal(memory.read().revision, 1);
+  memory.transact(() => {});
+  assert.equal(memory.read().revision, 1);
+  assertCode(() => memory.transact(() => {}, { expected_revision: 0 }), "VIDEO_EVIDENCE_STORE_CAS_CONFLICT");
+
+  const file = createFileVideoEvidenceAdapter({ stateFile });
+  assert.deepEqual(file.read(), {
+    schema: STORE_SCHEMA,
+    revision: 0,
+    records: {},
+    asset_claims: { evidence_id: {}, blob_ref: {}, sha256: {} },
+  });
+  fs.writeFileSync(stateFile, "{");
+  assertCode(() => file.read(), "VIDEO_EVIDENCE_STORE_CORRUPT");
+  fs.writeFileSync(stateFile, "x".repeat(MAX_STATE_BYTES + 1));
+  assertCode(() => file.read(), "VIDEO_EVIDENCE_STORE_BOUNDED");
+  fs.rmSync(stateFile, { force: true });
+  const external = path.join(root, "external.json");
+  fs.writeFileSync(external, JSON.stringify({ schema: STORE_SCHEMA }));
+  fs.symlinkSync(external, stateFile);
+  assertCode(() => file.read(), "VIDEO_EVIDENCE_STORE_UNSAFE");
+}));
+
 test("model output creates a bounded zero-authority proposal with immutable turn bindings", () => {
   const { core } = harness();
   const record = core.proposeFromModel(proposal());
@@ -200,6 +287,7 @@ test("model output creates a bounded zero-authority proposal with immutable turn
   assert.deepEqual(STATES, ["proposed", "user_started", "captured", "uploaded", "attached", "processed", "deleted", "failed"]);
   assert.equal(MAX_DURATION_SECONDS, 120);
   assert.equal(MAX_REQUEST_TTL_MS, 900_000);
+  assert.equal(MAX_RECEIPT_FUTURE_SKEW_MS, 300_000);
   assert.equal(MAX_VIDEO_RETENTION_MS, 86_400_000);
   assert.equal(MAX_VIDEO_BYTES, 24 * 1024 * 1024);
 
@@ -246,10 +334,10 @@ test("model output alone cannot start capture and only a trusted user action adv
   })), "invalid_transition");
   assertCode(() => core.recordUserStarted("video-request-1", {
     receipt_id: "model-start",
-    authority: "model_output",
+    assertion_kind: "model_output",
     user_activated: false,
     surface_id: "surface-browser-1",
-  }), "trusted_user_action_required");
+  }), "surface_user_action_assertion_required");
   assertCode(() => core.recordUserStarted("video-request-1", trusted("wrong-surface", {
     surface_id: "surface-browser-2",
   })), "surface_mismatch");
@@ -356,6 +444,89 @@ test("receipt replay is idempotent and optimistic versions reject concurrent com
   }), { expected_version: 2 });
   assert.equal(captured.version, 3);
 });
+
+test("receipt timestamps are monotonic and bounded against future skew", () => {
+  const { core } = harness();
+  core.proposeFromModel(proposal());
+  core.recordUserStarted("video-request-1", trusted("start-time"));
+  assertCode(() => core.recordCaptured("video-request-1", trusted("capture-regression", {
+    duration_seconds: 1,
+    capture_scope: "tab",
+    has_audio: false,
+    at: "2026-07-15T12:00:59.000Z",
+  })), "receipt_time_regression");
+  assertCode(() => core.recordCaptured("video-request-1", trusted("capture-future", {
+    duration_seconds: 1,
+    capture_scope: "tab",
+    has_audio: false,
+    at: "2026-07-15T12:05:01.000Z",
+  })), "receipt_time_future");
+  const unchanged = core.get("video-request-1");
+  assert.equal(unchanged.status, "user_started");
+  assert.equal(unchanged.updated_at, "2026-07-15T12:01:00.000Z");
+});
+
+test("durable adapter reloads records, receipts, claims, tombstones, and rejects stale CAS", () => withDurableStore(({ stateFile }) => {
+  const adapterOne = createFileVideoEvidenceAdapter({ stateFile });
+  const first = harness({ adapter: adapterOne }).core;
+  first.proposeFromModel(proposal());
+  advanceToAttached(first);
+  const beforeDelete = adapterOne.read();
+  assert.equal(beforeDelete.records["video-request-1"].status, "attached");
+  assert.equal(beforeDelete.records["video-request-1"].receipts.length, 4);
+  assert.equal(beforeDelete.asset_claims.evidence_id["evidence-video-1"].turn_id, "turn-1");
+
+  const adapterTwo = createFileVideoEvidenceAdapter({ stateFile });
+  const restarted = harness({ adapter: adapterTwo }).core;
+  assert.equal(restarted.get("video-request-1").version, 5);
+  const staleRevision = adapterOne.read().revision;
+  restarted.deleteEvidence("video-request-1", trusted("delete-restart", {
+    reason: "restart deletion",
+    blob_delete_receipt: blobDeleteReceipt(),
+    at: "2026-07-15T12:02:00.000Z",
+  }));
+  assertCode(() => adapterOne.transact(() => {}, { expected_revision: staleRevision }), "VIDEO_EVIDENCE_STORE_CAS_CONFLICT");
+
+  const adapterThree = createFileVideoEvidenceAdapter({ stateFile });
+  const afterRestart = harness({ adapter: adapterThree }).core;
+  const tombstone = afterRestart.get("video-request-1");
+  assert.equal(tombstone.status, "deleted");
+  assert.equal(tombstone.evidence.blob_ref, null);
+  assert.equal(adapterThree.read().asset_claims.blob_ref["blob-video-1"].request_id, "video-request-1");
+  afterRestart.proposeFromModel(proposal({
+    model_output: { request_id: "video-request-after-delete" },
+    turn: { turn_id: "turn-after-delete", session_id: "session-after-delete", query: "Reuse deleted asset?" },
+  }));
+  const afterDeleteBinding = {
+    request_id: "video-request-after-delete",
+    turn_id: "turn-after-delete",
+    session_id: "session-after-delete",
+  };
+  afterRestart.recordUserStarted("video-request-after-delete", trusted("start-after-delete", afterDeleteBinding));
+  afterRestart.recordCaptured("video-request-after-delete", trusted("capture-after-delete", {
+    ...afterDeleteBinding,
+    duration_seconds: 4.5,
+    capture_scope: "tab",
+    has_audio: false,
+  }));
+  assertCode(() => afterRestart.recordUploaded("video-request-after-delete", trusted("upload-after-delete", {
+    ...afterDeleteBinding,
+    evidence: uploadedEvidence(),
+  })), "evidence_identity_reuse");
+}));
+
+test("parallel file-backed instances serialize and only one can claim a shared blob and digest", () => withDurableStore(async ({ stateFile }) => {
+  const results = await Promise.all([runFileChild(stateFile, "alpha"), runFileChild(stateFile, "beta")]);
+  assert.equal(results.filter((item) => item.ok).length, 1);
+  assert.deepEqual(results.filter((item) => !item.ok).map((item) => item.code), ["evidence_identity_reuse"]);
+  const adapter = createFileVideoEvidenceAdapter({ stateFile });
+  const state = adapter.read();
+  assert.equal(Object.keys(state.records).length, 2);
+  assert.equal(Object.keys(state.asset_claims.blob_ref).length, 1);
+  assert.equal(Object.keys(state.asset_claims.sha256).length, 1);
+  assert.equal(Object.values(state.records).filter((record) => record.status === "uploaded").length, 1);
+  assert.equal(Object.values(state.records).filter((record) => record.status === "captured").length, 1);
+}));
 
 test("evidence id, blob ref, and digest are globally single-owner across requests and turns", () => {
   const { core } = harness();
@@ -534,7 +705,8 @@ test("provider processing requires a trusted receipt bound to provider, model, p
   core.proposeFromModel(proposal());
   advanceToAttached(core);
   const falsifications = [
-    { authority: "model_output" },
+    { assertion_kind: "model_output" },
+    { fixture_authenticated: false },
     { direct_video_received: false },
     { request_id: "video-request-2" },
     { turn_id: "turn-2" },
@@ -560,6 +732,7 @@ test("provider processing requires a trusted receipt bound to provider, model, p
   const processed = core.recordProcessed("video-request-1", {
     receipt_id: "provider-bound",
     provider_receipt: providerReceipt(),
+    at: "2026-07-15T12:02:00.000Z",
   });
   assert.equal(processed.processing.provider_receipt_ref, "provider-receipt-1");
   assert.equal(processed.processing.evidence_sha256, SHA);
@@ -594,7 +767,8 @@ test("deletion clears a blob ref only after a trusted store receipt binds the ex
   advanceToAttached(core);
   const falsifications = [
     null,
-    { authority: "surface_claim" },
+    { assertion_kind: "surface_claim" },
+    { fixture_authenticated: false },
     { deleted: false },
     { request_id: "video-request-2" },
     { evidence_id: "evidence-video-2" },

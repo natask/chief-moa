@@ -2,6 +2,11 @@
 
 const crypto = require("node:crypto");
 
+// This module does not authenticate routes, devices, providers, or blob stores.
+// Receipt fields are assertions until the caller's injected authorityVerifier
+// authenticates them. Durability and cross-process serialization likewise come
+// only from an injected durable adapter such as createFileVideoEvidenceAdapter.
+
 const SCHEMA = "moa.video-evidence-request.v1";
 const EVIDENCE_SCHEMA = "evidence_asset.v1";
 const STATES = Object.freeze([
@@ -22,22 +27,20 @@ const MAX_DURATION_SECONDS = 120;
 const MAX_REQUEST_TTL_MS = 15 * 60 * 1000;
 const MAX_VIDEO_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_VIDEO_BYTES = 24 * 1024 * 1024;
+const MAX_RECEIPT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const ALLOWED_VIDEO_TYPES = new Set(["video/webm", "video/mp4"]);
 
 function createVideoEvidenceContinuationCore(options = {}) {
+  const adapter = requireAdapter(options.adapter);
+  const authorityVerifier = requireAuthorityVerifier(options.authorityVerifier);
   const now = typeof options.now === "function" ? options.now : () => new Date().toISOString();
   const createId = typeof options.createId === "function"
     ? options.createId
     : () => `video-request-${crypto.randomUUID()}`;
-  const records = new Map();
-  const assetClaims = {
-    evidence_id: new Map(),
-    blob_ref: new Map(),
-    sha256: new Map(),
-  };
 
   function proposeFromModel(input = {}) {
-    rejectRawMedia(input);
+    return mutate(({ records }) => {
+      rejectRawMedia(input);
     const modelOutput = object(input.model_output, "model_output");
     if (modelOutput.schema !== SCHEMA) throw contractError("invalid_schema", `${SCHEMA} is required`);
     if (modelOutput.status != null && modelOutput.status !== "proposed") {
@@ -99,20 +102,21 @@ function createVideoEvidenceContinuationCore(options = {}) {
       created_at: createdAt,
       updated_at: createdAt,
     };
-    records.set(requestId, record);
-    return clone(record);
+      records.set(requestId, record);
+      return clone(record);
+    });
   }
 
   function recordUserStarted(requestId, receipt, options = {}) {
     return transition(requestId, "user_started", receipt, options, (record, value) => {
-      requireTrustedSurfaceReceipt(record, value, "user_started");
+      requireTrustedSurfaceReceipt(record, value, "user_started", authorityVerifier);
       return {};
     });
   }
 
   function recordCaptured(requestId, receipt, options = {}) {
     return transition(requestId, "captured", receipt, options, (record, value) => {
-      requireTrustedSurfaceReceipt(record, value, "captured");
+      requireTrustedSurfaceReceipt(record, value, "captured", authorityVerifier);
       const durationSeconds = finiteNumber(value.duration_seconds, "duration_seconds", 0, record.request.max_duration_seconds);
       const captureScope = enumValue(value.capture_scope, CAPTURE_SCOPES, "capture_scope");
       if (captureScope !== record.request.capture_scope) throw contractError("scope_mismatch", "captured scope differs from proposal");
@@ -123,21 +127,18 @@ function createVideoEvidenceContinuationCore(options = {}) {
   }
 
   function recordUploaded(requestId, receipt, options = {}) {
-    let claim = null;
-    const result = transition(requestId, "uploaded", receipt, options, (record, value) => {
-      requireTrustedSurfaceReceipt(record, value, "uploaded");
+    return transition(requestId, "uploaded", receipt, options, (record, value, runtime) => {
+      requireTrustedSurfaceReceipt(record, value, "uploaded", authorityVerifier);
       const evidence = normalizeEvidence(value.evidence, record);
-      assertAssetIdentityAvailable(assetClaims, evidence, record);
-      claim = { evidence, record };
+      assertAssetIdentityAvailable(runtime.assetClaims, evidence, record);
+      claimAssetIdentity(runtime.assetClaims, evidence, record);
       return { evidence };
     });
-    if (claim) claimAssetIdentity(assetClaims, claim.evidence, claim.record);
-    return result;
   }
 
   function attach(requestId, receipt, options = {}) {
     return transition(requestId, "attached", receipt, options, (record, value) => {
-      requireTrustedSurfaceReceipt(record, value, "attached");
+      requireTrustedSurfaceReceipt(record, value, "attached", authorityVerifier);
       const binding = object(value.binding, "binding");
       assertBinding(record, binding);
       if (token(value.evidence_id, "evidence_id") !== record.evidence.evidence_id) {
@@ -148,11 +149,12 @@ function createVideoEvidenceContinuationCore(options = {}) {
   }
 
   function createContinuation(requestId) {
-    const record = requireRecord(requestId);
-    rejectExpired(record);
-    if (record.status !== "attached") throw invalidTransition(record.status, "continuation");
-    if (!record.turn.original_query.trim()) throw contractError("blank_original_query", "continuation query cannot be blank");
-    return {
+    return inspect(({ records }) => {
+      const record = requireRecord(records, requestId);
+      rejectExpired(record);
+      if (record.status !== "attached") throw invalidTransition(record.status, "continuation");
+      if (!record.turn.original_query.trim()) throw contractError("blank_original_query", "continuation query cannot be blank");
+      return {
       schema: "moa.reasoning-turn.v2",
       continuation: "video_evidence",
       turn: {
@@ -169,7 +171,8 @@ function createVideoEvidenceContinuationCore(options = {}) {
       capability_snapshot_id: record.capability_snapshot.id,
       capability_snapshot: clone(record.capability_snapshot),
       provider_video: clone(record.provider_support),
-    };
+      };
+    });
   }
 
   function recordProcessed(requestId, receipt, options = {}) {
@@ -181,7 +184,7 @@ function createVideoEvidenceContinuationCore(options = {}) {
         throw contractError("silent_derivation_forbidden", "frame or transcript derivation is a separate disclosed flow");
       }
       const providerReceipt = object(value.provider_receipt, "provider_receipt");
-      assertProviderReceipt(record, providerReceipt);
+      assertProviderReceipt(record, providerReceipt, authorityVerifier);
       return {
         processing: {
           provider: record.provider_support.provider,
@@ -209,12 +212,12 @@ function createVideoEvidenceContinuationCore(options = {}) {
 
   function deleteEvidence(requestId, receipt, options = {}) {
     return transition(requestId, "deleted", receipt, options, (record, value) => {
-      requireTrustedSurfaceReceipt(record, value, "deleted");
+      requireTrustedSurfaceReceipt(record, value, "deleted", authorityVerifier);
       if (!record.evidence || !record.evidence.blob_ref) {
         throw contractError("evidence_required", "deletion requires uploaded video evidence", 409);
       }
       const deleteReceipt = object(value.blob_delete_receipt, "blob_delete_receipt");
-      assertBlobDeleteReceipt(record, deleteReceipt);
+      assertBlobDeleteReceipt(record, deleteReceipt, authorityVerifier);
       return {
         evidence: {
           evidence_id: record.evidence.evidence_id,
@@ -235,23 +238,33 @@ function createVideoEvidenceContinuationCore(options = {}) {
   }
 
   function expire(requestId, receipt = {}, options = {}) {
-    const record = requireRecord(requestId);
-    if (Date.parse(now()) <= Date.parse(record.request.expires_at)) {
-      throw contractError("not_expired", "video request has not expired", 409);
-    }
-    return fail(requestId, {
+    return transition(requestId, "failed", {
       ...receipt,
-      receipt_id: receipt.receipt_id || `expiry-${record.request_id}`,
+      receipt_id: receipt.receipt_id || `expiry-${token(requestId, "request_id")}`,
       code: "expired",
       message: "video evidence request expired before completion",
       at: receipt.at || now(),
-    }, options);
+    }, options, (record, value) => ({
+      failure: {
+        code: "expired",
+        message: "video evidence request expired before completion",
+        failed_at: iso(value.at || now(), "failed_at"),
+      },
+    }), {
+      allowFrom: ["proposed", "user_started", "captured", "uploaded", "attached"],
+      precheck(record) {
+        if (Date.parse(now()) <= Date.parse(record.request.expires_at)) {
+          throw contractError("not_expired", "video request has not expired", 409);
+        }
+      },
+    });
   }
 
   function transition(requestId, target, receipt, options, buildPatch, policy = {}) {
-    const record = requireRecord(requestId);
-    const value = object(receipt, "receipt");
-    rejectRawMedia(value);
+    return mutate((runtime) => {
+      const record = requireRecord(runtime.records, requestId);
+      const value = object(receipt, "receipt");
+      rejectRawMedia(value);
     const receiptId = token(value.receipt_id, "receipt_id");
     const fingerprint = digestCanonical({ target, receipt: value });
     const replay = record.idempotency[receiptId];
@@ -264,12 +277,14 @@ function createVideoEvidenceContinuationCore(options = {}) {
     if (options.expected_version != null && options.expected_version !== record.version) {
       throw contractError("version_conflict", `expected version ${options.expected_version}, found ${record.version}`, 409);
     }
-    if (target !== "failed" && target !== "deleted") rejectExpired(record);
-    const allowedFrom = policy.allowFrom || [previousState(target)];
-    if (!allowedFrom.includes(record.status)) throw invalidTransition(record.status, target);
-    const patch = buildPatch(record, value) || {};
-    const at = iso(value.at || now(), "receipt.at");
-    const next = {
+      if (target !== "failed" && target !== "deleted") rejectExpired(record);
+      if (typeof policy.precheck === "function") policy.precheck(record, value);
+      const allowedFrom = policy.allowFrom || [previousState(target)];
+      if (!allowedFrom.includes(record.status)) throw invalidTransition(record.status, target);
+      const patch = buildPatch(record, value, runtime) || {};
+      const at = iso(value.at || now(), "receipt.at");
+      assertMonotonicReceiptTime(record, at, now());
+      const next = {
       ...record,
       ...patch,
       status: target,
@@ -278,8 +293,9 @@ function createVideoEvidenceContinuationCore(options = {}) {
       idempotency: { ...record.idempotency, [receiptId]: { target, fingerprint } },
       updated_at: at,
     };
-    records.set(record.request_id, next);
-    return clone(next);
+      runtime.records.set(record.request_id, next);
+      return clone(next);
+    });
   }
 
   return {
@@ -293,14 +309,27 @@ function createVideoEvidenceContinuationCore(options = {}) {
     fail,
     deleteEvidence,
     expire,
-    get: (requestId) => clone(requireRecord(requestId)),
+    get: (requestId) => inspect(({ records }) => clone(requireRecord(records, requestId))),
   };
 
-  function requireRecord(requestId) {
+  function requireRecord(records, requestId) {
     const id = token(requestId, "request_id");
     const record = records.get(id);
     if (!record) throw contractError("request_not_found", "video evidence request not found", 404);
     return record;
+  }
+
+  function mutate(fn) {
+    return adapter.transact((state) => {
+      const runtime = hydrateState(state);
+      const result = fn(runtime);
+      dehydrateState(state, runtime);
+      return result;
+    });
+  }
+
+  function inspect(fn) {
+    return fn(hydrateState(adapter.read()));
   }
 
   function rejectExpired(record) {
@@ -324,6 +353,43 @@ function normalizeProviderSupport(value) {
     throw contractError("provider_support_mismatch", "unsupported providers need an honest reason");
   }
   return { provider, model, direct_video_input: direct, reason, posture_digest: postureDigest };
+}
+
+function requireAdapter(value) {
+  if (!value || typeof value.read !== "function" || typeof value.transact !== "function") {
+    throw new TypeError("a video evidence persistence adapter with read/transact is required");
+  }
+  return value;
+}
+
+function requireAuthorityVerifier(value) {
+  if (!value
+    || typeof value.verifySurfaceUserAction !== "function"
+    || typeof value.verifyBlobDeleteReceipt !== "function"
+    || typeof value.verifyProviderReceipt !== "function") {
+    throw new TypeError("an injected authenticated authority verifier is required");
+  }
+  return value;
+}
+
+function hydrateState(state) {
+  return {
+    records: new Map(Object.entries(state.records || {})),
+    assetClaims: {
+      evidence_id: new Map(Object.entries(state.asset_claims?.evidence_id || {})),
+      blob_ref: new Map(Object.entries(state.asset_claims?.blob_ref || {})),
+      sha256: new Map(Object.entries(state.asset_claims?.sha256 || {})),
+    },
+  };
+}
+
+function dehydrateState(state, runtime) {
+  state.records = Object.fromEntries(runtime.records);
+  state.asset_claims = {
+    evidence_id: Object.fromEntries(runtime.assetClaims.evidence_id),
+    blob_ref: Object.fromEntries(runtime.assetClaims.blob_ref),
+    sha256: Object.fromEntries(runtime.assetClaims.sha256),
+  };
 }
 
 function normalizeRetention(value, createdAt, requestExpiry) {
@@ -388,9 +454,9 @@ function normalizeEvidence(value, record) {
   };
 }
 
-function requireTrustedSurfaceReceipt(record, receipt, event) {
-  if (receipt.authority !== "trusted_surface_user_action" || receipt.user_activated !== true) {
-    throw contractError("trusted_user_action_required", `${event} requires a trusted Surface user action receipt`, 403);
+function requireTrustedSurfaceReceipt(record, receipt, event, verifier) {
+  if (receipt.assertion_kind !== "surface_user_action" || receipt.user_activated !== true) {
+    throw contractError("surface_user_action_assertion_required", `${event} requires a Surface user-action assertion`, 403);
   }
   if (token(receipt.surface_id, "receipt.surface_id") !== record.turn.surface_id) {
     throw contractError("surface_mismatch", "receipt belongs to another surface", 403);
@@ -400,6 +466,12 @@ function requireTrustedSurfaceReceipt(record, receipt, event) {
     turn_id: record.turn.turn_id,
     session_id: record.turn.session_id,
   }, "surface_receipt_binding_mismatch");
+  if (verifier.verifySurfaceUserAction(receipt, {
+    ...assetClaim(record),
+    surface_id: record.turn.surface_id,
+  }) !== true) {
+    throw contractError("surface_receipt_unverified", "Surface assertion was not authenticated by the injected authority verifier", 403);
+  }
 }
 
 function assertBinding(record, binding) {
@@ -451,9 +523,9 @@ function claimAssetIdentity(claims, evidence, record) {
   for (const key of ["evidence_id", "blob_ref", "sha256"]) claims[key].set(evidence[key], claim);
 }
 
-function assertBlobDeleteReceipt(record, receipt) {
-  if (receipt.authority !== "trusted_blob_store" || receipt.deleted !== true) {
-    throw contractError("trusted_blob_delete_receipt_required", "blob deletion requires a trusted successful store receipt", 403);
+function assertBlobDeleteReceipt(record, receipt, verifier) {
+  if (receipt.assertion_kind !== "blob_store_delete" || receipt.deleted !== true) {
+    throw contractError("blob_delete_assertion_required", "blob deletion requires a successful store assertion", 403);
   }
   assertExactFields(receipt, {
     request_id: record.request_id,
@@ -462,11 +534,14 @@ function assertBlobDeleteReceipt(record, receipt) {
     sha256: record.evidence.sha256,
   }, "blob_delete_binding_mismatch");
   token(receipt.receipt_ref, "blob_delete_receipt.receipt_ref");
+  if (verifier.verifyBlobDeleteReceipt(receipt, record.evidence) !== true) {
+    throw contractError("blob_delete_receipt_unverified", "blob deletion assertion was not authenticated by the injected authority verifier", 403);
+  }
 }
 
-function assertProviderReceipt(record, receipt) {
-  if (receipt.authority !== "trusted_provider_adapter" || receipt.direct_video_received !== true) {
-    throw contractError("trusted_provider_receipt_required", "processing requires a trusted direct-video provider receipt", 403);
+function assertProviderReceipt(record, receipt, verifier) {
+  if (receipt.assertion_kind !== "provider_processing" || receipt.direct_video_received !== true) {
+    throw contractError("provider_processing_assertion_required", "processing requires a direct-video provider assertion", 403);
   }
   assertExactFields(receipt, {
     request_id: record.request_id,
@@ -485,6 +560,9 @@ function assertProviderReceipt(record, receipt) {
     throw contractError("provider_receipt_binding_mismatch", "provider receipt capability posture does not match the request");
   }
   token(receipt.receipt_ref, "provider_receipt.receipt_ref");
+  if (verifier.verifyProviderReceipt(receipt, record.provider_support) !== true) {
+    throw contractError("provider_receipt_unverified", "provider assertion was not authenticated by the injected authority verifier", 403);
+  }
 }
 
 function assertExactFields(actual, expected, code) {
@@ -493,12 +571,22 @@ function assertExactFields(actual, expected, code) {
   }
 }
 
+function assertMonotonicReceiptTime(record, receiptAt, currentTime) {
+  const atMs = Date.parse(receiptAt);
+  if (atMs < Date.parse(record.updated_at)) {
+    throw contractError("receipt_time_regression", "receipt timestamp cannot move updated_at backward", 409);
+  }
+  if (atMs > Date.parse(iso(currentTime, "now")) + MAX_RECEIPT_FUTURE_SKEW_MS) {
+    throw contractError("receipt_time_future", "receipt timestamp exceeds the bounded future-skew allowance", 409);
+  }
+}
+
 function sanitizeReceipt(value, event, at) {
   const receipt = {
     receipt_id: token(value.receipt_id, "receipt_id"),
     event,
     at,
-    authority: optionalToken(value.authority),
+    assertion_kind: optionalToken(value.assertion_kind),
     surface_id: optionalToken(value.surface_id),
     user_activated: value.user_activated === true,
   };
@@ -597,6 +685,7 @@ module.exports = {
   CAPTURE_SCOPES,
   MAX_DURATION_SECONDS,
   MAX_REQUEST_TTL_MS,
+  MAX_RECEIPT_FUTURE_SKEW_MS,
   MAX_VIDEO_RETENTION_MS,
   MAX_VIDEO_BYTES,
   SCHEMA,
