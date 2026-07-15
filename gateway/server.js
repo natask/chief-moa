@@ -29,6 +29,7 @@ const {
 const voiceL10n = require("./lib/voice-l10n");
 const { createCompanionCatalogStore, COMMAND_VERBS: COMPANION_COMMAND_VERBS } = require("./lib/companion-catalog");
 const { createPetCollectionHandlers } = require("./lib/pet-collection-handlers");
+const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
@@ -376,6 +377,20 @@ const { routePetCollections } = createPetCollectionHandlers({
   petInputFromBody,
   manifestV2FieldsFromBody,
   petPreviewPayload,
+});
+const { routePetSharing } = createPetSharingHandlers({
+  companionCatalog,
+  catalogVersion: PET_CATALOG_VERSION,
+  voiceCloneMaxAudioBytes: VOICE_CLONE_MAX_AUDIO_BYTES,
+  authorizedAgent,
+  agentAuthError,
+  readJsonBody,
+  sendJson,
+  cleanError,
+  companionPetRecord,
+  profileOptionsFromBody,
+  requireDeviceScope,
+  applyCompanionToProfile,
 });
 const companionRuntimeAuthority = createCompanionRuntimeAuthority({
   policy: loadCompanionRuntimePolicy(),
@@ -866,59 +881,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    // Shared library: browse published (shared) character manifests, and install
-    // one as a companion profile patch (same authority as apply). Exact-path
-    // routes registered before the /:id/* regexes below so they never collide.
-    if (url.pathname === "/v1/agent/pets/shared" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, petSharedPayload(url));
+    if (await routePetSharing(request, response, url)) {
       return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/install" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handlePetInstall(request, response);
-      return;
-    }
-
-    // Voice-clone job for a character. POST enqueues a consent-gated clone job
-    // (dry-run while Google cloning is allowlist-pending); GET reads job status.
-    {
-      const match = url.pathname.match(/^\/v1\/agent\/pets\/([^/]+)\/voice-clone$/);
-      if (match) {
-        if (!authorizedAgent(request)) {
-          sendJson(response, 401, agentAuthError());
-          return;
-        }
-        const petId = decodeURIComponent(match[1]);
-        if (request.method === "POST") {
-          await handlePetVoiceClone(request, response, petId);
-          return;
-        }
-        if (request.method === "GET") {
-          sendJson(response, 200, petVoiceCloneStatusPayload(petId));
-          return;
-        }
-      }
-    }
-
-    // Publish a character to the shared library (requires approved provenance).
-    {
-      const match = url.pathname.match(/^\/v1\/agent\/pets\/([^/]+)\/publish$/);
-      if (match && request.method === "POST") {
-        if (!authorizedAgent(request)) {
-          sendJson(response, 401, agentAuthError());
-          return;
-        }
-        await handlePetPublish(request, response, decodeURIComponent(match[1]));
-        return;
-      }
     }
 
     if (url.pathname === "/v1/agent/profile" && request.method === "GET") {
@@ -4419,183 +4383,6 @@ async function handlePetGenerate(request, response) {
       error: cleanError(error),
       plan,
     });
-  }
-}
-
-// Voice-clone job endpoint. Consent-gated and (until the Google cloning
-// allowlist clears) dry-run: the plan is stored, the job status is
-// "blocked_allowlist", and the closest canonical voice is bound as the pet's
-// fallback. Reference audio bytes and any credentials are never persisted — only
-// a bounded descriptor (size + sha) — and reference_url is recorded, never
-// fetched server-side in this change. MOA_VOICE_CLONE_LIVE=1 is reserved: it
-// records the job "not_implemented_live" rather than calling any provider API.
-async function handlePetVoiceClone(request, response, petId) {
-  const body = await readJsonBody(request);
-  const pet = companionCatalog.get(petId);
-  if (!pet) {
-    sendJson(response, 404, { error: "companion not found" });
-    return;
-  }
-  const consent = body?.consent && typeof body.consent === "object" && !Array.isArray(body.consent) ? body.consent : {};
-  if (consent.attested !== true) {
-    sendJson(response, 422, { error: "consent.attested must be true to enroll a cloned voice" });
-    return;
-  }
-  const reference = voiceCloneReferenceFromBody(body);
-  if (!reference.ok) {
-    sendJson(response, 422, { error: reference.error });
-    return;
-  }
-  try {
-    const live = String(process.env.MOA_VOICE_CLONE_LIVE || "").trim() === "1";
-    const result = companionCatalog.createVoiceCloneJob({
-      companion_id: petId,
-      consent: { attested: true, subject: String(consent.subject || "") },
-      reference: reference.record,
-      live,
-    });
-    sendJson(response, 201, {
-      version: PET_CATALOG_VERSION,
-      job: result.job,
-      pet: companionPetRecord(result.companion),
-      companion: result.companion,
-      // The clone leg is allowlist-blocked; surface it plainly so callers know
-      // the pet is speaking with the bound canonical fallback for now.
-      blocker: live
-        ? "MOA_VOICE_CLONE_LIVE is set but live cloning is not implemented in this change."
-        : "Google voice cloning is allowlist-gated for this project; the job is stored in dry-run and the closest canonical voice is bound as the fallback.",
-      mutates_profile: false,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-function petVoiceCloneStatusPayload(petId) {
-  const pet = companionCatalog.get(petId);
-  const jobs = companionCatalog.listVoiceCloneJobs(petId);
-  return {
-    version: PET_CATALOG_VERSION,
-    generated_at: new Date().toISOString(),
-    companion_id: pet?.id || "",
-    found: Boolean(pet),
-    voice_binding: pet?.voice_binding || null,
-    voice_clone: pet?.voice_clone || null,
-    job: jobs.length ? jobs[jobs.length - 1] : null,
-    jobs,
-  };
-}
-
-// Validate the clone reference from the request body. Reference audio is capped
-// (decoded bytes), reference URLs are https-only. Returns a bounded descriptor;
-// the raw audio bytes are intentionally discarded here and never stored.
-function voiceCloneReferenceFromBody(body = {}) {
-  const audioBase64 = typeof body?.reference_audio_base64 === "string" ? body.reference_audio_base64.trim() : "";
-  const referenceUrl = typeof body?.reference_url === "string" ? body.reference_url.trim() : "";
-  if (audioBase64) {
-    const normalized = audioBase64.replace(/^data:[^;]+;base64,/, "");
-    let buffer;
-    try {
-      buffer = Buffer.from(normalized, "base64");
-    } catch {
-      buffer = null;
-    }
-    if (!buffer || buffer.length === 0) {
-      return { ok: false, error: "reference_audio_base64 is not valid base64 audio" };
-    }
-    if (buffer.length > VOICE_CLONE_MAX_AUDIO_BYTES) {
-      return { ok: false, error: `reference audio exceeds the ${VOICE_CLONE_MAX_AUDIO_BYTES}-byte cap` };
-    }
-    const sha = crypto.createHash("sha256").update(buffer).digest("hex");
-    return { ok: true, record: { kind: "audio", audio_bytes: buffer.length, audio_sha256: sha } };
-  }
-  if (referenceUrl) {
-    let parsed;
-    try {
-      parsed = new URL(referenceUrl);
-    } catch {
-      return { ok: false, error: "reference_url must be a valid URL" };
-    }
-    if (parsed.protocol !== "https:") {
-      return { ok: false, error: "reference_url must be https" };
-    }
-    return { ok: true, record: { kind: "url", url: parsed.toString() } };
-  }
-  return { ok: false, error: "provide reference_audio_base64 or reference_url" };
-}
-
-// Publish a character to the shared library. Requires provenance.consent_state
-// === "approved"; otherwise 409 with the current state in `reason`.
-async function handlePetPublish(request, response, petId) {
-  await readJsonBody(request).catch(() => ({}));
-  try {
-    const companion = companionCatalog.publishCompanion({ id: petId });
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      pet: companionPetRecord(companion),
-      companion,
-      visibility: companion.visibility,
-    });
-  } catch (error) {
-    if (error?.code === "consent_not_approved") {
-      sendJson(response, 409, {
-        error: cleanError(error),
-        code: "consent_not_approved",
-        reason: error.reason || "unreviewed",
-      });
-      return;
-    }
-    if (error?.code === "not_publishable") {
-      sendJson(response, 409, { error: cleanError(error), code: "not_publishable" });
-      return;
-    }
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-function petSharedPayload(url) {
-  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
-  const limit = Number(url?.searchParams?.get("limit") || 100);
-  const shared = companionCatalog.listShared({ query, limit });
-  return {
-    version: PET_CATALOG_VERSION,
-    generated_at: new Date().toISOString(),
-    query,
-    pets: shared.map(companionPetRecord),
-    companions: shared,
-    endpoints: {
-      shared: "/v1/agent/pets/shared",
-      install: "/v1/agent/pets/install",
-      publish: "/v1/agent/pets/:id/publish",
-    },
-  };
-}
-
-// Install a shared character: a companion profile patch, identical authority to
-// apply. Applying/installing grants no local action authority.
-async function handlePetInstall(request, response) {
-  const body = await readJsonBody(request);
-  const petId = body?.id || body?.companion_id || body?.companionId;
-  const companion = companionCatalog.get(petId);
-  if (!companion) {
-    sendJson(response, 404, { error: "companion not found" });
-    return;
-  }
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  try {
-    const result = applyCompanionToProfile({ companion_id: companion.id }, profileOptions, body?.source || "pet-install");
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      pet: companionPetRecord(result.companion),
-      installed_id: companion.id,
-      visibility: companion.visibility,
-      ...result,
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
   }
 }
 
