@@ -191,6 +191,7 @@ Generated page evaluation uses `moa.browser-program.v2`:
   "source_sha256": "sha256:...",
   "mode": "immediate|persistent",
   "world": "USER_SCRIPT|MAIN",
+  "timing": "explicit|document_start|document_end|document_idle",
   "target": {
     "tab_id": 42,
     "document_id": "document-...",
@@ -198,6 +199,11 @@ Generated page evaluation uses `moa.browser-program.v2`:
     "origins": ["https://example.test"],
     "matches": [],
     "excludes": []
+  },
+  "effect": {
+    "class": "unknown_program_effect",
+    "declared_effect_classes": ["visual_modification"],
+    "operations": ["draw"]
   },
   "authority": {
     "profile": "reviewed_standalone_v1",
@@ -209,7 +215,12 @@ Generated page evaluation uses `moa.browser-program.v2`:
   },
   "bridge_capabilities": [],
   "limits": {"timeout_ms": 5000, "max_result_bytes": 16384},
-  "rollback": {"prior_revision": 2, "cleanup_entrypoint": "optional"}
+  "rollback": {
+    "prior_revision": 2,
+    "capability": "prior_revision|cleanup_entrypoint|unavailable",
+    "cleanup_entrypoint": null,
+    "unavailable_reason": null
+  }
 }
 ```
 
@@ -224,7 +235,16 @@ fields. A delegated program replaces `standalone` with:
     "task_id": "task-...",
     "run_id": "run-...",
     "delegation_envelope_id": "envelope-...",
-    "grant_ids": ["grant-script-evaluate", "grant-origin"],
+    "grants": [{
+      "grant_id": "grant-script-evaluate",
+      "class": "program_authority",
+      "world": "USER_SCRIPT",
+      "executor": "user_scripts_execute",
+      "origins": ["https://example.test"],
+      "frame_scope": "top",
+      "effect_classes": ["unknown_program_effect", "visual_modification"],
+      "bridge_capability": null
+    }],
     "checkpoint_approval_id": null
   }
 }
@@ -237,6 +257,12 @@ a Delegate role, task, run, envelope, or grant. `delegated_runtime_v1` requires
 the typed Delegate role, task, run, envelope, and exact grants; a checkpoint
 approval is present only when the envelope reaches an approval checkpoint.
 Validators reject mixed, missing, or unknown authority variants.
+
+Every arbitrary source is classified as `unknown_program_effect`; caller-
+declared effect classes and typed grants narrow its intended authority but do
+not prove its complete runtime behavior. Static common-pattern checks are a
+fail-closed backstop for obvious undeclared network, credential, destructive,
+header/Bearer, and embedded-secret cases, not a JavaScript safety proof.
 
 The source digest, exact target, world, profile-discriminated authority,
 permission state, applicable grant/checkpoint state, and resource limits are

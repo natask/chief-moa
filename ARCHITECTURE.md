@@ -455,7 +455,8 @@ Generated page programs are a separate, explicit private-runtime lane described
 by `moa.browser-program.v2`; they do not weaken the declarative tweak contract.
 Each immutable program revision binds complete inspectable source and digest,
 mode, world, exact tab/document/frame/origin scope, execution profile,
-profile-discriminated authority, bridge grants, limits, and rollback metadata.
+profile-discriminated authority, typed world/executor/origin/frame/effect/bridge
+grants, limits, and rollback metadata.
 Standalone authority binds direct approval and approved source/scope digests
 without fabricated Delegate records. Delegated authority binds the typed
 Delegate role, task, run, envelope, exact grants, and an optional checkpoint
@@ -478,6 +479,15 @@ checkpoints, stale evidence, destructive application effects, or an expired
 envelope pause before execution. Visual hide/detach/insert/restyle/draw effects
 do not become reversible merely because JavaScript performed them, and deleting
 application data remains a destructive site action.
+
+Arbitrary JavaScript cannot be proven safe or completely effect-classified by
+static regular expressions. Gateway artifacts therefore classify every source
+as `unknown_program_effect`, require exact caller-declared effect classes, and
+require independent typed grants for high-risk network, credential, destructive,
+`MAIN`, CDP, and bridge authority. A conservative common-pattern scan rejects
+obvious undeclared risk and apparent embedded secrets, but is only a backstop;
+the owning extension must still resolve current grants and revalidate the live
+target immediately before use.
 
 Spoken input must never be lost. Each stored voice turn keeps the exact final
 transcript with a transcript source label (real STT, typed text, or synthetic
@@ -1593,7 +1603,10 @@ queues.
   and bounded gateway artifact/receipt store. It keeps immutable generated
   source revisions and inert proposal/audit state, binds receipts to the exact
   standalone or delegated authority variant, and performs no browser execution
-  or registration. Focused coverage: `npm run test:coverage:browser-programs`.
+  or registration. Its local file adapter serializes writers with an exclusive
+  process lock and fails visibly on lock timeout; relational route integration
+  remains the production persistence target. Focused coverage:
+  `npm run test:coverage:browser-programs`.
 - `gateway/lib/surface-skills.js`: `resolveTurnSurface` and the per-surface
   code-mode/classic tool registry (phone_* and browser_* capabilities,
   `phone_action`/`launch_background_browser_task` fallback tools). Smoke:

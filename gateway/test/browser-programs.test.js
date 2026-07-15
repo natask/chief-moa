@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -45,7 +46,7 @@ function delegatedProgram(overrides = {}) {
       excludes: [],
     },
     timing: "explicit",
-    effect: { class: "visual_modification", operations: ["draw"] },
+    effect: { class: "unknown_program_effect", declared_effect_classes: ["visual_modification"], operations: ["draw"] },
     authority: {
       profile: "delegated_runtime_v1",
       delegated: {
@@ -53,7 +54,16 @@ function delegatedProgram(overrides = {}) {
         task_id: "task-browser-1",
         run_id: "run-browser-1",
         delegation_envelope_id: "envelope-browser-1",
-        grant_ids: ["grant-arbitrary-code", "grant-script-evaluate", "grant-origin"],
+        grants: [{
+          grant_id: "grant-program-evaluate",
+          class: "program_authority",
+          world: "USER_SCRIPT",
+          executor: "user_scripts_execute",
+          origins: ["https://example.test"],
+          frame_scope: "top",
+          effect_classes: ["unknown_program_effect", "visual_modification"],
+          bridge_capability: null,
+        }],
         checkpoint_approval_id: null,
       },
     },
@@ -66,7 +76,16 @@ function delegatedProgram(overrides = {}) {
       unavailable_reason: "The immediate effect has no proven inverse",
     },
   };
-  return mergeProgram(base, overrides);
+  const merged = mergeProgram(base, overrides);
+  if (!Object.hasOwn(overrides, "authority")) {
+    const grant = merged.authority.delegated.grants[0];
+    grant.world = merged.world;
+    grant.executor = merged.mode === "persistent" ? "user_scripts_register" : "user_scripts_execute";
+    grant.origins = structuredClone(merged.target.origins);
+    grant.frame_scope = merged.target.frame_scope;
+    grant.effect_classes = ["unknown_program_effect", ...merged.effect.declared_effect_classes];
+  }
+  return merged;
 }
 
 function standaloneProgram(overrides = {}) {
@@ -186,7 +205,7 @@ test("authority variants reject mixed, fabricated, missing, and invalid profile 
   expectCode(() => validateBrowserProgram(fabricatedRole), "unsupported_schema");
 
   const noGrants = delegatedProgram();
-  noGrants.authority.delegated.grant_ids = [];
+  noGrants.authority.delegated.grants = [];
   expectCode(() => validateBrowserProgram(noGrants), "invalid_delegated_authority");
 
   const standaloneMain = standaloneProgram({ world: "MAIN" });
@@ -200,8 +219,8 @@ test("authority variants reject mixed, fabricated, missing, and invalid profile 
   expectCode(() => validateBrowserProgram(badBridge), "invalid_bridge");
 
   const duplicateBridge = delegatedProgram({ bridge_capabilities: [
-    { name: "page.notify", grant_id: "grant-origin" },
-    { name: "page.notify", grant_id: "grant-script-evaluate" },
+    { name: "page.notify", grant_id: "grant-program-evaluate" },
+    { name: "page.notify", grant_id: "grant-program-evaluate" },
   ] });
   expectCode(() => validateBrowserProgram(duplicateBridge), "invalid_bridge");
 
@@ -211,7 +230,16 @@ test("authority variants reject mixed, fabricated, missing, and invalid profile 
       delegated: {
         ...delegatedProgram().authority.delegated,
         checkpoint_approval_id: "approval-checkpoint-1",
-        grant_ids: [...delegatedProgram().authority.delegated.grant_ids, "grant-page-notify"],
+        grants: [...delegatedProgram().authority.delegated.grants, {
+          grant_id: "grant-page-notify",
+          class: "bridge_authority",
+          world: "USER_SCRIPT",
+          executor: null,
+          origins: ["https://example.test"],
+          frame_scope: "top",
+          effect_classes: [],
+          bridge_capability: "page.notify",
+        }],
       },
     },
     bridge_capabilities: [{ name: "page.notify", grant_id: "grant-page-notify" }],
@@ -260,12 +288,16 @@ test("mode, timing, target scope, matches, excludes, world, and limits are exact
 });
 
 test("destructive application effects cannot masquerade as visual modification", () => {
-  const masquerade = delegatedProgram({ effect: { class: "visual_modification", operations: ["delete_application_data"] } });
+  const masquerade = delegatedProgram({ effect: { class: "unknown_program_effect", declared_effect_classes: ["visual_modification"], operations: ["delete_application_data"] } });
   expectCode(() => validateBrowserProgram(masquerade), "effect_class_mismatch");
-  const reverseMasquerade = delegatedProgram({ effect: { class: "destructive_site_action", operations: ["hide"] } });
+  const reverseMasquerade = delegatedProgram({ effect: { class: "unknown_program_effect", declared_effect_classes: ["destructive_site_action"], operations: ["hide"] } });
   expectCode(() => validateBrowserProgram(reverseMasquerade), "effect_class_mismatch");
-  const destructive = delegatedProgram({ effect: { class: "destructive_site_action", operations: ["delete_application_data"] } });
-  assert.equal(validateBrowserProgram(destructive).effect.class, "destructive_site_action");
+  const destructive = delegatedProgram({ effect: { class: "unknown_program_effect", declared_effect_classes: ["destructive_site_action"], operations: ["delete_application_data"] } });
+  destructive.authority.delegated.grants.push({
+    grant_id: "grant-destructive-effect", class: "high_risk_effect", world: null, executor: null,
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: ["destructive_site_action"], bridge_capability: null,
+  });
+  assert.equal(validateBrowserProgram(destructive).effect.class, "unknown_program_effect");
   const standalone = standaloneProgram({ effect: destructive.effect });
   standalone.authority.standalone.approved_scope_digest = scopeDigest(standalone);
   expectCode(() => validateBrowserProgram(standalone), "invalid_standalone_authority");
@@ -366,7 +398,9 @@ test("rollback-unavailable artifacts can only record honest unavailable receipts
   store.propose(program);
   store.ingestReceipt(receipt(program, "proposal", "proposed"));
   store.ingestReceipt(receipt(program, "apply", "applied"));
-  expectCode(() => store.ingestReceipt(receipt(program, "rollback", "rolled_back")), "rollback_unavailable");
+  expectCode(() => store.ingestReceipt(receipt(program, "rollback", "rolled_back", {
+    rollback: { prior_revision: null, cleanup_attempted: true, cleanup_succeeded: true, reason: null },
+  })), "rollback_unavailable");
   assert.equal(store.ingestReceipt(receipt(program, "rollback", "rollback_unavailable")).receipt.status, "rollback_unavailable");
 
   const availableStore = createBrowserProgramStore({ adapter: createInMemoryBrowserProgramAdapter() });
@@ -402,6 +436,8 @@ test("persistent receipt claims require registration read-back and verified remo
     rollback: { prior_revision: 1, capability: "prior_revision", cleanup_entrypoint: null, unavailable_reason: null } });
   store.propose(second);
   const wrongPrior = receipt(second, "proposal", "proposed");
+  wrongPrior.receipt_id = "receipt-revision-2-proposal";
+  wrongPrior.idempotency_key = "idem-revision-2-proposal";
   wrongPrior.rollback.prior_revision = null;
   expectCode(() => store.ingestReceipt(wrongPrior), "receipt_binding_mismatch");
 });
@@ -410,9 +446,10 @@ test("secret-like source is rejected and receipt results are bounded and redacte
   for (const source of [
     "const api_key='secret-value-123';",
     "fetch('/x', {headers: {authorization: 'Bearer hidden-token'}});",
-    "document.cookie",
-    "localStorage.getItem('token')",
   ]) expectCode(() => validateBrowserProgram(delegatedProgram({ source })), "credentials_forbidden");
+  for (const source of ["document.cookie", "localStorage.getItem('token')"]) {
+    expectCode(() => validateBrowserProgram(delegatedProgram({ source })), "undeclared_high_risk_effect");
+  }
 
   const program = delegatedProgram();
   const redacted = validateBrowserProgramReceipt(receipt(program, "proposal", "proposed", {
@@ -469,11 +506,11 @@ test("validator edge bounds fail closed without coercion", () => {
     origins: ["https://example.test", "https://example.test"] } });
   expectCode(() => validateBrowserProgram(duplicateOrigin), "duplicate_value");
   const duplicateGrant = delegatedProgram();
-  duplicateGrant.authority.delegated.grant_ids.push("grant-origin");
+  duplicateGrant.authority.delegated.grants.push(structuredClone(duplicateGrant.authority.delegated.grants[0]));
   expectCode(() => validateBrowserProgram(duplicateGrant), "duplicate_value");
-  const emptyEffect = delegatedProgram({ effect: { class: "visual_modification", operations: [] } });
+  const emptyEffect = delegatedProgram({ effect: { class: "unknown_program_effect", declared_effect_classes: ["visual_modification"], operations: [] } });
   expectCode(() => validateBrowserProgram(emptyEffect), "invalid_effect");
-  const unknownOperation = delegatedProgram({ effect: { class: "visual_modification", operations: ["erase"] } });
+  const unknownOperation = delegatedProgram({ effect: { class: "unknown_program_effect", declared_effect_classes: ["visual_modification"], operations: ["erase"] } });
   expectCode(() => validateBrowserProgram(unknownOperation), "invalid_enum");
   const malformed = delegatedProgram();
   malformed.target = [];
@@ -509,5 +546,205 @@ test("file adapter writes private atomic bounded state and rejects malformed per
   fs.writeFileSync(file, "not json");
   expectCode(() => reopened.list(), "invalid_store");
   expectCode(() => createFileBrowserProgramAdapter(""), "invalid_file_path");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("rollback outcomes reject contradictory cleanup claims", () => {
+  const program = delegatedProgram();
+  for (const [status, rollback] of [
+    ["rolled_back", { prior_revision: null, cleanup_attempted: false, cleanup_succeeded: false, reason: null }],
+    ["rolled_back", { prior_revision: null, cleanup_attempted: true, cleanup_succeeded: false, reason: "failed" }],
+    ["rollback_unavailable", { prior_revision: null, cleanup_attempted: true, cleanup_succeeded: true, reason: null }],
+    ["failed", { prior_revision: null, cleanup_attempted: true, cleanup_succeeded: true, reason: "contradiction" }],
+  ]) expectCode(() => validateBrowserProgramReceipt(receipt(program, "rollback", status, { rollback })), "invalid_rollback_result");
+  expectCode(() => validateBrowserProgramReceipt(receipt(program, "apply", "applied", {
+    rollback: { prior_revision: null, cleanup_attempted: true, cleanup_succeeded: true, reason: null },
+  })), "invalid_rollback_result");
+});
+
+test("MAIN and CDP require independent typed grants with exact scope", () => {
+  const main = delegatedProgram({ world: "MAIN" });
+  expectCode(() => validateBrowserProgram(main), "invalid_grant");
+  main.authority.delegated.grants.push({
+    grant_id: "grant-main-world", class: "world_authority", world: "MAIN", executor: null,
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: [], bridge_capability: null,
+  });
+  assert.equal(validateBrowserProgram(main).world, "MAIN");
+
+  const cdp = delegatedProgram();
+  cdp.authority.delegated.grants[0].executor = "cdp_runtime_evaluate";
+  expectCode(() => validateBrowserProgram(cdp), "invalid_grant");
+  cdp.authority.delegated.grants.push({
+    grant_id: "grant-cdp-executor", class: "executor_authority", world: "USER_SCRIPT", executor: "cdp_runtime_evaluate",
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: [], bridge_capability: null,
+  });
+  const validated = validateBrowserProgram(cdp);
+  const store = createBrowserProgramStore({ adapter: createInMemoryBrowserProgramAdapter() });
+  store.propose(validated);
+  store.ingestReceipt(receipt(validated, "proposal", "proposed"));
+  assert.equal(store.ingestReceipt(receipt(validated, "apply", "applied", { executor: "cdp_runtime_evaluate" })).receipt.executor,
+    "cdp_runtime_evaluate");
+
+  const widened = delegatedProgram();
+  widened.authority.delegated.grants[0].origins = ["https://other.test"];
+  expectCode(() => validateBrowserProgram(widened), "invalid_grant");
+});
+
+test("opaque source stays unknown and obvious high-risk signals require declarations and typed grants", () => {
+  assert.equal(validateBrowserProgram(delegatedProgram()).effect.class, "unknown_program_effect");
+  expectCode(() => validateBrowserProgram(delegatedProgram({ source: "fetch('/private')" })), "undeclared_high_risk_effect");
+  expectCode(() => validateBrowserProgram(delegatedProgram({ source: "headers.set('Authorization', token)" })), "undeclared_high_risk_effect");
+  expectCode(() => validateBrowserProgram(delegatedProgram({ source: "indexedDB.deleteDatabase('app')" })), "undeclared_high_risk_effect");
+
+  const network = delegatedProgram({
+    source: "fetch('/status')",
+    effect: { class: "unknown_program_effect", declared_effect_classes: ["network_access"], operations: ["network_request"] },
+  });
+  expectCode(() => validateBrowserProgram(network), "invalid_grant");
+  network.authority.delegated.grants.push({
+    grant_id: "grant-network-effect", class: "high_risk_effect", world: null, executor: null,
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: ["network_access"], bridge_capability: null,
+  });
+  assert.deepEqual(validateBrowserProgram(network).effect.declared_effect_classes, ["network_access"]);
+});
+
+test("append and reload reject chronology and persisted graph fabrication", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-browser-program-graph-"));
+  const file = path.join(dir, "store.json");
+  const adapter = createFileBrowserProgramAdapter(file);
+  const store = createBrowserProgramStore({ adapter });
+  const program = delegatedProgram();
+  store.propose(program);
+  const proposed = receipt(program, "proposal", "proposed");
+  store.ingestReceipt(proposed);
+  expectCode(() => store.ingestReceipt(receipt(program, "apply", "applied", {
+    receipt_id: "receipt-apply-earlier", idempotency_key: "idem-apply-earlier", recorded_at: "2026-07-15T11:59:59.000Z",
+  })), "receipt_timestamp_regression");
+  const applied = receipt(program, "apply", "applied", {
+    receipt_id: "receipt-apply-valid", idempotency_key: "idem-apply-valid", recorded_at: "2026-07-15T12:00:01.000Z",
+  });
+  store.ingestReceipt(applied);
+  const validState = JSON.parse(fs.readFileSync(file, "utf8"));
+
+  const mutations = [
+    (state) => { state.receipts["receipt-apply-valid"].source_sha256 = HASH; },
+    (state) => { delete state.receipts["receipt-proposal-1"]; },
+    (state) => {
+      const duplicate = structuredClone(state.receipts["receipt-apply-valid"]);
+      duplicate.receipt_id = "receipt-duplicate-idempotency";
+      state.receipts[duplicate.receipt_id] = duplicate;
+    },
+    (state) => { state.receipts["receipt-apply-valid"].recorded_at = "2026-07-15T11:00:00.000Z"; },
+    (state) => { state.receipts["receipt-apply-valid"].executor = "cdp_runtime_evaluate"; },
+  ];
+  for (const mutate of mutations) {
+    const state = structuredClone(validState);
+    mutate(state);
+    fs.writeFileSync(file, JSON.stringify(state));
+    expectCode(() => createBrowserProgramStore({ adapter: createFileBrowserProgramAdapter(file) }).list(), "invalid_store");
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("file adapter serializes 32 concurrent writers without successful loss", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-browser-program-concurrency-"));
+  const file = path.join(dir, "store.json");
+  const modulePath = path.resolve(__dirname, "../lib/browser-programs.js");
+  const writer = String.raw`
+    const { createBrowserProgramStore, createFileBrowserProgramAdapter, sourceDigest } = require(process.argv[1]);
+    const file = process.argv[2]; const index = Number(process.argv[3]);
+    const source = "document.body.dataset.writer = '" + index + "';";
+    const id = "script-writer-" + index;
+    const program = { schema:"moa.browser-program.v2", artifact_id:id, revision:1, source_turn_id:"turn-writer-"+index,
+      name:"writer "+index, purpose:"Concurrent serialization proof", source, source_sha256:sourceDigest(source),
+      mode:"immediate", world:"USER_SCRIPT", target:{tab_id:index,document_id:"document-writer-"+index,frame_scope:"top",origins:["https://example.test"],matches:[],excludes:[]},
+      timing:"explicit", effect:{class:"unknown_program_effect",declared_effect_classes:["visual_modification"],operations:["restyle"]},
+      authority:{profile:"delegated_runtime_v1",delegated:{role:"delegate",task_id:"task-writer-"+index,run_id:"run-writer-"+index,delegation_envelope_id:"envelope-writer-"+index,
+        grants:[{grant_id:"grant-writer-"+index,class:"program_authority",world:"USER_SCRIPT",executor:"user_scripts_execute",origins:["https://example.test"],frame_scope:"top",effect_classes:["unknown_program_effect","visual_modification"],bridge_capability:null}],checkpoint_approval_id:null}},
+      bridge_capabilities:[], limits:{timeout_ms:1000,max_result_bytes:1024}, rollback:{prior_revision:null,capability:"unavailable",cleanup_entrypoint:null,unavailable_reason:"fixture"} };
+    createBrowserProgramStore({adapter:createFileBrowserProgramAdapter(file)}).propose(program);
+  `;
+  const results = await Promise.all(Array.from({ length: 32 }, (_, index) => new Promise((resolve) => {
+    const child = spawn(process.execPath, ["-e", writer, modulePath, file, String(index)], { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("exit", (code) => resolve({ code, stderr }));
+  })));
+  assert.deepEqual(results.filter((result) => result.code !== 0), []);
+  const store = createBrowserProgramStore({ adapter: createFileBrowserProgramAdapter(file) });
+  assert.equal(store.list().length, 32);
+  assert.equal(new Set(store.list().map((program) => program.artifact_id)).size, 32);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("typed grant shape and lifecycle defensive branches reject adversarial records", () => {
+  const badProgramGrant = delegatedProgram();
+  badProgramGrant.authority.delegated.grants[0].world = null;
+  expectCode(() => validateBrowserProgram(badProgramGrant), "invalid_grant");
+
+  const badWorldGrant = delegatedProgram({ world: "MAIN" });
+  badWorldGrant.authority.delegated.grants.push({
+    grant_id: "grant-main-world", class: "world_authority", world: "USER_SCRIPT", executor: null,
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: [], bridge_capability: null,
+  });
+  expectCode(() => validateBrowserProgram(badWorldGrant), "invalid_grant");
+
+  const badExecutorGrant = delegatedProgram();
+  badExecutorGrant.authority.delegated.grants.push({
+    grant_id: "grant-cdp", class: "executor_authority", world: "USER_SCRIPT", executor: "user_scripts_execute",
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: [], bridge_capability: null,
+  });
+  expectCode(() => validateBrowserProgram(badExecutorGrant), "invalid_grant");
+
+  const badBridgeGrant = delegatedProgram();
+  badBridgeGrant.authority.delegated.grants.push({
+    grant_id: "grant-bridge", class: "bridge_authority", world: "USER_SCRIPT", executor: null,
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: [], bridge_capability: null,
+  });
+  expectCode(() => validateBrowserProgram(badBridgeGrant), "invalid_grant");
+
+  const badRiskGrant = delegatedProgram();
+  badRiskGrant.authority.delegated.grants.push({
+    grant_id: "grant-risk", class: "high_risk_effect", world: null, executor: null,
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: ["visual_modification"], bridge_capability: null,
+  });
+  expectCode(() => validateBrowserProgram(badRiskGrant), "invalid_grant");
+
+  const uncoveredEffect = delegatedProgram();
+  uncoveredEffect.authority.delegated.grants[0].effect_classes = ["unknown_program_effect"];
+  expectCode(() => validateBrowserProgram(uncoveredEffect), "invalid_grant");
+
+  const wrongMatchOrigin = persistentRevision({ target: {
+    ...persistentRevision().target,
+    matches: ["https://other.test/*"], excludes: [],
+  } });
+  expectCode(() => validateBrowserProgram(wrongMatchOrigin), "invalid_scope");
+
+  const store = createBrowserProgramStore({ adapter: createInMemoryBrowserProgramAdapter() });
+  const program = delegatedProgram();
+  store.propose(program);
+  store.ingestReceipt(receipt(program, "proposal", "proposed"));
+  store.ingestReceipt(receipt(program, "apply", "applied"));
+  const secondApply = receipt(program, "apply", "applied", {
+    receipt_id: "receipt-apply-second", idempotency_key: "idem-apply-second", recorded_at: "2026-07-15T12:00:01.000Z",
+  });
+  expectCode(() => store.ingestReceipt(secondApply), "invalid_lifecycle");
+  store.ingestReceipt(receipt(program, "disable", "disabled", {
+    receipt_id: "receipt-disable-first", idempotency_key: "idem-disable-first", recorded_at: "2026-07-15T12:00:01.000Z",
+  }));
+  expectCode(() => store.ingestReceipt(receipt(program, "disable", "disabled", {
+    receipt_id: "receipt-disable-second", idempotency_key: "idem-disable-second", recorded_at: "2026-07-15T12:00:02.000Z",
+  })), "invalid_lifecycle");
+
+  const credentialPurpose = delegatedProgram({ purpose: "authorization: Bearer secret-value" });
+  expectCode(() => validateBrowserProgram(credentialPurpose), "credentials_forbidden");
+});
+
+test("malformed state fails visibly inside a locked transaction", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-browser-program-transaction-"));
+  const file = path.join(dir, "store.json");
+  fs.writeFileSync(file, "not json");
+  const store = createBrowserProgramStore({ adapter: createFileBrowserProgramAdapter(file) });
+  expectCode(() => store.propose(delegatedProgram()), "invalid_store");
   fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -132,7 +132,10 @@ capabilities, limits, and rollback metadata. `reviewed_standalone_v1` authority
 SHALL bind direct approval plus the approved source and scope digests without
 fabricating Delegate role/task/run/envelope fields. `delegated_runtime_v1`
 authority SHALL bind the typed Delegate role, task, run, delegation envelope,
-exact grants, and an optional checkpoint approval only when applicable. The
+exact typed class/world/executor/origin/frame/effect/bridge grants, and an
+optional checkpoint approval only when applicable. Arbitrary source SHALL
+remain `unknown_program_effect`; caller-declared effects and static common-
+pattern checks SHALL NOT be represented as proof of complete behavior. The
 extension SHALL revalidate digest, profile-specific authority,
 page/document/frame/origin, permissions, applicable grants/checkpoints, and
 limits immediately before execution or registration.
