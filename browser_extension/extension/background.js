@@ -1521,15 +1521,36 @@ async function stopDevReloadTimer() {
   } catch {}
 }
 
+// installType "development" means an unpacked load — the only install kind the
+// localhost reload bridge can ever apply to. getSelf needs no extra permission.
+let cachedInstallType = null;
+async function extensionInstallType() {
+  if (cachedInstallType) return cachedInstallType;
+  try {
+    const info = await chrome.management?.getSelf?.();
+    cachedInstallType = info?.installType || "unknown";
+  } catch {
+    cachedInstallType = "unknown";
+  }
+  return cachedInstallType;
+}
+
 async function devReloadConfig() {
   const stored = await chrome.storage.local.get({
-    ageeDevReloadEnabled: false,
+    ageeDevReloadEnabled: null,
     ageeDevReloadServer: DEV_RELOAD_DEFAULT_SERVER,
     ageeDevReloadVersion: null,
   });
   const server = String(stored.ageeDevReloadServer || DEV_RELOAD_DEFAULT_SERVER).replace(/\/+$/, "");
+  // Unpacked installs auto-enable the bridge so scripts/deploy.sh reload pokes
+  // actually land without a manual dev.html opt-in. An explicit stored boolean
+  // (from dev.html) always wins in either direction.
+  let enabled = stored.ageeDevReloadEnabled;
+  if (enabled == null) {
+    enabled = (await extensionInstallType()) === "development";
+  }
   return {
-    enabled: Boolean(stored.ageeDevReloadEnabled),
+    enabled: Boolean(enabled),
     server,
     version: stored.ageeDevReloadVersion == null ? null : Number(stored.ageeDevReloadVersion),
   };

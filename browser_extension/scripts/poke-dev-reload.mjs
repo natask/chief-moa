@@ -8,7 +8,8 @@ import { createServer } from "node:http";
 
 const host = process.env.AGEE_DEV_RELOAD_HOST || "localhost";
 const port = Number(process.env.AGEE_DEV_RELOAD_PORT || 7777);
-const holdMs = Number(process.env.AGEE_DEV_RELOAD_HOLD_MS || 12000);
+// 30s alarm cadence for a sleeping service worker + margin.
+const holdMs = Number(process.env.AGEE_DEV_RELOAD_HOLD_MS || 40000);
 const version = Date.now();
 const changedAt = new Date().toISOString();
 const endpoint = `http://${host}:${port}/__agee-dev/version`;
@@ -52,9 +53,20 @@ async function bumpExistingServer() {
   }
 }
 
+// Observed polls are the reload evidence: the loaded extension fetches
+// /__agee-dev/version every 1.5s while its worker is awake and every 30s via
+// alarm while asleep. Zero polls over the hold window means the bridge is not
+// running in the loaded build (or Chrome is closed) — report that plainly
+// instead of pretending the poke worked.
+let observedPolls = 0;
+
 const server = createServer((req, res) => {
   const url = new URL(req.url || "/", `http://${host}:${port}`);
   if (url.pathname === "/__agee-dev/version") {
+    observedPolls += 1;
+    if (observedPolls === 1) {
+      console.log("[agee-deploy] a loaded extension polled the reload endpoint.");
+    }
     sendJson(res, 200, { version, changedAt, source: "chief-moa-deploy" });
     return;
   }
@@ -71,10 +83,26 @@ server.on("error", async (error) => {
 
 server.listen(port, host, () => {
   console.log(`[agee-deploy] serving reload version ${version} at ${endpoint}`);
-  console.log(`[agee-deploy] holding for ${Math.round(holdMs / 1000)}s so a loaded unpacked extension can reload.`);
-  setTimeout(() => {
+  console.log(`[agee-deploy] holding up to ${Math.round(holdMs / 1000)}s so a loaded unpacked extension can reload.`);
+  const startedAt = Date.now();
+  const finish = () => {
     server.close(() => {
-      console.log("[agee-deploy] reload signal complete.");
+      if (observedPolls >= 2) {
+        console.log(`[agee-deploy] reload CONFIRMED: extension polled ${observedPolls} times (bump observed and re-polled after reload/record).`);
+      } else if (observedPolls === 1) {
+        console.log("[agee-deploy] reload LIKELY: one poll observed. First-ever poll only records a baseline; the next deploy reloads automatically.");
+      } else {
+        console.log("[agee-deploy] reload UNVERIFIED: no client polled during the hold window.");
+        console.log("[agee-deploy] The loaded build predates the auto-enabled bridge (or Chrome is closed). Reload once at chrome://extensions; every later deploy reloads automatically.");
+      }
     });
-  }, holdMs);
+  };
+  const ticker = setInterval(() => {
+    // End early once the post-reload (or post-record) second poll arrives, but
+    // give a sleeping service worker its 30s alarm plus margin otherwise.
+    if (observedPolls >= 2 || Date.now() - startedAt >= holdMs) {
+      clearInterval(ticker);
+      finish();
+    }
+  }, 500);
 });
