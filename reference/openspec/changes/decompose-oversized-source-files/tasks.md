@@ -310,6 +310,11 @@
       tests plus diagnosis and LiveKit transport smokes. Enforce a focused 90%
       line/branch/function gate, verified at 100% lines, 98.36% branches, and
       100% functions. Reduce `server.js` to 12,767 lines.
+- [x] 2.54 Extract the gateway health projection from `server.js`; add focused
+      routing, configured dependency, subsystem projection, and optional-state
+      fallback tests plus an account-connection health integration smoke.
+      Enforce a focused 90% line/branch/function gate, verified at 100% for all
+      three metrics. Reduce `server.js` to 12,686 lines.
 
 ## 3. Other Oversized Surfaces
 
