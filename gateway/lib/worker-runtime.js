@@ -156,52 +156,54 @@ function parseClaudeJsonEnvelope(stdout) {
   }
 }
 
-const CLI_HARNESS_DEFS = {
-  gemini: {
-    bin: () => process.env.GEMINI_BIN || "gemini",
-    versionArgs: ["-v"],
-    argsFor: (run) => [
-      "--prompt", String(run.prompt || ""),
-      "--skip-trust",
-      "--approval-mode", process.env.GEMINI_APPROVAL_MODE || "yolo",
-      "--output-format", "text",
-    ],
-  },
-  codex: {
-    bin: () => process.env.CODEX_BIN || "codex",
-    versionArgs: ["--version"],
-    argsFor: (run, workDir) => {
-      const args = ["exec", "--cd", workDir, "--skip-git-repo-check"];
-      if (process.env.CODEX_BYPASS_APPROVALS === "1") {
-        args.push("--dangerously-bypass-approvals-and-sandbox");
-      } else {
-        args.push("--sandbox", process.env.CODEX_SANDBOX || "workspace-write");
-      }
-      args.push(String(run.prompt || ""));
-      return args;
+function cliHarnessDefinitions(env) {
+  return {
+    gemini: {
+      bin: () => env.GEMINI_BIN || "gemini",
+      versionArgs: ["-v"],
+      argsFor: (run) => [
+        "--prompt", String(run.prompt || ""),
+        "--skip-trust",
+        "--approval-mode", env.GEMINI_APPROVAL_MODE || "yolo",
+        "--output-format", "text",
+      ],
     },
-  },
-  claude: {
-    bin: () => process.env.CLAUDE_BIN || "claude",
-    versionArgs: ["--version"],
-    parseOutput: parseClaudeJsonEnvelope,
-    argsFor: (run, workDir) => {
-      const args = [
-        "--print",
-        "--output-format", "json",
-        "--model", process.env.CLAUDE_AGENT_MODEL || process.env.CLAUDE_MODEL || "sonnet",
-        "--add-dir", workDir,
-      ];
-      if (process.env.CLAUDE_DANGEROUS_SKIP_PERMISSIONS === "1") {
-        args.push("--dangerously-skip-permissions");
-      } else {
-        args.push("--permission-mode", process.env.CLAUDE_PERMISSION_MODE || "plan");
-      }
-      args.push(String(run.prompt || ""));
-      return args;
+    codex: {
+      bin: () => env.CODEX_BIN || "codex",
+      versionArgs: ["--version"],
+      argsFor: (run, workDir) => {
+        const args = ["exec", "--cd", workDir, "--skip-git-repo-check"];
+        if (env.CODEX_BYPASS_APPROVALS === "1") {
+          args.push("--dangerously-bypass-approvals-and-sandbox");
+        } else {
+          args.push("--sandbox", env.CODEX_SANDBOX || "workspace-write");
+        }
+        args.push(String(run.prompt || ""));
+        return args;
+      },
     },
-  },
-};
+    claude: {
+      bin: () => env.CLAUDE_BIN || "claude",
+      versionArgs: ["--version"],
+      parseOutput: parseClaudeJsonEnvelope,
+      argsFor: (run, workDir) => {
+        const args = [
+          "--print",
+          "--output-format", "json",
+          "--model", env.CLAUDE_AGENT_MODEL || env.CLAUDE_MODEL || "sonnet",
+          "--add-dir", workDir,
+        ];
+        if (env.CLAUDE_DANGEROUS_SKIP_PERMISSIONS === "1") {
+          args.push("--dangerously-skip-permissions");
+        } else {
+          args.push("--permission-mode", env.CLAUDE_PERMISSION_MODE || "plan");
+        }
+        args.push(String(run.prompt || ""));
+        return args;
+      },
+    },
+  };
+}
 
 function binaryAnswersProbe(bin, versionArgs) {
   try {
@@ -214,12 +216,12 @@ function binaryAnswersProbe(bin, versionArgs) {
 
 // echo is always available; each CLI harness registers only when its binary
 // answers a version probe. MOA_WORKER_HARNESSES (comma list) narrows the set.
-function detectHarnesses(env = process.env) {
+function detectHarnesses(env = process.env, { probe = binaryAnswersProbe, createHarness = cliHarness } = {}) {
   const harnesses = { ...DEFAULT_HARNESSES };
-  for (const [name, def] of Object.entries(CLI_HARNESS_DEFS)) {
+  for (const [name, def] of Object.entries(cliHarnessDefinitions(env))) {
     const bin = def.bin();
-    if (binaryAnswersProbe(bin, def.versionArgs)) {
-      harnesses[name] = cliHarness(bin, def.argsFor, { parseOutput: def.parseOutput });
+    if (probe(bin, def.versionArgs)) {
+      harnesses[name] = createHarness(bin, def.argsFor, { parseOutput: def.parseOutput });
     }
   }
   const allowlist = String(env.MOA_WORKER_HARNESSES || "").split(",").map((item) => item.trim()).filter(Boolean);
@@ -237,7 +239,7 @@ function createWorkerRuntime(options = {}) {
   const gatewayUrl = normalizeGatewayUrl(options.gatewayUrl);
   if (!gatewayUrl) throw new WorkerRuntimeError("invalid_config", "gatewayUrl is required (http or https)");
   const localConfig = options.projectConfig || loadWorkerProjectConfig(options.projectConfigFile, { workspaceRoot: options.workspaceRoot });
-  const workspace = localConfig.projects.length ? createWorkerWorkspace(localConfig, { gitBin: options.gitBin }) : null;
+  const workspace = options.workspace || (localConfig.projects.length ? createWorkerWorkspace(localConfig, { gitBin: options.gitBin }) : null);
   const availableHarnesses = options.harnesses && typeof options.harnesses === "object"
     ? options.harnesses
     : detectHarnesses();

@@ -103,6 +103,11 @@
       response, timeout, network-error, URL filtering, and metadata-bound tests
       with a focused 90% line/branch/function coverage gate. Verified at 100%
       lines and functions and 90.28% branches.
+- [x] 2.20 Add exhaustive worker-runtime configuration, credential, claim
+      safety, allowlist, retry, cancellation, stale-authority, workspace-lock,
+      terminal-result, provider-error, and CLI-process tests with a focused 90%
+      line/branch/function coverage gate. Verified at 100% lines, 91.36%
+      branches, and 97.56% functions.
 
 ## 3. Other Oversized Surfaces
 
