@@ -16,8 +16,9 @@ alignment.
   persistence, provider denial, persona preservation, and reversion.
 - Acceptance: Note produces zero model requests, Coach preserves the saved base
   persona while changing the turn policy, and Ask restores normal policy.
-- Deferred: Android/browser selectors and capture mechanics, capture blocks and
-  notebook, video routing, and deployment.
+- Rejected: Android/browser mode selectors.
+- Deferred: conversational mode switching, client admission preflight and
+  capture mechanics, capture blocks and notebook, video routing, and deployment.
 
 ## 0. Reconcile Current State
 

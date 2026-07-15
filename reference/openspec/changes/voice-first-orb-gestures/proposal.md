@@ -39,8 +39,8 @@ shortcuts retain their existing meanings.
 
 ## Delivery Modes
 
-Gestures control capture mechanics; the selected delivery mode controls what
-happens after stop/release:
+Gestures control capture mechanics; the conversationally selected delivery
+policy controls what happens after stop/release:
 
 | Mode | Result |
 | --- | --- |
@@ -48,9 +48,10 @@ happens after stop/release:
 | Note | Store through the raw audio-note path; no provider work, reply, or agent launch. |
 | Coach | Store/send a conversational turn with the bounded turn-local coaching overlay. |
 
-The gateway now owns versioned, device-scoped Ask/Note/Coach admission. Client
-selectors and client preflight integration are separate follow-up tickets, so
-the gesture implementation does not claim end-to-end mode selection yet.
+The gateway owns versioned, device-scoped Ask/Note/Coach admission as internal
+routing state. Clients must not expose a mode selector. A user changes behavior
+conversationally, and client preflight applies the admitted policy before
+provider work. The gesture implementation does not claim that preflight yet.
 
 ## Flags
 
@@ -72,7 +73,7 @@ for reliable system-wide insertion, and the browser must never infer submit.
 - Android and the browser extension own gesture detection and local UI state.
 - The gateway owns delivery-mode admission and provider routing.
 - Chat remains reachable by triple-click.
-- This unit does not add client mode selectors, spoken mode switching,
+- This unit does not add conversational mode switching,
   `capture_block`, notebook/IME, video routing, or automatic agent dispatch.
 - Model output, screen context, and silence cannot change capture disposition.
 

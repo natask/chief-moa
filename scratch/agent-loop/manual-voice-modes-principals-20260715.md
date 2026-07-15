@@ -3,7 +3,8 @@
 ## Accepted Outcome
 
 - Android and browser use the same single/hold/double/triple manual gesture map.
-- Ask, Note, and Coach are explicit delivery modes, not gesture chords.
+- Ask, Note, and Coach remain internal delivery policies, not visible selectors
+  or gesture chords. The user expresses note/coaching intent conversationally.
 - Security, Simplification, and Fuzzing are bounded principal workflow roles;
   ordinary feature work remains separate.
 - Every implementation lane uses an isolated worktree, narrow evidence,
@@ -20,8 +21,10 @@
 
 ## Deliberately Staged Next Units
 
-1. Android mode selector/state, admission preflight, and physical-phone QA.
-2. Browser mode selector/state and admission preflight.
+1. Android conversational mode switching, admission preflight, and
+   physical-phone QA; no mode selector.
+2. Browser conversational mode switching and admission preflight; no mode
+   selector.
 3. Spoken mode switching as a control turn.
 4. `capture_block` plus notebook/transcription; then Dictate/IME.
 5. Principal finding schema/fingerprint/dedupe, bounded repair handoff, and
@@ -30,3 +33,23 @@
    after exact-candidate worktree and retry-budget policy is executable.
 
 No lane in this unit authorizes deployment or automatic repair fanout.
+
+## Steering Amendment — 2026-07-15
+
+- Single-click during an active response is steer: immediately stop playback,
+  cancel provider generation, freeze the accepted reply prefix with an
+  interruption marker, ignore late output, and begin replacement capture
+  without waiting for cancellation acknowledgement.
+- Double-click starts an independent branch/trace from a frozen context
+  snapshot. It does not inherit a mutable provider session.
+- Queue is explicit only. An ordinary interruption never silently becomes a
+  follow-up queued behind stale work.
+- Triple-click cancels without sending and opens chat.
+- Browser page identity is visible locally but is not automatically sent as
+  model context.
+- Resolved overlay cues retire from the compact surface; durable gateway
+  history remains retrievable.
+
+Physical Android timing/audio-focus QA, manual browser timing QA, candidate
+integration, release artifacts, and active promotion remain separate evidence
+states.

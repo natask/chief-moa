@@ -305,9 +305,11 @@ separate X/Send side controls own disposition, and normal manual turns never
 wait for silence detection. The one open chat/transcript card follows the orb
 and flips wholly above or below it. Android drag-to-remove and explicit Hide
 actions keep their existing behavior. Keyboard shortcuts and flag-off legacy
-behavior remain unchanged. Delivery mode is separate from gesture mechanics:
-the gateway owns versioned device-scoped Ask/Note/Coach admission, while client
-mode selectors and preflight are follow-up work. Contract:
+behavior remain unchanged. Delivery policy is separate from gesture mechanics.
+The gateway owns versioned, device-scoped Ask/Note/Coach admission as internal
+routing state. Clients do not expose a mode selector: the user changes behavior
+conversationally (for example, "take a note" or "coach me") and preflight
+applies the resulting policy before provider work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface stays small: it shows the current intent/result and compact

@@ -89,10 +89,10 @@ latest states. The orb remains draggable. While dragging, a bottom-center
 `Hide orb` target appears; dropping on it asks for or uses a reversible hide
 action. Permanent service disable stays in the full app/settings.
 
-Avoid assigning double-, triple-, and four-tap gestures to different media or
-agent types before physical-phone QA. A compact mode selector and post-capture
-actions are more discoverable; gestures may become accelerators only after their
-base actions exist.
+Do not assign double-, triple-, and four-tap gestures to media or agent types.
+The user states note/coaching intent conversationally; the surface may show the
+active behavior as status but must not expose a mode selector. Multi-clicks are
+reserved for interruption, branching, and chat mechanics.
 
 ### Full App Notebook
 
@@ -182,4 +182,3 @@ surface. Any future ad model needs a separate privacy/threat-model decision.
 - Promotion: additive state compatibility, backup/restore evidence, no active
   recording or transcription interrupted, OTA rollback known, then smoke the
   promoted gateway and installed Android build.
-
