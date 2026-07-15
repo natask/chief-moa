@@ -33,6 +33,7 @@ const { createPetCollectionHandlers } = require("./lib/pet-collection-handlers")
 const { createPetCoreHandlers } = require("./lib/pet-core-handlers");
 const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
 const { createProfileHandlers } = require("./lib/profile-handlers");
+const { createAgentRunHandlers } = require("./lib/agent-run-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
@@ -424,6 +425,12 @@ const { routeProfiles } = createProfileHandlers({
   profileOptionsFromUrl, profileOptionsFromBody, requireDeviceScope,
   agentProfilePayload, readProfileHistory, recordProfileHistory,
   rejectedLanguageFields, supportedLanguagesSentence, profileApplicationSemantics,
+});
+const { routeAgentRunReads } = createAgentRunHandlers({
+  authorizedAgent, agentAuthError, sendJson, sanitizeId,
+  runExists: (id) => fs.existsSync(agentRunPath(id)),
+  readAgentRun, readAgentEvents, isRunActive: (id) => activeRuns.has(id),
+  listAgentRuns, cancelAgentRunById, agentRunPayload,
 });
 const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 
@@ -931,12 +938,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/runs" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, { runs: listAgentRuns(Number(url.searchParams.get("limit") || 25)) });
+    if (await routeAgentRunReads(request, response, url)) {
       return;
     }
 
@@ -946,16 +948,6 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       await handleAgentRun(request, response);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname.startsWith("/v1/agent/runs/") && url.pathname.endsWith("/cancel")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.replace("/v1/agent/runs/", "").replace("/cancel", "");
-      await handleCancelAgentRun(response, id);
       return;
     }
 
@@ -996,16 +988,6 @@ const server = http.createServer(async (request, response) => {
     ) {
       const id = url.pathname.slice("/v1/agent/runs/".length, -"/result".length);
       await handleWorkerResult(request, response, id);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/agent/runs/")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.replace("/v1/agent/runs/", "");
-      sendAgentRun(response, id);
       return;
     }
 
@@ -4908,21 +4890,6 @@ function sendRouterActivation(response, id) {
     ping,
     events,
   });
-}
-
-async function handleCancelAgentRun(response, id) {
-  const result = cancelAgentRunById(id);
-  if (!result.ok && result.status === "not_found") {
-    sendJson(response, 404, { error: "agent run not found" });
-    return;
-  }
-
-  if (result.status === "cancel_requested") {
-    sendJson(response, 202, agentRunPayload(result.run));
-    return;
-  }
-
-  sendJson(response, 200, agentRunPayload(result.run));
 }
 
 function cancelAgentRunById(id) {
@@ -13471,20 +13438,6 @@ function sendConversation(response, id) {
     return;
   }
   sendJson(response, 200, JSON.parse(fs.readFileSync(filePath, "utf8")));
-}
-
-function sendAgentRun(response, id) {
-  const safeId = sanitizeId(id);
-  const filePath = agentRunPath(safeId);
-  if (!fs.existsSync(filePath)) {
-    sendJson(response, 404, { error: "agent run not found" });
-    return;
-  }
-  sendJson(response, 200, {
-    run: readAgentRun(safeId),
-    events: readAgentEvents(safeId),
-    active: activeRuns.has(safeId),
-  });
 }
 
 function readAndroidOtaManifest() {

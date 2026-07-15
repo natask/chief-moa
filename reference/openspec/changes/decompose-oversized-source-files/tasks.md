@@ -49,6 +49,10 @@
       handlers with a focused 90% line/branch/function coverage gate. Verified
       at 100% lines, branches, and functions; reduce `server.js` to 15,300 lines.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.
+- [x] 2.5a Extract agent-run list, detail, event projection, active-state, and
+      cancel response handlers with a focused 90% line/branch/function coverage
+      gate. Verified at 100% for all three metrics; reduce `server.js` to 15,253
+      lines.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.
 - [ ] 2.7 Extract context, thread, and history assembly.
 - [ ] 2.8 Extract device-client, browser-task, and tool-request stores.
