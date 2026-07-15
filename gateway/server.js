@@ -32,6 +32,7 @@ const { createCompanionHandlers } = require("./lib/companion-handlers");
 const { createPetCollectionHandlers } = require("./lib/pet-collection-handlers");
 const { createPetCoreHandlers } = require("./lib/pet-core-handlers");
 const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
+const { createProfileHandlers } = require("./lib/profile-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
@@ -417,6 +418,12 @@ const { routeCompanions } = createCompanionHandlers({
   authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
   activeCompanionPayload, profileOptionsFromBody, requireDeviceScope,
   agentProfileRuntimeStatus, summarizePreviewProfile, applyCompanionToProfile,
+});
+const { routeProfiles } = createProfileHandlers({
+  agentProfile, authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
+  profileOptionsFromUrl, profileOptionsFromBody, requireDeviceScope,
+  agentProfilePayload, readProfileHistory, recordProfileHistory,
+  rejectedLanguageFields, supportedLanguagesSentence, profileApplicationSemantics,
 });
 const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 
@@ -812,69 +819,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/profile" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, agentProfilePayload({}, profileOptionsFromUrl(url)));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile" && request.method === "PUT") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleAgentProfilePut(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile/history" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, readProfileHistory({
-        limit: Number(url.searchParams.get("limit") || 50),
-        systemPromptOnly: url.searchParams.get("system_prompt_only") === "1",
-      }));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile/versions" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const profileOptions = profileOptionsFromUrl(url);
-      sendJson(response, 200, {
-        current_version: agentProfile.currentVersion(profileOptions),
-        scope: profileOptions.scope,
-        device_id: profileOptions.deviceId || "",
-        versions: agentProfile.versions({
-          limit: Number(url.searchParams.get("limit") || 50),
-          deviceId: profileOptions.deviceId,
-        }),
-      });
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile/rollback" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleAgentProfileRollback(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile/reset" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleAgentProfileReset(request, response);
+    if (await routeProfiles(request, response, url)) {
       return;
     }
 
@@ -4632,88 +4577,6 @@ function cleanSelfExtensionToken(value, max) {
 
 function cleanSelfExtensionText(value, max) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-
-async function handleAgentProfilePut(request, response) {
-  const body = await readJsonBody(request);
-  // Accept either a bare patch object or { profile: {...} } / { profile_overrides: {...} }.
-  const patch = body && typeof body === "object"
-    ? (body.profile || body.profile_overrides || body)
-    : {};
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  const before = agentProfile.effective(profileOptions);
-  const beforeVersion = agentProfile.currentVersion(profileOptions);
-  agentProfile.patch(patch, {
-    source: body?.source || "api",
-    reason: "patch",
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
-  const after = agentProfile.effective(profileOptions);
-  const afterVersion = agentProfile.currentVersion(profileOptions);
-  recordProfileHistory(before, after, body?.source, {
-    beforeVersion,
-    afterVersion,
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
-  // A language the pipeline does not support is dropped by the sanitizer (the
-  // previous setting stays), so the turn never breaks. Report the rejection so
-  // the client can tell the user only the supported languages are available.
-  const rejectedLanguages = rejectedLanguageFields(patch);
-  const extra = { application: profileApplicationSemantics() };
-  if (rejectedLanguages.length > 0) {
-    extra.language_rejection = {
-      fields: rejectedLanguages,
-      supported: supportedLanguagesSentence(),
-      message: `That language is not in the supported set (${supportedLanguagesSentence()}), so I kept the previous language.`,
-    };
-  }
-  sendJson(response, 200, agentProfilePayload(extra, profileOptions));
-}
-
-async function handleAgentProfileReset(request, response) {
-  const body = await readJsonBody(request);
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  const before = agentProfile.effective(profileOptions);
-  const beforeVersion = agentProfile.currentVersion(profileOptions);
-  agentProfile.reset({
-    source: body?.source || "api",
-    reason: "reset",
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
-  const after = agentProfile.effective(profileOptions);
-  const afterVersion = agentProfile.currentVersion(profileOptions);
-  recordProfileHistory(before, after, body?.source || "reset", {
-    beforeVersion,
-    afterVersion,
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
-  sendJson(response, 200, agentProfilePayload({ application: profileApplicationSemantics() }, profileOptions));
-}
-
-async function handleAgentProfileRollback(request, response) {
-  const body = await readJsonBody(request);
-  const version = body?.version || body?.profile_version || body?.rollback_to_version;
-  try {
-    const before = agentProfile.effective();
-    const beforeVersion = agentProfile.currentVersion();
-    agentProfile.rollback(version, { source: body?.source || "api", reason: "rollback" });
-    const after = agentProfile.effective();
-    const afterVersion = agentProfile.currentVersion();
-    recordProfileHistory(before, after, body?.source || "rollback", { beforeVersion, afterVersion });
-    sendJson(response, 200, agentProfilePayload({ application: profileApplicationSemantics() }));
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
 }
 
 // Append a history entry whenever the effective profile actually changed. We log

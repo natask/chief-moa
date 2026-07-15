@@ -31,7 +31,8 @@
       coverage gate; reduce `server.js` to 16,061 lines.
 - [x] 2.4a Extract pet agent/bookmark collection handlers with a focused 90%
       line/branch/function coverage gate; reduce `server.js` to 15,939 lines.
-- [ ] 2.4b Extract the remaining companion, pet, and profile handlers.
+- [x] 2.4b Extract the remaining companion, pet, and profile handlers through
+      the bounded 2.4b1-2.4b4 slices below.
 - [x] 2.4b1 Extract pet shared-library, install, publish, and voice-clone
       handlers with a focused 90% line/branch/function coverage gate. Verified
       at 100% lines, 98.86% branches, and 90.91% functions; reduce `server.js`
@@ -44,6 +45,9 @@
       handlers with a focused 90% line/branch/function coverage gate. Verified
       at 100% lines, 93.22% branches, and 100% functions; reduce `server.js` to
       15,437 lines.
+- [x] 2.4b4 Extract profile read, update, history, version, rollback, and reset
+      handlers with a focused 90% line/branch/function coverage gate. Verified
+      at 100% lines, branches, and functions; reduce `server.js` to 15,300 lines.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.
 - [ ] 2.7 Extract context, thread, and history assembly.
