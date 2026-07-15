@@ -34,6 +34,7 @@ const { createPetCoreHandlers } = require("./lib/pet-core-handlers");
 const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
 const { createProfileHandlers } = require("./lib/profile-handlers");
 const { createAgentRunHandlers } = require("./lib/agent-run-handlers");
+const { createAgentRunLaunchHandlers } = require("./lib/agent-run-launch-handlers");
 const { createAgentWorkerHandlers } = require("./lib/agent-worker-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
@@ -432,6 +433,13 @@ const { routeAgentRunReads } = createAgentRunHandlers({
   runExists: (id) => fs.existsSync(agentRunPath(id)),
   readAgentRun, readAgentEvents, isRunActive: (id) => activeRuns.has(id),
   listAgentRuns, cancelAgentRunById, agentRunPayload,
+});
+const { routeAgentRunLaunches } = createAgentRunLaunchHandlers({
+  authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
+  sanitizeId, runExists: (id) => fs.existsSync(agentRunPath(id)),
+  readAgentRun, createAgentRun, executeAgentRun, activeRuns,
+  agentRunBodyWithSessionContext, useWorkerPullForAgentRuns, agentRunPayload,
+  appendAgentEvent, truncate, agentPromptWithSessionContext,
 });
 const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 
@@ -933,22 +941,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/runs" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleAgentRun(request, response);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname.startsWith("/v1/agent/runs/") && url.pathname.endsWith("/followups")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.replace("/v1/agent/runs/", "").replace("/followups", "");
-      await handleAgentRunFollowup(request, response, id);
+    if (await routeAgentRunLaunches(request, response, url)) {
       return;
     }
 
@@ -4572,43 +4565,6 @@ async function handleUpdateProject(request, response, id) {
   }
 }
 
-async function handleAgentRun(request, response) {
-  const body = await readJsonBody(request);
-  const runBody = agentRunBodyWithSessionContext(body);
-  let run;
-  try {
-    run = createAgentRun(runBody);
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-
-  if (useWorkerPullForAgentRuns()) {
-    sendJson(response, 202, {
-      ...agentRunPayload(readAgentRun(run.id)),
-      worker_pull: {
-        queued: true,
-        claim_url: "/v1/agent/workers/claim",
-      },
-    });
-    return;
-  }
-
-  const wait = body.wait !== false;
-  const active = { child: null, cancelRequested: false, promise: null };
-  const promise = executeAgentRun(run.id, active).finally(() => activeRuns.delete(run.id));
-  active.promise = promise;
-  activeRuns.set(run.id, active);
-
-  if (!wait) {
-    sendJson(response, 202, agentRunPayload(readAgentRun(run.id)));
-    return;
-  }
-
-  await promise;
-  sendJson(response, 200, agentRunPayload(readAgentRun(run.id)));
-}
-
 // Router activate: turn an intent/utterance into a launched task agent and
 // return the run id IMMEDIATELY (non-blocking). The router assembles a small
 // amount of context, creates an agent run via the existing run store/harness,
@@ -4803,85 +4759,6 @@ function cancelAgentRunById(id) {
   appendAgentEvent(safeId, "canceled", { error: next.error });
   activeRuns.delete(safeId);
   return { ok: true, status: "canceled_before_active", run: next };
-}
-
-async function handleAgentRunFollowup(request, response, id) {
-  const safeId = sanitizeId(id);
-  if (!fs.existsSync(agentRunPath(safeId))) {
-    sendJson(response, 404, { error: "agent run not found" });
-    return;
-  }
-
-  const parent = readAgentRun(safeId);
-  const body = await readJsonBody(request);
-  const text = String(body.prompt || body.text || body.transcript || "").trim();
-  if (!text) {
-    sendJson(response, 400, { error: "follow-up text is required" });
-    return;
-  }
-
-  appendAgentEvent(parent.id, "follow_up", {
-    text: truncate(text, 4000),
-    source: String(body.source || "android-overlay").slice(0, 80),
-  });
-
-  const continuationPrompt = [
-    "Continue the prior Moa agent run with this new user follow-up.",
-    "",
-    "Parent run:",
-    parent.id,
-    "",
-    "Parent prompt:",
-    truncate(parent.prompt || "", 6000),
-    "",
-    "Parent latest output:",
-    truncate(parent.output || parent.stderr || parent.stdout || "", 6000),
-    "",
-    "New user follow-up:",
-    text,
-  ].join("\n");
-  const promptWithSessionContext = agentPromptWithSessionContext(continuationPrompt, {
-    sessionId: body.session_id || body.conversation_id || parent.conversation_id,
-    branchId: body.branch_id || "default",
-    allBranches: body.all_branches_context === true,
-  });
-
-  let run;
-  try {
-    run = createAgentRun({
-      conversation_id: body.conversation_id || parent.conversation_id,
-      source: body.source || "android-follow-up",
-      harness: body.harness || parent.harness,
-      working_dir: body.working_dir || parent.working_dir,
-      prompt: promptWithSessionContext,
-      screen: body.screen,
-      parent_run_id: parent.id,
-      profile_version: body.profile_version || parent.profile_version,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-
-  const active = { child: null, cancelRequested: false, promise: null };
-  if (useWorkerPullForAgentRuns()) {
-    sendJson(response, 202, {
-      ...agentRunPayload(readAgentRun(run.id)),
-      parent_run_id: parent.id,
-      worker_pull: {
-        queued: true,
-        claim_url: "/v1/agent/workers/claim",
-      },
-    });
-    return;
-  }
-  const promise = executeAgentRun(run.id, active).finally(() => activeRuns.delete(run.id));
-  active.promise = promise;
-  activeRuns.set(run.id, active);
-  sendJson(response, 202, {
-    ...agentRunPayload(readAgentRun(run.id)),
-    parent_run_id: parent.id,
-  });
 }
 
 async function supervisorStatusPayload() {

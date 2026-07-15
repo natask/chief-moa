@@ -57,6 +57,9 @@
       completion-hook handlers with a focused 90% line/branch/function coverage
       gate. Verified at 100% for all three metrics; reduce `server.js` to 15,121
       lines.
+- [x] 2.5c Extract agent-run launch and follow-up handlers with a focused 90%
+      line/branch/function coverage gate. Verified at 100% lines, 93.62%
+      branches, and 100% functions; reduce `server.js` to 14,998 lines.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.
 - [ ] 2.7 Extract context, thread, and history assembly.
 - [ ] 2.8 Extract device-client, browser-task, and tool-request stores.
