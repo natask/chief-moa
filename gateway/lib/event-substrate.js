@@ -1225,5 +1225,7 @@ module.exports = {
     retrySync,
     sameFileIdentity,
     unlinkArtifactWithIdentity,
+    lstatRegularBoundary,
+    verifyOpenedRegularBoundary,
   }),
 };

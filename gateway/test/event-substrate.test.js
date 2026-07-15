@@ -381,6 +381,8 @@ test("filesystem test primitives fail closed on identity and retry faults", asyn
     retrySync,
     sameFileIdentity,
     unlinkArtifactWithIdentity,
+    lstatRegularBoundary,
+    verifyOpenedRegularBoundary,
   } = eventSubstrateTestInternals;
   assert.throws(() => createPostgresEventSubstrateStore({}), /DATABASE_URL is required/);
   const lazyPostgres = createPostgresEventSubstrateStore({ databaseUrl: "postgres://invalid.invalid/test", initialize: false });
@@ -468,4 +470,25 @@ test("filesystem test primitives fail closed on identity and retry faults", asyn
   assert.equal(jsonAppendLockIsStale({ mtimeMs: 0, owner: validOwner }, staleOptions), true);
   assert.equal(jsonAppendLockIsStale({ mtimeMs: 0, owner: { ...validOwner, process_instance_id: "" } }, staleOptions), false);
   assert.equal(jsonAppendLockIsStale({ mtimeMs: 0, owner: { ...validOwner, pid: 99999999 } }, staleOptions), true);
+
+  const boundary = path.join(root, "opened-boundary");
+  fs.writeFileSync(boundary, "one");
+  const before = lstatRegularBoundary(boundary, "test boundary");
+  const handle = fs.openSync(boundary, "r");
+  try {
+    assert.equal(verifyOpenedRegularBoundary(boundary, handle, before, "test boundary").isFile(), true);
+    assert.throws(
+      () => verifyOpenedRegularBoundary(boundary, handle, { ...before, ino: before.ino + 1 }, "test boundary"),
+      (error) => error.code === "EVENT_SUBSTRATE_UNSAFE_PATH",
+    );
+    fs.renameSync(boundary, `${boundary}.old`);
+    fs.writeFileSync(boundary, "two");
+    assert.throws(
+      () => verifyOpenedRegularBoundary(boundary, handle, before, "test boundary"),
+      (error) => error.code === "EVENT_SUBSTRATE_UNSAFE_PATH",
+    );
+  } finally {
+    fs.closeSync(handle);
+  }
+  assert.equal(lstatRegularBoundary(path.join(root, "missing-boundary"), "test boundary", { allowMissing: true }), null);
 });
