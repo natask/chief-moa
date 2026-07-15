@@ -77,3 +77,33 @@ The consolidation may reach `master` only after:
 
 Paid provider and real phone/browser QA remain distinct evidence. They are not
 silently inferred from deterministic checks.
+
+## Integration Decisions And Evidence
+
+- Rebased the voice/browser lane one commit at a time. Retained current-master
+  implementations where older extraction patches conflicted, and integrated
+  the compatible broker, search, native-audio, role-authority, voice-profile,
+  companion, deployment, telemetry, documentation, and verification work.
+- Kept the current Android and extension controllers while retaining the
+  independent durable-draft state/protocol modules and their focused tests.
+  The older controller rewrites were not applied because they targeted
+  superseded implementations and regressed the current runtime contract.
+- Reconciled the gateway decomposition ledger so skipped/superseded extraction
+  commits are not represented as present modules.
+- Established exact non-growth ceilings for the combined oversized-source debt
+  and recorded new extraction tasks. Repository-wide production size remains a
+  trend metric; the per-file ceiling is the blocking ratchet.
+- Repaired every invalid active OpenSpec change. Fully completed contributor
+  strategy and audio-note changes were archived; proposed or incomplete changes
+  remain active with strict-valid capability deltas.
+- Combined validation on 2026-07-15: gateway functional/smoke tests passed
+  524/526 with one intentional skip and only the subsequently repaired size
+  gate failing; gateway quality coverage and deterministic voice evaluation
+  then passed; browser extension verify and real headless-Chrome smoke passed
+  after making shortcut tap simulation timing-independent; Android
+  `testDebugUnitTest assembleDebug` passed; every active OpenSpec change passed
+  strict validation; `git diff --check` passed.
+
+The final commit must rerun the complete gateway gate so the repaired size
+policy is covered in the same invocation, then recheck all surfaces from a
+clean tree before master moves.

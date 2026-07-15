@@ -434,6 +434,23 @@ async function main() {
           });
           if (holdMs) await sleep(holdMs);
         };
+	        const dispatchTap = async (key, code) => {
+	          await chrome.scripting.executeScript({
+	            target: { tabId },
+	            args: [key, code],
+	            func: (eventKey, eventCode) => {
+	              for (const eventType of ["keydown", "keyup"]) {
+	                window.dispatchEvent(new KeyboardEvent(eventType, {
+	                  key: eventKey,
+	                  code: eventCode,
+	                  metaKey: true,
+	                  bubbles: true,
+	                  cancelable: true,
+	                }));
+	              }
+	            },
+	          });
+	        };
 	        const read = async () => {
 	          const [result] = await chrome.scripting.executeScript({
 	            target: { tabId },
@@ -480,13 +497,11 @@ async function main() {
 	        await sleep(80);
 	        const comma = await read();
 
-        await dispatch("keydown", ".", "Period");
-        await dispatch("keyup", ".", "Period", 50);
+        await dispatchTap(".", "Period");
         await sleep(120);
         const tapStarted = await read();
 
-        await dispatch("keydown", ".", "Period");
-        await dispatch("keyup", ".", "Period", 30);
+        await dispatchTap(".", "Period");
         await sleep(120);
         const tapCommitted = await read();
         const attach = tapCommitted.calls.find((call) => call.cmd === "voiceSessionAttach");

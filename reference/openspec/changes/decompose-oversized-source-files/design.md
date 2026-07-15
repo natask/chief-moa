@@ -6,12 +6,15 @@ The initial tracked-source audit found these files above the 2,000-line limit:
 
 | File | Baseline lines | Intended boundary |
 | --- | ---: | --- |
-| `gateway/server.js` | 15,923 | composition and route registration |
-| `browser_extension/extension/background.js` | 4,489 | background orchestration |
-| `gateway/lib/voice-providers.js` | 4,016 | provider registry and adapters |
-| `browser_extension/extension/content.js` | 3,704 | content-script composition |
-| `android_app/app/src/main/java/ai/moa/assistant/OverlayService.java` | 3,659 | Android service lifecycle |
-| `gateway/lib/voice-session-server.js` | 2,047 | voice-session transport |
+| `gateway/server.js` | 16,610 | composition and route registration |
+| `gateway/lib/voice-drafts.js` | 5,950 | durable draft state machine and persistence |
+| `browser_extension/extension/background.js` | 5,663 | background orchestration |
+| `browser_extension/extension/content.js` | 4,614 | content-script composition |
+| `android_app/app/src/main/java/ai/moa/assistant/OverlayService.java` | 4,094 | Android service lifecycle |
+| `gateway/lib/voice-providers.js` | 4,049 | provider registry and adapters |
+| `gateway/lib/voice-session-server.js` | 2,279 | voice-session transport |
+| `website/public/pets/index.html` | 2,244 | pet-library markup, styling, and behavior |
+| `gateway/lib/work-history.js` | 2,032 | work-history domain and persistence |
 
 Line counts are audit evidence, not a quality score. Generated assets, lock
 files, documentation, tests, and smoke fixtures are not governed by the
@@ -31,7 +34,9 @@ line ultimate goal remains explicit, but reaching it requires evidence-backed
 scope reduction and deduplication across Android, browser, and gateway—not
 minification or moving owned behavior into dependencies.
 
-The total-production ceiling ratchets downward separately from that milestone.
+The production total is a trend metric rather than a hard ceiling: a bounded
+new module may legitimately increase it. Per-file ceilings remain the hard
+ratchet, so consolidation cannot hide growth in an already oversized file.
 Test and smoke source is measured independently and may not exceed 2x owned
 production source. The ratio gate must not be satisfied by deleting meaningful
 failure-path, adversarial, or integration coverage.

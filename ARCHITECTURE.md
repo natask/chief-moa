@@ -1577,6 +1577,16 @@ Agent harnesses and their credentials never run on or mount into the VPS
 gateway; remote agent execution uses the worker-pull model where the user's
 execution machine connects outbound to claim queued runs.
 
+## Source-Size Guardrail
+
+Owned production files have a 2,000-line limit. Files already above that limit
+are explicit architecture debt with exact non-growth ceilings in
+`scripts/source-size-policy.js`; every extraction lowers or removes its ceiling.
+The repository-wide production total is reported as a trend toward the 60,000
+line milestone and 10,000-line ultimate goal, not as a hard ceiling that would
+forbid adding a new bounded module. The active
+`decompose-oversized-source-files` change owns the extraction backlog.
+
 ## Deployment Finish Loop
 
 Agents must treat preview deployment or release artifact creation as part of

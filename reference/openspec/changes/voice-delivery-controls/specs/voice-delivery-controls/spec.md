@@ -30,8 +30,8 @@ natural-language pace instruction appended to `input.prompt`.
 
 ### Requirement: Tool rounds are never dead air on streaming voice turns
 
-On a streaming voice turn, when the model starts a tool round that does real
-work without having spoken yet, the gateway SHALL speak one short localized
+The gateway SHALL prevent dead air on a streaming voice turn when the model
+starts a tool round that does real work without having spoken yet by speaking one short localized
 acknowledgment through the streaming pipeline immediately (bypassing the
 sentence chunker), and the reasoning model SHALL be directed to speak a
 one-line acknowledgment before real tool calls. Quick metadata lookups SHALL

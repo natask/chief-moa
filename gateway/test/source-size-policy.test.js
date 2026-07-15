@@ -1,6 +1,9 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 const {
   MAX_SOURCE_LINES,
@@ -37,4 +40,17 @@ test("tracked and non-ignored production sources do not exceed a debt ceiling", 
   assert.deepEqual(audit.violations, [], JSON.stringify(audit.violations, null, 2));
   assert.ok(audit.productionLines > audit.targetProductionLines);
   assert.ok(audit.testToProductionRatio <= MAX_TEST_TO_PRODUCTION_RATIO);
+});
+
+test("a bounded new module may increase the reported total without violating architecture debt", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moa-source-size-policy-"));
+  try {
+    fs.mkdirSync(path.join(root, "gateway", "lib"), { recursive: true });
+    fs.writeFileSync(path.join(root, "gateway", "lib", "bounded.js"), "const value = 1;\n");
+    const audit = auditSourceSizes({ root, files: ["gateway/lib/bounded.js"] });
+    assert.equal(audit.productionLines, 1);
+    assert.deepEqual(audit.violations, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

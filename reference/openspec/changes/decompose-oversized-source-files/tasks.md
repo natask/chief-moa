@@ -32,6 +32,8 @@
 - [ ] 2.8 Extract device-client, browser-task, and tool-request stores.
 - [ ] 2.9 Move provider adapters and HTTP routes behind bounded modules.
 - [ ] 2.10 Reduce `server.js` below 2,000 lines and remove its debt exemption.
+- [ ] 2.11 Split the durable voice-draft store into bounded state, persistence,
+      authority, and recovery modules.
 
 ## 3. Other Oversized Surfaces
 
@@ -40,6 +42,8 @@
 - [ ] 3.3 Split Android overlay lifecycle, UI, voice, and action coordination below 2,000 lines.
 - [ ] 3.4 Split voice provider implementations into provider-specific modules.
 - [ ] 3.5 Reduce the voice-session transport below 2,000 lines.
+- [ ] 3.6 Split the pet-library page into bounded markup, style, and behavior files.
+- [ ] 3.7 Reduce the work-history module below 2,000 lines.
 
 ## Verification
 
