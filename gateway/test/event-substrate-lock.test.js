@@ -84,13 +84,17 @@ test("real child processes serialize compare-and-append and preserve exact retry
     assert.equal(seeded.stream_version, 1);
 
     const commands = [input("child-race-one", 1), input("child-race-two", 1)];
-    const results = await Promise.all(commands.map((event) => runChild(dataDir, event)));
+    // This case verifies compare-and-append serialization, not stale-owner
+    // recovery. Keep the stale threshold above a loaded CI scheduler pause so
+    // a healthy child is never mistaken for an abandoned lock owner.
+    const childOptions = { staleMs: 2_000, timeoutMs: 5_000 };
+    const results = await Promise.all(commands.map((event) => runChild(dataDir, event, "append", childOptions)));
     assert.deepEqual(results.map((result) => result.code).sort(), [0, 2]);
     const winnerIndex = results.findIndex((result) => result.code === 0);
     const loser = results.find((result) => result.code === 2);
     assert.equal(loser.json?.error?.code, "EVENT_STREAM_VERSION_CONFLICT");
 
-    const retry = await runChild(dataDir, commands[winnerIndex]);
+    const retry = await runChild(dataDir, commands[winnerIndex], "append", childOptions);
     assert.equal(retry.code, 0, retry.stderr || retry.stdout);
     assert.deepEqual(retry.json.result, results[winnerIndex].json.result);
 
