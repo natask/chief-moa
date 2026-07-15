@@ -274,6 +274,13 @@
       the existing supervisor lifecycle smoke. Enforce a focused 90%
       line/branch/function gate, verified at 100% for all three metrics. Reduce
       `server.js` to 13,341 lines.
+- [x] 2.49 Extract authenticated conversation, session, thread, context, voice
+      turn, chat turn, and history read routing from `server.js`; add focused
+      route-recognition, authorization, alias, default, decoding, branch-metadata,
+      pagination, legacy-record, collision, and normalization tests plus session
+      history, thread lifecycle, and chat-turn integration smokes. Enforce a
+      focused 90% line/branch/function gate, verified at 100% for all three
+      metrics. Reduce `server.js` to 13,184 lines.
 
 ## 3. Other Oversized Surfaces
 
