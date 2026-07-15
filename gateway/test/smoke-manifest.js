@@ -37,6 +37,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/presentation-handlers.js",
   "lib/supervisor-handlers.js",
   "lib/session-read-handlers.js",
+  "lib/thread-switch-handlers.js",
   "lib/project-store.js",
   "lib/intent-runtime.js",
   "lib/intent-runtime-router.js",
