@@ -1589,6 +1589,11 @@ queues.
   the linked `agent_run` create, and the deterministic keyless step-planning
   fallback; behind `/v1/browser/agent-tasks*`. Smoke:
   `scripts/smoke-browser-agent-loop.js` (`npm run smoke:browser-agent-loop`).
+- `gateway/lib/browser-programs.js`: closed `moa.browser-program.v2` validator
+  and bounded gateway artifact/receipt store. It keeps immutable generated
+  source revisions and inert proposal/audit state, binds receipts to the exact
+  standalone or delegated authority variant, and performs no browser execution
+  or registration. Focused coverage: `npm run test:coverage:browser-programs`.
 - `gateway/lib/surface-skills.js`: `resolveTurnSurface` and the per-surface
   code-mode/classic tool registry (phone_* and browser_* capabilities,
   `phone_action`/`launch_background_browser_task` fallback tools). Smoke:
