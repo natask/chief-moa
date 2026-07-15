@@ -5,6 +5,7 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public final class MoaAssistantAudioProgressTrackerTest {
@@ -80,5 +81,72 @@ public final class MoaAssistantAudioProgressTrackerTest {
         assertEquals("cancel", event.optString("reason"));
         assertTrue(event.has("assistant_text_chars"));
         assertFalse(event.isNull("segment_index"));
+    }
+
+    @Test
+    public void metadataParsingHandlesAliasesStringsAndInvalidBounds() throws Exception {
+        assertNull(MoaAssistantAudioProgressTracker.parseSegmentMetadata(null));
+
+        MoaAssistantAudioProgressTracker.SegmentMetadata aliases =
+                MoaAssistantAudioProgressTracker.parseSegmentMetadata(new JSONObject()
+                        .put("index", "7")
+                        .put("assistant_text_start", " 4 ")
+                        .put("assistant_text_end", 9));
+        assertEquals(7, aliases.index);
+        assertEquals(4, aliases.textStart);
+        assertEquals(9, aliases.textEnd);
+
+        MoaAssistantAudioProgressTracker.SegmentMetadata bounded =
+                MoaAssistantAudioProgressTracker.parseSegmentMetadata(new JSONObject()
+                        .put("segment_index", "not-a-number")
+                        .put("char_start", -3)
+                        .put("char_end", -8));
+        assertEquals(-1, bounded.index);
+        assertEquals(0, bounded.textStart);
+        assertEquals(0, bounded.textEnd);
+
+        MoaAssistantAudioProgressTracker.SegmentMetadata textFallback =
+                MoaAssistantAudioProgressTracker.parseSegmentMetadata(new JSONObject()
+                        .put("start_char", 2)
+                        .put("text", " hi "));
+        assertEquals(2, textFallback.textStart);
+        assertEquals(4, textFallback.textEnd);
+    }
+
+    @Test
+    public void ignoresEmptyFramesAndResetClearsAllProgress() throws Exception {
+        MoaAssistantAudioProgressTracker tracker = new MoaAssistantAudioProgressTracker();
+        tracker.onAssistantAudioSegment(new JSONObject()
+                .put("segment_index", 1)
+                .put("text_start", 2)
+                .put("text_end", 8));
+        tracker.onAssistantAudioFrame(null);
+        assertEquals(0L, tracker.snapshot(100L).playedPcmBytes);
+
+        tracker.onAssistantAudioSegment(new JSONObject()
+                .put("segment_index", 2)
+                .put("text_start", 0)
+                .put("text_end", 4));
+        tracker.onAssistantAudioFrame(new byte[8]);
+        assertEquals(4, tracker.snapshot(4L).assistantTextChars);
+
+        tracker.reset();
+        MoaAssistantAudioProgressTracker.PlaybackProgress reset = tracker.snapshot(4L);
+        assertEquals(0L, reset.playedPcmBytes);
+        assertEquals(0, reset.assistantTextChars);
+        assertEquals(-1, reset.assistantSegmentIndex);
+    }
+
+    @Test
+    public void negativeAndOverflowedPlaybackHeadsFailClosed() throws Exception {
+        MoaAssistantAudioProgressTracker tracker = new MoaAssistantAudioProgressTracker();
+        tracker.onAssistantAudioSegment(new JSONObject()
+                .put("segment_index", 0)
+                .put("text_start", 0)
+                .put("text_end", 2));
+        tracker.onAssistantAudioFrame(new byte[4]);
+
+        assertEquals(0L, tracker.snapshot(-1L).playedPcmBytes);
+        assertEquals(0L, tracker.snapshot(Long.MAX_VALUE).playedPcmBytes);
     }
 }

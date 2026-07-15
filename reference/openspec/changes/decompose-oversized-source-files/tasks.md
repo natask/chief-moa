@@ -63,6 +63,11 @@
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
+- [x] 4.6 Add a production-only Android JaCoCo report and exact non-regression
+      gate. Baseline: 16.43% lines, 19.79% branches, and 21.49% methods with
+      128 passing JVM tests.
+- [ ] 4.7 Merge JVM and emulator/device evidence and raise the Android hard gate
+      to at least 90% lines, branches, and methods.
 
 ## Verification
 
