@@ -250,7 +250,14 @@ test("core requires explicit persistence and authenticated-authority seams", () 
 test("persistence adapters expose bounded revisions and fail closed on corrupt or unsafe state", () => withDurableStore(({ root, stateFile }) => {
   const memory = createMemoryVideoEvidenceAdapter();
   assert.equal(memory.read().revision, 0);
-  memory.transact((state) => { state.records.one = { id: "one" }; });
+  memory.transact((state) => {
+    state.records.one = {
+      request_id: "one",
+      status: "proposed",
+      turn: { turn_id: "turn-one", session_id: "session-one" },
+      evidence: null,
+    };
+  });
   assert.equal(memory.read().revision, 1);
   memory.transact(() => {});
   assert.equal(memory.read().revision, 1);
@@ -513,6 +520,60 @@ test("durable adapter reloads records, receipts, claims, tombstones, and rejects
     ...afterDeleteBinding,
     evidence: uploadedEvidence(),
   })), "evidence_identity_reuse");
+}));
+
+test("parseable claim and deletion-tombstone tampering fails closed before restart use", () => withDurableStore(({ stateFile }) => {
+  const adapter = createFileVideoEvidenceAdapter({ stateFile });
+  const core = harness({ adapter }).core;
+  core.proposeFromModel(proposal());
+  advanceToAttached(core);
+  core.deleteEvidence("video-request-1", trusted("delete-integrity", {
+    reason: "integrity fixture",
+    blob_delete_receipt: blobDeleteReceipt(),
+    at: "2026-07-15T12:02:00.000Z",
+  }));
+  const pristine = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  const tamper = (mutate, code) => {
+    const value = structuredClone(pristine);
+    mutate(value);
+    fs.writeFileSync(stateFile, JSON.stringify(value));
+    assertCode(() => adapter.read(), code);
+  };
+  for (const [kind, identity] of [
+    ["evidence_id", "evidence-video-1"],
+    ["blob_ref", "blob-video-1"],
+    ["sha256", SHA],
+  ]) {
+    tamper((state) => { delete state.asset_claims[kind][identity]; }, "VIDEO_EVIDENCE_STORE_CLAIM_GRAPH_CORRUPT");
+  }
+  tamper((state) => {
+    state.asset_claims.evidence_id["evidence-video-1"] = {
+      request_id: "video-request-other",
+      turn_id: "turn-other",
+      session_id: "session-other",
+    };
+  }, "VIDEO_EVIDENCE_STORE_CLAIM_GRAPH_CORRUPT");
+  tamper((state) => {
+    state.asset_claims.blob_ref["orphan-blob"] = {
+      request_id: "video-request-orphan",
+      turn_id: "turn-orphan",
+      session_id: "session-orphan",
+    };
+  }, "VIDEO_EVIDENCE_STORE_CLAIM_GRAPH_CORRUPT");
+  tamper((state) => { delete state.records["video-request-1"].deletion.deleted_blob_ref; }, "VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT");
+  tamper((state) => { state.records["video-request-1"].receipts.pop(); }, "VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT");
+  tamper((state) => {
+    const duplicate = structuredClone(state.records["video-request-1"]);
+    duplicate.request_id = "video-request-conflict";
+    duplicate.turn.turn_id = "turn-conflict";
+    duplicate.turn.session_id = "session-conflict";
+    state.records[duplicate.request_id] = duplicate;
+  }, "VIDEO_EVIDENCE_STORE_CLAIM_CONFLICT");
+
+  fs.writeFileSync(stateFile, JSON.stringify(pristine));
+  const restarted = harness({ adapter: createFileVideoEvidenceAdapter({ stateFile }) }).core;
+  assert.equal(restarted.get("video-request-1").status, "deleted");
+  assert.equal(restarted.get("video-request-1").deletion.deleted_blob_ref, "blob-video-1");
 }));
 
 test("parallel file-backed instances serialize and only one can claim a shared blob and digest", () => withDurableStore(async ({ stateFile }) => {

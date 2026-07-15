@@ -90,7 +90,71 @@ function normalizeState(value) {
   for (const key of ["evidence_id", "blob_ref", "sha256"]) {
     assetClaims[key] = boundedObject(rawClaims[key], `asset_claims.${key}`, MAX_CLAIMS_PER_KIND);
   }
+  assertClaimGraph(records, assetClaims);
   return clone({ schema: STORE_SCHEMA, revision: value.revision, records, asset_claims: assetClaims });
+}
+
+function assertClaimGraph(records, actualClaims) {
+  const expected = { evidence_id: {}, blob_ref: {}, sha256: {} };
+  for (const [recordKey, record] of Object.entries(records)) {
+    if (!plainObject(record) || record.request_id !== recordKey || !plainObject(record.turn)) {
+      throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} has invalid identity`);
+    }
+    const owner = {
+      request_id: recordKey,
+      turn_id: requiredStoredText(record.turn.turn_id, `${recordKey}.turn_id`),
+      session_id: requiredStoredText(record.turn.session_id, `${recordKey}.session_id`),
+    };
+    const evidence = record.evidence;
+    const evidenceRequired = ["uploaded", "attached", "processed", "deleted"].includes(record.status);
+    if (!evidence) {
+      if (evidenceRequired) throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} lost required evidence`);
+      continue;
+    }
+    if (!plainObject(evidence)) throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} evidence is invalid`);
+    const receipts = Array.isArray(record.receipts) ? record.receipts : [];
+    if (!receipts.some((receipt) => receipt?.event === "uploaded")) {
+      throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} evidence lacks an upload receipt`);
+    }
+    const evidenceId = requiredStoredText(evidence.evidence_id, `${recordKey}.evidence_id`);
+    const sha256 = requiredStoredText(evidence.sha256, `${recordKey}.sha256`);
+    let blobRef;
+    if (record.status === "deleted") {
+      if (evidence.deleted !== true || evidence.blob_ref !== null || !plainObject(record.deletion)) {
+        throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} has an invalid deletion tombstone`);
+      }
+      blobRef = requiredStoredText(record.deletion.deleted_blob_ref, `${recordKey}.deleted_blob_ref`);
+      requiredStoredText(record.deletion.blob_delete_receipt_ref, `${recordKey}.blob_delete_receipt_ref`);
+      if (receipts.at(-1)?.event !== "deleted") {
+        throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} deletion receipt continuity is broken`);
+      }
+    } else {
+      if (evidence.deleted === true) throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} has an unexpected deletion tombstone`);
+      blobRef = requiredStoredText(evidence.blob_ref, `${recordKey}.blob_ref`);
+    }
+    addExpectedClaim(expected.evidence_id, evidenceId, owner, "evidence_id");
+    addExpectedClaim(expected.blob_ref, blobRef, owner, "blob_ref");
+    addExpectedClaim(expected.sha256, sha256, owner, "sha256");
+  }
+  for (const key of ["evidence_id", "blob_ref", "sha256"]) {
+    if (canonical(actualClaims[key]) !== canonical(expected[key])) {
+      throw storeError("VIDEO_EVIDENCE_STORE_CLAIM_GRAPH_CORRUPT", `${key} claims do not exactly match persisted record ownership`);
+    }
+  }
+}
+
+function addExpectedClaim(index, identity, owner, kind) {
+  const existing = index[identity];
+  if (existing && canonical(existing) !== canonical(owner)) {
+    throw storeError("VIDEO_EVIDENCE_STORE_CLAIM_CONFLICT", `${kind} is owned by conflicting records`);
+  }
+  index[identity] = owner;
+}
+
+function requiredStoredText(value, field) {
+  const text = String(value || "").trim();
+  if (!text || text.length > 240) throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `${field} is invalid`);
+  return text;
 }
 
 function boundedObject(value, field, maxEntries) {
