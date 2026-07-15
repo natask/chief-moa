@@ -11,7 +11,7 @@ markup, and styles never contribute production coverage.
 
 | Surface | Lines | Branches | Functions/methods | Evidence status |
 | --- | ---: | ---: | ---: | --- |
-| Gateway | 76.72% | 72.28% | 80.55% | Node production-only run over `server.js` and `lib/**/*.js`; 651 tests passed and one skipped at the last whole-surface measurement. Extracted work-history, pet-collection, pet-sharing, pet-core, companion, profile, agent-run read/cancel, agent-worker, agent-run launch/follow-up, and router-activation handlers plus the release registry, proactive-turn policy, worker-pull state machine, remote-mode policy, Brain, and memory matcher each have permanent focused coverage above 90%. |
+| Gateway | 76.82% | 72.38% | 80.61% | Node production-only run over `server.js` and `lib/**/*.js`; 657 tests passed and one skipped at the last whole-surface measurement. Extracted work-history, pet-collection, pet-sharing, pet-core, companion, profile, agent-run read/cancel, agent-worker, agent-run launch/follow-up, and router-activation handlers plus the release registry, proactive-turn policy, worker-pull state machine, remote-mode policy, Brain, and memory matcher each have permanent focused coverage above 90%. |
 | Android | 17.94% | 21.80% | 23.51% | Exact JaCoCo ratchet passes with 144 JVM tests. Extracted agent-run and context-control state modules each have permanent focused coverage above 90%; generated Android classes remain the only exclusions. |
 | Browser extension | 17.85% | 7.71% | 8.29% | Exact 25-file runtime classifier; 12 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. Extracted browser-turn and agent-loop policy modules have permanent focused gates above 90%. |
 | LiveKit worker | 99.07% | 90.40% | 92.00% | Hard production-only gate passes with all six compiled runtime modules loaded and 19 tests covering worker, STT, LLM, TTS, auth, streaming, and failure paths. |
@@ -109,7 +109,7 @@ deleting, or excluding meaningful failure-path and integration tests.
 - Apple: the ad-hoc signed QA bundle was created at
   `apple_surfaces/dist/MoaMac.app`; packaging did not launch it or request TCC
   permissions.
-- Gateway: the complete production-only run passed 651 tests with one skip, but
+- Gateway: the complete production-only run passed 657 tests with one skip, but
   no isolated preview, backup/restore evidence, or state-compatibility rollout
   was established. The branch was therefore not pushed through the
   production-triggering `push-master.sh` path.
