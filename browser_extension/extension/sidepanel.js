@@ -11,8 +11,12 @@ const talkBtn = document.getElementById("talk");
 const form = document.getElementById("form");
 const textInput = document.getElementById("text");
 const sendBtn = document.getElementById("sendBtn");
+const agentModeSelector = document.getElementById("agentModeSelector");
+const agentModeButtons = [...document.querySelectorAll("[data-agent-mode-option]")];
 
 const TURN_WATCHDOG_MS = 90000;
+const BROWSER_AGENT_ROLE_KEY = "ageeBrowserAgentRole";
+const BROWSER_AGENT_ROLES = new Set(["delegate", "help", "collaborate", "explain"]);
 
 let port = null;
 let nextReqId = 1;
@@ -25,6 +29,25 @@ const playbackSources = new Set();
 
 // One turn at a time. `turn` is null when idle.
 let turn = null;
+let selectedAgentRole = "delegate";
+
+function setAgentRole(value, { persist = true } = {}) {
+  const role = String(value || "").trim().toLowerCase();
+  selectedAgentRole = BROWSER_AGENT_ROLES.has(role) ? role : "delegate";
+  if (agentModeSelector) agentModeSelector.dataset.agentMode = selectedAgentRole;
+  for (const button of agentModeButtons) {
+    button.setAttribute("aria-pressed", String(button.dataset.agentModeOption === selectedAgentRole));
+  }
+  if (persist) chrome.storage.local.set({ [BROWSER_AGENT_ROLE_KEY]: selectedAgentRole }).catch(() => {});
+}
+
+for (const button of agentModeButtons) {
+  button.addEventListener("click", () => setAgentRole(button.dataset.agentModeOption));
+}
+
+chrome.storage.local.get({ [BROWSER_AGENT_ROLE_KEY]: "delegate" }).then((stored) => {
+  setAgentRole(stored[BROWSER_AGENT_ROLE_KEY], { persist: false });
+}).catch(() => setAgentRole("delegate", { persist: false }));
 
 function setStatus(text, state = "idle") {
   statusEl.textContent = text;
@@ -115,6 +138,33 @@ function updateCard(state, { you, reply, error, pendingLabel } = {}) {
     state.ui.ag.className = "ag error";
   }
   state.ui.card.scrollIntoView({ block: "end" });
+}
+
+function confirmDelegation(state) {
+  return new Promise((resolve) => {
+    const message = document.createElement("p");
+    message.className = "delegation-confirm-copy";
+    message.textContent = "Delegate this task on the current site for up to 20 steps? A.G. may click, type, select, scroll, press keys, wait, and capture page evidence. Navigation or sensitive/out-of-scope work stops for approval.";
+    const actions = document.createElement("div");
+    actions.className = "delegation-confirm-actions";
+    const allow = document.createElement("button");
+    allow.type = "button";
+    allow.textContent = "Delegate task";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.className = "secondary";
+    actions.append(allow, cancel);
+    state.ui.ag.className = "ag confirming";
+    state.ui.ag.replaceChildren(message, actions);
+    const finish = (confirmed) => {
+      allow.disabled = true;
+      cancel.disabled = true;
+      resolve(confirmed);
+    };
+    allow.addEventListener("click", () => finish(true), { once: true });
+    cancel.addEventListener("click", () => finish(false), { once: true });
+  });
 }
 
 // ---- Audio playback ---------------------------------------------------------
@@ -465,26 +515,43 @@ floatBtn.addEventListener("click", () => {
   floatOut();
 });
 
-// ---- Text turns over the same voice-session channel --------------------------
+// ---- Typed browser-agent turns -----------------------------------------------
 
-form.addEventListener("submit", (e) => {
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = textInput.value.trim();
   if (!text || (turn && !turn.done)) return;
   textInput.value = "";
   sendBtn.disabled = true;
   setStatus("Sending…");
-  startTurn("text", { youText: text }).then((state) => {
-    if (!state) return;
-    updateCard(state, { pendingLabel: "thinking…" });
-    request({
-      cmd: "voiceSessionControl",
-      voiceSessionId: state.voiceSessionId,
-      message: { type: "text_turn", text, turn_id: state.turnId },
-    }).then((res) => {
-      if (!res?.ok) failTurn(state, String(res?.error || "The gateway rejected the text turn."));
-    }).catch((error) => failTurn(state, String(error?.message || error)));
-  });
+  const state = newTurnState("text", text);
+  turn = state;
+  armWatchdog(state);
+  const role = selectedAgentRole;
+  let delegationConfirmed = false;
+  if (role === "delegate") {
+    delegationConfirmed = await confirmDelegation(state);
+    if (!delegationConfirmed) {
+      updateCard(state, { reply: "Delegation cancelled." });
+      finishTurn(state);
+      return;
+    }
+  }
+  updateCard(state, { pendingLabel: `${role} is working…` });
+  request({
+    cmd: "browserRoleTurn",
+    cueId: `panel_${state.turnId}`,
+    text,
+    role,
+    delegationConfirmed,
+  }, TURN_WATCHDOG_MS).then((res) => {
+    if (!res?.ok) {
+      failTurn(state, String(res?.error || "The browser agent rejected the turn."));
+      return;
+    }
+    updateCard(state, { reply: String(res.summary || "Done.") });
+    finishTurn(state);
+  }).catch((error) => failTurn(state, String(error?.message || error)));
 });
 
 ensurePort();

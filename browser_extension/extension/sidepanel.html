@@ -138,6 +138,24 @@
         border-color: #5b2b2b;
         color: var(--error);
       }
+      .turn .ag.confirming { background: #1b1d22; }
+      .delegation-confirm-copy { margin: 0; }
+      .delegation-confirm-actions { display: flex; gap: 8px; margin-top: 12px; }
+      .delegation-confirm-actions button,
+      #agentModeSelector button {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        cursor: pointer;
+        font: inherit;
+        padding: 7px 9px;
+      }
+      .delegation-confirm-actions button { background: var(--text); color: #111; }
+      .delegation-confirm-actions button.secondary { background: transparent; color: var(--muted); }
+      .mode-section { border-bottom: 1px solid var(--border); padding: 10px 14px; }
+      .mode-label { color: var(--muted); display: block; font-size: 11px; margin-bottom: 7px; }
+      #agentModeSelector { display: grid; gap: 4px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      #agentModeSelector button { background: transparent; color: var(--muted); font-size: 11px; min-width: 0; padding-inline: 4px; }
+      #agentModeSelector button[aria-pressed="true"] { background: var(--text); color: #111; font-weight: 650; }
       footer {
         border-top: 1px solid var(--border);
         display: flex;
@@ -211,6 +229,15 @@
       <div class="spacer"></div>
       <button id="floatBtn" type="button" title="Pop A.G. out into an always-on-top floating window">Float</button>
     </header>
+    <section class="mode-section" aria-labelledby="agentModeLabel">
+      <span class="mode-label" id="agentModeLabel">Browser agent</span>
+      <div id="agentModeSelector" data-agent-mode="delegate" role="group" aria-label="Choose browser agent">
+        <button id="agentModeDelegate" data-agent-mode-option="delegate" type="button" aria-pressed="true">Delegate</button>
+        <button id="agentModeHelp" data-agent-mode-option="help" type="button" aria-pressed="false">Help</button>
+        <button id="agentModeCollaborate" data-agent-mode-option="collaborate" type="button" aria-pressed="false">Collaborate</button>
+        <button id="agentModeExplain" data-agent-mode-option="explain" type="button" aria-pressed="false">Explain</button>
+      </div>
+    </section>
     <main id="log">
       <p class="hint">
         This panel is A.G.'s own surface. It works on every page, including

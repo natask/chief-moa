@@ -11,6 +11,7 @@ import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice
 import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
+import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
 
 chrome.runtime.onInstalled.addListener(async () => {
   await initializePrivacyState();
@@ -3564,6 +3565,7 @@ function browserEvidencePage(snapshot) {
 async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, options = {}) {
   const text = String(instruction || "").trim() || "Describe this page";
   const inputKind = options.input || "text";
+  const role = normalizeBrowserAgentRole(options.role);
   claimActiveAgentTab(tabId, "browser agent turn started", {
     cue_id: cueId,
     status: "collecting_page_context",
@@ -3577,6 +3579,9 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   throwIfAborted(signal);
   const screenshot = await captureScreenshot(tabId);
   const screenshotEvidence = browserScreenshotEvidence(screenshot);
+  const delegationEnvelope = role === "delegate" && options.delegationConfirmed === true
+    ? browserDelegationEnvelope(text, snapshot.url)
+    : null;
 
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
@@ -3603,6 +3608,8 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
       input: { type: inputKind, text },
       page: browserEvidencePage(snapshot),
       intent_hint: "browser_page_question",
+      ...(role ? { role } : {}),
+      ...(delegationEnvelope ? { delegation_envelope: delegationEnvelope } : {}),
     },
   });
 
@@ -3640,8 +3647,10 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   const data = await waitForBrowserTurnAnswer(cfg, started, signal);
   const summary = browserTurnSummary(data);
   const speak = String(data?.speak || data?.result?.speak || "").trim();
-  sendBrowserAgentProgress(tabId, cueId, "done");
-  send(tabId, { cmd: "done", cueId, summary, speak });
+  if (options.delivery !== "return") {
+    sendBrowserAgentProgress(tabId, cueId, "done");
+    send(tabId, { cmd: "done", cueId, summary, speak });
+  }
   await saveTaskState(cueId, {
     status: "done",
     instruction: text,
@@ -3649,6 +3658,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
     tabId,
     browserTurnId: browserTurnId(data) || browserTurnId(started) || null,
     evidenceId: evidenceId || null,
+    agentRole: role || null,
     lastResult: summary.slice(0, 500),
   });
   return data;
@@ -3830,6 +3840,15 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
       return;
     }
     if (await maybeRequestAndroidSpeak(tabId, instruction, cfg, signal, cueId)) {
+      return;
+    }
+    const explicitRole = normalizeBrowserAgentRole(contextControls.agentRole);
+    if (explicitRole) {
+      await runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, {
+        input: "text",
+        role: explicitRole,
+        delegationConfirmed: contextControls.delegationConfirmed === true,
+      });
       return;
     }
     // Page-change requests are no longer gated by a local keyword regex. They flow
@@ -5184,6 +5203,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
     runAgent(tabId, msg.instruction, controller, cueId, {
+      agentRole: msg.agentRole,
+      delegationConfirmed: msg.delegationConfirmed === true,
       contextAction: msg.contextAction,
       threadLabel: msg.threadLabel,
     });
@@ -5529,6 +5550,40 @@ function closePanelSessions(reason) {
 }
 
 async function handlePanelRequest(msg) {
+  if (msg.cmd === "browserRoleTurn") {
+    const role = normalizeBrowserAgentRole(msg.role);
+    if (!role) return { ok: false, error: "Choose Delegate, Help, Collaborate, or Explain." };
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.id || !isInjectableOverlayUrl(tab.url)) {
+      return { ok: false, error: "Open a normal web page before starting a browser-agent task." };
+    }
+    const cfg = await getConfig();
+    if (!cfg.gatewayUrl) {
+      return { ok: false, error: "No gateway URL set. Open A.G. Options and configure the Agent gateway URL." };
+    }
+    await ensureContent(tab.id);
+    const cueId = nextCueId(msg.cueId || `panel_${Date.now().toString(36)}`);
+    const controller = new AbortController();
+    tasks.set(cueId, { controller, tabId: tab.id });
+    try {
+      const data = await runBrowserAgentTurn(tab.id, msg.text, cfg, controller.signal, cueId, {
+        input: "text",
+        role,
+        delivery: "return",
+        delegationConfirmed: msg.delegationConfirmed === true,
+      });
+      return {
+        ok: true,
+        role,
+        summary: browserTurnSummary(data),
+        browser_turn_id: browserTurnId(data),
+        task_ids: Array.isArray(data?.task_ids) ? data.task_ids : [],
+        agent_run_ids: Array.isArray(data?.agent_run_ids) ? data.agent_run_ids : [],
+      };
+    } finally {
+      if (tasks.get(cueId)?.controller === controller) tasks.delete(cueId);
+    }
+  }
   if (msg.cmd === "voiceSessionStart") {
     if (activeRecordSession()) {
       return { ok: false, error: "An audio note recording is in progress. Stop recording before starting voice." };

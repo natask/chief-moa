@@ -758,7 +758,7 @@ async function main() {
           },
         });
 
-        const submit = async (text) => {
+        const submit = async (text, approveDelegation = false) => {
           await chrome.scripting.executeScript({
             target: { tabId },
             args: [text],
@@ -773,6 +773,13 @@ async function main() {
               }
             },
           });
+          if (approveDelegation) {
+            await sleep(40);
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              func: () => document.querySelector('[data-agee-confirm="yes"]')?.click(),
+            });
+          }
           await sleep(120);
           const [snap] = await chrome.scripting.executeScript({
             target: { tabId },
@@ -798,7 +805,7 @@ async function main() {
 
         // A non-stop instruction is NOT swallowed: it does reach the gateway,
         // proving the stop path is scoped and not a blanket "swallow all input".
-        const control = await submit(controlText);
+        const control = await submit(controlText, true);
 
         const [final] = await chrome.scripting.executeScript({
           target: { tabId },

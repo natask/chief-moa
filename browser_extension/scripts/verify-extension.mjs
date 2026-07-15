@@ -5,6 +5,7 @@ const requiredFiles = [
   "package.json",
   "extension/manifest.json",
   "extension/background.js",
+  "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
   "extension/browser-context-adapter.js",
@@ -57,6 +58,7 @@ const requiredFiles = [
   "scripts/test-voice-sampler-lifecycle.mjs",
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-browser-context-adapter.mjs",
+  "scripts/test-browser-agent-role-runtime.mjs",
 ];
 
 for (const file of requiredFiles) {
@@ -440,14 +442,29 @@ if (
   throw new Error("background.js must bridge the side panel: PANEL_TAB_ID routing in send(), the agee-panel port, and a synchronous sidePanel.open from the action click and open-agee-panel command");
 }
 const sidepanelSource = readFileSync("extension/sidepanel.js", "utf8");
+const browserAgentRoleRuntimeSource = readFileSync("extension/browser-agent-role-runtime.js", "utf8");
 if (
   !/chrome\.runtime\.connect\(\{ name: "agee-panel" \}\)/.test(sidepanelSource) ||
   !/"extension-offscreen"/.test(sidepanelSource) ||
-  !/text_turn/.test(sidepanelSource) ||
+  !/cmd: "browserRoleTurn"/.test(sidepanelSource) ||
+  !/data-agent-mode-option/.test(sidepanelSource) ||
   !/commit_turn/.test(sidepanelSource) ||
   !/documentPictureInPicture/.test(sidepanelSource)
 ) {
-  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture, support commit_turn + text_turn, and offer the document PiP float");
+  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture for commit_turn, route typed turns through browserRoleTurn, expose role selection, and offer the document PiP float");
+}
+
+if (
+  !/id="agee-mode-select"/.test(contentSource) ||
+  !/agentRole: role/.test(contentSource) ||
+  !/delegationConfirmed/.test(contentSource) ||
+  !/agentRole: msg\.agentRole/.test(backgroundSource) ||
+  !/role: explicitRole/.test(backgroundSource) ||
+  !/msg\.cmd === "browserRoleTurn"/.test(backgroundSource) ||
+  !/delegation_envelope: delegationEnvelope/.test(backgroundSource) ||
+  !/moa\.browser-delegation\.v1/.test(browserAgentRoleRuntimeSource)
+) {
+  throw new Error("browser agent role controls must route explicit overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
 }
 
 if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {

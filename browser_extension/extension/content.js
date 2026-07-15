@@ -26,6 +26,7 @@
     draftSendButton,
     panel,
     input,
+    agentModeSelect,
     proactiveButton,
     proactiveCardEl,
     proactiveIndicator,
@@ -113,6 +114,8 @@
   const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
   const UI_SPEC_CACHE_KEY = "ageeUiSpec";
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
+  const BROWSER_AGENT_ROLE_KEY = "ageeBrowserAgentRole";
+  const BROWSER_AGENT_ROLES = new Set(["delegate", "help", "collaborate", "explain"]);
   const PROFILE_CACHE_KEY = "ageeProfileCache";
   // Language chip: what A.G. currently hears (STT) and speaks (reply), read
   // from the cached gateway profile and kept live across a running turn.
@@ -359,6 +362,12 @@
         <div id="agee-bar">
           <span id="agee-dot"></span>
           <textarea id="agee-input" rows="1" placeholder="Ask A.G." autocomplete="off" spellcheck="true"></textarea>
+          <select id="agee-mode-select" data-agent-mode-control aria-label="Browser agent role">
+            <option value="delegate" selected>Delegate</option>
+            <option value="help">Help</option>
+            <option value="collaborate">Collaborate</option>
+            <option value="explain">Explain</option>
+          </select>
           <button id="proactiveHelp" type="button" data-agee-proactive="grant" data-agee-tip="Local suggestions for this tab" aria-label="Local suggestions for this tab">Local</button>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
@@ -372,6 +381,7 @@
     draftSendButton = root.querySelector("#agee-draft-send");
     panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
+    agentModeSelect = root.querySelector("#agee-mode-select");
     proactiveButton = root.querySelector("#proactiveHelp");
     proactiveCardEl = root.querySelector("#agee-proactive-card");
     proactiveIndicator = root.querySelector("#agee-proactive-indicator");
@@ -390,6 +400,7 @@
     restoreLauncherPosition();
     restoreMascotScale();
     restoreUiChimePreference();
+    restoreBrowserAgentRole();
     restoreVoiceFirstGestures();
     loadAvatarBehaviorRuntime();
     loadUiSpec();
@@ -409,6 +420,9 @@
     launcher.addEventListener("pointerdown", startLauncherDrag);
     launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
     window.addEventListener("resize", handleViewportResize);
+    agentModeSelect.addEventListener("change", () => {
+      chrome.storage.local.set({ [BROWSER_AGENT_ROLE_KEY]: selectedBrowserAgentRole() }).catch(() => {});
+    });
 
     draftCancelButton.addEventListener("click", (e) => {
       e.preventDefault();
@@ -2779,6 +2793,20 @@
       input.focus();
       return;
     }
+    const role = selectedBrowserAgentRole();
+    if (role === "delegate") {
+      const host = location.hostname || "this page";
+      askInlineConfirm(
+        `Delegate this task on ${host} for up to 20 steps? A.G. may click, type, select, scroll, press keys, wait, and capture page evidence. Navigation or sensitive or out-of-scope work stops for approval.`,
+      ).then((confirmed) => {
+        if (confirmed) dispatchInstruction(instruction, displayText, role, true);
+      });
+      return;
+    }
+    dispatchInstruction(instruction, displayText, role, false);
+  }
+
+  function dispatchInstruction(instruction, displayText, role, delegationConfirmed) {
     const cueId = newCueId();
     openTextSurface({ fresh: false });
     createCue(cueId, displayText, { presentation: "card" });
@@ -2797,6 +2825,8 @@
       cmd: "run",
       instruction,
       cueId,
+      agentRole: role,
+      delegationConfirmed,
       contextAction: context.action,
       threadLabel: context.label,
     }).then(() => {
@@ -2804,6 +2834,19 @@
     }).catch((error) => {
       showCueError(cueId, error?.message || error, { react: false });
     });
+  }
+
+  function selectedBrowserAgentRole() {
+    const role = String(agentModeSelect?.value || "delegate").trim().toLowerCase();
+    return BROWSER_AGENT_ROLES.has(role) ? role : "delegate";
+  }
+
+  function restoreBrowserAgentRole() {
+    chrome.storage.local.get({ [BROWSER_AGENT_ROLE_KEY]: "delegate" }).then((stored) => {
+      if (!agentModeSelect) return;
+      const role = String(stored[BROWSER_AGENT_ROLE_KEY] || "delegate").trim().toLowerCase();
+      agentModeSelect.value = BROWSER_AGENT_ROLES.has(role) ? role : "delegate";
+    }).catch(() => {});
   }
 
   function describePage() {
@@ -3353,6 +3396,7 @@
       cmd: "run",
       instruction: transcript,
       cueId: state.cueId,
+      agentRole: pageContextTurn ? selectedBrowserAgentRole() : undefined,
       contextAction: state.incognito ? "incognito" : "",
     }).then(() => {
       if (extensionContextInvalidated) removeCueCard(state.cueId);

@@ -130,11 +130,17 @@ async function main() {
 
     workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
     await workerCdp.send("Runtime.enable");
-    const commands = await evaluate(workerCdp, "chrome.commands.getAll()");
+    // The service-worker target can appear a few milliseconds before Chrome
+    // has attached its extension APIs. Retry this first real API read instead
+    // of treating that startup race as a product exception.
+    const commands = await waitForEval(
+      workerCdp,
+      'globalThis.chrome?.commands?.getAll ? chrome.commands.getAll().then((items) => items.length ? items : null) : null',
+    );
     if (!commands.find((command) => command.name === "open-agee-panel")) {
       throw new Error(`open-agee-panel command was not registered: ${JSON.stringify(commands)}`);
     }
-    const sidePanelApi = await evaluate(workerCdp, 'typeof chrome.sidePanel?.open === "function"');
+    const sidePanelApi = await waitForEval(workerCdp, 'typeof chrome.sidePanel?.open === "function"');
     if (!sidePanelApi) throw new Error("chrome.sidePanel.open is not available in the service worker");
 
     const panelUrl = `chrome-extension://${extensionId}/sidepanel.html`;
@@ -146,6 +152,40 @@ async function main() {
     pageCdp = new Cdp(pageTarget.webSocketDebuggerUrl);
     await pageCdp.send("Runtime.enable");
     await waitForEval(pageCdp, 'document.readyState === "complete" && document.getElementById("status")?.textContent === "Ready."');
+
+    const roleUi = await evaluate(pageCdp, `(async () => {
+      const selector = document.getElementById("agentModeSelector");
+      const buttons = [...document.querySelectorAll("[data-agent-mode-option]")];
+      const initial = selector?.dataset.agentMode || "";
+      document.getElementById("agentModeCollaborate")?.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const stored = await chrome.storage.local.get("ageeBrowserAgentRole");
+      return {
+        initial,
+        selected: selector?.dataset.agentMode || "",
+        stored: stored.ageeBrowserAgentRole || "",
+        pressed: buttons.filter((button) => button.getAttribute("aria-pressed") === "true").map((button) => button.dataset.agentModeOption),
+      };
+    })()`);
+    if (
+      roleUi?.initial !== "delegate" ||
+      roleUi?.selected !== "collaborate" ||
+      roleUi?.stored !== "collaborate" ||
+      JSON.stringify(roleUi?.pressed) !== JSON.stringify(["collaborate"])
+    ) {
+      throw new Error(`side-panel role selector did not persist one explicit role: ${JSON.stringify(roleUi)}`);
+    }
+
+    await evaluate(pageCdp, `(() => {
+      document.getElementById("agentModeDelegate")?.click();
+      const input = document.getElementById("text");
+      input.value = "organize this page";
+      document.getElementById("form")?.requestSubmit();
+      return true;
+    })()`);
+    await waitForEval(pageCdp, 'document.querySelector(".delegation-confirm-actions") && document.querySelector(".delegation-confirm-copy")?.textContent.includes("up to 20 steps")');
+    await evaluate(pageCdp, 'document.querySelector(".delegation-confirm-actions .secondary")?.click()');
+    await waitForEval(pageCdp, '[...document.querySelectorAll(".turn .ag")].some((node) => node.textContent === "Delegation cancelled.")');
 
     // Round-trip the panel bridge: an unsupported command must come back with
     // its reqId and a readable error, proving onConnect -> handlePanelRequest
@@ -169,7 +209,7 @@ async function main() {
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
-        "chrome.sidePanel.open available.",
+        "role selector persisted Collaborate, Delegate confirmation cancelled safely, chrome.sidePanel.open available.",
     );
   } finally {
     workerCdp?.close();
