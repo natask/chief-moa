@@ -103,8 +103,8 @@ if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");
 }
 
-if (manifest.version !== "0.1.31") {
-  throw new Error(`consolidated proactive and voice-continuity release must use manifest 0.1.31, got ${manifest.version}`);
+if (manifest.version !== "0.1.34") {
+  throw new Error(`video-note capture release must use manifest 0.1.34, got ${manifest.version}`);
 }
 
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
