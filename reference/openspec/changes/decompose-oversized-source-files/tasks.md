@@ -40,6 +40,10 @@
       generation handlers with a focused 90% line/branch/function coverage
       gate. Verified at 100% lines, 91.84% branches, and 100% functions; reduce
       `server.js` to 15,576 lines.
+- [x] 2.4b3 Extract companion catalog, create, preview, apply, and rollback
+      handlers with a focused 90% line/branch/function coverage gate. Verified
+      at 100% lines, 93.22% branches, and 100% functions; reduce `server.js` to
+      15,437 lines.
 - [ ] 2.5 Extract agent-run lifecycle, harnesses, and work graph handlers.
 - [ ] 2.6 Split voice diagnosis, cascaded reasoning, and turn persistence.
 - [ ] 2.7 Extract context, thread, and history assembly.

@@ -28,6 +28,7 @@ const {
 } = require("./lib/profile-options");
 const voiceL10n = require("./lib/voice-l10n");
 const { createCompanionCatalogStore, COMMAND_VERBS: COMPANION_COMMAND_VERBS } = require("./lib/companion-catalog");
+const { createCompanionHandlers } = require("./lib/companion-handlers");
 const { createPetCollectionHandlers } = require("./lib/pet-collection-handlers");
 const { createPetCoreHandlers } = require("./lib/pet-core-handlers");
 const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
@@ -411,6 +412,12 @@ const companionRuntimeAuthority = createCompanionRuntimeAuthority({
   loadState: loadCompanionRuntimeState,
   saveState: saveCompanionRuntimeState,
 });
+const { routeCompanions } = createCompanionHandlers({
+  companionCatalog, agentProfile, companionRuntimeAuthority,
+  authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
+  activeCompanionPayload, profileOptionsFromBody, requireDeviceScope,
+  agentProfileRuntimeStatus, summarizePreviewProfile, applyCompanionToProfile,
+});
 const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
@@ -777,48 +784,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/companions" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, companionCatalogPayload(url));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/companions" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateCompanion(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/companions/preview" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCompanionPreview(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/companions/apply" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCompanionApply(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/companions/rollback" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCompanionRollback(request, response);
+    if (await routeCompanions(request, response, url)) {
       return;
     }
 
@@ -4045,27 +4011,6 @@ function uiSpecPayload(userId = accountUserId()) {
   };
 }
 
-function companionCatalogPayload(url) {
-  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
-  const limit = Number(url?.searchParams?.get("limit") || 100);
-  const profile = agentProfile.effective();
-  const activeCompanion = activeCompanionPayload(profile);
-  return {
-    version: companionCatalog.version,
-    generated_at: new Date().toISOString(),
-    query,
-    active_companion_id: profile.active_companion_id || "",
-    active_companion: activeCompanion,
-    companions: companionCatalog.list({ query, limit }),
-    endpoints: {
-      list: "/v1/agent/companions",
-      create: "/v1/agent/companions",
-      preview: "/v1/agent/companions/preview",
-      apply: "/v1/agent/companions/apply",
-    },
-  };
-}
-
 function petCatalogPayload(url) {
   const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
   const limit = Number(url?.searchParams?.get("limit") || 100);
@@ -4137,90 +4082,6 @@ function activePetPayload(options = {}) {
     // show and diff the default without exposing the whole profile.
     profile_voice: String(profile.voice || ""),
   };
-}
-
-async function handleCreateCompanion(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const companion = companionCatalog.createDraft({
-      text: body?.text || body?.request || body?.prompt || body?.description,
-      name: body?.name,
-      voice: body?.voice,
-      rules: body?.rules,
-    });
-    const preview = companionCatalog.preview({ companion_id: companion.id });
-    sendJson(response, 201, {
-      companion,
-      preview,
-      active_profile_mutated: false,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleCompanionPreview(request, response) {
-  const body = await readJsonBody(request);
-  const profileOptions = profileOptionsFromBody(body, "global");
-  // Signed-package previews go through the runtime authority lifecycle; plain
-  // catalog/studio previews keep the live first-party contract.
-  if (body?.package_base64 || body?.package || body?.approval_binding) {
-    try {
-      const current = String(agentProfile.currentVersion(profileOptions));
-      const expected = String(body?.expected_profile_version || "") || current;
-      if (expected !== current) throw new Error("expected_profile_version is stale");
-      sendJson(response, 200, companionRuntimeAuthority.preview({ ...body, scope: profileOptions.scope,
-        device_id: profileOptions.deviceId, expected_profile_version: expected }));
-    } catch (error) {
-      sendJson(response, 400, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
-    }
-    return;
-  }
-  try {
-    const preview = companionCatalog.preview(body || {});
-    const base = agentProfile.effective(profileOptions);
-    const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
-    sendJson(response, 200, {
-      ...preview,
-      mutates_profile: false,
-      profile_version: agentProfile.currentVersion(profileOptions),
-      profile_before: agentProfileRuntimeStatus(profileOptions),
-      profile_preview: summarizePreviewProfile(base, merged),
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-async function handleCompanionApply(request, response) {
-  const body = await readJsonBody(request);
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  // Signed-package applies require the runtime authority's approval binding;
-  // plain catalog/studio applies keep the live first-party contract.
-  if (body?.package_base64 || body?.package || body?.approval_binding || body?.package_digest) {
-    try {
-      sendJson(response, 200, companionRuntimeAuthority.apply({ ...body, scope: profileOptions.scope,
-        device_id: profileOptions.deviceId }));
-    } catch (error) {
-      sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
-    }
-    return;
-  }
-  try {
-    const result = applyCompanionToProfile(body || {}, profileOptions, body?.source || "api");
-    sendJson(response, 200, result);
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-async function handleCompanionRollback(request, response) {
-  const body = await readJsonBody(request);
-  try { sendJson(response, 200, companionRuntimeAuthority.rollback(body || {})); }
-  catch (error) { sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" }); }
 }
 
 function companionInputFromPetBody(body = {}) {
