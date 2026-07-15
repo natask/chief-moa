@@ -5,68 +5,62 @@ import java.util.Collections;
 import java.util.List;
 
 final class MoaVoiceFirstTapResolver {
+    enum CaptureOrigin {
+        NONE,
+        CURRENT_THREAD,
+        FRESH_THREAD
+    }
+
     enum Action {
-        START_CONTINUE_TALK,
-        START_FRESH_TALK,
-        CANCEL_TALK_LOOP,
+        START_OR_INTERRUPT,
+        STOP_AND_SEND,
+        CANCEL_CAPTURE,
+        START_FRESH,
         OPEN_CHAT
     }
 
-    private enum Tap1Action {
-        NONE,
-        ACTIVE_DRAFT
-    }
-
     private int tapCount;
-    private Tap1Action tap1Action = Tap1Action.NONE;
-    private boolean tap2StartedFresh;
 
     boolean hasOpenChord() {
         return tapCount > 0;
     }
 
-    List<Action> tapUp(boolean loopActive) {
+    void tapUp() {
         tapCount++;
-        if (tapCount == 1) {
-            tap2StartedFresh = false;
-            tap1Action = Tap1Action.ACTIVE_DRAFT;
-            if (loopActive) return Collections.emptyList();
-            return one(Action.START_CONTINUE_TALK);
+    }
+
+    List<Action> resolve(CaptureOrigin captureOrigin) {
+        int resolvedTapCount = tapCount;
+        reset();
+        CaptureOrigin origin = captureOrigin == null ? CaptureOrigin.NONE : captureOrigin;
+        if (resolvedTapCount == 1) {
+            return Collections.singletonList(origin != CaptureOrigin.NONE
+                    ? Action.STOP_AND_SEND
+                    : Action.START_OR_INTERRUPT);
         }
-        if (tapCount == 2) {
-            List<Action> actions = new ArrayList<>();
-            if (tap1Action == Tap1Action.ACTIVE_DRAFT) {
-                actions.add(Action.CANCEL_TALK_LOOP);
+        if (resolvedTapCount == 2) {
+            if (origin == CaptureOrigin.FRESH_THREAD) {
+                return Collections.singletonList(Action.STOP_AND_SEND);
             }
-            tap1Action = Tap1Action.NONE;
-            tap2StartedFresh = true;
-            actions.add(Action.START_FRESH_TALK);
+            List<Action> actions = new ArrayList<>();
+            if (origin == CaptureOrigin.CURRENT_THREAD) {
+                actions.add(Action.CANCEL_CAPTURE);
+            }
+            actions.add(Action.START_FRESH);
             return actions;
         }
-        if (tapCount == 3) {
+        if (resolvedTapCount == 3) {
             List<Action> actions = new ArrayList<>();
-            if (tap2StartedFresh) {
-                actions.add(Action.CANCEL_TALK_LOOP);
+            if (origin != CaptureOrigin.NONE) {
+                actions.add(Action.CANCEL_CAPTURE);
             }
-            tap2StartedFresh = false;
             actions.add(Action.OPEN_CHAT);
             return actions;
         }
         return Collections.emptyList();
     }
 
-    List<Action> resolve() {
-        reset();
-        return Collections.emptyList();
-    }
-
     void reset() {
         tapCount = 0;
-        tap1Action = Tap1Action.NONE;
-        tap2StartedFresh = false;
-    }
-
-    private static List<Action> one(Action action) {
-        return Collections.singletonList(action);
     }
 }

@@ -168,6 +168,8 @@ public final class OverlayService extends Service {
     // Record mode: while enabled, double-click-and-hold captures a raw audio
     // note locally and uploads it on release. Never a voice turn.
     private boolean recordModeEnabled;
+    private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin =
+            MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
     private boolean audioNoteActive;
     private MoaAudioCaptureController audioNoteCapture;
     private ByteArrayOutputStream audioNoteBuffer;
@@ -573,8 +575,9 @@ public final class OverlayService extends Service {
                 this::beginWarmMic,
                 this::discardWarmMic,
                 () -> MoaPrefs.voiceFirstGestures(this),
-                this::isContinuousLoopActive,
+                this::manualTapCaptureOrigin,
                 this::handleOrbStartTalkLoop,
+                this::handleOrbStopAndSend,
                 this::handleOrbStartFreshTalkLoop,
                 this::handleOrbCancelTalkLoop,
                 this::showPanel,
@@ -1069,6 +1072,7 @@ public final class OverlayService extends Service {
     }
 
     private void discardVoiceDraft() {
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
@@ -1087,6 +1091,7 @@ public final class OverlayService extends Service {
         if (!reviewableVoiceDraftActive()) {
             return;
         }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
@@ -1748,8 +1753,8 @@ public final class OverlayService extends Service {
     private String orbGestureHint() {
         if (MoaPrefs.voiceFirstGestures(this)) {
             return recordModeEnabled
-                    ? "Record mode: press and hold to record a note."
-                    : "Tap to continue. Double-tap for new thread. Triple-tap for chat. Hold to talk. Drag to move.";
+                    ? "Notes mode: tap to start, tap again to store. Hold-release also stores."
+                    : "Tap toggles talk. Double-tap toggles a new thread. Triple-tap opens chat. Hold-release sends.";
         }
         return recordModeEnabled
                 ? "Record mode: double-click and hold to record a note."
@@ -2555,12 +2560,16 @@ public final class OverlayService extends Service {
         showPanel();
     }
 
-    // Whether a reviewable hands-free voice draft is running. A tap while active
-    // is deliberately inert; the visible X / + controls own cancel and send.
-    private boolean isContinuousLoopActive() {
-        return continuousVoiceLoop
-                || pendingContinuousVoiceRestart != null
-                || (streamingVoiceActive() && streamingTurnContinuous);
+    // True only while the user owns an open manual capture. Assistant playback
+    // and reasoning are not capture: tapping then interrupts and starts a new turn.
+    private boolean isManualTapCaptureActive() {
+        return audioNoteActive || reviewableVoiceDraftActive();
+    }
+
+    private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin() {
+        return isManualTapCaptureActive()
+                ? manualTapCaptureOrigin
+                : MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
     }
 
     // VOICE-FIRST single quick tap (draft off) = start a reviewable draft with
@@ -2571,6 +2580,11 @@ public final class OverlayService extends Service {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD;
+        if (recordModeEnabled) {
+            startAudioNoteCapture();
+            return;
+        }
         stopAssistantAudioForBargeIn();
         // Suppress the "didn't catch that" cue for this first turn only: a tap that
         // starts the loop and captures no speech was a barge-in or a stray tap, not
@@ -2579,16 +2593,39 @@ public final class OverlayService extends Service {
         startReviewableVoiceDraft();
     }
 
-    // VOICE-FIRST double quick tap = start a fresh-thread voice turn. The tap
-    // resolver cancels any milliseconds-old or pending current loop first; this
-    // method only arms the one-shot branch choice and opens the normal talk loop.
+    private void handleOrbStopAndSend() {
+        if (audioNoteActive) {
+            finishAudioNoteCapture(false);
+            return;
+        }
+        sendVoiceDraft();
+    }
+
     private void handleOrbStartFreshTalkLoop() {
         if (pushToTalkVoiceTurn || audioNoteActive) {
+            return;
+        }
+        if (recordModeEnabled) {
+            startAudioNoteCapture();
+            manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
             return;
         }
         newThreadArmed = true;
         refreshContextControls();
         handleOrbStartTalkLoop();
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
+    }
+
+    private void handleOrbCancelTalkLoop() {
+        suppressFirstTapTurnEmptyCue = false;
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+        if (audioNoteActive) {
+            cancelAudioNoteCapture();
+        }
+        discardVoiceDraft();
+        voiceLog.clear();
+        removeTranscriptOverlay();
+        updateMicState();
     }
 
     // Stop any assistant audio so a tap-to-talk starts on a quiet mic. Cancels an
@@ -2601,17 +2638,6 @@ public final class OverlayService extends Service {
         }
         cancelVoiceSampler();
         voiceController.stopQuietly();
-    }
-
-    // VOICE-FIRST double tap after a just-started loop = undo it quietly before
-    // chat opens. The session is milliseconds old with nothing meaningful
-    // captured, so it is torn down without a cue.
-    private void handleOrbCancelTalkLoop() {
-        suppressFirstTapTurnEmptyCue = false;
-        cancelStreamingVoice();
-        voiceLog.clear();
-        removeTranscriptOverlay();
-        updateMicState();
     }
 
     // The escape hatch: a large move after a press-to-talk hold confirmed cancels
@@ -2859,6 +2885,7 @@ public final class OverlayService extends Service {
     // While record mode is on, the same gesture records a raw audio note
     // instead: no voice session, no SpeechRecognizer, no STT/LLM/TTS.
     private void handleOrbDoublePressStart() {
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         if (recordModeEnabled) {
             startAudioNoteCapture();
             return;
@@ -2968,6 +2995,7 @@ public final class OverlayService extends Service {
         if (!audioNoteActive) {
             return;
         }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         audioNoteActive = false;
         MoaAudioCaptureController capture = audioNoteCapture;
         audioNoteCapture = null;

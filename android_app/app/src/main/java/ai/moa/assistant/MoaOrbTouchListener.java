@@ -11,6 +11,7 @@ import android.view.WindowManager;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 // Orb gestures. The overlay runs one of two contracts depending on the
 // experimental voice-first flag (MoaPrefs.voiceFirstGestures), latched per
@@ -23,18 +24,11 @@ import java.util.function.Consumer;
 //   A single tap is confirmed only after the double-tap window passes, so the
 //   chat menu never flashes before a double-click hold engages voice.
 //
-// Flag ON (voice-first, v3):
-//   single quick tap       -> starts a reviewable voice draft. Loop off: onStartTalkLoop
-//                             fires immediately on the first tap-up (it stops any
-//                             assistant audio and opens the hands-free loop). Loop
-//                             on: no-op; visible X / Send controls own disposition.
-//   double quick tap       -> fresh-thread talk. If tap 1 started the loop or
-//                             deferred a send, that loop is cancelled before
-//                             onStartFreshTalkLoop opens a new-thread turn.
-//   triple quick tap       -> onOpenChat. If tap 2 started a fresh loop it is
-//                             cancelled first, so chat never leaves a hot mic.
-//   fourth tap and beyond  -> nothing (swallowed; the chord stays alive so rapid
-//                             extra taps never re-toggle the loop)
+// Flag ON (manual voice):
+//   single quick tap       -> toggle current-thread capture (start/interrupt or send/store)
+//   double quick tap       -> cancel an active draft and start capture in a fresh thread
+//   triple quick tap       -> cancel an active draft and open chat
+//   fourth tap and beyond  -> nothing
 //   press-and-hold, still  -> onDoublePressStart / onPressToTalkRelease
 //                             (push to talk; the mic warms at press-down)
 //   hold + large move      -> onPressToTalkCancel, then reposition the orb: once
@@ -67,17 +61,16 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     // a drag or an early release, so the warm mic is dropped and never leaks.
     private final Runnable onDoublePressArmed;
     private final Runnable onDoublePressAbort;
-    // Voice-first callbacks (flag on). voiceLoopActive reports whether the
-    // hands-free voice loop is running, so the first tap knows whether to start it
-    // or to keep the visible draft controls active. onStartTalkLoop starts the loop with barge-in;
-    // onStartFreshTalkLoop starts a new-thread loop; onCancelTalkLoop quietly drops a just-
-    // started loop; onOpenChat opens the chat panel;
+    // Manual-voice callbacks (flag on). manualCaptureOrigin distinguishes an
+    // open current-thread capture from one opened by the double-tap fresh-thread
+    // toggle. Assistant speech is not capture: a tap during speech interrupts it.
     // onPressToTalkCancel aborts a confirmed hold's capture without committing.
     // The hold path reuses onDoublePressStart / onPressToTalkRelease and the
     // warm-mic pair onDoublePressArmed / onDoublePressAbort.
     private final BooleanSupplier voiceFirstEnabled;
-    private final BooleanSupplier voiceLoopActive;
+    private final Supplier<MoaVoiceFirstTapResolver.CaptureOrigin> manualCaptureOrigin;
     private final Runnable onStartTalkLoop;
+    private final Runnable onSendTalkLoop;
     private final Runnable onStartFreshTalkLoop;
     private final Runnable onCancelTalkLoop;
     private final Runnable onOpenChat;
@@ -125,8 +118,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             Runnable onDoublePressArmed,
             Runnable onDoublePressAbort,
             BooleanSupplier voiceFirstEnabled,
-            BooleanSupplier voiceLoopActive,
+            Supplier<MoaVoiceFirstTapResolver.CaptureOrigin> manualCaptureOrigin,
             Runnable onStartTalkLoop,
+            Runnable onSendTalkLoop,
             Runnable onStartFreshTalkLoop,
             Runnable onCancelTalkLoop,
             Runnable onOpenChat,
@@ -147,8 +141,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.onDoublePressArmed = onDoublePressArmed;
         this.onDoublePressAbort = onDoublePressAbort;
         this.voiceFirstEnabled = voiceFirstEnabled;
-        this.voiceLoopActive = voiceLoopActive;
+        this.manualCaptureOrigin = manualCaptureOrigin;
         this.onStartTalkLoop = onStartTalkLoop;
+        this.onSendTalkLoop = onSendTalkLoop;
         this.onStartFreshTalkLoop = onStartFreshTalkLoop;
         this.onCancelTalkLoop = onCancelTalkLoop;
         this.onOpenChat = onOpenChat;
@@ -261,10 +256,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         }
     }
 
-    // The voice-first contract (flag on, v3). Single quick tap toggles the talk
-    // loop with barge-in, double tap starts fresh-thread talk, triple tap opens
-    // chat, press-and-hold talks, and a large move after the hold confirms cancels
-    // the capture into a drag. The plain drag and coordinate clamp are unchanged.
+    // The manual-voice contract. Quick taps resolve as a single/double/triple
+    // chord against current capture provenance; provider silence never commits.
+    // Hold-release remains the immediate push-to-talk shortcut.
     private boolean onTouchVoiceFirst(View view, MotionEvent event) {
         int action = event.getActionMasked();
         switch (action) {
@@ -276,11 +270,6 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 downTimeMs = event.getEventTime();
                 moved = false;
                 voiceFirstHoldActive = false;
-                // A chord is already in progress, so this press-down is a potential
-                // second (or later) tap. Suspend the pending tap-resolve now: for a
-                // Clearing the pending resolve here preserves the open chord so
-                // tap 2 can supersede the current draft with a fresh thread.
-                // The chord count is preserved for the tap-up.
                 if (voiceFirstTapResolver.hasOpenChord()) {
                     cancelVoiceFirstTapResolve();
                 }
@@ -340,8 +329,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 onDoublePressAbort.run();
                 if (action == MotionEvent.ACTION_CANCEL || moved) {
                     if (moved) onOrbDragEnd.accept(action == MotionEvent.ACTION_UP);
-                    // A cancel or a drag is never a tap. A drag already reset the
-                    // chord; the escape-hatch drag reset it when the hold confirmed.
+                    // A cancel or drag is never a tap and cannot leave a partially
+                    // entered click chord armed.
+                    resetVoiceFirstTapChord();
                     return true;
                 }
                 handleVoiceFirstTapUp(event);
@@ -351,14 +341,11 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         }
     }
 
-    // A quick tap released. Tap 1 toggles the loop: start it now (with barge-in)
-    // when it is off; while a draft is already active, tap 1 does nothing because
-    // the visible controls own cancel/send. Tap 2 starts a fresh-thread talk
-    // loop. Tap 3 opens chat. Tap 4+ does nothing but keeps the chord alive so
-    // extra taps stay inert.
+    // Resolve only after the multi-click window. That short deferral is required
+    // so tap 1 of a double/triple chord cannot send an active draft before the
+    // final gesture meaning is known.
     private void handleVoiceFirstTapUp(MotionEvent event) {
-        boolean loopActive = voiceLoopActive != null && voiceLoopActive.getAsBoolean();
-        runVoiceFirstTapActions(voiceFirstTapResolver.tapUp(loopActive));
+        voiceFirstTapResolver.tapUp();
         scheduleVoiceFirstTapResolve();
     }
 
@@ -370,8 +357,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 return;
             }
             voiceFirstHoldActive = true;
-            // A confirmed hold is push-to-talk. Abandon any pending tap chord and
-            // hand the still-warm mic to the start handler (record mode routes
+            // A confirmed hold is push-to-talk. Abandon a pending tap chord and
+            // hand the still-warm mic to the
+            // start handler (record mode routes
             // the same callback to a note capture).
             resetVoiceFirstTapChord();
             onDoublePressStart.run();
@@ -390,7 +378,10 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         cancelVoiceFirstTapResolve();
         pendingVoiceFirstTapResolve = () -> {
             pendingVoiceFirstTapResolve = null;
-            runVoiceFirstTapActions(voiceFirstTapResolver.resolve());
+            MoaVoiceFirstTapResolver.CaptureOrigin origin = manualCaptureOrigin == null
+                    ? MoaVoiceFirstTapResolver.CaptureOrigin.NONE
+                    : manualCaptureOrigin.get();
+            runVoiceFirstTapActions(voiceFirstTapResolver.resolve(origin));
         };
         mainHandler.postDelayed(pendingVoiceFirstTapResolve, DOUBLE_TAP_TIMEOUT_MS);
     }
@@ -410,14 +401,17 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private void runVoiceFirstTapActions(List<MoaVoiceFirstTapResolver.Action> actions) {
         for (MoaVoiceFirstTapResolver.Action action : actions) {
             switch (action) {
-                case START_CONTINUE_TALK:
+                case START_OR_INTERRUPT:
                     onStartTalkLoop.run();
                     break;
-                case START_FRESH_TALK:
-                    onStartFreshTalkLoop.run();
+                case STOP_AND_SEND:
+                    onSendTalkLoop.run();
                     break;
-                case CANCEL_TALK_LOOP:
+                case CANCEL_CAPTURE:
                     onCancelTalkLoop.run();
+                    break;
+                case START_FRESH:
+                    onStartFreshTalkLoop.run();
                     break;
                 case OPEN_CHAT:
                     onOpenChat.run();
