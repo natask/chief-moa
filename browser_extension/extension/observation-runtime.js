@@ -5,6 +5,7 @@
   "use strict";
 
   const SCHEMA_VERSION = "moa.observation-anchor.v1";
+  const MAX_REGISTERED_ANCHORS = 100;
   const root = global || globalThis;
 
   function finite(value) {
@@ -63,6 +64,22 @@
     return hashText(JSON.stringify([tag, type, roleFor(element), nameFor(element)]));
   }
 
+  function canonicalEvidence(anchor) {
+    return JSON.stringify({
+      schema_version: anchor?.schema_version,
+      anchor_id: anchor?.anchor_id,
+      snapshot_id: anchor?.snapshot_id,
+      document_id: anchor?.document_id,
+      page_epoch: anchor?.page_epoch,
+      layout_epoch: anchor?.layout_epoch,
+      frame_path: anchor?.frame_path,
+      element_ref: anchor?.element_ref,
+      geometry: anchor?.geometry,
+      captured_at: anchor?.captured_at,
+      provenance: anchor?.provenance,
+    });
+  }
+
   function createObservationRuntime({ window: view, document: doc, now, randomId } = {}) {
     if (!view || !doc) throw new Error("observation runtime requires a window and document");
     const clock = typeof now === "function" ? now : () => new Date().toISOString();
@@ -78,6 +95,8 @@
     const frameId = view.top === view ? "top" : `child_${makeRandomId()}`;
     const nodeIds = new WeakMap();
     const registry = new Map();
+    const WeakReference = view.WeakRef || root.WeakRef;
+    if (typeof WeakReference !== "function") throw new Error("observation runtime requires WeakRef support");
     let nextNodeId = 1;
 
     function bumpLayout() {
@@ -103,8 +122,22 @@
       if (href && lastHref && href !== lastHref) noteSameDocumentNavigation();
     }
 
+    function tombstoneRemovedNodes(records) {
+      const removed = records.flatMap((record) => Array.from(record.removedNodes || []));
+      if (!removed.length) return;
+      for (const record of registry.values()) {
+        const element = record.element.deref();
+        if (!element) {
+          record.tombstoned = true;
+          continue;
+        }
+        if (removed.some((node) => node === element || node.contains?.(element))) record.tombstoned = true;
+      }
+    }
+
     const observer = typeof view.MutationObserver === "function"
       ? new view.MutationObserver((records) => {
+          tombstoneRemovedNodes(records);
           if (records.some((record) => !record.target?.closest?.("#agee-root"))) bumpLayout();
         })
       : null;
@@ -155,7 +188,10 @@
 
     function localIdFor(element) {
       let localId = nodeIds.get(element);
-      if (!localId) {
+      const removedIdentity = Array.from(registry.values()).some(
+        (record) => record.tombstoned && record.localId === localId && record.element.deref() === element,
+      );
+      if (!localId || removedIdentity) {
         localId = `el_${nextNodeId++}`;
         nodeIds.set(element, localId);
       }
@@ -185,7 +221,14 @@
         captured_at: capturedAt || clock(),
         provenance: "dom",
       };
-      registry.set(localId, { element, fingerprint });
+      registry.set(anchor.anchor_id, {
+        element: new WeakReference(element),
+        evidence: canonicalEvidence(anchor),
+        fingerprint,
+        localId,
+        tombstoned: false,
+      });
+      while (registry.size > MAX_REGISTERED_ANCHORS) registry.delete(registry.keys().next().value);
       return anchor;
     }
 
@@ -205,13 +248,16 @@
       if (!anchor || anchor.schema_version !== SCHEMA_VERSION) return stale(anchor, "invalid_anchor");
       if (!active || anchor.document_id !== documentId || anchor.page_epoch !== pageEpoch) return stale(anchor, "page_changed");
       if (anchor.frame_path?.length !== 1 || anchor.frame_path[0] !== frameId) return stale(anchor, "frame_changed");
-      const localId = anchor.element_ref?.local_id;
-      const entry = registry.get(localId);
-      if (!entry) return stale(anchor, "ambiguous_identity");
-      if (!entry.element?.isConnected || entry.element.ownerDocument !== doc) return stale(anchor, "node_replaced");
-      const fingerprint = elementFingerprint(entry.element);
+      const entry = registry.get(anchor.anchor_id);
+      if (!entry) return stale(anchor, "unregistered_anchor");
+      if (entry.evidence !== canonicalEvidence(anchor)) return stale(anchor, "evidence_mismatch");
+      const element = entry.element.deref();
+      if (entry.tombstoned || !element?.isConnected || element.ownerDocument !== doc || nodeIds.get(element) !== entry.localId) {
+        return stale(anchor, "node_replaced");
+      }
+      const fingerprint = elementFingerprint(element);
       if (fingerprint !== entry.fingerprint || fingerprint !== anchor.element_ref.fingerprint) return stale(anchor, "identity_changed");
-      const currentGeometry = geometryFor(entry.element);
+      const currentGeometry = geometryFor(element);
       return {
         valid: true,
         status: layoutEpoch === anchor.layout_epoch ? "current" : "remeasured",
@@ -261,7 +307,15 @@
       limitations,
       state: () => {
         syncPageLocation();
-        return { document_id: documentId, page_epoch: pageEpoch, layout_epoch: layoutEpoch, frame_path: [frameId], active };
+        return {
+          document_id: documentId,
+          page_epoch: pageEpoch,
+          layout_epoch: layoutEpoch,
+          frame_path: [frameId],
+          active,
+          registered_anchor_count: registry.size,
+          max_registered_anchors: MAX_REGISTERED_ANCHORS,
+        };
       },
       destroy: () => {
         observer?.disconnect();
@@ -272,6 +326,7 @@
 
   root.AgeeObservationRuntime = Object.freeze({
     schemaVersion: SCHEMA_VERSION,
+    maxRegisteredAnchors: MAX_REGISTERED_ANCHORS,
     createObservationRuntime,
     elementFingerprint,
   });

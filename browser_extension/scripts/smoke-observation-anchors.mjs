@@ -165,6 +165,19 @@ async function main() {
     const secondTarget = second.elements.find((element) => element.label === "Stable target");
     assert.equal(secondTarget.observation_anchor.element_ref.local_id, anchor.element_ref.local_id, "same live node must retain its stable ref");
 
+    const tampered = structuredClone(anchor);
+    tampered.geometry.document_rect.y += 1;
+    const tamperedResult = await waitForMessage(worker, urlPattern, { cmd: "revalidateObservationAnchor", anchor: tampered });
+    assert.deepEqual([tamperedResult.valid, tamperedResult.reason], [false, "evidence_mismatch"]);
+    const recombined = structuredClone(secondTarget.observation_anchor);
+    recombined.anchor_id = anchor.anchor_id;
+    const recombinedResult = await waitForMessage(worker, urlPattern, { cmd: "revalidateObservationAnchor", anchor: recombined });
+    assert.deepEqual([recombinedResult.valid, recombinedResult.reason], [false, "evidence_mismatch"]);
+    const forged = structuredClone(anchor);
+    forged.anchor_id = "anchor_forged";
+    const forgedResult = await waitForMessage(worker, urlPattern, { cmd: "revalidateObservationAnchor", anchor: forged });
+    assert.deepEqual([forgedResult.valid, forgedResult.reason], [false, "unregistered_anchor"]);
+
     await evaluate(page, `scrollTo(0, 120); true`);
     await delay(120);
     const afterScroll = await waitForMessage(worker, urlPattern, { cmd: "revalidateObservationAnchor", anchor });
@@ -195,7 +208,7 @@ async function main() {
     const ambiguous = structuredClone(anchor);
     ambiguous.element_ref.local_id = "el_missing";
     const ambiguousResult = await waitForMessage(worker, urlPattern, { cmd: "revalidateObservationAnchor", anchor: ambiguous });
-    assert.deepEqual([ambiguousResult.valid, ambiguousResult.reason], [false, "ambiguous_identity"]);
+    assert.deepEqual([ambiguousResult.valid, ambiguousResult.reason], [false, "evidence_mismatch"]);
 
     await evaluate(page, `window.fixture.replaceLookalike(); true`);
     await delay(160);
@@ -213,7 +226,7 @@ async function main() {
     const navigated = await waitForMessage(worker, urlPattern, { cmd: "revalidateObservationAnchor", anchor });
     assert.deepEqual([navigated.valid, navigated.reason], [false, "page_changed"], "navigation must fail closed");
 
-    console.log("observation-anchor smoke passed: stable scroll ref; viewport/reflow remeasure; replacement, ambiguity, frame and navigation stale; canvas/cross-origin bounded");
+    console.log("observation-anchor smoke passed: issued evidence binding; stable scroll ref; viewport/reflow remeasure; replacement, frame and navigation stale; canvas/cross-origin bounded");
   } finally {
     page?.close();
     worker?.close();

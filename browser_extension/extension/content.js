@@ -4291,6 +4291,7 @@
     'a[href], button, input:not([type=hidden]), textarea, select, [role=button], [role=link], [role=tab], [role=menuitem], [contenteditable=""], [contenteditable=true], [onclick]';
   const MAX_VISIBLE_TEXT_CHARS = 5200;
   const MAX_VISIBLE_TEXT_PARTS = 140;
+  const MAX_OBSERVATION_ANCHORS = 100;
   const TEXT_NODE_EXCLUDED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS"]);
 
   function visible(el) {
@@ -4382,13 +4383,14 @@
   function snapshot() {
     indexed = [];
     const out = [];
-    document.querySelectorAll(SELECTOR).forEach((el) => {
-      if (el.closest("#agee-root")) return;
-      if (!visible(el)) return;
+    for (const el of document.querySelectorAll(SELECTOR)) {
+      if (el.closest("#agee-root")) continue;
+      if (!visible(el)) continue;
       const i = indexed.length;
       indexed.push(el);
       out.push({ i, tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "", label: label(el), element: el });
-    });
+      if (out.length >= MAX_OBSERVATION_ANCHORS) break;
+    }
     const capturedAt = new Date().toISOString();
     const snapshotId = `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const observationRuntime = window.__ageeObservationRuntime;
@@ -4396,6 +4398,9 @@
       ...item,
       observation_anchor: observationRuntime?.observe(element, { snapshotId, capturedAt }) || null,
     }));
+    // This raw content->extension snapshot is the local evidence propagation
+    // boundary. Downstream gateway/model shapers must copy limitations
+    // explicitly; they must never infer element identity for omitted regions.
     return {
       url: location.href,
       title: document.title,
