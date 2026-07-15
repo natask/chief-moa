@@ -85,9 +85,13 @@
       `OverlayService.java` to 3,959 lines.
 - [x] 4.8 Repair Apple protocol drift, move executable shell behavior into
       test-linked modules, and add an exact, fail-closed coverage classifier.
-      Baseline: 89.17% lines, 85.29% functions, and 81.05% LLVM regions across
-      45 passing tests and both instrumented app products. This Swift toolchain
-      emits no branch counters, so regions are not relabeled as branches.
+      Current deterministic baseline: 84.60% lines, 85.42% functions, and
+      78.67% LLVM regions across 45 passing tests and both instrumented app
+      products. This Swift toolchain emits no branch counters, so regions are
+      not relabeled as branches.
+- [x] 4.8a Execute and merge inert bootstrap profiles for both Apple app
+      products instead of counting their entrypoints as unexecuted. Verified
+      without launching a window or requesting TCC permissions.
 - [ ] 4.9 Raise Apple executable coverage to at least 90% for lines and
       functions, and enforce an honest 90% branch metric on a toolchain or
       instrumentation path that emits branch counters.
