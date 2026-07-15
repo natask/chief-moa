@@ -135,6 +135,10 @@
       disable, and disconnect tests; persist notification reasons so duplicate
       queued notifications coalesce correctly. Verified with a focused gate at
       99.30% lines, 92.96% branches, and 95.40% functions.
+- [x] 2.27 Add exhaustive browser-agent action, observation, planner-context,
+      tool-capture, persistence, lease, policy, fallback, terminal-state, and
+      health-count tests; remove the unreachable max-step helper. Verified with
+      a focused gate at 99.85% lines, 90.00% branches, and 100% functions.
 
 ## 3. Other Oversized Surfaces
 
