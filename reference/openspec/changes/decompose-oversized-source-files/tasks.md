@@ -181,6 +181,12 @@
       timeout, and heuristic-fallback tests with a focused 90%
       line/branch/function gate. Verified at 99.47% lines, 96.79% branches, and
       100% functions.
+- [x] 2.36 Add exhaustive work-history task/run lifecycle, evidence, feedback,
+      control, deployment request, claim, effect, receipt, projection, UI-route,
+      validation, idempotency-collision, and rollout-guard tests; distinguish an
+      already-receipted rollback from a never-applied request. Enforce a focused
+      90% line/branch/function gate, verified at 99.80% lines, 91.27% branches,
+      and 95.59% functions while retaining the 2,032-line source ceiling.
 
 ## 3. Other Oversized Surfaces
 
