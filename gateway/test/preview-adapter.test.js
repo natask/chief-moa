@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createPreviewResourcePlan } = require("../lib/preview-resource-plan");
-const { createPreviewAdapter } = require("../lib/preview-adapter");
+const { createPreviewAdapter, previewAdapterTestInternals } = require("../lib/preview-adapter");
 const { createComposePreviewProvider, validateComposeConfig } = require("../lib/preview-provider-compose");
 const { createPreviewPoller } = require("../scripts/preview-worker");
 
@@ -78,6 +78,105 @@ test("adapter performs exact cleanup after bounded health failure and abort", as
   aborted.create = async () => { aborted.calls.push("create"); controller.abort(); };
   await assert.rejects(createPreviewAdapter({ provider: aborted, signal: controller.signal }).deploy(plan, active), { name: "AbortError" });
   assert.equal(aborted.calls.filter((call) => call === "cleanup").length, 1);
+});
+
+test("adapter validates provider shape, inspection identity, and bounded poll options", async () => {
+  assert.throws(() => createPreviewAdapter(), /requires create\(\)/);
+  for (const missing of ["create", "inspect", "health", "cleanup"]) {
+    const provider = fakeProvider();
+    delete provider[missing];
+    assert.throws(() => createPreviewAdapter({ provider }), new RegExp(`requires ${missing}\\(\\)`));
+  }
+
+  const plan = createPreviewResourcePlan(base);
+  const fields = ["project", "hostname", "database", "queue", "queue_status", "storage", "worker_pool", "worker_pool_status", "image_ref", "database_image_ref", "commit_sha"];
+  for (const field of fields) {
+    const provider = fakeProvider({ existing: true });
+    provider.inspect = async () => ({ exists: true, ...plan, [field]: `wrong-${field}` });
+    await assert.rejects(
+      createPreviewAdapter({ provider }).deploy(plan, active),
+      new RegExp(`inspection ${field} does not match`),
+    );
+  }
+
+  const missing = fakeProvider({ existing: true });
+  missing.inspect = async () => null;
+  missing.create = async () => {};
+  await assert.rejects(
+    createPreviewAdapter({ provider: missing, poll: { attempts: -5, interval_ms: -5, operation_timeout_ms: -5 } }).deploy(plan, active),
+    /did not inspect an existing preview/,
+  );
+  assert.equal(missing.calls.filter((call) => call === "cleanup").length, 1);
+
+  const bounded = fakeProvider();
+  const timeoutValues = [];
+  const boundedCreate = bounded.create;
+  bounded.create = async (createdPlan, options) => {
+    timeoutValues.push(options.timeout_ms);
+    await boundedCreate(createdPlan, options);
+  };
+  await createPreviewAdapter({
+    provider: bounded,
+    poll: { attempts: 500, interval_ms: 50_000, operation_timeout_ms: 999_999 },
+  }).deploy(plan, active);
+  assert.deepEqual(timeoutValues, [120_000]);
+
+  const changingActive = { ...active };
+  const colliding = fakeProvider({ existing: true });
+  colliding.inspect = async () => {
+    changingActive.project = plan.project;
+    return { exists: true, ...plan };
+  };
+  await assert.rejects(
+    createPreviewAdapter({ provider: colliding }).deploy(plan, changingActive),
+    /preview project collides with active identity/,
+  );
+});
+
+test("default polling sleep resolves and aborts without stranding cleanup", async () => {
+  const plan = createPreviewResourcePlan(base);
+  const resolving = fakeProvider({ healthy: false });
+  resolving.health = async () => {
+    resolving.calls.push("health");
+    return resolving.calls.filter((call) => call === "health").length > 1;
+  };
+  const deployed = await createPreviewAdapter({
+    provider: resolving,
+    poll: { attempts: 2, interval_ms: 1 },
+  }).deploy(plan, active);
+  assert.equal(deployed.reused, false);
+
+  const controller = new AbortController();
+  const aborting = fakeProvider({ healthy: false });
+  aborting.health = async () => {
+    aborting.calls.push("health");
+    setImmediate(() => controller.abort(new Error("stop polling")));
+    return false;
+  };
+  await assert.rejects(
+    createPreviewAdapter({
+      provider: aborting,
+      signal: controller.signal,
+      poll: { attempts: 2, interval_ms: 1000 },
+    }).deploy(plan, active),
+    /stop polling/,
+  );
+  assert.equal(aborting.calls.filter((call) => call === "cleanup").length, 1);
+
+  await assert.rejects(
+    previewAdapterTestInternals.abortableSleep(1, { aborted: true, reason: null }),
+    { name: "AbortError" },
+  );
+  let abortSleep;
+  const reasonlessSignal = {
+    aborted: false,
+    reason: null,
+    addEventListener(_name, listener) { abortSleep = listener; },
+    removeEventListener() {},
+  };
+  const sleeping = previewAdapterTestInternals.abortableSleep(1000, reasonlessSignal);
+  abortSleep();
+  await assert.rejects(sleeping, { name: "AbortError" });
 });
 
 test("compose provider uses fixed executable argv, inspects labels, and refuses production operations", async () => {
