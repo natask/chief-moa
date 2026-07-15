@@ -260,6 +260,13 @@
       HTTP integration suite. Enforce a focused 90% line/branch/function gate,
       verified at 100% lines, 97.92% branches, and 100% functions. Reduce
       `server.js` to 13,468 lines.
+- [x] 2.47 Extract presentation-evaluation authorization, transcript selection,
+      evaluator invocation, model-failure mapping, and live/final parsing from
+      `server.js`; add focused unrelated-route, auth, inline and stored turn,
+      default-mode, no-transcript, provider-failure, real-evaluator, and existing
+      deterministic presentation smoke coverage. Enforce a focused 90%
+      line/branch/function gate, verified at 100% for all three metrics. Reduce
+      `server.js` to 13,418 lines.
 
 ## 3. Other Oversized Surfaces
 
