@@ -2,9 +2,12 @@
 
 ## Status
 
-Proposed for product and architecture alignment on 2026-07-14. This note does
-not authorize browser implementation, extension permission changes, provider
-spend, recording, packaging, or deployment.
+Superseded as the primary product proposal on 2026-07-14 by
+`reference/openspec/changes/browser-situated-agent-experience`. The research,
+browser feasibility evidence, and teaching-loop design remain useful, but the
+user clarified that tutorials are one use case rather than the product
+architecture. This note does not authorize browser implementation, extension
+permission changes, provider spend, recording, packaging, or deployment.
 
 ## Intent Resolution
 
