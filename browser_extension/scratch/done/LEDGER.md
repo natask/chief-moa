@@ -1,1 +1,2 @@
+- Voice-first browser gestures now toggle current-thread capture on single click, fresh-thread capture on double-click, push-to-talk on hold, and collision-safe chat on triple-click — agent: codex/gpt-5 — 888b6a5a
 - Video notes (extension half): shift-click record = screen+mic WebM via desktopCapture picker + offscreen MediaRecorder (120s/20MiB caps), direct upload to /v1/video-notes, then a /v1/voice/turns video turn whose reply lands on the note's cue; Stop-sharing bar auto-finishes; voice/audio-note/video-note mutually refuse the mic — agent: claude-code/fable-5 — 1865dc3
