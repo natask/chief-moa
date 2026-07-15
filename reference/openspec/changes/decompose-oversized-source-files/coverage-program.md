@@ -11,12 +11,12 @@ markup, and styles never contribute production coverage.
 
 | Surface | Lines | Branches | Functions/methods | Evidence status |
 | --- | ---: | ---: | ---: | --- |
-| Gateway | 72.28% | 68.75% | 76.76% | Node production-only run over `server.js` and `lib/**/*.js`; 525/527 tests passed, one skipped, and one work-history lease smoke expired while a duplicate coverage run was competing. |
-| Android | 17.57% | 21.37% | 22.66% | Exact JaCoCo ratchet passes with 136 JVM tests. The extracted agent-run tracker has 98.96% lines, 95.95% branches, and 100% methods; generated Android classes remain the only exclusions. |
-| Browser extension | 16.65% | 6.57% | 7.86% | Exact 24-file runtime classifier; 11 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. The extracted browser-turn protocol has a permanent 100/95.90/100 focused gate. |
+| Gateway | 73.39% | 69.52% | 77.28% | Node production-only run over `server.js` and `lib/**/*.js`; 543 tests passed and one skipped. Extracted work-history and pet-collection handlers each have permanent focused coverage above 90%. |
+| Android | 17.94% | 21.80% | 23.51% | Exact JaCoCo ratchet passes with 144 JVM tests. Extracted agent-run and context-control state modules each have permanent focused coverage above 90%; generated Android classes remain the only exclusions. |
+| Browser extension | 17.85% | 7.71% | 8.29% | Exact 25-file runtime classifier; 12 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. Extracted browser-turn and agent-loop policy modules have permanent focused gates above 90%. |
 | LiveKit worker | 99.07% | 90.40% | 92.00% | Hard production-only gate passes with all six compiled runtime modules loaded and 19 tests covering worker, STT, LLM, TTS, auth, streaming, and failure paths. |
 | Website | 96.09% | 90.40% | 97.47% | Hard `c8 --all` gate covers all seven Pages handlers and four extracted public runtime modules with 42 passing tests; owned HTML contains no inline executable JavaScript. |
-| Apple surfaces | blocked | blocked | blocked | `swift test --enable-code-coverage` is blocked by typed protocol drift; executable shells are not linked into the SwiftPM test product. |
+| Apple surfaces | 89.17% | unavailable | 85.29% | Protocol drift is repaired, 45 tests pass, and both instrumented apps build. The exact classifier combines test and executable profiles; LLVM regions are 81.05%, while this Swift toolchain emits no branch counters, so the hard 90% gate fails closed. |
 | Windows portable core | 98.56% | 92.07% | 98.15% | Hard Rust gate passes with 27 tests. This does not cover the separate WinUI C# executable. |
 | Windows WinUI shell | unmeasured | unmeasured | unmeasured | Native C#/WinUI instrumentation requires a Windows runner and remains a separate acceptance check. |
 
@@ -94,3 +94,29 @@ Each ticket has one observable acceptance check and is committed separately.
 Run the native tests first, then the production-only coverage gate, then the
 surface build/smoke command. Coverage work does not authorize weakening,
 deleting, or excluding meaningful failure-path and integration tests.
+
+## Artifact And Promotion Record (2026-07-15)
+
+- Browser extension: the real headless-Chrome smoke passed and the committed
+  `0.1.40` runtime was packaged as `browser_extension/dist/A.G.-0.1.40.zip`.
+  The already-loaded browser was not reloaded because interruption-free active
+  browser state was not proven.
+- Android: `assembleDebug` passed and the versioned OTA artifact
+  `ai.moa.assistant-1784106283` was created under
+  `gateway/data/android-ota/releases/`. It was not synced or installed because
+  an interruption-free phone session was not proven and the VPS host/token are
+  unavailable in this checkout.
+- Apple: the ad-hoc signed QA bundle was created at
+  `apple_surfaces/dist/MoaMac.app`; packaging did not launch it or request TCC
+  permissions.
+- Gateway: the complete production-only run passed 543 tests with one skip, but
+  no isolated preview, backup/restore evidence, or state-compatibility rollout
+  was established. The branch was therefore not pushed through the
+  production-triggering `push-master.sh` path.
+- Website: the hard 90% coverage gate passes, but Cloudflare preview credentials
+  are unavailable, so no isolated Pages preview or active promotion occurred.
+
+These ignored local artifacts are QA/release inputs, not evidence of an active
+promotion. Windows WinUI, Android, browser extension, gateway, and Apple remain
+below their whole-surface acceptance gates, so repository-wide promotion is
+blocked even though the Windows core, LiveKit worker, and website gates pass.

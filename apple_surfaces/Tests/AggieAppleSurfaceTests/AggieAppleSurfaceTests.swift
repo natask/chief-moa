@@ -164,3 +164,88 @@ func denialPathsNeverInvokeExecutor(kind: String) async throws {
     #expect(throws: AggieProtocolError.duplicateProposal) { try second.record(.unknownEffect, for: "msg-claim") }
     #expect(try second.status(for: "msg-claim") == .unknownEffect)
 }
+
+@Test func jsonValueRoundTripsEveryCanonicalShape() throws {
+    let values: [JSONValue] = [
+        .null, .bool(true), .number(1.5), .string("value"),
+        .array([.number(2), .null]), .object(["nested": .bool(false)]),
+    ]
+    for value in values {
+        let encoded = try JSONEncoder().encode(value)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: encoded) == value)
+    }
+    #expect(throws: (any Error).self) { try JSONDecoder().decode(JSONValue.self, from: Data("1e999".utf8)) }
+}
+
+@Test func decoderRejectsMalformedTypesIdentifiersAndDeepOrWidePayloads() throws {
+    for overrides: [String: Any] in [
+        ["version": 3], ["type": "turn.text"], ["message_id": "bad id"],
+        ["session_id": ""], ["surface": ["id": "bad/id", "kind": "macos", "mode": "text"]],
+    ] {
+        #expect(throws: (any Error).self) { try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: overrides)) }
+    }
+    var deep: Any = "safe"
+    for _ in 0..<14 { deep = ["nested": deep] }
+    #expect(throws: AggieProtocolError.dangerousPayload) {
+        try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["future": deep]))
+    }
+    #expect(throws: AggieProtocolError.tooLarge) {
+        try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["future": Array(repeating: "x", count: 65)]))
+    }
+    #expect(throws: AggieProtocolError.tooLarge) {
+        try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["future": String(repeating: "x", count: 16_385)]))
+    }
+    #expect(throws: AggieProtocolError.dangerousPayload) {
+        try AggieEnvelopeDecoder.decodeProposal(proposalData(overrides: ["future": "unsafe\u{1}text"]))
+    }
+}
+
+@Test func journalsEnforceTerminalAndCapacityBounds() throws {
+    let memory = InMemoryEffectJournal()
+    try memory.record(.knownSucceeded, for: "terminal")
+    #expect(try memory.status(for: "missing") == .notStarted)
+    #expect(throws: AggieProtocolError.duplicateProposal) { try memory.record(.notStarted, for: "terminal") }
+    for index in 0..<(AggieLimits.pendingProposals - 1) { try memory.record(.knownFailed, for: "msg-\(index)") }
+    #expect(throws: AggieProtocolError.tooLarge) { try memory.record(.knownFailed, for: "overflow") }
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let url = directory.appendingPathComponent("journal.json")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data(repeating: 0x20, count: AggieLimits.replayBytes + 1).write(to: url)
+    #expect(throws: AggieProtocolError.tooLarge) { try AtomicFileEffectJournal(url: url).status(for: "msg") }
+}
+
+@Test func replayDetectsDuplicatesConflictsGapsAndBadScope() throws {
+    var replay = SessionReplay(sessionID: "sess-1")
+    let first = ReplayEvent(sequence: 1, messageID: "msg-1", sessionID: "sess-1", canonicalEnvelope: Data("one".utf8))
+    #expect(try replay.accept(first).accepted)
+    #expect(try replay.accept(first).duplicate)
+    #expect(throws: AggieProtocolError.sequenceConflict) {
+        try replay.accept(ReplayEvent(sequence: 1, messageID: "msg-other", sessionID: "sess-1", canonicalEnvelope: Data("two".utf8)))
+    }
+    #expect(throws: AggieProtocolError.messageConflict) {
+        try replay.accept(ReplayEvent(sequence: 2, messageID: "msg-1", sessionID: "sess-1", canonicalEnvelope: Data("two".utf8)))
+    }
+    #expect(throws: AggieProtocolError.sequenceGap) {
+        try replay.accept(ReplayEvent(sequence: 3, messageID: "msg-3", sessionID: "sess-1", canonicalEnvelope: Data("three".utf8)))
+    }
+    #expect(throws: AggieProtocolError.scopeMismatch) {
+        try replay.accept(ReplayEvent(sequence: 2, messageID: "msg-2", sessionID: "other", canonicalEnvelope: Data("two".utf8)))
+    }
+    for event in [
+        ReplayEvent(sequence: 0, messageID: "msg", sessionID: "sess-1", canonicalEnvelope: Data("x".utf8)),
+        ReplayEvent(sequence: 2, messageID: "bad id", sessionID: "sess-1", canonicalEnvelope: Data("x".utf8)),
+    ] { #expect(throws: (any Error).self) { try replay.accept(event) } }
+    #expect(throws: AggieProtocolError.malformed("backoff")) { try reconnectDelay(attempt: -1, entropy: 0) }
+    #expect(throws: AggieProtocolError.malformed("backoff")) { try reconnectDelay(attempt: 1, entropy: 2) }
+}
+
+@Test func canonicalDigestHandlesArraysBooleansNullAndFractionalNumbers() throws {
+    var raw = try JSONSerialization.jsonObject(with: proposalData()) as! [String: Any]
+    var payload = raw["payload"] as! [String: Any]
+    payload["params"] = ["values": [true, NSNull(), 1.5, "slash\\quote\""]]
+    raw["payload"] = payload
+    let proposal = try AggieEnvelopeDecoder.decodeProposal(JSONSerialization.data(withJSONObject: raw))
+    #expect(try AggieDigest.proposal(proposal).count == 64)
+}

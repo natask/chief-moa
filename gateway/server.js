@@ -28,6 +28,7 @@ const {
 } = require("./lib/profile-options");
 const voiceL10n = require("./lib/voice-l10n");
 const { createCompanionCatalogStore, COMMAND_VERBS: COMPANION_COMMAND_VERBS } = require("./lib/companion-catalog");
+const { createPetCollectionHandlers } = require("./lib/pet-collection-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
@@ -366,6 +367,18 @@ const voiceModeHandlers = createVoiceModeHandlers({ store: voiceModes, authorize
 const companionCatalog = createCompanionCatalogStore({
   dataDir: DATA_DIR,
   voiceBinding: companionVoiceBindingOptions(),
+});
+const { routePetCollections } = createPetCollectionHandlers({
+  companionCatalog,
+  catalogVersion: PET_CATALOG_VERSION,
+  authorizedAgent,
+  agentAuthError,
+  readJsonBody,
+  sendJson,
+  cleanError,
+  petInputFromBody,
+  manifestV2FieldsFromBody,
+  petPreviewPayload,
 });
 const companionRuntimeAuthority = createCompanionRuntimeAuthority({
   policy: loadCompanionRuntimePolicy(),
@@ -817,74 +830,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/pets/agents" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, petAgentsPayload(url));
+    if (await routePetCollections(request, response, url)) {
       return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/agents" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreatePetAgent(request, response);
-      return;
-    }
-
-    {
-      const match = url.pathname.match(/^\/v1\/agent\/pets\/agents\/([^/]+)$/);
-      if (match && request.method === "GET") {
-        if (!authorizedAgent(request)) {
-          sendJson(response, 401, agentAuthError());
-          return;
-        }
-        const agent = companionCatalog.getAgent(decodeURIComponent(match[1]));
-        if (!agent) {
-          sendJson(response, 404, { error: "agent not found" });
-          return;
-        }
-        sendJson(response, 200, { version: PET_CATALOG_VERSION, agent });
-        return;
-      }
-    }
-
-    if (url.pathname === "/v1/agent/pets/bookmarks" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, petBookmarksPayload(url));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/bookmarks" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreatePetBookmark(request, response);
-      return;
-    }
-
-    {
-      const match = url.pathname.match(/^\/v1\/agent\/pets\/bookmarks\/([^/]+)$/);
-      if (match && request.method === "GET") {
-        if (!authorizedAgent(request)) {
-          sendJson(response, 401, agentAuthError());
-          return;
-        }
-        const bookmark = companionCatalog.getBookmark(decodeURIComponent(match[1]));
-        if (!bookmark) {
-          sendJson(response, 404, { error: "bookmark not found" });
-          return;
-        }
-        sendJson(response, 200, { version: PET_CATALOG_VERSION, bookmark });
-        return;
-      }
     }
 
     if (url.pathname === "/v1/agent/pets" && request.method === "POST") {
@@ -4271,38 +4218,6 @@ function activePetPayload(options = {}) {
   };
 }
 
-function petAgentsPayload(url) {
-  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
-  const limit = Number(url?.searchParams?.get("limit") || 100);
-  return {
-    version: PET_CATALOG_VERSION,
-    generated_at: new Date().toISOString(),
-    query,
-    agents: companionCatalog.listAgents({ query, limit }),
-    endpoints: {
-      list: "/v1/agent/pets/agents",
-      create: "/v1/agent/pets/agents",
-      bookmarks: "/v1/agent/pets/bookmarks",
-    },
-  };
-}
-
-function petBookmarksPayload(url) {
-  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
-  const limit = Number(url?.searchParams?.get("limit") || 100);
-  return {
-    version: PET_CATALOG_VERSION,
-    generated_at: new Date().toISOString(),
-    query,
-    bookmarks: companionCatalog.listBookmarks({ query, limit }),
-    endpoints: {
-      list: "/v1/agent/pets/bookmarks",
-      create: "/v1/agent/pets/bookmarks",
-      agents: "/v1/agent/pets/agents",
-    },
-  };
-}
-
 async function handleCreateCompanion(request, response) {
   const body = await readJsonBody(request);
   try {
@@ -4345,43 +4260,6 @@ async function handleCreatePet(request, response) {
     });
   } catch (error) {
     sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleCreatePetAgent(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const agent = companionCatalog.createAgent({
-      text: body?.text || body?.request || body?.prompt || body?.description,
-      name: body?.name,
-      voice: body?.voice,
-      pet: petInputFromBody(body),
-      image_data_url: body?.image_data_url || body?.imageDataUrl || body?.source_image || body?.sourceImage,
-      rules: body?.rules,
-      ...manifestV2FieldsFromBody(body),
-    });
-    const preview = companionCatalog.preview({ companion_id: agent.companion_id });
-    sendJson(response, 201, {
-      version: PET_CATALOG_VERSION,
-      agent,
-      preview: petPreviewPayload(preview),
-      active_profile_mutated: false,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleCreatePetBookmark(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const bookmark = companionCatalog.createBookmark(body || {});
-    sendJson(response, 201, {
-      version: PET_CATALOG_VERSION,
-      bookmark,
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
   }
 }
 

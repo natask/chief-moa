@@ -62,9 +62,6 @@ public final class OverlayService extends Service {
     // a broken or blank turn. No local TTS is used (hosted-audio-only policy).
     private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
     private static final String NOT_SPOKEN_SUFFIX = "\n\n(not spoken)";
-    // Mirror of the "(not spoken)" convention for an incognito turn the gateway
-    // answered but did not persist (context.persisted === false).
-    private static final String NOT_SAVED_SUFFIX = "\n\n(not saved)";
     // Inactivity watchdog for a committed streaming turn. It is armed on commit
     // and RESET by every streaming event (partial/final transcript, assistant
     // text, assistant audio start + each audio frame, turn_progress keepalives).
@@ -181,8 +178,7 @@ public final class OverlayService extends Service {
     // incognito is a persistent mode where every turn is answered but never
     // persisted by the gateway. Both are explicit client overrides that always
     // win over the model's own context choice.
-    private boolean newThreadArmed;
-    private boolean incognitoEnabled;
+    private final MoaContextControlState contextControls = new MoaContextControlState();
     private TextView newThreadPill;
     private TextView incognitoPill;
     private LinearLayout contextControlsRow;
@@ -1542,19 +1538,19 @@ public final class OverlayService extends Service {
     // Arm/disarm the one-shot new-thread state. Re-tapping disarms it; it is also
     // consumed automatically once a turn rides on it.
     private void toggleNewThreadArmed() {
-        newThreadArmed = !newThreadArmed;
+        contextControls.toggleNewThread();
         refreshContextControls();
     }
 
     // Toggle the persistent incognito mode on/off.
     private void toggleIncognito() {
-        incognitoEnabled = !incognitoEnabled;
+        contextControls.toggleIncognito();
         refreshContextControls();
     }
 
     private void refreshContextControls() {
         if (newThreadPill != null) {
-            boolean armed = newThreadArmed;
+            boolean armed = contextControls.isNewThreadArmed();
             newThreadPill.setText(armed ? "New thread armed" : "New thread");
             newThreadPill.setTextColor(armed ? MoaColors.INK : MoaColors.MUTED);
             newThreadPill.setBackground(MoaDrawables.rounded(
@@ -1565,7 +1561,7 @@ public final class OverlayService extends Service {
             ));
         }
         if (incognitoPill != null) {
-            boolean on = incognitoEnabled;
+            boolean on = contextControls.isIncognitoEnabled();
             incognitoPill.setText(on ? "Incognito on" : "Incognito");
             incognitoPill.setTextColor(on ? MoaColors.INK : MoaColors.MUTED);
             incognitoPill.setBackground(MoaDrawables.rounded(
@@ -1577,7 +1573,7 @@ public final class OverlayService extends Service {
         }
         if (contextControlsRow != null) {
             // Persistent tinted status row while incognito is on.
-            contextControlsRow.setBackground(incognitoEnabled
+            contextControlsRow.setBackground(contextControls.isIncognitoEnabled()
                     ? MoaDrawables.rounded(0x22FF8A3D, dp(14), 0x40FF8A3D, dp(1))
                     : null);
         }
@@ -1866,7 +1862,7 @@ public final class OverlayService extends Service {
         // reply so the user knows nothing was saved. The spoken `speak` string is
         // left untouched so the marker is never read aloud.
         if (MoaGatewayClient.turnNotPersisted(response)) {
-            text = appendNotSaved(text);
+            text = MoaContextControlState.appendNotSaved(text);
         }
 
         boolean shouldSpeak = fromVoice && !speakText.isEmpty();
@@ -1989,7 +1985,7 @@ public final class OverlayService extends Service {
                 MoaGatewayClient.GatewayTextResponse reply = gatewayClient().chat(requestBody);
                 mainHandler.post(() -> {
                     updateConversationId(reply.conversationId);
-                    deliverReply(reply.notSaved ? appendNotSaved(reply.text) : reply.text, fromVoice);
+                    deliverReply(reply.notSaved ? MoaContextControlState.appendNotSaved(reply.text) : reply.text, fromVoice);
                 });
             } catch (Exception error) {
                 Log.w(TAG, "gateway chat failed: " + cleanError(error));
@@ -2097,23 +2093,9 @@ public final class OverlayService extends Service {
     // new-thread arm is consumed by the turn it rides on. The gateway treats an
     // explicit context_action as an override that beats the model's own choice.
     private void applyContextControls(JSONObject body) throws JSONException {
-        if (incognitoEnabled) {
-            body.put("context_action", "incognito");
-            return;
-        }
-        if (newThreadArmed) {
-            body.put("context_action", "new");
-            newThreadArmed = false;
+        if (contextControls.applyTo(body)) {
             refreshContextControls();
         }
-    }
-
-    private String appendNotSaved(String text) {
-        String value = safe(text);
-        if (value.isEmpty() || value.endsWith(NOT_SAVED_SUFFIX)) {
-            return value;
-        }
-        return value + NOT_SAVED_SUFFIX;
     }
 
     private String androidDeviceId() {
@@ -2488,7 +2470,7 @@ public final class OverlayService extends Service {
             manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
             return;
         }
-        newThreadArmed = true;
+        contextControls.armNewThread();
         refreshContextControls();
         handleOrbStartTalkLoop();
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
@@ -3094,12 +3076,15 @@ public final class OverlayService extends Service {
         // one-shot "new thread" must first resolve their branch through
         // /v1/threads/switch, because the streaming WS branch is fixed at session
         // start and cannot change once the socket is open.
-        String contextAction = incognitoEnabled ? "incognito" : (newThreadArmed ? "new" : "");
-        if (contextAction.isEmpty()) {
+        MoaContextControlState.StreamingChoice choice = contextControls.consumeStreamingChoice();
+        if (choice.consumedNewThread) {
+            refreshContextControls();
+        }
+        if (!choice.requiresBranchSwitch()) {
             openStreamingVoiceSession(autoCommitOnSilence, continuousLoop, "default", false);
             return;
         }
-        resolveThreadBranchThenOpenStreamingVoice(autoCommitOnSilence, continuousLoop, contextAction);
+        resolveThreadBranchThenOpenStreamingVoice(autoCommitOnSilence, continuousLoop, choice.action);
     }
 
     // Resolve the thread branch for an incognito / new-thread streaming voice turn
@@ -3109,12 +3094,6 @@ public final class OverlayService extends Service {
     // than silently opening a persisted session, keeping the incognito guarantee.
     private void resolveThreadBranchThenOpenStreamingVoice(boolean autoCommit, boolean continuous, String action) {
         final boolean incognito = "incognito".equals(action);
-        // Consume the one-shot "new" arm now that we are acting on it; incognito
-        // is a persistent mode and stays on.
-        if (!incognito) {
-            newThreadArmed = false;
-            refreshContextControls();
-        }
         // Release any prior controller/timers so the mic and socket are free while
         // the branch resolves, mirroring openStreamingVoiceSession's entry.
         cancelContinuousVoiceRestart();
@@ -3740,11 +3719,10 @@ public final class OverlayService extends Service {
     // voice session (its inc- branch is never persisted). The stored chat message
     // was already recorded before this runs, so only the overlay row shows it.
     private void markCurrentReplyNotSaved() {
-        String text = safe(voiceAssistantTranscript);
-        if (text.isEmpty() || text.endsWith(NOT_SAVED_SUFFIX)) {
-            return;
+        String marked = MoaContextControlState.appendNotSaved(voiceAssistantTranscript);
+        if (!marked.equals(safe(voiceAssistantTranscript))) {
+            updateVoiceAssistantTranscript(marked);
         }
-        updateVoiceAssistantTranscript(text + NOT_SAVED_SUFFIX);
     }
 
     private boolean shouldStartVoice(Intent intent) {

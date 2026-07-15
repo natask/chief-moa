@@ -88,6 +88,7 @@ const metrics = Object.fromEntries(
 const ratchet = JSON.parse(readFileSync(join(root, "scripts", "coverage-ratchet.json"), "utf8"));
 const failures = [];
 const focusedThresholds = new Map([
+  ["extension/browser-agent-loop-policy.js", 90],
   ["extension/browser-turn-protocol.js", 90],
 ]);
 const focusedResults = [];

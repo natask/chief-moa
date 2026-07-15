@@ -104,12 +104,12 @@ def debugUnitTestCoverageData = layout.buildDirectory.file(
 // Raise these floors as Android lifecycle logic is extracted and tested; never
 // lower them to make verification pass.
 def debugUnitTestCoverageRatchet = [
-        // 1,414 / 8,046 executable production lines.
-        line  : new BigDecimal('0.1757394978871489'),
-        // 956 / 4,473 production branches.
-        branch: new BigDecimal('0.2137268052761010'),
-        // 249 / 1,099 production methods (the JaCoCo function analogue).
-        method: new BigDecimal('0.2265696087352138')
+        // 1,448 / 8,070 executable production lines.
+        line  : new BigDecimal('0.1794299876084262'),
+        // 976 / 4,477 production branches.
+        branch: new BigDecimal('0.2180031270940361'),
+        // 261 / 1,110 production methods (the JaCoCo function analogue).
+        method: new BigDecimal('0.2351351351351351')
 ]
 
 tasks.register('reportDebugUnitTestCoverage', JacocoReport) {
