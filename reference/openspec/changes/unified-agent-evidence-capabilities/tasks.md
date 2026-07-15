@@ -6,14 +6,20 @@ Android/workflow, and independent verification remain separate ownership lanes.
 ## 1. Contract Reconciliation (workflow/docs lane, serial first)
 
 - [x] 1.1 Define `moa.reasoning-turn.v2`, `evidence_asset.v1`,
-      `moa.video-evidence-request.v1`, and `moa.browser-program.v2`.
+      `moa.video-evidence-request.v1`, and profile-discriminated
+      `moa.browser-program.v2` authority.
 - [x] 1.2 Reconcile generated program authority as
       `reviewed_standalone_v1` and `delegated_runtime_v1`.
 - [x] 1.3 Record route-uniform search, initial-turn multimodal evidence, video
       continuation, receipts/retention, ownership, and the rollout DAG in
       OpenSpec and `ARCHITECTURE.md`.
+- [x] 1.4 Reconcile the browser-situated proposal and normative spec so packaged
+      reversible helpers remain distinct from arbitrary program effects, whose
+      receipts report actual cleanup/rollback support and preserve destructive
+      application-action classification.
   - Acceptance: strict OpenSpec validation passes, and no active reconciled
-    document makes the two execution profiles look like one universal policy.
+    document makes the two execution profiles look like one universal policy or
+    requires every generated program to claim a packaged helper's defined undo.
 
 ## 2. Route-Uniform Search (gateway lane)
 
