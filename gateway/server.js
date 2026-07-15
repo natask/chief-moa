@@ -103,6 +103,7 @@ const { createVoiceModeHandlers, createVoiceModeStore, routingFor } = require(".
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
 const { createPresentationHandlers } = require("./lib/presentation-handlers");
+const { createSupervisorHandlers } = require("./lib/supervisor-handlers");
 const {
   normalizeSpeech,
   isStopLike,
@@ -758,6 +759,12 @@ const voiceSessionServer = createVoiceSessionServer({
   reasoner: runAndroidCascadedVoiceReasoning,
   blobStore,
 });
+const { routeSupervisor } = createSupervisorHandlers({
+  authorizedAgent, agentAuthError, sendJson, harnessStatus, workGraph,
+  listAllAgentRuns, isTerminalRunStatus, provider: MODEL_PROVIDER, model: MODEL_ID,
+  providerConfigured, dataDir: DATA_DIR, brain, voiceSessionServer,
+  effectiveInstruction, truncate,
+});
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -935,12 +942,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/harnesses" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, { harnesses: harnessStatus() });
+    if (await routeSupervisor(request, response, url)) {
       return;
     }
 
@@ -966,15 +968,6 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (await routeDeviceTools(request, response, url)) {
-      return;
-    }
-
-    if (url.pathname === "/v1/supervisor/status" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, await supervisorStatusPayload());
       return;
     }
 
@@ -3688,76 +3681,6 @@ function cancelAgentRunById(id) {
   appendAgentEvent(safeId, "canceled", { error: next.error });
   activeRuns.delete(safeId);
   return { ok: true, status: "canceled_before_active", run: next };
-}
-
-async function supervisorStatusPayload() {
-  const nodes = await workGraph.list();
-  const byStatus = {};
-  for (const status of workGraph.statuses()) {
-    byStatus[status] = nodes.filter((node) => node.status === status).length;
-  }
-  const allRuns = listAllAgentRuns().sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-  const activeRuns = allRuns.filter((run) => !isTerminalRunStatus(run.status));
-  return {
-    generated_at: new Date().toISOString(),
-    frame: "node_based_execution_with_thin_supervisor",
-    supervisor: {
-      standing_chief_agent: false,
-      conductor_loop: false,
-      remote_model_poll_cadence_ms: null,
-      description: "The supervisor is a query and launch surface over durable work nodes and disposable executor runs.",
-    },
-    storage: {
-      agent_runs: "json-files",
-      ...(typeof workGraph.storageInfo === "function" ? workGraph.storageInfo() : {
-        work_graph: workGraph.graphPath,
-        postgres_configured: false,
-      }),
-    },
-    gateway: {
-      provider: MODEL_PROVIDER,
-      model: MODEL_ID,
-      provider_configured: providerConfigured(),
-      data_dir: DATA_DIR,
-    },
-    brain: {
-      available: brain.available(),
-      role: "memory_only",
-      slug_prefix: brain.slugPrefix,
-    },
-    voice: {
-      stream_provider: voiceSessionServer.status(),
-      transcript_turn_endpoint: "/v1/voice/turns",
-      streaming_endpoint: voiceSessionServer.endpoint,
-    },
-    harnesses: harnessStatus(),
-    work_graph: {
-      total: nodes.length,
-      by_status: byStatus,
-      active: nodes
-        .filter((node) => ["open", "running", "blocked"].includes(node.status))
-        .slice(0, 25)
-        .map(workNodeSummary),
-    },
-    agent_runs: {
-      active: activeRuns,
-      recent: allRuns.slice(0, 25),
-    },
-  };
-}
-
-function workNodeSummary(node) {
-  return {
-    id: node.id,
-    title: node.title,
-    status: node.status,
-    parent_id: node.parentId,
-    executor: node.executor,
-    queue_count: Array.isArray(node.queue) ? node.queue.length : 0,
-    next_step: node.nextStep || "",
-    effective_instruction: truncate(effectiveInstruction(node), 240),
-    updated_at: node.updatedAt,
-  };
 }
 
 async function sendWorkNode(response, id) {
