@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Observation anchor fixture</title>
+  <style>
+    body { margin: 0; min-height: 2400px; font: 16px system-ui; }
+    #lead { height: 180px; }
+    #target { margin-left: 40px; width: 180px; height: 44px; }
+    #after { height: 1400px; }
+    canvas, iframe { display: block; width: 160px; height: 80px; margin: 20px 40px; }
+  </style>
+</head>
+<body>
+  <div id="lead"></div>
+  <button id="target" aria-label="Stable target">Stable target</button>
+  <div id="after"></div>
+  <canvas id="paint" width="160" height="80"></canvas>
+  <iframe id="foreign" title="Cross-origin fixture"></iframe>
+  <script>
+    const foreign = document.querySelector("#foreign");
+    foreign.src = `http://127.0.0.1:${location.port}/fixtures/demo.html`;
+    window.fixture = {
+      reflow() {
+        document.querySelector("#lead").style.height = "260px";
+      },
+      replaceLookalike() {
+        const old = document.querySelector("#target");
+        const replacement = old.cloneNode(true);
+        old.replaceWith(replacement);
+      },
+    };
+  </script>
+</body>
+</html>

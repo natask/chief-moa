@@ -13,6 +13,7 @@ const requiredFiles = [
   "extension/browser-context-adapter.js",
   "extension/config.js",
   "extension/content.js",
+  "extension/observation-runtime.js",
   "extension/proactive-helper.js",
   "extension/proactive-confirm.html",
   "extension/proactive-confirm.css",
@@ -40,11 +41,13 @@ const requiredFiles = [
   "docs/task-split.md",
   "docs/validation.md",
   "fixtures/demo.html",
+  "fixtures/observation-anchors.html",
   "fixtures/proactive.html",
   "fixtures/proactive-hostile.html",
   "fixtures/proactive-sensitive.html",
   "LICENSE",
   "scripts/smoke-extension.mjs",
+  "scripts/smoke-observation-anchors.mjs",
   "scripts/dev-extension.mjs",
   "scripts/doctor.mjs",
   "scripts/chrome-for-testing.mjs",
@@ -83,6 +86,7 @@ const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
+const observationRuntimeSource = readFileSync("extension/observation-runtime.js", "utf8");
 const proactiveHelperSource = readFileSync("extension/proactive-helper.js", "utf8");
 const proactiveConfirmHtmlSource = readFileSync("extension/proactive-confirm.html", "utf8");
 const proactiveConfirmCssSource = readFileSync("extension/proactive-confirm.css", "utf8");
@@ -124,6 +128,15 @@ if (manifest.manifest_version !== 3) {
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
 if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js")) {
   throw new Error("proactive-helper.js must load before content.js");
+}
+if (
+  mainContentScript.js.indexOf("observation-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/AgeeObservationRuntime/.test(observationRuntimeSource) ||
+  !/revalidateObservationAnchor/.test(contentSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
+) {
+  throw new Error("observation runtime must load before content.js in declared and dynamic injection paths");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -199,7 +212,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "observation-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
@@ -698,8 +711,9 @@ if (
 if (
   !/snapshotId/.test(contentSource) ||
   !/viewport:\s*\{/.test(contentSource) ||
-  !/capturedAt:\s*new Date\(\)\.toISOString\(\)/.test(contentSource) ||
-  !/elementSummaries:\s*out\.map/.test(contentSource)
+  !/const capturedAt = new Date\(\)\.toISOString\(\)/.test(contentSource) ||
+  !/capturedAt,/.test(contentSource) ||
+  !/elementSummaries:\s*elements\.map/.test(contentSource)
 ) {
   throw new Error("content snapshot must include snapshotId, viewport, capturedAt, and element summaries without removing the existing shape");
 }
