@@ -335,6 +335,17 @@ as a canonical conversation turn (marked incomplete) with whatever transcript
 and assistant text the provider produced before the cutoff. That partial turn
 flows into the next session's context pack, so a user can interrupt the model on
 one device and resume the thread on another against the same dataset.
+When a new current-thread `session_start` arrives while the assistant turn is
+committed or playing, it is steering rather than queued work. The gateway stops
+future audio for the old turn, persists its partial text on that old turn, and
+correlates both records with an additive `turn_relation` boundary. Provider
+output arriving after cancellation is dropped; it is never attached to the new
+turn. A different branch or explicit `context_action` of `new`, `fork`, or
+`incognito` records a `fresh_thread` boundary with
+`inherit_partial_context:false`. A bare `cancel_turn` has no admitted successor.
+Queueing is a separate, explicit spoken/typed backlog action and is not the
+default for interruption; its execution path remains staged. These conversation
+semantics do not cancel detached `agent_run` work.
 Spoken profile-control requests such as voice and language changes are routed
 through the gateway profile store; Gemini Live reads the effective voice,
 language, and Moa-owned context when the next Live session starts. Profile
@@ -959,6 +970,11 @@ messages can target a research workflow, implementation requests can target
 coding, and simple messages can stay on the direct-answer path. Explicit broker
 launch starts at most one selected launchable route in this slice; ordinary
 messages still only store decisions and context packs.
+
+Non-interrupting broker routing refers to detached tasks and `agent_run` work;
+it does not turn an active conversational assistant reply into a queue. A
+current-thread user turn steers that reply by default while detached runs
+continue.
 
 A broadcast turn ("update all active agents ...") fans out across active/forked
 runs: runs the message pertains to receive it as `broker_evidence_attached`, and

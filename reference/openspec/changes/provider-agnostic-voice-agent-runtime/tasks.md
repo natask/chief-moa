@@ -112,6 +112,15 @@
 - [ ] 13.3 Define the canonical context commands and per-turn pack shape together: client override `context_action`, model tool `context_management`, live read tool `get_session_context`, and stable refs for session, branch, turn, active thread, profile version, mode overlay, summaries, voice evidence, provider events, route decisions, and artifact refs.
 - [ ] 13.4 Add a cache key or content hash to each context pack so retries, provider reconnects, replay QA, and agent routing reuse the same bounded evidence instead of rebuilding an unbounded prompt.
 - [ ] 13.5 Verify with `cd gateway && npm run smoke:live-interrupt-handoff && node scripts/smoke-context-decision.js && node scripts/smoke-thread-enrichment.js` that the next turn receives the partial context pack and that no stale assistant audio from the interrupted turn writes into the new turn.
+- [x] 13.6 Define and implement the gateway `moa.voice-turn-relation.v1`
+      boundary: current-thread input steers an active assistant reply, persists
+      its partial on the superseded turn, stops stale audio, and admits the new
+      turn without waiting for provider completion; fresh-thread input is
+      explicitly non-inheriting. Covered by `test/voice-turn-steering.test.js`.
+- [ ] 13.7 Android and browser SHALL send the same branch for ordinary steering
+      and an explicit `context_action:new` or already-minted fresh branch for
+      double-click fresh-thread capture; cross-socket correlation remains client
+      integration work. Queue remains a separate explicit backlog action.
 
 ## 14. Stage D: Profiles, Modes, Controls, And Demonstration
 

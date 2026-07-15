@@ -14,6 +14,7 @@ const {
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
 const { canonicalVoice } = require("./profile-options");
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
+const { planVoiceTurnRelation } = require("./voice-turn-steering");
 
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
@@ -283,17 +284,19 @@ class VoiceSessionConnection {
   }
 
   async handleSessionStart(event) {
-    if (this.responding) {
-      await this.closeCurrentTurn("interrupted");
-      this.responding = false;
-    }
-
-    await this.closeCurrentTurn("replaced");
-
     const sessionId = sanitizeId(event.session_id || randomId("session"), "session_id");
     const conversationId = sanitizeId(event.conversation_id || sessionId, "conversation_id");
     const branchId = sanitizeId(event.branch_id || "default", "branch_id");
     const turnId = sanitizeId(event.turn_id || randomId("turn"), "turn_id");
+    const turnRelation = planVoiceTurnRelation(this.turn, {
+      sessionId, conversationId, branchId, turnId,
+      contextAction: event.context_action || event.contextAction,
+    }, { boundaryId: randomId("steer"), occurredAt: nowIso() });
+    if (turnRelation) {
+      this.turn.turnRelation = turnRelation.prior;
+      await this.closeCurrentTurn(turnRelation.closeStatus);
+      this.responding = false;
+    }
     const turnDir = path.join(this.sessionsDir, sessionId);
     const format = normalizeFormat(event.format);
     const playbackPolicy = normalizePlaybackPolicy(event.playback_policy || event.playbackPolicy);
@@ -361,6 +364,7 @@ class VoiceSessionConnection {
       captureSummary: {},
       transportSummary: {},
       syntheticText: "",
+      turnRelation: turnRelation?.next || null,
     };
     turn.contextPrompt = this.contextPromptForTurn(turn);
     turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
@@ -424,6 +428,7 @@ class VoiceSessionConnection {
       branch_id: branchId,
       turn_id: turnId,
       playback_policy: playbackPolicy,
+      ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
     });
     turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     await this.recordProviderEvent(turn, turn.providerEvents, "profile_applied", {
@@ -1243,6 +1248,7 @@ class VoiceSessionConnection {
         // stored PCM still carries its language for later audio analysis.
         input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
         provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
+        ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
       });
     } catch (error) {
       writeTurnMetadata(turn, {
@@ -1320,6 +1326,7 @@ class VoiceSessionConnection {
         // agent can fetch the stored PCM and know both input and output languages.
         input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
         provider_events: Array.isArray(turn.providerEvents?.events) ? turn.providerEvents.events : [],
+        ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
       });
     } catch (error) {
       writeTurnMetadata(turn, {
@@ -1517,29 +1524,7 @@ class VoiceSessionConnection {
 
     const turn = this.turn;
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
-    if (turn.status !== "recording") {
-      if (hasPartialEndpointPlayback(turn)) {
-        turn.recordedCanonical = false;
-      }
-      turn.status = status;
-      await closeAudioStream(turn);
-      await closeAssistantAudioStream(turn);
-      if (turn.liveSession) {
-        turn.liveSession.cancel();
-      }
-      abortSttStream(turn);
-      await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
-        status,
-      });
-      await this.recordIncompleteTurn(turn, status);
-      writeTurnMetadata(turn, {
-        status,
-        closed_at: nowIso(),
-      });
-      this.turn = null;
-      return;
-    }
-
+    if (turn.status !== "recording" && hasPartialEndpointPlayback(turn)) turn.recordedCanonical = false;
     turn.status = status;
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
@@ -1549,6 +1534,7 @@ class VoiceSessionConnection {
     abortSttStream(turn);
     await this.recordProviderEvent(turn, providerEvents, status === "interrupted" ? "interruption" : "turn_closed", {
       status,
+      ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
     });
     await this.recordIncompleteTurn(turn, status);
     writeTurnMetadata(turn, {
@@ -1889,6 +1875,7 @@ function writeTurnMetadata(turn, patch) {
     provider_events: patch.provider_events || previous.provider_events || [],
     assistant_audio_segments: patch.assistant_audio_segments || previous.assistant_audio_segments || turn.assistantAudioSegments || [],
     playback_progress: patch.playback_progress || previous.playback_progress || turn.playbackProgress || null,
+    turn_relation: patch.turn_relation || previous.turn_relation || turn.turnRelation || null,
   };
 
   turn.metadata = next;

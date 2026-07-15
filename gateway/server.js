@@ -11059,6 +11059,7 @@ async function recordStreamingVoiceTurn(turn) {
         : {},
       playback_policy: turn.playback_policy || {},
       provider_events: Array.isArray(turn.provider_events) ? turn.provider_events : [],
+      turn_relation: turn.turn_relation && typeof turn.turn_relation === "object" ? turn.turn_relation : null,
       transcription_only: turn.transcription_only === true,
       incomplete,
       status: turnStatus,
