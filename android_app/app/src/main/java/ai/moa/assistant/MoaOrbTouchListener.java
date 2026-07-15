@@ -10,6 +10,7 @@ import android.view.WindowManager;
 
 import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 // Orb gestures. The overlay runs one of two contracts depending on the
 // experimental voice-first flag (MoaPrefs.voiceFirstGestures), latched per
@@ -23,11 +24,10 @@ import java.util.function.BooleanSupplier;
 //   chat menu never flashes before a double-click hold engages voice.
 //
 // Flag ON (voice-first, v3):
-//   single quick tap       -> talk toggle with barge-in. Loop off: onStartTalkLoop
+//   single quick tap       -> starts a reviewable voice draft. Loop off: onStartTalkLoop
 //                             fires immediately on the first tap-up (it stops any
 //                             assistant audio and opens the hands-free loop). Loop
-//                             on: the tap defers onCommitAndEndLoop by the double-
-//                             tap window so a second tap can supersede it.
+//                             on: no-op; visible X / Send controls own disposition.
 //   double quick tap       -> fresh-thread talk. If tap 1 started the loop or
 //                             deferred a send, that loop is cancelled before
 //                             onStartFreshTalkLoop opens a new-thread turn.
@@ -69,9 +69,8 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final Runnable onDoublePressAbort;
     // Voice-first callbacks (flag on). voiceLoopActive reports whether the
     // hands-free voice loop is running, so the first tap knows whether to start it
-    // or to defer a send. onStartTalkLoop starts the loop with barge-in;
-    // onStartFreshTalkLoop starts a new-thread loop; onCommitAndEndLoop commits
-    // any in-flight speech and ends it; onCancelTalkLoop quietly drops a just-
+    // or to keep the visible draft controls active. onStartTalkLoop starts the loop with barge-in;
+    // onStartFreshTalkLoop starts a new-thread loop; onCancelTalkLoop quietly drops a just-
     // started loop; onOpenChat opens the chat panel;
     // onPressToTalkCancel aborts a confirmed hold's capture without committing.
     // The hold path reuses onDoublePressStart / onPressToTalkRelease and the
@@ -80,10 +79,12 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final BooleanSupplier voiceLoopActive;
     private final Runnable onStartTalkLoop;
     private final Runnable onStartFreshTalkLoop;
-    private final Runnable onCommitAndEndLoop;
     private final Runnable onCancelTalkLoop;
     private final Runnable onOpenChat;
     private final Runnable onPressToTalkCancel;
+    private final Runnable onOrbDragStart;
+    private final Runnable onOrbDragMove;
+    private final Consumer<Boolean> onOrbDragEnd;
     private final MoaVoiceFirstTapResolver voiceFirstTapResolver = new MoaVoiceFirstTapResolver();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final int touchSlop;
@@ -127,10 +128,12 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             BooleanSupplier voiceLoopActive,
             Runnable onStartTalkLoop,
             Runnable onStartFreshTalkLoop,
-            Runnable onCommitAndEndLoop,
             Runnable onCancelTalkLoop,
             Runnable onOpenChat,
-            Runnable onPressToTalkCancel
+            Runnable onPressToTalkCancel,
+            Runnable onOrbDragStart,
+            Runnable onOrbDragMove,
+            Consumer<Boolean> onOrbDragEnd
     ) {
         this.context = context;
         this.windowManager = windowManager;
@@ -147,10 +150,12 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.voiceLoopActive = voiceLoopActive;
         this.onStartTalkLoop = onStartTalkLoop;
         this.onStartFreshTalkLoop = onStartFreshTalkLoop;
-        this.onCommitAndEndLoop = onCommitAndEndLoop;
         this.onCancelTalkLoop = onCancelTalkLoop;
         this.onOpenChat = onOpenChat;
         this.onPressToTalkCancel = onPressToTalkCancel;
+        this.onOrbDragStart = onOrbDragStart;
+        this.onOrbDragMove = onOrbDragMove;
+        this.onOrbDragEnd = onOrbDragEnd;
         ViewConfiguration viewConfiguration = ViewConfiguration.get(context);
         this.touchSlop = viewConfiguration.getScaledTouchSlop();
         this.doubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
@@ -206,6 +211,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 int dx = Math.round(event.getRawX() - downX);
                 int dy = Math.round(event.getRawY() - downY);
                 if (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop) {
+                    if (!moved) onOrbDragStart.run();
                     moved = true;
                     // Drift past the slop turns a not-yet-confirmed double press
                     // into a drag. Clear doublePressPending as well as the timer:
@@ -224,6 +230,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 orbParams.x = clampOrbX(startX + dx);
                 orbParams.y = clampOrbY(startY + dy);
                 windowManager.updateViewLayout(orbView, orbParams);
+                onOrbDragMove.run();
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
@@ -243,6 +250,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     return true;
                 }
                 if (moved || action == MotionEvent.ACTION_CANCEL || event.getEventTime() - downTimeMs > SINGLE_TAP_MAX_MS) {
+                    if (moved) onOrbDragEnd.accept(action == MotionEvent.ACTION_UP);
                     lastTapCandidate = false;
                     return true;
                 }
@@ -270,8 +278,8 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 voiceFirstHoldActive = false;
                 // A chord is already in progress, so this press-down is a potential
                 // second (or later) tap. Suspend the pending tap-resolve now: for a
-                // loop-active tap 1 that resolve carries the deferred commit+end, so
-                // clearing it here lets tap 2 supersede the send with a fresh thread.
+                // Clearing the pending resolve here preserves the open chord so
+                // tap 2 can supersede the current draft with a fresh thread.
                 // The chord count is preserved for the tap-up.
                 if (voiceFirstTapResolver.hasOpenChord()) {
                     cancelVoiceFirstTapResolve();
@@ -294,15 +302,18 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     if (Math.abs(dx) > doubleTapSlop || Math.abs(dy) > doubleTapSlop) {
                         voiceFirstHoldActive = false;
                         moved = true;
+                        onOrbDragStart.run();
                         onPressToTalkCancel.run();
                         orbParams.x = clampOrbX(startX + dx);
                         orbParams.y = clampOrbY(startY + dy);
                         windowManager.updateViewLayout(orbView, orbParams);
+                        onOrbDragMove.run();
                     }
                     return true;
                 }
                 if (!moved && (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop)) {
                     moved = true;
+                    onOrbDragStart.run();
                     // Drift past the slop before the hold confirms is a drag:
                     // cancel the hold, drop the warm mic, and end any in-progress
                     // tap chord so a reposition never fires talk or chat.
@@ -313,6 +324,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 orbParams.x = clampOrbX(startX + dx);
                 orbParams.y = clampOrbY(startY + dy);
                 windowManager.updateViewLayout(orbView, orbParams);
+                onOrbDragMove.run();
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
@@ -327,6 +339,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 // No hold consumed the warm mic, so drop it.
                 onDoublePressAbort.run();
                 if (action == MotionEvent.ACTION_CANCEL || moved) {
+                    if (moved) onOrbDragEnd.accept(action == MotionEvent.ACTION_UP);
                     // A cancel or a drag is never a tap. A drag already reset the
                     // chord; the escape-hatch drag reset it when the hold confirmed.
                     return true;
@@ -339,8 +352,8 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     }
 
     // A quick tap released. Tap 1 toggles the loop: start it now (with barge-in)
-    // when it is off, or defer a commit+end past the double-tap window when it is
-    // on so a rapid second tap can supersede. Tap 2 starts a fresh-thread talk
+    // when it is off; while a draft is already active, tap 1 does nothing because
+    // the visible controls own cancel/send. Tap 2 starts a fresh-thread talk
     // loop. Tap 3 opens chat. Tap 4+ does nothing but keeps the chord alive so
     // extra taps stay inert.
     private void handleVoiceFirstTapUp(MotionEvent event) {
@@ -405,9 +418,6 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     break;
                 case CANCEL_TALK_LOOP:
                     onCancelTalkLoop.run();
-                    break;
-                case COMMIT_AND_END_TALK:
-                    onCommitAndEndLoop.run();
                     break;
                 case OPEN_CHAT:
                     onOpenChat.run();

@@ -22,14 +22,11 @@ public final class MoaVoiceFirstTapResolverTest {
     }
 
     @Test
-    public void singleTapWhileListeningCommitsAfterTapWindow() {
+    public void singleTapWhileListeningNeverCommitsDraft() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
 
         assertEquals(Collections.emptyList(), resolver.tapUp(true));
-        assertEquals(
-                Collections.singletonList(MoaVoiceFirstTapResolver.Action.COMMIT_AND_END_TALK),
-                resolver.resolve()
-        );
+        assertEquals(Collections.emptyList(), resolver.resolve());
     }
 
     @Test
@@ -51,7 +48,7 @@ public final class MoaVoiceFirstTapResolverTest {
     }
 
     @Test
-    public void doubleTapWhileListeningSupersedesSendWithFreshThread() {
+    public void doubleTapWhileListeningSupersedesDraftWithFreshThread() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
 
         assertEquals(Collections.emptyList(), resolver.tapUp(true));
@@ -82,7 +79,7 @@ public final class MoaVoiceFirstTapResolverTest {
     }
 
     @Test
-    public void resetClearsDeferredCommit() {
+    public void resetClearsOpenDraftChord() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
 
         resolver.tapUp(true);

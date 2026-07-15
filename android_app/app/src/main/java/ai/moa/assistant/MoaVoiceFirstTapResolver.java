@@ -9,14 +9,12 @@ final class MoaVoiceFirstTapResolver {
         START_CONTINUE_TALK,
         START_FRESH_TALK,
         CANCEL_TALK_LOOP,
-        COMMIT_AND_END_TALK,
         OPEN_CHAT
     }
 
     private enum Tap1Action {
         NONE,
-        STARTED,
-        SEND_PENDING
+        ACTIVE_DRAFT
     }
 
     private int tapCount;
@@ -31,16 +29,13 @@ final class MoaVoiceFirstTapResolver {
         tapCount++;
         if (tapCount == 1) {
             tap2StartedFresh = false;
-            if (loopActive) {
-                tap1Action = Tap1Action.SEND_PENDING;
-                return Collections.emptyList();
-            }
-            tap1Action = Tap1Action.STARTED;
+            tap1Action = Tap1Action.ACTIVE_DRAFT;
+            if (loopActive) return Collections.emptyList();
             return one(Action.START_CONTINUE_TALK);
         }
         if (tapCount == 2) {
             List<Action> actions = new ArrayList<>();
-            if (tap1Action == Tap1Action.STARTED || tap1Action == Tap1Action.SEND_PENDING) {
+            if (tap1Action == Tap1Action.ACTIVE_DRAFT) {
                 actions.add(Action.CANCEL_TALK_LOOP);
             }
             tap1Action = Tap1Action.NONE;
@@ -61,12 +56,7 @@ final class MoaVoiceFirstTapResolver {
     }
 
     List<Action> resolve() {
-        int count = tapCount;
-        Tap1Action first = tap1Action;
         reset();
-        if (count == 1 && first == Tap1Action.SEND_PENDING) {
-            return one(Action.COMMIT_AND_END_TALK);
-        }
         return Collections.emptyList();
     }
 

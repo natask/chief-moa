@@ -11,16 +11,13 @@ and gesture contract: `scratch/agent-loop/voice-first-orb-gestures-20260706.md`.
 
 ## What Changes
 
-Behind an experimental flag, off by default, the Android surface moves to the
-v3 contract:
+Behind an experimental flag, off by default, the Android surface uses the
+review-before-send v4 contract:
 
-- Single click/tap: continue the current voice thread. If idle, it arms
-  hands-free talk mode immediately (starting the turn stops any playing
-  assistant audio; that is the interrupt). If already listening, the click
-  means "send and end talk mode", deferred by the multi-click window so a
-  rapid double click can supersede it. A tap-armed turn that captured no
-  speech disarms quietly with no "didn't catch that" cue, so a silent tap
-  doubles as "shut up". Talk mode shows a visible active state.
+- Single click/tap: start a reviewable draft in the current voice thread. The
+  compact voice card immediately shows `X` on the left to discard and `+` on
+  the right as the one affirmative Send action. A later orb tap never commits
+  the draft; disposition stays visible and reversible.
 - Double-click, quick: start a fresh voice thread. If the first click armed
   the current thread or deferred a send, that loop is cancelled first; the new
   turn rides the existing one-shot `context_action:"new"` path so it keeps
@@ -34,12 +31,56 @@ v3 contract:
   hold confirms cancels the capture and escapes into a drag (hold-then-move
   muscle memory).
 - Fourth click and beyond: nothing.
-- Drag and (browser) wheel resize: unchanged.
+- Drag repositions the orb and its open card together. The card docks wholly
+  above the orb when it fits and otherwise flips wholly below it.
+- Dragging the orb into the bottom removal target and releasing hides the orb
+  and stops the overlay service. The chat header and foreground notification
+  expose a second explicit Hide action.
 
 The v1 trial mapping (single tap = interrupt, double = talk toggle, triple =
-chat) and v2 mapping (single tap = talk toggle, double = chat) are superseded
-on Android; interrupt folded into the tap-toggle's barge-in. Browser is a
-follow-up and stays on v2 until its own QA slice lands.
+chat), v2 mapping (single tap = talk toggle, double = chat), and v3
+single-tap start/send toggle are superseded on Android. Browser is a follow-up
+and stays on v2 until its own review-control QA slice lands.
+
+## Accepted Review-Before-Send Revision (2026-07-14)
+
+The next product revision makes the cheapest gesture consistent and visibly
+reversible on Android and in the browser:
+
+- A single click starts a voice draft and immediately exposes two controls:
+  `X` to cancel/discard and one affirmative `Send` control to commit. The
+  affirmative control may use a send arrow or a check/yes treatment, but it is
+  one semantic action rather than separate Yes and Send actions.
+- A single click never silently commits a draft. The user can keep speaking,
+  cancel, or explicitly send from the visible controls.
+- A still press-and-hold remains push-to-talk; release commits immediately.
+  This preserves the fast eyes-free path on both surfaces while the click path
+  favors review and correction.
+- Android and browser use the same visible draft states and meanings. Layout
+  may adapt to each surface, but `X` always discards and `Send` always commits.
+- Multi-click mappings are not changed by this revision until their collision
+  with the new single-click review state is designed and tested. In particular,
+  double, triple, and fourth clicks must not accidentally send a pending draft.
+
+The user aligned this revision for Android implementation and deployment on
+2026-07-14. Browser parity remains governed by the same `X` / Send meanings;
+this implementation unit changes only the Android-owned overlay.
+
+### Separate Follow-Up: Clean Voice Into The Current Text Field
+
+The user also wants a composing feature: speak rough text, have Moa clean it
+up, and place the result into the text field currently in use without sending
+it. This is distinct from sending a turn to Moa:
+
+- The destination surface owns detection of the currently focused editable
+  field and the local insertion action.
+- The gateway may return a cleaned-text proposal, but it cannot type into the
+  field directly. Android accessibility or the browser extension revalidates
+  focus, previews when appropriate, performs the insertion, and receipts it.
+- Insertion never implies submit, send, click, or form completion.
+- The invocation gesture remains unresolved. A directional swipe from the
+  active voice draft is preferred for exploration because double/triple/fourth
+  click meanings are already crowded and poorly discoverable.
 
 Flags:
 
@@ -65,9 +106,9 @@ Flags:
 
 - Browser extension: `cd browser_extension && npm run verify && npm run smoke`.
 - Android: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`.
-- Android manual QA with the flag on: single click arms talk mode with a
-  visible active state and a later single click sends, double-click starts a
-  new voice thread, triple-click opens chat, a silent tap disarms quietly,
-  hold-to-talk release commits, and a big mid-hold move becomes a drag; flag
-  off restores today's behavior. Browser QA remains on the v2 contract until
-  the browser follow-up lands.
+- Android manual QA with the flag on: single click starts a draft with visible
+  `X` and `+`; only `+` sends; `X` discards; a later orb tap does not send;
+  double-click starts a new voice thread; triple-click opens chat; hold-to-talk
+  release commits; open cards remain wholly above or below the moved orb; and
+  dragging onto Remove hides the orb. Flag off restores the legacy gestures.
+- Browser QA remains on the v2 contract until the review-control follow-up lands.

@@ -296,17 +296,18 @@ gateway voice turn without stopping already queued assistant audio.
 
 An experimental voice-first gesture mode (off by default; browser flag
 `ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
-the primary surface toward voice: single click toggles hands-free talk mode
-with barge-in (arming stops any playing assistant audio; a later single click
-sends after the multi-click window; a tap-armed turn with no captured speech
-disarms quietly, so a silent tap doubles as "shut up"), double-click starts a
-fresh voice thread that does not use the current thread's replies, and
-triple-click opens the demoted chat surface. A still first-press hold is
-push-to-talk (release commits; a large move after the hold confirms cancels
-the capture and escapes into a drag). Drag and resize are unchanged, and the
-flag off keeps the default contract above. Android implements this v3 mapping
-first; the browser flag remains on the prior v2 mapping until the browser
-follow-up lands. Contract:
+the primary surface toward voice. Android uses the reviewable v4 contract:
+Single click starts a draft with visible `X` (discard) and `+` (the single Send
+action); later orb taps never commit it. Double-click cancels the current draft
+and starts a fresh voice thread that does not use the current thread's replies,
+and triple-click cancels voice and opens the demoted chat surface. A still
+first-press hold is push-to-talk (release commits; a large move after the hold
+confirms cancels capture and escapes into a drag). The one open chat/transcript
+card follows the orb and flips wholly above or below it. Dragging into the
+bottom removal target, or choosing Hide in the chat header/foreground
+notification, stops the overlay service and removes all overlay windows. The
+flag off keeps Android's legacy gesture contract. The browser flag remains on
+its prior v2 mapping until its own review-control QA slice lands. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface stays small: it shows the current intent/result and compact

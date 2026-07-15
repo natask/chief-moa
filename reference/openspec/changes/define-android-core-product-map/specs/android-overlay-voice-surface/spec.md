@@ -93,6 +93,57 @@ The Android app SHALL show current speech text while the user is speaking.
 - **AND** the assistant response appears in the same compact voice surface
 - **AND** previous voice-turn messages are not shown in that surface
 
+### Requirement: Reviewable Tap Voice Draft
+When voice-first gestures are enabled, the Android overlay SHALL treat a tap
+voice turn as a reversible draft rather than an implicit submission.
+
+#### Scenario: Tap starts a draft
+- **WHEN** the user taps the idle orb
+- **THEN** the overlay begins voice capture
+- **AND** immediately shows `X` to discard on the left and `+` to Send on the right
+
+#### Scenario: User explicitly sends
+- **WHEN** a tap-started draft is active and the user taps `+`
+- **THEN** Android commits that voice turn exactly once
+- **AND** ends the draft capture loop
+
+#### Scenario: User discards
+- **WHEN** a tap-started draft is active and the user taps `X`
+- **THEN** Android cancels capture and discards the draft locally
+- **AND** submits no voice turn
+
+#### Scenario: Orb tap cannot silently send
+- **WHEN** a tap-started draft is active and the user taps the orb again
+- **THEN** Android does not commit the draft
+- **AND** the visible `X` and `+` controls remain the disposition authority
+
+### Requirement: Orb-Anchored Mobile Surface
+The Android overlay SHALL keep at most one large interactive card visible and
+place that card predictably relative to the orb.
+
+#### Scenario: Surface fits above the orb
+- **WHEN** the chat or transcript card opens and has enough room above the orb
+- **THEN** the entire card is placed above the orb with a visible gap
+
+#### Scenario: Surface must flip below
+- **WHEN** the card cannot fit above the orb
+- **THEN** the entire card is placed below the orb and clamped to the display
+
+#### Scenario: Orb moves with an open surface
+- **WHEN** the user drags the orb while a card is open
+- **THEN** the card follows and recomputes its above-or-below placement
+
+### Requirement: User-Removable Overlay
+The Android overlay SHALL provide discoverable local ways to remove the orb.
+
+#### Scenario: Drag to remove
+- **WHEN** the user drags the orb into the visible removal target and releases
+- **THEN** Android stops the overlay service and removes the orb and open card
+
+#### Scenario: Explicit hide fallback
+- **WHEN** the user taps Hide in the chat header or overlay notification
+- **THEN** Android stops the overlay service and removes all overlay windows
+
 ### Requirement: Minimal Spoken Interruption
 The Android app SHALL separate displayed response text from spoken response text.
 

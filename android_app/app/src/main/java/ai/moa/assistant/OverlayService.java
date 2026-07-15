@@ -46,6 +46,7 @@ public final class OverlayService extends Service {
 
     static final String ACTION_ASSIST_BUTTON = "ai.moa.assistant.action.ASSIST_BUTTON";
     static final String ACTION_COLLAPSE_SURFACES = "ai.moa.assistant.action.COLLAPSE_SURFACES";
+    static final String ACTION_HIDE_OVERLAY = "ai.moa.assistant.action.HIDE_OVERLAY";
     static final String EXTRA_START_VOICE = "ai.moa.assistant.extra.START_VOICE";
 
     private static final int MAX_HISTORY_MESSAGES = 50;
@@ -92,6 +93,10 @@ public final class OverlayService extends Service {
     private WindowManager windowManager;
     private OrbView orbView;
     private WindowManager.LayoutParams orbParams;
+    private WindowManager.LayoutParams panelParams;
+    private WindowManager.LayoutParams transcriptParams;
+    private View orbRemoveTarget;
+    private boolean orbRemoveTargetActive;
     // Two surfaces hang off the orb. TAP opens the chat panel: a polished card
     // with bubbles + composer, the place to read the conversation and type.
     // DOUBLE-CLICK-AND-HOLD opens the voice surface: a compact native transcript
@@ -106,6 +111,8 @@ public final class OverlayService extends Service {
     private ScrollView voiceTranscriptScroll;
     private TextView voiceMetaLine;
     private TextView voiceLanguageLine;
+    private TextView voiceCancelControl;
+    private TextView voiceSendControl;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
     // Persistent, stacked transcript. Each turn appends a fresh user + assistant
     // row; older rows stay until the user swipes them away. The scalar mirrors
@@ -318,6 +325,10 @@ public final class OverlayService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        if (ACTION_HIDE_OVERLAY.equals(intent != null ? intent.getAction() : null)) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         if (orbView == null) {
             showOrb();
         }
@@ -340,6 +351,7 @@ public final class OverlayService extends Service {
         voiceLog.clear();
         removeTranscriptOverlay();
         removePanel();
+        removeOrbRemoveTarget();
         removeOrb();
         agentRunPolling = false;
         cancelStreamingTurnWatchdog();
@@ -410,6 +422,8 @@ public final class OverlayService extends Service {
             flags |= PendingIntent.FLAG_IMMUTABLE;
         }
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
+        Intent hideIntent = new Intent(this, OverlayService.class).setAction(ACTION_HIDE_OVERLAY);
+        PendingIntent hidePendingIntent = PendingIntent.getService(this, 1, hideIntent, flags);
 
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -425,6 +439,7 @@ public final class OverlayService extends Service {
                 .setShowWhen(false)
                 .setOnlyAlertOnce(true)
                 .setDefaults(0);
+        builder.addAction(R.drawable.ic_moa_orb, "Hide", hidePendingIntent);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             builder.setCategory(Notification.CATEGORY_SERVICE);
             builder.setColor(0xFFF4D35E);
@@ -548,7 +563,7 @@ public final class OverlayService extends Service {
                 windowManager,
                 orbView,
                 orbParams,
-                ORB_WINDOW_DP,
+                size,
                 ORB_EDGE_MARGIN_DP,
                 this::handleOrbSingleTap,
                 this::handleOrbDoublePressStart,
@@ -559,10 +574,12 @@ public final class OverlayService extends Service {
                 this::isContinuousLoopActive,
                 this::handleOrbStartTalkLoop,
                 this::handleOrbStartFreshTalkLoop,
-                this::endContinuousVoiceLoop,
                 this::handleOrbCancelTalkLoop,
                 this::showPanel,
-                this::handleOrbPushToTalkCancel
+                this::handleOrbPushToTalkCancel,
+                this::showOrbRemoveTarget,
+                this::updateOrbDragSurfaces,
+                this::finishOrbDrag
         ));
 
         windowManager.addView(orbView, orbParams);
@@ -573,6 +590,120 @@ public final class OverlayService extends Service {
             windowManager.removeView(orbView);
             orbView = null;
         }
+    }
+
+    private void positionSurfaceNearOrb(View surface, WindowManager.LayoutParams params) {
+        if (surface == null || params == null || orbParams == null) {
+            return;
+        }
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int margin = dp(10);
+        int gap = dp(12);
+        int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
+        int surfaceWidth = params.width > 0 ? params.width : Math.min(screenWidth - margin * 2, dp(380));
+        int measuredHeight = surface.getMeasuredHeight();
+        if (measuredHeight <= 0) {
+            measuredHeight = surface == panelView ? dp(430) : dp(180);
+        }
+
+        int orbCenterX = orbParams.x + orbSize / 2;
+        int minX = surfaceWidth + margin * 2 <= screenWidth ? margin : 0;
+        int maxX = Math.max(minX, screenWidth - surfaceWidth - minX);
+        params.x = Math.max(minX, Math.min(orbCenterX - surfaceWidth / 2, maxX));
+
+        int aboveY = orbParams.y - measuredHeight - gap;
+        int belowY = orbParams.y + orbSize + gap;
+        int aboveSpace = orbParams.y - gap - margin;
+        int belowSpace = screenHeight - belowY - margin;
+        boolean placeAbove = measuredHeight <= aboveSpace || aboveSpace >= belowSpace;
+        params.y = placeAbove ? aboveY : belowY;
+        params.y = Math.max(margin, Math.min(params.y, screenHeight - measuredHeight - margin));
+
+        if (surface.getParent() != null) {
+            try {
+                windowManager.updateViewLayout(surface, params);
+            } catch (IllegalArgumentException ignored) {
+                // The surface was removed between measurement and repositioning.
+            }
+        }
+    }
+
+    private void updateAnchoredSurfacePositions() {
+        positionSurfaceNearOrb(panelView, panelParams);
+        positionSurfaceNearOrb(transcriptView, transcriptParams);
+    }
+
+    private void showOrbRemoveTarget() {
+        if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
+            return;
+        }
+        TextView target = text("Remove orb", MoaColors.PAPER, 14, true);
+        target.setGravity(Gravity.CENTER);
+        target.setBackground(MoaDrawables.rounded(0xF01B1C20, dp(28), MoaColors.PANEL_BORDER, dp(1)));
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                dp(150),
+                dp(58),
+                overlayType(),
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                android.graphics.PixelFormat.TRANSLUCENT
+        );
+        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        params.y = dp(34);
+        windowManager.addView(target, params);
+        orbRemoveTarget = target;
+        target.setAlpha(0f);
+        target.setScaleX(0.9f);
+        target.setScaleY(0.9f);
+        target.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(140).start();
+    }
+
+    private void updateOrbDragSurfaces() {
+        updateAnchoredSurfacePositions();
+        if (!(orbRemoveTarget instanceof TextView) || orbParams == null) {
+            return;
+        }
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
+        int centerX = orbParams.x + orbSize / 2;
+        int centerY = orbParams.y + orbSize / 2;
+        boolean active = centerY >= screenHeight - dp(170)
+                && Math.abs(centerX - screenWidth / 2) <= dp(135);
+        if (active == orbRemoveTargetActive) {
+            return;
+        }
+        orbRemoveTargetActive = active;
+        TextView target = (TextView) orbRemoveTarget;
+        target.setText(active ? "Release to remove" : "Remove orb");
+        target.setTextColor(active ? MoaColors.PAPER : MoaColors.MUTED);
+        target.setBackground(MoaDrawables.rounded(
+                active ? 0xF0B3261E : 0xF01B1C20,
+                dp(28),
+                active ? 0x80FF8A80 : MoaColors.PANEL_BORDER,
+                dp(1)
+        ));
+        target.animate().scaleX(active ? 1.08f : 1f).scaleY(active ? 1.08f : 1f).setDuration(100).start();
+    }
+
+    private void finishOrbDrag(Boolean completedDrop) {
+        boolean remove = Boolean.TRUE.equals(completedDrop) && orbRemoveTargetActive;
+        removeOrbRemoveTarget();
+        if (remove) {
+            mainHandler.post(this::stopSelf);
+        }
+    }
+
+    private void removeOrbRemoveTarget() {
+        orbRemoveTargetActive = false;
+        if (orbRemoveTarget == null) {
+            return;
+        }
+        View target = orbRemoveTarget;
+        orbRemoveTarget = null;
+        detachView(target);
     }
 
     private void togglePanel() {
@@ -592,7 +723,7 @@ public final class OverlayService extends Service {
 
         panelView = createPanel();
         int width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(20), dp(380));
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+        panelParams = new WindowManager.LayoutParams(
                 width,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 overlayType(),
@@ -605,13 +736,11 @@ public final class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 android.graphics.PixelFormat.TRANSLUCENT
         );
-        // Anchor to the top. The IME always rises from the bottom, so a top-
-        // anchored panel keeps the composer visible above the keyboard without
-        // fighting overlay resize behavior.
-        params.gravity = Gravity.TOP | Gravity.END;
-        params.x = dp(12);
-        params.y = dp(64);
-        params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
+        // The surface follows the orb and flips above/below it when one side
+        // cannot fit. The IME does not resize overlay windows, so positioning is
+        // kept independent from keyboard animation.
+        panelParams.gravity = Gravity.TOP | Gravity.START;
+        panelParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
 
         panelView.setOnTouchListener((view, event) -> {
             if (event.getActionMasked() == android.view.MotionEvent.ACTION_OUTSIDE) {
@@ -621,8 +750,10 @@ public final class OverlayService extends Service {
             return false;
         });
 
-        windowManager.addView(panelView, params);
+        positionSurfaceNearOrb(panelView, panelParams);
+        windowManager.addView(panelView, panelParams);
         panelOpen = true;
+        panelView.post(() -> positionSurfaceNearOrb(panelView, panelParams));
         renderMessages();
         animateSurfaceIn(panelView);
         mainHandler.postDelayed(() -> {
@@ -659,6 +790,7 @@ public final class OverlayService extends Service {
         hideKeyboard();
         final View dying = panelView;
         panelView = null;
+        panelParams = null;
         panelOpen = false;
         // Drop references so stale async callbacks (render, status) never write
         // into a detached panel.
@@ -717,6 +849,7 @@ public final class OverlayService extends Service {
             return;
         }
         cancelAutoDismiss();
+        removePanel();
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -755,8 +888,8 @@ public final class OverlayService extends Service {
                 ViewGroup.LayoutParams.WRAP_CONTENT
         ));
 
-        int width = Math.min(getResources().getDisplayMetrics().widthPixels, dp(560));
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+        int width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(12), dp(560));
+        transcriptParams = new WindowManager.LayoutParams(
                 width,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 overlayType(),
@@ -765,10 +898,11 @@ public final class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 android.graphics.PixelFormat.TRANSLUCENT
         );
-        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(120);
-        windowManager.addView(shell, params);
+        transcriptParams.gravity = Gravity.TOP | Gravity.START;
+        positionSurfaceNearOrb(shell, transcriptParams);
+        windowManager.addView(shell, transcriptParams);
         transcriptView = shell;
+        shell.post(() -> positionSurfaceNearOrb(transcriptView, transcriptParams));
         animateSurfaceIn(card);
     }
 
@@ -780,6 +914,10 @@ public final class OverlayService extends Service {
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(2), 0, dp(2), dp(4));
+
+        voiceCancelControl = voiceDraftControl("×", "Cancel voice draft", false);
+        voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
+        header.addView(voiceCancelControl);
 
         PulseDot dot = new PulseDot(this);
         LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(9), dp(9));
@@ -793,6 +931,11 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
+        voiceSendControl = voiceDraftControl("+", "Send voice draft", true);
+        voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
+        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(42), dp(42));
+        sendParams.leftMargin = dp(10);
+        header.addView(voiceSendControl, sendParams);
         container.addView(header);
 
         // A dedicated line that ALWAYS shows the current hear (STT) / speak
@@ -804,7 +947,91 @@ public final class OverlayService extends Service {
         container.addView(voiceLanguageLine);
 
         updateVoiceHeaderState();
+        updateVoiceDraftControls();
         return container;
+    }
+
+    private TextView voiceDraftControl(String glyph, String description, boolean affirmative) {
+        TextView control = new TextView(this);
+        control.setText(glyph);
+        control.setContentDescription(description);
+        control.setTextSize(affirmative ? 25 : 24);
+        control.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        control.setGravity(Gravity.CENTER);
+        control.setTextColor(affirmative ? MoaColors.INK : MoaColors.PAPER);
+        control.setBackground(MoaDrawables.circlePressable(
+                affirmative ? MoaColors.GOLD : 0x24FFFFFF,
+                affirmative ? MoaColors.AMBER : 0x3AFFFFFF,
+                affirmative ? 0x33FFFFFF : MoaColors.PANEL_BORDER,
+                dp(1)
+        ));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(42), dp(42));
+        params.rightMargin = dp(10);
+        control.setLayoutParams(params);
+        return control;
+    }
+
+    private boolean reviewableVoiceDraftActive() {
+        return MoaPrefs.voiceFirstGestures(this)
+                && continuousVoiceLoop
+                && !pushToTalkVoiceTurn
+                && !currentStreamingTurnCommitRequested
+                && (voiceRuntimeState == VoiceRuntimeState.LISTENING
+                    || voiceRuntimeState == VoiceRuntimeState.RECOVERING);
+    }
+
+    private void updateVoiceDraftControls() {
+        boolean visible = reviewableVoiceDraftActive();
+        int visibility = visible ? View.VISIBLE : View.GONE;
+        if (voiceCancelControl != null) {
+            voiceCancelControl.setVisibility(visibility);
+        }
+        if (voiceSendControl != null) {
+            voiceSendControl.setVisibility(visibility);
+            voiceSendControl.setEnabled(visible);
+            voiceSendControl.setAlpha(visible ? 1f : 0.45f);
+        }
+    }
+
+    private void discardVoiceDraft() {
+        suppressFirstTapTurnEmptyCue = false;
+        continuousVoiceLoop = false;
+        cancelContinuousVoiceRestart();
+        invalidatePendingBranchSwitch();
+        if (streamingVoiceActive()) {
+            cancelStreamingVoice();
+        } else {
+            voiceController.stopQuietly();
+            removeTranscriptOverlay();
+        }
+        setVoiceRuntimeState(VoiceRuntimeState.READY);
+        updateMicState();
+    }
+
+    private void sendVoiceDraft() {
+        if (!reviewableVoiceDraftActive()) {
+            return;
+        }
+        suppressFirstTapTurnEmptyCue = false;
+        continuousVoiceLoop = false;
+        cancelContinuousVoiceRestart();
+        if (streamingBranchSwitchPending && streamingVoiceController == null) {
+            streamingCommitPendingOpen = true;
+            setVoiceRuntimeState(VoiceRuntimeState.SENDING);
+            updateMicState();
+            return;
+        }
+        if (streamingVoiceActive() && streamingVoiceController != null) {
+            commitStreamingVoiceTurnNow();
+            return;
+        }
+        if (voiceController.isCommandListening()) {
+            voiceController.commitCurrentSpeech();
+            setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+            updateMicState();
+            return;
+        }
+        discardVoiceDraft();
     }
 
     private void showCurrentScreenContext() {
@@ -882,6 +1109,7 @@ public final class OverlayService extends Service {
             }
         }
         updateVoiceHeaderState();
+        updateVoiceDraftControls();
         scrollVoiceTranscriptToBottom();
     }
 
@@ -1023,6 +1251,7 @@ public final class OverlayService extends Service {
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
         voiceRuntimeState = state == null ? VoiceRuntimeState.READY : state;
         updateVoiceHeaderState();
+        updateVoiceDraftControls();
         // Single choke point for the orb's response state so the lion visibly
         // reflects thinking / responding / error without touching other call
         // sites. The watchdog + error paths become visible here for free.
@@ -1163,8 +1392,11 @@ public final class OverlayService extends Service {
         // to empty / onDestroy) clears the log.
         final View dying = transcriptView;
         transcriptView = null;
+        transcriptParams = null;
         voiceTranscriptColumn = null;
         voiceTranscriptScroll = null;
+        voiceCancelControl = null;
+        voiceSendControl = null;
         voiceMetaLine = null;
         voiceLanguageLine = null;
         dying.animate()
@@ -1307,7 +1539,13 @@ public final class OverlayService extends Service {
         refreshRecordModePill();
         header.addView(recordModePill);
 
-        TextView close = pill("Done", 0x16FFFFFF, MoaColors.MUTED);
+        TextView hide = pill("Hide", 0x16FF453A, 0xFFFFAAA4);
+        hide.setContentDescription("Hide the A.G. orb");
+        hide.setOnClickListener(v -> stopSelf());
+        header.addView(hide);
+
+        TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
+        close.setContentDescription("Close chat");
         close.setOnClickListener(v -> dismissOverlayUi());
         header.addView(close);
         return header;
@@ -2344,17 +2582,15 @@ public final class OverlayService extends Service {
         showPanel();
     }
 
-    // Whether the hands-free voice loop is running. The voice-first tap chord asks
-    // this at the first tap-up to choose between starting the loop and deferring a
-    // commit+end, mirroring the browser's `conversationActive || (liveVoice &&
-    // listening)` check.
+    // Whether a reviewable hands-free voice draft is running. A tap while active
+    // is deliberately inert; the visible X / + controls own cancel and send.
     private boolean isContinuousLoopActive() {
         return continuousVoiceLoop
                 || pendingContinuousVoiceRestart != null
                 || (streamingVoiceActive() && streamingTurnContinuous);
     }
 
-    // VOICE-FIRST single quick tap (loop off) = start the hands-free loop with
+    // VOICE-FIRST single quick tap (draft off) = start a reviewable draft with
     // barge-in. Starting stops any assistant audio first, which is the interrupt.
     // A tap never cuts a live user mic: while a PTT hold or a record capture owns
     // the mic this is a no-op, so nothing spoken is dropped.
@@ -2367,7 +2603,7 @@ public final class OverlayService extends Service {
         // starts the loop and captures no speech was a barge-in or a stray tap, not
         // a failed utterance. Set after the barge-in teardown clears it.
         suppressFirstTapTurnEmptyCue = true;
-        startContinuousStreamingVoiceTurn();
+        startReviewableVoiceDraft();
     }
 
     // VOICE-FIRST double quick tap = start a fresh-thread voice turn. The tap
@@ -2423,28 +2659,6 @@ public final class OverlayService extends Service {
         updateMicState();
     }
 
-    // Commit an in-flight utterance and end the loop, or tear the session down when
-    // nothing is in flight. Used by the voice-first deferred "send and end" tap.
-    private void endContinuousVoiceLoop() {
-        suppressFirstTapTurnEmptyCue = false;
-        continuousVoiceLoop = false;
-        cancelContinuousVoiceRestart();
-        boolean hasInFlightSpeech = streamingVoiceActive()
-                && streamingVoiceController != null
-                && !currentStreamingTurnCommitRequested
-                && !visibleVoiceContent(currentStreamingTranscript).isEmpty();
-        if (hasInFlightSpeech) {
-            commitStreamingVoiceTurnNow();
-            return;
-        }
-        if (streamingVoiceActive()) {
-            // cancelStreamingVoice already folds the transcript surface away.
-            cancelStreamingVoice();
-            return;
-        }
-        dismissOverlayUi();
-    }
-
     private void startPushToTalkVoiceTurn() {
         if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
             dismissOverlayUi(false);
@@ -2463,7 +2677,7 @@ public final class OverlayService extends Service {
             startStreamingVoiceTurn(false, false);
             return;
         }
-        startLocalVoiceTurn(true);
+        startLocalVoiceTurn(true, false);
     }
 
     private void handleOrbVoicePressRelease() {
@@ -2890,11 +3104,11 @@ public final class OverlayService extends Service {
         updateMicState();
     }
 
-    private void startLocalVoiceTurn(boolean manualCommitOnly) {
+    private void startLocalVoiceTurn(boolean manualCommitOnly, boolean reviewableDraft) {
         // The local SpeechRecognizer path does not use our AudioRecord, so a mic
         // warmed by the gesture would leak (indicator stuck on). Drop it here.
         discardWarmMic();
-        continuousVoiceLoop = false;
+        continuousVoiceLoop = reviewableDraft;
         cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
             cancelStreamingVoice();
@@ -2974,10 +3188,21 @@ public final class OverlayService extends Service {
 
     private void startContinuousStreamingVoiceTurn() {
         if (!streamingVoiceAvailable()) {
-            startLocalVoiceTurn(false);
+            startLocalVoiceTurn(false, false);
             return;
         }
         startStreamingVoiceTurn(true, true);
+    }
+
+    private void startReviewableVoiceDraft() {
+        if (!streamingVoiceAvailable()) {
+            startLocalVoiceTurn(true, true);
+            return;
+        }
+        // Tap-created drafts never use silence auto-commit. Only the visible +
+        // control can commit; X cancels locally. Continuous here means the draft
+        // remains the active voice surface, not that it auto-rearms after reply.
+        startStreamingVoiceTurn(false, true);
     }
 
     private void startStreamingVoiceTurn(boolean autoCommitOnSilence, boolean continuousLoop) {

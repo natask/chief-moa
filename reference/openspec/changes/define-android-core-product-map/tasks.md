@@ -98,3 +98,14 @@
 - [x] 10.4 Add browser extension device-client heartbeat and a safe local tool manifest including tab list/open/activate/close/reload, page-context snapshot, bounded `chrome.debugger` CDP execution, queued browser task claim/receipt, and local receipts.
 - [x] 10.5 Add gateway APIs for listing active agents/runs/tool executions from any surface.
 - [x] 10.6 Add a first cross-device smoke: browser requests Android to speak a short message; Android validates locally, speaks it, and receipts it through the gateway. Verified with `cd gateway && npm run smoke:device-hub`, plus Android and extension build/verify checks.
+
+## 11. Reviewable Mobile Overlay Controls
+
+- [x] 11.1 Show `X` and `+` controls for every tap-started Android voice draft.
+- [x] 11.2 Prevent single-, double-, triple-, and fourth-tap resolution from
+      silently committing a draft; keep hold-release as the fast commit path.
+- [x] 11.3 Keep chat and voice cards mutually exclusive and dock the open card
+      wholly above or below the orb, including while the orb moves.
+- [x] 11.4 Add drag-to-remove plus explicit chat-header and notification Hide actions.
+- [x] 11.5 Verify Android unit tests, `assembleDebug`, and strict OpenSpec validation.
+- [ ] 11.6 Publish the committed Android OTA artifact and verify its update metadata.
