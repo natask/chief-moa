@@ -133,6 +133,11 @@ if (
   mainContentScript.js.indexOf("observation-runtime.js") < 0 ||
   mainContentScript.js.indexOf("observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   !/AgeeObservationRuntime/.test(observationRuntimeSource) ||
+  !/MAX_REGISTERED_ANCHORS = 100/.test(observationRuntimeSource) ||
+  !/new WeakReference\(element\)/.test(observationRuntimeSource) ||
+  !/entry\.evidence !== canonicalEvidence\(anchor\)/.test(observationRuntimeSource) ||
+  !/tombstoneRemovedNodes/.test(observationRuntimeSource) ||
+  !/MAX_OBSERVATION_ANCHORS = 100/.test(contentSource) ||
   !/revalidateObservationAnchor/.test(contentSource) ||
   !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {

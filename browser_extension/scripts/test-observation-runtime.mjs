@@ -57,6 +57,7 @@ function element(tagName, attributes = {}, rect = { x: 40, y: 200, width: 180, h
     getAttribute(name) { return attributes[name] || ""; },
     getBoundingClientRect() { return { ...this.rect }; },
     closest() { return null; },
+    contains(node) { return node === this; },
   };
 }
 
@@ -102,17 +103,40 @@ wrongFrame.frame_path = ["child"];
 assert.equal(runtime.revalidate(wrongFrame).reason, "frame_changed");
 const unknown = structuredClone(first);
 unknown.element_ref.local_id = "el_unknown";
-assert.equal(runtime.revalidate(unknown).reason, "ambiguous_identity");
+assert.equal(runtime.revalidate(unknown).reason, "evidence_mismatch");
 
+const tamperedFingerprint = structuredClone(first);
+tamperedFingerprint.element_ref.fingerprint = "fnv1a-00000000";
+assert.equal(runtime.revalidate(tamperedFingerprint).reason, "evidence_mismatch", "registered anchor evidence must be immutable");
+const recombined = structuredClone(second);
+recombined.anchor_id = first.anchor_id;
+assert.equal(runtime.revalidate(recombined).reason, "evidence_mismatch", "anchor id cannot be recombined with another snapshot");
+const forged = structuredClone(first);
+forged.anchor_id = "anchor_forged";
+assert.equal(runtime.revalidate(forged).reason, "unregistered_anchor", "a valid local id cannot authorize an unissued anchor");
+
+const beforeRemoval = runtime.observe(button, { snapshotId: "snap_before_removal" });
 button.isConnected = false;
-assert.equal(runtime.revalidate(first).reason, "node_replaced");
-
+mutationCallback([{ target: doc, removedNodes: [button] }]);
 button.isConnected = true;
+assert.equal(runtime.revalidate(beforeRemoval).reason, "node_replaced", "remove and reinsert must not revive an issued anchor");
+const afterReinsert = runtime.observe(button, { snapshotId: "snap_after_reinsert" });
+assert.notEqual(afterReinsert.element_ref.local_id, beforeRemoval.element_ref.local_id);
+
 view.location.href = "https://example.test/two";
 assert.equal(runtime.revalidate(first).reason, "page_changed");
+assert.equal(runtime.state().registered_anchor_count, 0, "SPA navigation must prune prior-page anchor records");
 const afterSameDocumentNavigation = runtime.observe(button, { snapshotId: "snap_three" });
 assert.ok(afterSameDocumentNavigation, "same-document navigation must permit a fresh observation");
 assert.notEqual(afterSameDocumentNavigation.page_epoch, first.page_epoch);
+
+const bounded = [];
+for (let index = 0; index < api.maxRegisteredAnchors + 5; index += 1) {
+  bounded.push(runtime.observe(element("BUTTON", { "aria-label": `Target ${index}` }), { snapshotId: `snap_bound_${index}` }));
+}
+assert.equal(runtime.state().registered_anchor_count, api.maxRegisteredAnchors);
+assert.equal(runtime.revalidate(bounded[0]).reason, "unregistered_anchor", "old records must be pruned at the hard bound");
+assert.equal(runtime.revalidate(bounded.at(-1)).valid, true);
 
 const canvas = element("CANVAS");
 const iframe = element("IFRAME");
