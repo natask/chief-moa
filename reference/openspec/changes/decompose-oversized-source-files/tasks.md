@@ -117,6 +117,10 @@
       with a deterministic scripted pool and focused 90% line/branch/function
       coverage gate. Verified at 98.67% lines, 93.44% branches, and 97.73%
       functions.
+- [x] 2.23 Add exhaustive video-note storage, quota, metadata, corruption,
+      stream, inline-part, raw-body, HTTP handler, deletion, and error-bound
+      tests with a focused 90% line/branch/function coverage gate. Verified at
+      100% lines, 93.24% branches, and 95.56% functions.
 
 ## 3. Other Oversized Surfaces
 
