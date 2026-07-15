@@ -198,3 +198,24 @@ test("document-context metadata rejects invalid counts and merges conservative c
   const unknown = browserEvidenceSummaryFromValue({ document_context: { complete: "yes" } });
   assert.equal(unknown.context_complete, null);
 });
+
+test("an empty rendered document retains complete zero-part coverage metadata", () => {
+  const summary = browserEvidenceSummaryFromBody({
+    snapshot: {
+      page_text: "",
+      document_context: {
+        scope: "whole_rendered_document",
+        coverage: "complete",
+        complete: true,
+        truncated: false,
+        source_parts_total: 0,
+        source_parts_included: 0,
+      },
+    },
+  });
+  assert.equal(summary.visible_text, "");
+  assert.equal(summary.context_scope, "whole_rendered_document");
+  assert.equal(summary.context_complete, true);
+  assert.equal(summary.source_parts_total, 0);
+  assert.equal(summary.source_parts_included, 0);
+});

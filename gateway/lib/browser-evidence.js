@@ -35,7 +35,7 @@ function browserEvidenceSummaryFromBody(body) {
     body.context?.browser_page,
   ]) {
     const summary = browserEvidenceSummaryFromValue(value);
-    if (summary.visible_text || summary.source_ref) summaries.push(summary);
+    if (summary.visible_text || summary.source_ref || summary.context_scope) summaries.push(summary);
   }
   if (!summaries.length) return emptyBrowserEvidenceSummary(browserPageRefFromBody(body));
   return mergeBrowserEvidenceSummaries(...summaries, { page_ref: browserPageRefFromBody(body) });
