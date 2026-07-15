@@ -288,6 +288,14 @@
       existing cross-surface thread lifecycle smoke. Enforce a focused 90%
       line/branch/function gate, verified at 100% lines, 94.44% branches, and
       100% functions. Reduce `server.js` to 13,111 lines.
+- [x] 2.51 Extract authenticated broker-message, research, report persistence,
+      report read, model-pass fallback, and completion-event routing from
+      `server.js`; add focused recognition, authorization, validation, selected
+      and unselected routing, legacy identity, evidence-message, provider-empty,
+      provider-failure, atomic persistence, sanitization, corrupt/missing read,
+      event fallback, and clock tests plus broker and research integration smokes.
+      Enforce a focused 90% line/branch/function gate, verified at 100% lines,
+      98.41% branches, and 100% functions. Reduce `server.js` to 12,962 lines.
 
 ## 3. Other Oversized Surfaces
 
