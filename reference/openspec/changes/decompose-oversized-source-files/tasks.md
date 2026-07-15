@@ -302,6 +302,14 @@
       metadata, and delete dispatch tests plus audio- and video-note integration
       smokes. Enforce a focused 90% line/branch/function gate, verified at 100%
       for all three metrics. Reduce `server.js` to 12,889 lines.
+- [x] 2.53 Extract authenticated voice retranscription, turn list/detail,
+      diagnosis, stored audio, session ticket, LiveKit token/reason/turn-record,
+      hosted synthesis, and ambient-frame routing from `server.js`; add focused
+      recognition, authorization, precedence, decoded identity, diagnosis scope,
+      alias, bound, LiveKit unavailable/available, and synthesis-independence
+      tests plus diagnosis and LiveKit transport smokes. Enforce a focused 90%
+      line/branch/function gate, verified at 100% lines, 98.36% branches, and
+      100% functions. Reduce `server.js` to 12,767 lines.
 
 ## 3. Other Oversized Surfaces
 
