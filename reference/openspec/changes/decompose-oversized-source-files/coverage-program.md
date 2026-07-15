@@ -11,7 +11,7 @@ markup, and styles never contribute production coverage.
 
 | Surface | Lines | Branches | Functions/methods | Evidence status |
 | --- | ---: | ---: | ---: | --- |
-| Gateway | 74.21% | 70.00% | 77.72% | Node production-only run over `server.js` and `lib/**/*.js`; 564 tests passed and one skipped at the last whole-surface measurement. Extracted work-history, pet-collection, pet-sharing, pet-core, companion, and profile handlers each have permanent focused coverage above 90%. |
+| Gateway | 74.27% | 70.16% | 77.77% | Node production-only run over `server.js` and `lib/**/*.js`; 570 tests passed and one skipped. Extracted work-history, pet-collection, pet-sharing, pet-core, companion, and profile handlers each have permanent focused coverage above 90%. |
 | Android | 17.94% | 21.80% | 23.51% | Exact JaCoCo ratchet passes with 144 JVM tests. Extracted agent-run and context-control state modules each have permanent focused coverage above 90%; generated Android classes remain the only exclusions. |
 | Browser extension | 17.85% | 7.71% | 8.29% | Exact 25-file runtime classifier; 12 V8-executed files and conservative zero-count Istanbul metadata for 13 unloaded files. Extracted browser-turn and agent-loop policy modules have permanent focused gates above 90%. |
 | LiveKit worker | 99.07% | 90.40% | 92.00% | Hard production-only gate passes with all six compiled runtime modules loaded and 19 tests covering worker, STT, LLM, TTS, auth, streaming, and failure paths. |
