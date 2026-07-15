@@ -97,6 +97,7 @@ const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
 const { createPresentationHandlers } = require("./lib/presentation-handlers");
 const { createSupervisorHandlers } = require("./lib/supervisor-handlers");
+const { createSessionReadHandlers } = require("./lib/session-read-handlers");
 const {
   normalizeSpeech,
   isStopLike,
@@ -529,6 +530,12 @@ const brain = createBrain({ recallLimit: BRAIN_RECALL_LIMIT });
 // lineage, and cross-device active-thread resolution the turn ledgers do not
 // carry.
 const threadStore = createThreadStore({ dataDir: DATA_DIR });
+const { routeSessionReads } = createSessionReadHandlers({
+  authorized, sendJson, sendConversation, sessionSummaryPayload, defaultSessionId,
+  threadListPayload, threadStore, sanitizeOptionalId, sessionContextPayload,
+  listVoiceTurnsForSession, historyMessagesPayload, resolveContextTurnLimit,
+  listChatTurnRecordsForSession, latestContextPayload,
+});
 const workGraph = createWorkGraphStore({
   dataDir: DATA_DIR,
   databaseUrl: process.env.DATABASE_URL,
@@ -958,68 +965,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname.startsWith("/v1/conversations/")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const id = url.pathname.replace("/v1/conversations/", "");
-      sendConversation(response, id);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/sessions") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, sessionSummaryPayload(Number(url.searchParams.get("limit") || 25)));
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/sessions/default") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, { session_id: defaultSessionId() });
-      return;
-    }
-
-    // Thread control plane. A thread is a branch inside the one shared session.
-    // GET /v1/threads lists every branch (chat + voice + browser) with its
-    // lifecycle metadata and rolling summary. POST /v1/threads/switch records
-    // the active thread so every device resolves the same one, and GET
-    // /v1/threads/active returns it. Backward-compatible: callers that never
-    // touch these keep continuing on their caller-provided or default branch.
-    if (request.method === "GET" && url.pathname === "/v1/threads") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const sessionId = url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || defaultSessionId();
-      sendJson(response, 200, threadListPayload(sessionId, Number(url.searchParams.get("limit") || 50)));
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/threads/active") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const sessionId = sanitizeOptionalId(url.searchParams.get("session_id") || url.searchParams.get("conversation_id"), defaultSessionId());
-      const surface = String(url.searchParams.get("surface") || "").slice(0, 60);
-      const active = threadStore.getActive(sessionId, surface);
-      const meta = threadStore.getThread(sessionId, active.branch_id);
-      sendJson(response, 200, {
-        session_id: sessionId,
-        surface,
-        active: {
-          ...active,
-          kind: meta?.kind || (active.branch_id === "default" ? "default" : "new"),
-          label: meta?.label || (active.branch_id === "default" ? "Main thread" : active.branch_id),
-        },
-      });
+    if (await routeSessionReads(request, response, url)) {
       return;
     }
 
@@ -1029,109 +975,6 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       await handleThreadSwitch(request, response);
-      return;
-    }
-
-    if (
-      request.method === "GET" &&
-      url.pathname.startsWith("/v1/sessions/") &&
-      url.pathname.endsWith("/context")
-    ) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const sessionId = decodeURIComponent(
-        url.pathname.slice("/v1/sessions/".length, -"/context".length)
-      );
-      sendJson(response, 200, sessionContextPayload({
-        sessionId,
-        branchId: url.searchParams.get("branch_id") || "default",
-        allBranches: url.searchParams.get("all_branches") === "1" || url.searchParams.get("all_branches") === "true",
-        turnLimit: url.searchParams.get("turn_limit"),
-      }));
-      return;
-    }
-
-    // One session's ordered turns — the chat-history read path. The overlay
-    // reloads prior turns by stable session id so the conversation persists
-    // across reopens.
-    if (
-      request.method === "GET" &&
-      url.pathname.startsWith("/v1/sessions/") &&
-      url.pathname.endsWith("/turns")
-    ) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const sessionId = decodeURIComponent(
-        url.pathname.slice("/v1/sessions/".length, -"/turns".length)
-      );
-      sendJson(response, 200, {
-        session_id: sanitizeOptionalId(sessionId, "default"),
-        turns: listVoiceTurnsForSession(sessionId),
-      });
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/history/messages") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, historyMessagesPayload({
-        sessionId: url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || "",
-        q: url.searchParams.get("q") || url.searchParams.get("query") || "",
-        limit: Number(url.searchParams.get("limit") || 50),
-      }));
-      return;
-    }
-
-    // Typed chat history for a session — the read path for the console / coded
-    // chat surface. Parallel in shape to the voice /turns endpoint above but
-    // reads from the per-session chat-turns store (falling back to the global
-    // turns.jsonl ledger for sessions that pre-date the per-session store).
-    if (
-      request.method === "GET" &&
-      url.pathname.startsWith("/v1/sessions/") &&
-      url.pathname.endsWith("/chat-turns")
-    ) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const sessionId = decodeURIComponent(
-        url.pathname.slice("/v1/sessions/".length, -"/chat-turns".length)
-      );
-      const safeId = sanitizeOptionalId(sessionId, "default");
-      const limit = resolveContextTurnLimit(url.searchParams.get("limit"));
-      const all = listChatTurnRecordsForSession(safeId);
-      const page = all.slice(-limit);
-      sendJson(response, 200, {
-        session_id: safeId,
-        total: all.length,
-        limit,
-        turns: page.map((record) => ({
-          turn_id: String(record.turn_id || ""),
-          conversation_id: String(record.conversation_id || safeId),
-          session_id: String(record.session_id || safeId),
-          source: String(record.source || ""),
-          model: String(record.model || ""),
-          profile_version: String(record.profile_version || ""),
-          created_at: String(record.created_at || record.ts || ""),
-          response_text: String(record.response_text || ""),
-        })),
-      });
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/context/latest") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendJson(response, 200, latestContextPayload());
       return;
     }
 

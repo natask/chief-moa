@@ -36,6 +36,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/android-ota-handlers.js",
   "lib/presentation-handlers.js",
   "lib/supervisor-handlers.js",
+  "lib/session-read-handlers.js",
   "lib/project-store.js",
   "lib/intent-runtime.js",
   "lib/intent-runtime-router.js",
