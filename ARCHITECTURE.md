@@ -740,10 +740,19 @@ recent voice turns, chat turns, provider events, active/completed runs, profile
 status, and browser task receipts so a later voice session can recover what the
 browser surface did without relying on provider memory.
 
-Browser continuous/ambient mode is explicit start/stop. When active, the
-extension samples page context and posts a frame to `POST /v1/voice/frames` on a
-200 ms target interval. The gateway stores those frames as session evidence only;
-this path does not run model calls on the 200 ms cadence.
+The authenticated browser-turn contract exposes the separately addressable
+`delegate`, `help`, `collaborate`, and `explain` roles through
+`GET /v1/browser/roles` and accepts an explicit `role` on
+`POST /v1/browser/turns`. The catalog puts Delegate first for new selector UI,
+while an omitted role remains Explain/read-only for legacy-client safety. The
+gateway stores the role identity, authority, and execution policy on the turn;
+an explicit Delegate turn may link a bounded `/v1/browser/agent-tasks` task and
+its observable agent run. Help and Explain emit no action or task, and
+Collaborate emits at most one non-executable, confirmation-required step
+proposal. Role prose cannot change this typed authority. Browser voice
+`session_start` does not yet consume this contract: provider-native/cascaded
+voice turns remain a separate follow-up until committed transcripts and browser
+evidence can enter the same browser-turn lifecycle without prompt-only routing.
 
 ### Privacy-first proactive browser assistance
 
