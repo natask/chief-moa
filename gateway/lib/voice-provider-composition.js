@@ -23,6 +23,7 @@ class TranscriptSidecarVoiceProvider {
         configured: sidecar.configured === true,
         model: sidecar.model || null,
         language_codes: Array.isArray(sidecar.language_codes) ? sidecar.language_codes : [],
+        prompt_language_codes: Array.isArray(sidecar.prompt_language_codes) ? sidecar.prompt_language_codes : [],
         streaming: sidecar.voice_stt?.streaming_recognition === true,
       },
     };

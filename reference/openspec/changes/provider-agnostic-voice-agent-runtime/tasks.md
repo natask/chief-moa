@@ -177,3 +177,17 @@
       Deterministic coverage, gateway checks, browser verify/smoke, and Android
       assemble passed 2026-07-14. OpenSpec CLI was unavailable. Paid-provider
       preview and real phone/browser QA remain not measured.
+
+## 17. Chirp Automatic Recognition With Profile Prompting
+
+- [x] 17.1 Record the provider contract: Chirp 3 always recognizes with
+      `languageCodes=["auto"]`; the Moa input-language profile changes a bounded
+      custom transcription prompt rather than a provider recognition locale.
+- [x] 17.2 Apply the same profile-derived custom prompt to streaming and batch
+      Chirp requests, and permit streaming recognition in `auto` mode.
+- [x] 17.3 Add deterministic coverage proving profile changes alter the prompt,
+      never the recognition code, and batch fallback preserves the prompt.
+- [x] 17.4 Run gateway checks and an isolated live Chirp streaming replay.
+      Evidence: `chirp-auto-prompt-streaming-eval-20260715.md`.
+- [ ] 17.5 Before promotion, record an isolated preview, active-turn drain,
+      rollback, fresh backup/restore, and active-profile evidence.

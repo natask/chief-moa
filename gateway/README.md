@@ -259,7 +259,7 @@ VOICE_PROVIDER=chirp
 GCP_PROJECT_ID=<google-cloud-project>
 GCP_LOCATION=us
 CHIRP_MODEL=chirp_3
-CHIRP_LANGUAGE_CODES=en-US,am-ET
+CHIRP_PROMPT_LANGUAGE_CODES=en-US,am-ET
 
 # Use one of:
 GCP_SERVICE_ACCOUNT_KEY=<service-account-json>
@@ -274,6 +274,10 @@ CHIRP_ACCESS_TOKEN=<oauth-access-token>
 gateway uses Speech-to-Text V2 `recognize` with explicit PCM16 decoding for the
 short push-to-talk turn, emits the Chirp transcript, and the Android app then
 sends that transcript through `/v1/voice/turns` for the durable assistant reply.
+Chirp 3 recognition always uses `languageCodes=["auto"]`. The effective
+profile's `input_languages` become a custom verbatim-transcription prompt shared
+by streaming recognition and batch fallback; the env value above is only the
+boot fallback when no profile is available.
 
 The default system prompt is intentionally voice-specific:
 

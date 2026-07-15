@@ -3601,12 +3601,6 @@ function voiceProfileDiagnostics(profileStatus, providerStatus) {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
-  if (inputLanguages.length === 1) {
-    warnings.push({
-      code: "single_input_language_restriction",
-      summary: `Speech recognition is restricted to ${inputLanguages[0]}; turns in other languages can be rejected.`,
-    });
-  }
   return {
     ok: warnings.length === 0,
     stored_voice_provider: storedProvider,
@@ -9204,10 +9198,12 @@ async function handleVoiceRetranscribe(request, response, url) {
     return;
   }
 
-  const overrideCodes = normalizeRetranscribeLanguageCodes(body.language_codes || body.languageCodes);
+  // `language_codes` remains a backwards-compatible request alias, but these
+  // values now shape Chirp's prompt; recognition itself always stays `auto`.
+  const overrideCodes = normalizeRetranscribeLanguageCodes(body.prompt_language_codes || body.promptLanguageCodes || body.language_codes || body.languageCodes);
   const codes = overrideCodes.length > 0
     ? overrideCodes
-    : (typeof provider.sttLanguageCodes === "function" ? provider.sttLanguageCodes() : ["en-US"]);
+    : (typeof provider.sttPromptLanguageCodes === "function" ? provider.sttPromptLanguageCodes() : ["en-US"]);
   const syntheticTurn = {
     turnId,
     pcmPath,
@@ -9297,6 +9293,8 @@ async function handleVoiceRetranscribe(request, response, url) {
     retranscribed: true,
     revision,
     language_codes: codes,
+    prompt_language_codes: codes,
+    recognition_language_codes: ["auto"],
     windowed: transcription?.windowed === true,
     language_rejected: transcription?.languageRejected === true,
     audio_bytes: stat.size,
@@ -9919,7 +9917,7 @@ function writeVoiceTurnRecord(record) {
 // durable, model-agnostic reply turn and return the spoken reply plus the reply
 // language so the Cloud TTS leg can synthesize it. Reply language and voice come
 // from the effective agent profile (OUTPUT policy); the STT leg already handled
-// the restricted INPUT languages. Control/agent-run turns return empty speak so
+// the profile-derived INPUT prompt languages. Control/agent-run turns return empty speak so
 // the cascaded provider skips TTS.
 async function runCascadedVoiceReasoning(input) {
   return withTimeout(runCascadedVoiceReasoningInner(input), MODEL_FETCH_TIMEOUT_MS, "cascaded voice reasoning");
@@ -10504,7 +10502,7 @@ function cascadedVoiceProfileTools(call) {
   return [
     {
       name: "update_agent_profile",
-      description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks or wants you to hear, listen for, understand, transcribe, or detect (recognition is constrained to exactly this set, at most two). Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language leads right now (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Set both fields in one call when the user asks you to listen in one language set and respond, speak, or reply in another. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `speaking_rate` (0.5–2.0; 1.0 = normal speed) when asked to speak faster or slower, and `voice_tone` (a few words like \"warm, upbeat\"; \"neutral\" clears it) when asked for a different voice mood. Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in the new setting language only.",
+      description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks or wants you to hear, listen for, understand, transcribe, or detect. These codes shape the automatic STT transcription prompt (at most two); they do not reject other detected languages. Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language the prompt emphasizes first (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Set both fields in one call when the user asks you to listen in one language set and respond, speak, or reply in another. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `speaking_rate` (0.5–2.0; 1.0 = normal speed) when asked to speak faster or slower, and `voice_tone` (a few words like \"warm, upbeat\"; \"neutral\" clears it) when asked for a different voice mood. Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in the new setting language only.",
       parameters: {
         type: "object",
         properties: {
@@ -10600,7 +10598,7 @@ function languageControlDirective(profile) {
   const reply = String(profile?.language || profile?.language_primary || "").trim();
   return [
     "Language control (you own this; the gateway does not guess from your words):",
-    understand ? `- You currently understand: ${understand}. Speech recognition is constrained to exactly this set.` : "",
+    understand ? `- You currently understand: ${understand}. These languages guide automatic speech transcription; preserve other detected languages too.` : "",
     reply ? `- You currently reply in: ${reply}.` : "",
     "- If the user says which languages THEY speak (\"I only speak English and Amharic\", \"I speak only these two\"), call update_agent_profile with input_languages set to exactly that set.",
     "- If the user says to lead with one of those right now (\"right now I want to speak Amharic\"), set input_language_primary to that code.",
@@ -10727,7 +10725,7 @@ async function recordStreamingVoiceTurn(turn) {
       model: turn.model || "",
       // Language pair recorded on the canonical turn so audio-analysis agents
       // can fetch the stored PCM and know the input/output languages. Input
-      // languages come from the STT restriction; reply_language is the OUTPUT.
+      // languages come from the STT prompt; reply_language is the OUTPUT.
       input_languages: Array.isArray(turn.input_languages) ? turn.input_languages : [],
       reply_language: turn.reply_language || "",
       tts_spoke: turn.tts_spoke === true,

@@ -92,9 +92,9 @@ const VOICE_ALIAS_TO_ID = Object.freeze({
 const VOICE_ALIASES_BY_KEY = new Map(Object.entries(VOICE_ALIAS_TO_ID).map(([alias, id]) => [normalizeSpeechKey(alias), id]));
 
 // Supported languages are the ones Google Chirp 3 (Speech-to-Text V2, model
-// `chirp_3`) can transcribe. The gateway constrains recognition to the profile's
-// `input_languages` (a subset of this catalog), so the model owns which languages
-// are understood by picking codes from here. Reply-language (TTS) support may be
+// `chirp_3`) can transcribe. The gateway names the profile's `input_languages`
+// in Chirp's custom prompt while recognition remains automatic. Reply-language
+// (TTS) support may be
 // narrower: gemini-tts synthesizes any language the model speaks, classic
 // cloud-tts only the ones with a hosted voice; where TTS lacks a language the
 // pipeline returns text (never on-device TTS). `keys` are spoken english-name
@@ -616,10 +616,10 @@ function profileOptionsPayload(options = {}) {
 // still flows through the profile sanitizer (normalizeLanguageList), which drops
 // any code not in the catalog and never blanks a field.
 //
-//   understand / input_languages   -> the constrained set the STT recognizer is
-//                                      limited to (the languages the user speaks)
-//   understand_primary / speaking  -> reorder which understood language is primary
-//                                      right now ("right now I want to speak X")
+//   understand / input_languages   -> languages named in the STT custom prompt
+//                                      (provider recognition remains automatic)
+//   understand_primary / speaking  -> reorder the prompt's language emphasis
+//                                      ("right now I want to speak X")
 //   reply / language               -> the language(s) the assistant replies in
 //   reply_primary                  -> the primary reply language
 //   lock (bool)                    -> true disables automatic reply-language switching

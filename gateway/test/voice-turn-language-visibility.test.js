@@ -20,7 +20,7 @@ const INPUT_LANGUAGES = ["am-ET", "en-US"];
 
 // A cascaded-style provider that returns assistant text but NO reply_language,
 // forcing the gateway's effective-profile fallback. Its status advertises the
-// restricted STT language codes for the session.
+// configured STT prompt-language codes for the session.
 function noReplyLanguageProvider() {
   return {
     status() {
@@ -152,7 +152,7 @@ test("turn_done always carries reply_language and input_languages", async () => 
     // profile reply language rather than leaving the field off.
     assert.equal(turnDone.reply_language, "am-ET", "reply_language must fall back to the effective profile");
     assert.ok(Object.prototype.hasOwnProperty.call(turnDone, "input_languages"), "input_languages must always be present");
-    assert.deepEqual(turnDone.input_languages, INPUT_LANGUAGES, "input_languages must carry the restricted STT codes");
+    assert.deepEqual(turnDone.input_languages, INPUT_LANGUAGES, "input_languages must carry the configured STT prompt codes");
   } finally {
     await closeVoiceServer(voiceServer);
     await closeHttpServer(server);

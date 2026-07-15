@@ -10,7 +10,8 @@
 //   1. retranscribe round-trips on a stored turn: the fresh transcript is
 //      returned AND persisted non-destructively (original kept as revision 0,
 //      the new one appended, retranscribed:true).
-//   2. a language_codes override is honored and forwarded to STT.
+//   2. a prompt-language override changes the custom prompt while recognition
+//      remains automatic.
 //   3. a missing PCM returns 404 (e.g. incognito-deleted audio).
 
 const assert = require("node:assert");
@@ -97,13 +98,18 @@ async function main() {
       "a provider event records the re-transcription",
     );
 
-    // 2. language_codes override is honored and forwarded to STT.
+    // 2. The backwards-compatible language_codes override shapes the prompt;
+    // recognition itself remains automatic.
     fakeGoogle.reset();
     fakeGoogle.setTranscript("amharic retranscription");
     const withCodes = await postRetranscribe(baseUrl, sessionId, turnId, { language_codes: ["am-ET"] });
     assert.equal(withCodes.status, 200, "override request succeeds");
     assert.deepEqual(withCodes.body.language_codes, ["am-ET"], "override codes are echoed back");
-    assert.deepEqual(fakeGoogle.lastLanguageCodes(), ["am-ET"], "override codes are forwarded to STT");
+    assert.deepEqual(withCodes.body.prompt_language_codes, ["am-ET"]);
+    assert.deepEqual(withCodes.body.recognition_language_codes, ["auto"]);
+    assert.deepEqual(fakeGoogle.lastLanguageCodes(), ["auto"], "recognition remains automatic");
+    assert.match(fakeGoogle.lastCustomPrompt(), /Amharic/);
+    assert.doesNotMatch(fakeGoogle.lastCustomPrompt(), /English/);
     assert.equal(withCodes.body.revision, 2, "second retranscription is revision 2");
 
     // 3. Missing PCM -> 404.
@@ -150,7 +156,10 @@ async function startFakeGoogle() {
       body = {};
     }
     if (request.url.includes(":recognize")) {
-      state.calls.push({ language_codes: body?.config?.languageCodes || [] });
+      state.calls.push({
+        language_codes: body?.config?.languageCodes || [],
+        custom_prompt: body?.config?.features?.customPromptConfig?.customPrompt || "",
+      });
       sendJson(response, 200, { results: [{ alternatives: [{ transcript: state.transcript }] }] });
       return;
     }
@@ -162,6 +171,7 @@ async function startFakeGoogle() {
     setTranscript: (value) => { state.transcript = value; },
     reset: () => { state.calls = []; },
     lastLanguageCodes: () => (state.calls.length ? state.calls[state.calls.length - 1].language_codes : []),
+    lastCustomPrompt: () => (state.calls.length ? state.calls[state.calls.length - 1].custom_prompt : ""),
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }

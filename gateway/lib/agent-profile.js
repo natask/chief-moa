@@ -655,9 +655,9 @@ function pickProfileFields(input) {
   if (typeof input.language_auto_switch === "boolean") {
     out.language_auto_switch = input.language_auto_switch;
   }
-  // Languages the USER speaks. Modular STT providers can use these as direct
-  // language hints; Gemini Live native audio infers input language and receives
-  // these through Moa-owned context instead.
+  // Languages the USER speaks. Chirp keeps provider recognition on `auto` and
+  // turns these into a custom transcription prompt; native-audio providers
+  // receive them through Moa-owned context.
   if (typeof input.input_languages === "string" && input.input_languages.trim()) {
     const list = normalizeLanguageList(input.input_languages);
     if (list.codes.length > 0 && list.invalid.length === 0) {
