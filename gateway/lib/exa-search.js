@@ -35,7 +35,6 @@ async function searchExa(args, options = {}) {
   if (typeof fetchImpl !== "function") return { ok: false, status: "unavailable", error: "fetch is unavailable" };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), positiveInteger(env.EXA_SEARCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS));
-  timeout.unref?.();
   try {
     const response = await fetchImpl(String(env.EXA_SEARCH_ENDPOINT || DEFAULT_ENDPOINT), {
       method: "POST",
