@@ -211,6 +211,12 @@
       gates, verified at 100% lines, 95.24% branches, and 100% functions for
       handlers and 100% lines, 93.40% branches, and 100% functions for runtime
       authority. Reduce `server.js` to 14,613 lines.
+- [x] 2.40 Extract authenticated work-graph node, event, artifact, item-read,
+      and action routing from `server.js`; add exhaustive route, authorization,
+      query-alias, filter-default, collection, creation, and exact path-remainder
+      tests. Enforce a focused 90% line/branch/function gate, verified at 100%
+      for all three metrics, while retaining the existing above-90% JSON and
+      PostgreSQL store gates. Reduce `server.js` to 14,534 lines.
 
 ## 3. Other Oversized Surfaces
 
