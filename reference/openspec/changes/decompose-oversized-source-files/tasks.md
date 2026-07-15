@@ -245,6 +245,14 @@
       and default-clock tests plus browser routing, continuity, and agent-loop
       smokes. Enforce a focused 90% line/branch/function gate, verified at 100%
       lines, 95% branches, and 100% functions. Reduce `server.js` to 13,772 lines.
+- [x] 2.45 Extract OAuth, gateway-secret-form, provider catalog, connection,
+      notification, health, item-read, patch, refresh, reauthorization, disable,
+      and disconnect routing from `server.js`; add exhaustive auth-class,
+      redirect, callback, form/JSON, scope, query, path, action, typed-error,
+      payload, and default tests plus encrypted credential and device-notification
+      smokes. Enforce a focused 90% line/branch/function gate, verified at 100%
+      lines, 97.14% branches, and 100% functions. Reduce `server.js` to 13,638
+      lines.
 
 ## 3. Other Oversized Surfaces
 
