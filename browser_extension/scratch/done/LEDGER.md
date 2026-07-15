@@ -1,3 +1,4 @@
+- Browser overlay now shows current-page identity, retires transient results into on-demand history, and single-click steering freezes accepted text while superseding stale speech — agent: codex/gpt-5 — b3d63250
 - Browser voice toggles now require matching capture provenance, so a single click cannot send a fresh-thread capture started by double-click — agent: codex/gpt-5 — 5ff04790
 - Browser gesture parity release candidate allocated collision-free manifest version 0.1.41 — agent: codex/gpt-5 — b892145d
 - Voice-first browser gestures now toggle current-thread capture on single click, fresh-thread capture on double-click, push-to-talk on hold, and collision-safe chat on triple-click — agent: codex/gpt-5 — 888b6a5a
