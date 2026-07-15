@@ -94,6 +94,19 @@
       <span id="backgroundAutomationStatus"></span>
     </div>
 
+    <h2>User scripts</h2>
+    <p class="sub">Off by default. These switches only make Chrome's isolated user-script runtime available for a future reviewed program flow. They do not let the model run code, and this build has no automatic execution path.</p>
+    <div>
+      <label><input id="reviewedUserScripts" type="checkbox" /> Reviewed standalone scripts</label>
+      <span id="reviewedUserScriptsStatus"></span>
+    </div>
+    <div class="hint">Each changed source revision still requires an exact source, digest, scope, timing, and approval match. Scripts use the isolated USER_SCRIPT world only.</div>
+    <div>
+      <label><input id="delegatedUserScripts" type="checkbox" /> Delegated script runtime</label>
+      <span id="delegatedUserScriptsStatus"></span>
+    </div>
+    <div class="hint">Separate opt-in for a future confirmed Delegate envelope. MAIN remains a separate visible grant. If Chrome reports “Allow User Scripts” is off, enable it on this extension's details page.</div>
+
     <hr />
 
     <h2>Runtime agent profile</h2>

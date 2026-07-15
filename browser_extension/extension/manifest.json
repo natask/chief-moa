@@ -9,7 +9,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "desktopCapture"],
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "desktopCapture", "userScripts"],
   "host_permissions": [
     "http://*/*",
     "https://*/*",
