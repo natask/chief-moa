@@ -101,6 +101,7 @@ const { createSessionReadHandlers } = require("./lib/session-read-handlers");
 const { createThreadSwitchHandlers } = require("./lib/thread-switch-handlers");
 const { createBrokerResearchHandlers } = require("./lib/broker-research-handlers");
 const { createMediaNoteHandlers } = require("./lib/media-note-handlers");
+const { createVoiceControlHandlers } = require("./lib/voice-control-handlers");
 const {
   normalizeSpeech,
   isStopLike,
@@ -759,6 +760,13 @@ const voiceSessionServer = createVoiceSessionServer({
   // the Cloud TTS leg can speak the reply. Only used by the cascaded provider.
   reasoner: runCascadedVoiceReasoning,
 });
+const { routeVoiceControls } = createVoiceControlHandlers({
+  authorized, sendJson, handleVoiceRetranscribe, handleVoiceTurnsList,
+  handleVoiceTurnGet, voiceDiagnosisPayload, sendVoiceAudio,
+  handleVoiceSessionTicket, handleLivekitToken, livekitConfigured,
+  livekitNotConfiguredPayload, handleInternalVoiceReason,
+  handleInternalVoiceSynthesize, handleInternalVoiceTurnRecord, handleVoiceFrame,
+});
 const { routeSupervisor } = createSupervisorHandlers({
   authorizedAgent, agentAuthError, sendJson, harnessStatus, workGraph,
   listAllAgentRuns, isTerminalRunStatus, provider: MODEL_PROVIDER, model: MODEL_ID,
@@ -1056,140 +1064,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST"
-      && url.pathname.startsWith("/v1/voice/turns/")
-      && url.pathname.endsWith("/retranscribe")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleVoiceRetranscribe(request, response, url);
-      return;
-    }
-
     if (await routeMediaNotes(request, response, url)) {
       return;
     }
-
-    if (request.method === "GET" && url.pathname === "/v1/voice/turns") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      handleVoiceTurnsList(response, url);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/voice/turns/")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const turnId = decodeURIComponent(url.pathname.replace("/v1/voice/turns/", "")).trim();
-      handleVoiceTurnGet(response, turnId, url.searchParams.get("session_id") || "");
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/voice/diagnosis") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      const diagnosisSessionId = url.searchParams.get("session_id") || url.searchParams.get("conversation_id") || "";
-      const diagnosisTurnId = url.searchParams.get("turn_id") || "";
-      if (!diagnosisSessionId) {
-        sendJson(response, 400, { error: "session_id is required for a bounded voice diagnosis query" });
-        return;
-      }
-      sendJson(response, 200, voiceDiagnosisPayload({
-        sessionId: diagnosisSessionId,
-        turnId: diagnosisTurnId,
-        limit: Number(url.searchParams.get("limit") || 10),
-      }));
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/voice/audio/")) {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      sendVoiceAudio(request, response, url);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/voice/session-ticket") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleVoiceSessionTicket(request, response);
-      return;
-    }
-
-    // ---- LiveKit voice-transport PROTOTYPE (flag-gated) ---------------------
-    // The token/reason/turn-record routes below are inert unless LIVEKIT_URL +
-    // LIVEKIT_API_KEY + LIVEKIT_API_SECRET are set, so the default cascaded WS
-    // pipeline is unchanged. The client-facing token route and the worker-facing
-    // internal hooks share the same bearer-token auth as their peers.
-    if (request.method === "POST" && url.pathname === "/v1/voice/livekit/token") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleLivekitToken(request, response);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/internal/voice/reason") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      if (!livekitConfigured()) {
-        sendJson(response, 503, livekitNotConfiguredPayload());
-        return;
-      }
-      await handleInternalVoiceReason(request, response);
-      return;
-    }
-
-    // Synthesize is NOT LiveKit-gated: it wraps the active provider's hosted
-    // TTS leg directly, so any authorized surface (LiveKit worker, website
-    // replay-in-another-voice) can re-voice stored reply text. The handler
-    // itself reports 501 when the active provider has no hosted TTS leg.
-    if (request.method === "POST" && url.pathname === "/v1/internal/voice/synthesize") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleInternalVoiceSynthesize(request, response);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/internal/voice/turn-record") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      if (!livekitConfigured()) {
-        sendJson(response, 503, livekitNotConfiguredPayload());
-        return;
-      }
-      await handleInternalVoiceTurnRecord(request, response);
-      return;
-    }
-
-    // Ambient frame intake for the continuous (rung-3) interaction mode. The
-    // client samples the screen on an interval (~200ms target) and posts each
-    // frame; the gateway stores it per session. Intake only for now — no model
-    // call. A later step reads this stream to produce proactive feedback.
-    if (request.method === "POST" && url.pathname === "/v1/voice/frames") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleVoiceFrame(request, response);
+    if (await routeVoiceControls(request, response, url)) {
       return;
     }
 
