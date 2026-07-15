@@ -94,3 +94,29 @@ Each ticket has one observable acceptance check and is committed separately.
 Run the native tests first, then the production-only coverage gate, then the
 surface build/smoke command. Coverage work does not authorize weakening,
 deleting, or excluding meaningful failure-path and integration tests.
+
+## Artifact And Promotion Record (2026-07-15)
+
+- Browser extension: the real headless-Chrome smoke passed and the committed
+  `0.1.40` runtime was packaged as `browser_extension/dist/A.G.-0.1.40.zip`.
+  The already-loaded browser was not reloaded because interruption-free active
+  browser state was not proven.
+- Android: `assembleDebug` passed and the versioned OTA artifact
+  `ai.moa.assistant-1784106283` was created under
+  `gateway/data/android-ota/releases/`. It was not synced or installed because
+  an interruption-free phone session was not proven and the VPS host/token are
+  unavailable in this checkout.
+- Apple: the ad-hoc signed QA bundle was created at
+  `apple_surfaces/dist/MoaMac.app`; packaging did not launch it or request TCC
+  permissions.
+- Gateway: the complete production-only run passed 543 tests with one skip, but
+  no isolated preview, backup/restore evidence, or state-compatibility rollout
+  was established. The branch was therefore not pushed through the
+  production-triggering `push-master.sh` path.
+- Website: the hard 90% coverage gate passes, but Cloudflare preview credentials
+  are unavailable, so no isolated Pages preview or active promotion occurred.
+
+These ignored local artifacts are QA/release inputs, not evidence of an active
+promotion. Windows WinUI, Android, browser extension, gateway, and Apple remain
+below their whole-surface acceptance gates, so repository-wide promotion is
+blocked even though the Windows core, LiveKit worker, and website gates pass.
