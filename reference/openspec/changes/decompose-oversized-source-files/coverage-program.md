@@ -17,7 +17,8 @@ markup, and styles never contribute production coverage.
 | LiveKit worker | at most 17.5% | unmeasured | unmeasured | Only `config.ts` has tests; 756 of 916 production lines are currently outside the test link/import path. |
 | Website | unmeasured | unmeasured | unmeasured | No test runner exists and about 2,315 executable JavaScript lines remain embedded in HTML. |
 | Apple surfaces | blocked | blocked | blocked | `swift test --enable-code-coverage` is blocked by typed protocol drift; executable shells are not linked into the SwiftPM test product. |
-| Windows surface | unmeasured | unmeasured | unmeasured | Rust tests pass, but `cargo-llvm-cov` is not installed; WinUI coverage requires a Windows runner. |
+| Windows portable core | 98.56% | 92.07% | 98.15% | Hard Rust gate passes with 27 tests. This does not cover the separate WinUI C# executable. |
+| Windows WinUI shell | unmeasured | unmeasured | unmeasured | Native C#/WinUI instrumentation requires a Windows runner and remains a separate acceptance check. |
 
 These are starting measurements, not release claims. A percentage remains
 invalid if an eligible production file is absent from coverage metadata.

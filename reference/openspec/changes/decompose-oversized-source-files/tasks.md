@@ -48,6 +48,14 @@
 - [ ] 3.6 Split the pet-library page into bounded markup, style, and behavior files.
 - [ ] 3.7 Reduce the work-history module below 2,000 lines.
 
+## 4. Production Coverage Rollout
+
+- [x] 4.1 Enforce at least 90% lines, branches, and functions for the Windows
+      portable Rust core. Verified at 98.56% lines, 92.07% branches, and 98.15%
+      functions with 27 passing tests.
+- [ ] 4.2 Add a separate 90% line/branch/method report for the WinUI C# shell on
+      a Windows runner.
+
 ## Verification
 
 - `node scripts/source-size-policy.js`
