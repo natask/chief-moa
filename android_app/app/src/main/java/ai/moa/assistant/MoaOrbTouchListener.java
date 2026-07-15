@@ -25,8 +25,8 @@ import java.util.function.Supplier;
 //   chat menu never flashes before a double-click hold engages voice.
 //
 // Flag ON (manual voice):
-//   single quick tap       -> toggle current-thread capture (start/interrupt or send/store)
-//   double quick tap       -> cancel an active draft and start capture in a fresh thread
+//   single quick tap       -> toggle current-thread capture; inert during fresh-thread capture
+//   double quick tap       -> toggle fresh-thread capture, replacing an active current draft
 //   triple quick tap       -> cancel an active draft and open chat
 //   fourth tap and beyond  -> nothing
 //   press-and-hold, still  -> onDoublePressStart / onPressToTalkRelease
@@ -399,27 +399,14 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     }
 
     private void runVoiceFirstTapActions(List<MoaVoiceFirstTapResolver.Action> actions) {
-        for (MoaVoiceFirstTapResolver.Action action : actions) {
-            switch (action) {
-                case START_OR_INTERRUPT:
-                    onStartTalkLoop.run();
-                    break;
-                case STOP_AND_SEND:
-                    onSendTalkLoop.run();
-                    break;
-                case CANCEL_CAPTURE:
-                    onCancelTalkLoop.run();
-                    break;
-                case START_FRESH:
-                    onStartFreshTalkLoop.run();
-                    break;
-                case OPEN_CHAT:
-                    onOpenChat.run();
-                    break;
-                default:
-                    break;
-            }
-        }
+        MoaOrbTouchActionDispatcher.dispatch(
+                actions,
+                onStartTalkLoop,
+                onSendTalkLoop,
+                onCancelTalkLoop,
+                onStartFreshTalkLoop,
+                onOpenChat
+        );
     }
 
     private boolean isSecondTap(MotionEvent event) {

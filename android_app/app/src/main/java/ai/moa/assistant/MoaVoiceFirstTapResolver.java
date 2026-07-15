@@ -34,7 +34,12 @@ final class MoaVoiceFirstTapResolver {
         reset();
         CaptureOrigin origin = captureOrigin == null ? CaptureOrigin.NONE : captureOrigin;
         if (resolvedTapCount == 1) {
-            return Collections.singletonList(origin != CaptureOrigin.NONE
+            if (origin == CaptureOrigin.FRESH_THREAD) {
+                // A fresh-thread capture belongs to the double-click toggle.
+                // A colliding single click cannot send or cancel it.
+                return Collections.emptyList();
+            }
+            return Collections.singletonList(origin == CaptureOrigin.CURRENT_THREAD
                     ? Action.STOP_AND_SEND
                     : Action.START_OR_INTERRUPT);
         }

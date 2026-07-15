@@ -22,13 +22,24 @@ public final class MoaVoiceFirstTapResolverTest {
     }
 
     @Test
-    public void tapStopsAndSendsWhenManualCaptureIsActive() {
+    public void singleTapStopsAndSendsCurrentThreadCapture() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
         resolver.tapUp();
 
         assertEquals(
                 Collections.singletonList(MoaVoiceFirstTapResolver.Action.STOP_AND_SEND),
                 resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD)
+        );
+    }
+
+    @Test
+    public void singleTapDoesNotSendFreshThreadCapture() {
+        MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
+
+        assertEquals(
+                Collections.emptyList(),
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD)
         );
     }
 
