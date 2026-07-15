@@ -95,11 +95,7 @@ const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-
 const { createVideoNoteHandlers, createVideoNotesStore, videoInlinePart } = require("./lib/video-notes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
-const {
-  buildEvaluatorMessages,
-  parseFinal: parsePresentationFinal,
-  parseLive: parsePresentationLive,
-} = require("./lib/presentation-evaluator");
+const { createPresentationHandlers } = require("./lib/presentation-handlers");
 const {
   normalizeSpeech,
   isStopLike,
@@ -314,6 +310,10 @@ fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 const { routeAndroidOta, health: androidOtaHealth } = createAndroidOtaHandlers({
   androidOta, otaDir: ANDROID_OTA_DIR, authorized, sendJson, cleanError,
   externalOriginForRequest, recordProductEventBestEffort,
+});
+const { routePresentation } = createPresentationHandlers({
+  authorized, sendJson, readJsonBody, sanitizeOptionalId, listVoiceTurnsForSession,
+  callModel, effectiveProfile: () => agentProfile.effective(), cleanError,
 });
 const browserTurnStore = browserTurns.createBrowserTurnStore({ turnsDir: BROWSER_TURNS_DIR, evidenceDir: BROWSER_EVIDENCE_DIR });
 const browserTurnLifecycle = browserTurns.createBrowserTurnLifecycle({
@@ -1453,15 +1453,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    // Judge a live pitch. The caller passes a session_id (whose voice turns are
-    // the transcript), the deck beats as ground truth, and a mode: "live" for a
-    // one-line nudge mid-pitch, "final" for the scorecard + verdict at the end.
-    if (request.method === "POST" && url.pathname === "/v1/presentation/evaluate") {
-      if (!authorized(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handlePresentationEvaluate(request, response);
+    if (await routePresentation(request, response, url)) {
       return;
     }
 
@@ -1561,48 +1553,6 @@ function ownerUserId() {
 
 function ownerActor() {
   return { kind: "user", id: ownerUserId() };
-}
-
-// Evaluate a presentation. Reads the session's voice turns as the transcript
-// (or accepts `turns` inline for testing), feeds them + the deck beats through
-// the evaluator, and returns a nudge (live) or a scorecard + verdict (final).
-async function handlePresentationEvaluate(request, response) {
-  const body = await readJsonBody(request);
-  const mode = body.mode === "live" ? "live" : "final";
-  const sessionId = body.session_id ? sanitizeOptionalId(body.session_id, "default") : null;
-  const turns = Array.isArray(body.turns) && body.turns.length
-    ? body.turns
-    : sessionId
-    ? listVoiceTurnsForSession(sessionId)
-    : [];
-
-  if (turns.length === 0) {
-    sendJson(response, 400, { error: "no transcript: pass session_id with captured turns, or turns inline" });
-    return;
-  }
-
-  const messages = buildEvaluatorMessages({
-    deck: body.deck,
-    turns,
-    mode,
-    elapsedSec: Number(body.elapsed_sec),
-  });
-
-  let reply;
-  try {
-    reply = await callModel(messages, agentProfile.effective());
-  } catch (error) {
-    sendJson(response, 502, { error: `evaluator model call failed: ${cleanError(error)}` });
-    return;
-  }
-
-  const result = mode === "live" ? parsePresentationLive(reply) : parsePresentationFinal(reply);
-  sendJson(response, 200, {
-    mode,
-    session_id: sessionId,
-    turns_seen: turns.length,
-    ...result,
-  });
 }
 
 // Connections are scoped to an authenticated user. Until the better-auth user
