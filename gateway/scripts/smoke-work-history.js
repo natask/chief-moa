@@ -411,6 +411,42 @@ async function assertDeploymentLinks(baseUrl) {
   assert.doesNotMatch(links.json.display, /app\.example\.test/);
   assert.equal(links.json.work_history.latest_applied_id, "");
   assert.equal(await countDeploymentRecords(), beforeCount, "a link question must not create deployment records");
+
+  // Crash-after-effect recovery is an apply-only authority. The server binds
+  // the adopting worker to the scoped promoter credential, never request JSON.
+  const applyClaim = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/claim`, {
+    operation: "apply", claim_id: "smoke-apply-original",
+    lease_expires_at: new Date(Date.now() + 75).toISOString(),
+  }, PROMOTER_TOKEN);
+  assert.equal(applyClaim.status, 200, JSON.stringify(applyClaim.json));
+  const effect = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/effect`, {
+    operation: "apply", claim_id: applyClaim.json.claim_id, effect_id: "smoke-apply-effect",
+    deployment_id: "smoke-active-deployment", target: "gateway",
+    active_url: "https://app.example.test", artifact_refs: ["artifact://smoke"],
+    backup_record_ref: "backup://smoke", restore_check_ref: "restore://smoke",
+    smoke_artifact_ref: "smoke://post-apply", rollback_ref: "rollback://smoke",
+    drain_status: "drained", compatibility_status: "compatible",
+  }, PROMOTER_TOKEN);
+  assert.equal(effect.status, 201, JSON.stringify(effect.json));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const adoptionBody = {
+    operation: "apply", effect_id: "smoke-apply-effect", claim_id: "smoke-apply-recovery",
+    worker_id: "forged-worker", lease_expires_at: new Date(Date.now() + 60000).toISOString(),
+    reason: "smoke crash recovery",
+  };
+  assert.equal((await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/adopt`, adoptionBody)).status, 400,
+    "general user credential cannot adopt an apply effect");
+  assert.equal((await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/adopt`, adoptionBody, PREVIEW_TOKEN)).status, 400,
+    "preview credential cannot adopt an apply effect");
+  const adopted = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/adopt`, adoptionBody, PROMOTER_TOKEN);
+  assert.equal(adopted.status, 200, JSON.stringify(adopted.json));
+  assert.equal(adopted.json.effect_adoptions.at(-1).adopted_by_worker_id, "production-promoter",
+    "adoption identity must come from the scoped credential");
+  const recoveredReceipt = await postJson(`${baseUrl}/v1/work-history/deployments/requests/${requestId}/receipt`, {
+    operation: "apply", effect_id: "smoke-apply-effect", claim_id: "smoke-apply-recovery",
+  }, PROMOTER_TOKEN);
+  assert.equal(recoveredReceipt.status, 200, JSON.stringify(recoveredReceipt.json));
+  assert.equal(recoveredReceipt.json.status, "applied");
 }
 
 async function assertUiOpen(baseUrl, runId) {

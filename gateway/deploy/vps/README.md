@@ -127,7 +127,37 @@ against a scratch stack, move the checkout, rebuild the gateway image,
 recreate only the gateway container. Postgres, Caddy, and all volumes stay up
 and untouched; schema changes apply on gateway boot (`schema.sql` is
 idempotent). If the backup or restore check fails, the update stops before
-touching the active service.
+touching the active service. After the checkout begins to move, failures through
+checkout, build, final evidence validation, container recreation, health, and
+Caddy reload idempotently restore the previous checkout, gateway, edge config,
+and prior local receipt.
+
+The M4 effect is the point of no blind return. Immediately before sending it,
+the promoter atomically writes a durable phase journal. If the effect request
+may have been accepted, the candidate remains active even when the client sees
+an error: rolling it back would contradict immutable M4 state. The failed
+command preserves its original exit code and prints the recovery command. Run:
+
+```sh
+scripts/vps/recover-promotion.sh \
+  --journal /opt/chief-moa/app/.deploy-markers/gateway-promotion-journal.json
+```
+
+Recovery queries M4 and never reapplies or restarts the gateway. It receipts an
+existing effect using the original live claim, or—after claim expiry—requires a
+current scoped apply credential and explicit `MOA_RECOVERY_WORKER_ID` and
+`MOA_RECOVERY_CLAIM_ID` for audited adoption. If M4 already has the receipt, it
+only recreates the verified local mirror. The journal and retained prior receipt
+backup are cleared after effect, immutable receipt, and local mirror all agree.
+
+The rollback/recovery boundary has a no-I/O adversarial harness:
+
+```sh
+bash scripts/vps/test-update-rollback.sh
+```
+
+It replaces Git, Docker, Caddy, health checks, evidence validation, and receipt
+recording with temporary fakes; it does not contact or mutate a live service.
 
 ## Promote A New Version From Your Workstation
 

@@ -3717,7 +3717,7 @@ async function routeWorkHistory(request, response, url) {
       sendJson(response, 200, { requests: await workHistory.pendingApprovedPreviewRequests({ limit: url.searchParams.get("limit") }) });
       return true;
     }
-    const deploymentRequestMatch = pathname.match(/^\/v1\/work-history\/deployments\/requests\/([^/]+)(?:\/(review|claim|verification|effect|receipt))?$/);
+    const deploymentRequestMatch = pathname.match(/^\/v1\/work-history\/deployments\/requests\/([^/]+)(?:\/(review|claim|verification|effect|adopt|receipt))?$/);
     if (deploymentRequestMatch) {
       const requestId = decodeURIComponent(deploymentRequestMatch[1]);
       const action = deploymentRequestMatch[2] || "";
@@ -3766,6 +3766,7 @@ async function routeWorkHistory(request, response, url) {
             sendJson(response, 201, result);
           }
           else if (action === "effect") sendJson(response, 201, await workHistory.observeDeploymentOperationEffect(controlled));
+          else if (action === "adopt") sendJson(response, 200, await workHistory.adoptDeploymentOperationEffect(controlled));
           else sendJson(response, 200, await workHistory.receiptDeploymentOperation(controlled));
         }
         return true;

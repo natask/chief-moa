@@ -33,6 +33,76 @@ done
 require_env_file
 cd "$APP_DIR"
 
+# Failures before a remote M4 effect can be accepted restore the old artifact.
+# Once an effect request is in flight, the durable journal forces forward
+# recovery: blindly rolling back would contradict immutable control-plane
+# state if the effect was accepted just before a crash or network failure.
+promotion_mutated=0
+promotion_complete=0
+rollback_running=0
+receipt_file="${MOA_PROMOTION_RECEIPT_FILE:-$APP_DIR/.deploy-markers/gateway-promotion-receipt.json}"
+promotion_journal="${MOA_PROMOTION_JOURNAL_FILE:-$APP_DIR/.deploy-markers/gateway-promotion-journal.json}"
+receipt_backup=""
+
+rollback_gateway() {
+  local rollback_failed=0 caddy_container=""
+  echo "Rolling gateway back to $old_full_sha" >&2
+  git -C "$APP_DIR" checkout --force --detach "$old_full_sha" || rollback_failed=1
+  compose build gateway || rollback_failed=1
+  compose up -d --no-deps gateway || rollback_failed=1
+  if [ -n "${port:-}" ]; then
+    wait_for_gateway_health "http://127.0.0.1:$port/health" 45 || rollback_failed=1
+  fi
+  # A later receipt failure can happen after a candidate Caddy reload. Restore
+  # the old checkout's edge configuration as part of the same rollback.
+  if [ "${caddy_changed:-0}" = "1" ]; then
+    caddy_container="$(compose ps -q caddy)" || rollback_failed=1
+    if [ -z "$caddy_container" ] \
+      || ! docker exec "$caddy_container" caddy validate --config /etc/caddy/Caddyfile \
+      || ! docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile; then
+      rollback_failed=1
+    fi
+  fi
+  rm -f -- "$receipt_file" || rollback_failed=1
+  if [ -n "$receipt_backup" ] && [ -f "$receipt_backup" ]; then
+    mv -f -- "$receipt_backup" "$receipt_file" || rollback_failed=1
+  fi
+  if [ "$rollback_failed" -ne 0 ]; then
+    echo "ROLLBACK FAILED for $old_full_sha; manual recovery is required; candidate promotion receipt is absent" >&2
+    return 1
+  fi
+  echo "Rollback restored $old_full_sha; candidate apply remains failed and unreceipted" >&2
+}
+
+promotion_exit() {
+  local original_status=$? rollback_status=0 phase=""
+  trap - EXIT
+  if [ "$original_status" -eq 0 ] || [ "$promotion_complete" -eq 1 ] \
+    || [ "$promotion_mutated" -eq 0 ] || [ "$rollback_running" -eq 1 ]; then
+    [ -z "$receipt_backup" ] || rm -f -- "$receipt_backup"
+    exit "$original_status"
+  fi
+  if [ -f "$promotion_journal" ]; then
+    phase="$(sed -n 's/.*"phase": "\([^"]*\)".*/\1/p' "$promotion_journal" | head -n 1)"
+  fi
+  case "$phase" in
+    effect_attempting|effect_observed|receipt_attempting|receipt_observed|mirror_attempting)
+      echo "PROMOTION RECOVERY REQUIRED: candidate remains active because M4 effect may be immutable (journal phase: $phase)" >&2
+      echo "Run: $SCRIPT_DIR/recover-promotion.sh --journal $promotion_journal" >&2
+      exit "$original_status"
+      ;;
+  esac
+  rollback_running=1
+  set +e
+  rollback_gateway
+  rollback_status=$?
+  if [ "$rollback_status" -ne 0 ]; then
+    echo "Promotion failed with status $original_status and rollback also failed" >&2
+  fi
+  exit "$original_status"
+}
+trap promotion_exit EXIT
+
 # Resolve and validate the exact candidate before any active mutation. The
 # manifest is produced only after the M4 request/review/preview/verification/
 # claim chain and records isolated preview, drain/resume, compatibility and
@@ -63,6 +133,15 @@ fi
 # single untracked file that the new ref tracks wedges every update.
 old_full_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
 old_sha="${old_full_sha:0:12}"
+port="$(env_value GATEWAY_PORT)"
+port="${port:-8787}"
+# Preserve the prior immutable receipt so a failed candidate cannot erase the
+# last known-good deployment record while ensuring its own receipt is absent.
+if [ -f "$receipt_file" ]; then
+  receipt_backup="${receipt_file}.pre-promotion.$$"
+  cp -p -- "$receipt_file" "$receipt_backup"
+fi
+promotion_mutated=1
 git -C "$APP_DIR" checkout --force --detach "origin/$REF" 2>/dev/null \
   || git -C "$APP_DIR" checkout --force --detach "$REF"
 new_sha="$(git -C "$APP_DIR" rev-parse --short HEAD)"
@@ -79,40 +158,39 @@ node "$SCRIPT_DIR/validate-promotion-evidence.js" \
   --control-plane-url "${MOA_CONTROL_PLANE_URL:-}"
 compose up -d --no-deps gateway
 
-port="$(env_value GATEWAY_PORT)"
-port="${port:-8787}"
 if ! wait_for_gateway_health "http://127.0.0.1:$port/health" 45; then
-  echo "Post-apply smoke failed; rolling back to $old_full_sha" >&2
-  git -C "$APP_DIR" checkout --force --detach "$old_full_sha"
-  compose build gateway
-  compose up -d --no-deps gateway
-  wait_for_gateway_health "http://127.0.0.1:$port/health" 45
-  echo "Rollback restored $old_full_sha; apply remains failed and unreceipted" >&2
+  echo "Post-apply smoke failed" >&2
   exit 1
 fi
-
-receipt_file="${MOA_PROMOTION_RECEIPT_FILE:-$APP_DIR/.deploy-markers/gateway-promotion-receipt.json}"
-node "$SCRIPT_DIR/record-promotion-receipt.js" \
-  --evidence "$EVIDENCE_FILE" --commit "$candidate_sha" --previous "$old_full_sha" \
-  --receipt "$receipt_file" --health-url "http://127.0.0.1:$port/health" \
-  --control-plane-url "${MOA_CONTROL_PLANE_URL:-}"
 
 # 4. If the Caddyfile changed in this update, apply it with a validated
 # graceful reload. Requires the directory mount (docker-compose.vps.yml);
 # reload keeps the old config on validation failure, so the front never
-# drops. Non-fatal: a reload failure leaves the previous routes serving.
+# drops. An edge-config failure rolls the candidate gateway back and cannot be
+# receipted as a successful apply.
+caddy_changed=0
 if ! git -C "$APP_DIR" diff --quiet "$old_sha" "$new_sha" -- gateway/deploy/vps/Caddyfile; then
+  caddy_changed=1
   caddy_container="$(compose ps -q caddy)"
-  if [ -n "$caddy_container" ]; then
-    if docker exec "$caddy_container" caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
-      docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile \
-        && echo "Caddyfile changed: reloaded caddy." \
-        || echo "WARNING: caddy reload failed; previous routes still serving." >&2
-    else
-      echo "WARNING: new Caddyfile failed validation; caddy keeps the old config." >&2
-    fi
+  if [ -z "$caddy_container" ] \
+    || ! docker exec "$caddy_container" caddy validate --config /etc/caddy/Caddyfile \
+    || ! docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile; then
+    echo "Caddy candidate validation/reload failed" >&2
+    exit 1
   fi
+  echo "Caddyfile changed: validated and reloaded caddy."
 fi
+
+# 5. Only after the complete edge-visible smoke succeeds, record the M4
+# observed effect and immutable receipt, then write the local receipt mirror.
+node "$SCRIPT_DIR/record-promotion-receipt.js" \
+  --evidence "$EVIDENCE_FILE" --commit "$candidate_sha" --previous "$old_full_sha" \
+  --receipt "$receipt_file" --receipt-backup "$receipt_backup" --journal "$promotion_journal" \
+  --health-url "http://127.0.0.1:$port/health" \
+  --control-plane-url "${MOA_CONTROL_PLANE_URL:-}"
+promotion_complete=1
+trap - EXIT
+[ -z "$receipt_backup" ] || rm -f -- "$receipt_backup"
 
 domain="$(env_value MOA_DOMAIN)"
 echo "Updated gateway $old_sha -> $new_sha"

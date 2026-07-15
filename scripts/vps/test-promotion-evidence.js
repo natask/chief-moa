@@ -56,10 +56,12 @@ for (const mutation of [
 ]) assert.notEqual(run({ ...base, ...mutation }).status, 0, JSON.stringify(mutation));
 const evidenceFile = path.join(os.tmpdir(), `moa-promotion-receipt-evidence-${process.pid}.json`);
 const receiptFile = path.join(os.tmpdir(), `moa-promotion-receipt-${process.pid}.json`);
+const journalFile = path.join(os.tmpdir(), `moa-promotion-journal-${process.pid}.json`);
 fs.writeFileSync(evidenceFile, JSON.stringify(base));
 let receiptResult = spawnSync(process.execPath, [receiptWriter,
   "--evidence", evidenceFile, "--commit", base.candidate_commit,
   "--previous", "b".repeat(40), "--receipt", receiptFile,
+  "--journal", journalFile,
   "--health-url", "http://127.0.0.1:8787/health",
 ], { encoding: "utf8", env: { ...process.env, MOA_ALLOW_OFFLINE_PROMOTION_EVIDENCE_TEST: "1" } });
 assert.equal(receiptResult.status, 0, receiptResult.stderr);
@@ -70,10 +72,13 @@ assert.equal(receipt.post_apply_smoke.status, "passed");
 receiptResult = spawnSync(process.execPath, [receiptWriter,
   "--evidence", evidenceFile, "--commit", "c".repeat(40),
   "--previous", "b".repeat(40), "--receipt", `${receiptFile}.bad`,
+  "--journal", `${journalFile}.bad`,
   "--health-url", "http://127.0.0.1:8787/health",
 ], { encoding: "utf8", env: { ...process.env, MOA_ALLOW_OFFLINE_PROMOTION_EVIDENCE_TEST: "1" } });
 assert.notEqual(receiptResult.status, 0);
 fs.rmSync(evidenceFile, { force: true });
 fs.rmSync(receiptFile, { force: true });
 fs.rmSync(`${receiptFile}.bad`, { force: true });
+fs.rmSync(journalFile, { force: true });
+fs.rmSync(`${journalFile}.bad`, { force: true });
 process.stdout.write("promotion evidence hostile tests passed (9 cases)\n");
