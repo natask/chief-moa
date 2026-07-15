@@ -14,6 +14,14 @@ on:
       - "android_app/**"
       - "gateway/server.js"
       - "gateway/scripts/smoke-main-machine.js"
+  # PRs run the credential-free verify+build so scripts/release/push-master.sh
+  # can prove a branch green before master moves; publishing stays manual.
+  pull_request:
+    paths:
+      - ".github/workflows/android-ota-vps.yml"
+      - "android_app/**"
+      - "gateway/server.js"
+      - "gateway/scripts/smoke-main-machine.js"
   workflow_dispatch:
     inputs:
       publish:

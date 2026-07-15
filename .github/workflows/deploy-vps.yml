@@ -20,6 +20,15 @@ on:
       - "docker-compose.yml"
       - "docker-compose.vps.yml"
       - "scripts/vps/**"
+  # PRs run the SAME verification so scripts/release/push-master.sh can prove a
+  # branch green before master ever moves; only the ref publish is push-gated.
+  pull_request:
+    paths:
+      - ".github/workflows/deploy-vps.yml"
+      - "gateway/**"
+      - "docker-compose.yml"
+      - "docker-compose.vps.yml"
+      - "scripts/vps/**"
   workflow_dispatch: {}
 
 concurrency:
@@ -49,10 +58,15 @@ jobs:
         run: |
           set -euo pipefail
           cd gateway
-          npm install --no-audit --no-fund
-          npm run check
+          # Same installer and lockfile as dev and the Docker image: what gets
+          # verified is what ships.
+          corepack enable
+          corepack prepare --activate
+          pnpm install --frozen-lockfile
+          pnpm run check
 
       - name: Publish vps-deploy ref
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail

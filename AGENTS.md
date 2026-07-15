@@ -98,9 +98,17 @@ to master that touches the gateway deploy path is verified by the
 a systemd timer on the droplet (`scripts/vps/auto-update.sh`) promotes that
 ref within ~2 minutes through `scripts/vps/update.sh`, whose backup +
 restore-check gate still aborts before touching the service if either fails.
-Agents deploy the gateway by merging verified work to master and pushing when
-the active-promotion gate below passes. If the gate is not proven, they wait.
+Agents deploy the gateway by merging verified work to master when the
+active-promotion gate below passes. If the gate is not proven, they wait.
 Manual promotion (`scripts/vps/push.sh`) uses the same gate.
+
+Master is moved ONLY through `scripts/release/push-master.sh`, never by a
+direct `git push origin <branch>:master`. The script pushes the branch, opens
+a PR so the same CI workflows verify it branch-side, waits for green, and
+fast-forwards master only then — a red run burns on the branch instead of on
+the deploy ref. When extension sources changed, pick the version with
+`scripts/release/next-extension-version.sh` (it scans every ref so parallel
+branches never collide).
 
 ## Active Promotion Safety
 
