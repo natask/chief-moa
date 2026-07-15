@@ -238,6 +238,13 @@
       default-clock tests plus both browser-task end-to-end smokes. Enforce a
       focused 90% line/branch/function gate, verified at 100% lines, 96.61%
       branches, and 100% functions. Reduce `server.js` to 13,893 lines.
+- [x] 2.44 Extract authenticated browser role, turn creation, evidence
+      completion, and lifecycle-status routing from `server.js`; add exhaustive
+      authorization, input, modality, build-error, locator-alias, missing-turn,
+      evidence-content, request-linkage, page-ref, deduplication, persistence,
+      and default-clock tests plus browser routing, continuity, and agent-loop
+      smokes. Enforce a focused 90% line/branch/function gate, verified at 100%
+      lines, 95% branches, and 100% functions. Reduce `server.js` to 13,772 lines.
 
 ## 3. Other Oversized Surfaces
 
