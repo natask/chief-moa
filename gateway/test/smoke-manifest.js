@@ -36,6 +36,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/event-project-handlers.js",
   "lib/device-tool-handlers.js",
   "lib/browser-task-handlers.js",
+  "lib/browser-turn-handlers.js",
   "lib/project-store.js",
   "lib/intent-runtime.js",
   "lib/intent-runtime-router.js",
