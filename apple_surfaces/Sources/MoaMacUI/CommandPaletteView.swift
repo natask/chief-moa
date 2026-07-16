@@ -42,10 +42,24 @@ public struct CommandPaletteView: View {
             }
 
             if !model.reply.isEmpty {
-                ScrollView {
-                    Text(model.reply)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 8) {
+                    ScrollView {
+                        Text(model.reply)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    if model.replyIsDerivedCandidate {
+                        HStack {
+                            Text("Screen-aware candidate · no action executed")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Insert candidate at prior cursor") {
+                                Task { await model.insertDerivedCandidateAtPriorCursor() }
+                            }
+                            .disabled(!model.hasInsertionTarget)
+                        }
+                    }
                 }
                 .frame(maxHeight: 100)
                 .padding(12)
@@ -113,6 +127,12 @@ public struct CommandPaletteView: View {
             Text(model.voiceState.message)
                 .font(.caption2)
                 .foregroundStyle(model.voiceState.phase == .denied || model.voiceState.phase == .failed ? .red : .secondary)
+
+            Button("Ask with current app…") {
+                Task { await model.askWithCurrentApp(); promptFocused = true }
+            }
+            .disabled(model.isSending || model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .help("Uses one already-active network-enabled Screen Context grant, shows the exact scope, and asks for final approval")
 
             Text("\(shortcutLabel) to toggle · Return to send · hold the mic to transcribe · insertion always previews and confirms")
                 .font(.caption2)

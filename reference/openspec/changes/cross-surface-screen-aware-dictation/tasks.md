@@ -121,8 +121,11 @@ reserved for a later integration ticket.
 
 ## 10. macOS screen-aware actions
 
-- [ ] 10.1 Connect the separately granted focused-window evidence flow to Ask
+- [x] 10.1 Connect the separately granted focused-window evidence flow to Ask
       and bounded local proposals without widening screenshot authority.
+- [ ] 10.2 Run isolated installed-app Screen Recording, Accessibility, grant
+      expiry, focus-change, and real gateway QA for the exact candidate without
+      replacing the user's active TCC identity.
 - Allowed paths: macOS coordinator/action integration and focused tests.
 - Depends on: tickets 2, 6, and 9.
 - Acceptance: a screen-based draft is inert until local approval; Stop or grant

@@ -39,13 +39,21 @@ public protocol GatewayChatSending: Sendable {
     func send(_ request: GatewayChatRequest, bearerToken: String) async throws -> GatewayChatReply
 }
 
-public struct URLSessionGatewayChatSender: GatewayChatSending {
+public struct URLSessionGatewayChatSender: GatewayChatSending, ScreenAwareChatSending {
     public init() {}
     public func send(_ chat: GatewayChatRequest, bearerToken: String) async throws -> GatewayChatReply {
+        try await send(endpoint: chat.endpoint, body: chat.body, bearerToken: bearerToken)
+    }
+
+    public func send(_ chat: GatewayScreenAwareChatRequest, bearerToken: String) async throws -> GatewayChatReply {
+        try await send(endpoint: chat.endpoint, body: chat.body, bearerToken: bearerToken)
+    }
+
+    private func send(endpoint: URL, body: Data, bearerToken: String) async throws -> GatewayChatReply {
         guard !bearerToken.isEmpty else { throw MoaMacError.missingToken }
-        var request = URLRequest(url: chat.endpoint)
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.httpBody = chat.body
+        request.httpBody = body
         request.timeoutInterval = 45
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
@@ -70,6 +78,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public var token: String
     @Published public var prompt = ""
     @Published public private(set) var reply = ""
+    @Published public private(set) var replyIsDerivedCandidate = false
     @Published public private(set) var status = "Ready"
     @Published public private(set) var isSending = false
     @Published public private(set) var voiceState = VoiceTranscriptState()
@@ -80,6 +89,10 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     private let voiceController: any VoiceCaptureControlling
     private let insertionCoordinator: TranscriptInsertionCoordinator
     private let insertionApprover: any TranscriptInsertionApproving
+    private let currentAppAsk: CurrentAppAskCoordinator
+    private let currentAppAskApprover: any CurrentAppAskApproving
+    private let currentAppAskScope: any CurrentAppAskScopeValidating
+    private let screenAwareSender: any ScreenAwareChatSending
     private let sessionID: String
     private var voiceGeneration: UInt64 = 0
     private var voiceReleaseRequested = false
@@ -93,7 +106,10 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
                 adapter: SystemTranscriptInsertionAXAdapter(),
                 journal: SystemTranscriptReceiptJournal.make()
             ),
-            insertionApprover: SystemTranscriptInsertionApprover()
+            insertionApprover: SystemTranscriptInsertionApprover(),
+            currentAppAsk: SystemCurrentAppAskContext.shared,
+            currentAppAskApprover: SystemCurrentAppAskApprover(),
+            currentAppAskScope: CurrentAppAskWorkspaceScope()
         )
     }
 
@@ -102,7 +118,11 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         sender: any GatewayChatSending,
         voiceController: (any VoiceCaptureControlling)? = nil,
         insertionCoordinator: TranscriptInsertionCoordinator? = nil,
-        insertionApprover: (any TranscriptInsertionApproving)? = nil
+        insertionApprover: (any TranscriptInsertionApproving)? = nil,
+        currentAppAsk: CurrentAppAskCoordinator = CurrentAppAskCoordinator(),
+        currentAppAskApprover: (any CurrentAppAskApproving)? = nil,
+        currentAppAskScope: (any CurrentAppAskScopeValidating)? = nil,
+        screenAwareSender: (any ScreenAwareChatSending)? = nil
     ) {
         self.store = store
         self.sender = sender
@@ -112,6 +132,16 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             journal: InMemoryTranscriptReceiptJournal()
         )
         self.insertionApprover = insertionApprover ?? SystemTranscriptInsertionApprover()
+        self.currentAppAsk = currentAppAsk
+        self.currentAppAskApprover = currentAppAskApprover ?? SystemCurrentAppAskApprover()
+        self.currentAppAskScope = currentAppAskScope ?? CurrentAppAskWorkspaceScope()
+        if let screenAwareSender {
+            self.screenAwareSender = screenAwareSender
+        } else if let compatibleSender = sender as? any ScreenAwareChatSending {
+            self.screenAwareSender = compatibleSender
+        } else {
+            self.screenAwareSender = URLSessionGatewayChatSender()
+        }
         origin = store.loadOrigin()
         token = store.loadToken()
         sessionID = store.loadSessionID()
@@ -126,11 +156,18 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     }
 
     public func insertTranscriptAtPriorCursor() async {
-        let transcript = voiceState.final
+        await insertCandidate(voiceState.final, success: "Transcript inserted — no click or submit performed")
+    }
+
+    public func insertDerivedCandidateAtPriorCursor() async {
+        await insertCandidate(reply, success: "Candidate inserted — no click or submit performed")
+    }
+
+    private func insertCandidate(_ candidate: String, success: String) async {
         do {
-            _ = try await insertionCoordinator.insertLiteralTranscript(transcript, approver: insertionApprover)
+            _ = try await insertionCoordinator.insertLiteralTranscript(candidate, approver: insertionApprover)
             hasInsertionTarget = false
-            status = "Transcript inserted — no click or submit performed"
+            status = success
         } catch TranscriptInsertionError.denied {
             status = "Insertion canceled — no text changed"
         } catch TranscriptInsertionError.secureTarget {
@@ -180,6 +217,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             let request = try GatewayChatRequest(origin: url, sessionID: sessionID, prompt: prompt)
             let result = try await sender.send(request, bearerToken: token)
             reply = result.text
+            replyIsDerivedCandidate = false
             prompt = ""
             status = "Reply received"
         } catch GatewayChatTransportError.unauthorized {
@@ -197,9 +235,54 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         }
     }
 
+    public func askWithCurrentApp() async {
+        guard !isSending else { return }
+        isSending = true
+        status = "Preparing current-app scope…"
+        defer { isSending = false }
+        do {
+            guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
+            let result = try await currentAppAsk.ask(
+                origin: url,
+                sessionID: sessionID,
+                prompt: prompt,
+                bearerToken: token,
+                now: Date.init,
+                approver: currentAppAskApprover,
+                scope: currentAppAskScope,
+                sender: screenAwareSender
+            )
+            reply = result.text
+            replyIsDerivedCandidate = true
+            prompt = ""
+            status = "Screen-aware candidate ready — inert until you choose insertion"
+        } catch CurrentAppAskError.unavailable {
+            status = "Start a network-enabled one-app Screen Context grant first"
+        } catch CurrentAppAskError.staleEvidence {
+            status = "Current-app evidence expired — no request sent"
+        } catch CurrentAppAskError.destinationChanged {
+            status = "Gateway destination changed — no request sent"
+        } catch CurrentAppAskError.scopeChanged {
+            status = "App or focused window changed — candidate discarded"
+        } catch CurrentAppAskError.cancelled, MoaMacError.cancelled {
+            status = "Screen-aware Ask canceled — evidence stripped"
+        } catch CurrentAppAskError.approvalMismatch {
+            status = "Approval no longer matches the exact request"
+        } catch GatewayChatTransportError.unauthorized {
+            status = "Gateway rejected the token"
+        } catch GatewayChatError.emptyPrompt {
+            status = "Type what you want Aggie to do with the current app"
+        } catch GatewayChatError.promptTooLarge {
+            status = "That message or evidence is too large"
+        } catch {
+            status = "Screen-aware Ask failed — evidence stripped"
+        }
+    }
+
     public func resetPresentation() {
         prompt = ""
         reply = ""
+        replyIsDerivedCandidate = false
         status = "Ready"
         voiceState.apply(.reset)
         insertionCoordinator.clear()

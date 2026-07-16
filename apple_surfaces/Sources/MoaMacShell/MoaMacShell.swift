@@ -126,6 +126,42 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     }
 }
 
+public enum SystemCurrentAppAskContext {
+    public static let shared = CurrentAppAskCoordinator()
+}
+
+struct CurrentAppAskWorkspaceScope: CurrentAppAskScopeValidating, @unchecked Sendable {
+    func validate(process: ProcessIdentity, focusedWindowID: UInt32?) async -> Bool {
+        await MainActor.run {
+            guard let live = NSRunningApplication(processIdentifier: process.pid),
+                  ProcessInspector.identity(live) == process,
+                  let front = NSWorkspace.shared.frontmostApplication,
+                  front.processIdentifier == process.pid || front.processIdentifier == ProcessInfo.processInfo.processIdentifier else {
+                return false
+            }
+            return AXCapture.snapshot(pid: process.pid).2 == focusedWindowID
+        }
+    }
+}
+
+@MainActor final class SystemCurrentAppAskApprover: CurrentAppAskApproving, @unchecked Sendable {
+    func approve(_ preview: CurrentAppAskPreview) async throws -> String {
+        let screenshotScope: String
+        if let digest = preview.screenshotSHA256 {
+            screenshotScope = "Focused-window JPEG: included (\(preview.screenshotBytes) bytes, SHA-256 \(digest))"
+        } else {
+            screenshotScope = "Focused-window JPEG: excluded or unavailable"
+        }
+        let alert = NSAlert()
+        alert.messageText = "Ask with this exact current-app scope?"
+        alert.informativeText = "Destination: POST \(preview.destination.absoluteString)\nRedirect: error\nApplication: \(preview.applicationBundleID)\nFocused window: \(preview.windowTitle)\n\(screenshotScope)\nGrant expires: \(preview.expiresAt.formatted())\nRequest SHA-256: \(preview.bodySHA256)\n\nSemantic evidence (exact):\n\(preview.semanticSummary)\n\nThe reply is inert. It will not click, insert, or send. Cursor insertion remains a separate confirmation."
+        alert.addButton(withTitle: "Send exact scope")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { throw MoaMacError.cancelled }
+        return preview.bodySHA256
+    }
+}
+
 @available(macOS 14.0, *) private enum WindowCapture {
     static func capture(id: CGWindowID, pid: pid_t) async throws -> ScreenshotEvidence {
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
@@ -155,14 +191,17 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     @Published public var paused = true
     @Published public var mode: ReleaseMode = .localOnly; @Published public var appName = "No app selected"; @Published public var suggestion = ""
     private let grants = GrantStore(); private lazy var coordinator = SuggestionCoordinator(grants: grants)
+    private let currentAppAsk: CurrentAppAskCoordinator
     private var identity: ProcessIdentity?; private var observer: AXSession?; private var task: Task<Void, Never>?; private var generation: UInt64 = 0
     private let inspectIdentity: @MainActor (NSRunningApplication) -> ProcessIdentity?
     public init() {
+        currentAppAsk = SystemCurrentAppAskContext.shared
         inspectIdentity = ProcessInspector.identity
         token = KeychainToken.load() ?? ""
         origin = UserDefaults.standard.string(forKey: "moa.gateway.origin") ?? ""
     }
-    init(selectedIdentity: ProcessIdentity, appName: String) {
+    init(selectedIdentity: ProcessIdentity, appName: String, currentAppAsk: CurrentAppAskCoordinator = CurrentAppAskCoordinator()) {
+        self.currentAppAsk = currentAppAsk
         inspectIdentity = { _ in selectedIdentity }
         token = KeychainToken.load() ?? ""
         identity = selectedIdentity
@@ -190,6 +229,7 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     public func deleteToken() { KeychainToken.delete(); token = ""; status = "Token deleted from Keychain" }
     public func start() async {
         generation &+= 1; let requestedGeneration = generation; task?.cancel(); observer?.stop(); observer = nil
+        await currentAppAsk.revoke()
         guard AXIsProcessTrusted(), let identity, let live = NSRunningApplication(processIdentifier: identity.pid), inspectIdentity(live) == identity else { status = "Select a live app and enable Accessibility first"; return }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == identity.pid else { status = "Selected app must be frontmost when starting"; return }
         let destination: URL? = mode == .localOnly ? nil : URL(string: origin)
@@ -208,9 +248,9 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
             paused = false; status = "Active for 15 minutes — \(appName), \(mode.rawValue)"; refresh()
         } catch { status = "Cannot start: invalid gateway origin or grant" }
     }
-    public func pause() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await grants.stop(); paused = true; status = "Paused and revoked — press Start again for a new grant" }
+    public func pause() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await currentAppAsk.revoke(); await grants.stop(); paused = true; status = "Paused and revoked — press Start again for a new grant" }
     public func resume() { status = "Pause revoked the grant — press Start again" }
-    public func stop() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await grants.stop(); paused = true; suggestion = ""; status = "Stopped — context purged" }
+    public func stop() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await currentAppAsk.revoke(); await grants.stop(); paused = true; suggestion = ""; status = "Stopped — context purged" }
     private func refresh() {
         guard !paused, let identity, let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier == identity.pid, inspectIdentity(front) == identity else { Task { await stop() }; return }
         task?.cancel(); task = Task { [weak self] in
@@ -223,6 +263,13 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
                   AXCapture.snapshot(pid: identity.pid).2 == captured.2 else { await stop(); return }
             guard !Task.isCancelled else { return }
             let observation = Observation(observationID: UUID().uuidString, capturedAt: Date(), app: .init(bundleID: identity.bundleID, name: appName), window: .init(title: captured.1), ax: captured.0, screenshot: image)
+            if grant.mode != .localOnly {
+                do {
+                    try await currentAppAsk.publishVerified(grant: grant, observation: observation, focusedWindowID: captured.2)
+                } catch {
+                    await currentAppAsk.revoke()
+                }
+            }
             do {
                 let result = try await coordinator.suggest(observation: observation, process: identity, origin: mode == .localOnly ? nil : URL(string: origin), token: token, now: Date.init,
                     approver: mode == .askEachTime ? UIApprover() : nil, transport: mode == .localOnly ? nil : EphemeralTransport(), scope: WorkspaceScope(), focusedWindowID: captured.2)

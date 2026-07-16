@@ -120,6 +120,35 @@ one-shot even while its snapshot and expiry remain current.
 - **WHEN** a consumed proposal id/nonce is submitted again
 - **THEN** it is rejected without AX mutation
 
+### Requirement: Screen-aware Ask is an explicit one-shot composition
+The macOS command surface SHALL attach current-app evidence to `/v1/chat` only
+when the user invokes **Ask with current app**, an already-active verified
+network-enabled one-app observation grant contains fresh evidence, and a final
+approval matches the exact destination and request digest. The reply SHALL be
+an inert text candidate.
+
+#### Scenario: User approves the exact current-app scope
+- **WHEN** the user invokes Ask with current app while the bound app/process,
+      focused window, grant, destination, and optional screenshot authority are
+      unchanged
+- **THEN** the approval shows the exact semantic evidence, screenshot
+      included/missing state and digest, destination, expiry, and request digest
+- **AND** one ephemeral `assistant_response` request carries gateway-compatible
+      `screen_evidence`
+- **AND** the returned text performs no click, insertion, focus, or submit
+
+#### Scenario: Grant or scope changes during composition
+- **WHEN** Stop, grant expiry, app/process/signing change, another foreground
+      application, focused-window change, or destination change occurs before
+      release completes
+- **THEN** queued work is canceled, cached evidence is stripped, and no
+      candidate is accepted
+
+#### Scenario: User inserts the derived candidate
+- **WHEN** the user separately chooses insertion for the inert candidate
+- **THEN** the existing exact-text confirmation, target/state revalidation, and
+      local receipt flow applies without widening AX action authority
+
 ### Requirement: Literal transcription insertion remains locally state-bound
 The macOS surface SHALL treat final voice transcription as literal user text,
 not a model action. Before Moa takes focus it SHALL bind the prior application

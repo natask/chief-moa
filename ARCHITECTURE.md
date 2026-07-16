@@ -244,6 +244,21 @@ remain gateway-owned. This is the first daily companion slice; ticketed live
 voice, shared session-event presentation, pointer overlays, and approved native
 actions remain staged work.
 
+An explicit `Ask with current app` command is the only composition between the
+typed panel and screen context. It can consume one fresh observation only from
+an already-active, verified, network-enabled one-app grant. The final approval
+shows the exact `/v1/chat` destination, bounded semantic JSON, focused-window
+scope, optional JPEG byte count/digest, expiry, and exact request digest. The
+request uses `delivery_intent: assistant_response` plus the gateway's
+`moa.screen-evidence.v1`-compatible `screen_evidence`; screenshot bytes exist
+only in that ephemeral request and only when focused-window capture was enabled
+for the grant. Stop, expiry, process/signing change, another foreground app, or
+focused-window change invalidates queued work and strips the cached evidence.
+The returned text is an inert candidate. Reusing it with the existing cursor
+insertion path requires a second exact-text confirmation and full target/state
+revalidation; Ask itself never clicks, inserts, focuses, submits, or expands AX
+action authority.
+
 The privacy-scoped proactive flow remains separate:
 
 ```text

@@ -8,6 +8,7 @@ executable Sources/AggieSurfaceApp/AggieSurfaceApp.swift
 executable Sources/MoaMac/main.swift
 executable Sources/MoaMacCore/GatewayChat.swift
 executable Sources/MoaMacCore/GatewayVoice.swift
+executable Sources/MoaMacCore/CurrentAppAsk.swift
 executable Sources/MoaMacCore/MoaMacCore.swift
 executable Sources/MoaMacCore/PanelLayoutPolicy.swift
 executable Sources/MoaMacCore/TranscriptInsertion.swift
@@ -22,6 +23,7 @@ test Tests/AggieAppleSurfaceTests/AggieAppleSurfaceTests.swift
 test Tests/AggieAppleSurfaceTests/MacSurfaceAdapterTests.swift
 test Tests/MoaMacCoreTests/MoaMacCoreTests.swift
 test Tests/MoaMacCoreTests/GatewayVoiceTests.swift
+test Tests/MoaMacCoreTests/CurrentAppAskTests.swift
 test Tests/MoaMacCoreTests/PanelLayoutPolicyTests.swift
 test Tests/MoaMacCoreTests/TranscriptInsertionTests.swift
 operational Package.swift
