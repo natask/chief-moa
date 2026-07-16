@@ -164,8 +164,16 @@ def imePolicyClasses = files(
                 dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
                 includes: [
                         '**/MoaEditorSensitivityPolicy*.class',
-                        '**/MoaEditorSessionBinding*.class'
+                        '**/MoaEditorSessionBinding*.class',
+                        '**/MoaLiteralTranscriptPolicy*.class'
                 ]
+        )
+)
+
+def screenEvidenceEnvelopeClasses = files(
+        fileTree(
+                dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
+                includes: ['**/MoaScreenEvidenceEnvelope*.class']
         )
 )
 
@@ -209,9 +217,50 @@ tasks.register('verifyImePolicyCoverage', JacocoCoverageVerification) {
     }
 }
 
+tasks.register('reportScreenEvidenceEnvelopeCoverage', JacocoReport) {
+    group = 'verification'
+    description = 'Reports focused coverage for Android screen-evidence serialization.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(screenEvidenceEnvelopeClasses)
+    sourceDirectories.from(debugProductionSources)
+
+    reports {
+        xml.required = true
+        html.required = true
+        xml.outputLocation = layout.buildDirectory.file('reports/jacoco/screenEvidenceEnvelope/xml/report.xml')
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco/screenEvidenceEnvelope/html')
+    }
+}
+
+tasks.register('verifyScreenEvidenceEnvelopeCoverage', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Requires >=90% line, branch, and method coverage for screen-evidence serialization.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(screenEvidenceEnvelopeClasses)
+    sourceDirectories.from(debugProductionSources)
+
+    violationRules {
+        rule {
+            element = 'BUNDLE'
+            ['LINE', 'BRANCH', 'METHOD'].each { counterName ->
+                limit {
+                    counter = counterName
+                    value = 'COVEREDRATIO'
+                    minimum = new BigDecimal('0.90')
+                }
+            }
+        }
+    }
+}
+
 tasks.named('check') {
     dependsOn tasks.named('verifyDebugUnitTestCoverage')
     dependsOn tasks.named('verifyImePolicyCoverage')
+    dependsOn tasks.named('verifyScreenEvidenceEnvelopeCoverage')
 }
 
 dependencies {

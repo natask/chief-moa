@@ -1,11 +1,12 @@
 ## Why
 
 Chief Moa has strong voice, memory, browser-action, Android accessibility, and
-macOS observation primitives, but it does not yet replace Wispr Flow. Android
-does not capture pixels or provide an IME, and MoaMac is neither installed nor
-notch-native and has no transcription-to-cursor path. The work must remain
-separate by surface and authority so model output never becomes an executable
-command.
+macOS observation primitives, but it does not yet replace Wispr Flow. At this
+change's outset Android did not capture pixels or provide an IME; isolated
+Android candidates now exist but still require physical-phone QA and release
+integration. MoaMac is neither installed nor notch-native and has no proven
+transcription-to-cursor path. The work must remain separate by surface and
+authority so model output never becomes an executable command.
 
 ## User-approved outcome
 

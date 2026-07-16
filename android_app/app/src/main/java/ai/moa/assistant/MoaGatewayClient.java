@@ -42,6 +42,33 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    /**
+     * Future durable-dictation boundary. The caller must first upload real audio
+     * through uploadAudioNote; a SpeechRecognizer transcript is never presented
+     * as a stored capture block because it supplies no replayable raw audio.
+     */
+    JSONObject createCaptureBlockForAudioNote(
+            String audioNoteId,
+            String idempotencyKey,
+            String sessionId,
+            JSONArray inputLanguages
+    ) throws Exception {
+        String noteId = safe(audioNoteId);
+        String key = safe(idempotencyKey);
+        if (noteId.isEmpty() || key.isEmpty()) {
+            throw new IllegalArgumentException("audio note id and idempotency key are required");
+        }
+        JSONObject body = new JSONObject();
+        body.put("audio_note_id", noteId);
+        body.put("idempotency_key", key);
+        body.put("session_id", safe(sessionId));
+        body.put("source_surface", "android_ime");
+        if (inputLanguages != null) {
+            body.put("input_languages", inputLanguages);
+        }
+        return new JSONObject(postJson(apiEndpoint("/v1/capture-blocks"), body.toString(), 15000));
+    }
+
     // Set the active thread for the shared session, or mint a new/fork/incognito
     // branch. Streaming voice must call this before opening the WS session so the
     // socket branch is fixed to the resolved thread; the reply carries the

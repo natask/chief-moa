@@ -1,7 +1,16 @@
 package ai.moa.assistant;
 
+import android.Manifest;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.inputmethodservice.InputMethodService;
+import android.os.Bundle;
+import android.os.Build;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -11,17 +20,18 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /**
- * Opt-in local IME safety MVP. Production microphone/STT transport is intentionally absent;
- * the fixed local candidate proves editor gating and exact InputConnection insertion.
+ * Opt-in literal dictation IME. Android SpeechRecognizer supplies a transcript candidate;
+ * this service never receives durable audio and never calls a model, tool, submit action, or TTS.
  */
 public final class MoaInputMethodService extends InputMethodService {
-    static final String LOCAL_QA_CANDIDATE = "Moa IME local insertion test.";
-
     private final MoaEditorSessionBinding binding = new MoaEditorSessionBinding();
     private MoaEditorSessionBinding.SessionToken editorSession;
+    private MoaEditorSessionBinding.SessionToken recognitionSession;
+    private SpeechRecognizer speechRecognizer;
+    private boolean listening;
     private TextView statusView;
     private TextView candidateView;
-    private Button loadCandidateButton;
+    private Button dictateButton;
     private Button insertButton;
     private Button cancelButton;
 
@@ -32,7 +42,7 @@ public final class MoaInputMethodService extends InputMethodService {
         root.setPadding(dp(16), dp(12), dp(16), dp(12));
         root.setBackgroundColor(MoaColors.SURFACE_0);
 
-        statusView = text("Local insertion QA · no audio or network", MoaColors.MUTED, 13);
+        statusView = text("Dictate · Android speech service · no durable audio", MoaColors.MUTED, 13);
         root.addView(statusView);
 
         candidateView = text("", MoaColors.PAPER, 17);
@@ -43,9 +53,10 @@ public final class MoaInputMethodService extends InputMethodService {
         actions.setGravity(Gravity.CENTER_VERTICAL);
         root.addView(actions);
 
-        loadCandidateButton = button("Load QA text");
-        loadCandidateButton.setOnClickListener(view -> loadLocalCandidate());
-        actions.addView(loadCandidateButton, weightedButtonParams());
+        dictateButton = button("Hold to Dictate");
+        dictateButton.setContentDescription("Hold to dictate literal text, then release to finish");
+        dictateButton.setOnTouchListener((view, event) -> handleDictateTouch(event));
+        actions.addView(dictateButton, weightedButtonParams());
 
         insertButton = button("Insert");
         insertButton.setOnClickListener(view -> commitCandidate());
@@ -69,12 +80,14 @@ public final class MoaInputMethodService extends InputMethodService {
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
+        destroySpeechRecognizer();
         editorSession = binding.beginEditor(MoaEditorSensitivityPolicy.EditorIdentity.from(attribute));
         renderState(null);
     }
 
     @Override
     public void onFinishInput() {
+        destroySpeechRecognizer();
         binding.finishEditor();
         editorSession = null;
         renderState(null);
@@ -86,12 +99,124 @@ public final class MoaInputMethodService extends InputMethodService {
         return false;
     }
 
-    private void loadLocalCandidate() {
-        MoaEditorSessionBinding.Rejection rejection =
-                binding.stageCandidate(editorSession, LOCAL_QA_CANDIDATE);
-        renderState(rejection == MoaEditorSessionBinding.Rejection.NONE
-                ? "Local candidate ready"
-                : rejectionMessage(rejection));
+    @Override
+    public void onDestroy() {
+        destroySpeechRecognizer();
+        super.onDestroy();
+    }
+
+    private boolean handleDictateTouch(MotionEvent event) {
+        if (event == null) {
+            return true;
+        }
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            startLiteralRecognition();
+        } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+            stopLiteralRecognition();
+        } else if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            cancelLiteralRecognition("Dictation interrupted · no text inserted");
+        }
+        return true;
+    }
+
+    private void startLiteralRecognition() {
+        MoaEditorSensitivityPolicy.EditorIdentity observed =
+                MoaEditorSensitivityPolicy.EditorIdentity.from(getCurrentInputEditorInfo());
+        MoaEditorSessionBinding.Rejection rejection = binding.validateEditor(editorSession, observed);
+        if (rejection != MoaEditorSessionBinding.Rejection.NONE) {
+            binding.clearCandidate();
+            renderState(rejectionMessage(rejection));
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            renderState("Microphone permission is off · enable it in the A.G. app");
+            return;
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            renderState("Android speech recognition is unavailable");
+            return;
+        }
+
+        destroySpeechRecognizer();
+        binding.clearCandidate();
+        recognitionSession = editorSession;
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        speechRecognizer.setRecognitionListener(new LiteralRecognitionListener());
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+        String language = MoaPrefs.inputLanguageTag(this);
+        if (language != null && !language.trim().isEmpty()) {
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language.trim());
+        }
+        listening = true;
+        renderState("Listening · release to finish literal text");
+        try {
+            speechRecognizer.startListening(intent);
+        } catch (RuntimeException error) {
+            destroySpeechRecognizer();
+            renderState("Dictation could not start · no text inserted");
+        }
+    }
+
+    private void stopLiteralRecognition() {
+        if (!listening || speechRecognizer == null) {
+            return;
+        }
+        listening = false;
+        speechRecognizer.stopListening();
+        renderState("Finishing literal transcript…");
+    }
+
+    private void cancelLiteralRecognition(String status) {
+        if (speechRecognizer != null) {
+            speechRecognizer.cancel();
+        }
+        listening = false;
+        recognitionSession = null;
+        binding.clearCandidate();
+        renderState(status);
+    }
+
+    private void destroySpeechRecognizer() {
+        if (speechRecognizer != null) {
+            speechRecognizer.cancel();
+            speechRecognizer.destroy();
+            speechRecognizer = null;
+        }
+        listening = false;
+        recognitionSession = null;
+    }
+
+    private void stageRecognition(Bundle results, boolean finalResult) {
+        String literal = MoaLiteralTranscriptPolicy.firstLiteral(
+                results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+        );
+        MoaEditorSensitivityPolicy.EditorIdentity observed =
+                MoaEditorSensitivityPolicy.EditorIdentity.from(getCurrentInputEditorInfo());
+        MoaEditorSessionBinding.Rejection rejection = binding.validateEditor(recognitionSession, observed);
+        if (rejection != MoaEditorSessionBinding.Rejection.NONE) {
+            cancelLiteralRecognition(rejectionMessage(rejection));
+            return;
+        }
+        if (literal == null) {
+            if (finalResult) {
+                renderState("No speech recognized · no text inserted");
+            }
+            return;
+        }
+        rejection = binding.stageCandidate(recognitionSession, literal);
+        if (finalResult) {
+            listening = false;
+            renderState(rejection == MoaEditorSessionBinding.Rejection.NONE
+                    ? "Literal candidate ready · review before Insert"
+                    : rejectionMessage(rejection));
+        } else {
+            renderState(rejection == MoaEditorSessionBinding.Rejection.NONE
+                    ? "Listening · partial literal candidate"
+                    : rejectionMessage(rejection));
+        }
     }
 
     private void commitCandidate() {
@@ -118,7 +243,7 @@ public final class MoaInputMethodService extends InputMethodService {
     }
 
     private void switchKeyboard() {
-        if (!switchToNextInputMethod(false)) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !switchToNextInputMethod(false)) {
             InputMethodManager manager = getSystemService(InputMethodManager.class);
             if (manager != null) {
                 manager.showInputMethodPicker();
@@ -137,12 +262,13 @@ public final class MoaInputMethodService extends InputMethodService {
             candidateView.setText("");
         } else {
             statusView.setText(message == null
-                    ? "Local insertion QA · no audio or network"
+                    ? "Dictate · Android speech service · no durable audio"
                     : message);
             candidateView.setText(candidate == null ? "No candidate staged" : candidate);
         }
-        if (loadCandidateButton != null) {
-            loadCandidateButton.setEnabled(!sensitive);
+        if (dictateButton != null) {
+            dictateButton.setEnabled(!sensitive);
+            dictateButton.setText(listening ? "Release to finish" : "Hold to Dictate");
         }
         if (insertButton != null) {
             insertButton.setEnabled(!sensitive && candidate != null);
@@ -166,6 +292,58 @@ public final class MoaInputMethodService extends InputMethodService {
                 return "No active editor";
             default:
                 return "Insertion unavailable";
+        }
+    }
+
+    private final class LiteralRecognitionListener implements RecognitionListener {
+        @Override
+        public void onReadyForSpeech(Bundle params) {
+            renderState("Listening · release to finish literal text");
+        }
+
+        @Override
+        public void onBeginningOfSpeech() {
+            renderState("Listening · speaking detected");
+        }
+
+        @Override
+        public void onRmsChanged(float rmsdB) {
+        }
+
+        @Override
+        public void onBufferReceived(byte[] buffer) {
+            // SpeechRecognizer audio is not a durable capture block. Do not retain it.
+        }
+
+        @Override
+        public void onEndOfSpeech() {
+            listening = false;
+            renderState("Finishing literal transcript…");
+        }
+
+        @Override
+        public void onError(int error) {
+            listening = false;
+            recognitionSession = null;
+            binding.clearCandidate();
+            renderState(error == SpeechRecognizer.ERROR_NO_MATCH
+                    || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                    ? "No speech recognized · no text inserted"
+                    : "Dictation failed · no text inserted");
+        }
+
+        @Override
+        public void onResults(Bundle results) {
+            stageRecognition(results, true);
+        }
+
+        @Override
+        public void onPartialResults(Bundle partialResults) {
+            stageRecognition(partialResults, false);
+        }
+
+        @Override
+        public void onEvent(int eventType, Bundle params) {
         }
     }
 

@@ -682,18 +682,33 @@ listable (`GET /v1/audio-notes`) and playable
 only captures and stores. Contract:
 `reference/openspec/changes/record-mode-audio-notes/proposal.md`.
 
-### Android input method (local insertion candidate)
+### Android explicit Ask screen evidence
+
+The overlay's visible `Ask + screen` control is the only Android route that
+mints screenshot consent. One tap issues one package-bound, process-local
+capture capability and invokes the accessibility screenshot adapter once. The
+request carries current semantic context plus an optional
+`moa.screen-evidence.request.v1` JPEG envelope to the gateway with explicit
+`delivery_intent: assistant_response`. Secure content, permission denial,
+capture failure, or app/freshness drift releases no pixels and remains visible
+as a semantic-only or no-context fallback. The chat response is rendered as
+text only; this route does not execute action proposals. Android still owns
+validation, approval, execution, and receipts for any later local effect.
+
+### Android input method (literal dictation candidate)
 
 The opt-in `MoaInputMethodService` is a separate Android-owned input surface.
 It classifies each `EditorInfo` before showing candidate content, clears the
 ephemeral candidate whenever the editor generation changes, and revalidates the
 bound editor immediately before an exact `InputConnection.commitText` call.
-Password, private, missing, and unsupported editors fail closed. The initial
-candidate is fixed local QA text: this proves activation, sensitive-editor
-suppression, stale-editor refusal, and insertion without adding microphone,
-gateway transcription, accessibility typing, action expansion, or submit
-behavior. Production dictation remains dependent on the separately verified
-capture/transcription contract.
+Password, private, missing, and unsupported editors fail closed before
+recording, display, or insertion. An explicit hold invokes Android
+`SpeechRecognizer`; partial/final literal text remains editor-generation-bound
+and `Insert` is a separate exact `commitText(text, 1)` operation with no submit.
+This MVP neither calls a model nor claims durable audio: SpeechRecognizer does
+not expose the replayable raw audio required by the gateway capture-block
+contract. `MoaGatewayClient` exposes that future boundary only for a real,
+already stored audio-note id.
 
 ### Browser Extension Thin Client
 
@@ -1419,6 +1434,9 @@ queues.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaEditorSensitivityPolicy.java`
   and `MoaEditorSessionBinding.java`: pure fail-closed IME privacy and freshness
   policy with a focused 90-percent coverage gate.
+- `android_app/app/src/main/java/ai/moa/assistant/MoaScreenEvidenceEnvelope.java`:
+  gateway-compatible ephemeral Android screenshot serialization and visible
+  fallback copy, with a focused 90-percent coverage gate.
 - `gateway/server.js`: HTTP API, voice router, model calls,
   conversation storage, agent-run execution, device-client registry, and
   cross-device tool-request queue.

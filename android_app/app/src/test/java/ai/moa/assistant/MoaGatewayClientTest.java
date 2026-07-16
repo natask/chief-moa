@@ -1,6 +1,7 @@
 package ai.moa.assistant;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -177,6 +178,31 @@ public final class MoaGatewayClientTest {
         throw new AssertionError("Expected gateway error");
     }
 
+    @Test
+    public void captureBlockBoundaryRequiresStoredAudioAndPostsExplicitSource() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+
+        JSONObject response = client.createCaptureBlockForAudioNote(
+                "note_1",
+                "ime-1",
+                "session-1",
+                new JSONArray().put("en-US").put("am-ET")
+        );
+
+        assertEquals("capture_1", response.getJSONObject("capture_block").getString("id"));
+        assertEquals("/v1/capture-blocks", requests.get(0).path);
+        assertTrue(requests.get(0).body.contains("\"audio_note_id\":\"note_1\""));
+        assertTrue(requests.get(0).body.contains("\"source_surface\":\"android_ime\""));
+        assertTrue(requests.get(0).body.contains("am-ET"));
+
+        try {
+            client.createCaptureBlockForAudioNote("", "key", "session", null);
+        } catch (IllegalArgumentException expected) {
+            return;
+        }
+        throw new AssertionError("Expected missing stored audio to fail locally");
+    }
+
     private TestResponse responseFor(RequestRecord request) {
         requests.add(request);
         if (request.body.contains("\"mode\":\"error\"")) {
@@ -203,6 +229,8 @@ public final class MoaGatewayClientTest {
             return new TestResponse(200, "{\"store\":{\"type\":\"json-files\"},\"recent_runs\":[{\"id\":\"run_789\"}],\"recent_turns\":[],\"sessions\":[]}");
         } else if ("/v1/agent/profile".equals(request.path)) {
             return new TestResponse(200, "{\"profile\":{\"language\":\"am-ET\",\"language_primary\":\"am-ET\",\"input_languages\":\"am-ET,en-US\",\"input_language_primary\":\"am-ET\"}}");
+        } else if ("/v1/capture-blocks".equals(request.path)) {
+            return new TestResponse(202, "{\"capture_block\":{\"id\":\"capture_1\",\"transcription\":{\"state\":\"queued\"}}}");
         }
         return new TestResponse(404, "{\"error\":\"not found\"}");
     }

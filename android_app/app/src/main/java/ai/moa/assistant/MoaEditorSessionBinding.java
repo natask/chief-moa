@@ -72,6 +72,13 @@ final class MoaEditorSessionBinding {
                 || session.classification != MoaEditorSensitivityPolicy.Classification.ORDINARY;
     }
 
+    Rejection validateEditor(
+            SessionToken session,
+            MoaEditorSensitivityPolicy.EditorIdentity observedEditor
+    ) {
+        return validateSession(session, observedEditor);
+    }
+
     void clearCandidate() {
         candidate = null;
     }

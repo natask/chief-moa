@@ -1,6 +1,7 @@
 package ai.moa.assistant;
 
 import android.accessibilityservice.AccessibilityService;
+import android.annotation.TargetApi;
 import android.graphics.Bitmap;
 import android.graphics.ColorSpace;
 import android.hardware.HardwareBuffer;
@@ -36,6 +37,11 @@ final class MoaScreenshotCaptureAdapter {
             return;
         }
 
+        captureSupported(request, callback);
+    }
+
+    @TargetApi(Build.VERSION_CODES.R)
+    private void captureSupported(MoaScreenshotPolicy.Request request, Callback callback) {
         service.takeScreenshot(Display.DEFAULT_DISPLAY, service.getMainExecutor(),
                 new AccessibilityService.TakeScreenshotCallback() {
                     @Override
@@ -52,6 +58,7 @@ final class MoaScreenshotCaptureAdapter {
                 });
     }
 
+    @TargetApi(Build.VERSION_CODES.R)
     private void handleSuccess(
             MoaScreenshotPolicy.Request request,
             Callback callback,
@@ -128,6 +135,7 @@ final class MoaScreenshotCaptureAdapter {
         return false;
     }
 
+    @TargetApi(Build.VERSION_CODES.R)
     private static EncodedImage encodeBounded(AccessibilityService.ScreenshotResult result) {
         if (result == null) {
             return null;
@@ -186,6 +194,7 @@ final class MoaScreenshotCaptureAdapter {
         }
     }
 
+    @TargetApi(Build.VERSION_CODES.R)
     private static void closeBuffer(AccessibilityService.ScreenshotResult result) {
         if (result != null && result.getHardwareBuffer() != null) {
             result.getHardwareBuffer().close();

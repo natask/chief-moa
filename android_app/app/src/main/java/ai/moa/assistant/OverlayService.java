@@ -102,6 +102,9 @@ public final class OverlayService extends Service {
     private LinearLayout messageColumn;
     private ScrollView messageScroll;
     private EditText composer;
+    private TextView askWithScreenButton;
+    private TextView screenAskStatus;
+    private boolean screenAskInFlight;
     private TextView runStatusView;
     private View transcriptView;
     private LinearLayout voiceTranscriptColumn;
@@ -798,6 +801,8 @@ public final class OverlayService extends Service {
         composer = null;
         runStatusView = null;
         recordModePill = null;
+        askWithScreenButton = null;
+        screenAskStatus = null;
         newThreadPill = null;
         incognitoPill = null;
         contextControlsRow = null;
@@ -1559,6 +1564,15 @@ public final class OverlayService extends Service {
         panel.addView(createHeader());
         panel.addView(createContextControlsRow());
 
+        screenAskStatus = text(
+                "Ask + screen captures once · Dictate stays in the keyboard",
+                MoaColors.MUTED,
+                11,
+                false
+        );
+        screenAskStatus.setPadding(dp(6), dp(5), dp(6), 0);
+        panel.addView(screenAskStatus);
+
         messageScroll = new ScrollView(this);
         messageScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         messageScroll.setVerticalScrollBarEnabled(false);
@@ -1723,6 +1737,12 @@ public final class OverlayService extends Service {
         composer.setPadding(dp(12), dp(9), dp(8), dp(9));
         row.addView(composer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        askWithScreenButton = pill("Ask + screen", 0x16FFFFFF, MoaColors.MUTED);
+        askWithScreenButton.setContentDescription("Ask using one screenshot and current screen text");
+        askWithScreenButton.setOnClickListener(v -> sendComposerWithScreen());
+        row.addView(askWithScreenButton);
+        refreshScreenAskControl();
+
         // Round gold send button. 46dp target, gold brand accent.
         TextView send = new TextView(this);
         send.setText("↑");
@@ -1734,6 +1754,7 @@ public final class OverlayService extends Service {
         LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(46), dp(46));
         sendParams.leftMargin = dp(4);
         send.setLayoutParams(sendParams);
+        send.setContentDescription("Ask without a screenshot");
         send.setOnClickListener(v -> sendComposer(false));
         row.addView(send);
         return row;
@@ -1835,6 +1856,106 @@ public final class OverlayService extends Service {
         }
         composer.setText("");
         sendUserMessage(text, fromVoice);
+    }
+
+    /** Explicit Ask path. Capture consent is minted and consumed only by this visible tap. */
+    private void sendComposerWithScreen() {
+        if (composer == null || screenAskInFlight) {
+            return;
+        }
+        String text = composer.getText().toString().trim();
+        if (text.isEmpty()) {
+            setScreenAskStatus("Type what you want to ask before sharing the screen");
+            return;
+        }
+        if (gatewayUrl.isEmpty()) {
+            setScreenAskStatus("Gateway unavailable · screenshot was not captured");
+            deliverReply("The gateway isn't connected yet. Open the Moa app to set it up.", false);
+            return;
+        }
+
+        composer.setText("");
+        addMessage(false, text);
+        JSONObject requestBody;
+        JSONObject initialScreen = actionBroker.screenSnapshot();
+        String expectedPackage = initialScreen == null ? "" : initialScreen.optString("package", "");
+        try {
+            requestBody = gatewayRequestBody();
+            MoaScreenEvidenceEnvelope.markAssistantAsk(requestBody);
+        } catch (JSONException error) {
+            setScreenAskStatus("Ask could not be prepared · screenshot was not captured");
+            deliverReply("I couldn't send that. Try again.", false);
+            return;
+        }
+
+        screenAskInFlight = true;
+        refreshScreenAskControl();
+        setScreenAskStatus("Capturing one screenshot for this Ask…");
+        MoaScreenshotPolicy.Request consent = MoaScreenshotPolicy.Request.issueExplicitConsent(
+                expectedPackage,
+                System.currentTimeMillis()
+        );
+        MoaAccessibilityService.captureScreenshot(consent, new MoaScreenshotCaptureAdapter.Callback() {
+            @Override
+            public void onCaptured(MoaScreenshotCapture capture) {
+                mainHandler.post(() -> finishScreenAwareAsk(requestBody, capture, null));
+            }
+
+            @Override
+            public void onDenied(MoaScreenshotPolicy.DenialReason reason) {
+                mainHandler.post(() -> finishScreenAwareAsk(requestBody, null, reason));
+            }
+        });
+    }
+
+    private void finishScreenAwareAsk(
+            JSONObject requestBody,
+            MoaScreenshotCapture capture,
+            MoaScreenshotPolicy.DenialReason denial
+    ) {
+        screenAskInFlight = false;
+        refreshScreenAskControl();
+        try {
+            // Refresh semantic evidence after the asynchronous pixel capture so
+            // the gateway receives the context nearest the captured frame.
+            actionBroker.putScreenContext(requestBody);
+            String semanticSummary = actionBroker.currentScreenSummary();
+            if (capture != null) {
+                MoaScreenEvidenceEnvelope.attachToAsk(requestBody, capture, semanticSummary);
+                setScreenAskStatus("Screenshot attached once · model response remains a proposal");
+            } else {
+                setScreenAskStatus(MoaScreenEvidenceEnvelope.visibleFallback(
+                        denial,
+                        !semanticSummary.trim().isEmpty()
+                ));
+            }
+        } catch (Exception error) {
+            try {
+                MoaScreenEvidenceEnvelope.fallBackWithoutScreenshot(requestBody);
+            } catch (JSONException ignored) {
+                requestBody.remove("screen_evidence");
+            }
+            setScreenAskStatus(MoaScreenEvidenceEnvelope.visibleFallback(
+                    MoaScreenshotPolicy.DenialReason.IMAGE_UNAVAILABLE,
+                    !actionBroker.currentScreenSummary().trim().isEmpty()
+            ));
+        }
+        dispatchGatewayReply(requestBody, false);
+    }
+
+    private void refreshScreenAskControl() {
+        if (askWithScreenButton == null) {
+            return;
+        }
+        askWithScreenButton.setEnabled(!screenAskInFlight);
+        askWithScreenButton.setText(screenAskInFlight ? "Capturing…" : "Ask + screen");
+        askWithScreenButton.setTextColor(screenAskInFlight ? MoaColors.GOLD : MoaColors.MUTED);
+    }
+
+    private void setScreenAskStatus(String value) {
+        if (screenAskStatus != null) {
+            screenAskStatus.setText(value == null ? "" : value);
+        }
     }
 
     private void sendUserMessage(String text, boolean fromVoice) {
@@ -2097,6 +2218,10 @@ public final class OverlayService extends Service {
             return;
         }
 
+        dispatchGatewayReply(requestBody, fromVoice);
+    }
+
+    private void dispatchGatewayReply(JSONObject requestBody, boolean fromVoice) {
         new Thread(() -> {
             try {
                 MoaGatewayClient.GatewayTextResponse reply = gatewayClient().chat(requestBody);

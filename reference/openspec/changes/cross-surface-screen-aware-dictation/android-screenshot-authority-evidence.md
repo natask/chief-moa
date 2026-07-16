@@ -1,5 +1,9 @@
 # Android Screenshot Authority Adapter Evidence
 
+> Historical evidence for the isolated `4de52d15` candidate. The later Android
+> integration connects it only to visible Ask; see
+> `android-screen-dictation-integration-evidence.md`.
+
 Candidate branch: `hygiene/android-screenshot-authority`
 
 Scope is ticket 1 only. The Android accessibility adapter accepts a process-local

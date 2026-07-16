@@ -17,6 +17,7 @@ public final class MoaEditorSessionBindingTest {
         MoaEditorSessionBinding.SessionToken session = binding.beginEditor(editor);
 
         assertFalse(binding.isSensitive(session));
+        assertEquals(MoaEditorSessionBinding.Rejection.NONE, binding.validateEditor(session, editor));
         assertEquals(
                 MoaEditorSessionBinding.Rejection.NONE,
                 binding.stageCandidate(session, "  Exact text.  ")
@@ -37,6 +38,10 @@ public final class MoaEditorSessionBindingTest {
         MoaEditorSessionBinding.SessionToken session = binding.beginEditor(password);
 
         assertTrue(binding.isSensitive(session));
+        assertEquals(
+                MoaEditorSessionBinding.Rejection.SENSITIVE_EDITOR,
+                binding.validateEditor(session, password)
+        );
         assertEquals(
                 MoaEditorSessionBinding.Rejection.SENSITIVE_EDITOR,
                 binding.stageCandidate(session, "must not persist")

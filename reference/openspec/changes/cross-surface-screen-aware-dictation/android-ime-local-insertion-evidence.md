@@ -1,5 +1,9 @@
 # Android IME Local Insertion Candidate
 
+> Historical evidence for the isolated `cc149817` candidate. The later Android
+> integration replaces its fixed QA text with SpeechRecognizer; see
+> `android-screen-dictation-integration-evidence.md`.
+
 ## Scope
 
 Ticket 4's local safety candidate adds the opt-in Android input-method shell,

@@ -47,6 +47,9 @@ reserved for a later integration ticket.
 - Acceptance: current evidence is attached once; app/focus/freshness changes
   invalidate it and no proposed action executes without local validation.
 - Verification: Android tests/build, gateway smoke, physical-phone stale-state QA.
+- Candidate status: deterministic Android glue is implemented in
+  `android-screen-dictation-integration-evidence.md`; physical-phone stale,
+  secure, and denial QA remains not measured, so this ticket stays open.
 
 ## 4. Android IME literal dictation
 
@@ -60,6 +63,10 @@ reserved for a later integration ticket.
   password, stale focus, or changed editor causes zero record/upload/display or
   insertion.
 - Verification: >=90% pure-policy coverage, unit/build checks, physical IME QA.
+- Candidate status: the fixed QA text has been replaced by an Android
+  SpeechRecognizer literal-transcript MVP. It deliberately has no durable raw
+  audio; physical insertion, language, sensitive-editor, and stale-focus QA
+  remains not measured, so this ticket stays open.
 
 ## 5. Android screen-aware action proposals
 
