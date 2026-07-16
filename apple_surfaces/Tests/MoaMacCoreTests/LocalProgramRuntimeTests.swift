@@ -625,6 +625,50 @@ private func makeRuntime(source: String,
         "approval_resolved", "tool_finished", "terminal"])
 }
 
+@Test func defaultRevocationNilApprovalAndRuntimeProgressPathsStayClosed() throws {
+    let journal = makeJournal()
+    let (_, envelope, fake) = makeRuntime(source: "return 1;", journal: journal,
+        executionID: "exec-default-closures", idempotencyKey: "idem-default-closures")
+    _ = try journal.claim(envelope, claimantDeviceID: "mac-fixture",
+        clientInstanceID: "client-fixture", at: fixtureNow)
+    try journal.markStarted(executionID: envelope.executionID, at: fixtureNow)
+    let readBridge = MacProgramBridge(authority: fake, executionID: envelope.executionID,
+        allowed: ["macos.app.current"], maximumCalls: 2,
+        deadline: fixtureNow.addingTimeInterval(10),
+        preStateSHA256: envelope.bindings.stateSHA256, journal: journal,
+        claimant: .init(deviceID: "mac-fixture", clientInstanceID: "client-fixture"),
+        programSHA256: envelope.program.sha256, catalogSHA256: envelope.catalog.sha256,
+        bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings), now: { fixtureNow })
+    #expect(!readBridge.call("macos.app.current", "{}").contains("error"))
+
+    let deniedJournal = makeJournal()
+    let (_, deniedEnvelope, deniedFake) = makeRuntime(source: "return 1;", journal: deniedJournal,
+        executionID: "exec-nil-approval", idempotencyKey: "idem-nil-approval")
+    _ = try deniedJournal.claim(deniedEnvelope, claimantDeviceID: "mac-fixture",
+        clientInstanceID: "client-fixture", at: fixtureNow)
+    try deniedJournal.markStarted(executionID: deniedEnvelope.executionID, at: fixtureNow)
+    let deniedBridge = MacProgramBridge(authority: deniedFake, executionID: deniedEnvelope.executionID,
+        allowed: ["macos.accessibility.press"], maximumCalls: 1,
+        deadline: fixtureNow.addingTimeInterval(10),
+        preStateSHA256: deniedEnvelope.bindings.stateSHA256, journal: deniedJournal,
+        claimant: .init(deviceID: "mac-fixture", clientInstanceID: "client-fixture"),
+        programSHA256: deniedEnvelope.program.sha256, catalogSHA256: deniedEnvelope.catalog.sha256,
+        bindingsSHA256: MacLocalProgramDigest.bindings(deniedEnvelope.bindings), now: { fixtureNow })
+    #expect(deniedBridge.call("macos.accessibility.press",
+        #"{"action":"press","handle":"node-1","observation_id":"obs-1"}"#).contains("approvalRequired"))
+
+    let progressSource = #"async function main({progress}) { progress("Processed local items.", 1, 1); return 1; }"#
+    let progressLimits = MacProgramLimits(sourceBytes: 65_536, wallMS: 5_000,
+        memoryBytes: nil, toolCalls: 2, parallelCalls: 1, resultBytes: 65_536, logBytes: 1_024)
+    let (runtime, progressEnvelope, _) = makeRuntime(source: progressSource,
+        limits: progressLimits, executionID: "exec-progress-runtime",
+        idempotencyKey: "idem-progress-runtime")
+    #expect(runtime.execute(progressEnvelope,
+        approvedProgramSHA256: progressEnvelope.program.sha256).status == "completed")
+    #expect(try runtime.lifecycleEvents(executionID: progressEnvelope.executionID)
+        .contains(where: { $0.kind == "progress" }))
+}
+
 @Test func systemAuthorityPolicyIsCoveredWithSyntheticPlatformOnly() throws {
     let process = ProcessIdentity(bundleID: "com.example.fixture", pid: 42,
         processStart: fixtureNow.addingTimeInterval(-10), signingIdentity: "fixture-signing")

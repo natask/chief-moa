@@ -106,6 +106,13 @@ private func runnerTranscript(source: String, resultBytes: Int = 65_536,
             return ["kind": "abort_result", "id": id, "aborted": true]
         })
     #expect(aborted.frames.last?["error"] as? String == "runtime_failed")
+
+    let malformedAbort = runnerTranscript(source:
+        "function main({signal}) { return signal.aborted; }", responder: { frame in
+            guard frame["kind"] as? String == "abort_poll", let id = frame["id"] as? Int else { return nil }
+            return ["kind": "abort_result", "id": id, "aborted": "invalid"]
+        })
+    #expect(malformedAbort.frames.last?["output_json"] as? String == "true")
 }
 
 @Test func startAndParentFramesAreClosed() {
@@ -113,6 +120,11 @@ private func runnerTranscript(source: String, resultBytes: Int = 65_536,
                   "result_bytes": 100, "log_bytes": 0, "extra": true] as [String: Any]]
     #expect(MacProgramRunnerSession.run(arguments: ["runner", "--stdio-v1"],
         read: { input.isEmpty ? nil : input.removeFirst() }, write: { _ in }) == 64)
+
+    var badLimits = [["kind": "start", "source": "function main(){}",
+                      "result_bytes": 0, "log_bytes": 0] as [String: Any]]
+    #expect(MacProgramRunnerSession.run(arguments: ["runner", "--stdio-v1"],
+        read: { badLimits.isEmpty ? nil : badLimits.removeFirst() }, write: { _ in }) == 64)
 
     let handle = MacProgramRunnerHandle()
     let state = MacProgramProcessRunner.RunnerState(input: Pipe(), handle: handle,
