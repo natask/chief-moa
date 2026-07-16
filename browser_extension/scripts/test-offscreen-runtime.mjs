@@ -122,6 +122,11 @@ globalThis.window.MediaRecorder = FakeMediaRecorder;
 
 const runtime = await import(`../extension/offscreen.js?test=${Date.now()}`);
 
+assert.equal(runtime.captureFailure(Object.assign(new Error("denied"), { name: "NotAllowedError" }), "user_media").code, "microphone_permission_denied");
+assert.equal(runtime.captureFailure(Object.assign(new Error("busy"), { name: "NotReadableError" }), "user_media").code, "microphone_capture_failed");
+assert.equal(runtime.captureFailure(Object.assign(new Error("denied"), { name: "NotAllowedError" }), "audio_runtime").code, "microphone_capture_failed");
+assert.equal(runtime.captureFailure("raw failure", "user_media").message, "raw failure");
+assert.equal(runtime.captureFailure(null, "user_media").message, "microphone capture failed");
 assert.equal(runtime.bytesToBase64(new Uint8Array([65, 66]).buffer), "QUI=");
 assert.equal(runtime.bytesToBase64(null), "");
 assert.equal(runtime.resampleToPcm16(null, 48000, 16000, {}).byteLength, 0);
@@ -307,6 +312,7 @@ function dispatch(message) {
   });
 }
 assert.equal(await dispatch({ cmd: "other" }), false);
+assert.deepEqual(await dispatch({ cmd: "offscreenVoiceReady" }), { ok: true, context: "offscreen" });
 assert.deepEqual(await dispatch({ cmd: "offscreenVoiceCaptureStop", voiceSessionId: "none" }), { ok: true });
 assert.deepEqual(await dispatch({ cmd: "offscreenVideoCaptureDiscard", videoSessionId: "none" }), { ok: true });
 assert.deepEqual(await dispatch({ cmd: "offscreenVoiceCaptureStop" }), { ok: true });
