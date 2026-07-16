@@ -3932,115 +3932,10 @@
   });
 
   // ---- Perception -------------------------------------------------------
-  const SELECTOR =
-    'a[href], button, input:not([type=hidden]), textarea, select, [role=button], [role=link], [role=tab], [role=menuitem], [contenteditable=""], [contenteditable=true], [onclick]';
-  const DOCUMENT_TEXT_EXCLUDED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS"]);
-
-  function visible(el) {
-    const r = el.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) return false;
-    if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) return false;
-    const s = getComputedStyle(el);
-    return s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
-  }
-
-  function documentTextParts() {
-    if (!document.body) return [];
-    const parts = [];
-    for (const node of document.body.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const text = String(node.nodeValue || "").trim();
-        if (text) parts.push(text);
-        continue;
-      }
-      if (node.nodeType !== Node.ELEMENT_NODE || node.id === "agee-root" || DOCUMENT_TEXT_EXCLUDED_TAGS.has(node.tagName)) continue;
-      const text = String(node.innerText || "");
-      for (const line of text.split(/\n+/)) {
-        if (line.trim()) parts.push(line);
-      }
-    }
-    return parts;
-  }
-
-  function documentPageContext() {
-    const policy = globalThis.AgeeDocumentContextPolicy;
-    const result = policy?.buildDocumentContext
-      ? policy.buildDocumentContext(documentTextParts())
-      : { text: "", metadata: { scope: "whole_rendered_document", coverage: "unavailable", complete: false, truncated: true } };
-    return {
-      pageText: result.text,
-      metadata: {
-        ...result.metadata,
-        text_source: "rendered_dom_inner_text",
-        canvas_count: document.querySelectorAll("canvas").length,
-        frame_count: document.querySelectorAll("iframe,frame").length,
-        virtualized_content_may_require_scroll: document.documentElement.scrollHeight > innerHeight,
-      },
-    };
-  }
-
-  function label(el) {
-    if (!el) return "";
-    const text =
-      el.getAttribute("aria-label") ||
-      el.getAttribute("placeholder") ||
-      (el.value && el.type !== "password" ? el.value : "") ||
-      el.innerText ||
-      el.getAttribute("title") ||
-      el.getAttribute("name") ||
-      "";
-    return text.replace(/\s+/g, " ").trim().slice(0, 80);
-  }
-
-  function snapshotElementSummary(item) {
-    const type = item.type ? ` ${item.type}` : "";
-    const labelText = item.label ? ` ${item.label}` : "";
-    return `[${item.i}] <${item.tag}${type}>${labelText}`;
-  }
-
-  const RISKY_TEXT = /\b(delete|remove|submit|send|pay|purchase|buy|checkout|confirm|transfer|withdraw|archive|sign out|log out|logout)\b/i;
-
-  function needsConfirmation(el, req) {
-    if (req.action === "key" && (req.text || "Enter") === "Enter") {
-      const active = document.activeElement;
-      return !!active && active !== document.body;
-    }
-    if (!el) return false;
-    if (req.action === "type" && el.getAttribute("type") === "password") return true;
-    if (req.action !== "click") return false;
-    return RISKY_TEXT.test(label(el));
-  }
-
-  let indexed = [];
-  function snapshot() {
-    indexed = [];
-    const out = [];
-    const documentContext = documentPageContext();
-    document.querySelectorAll(SELECTOR).forEach((el) => {
-      if (el.closest("#agee-root")) return;
-      if (!visible(el)) return;
-      const i = indexed.length;
-      indexed.push(el);
-      out.push({ i, tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "", label: label(el) });
-    });
-    return {
-      url: location.href,
-      title: document.title,
-      pageText: documentContext.pageText,
-      documentContext: documentContext.metadata,
-      elements: out,
-      snapshotId: `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      viewport: {
-        width: innerWidth,
-        height: innerHeight,
-        deviceScaleFactor: devicePixelRatio || 1,
-        scrollX,
-        scrollY,
-      },
-      capturedAt: new Date().toISOString(),
-      elementSummaries: out.map(snapshotElementSummary),
-    };
-  }
+  const pageObservation = window.AgeePageObservationRuntime.createPageObservationRuntime({
+    window,
+    document,
+  });
 
   // ---- Action -----------------------------------------------------------
   function setNativeValue(el, value) {
@@ -4053,7 +3948,7 @@
   }
 
   async function act(req) {
-    const el = indexed[req.index];
+    const el = pageObservation.elementAt(req.index);
     if (["click", "type", "clear", "select"].includes(req.action) && !el) {
       return { result: `no element at index ${req.index}` };
     }
@@ -4063,7 +3958,7 @@
       // confirm in. Those actions already passed the background's own local
       // action validator (the trust boundary), so skip the inline confirm when
       // req.background is set. Foreground actions keep the inline confirm.
-      if (!req.background && needsConfirmation(el, req) && !(await askInlineConfirm(`Let A.G. ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
+      if (!req.background && pageObservation.needsConfirmation(el, req) && !(await askInlineConfirm(`Let A.G. ${req.action} "${pageObservation.label(el || document.activeElement) || "this element"}"?`))) {
         return { result: `user cancelled ${req.action}` };
       }
       switch (req.action) {
@@ -4137,7 +4032,7 @@
         reply({ ok: true });
         return true;
       case "snapshot":
-        reply(snapshot());
+        reply(pageObservation.snapshot());
         return true;
       case "mediaCurrentState": {
         // Media identity and playback position are read only for this explicit

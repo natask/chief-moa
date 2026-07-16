@@ -19,6 +19,7 @@ const requiredFiles = [
   "extension/config.js",
   "extension/content.js",
   "extension/document-context.js",
+  "extension/page-observation-runtime.js",
   "extension/tweaks.js",
   "extension/offscreen.html",
   "extension/offscreen.js",
@@ -97,6 +98,7 @@ const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const documentContextSource = readFileSync("extension/document-context.js", "utf8");
+const pageObservationRuntimeSource = readFileSync("extension/page-observation-runtime.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
 const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const offscreenHtmlSource = readFileSync("extension/offscreen.html", "utf8");
@@ -143,9 +145,11 @@ if (
   mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("document-context.js") < 0 ||
   mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "document-context\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("page-observation-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("page-observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "browser-command-transcript-runtime\.js", "document-context\.js", "page-observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
-  throw new Error("steering-ui.js and document-context.js must load before content.js");
+  throw new Error("steering, command transcript, document context, and page observation runtimes must load before content.js");
 }
 if (
   packageJson.scripts?.["test:unit"] !== "node --test scripts/test-*.mjs" ||
@@ -491,7 +495,11 @@ if (
   throw new Error("browser role intent must have no selector and must route overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
 }
 
-if (!/function documentPageContext/.test(contentSource) || !/pageText:\s*documentContext\.pageText/.test(contentSource)) {
+if (
+  !/function documentPageContext/.test(pageObservationRuntimeSource) ||
+  !/pageText:\s*documentContext\.pageText/.test(pageObservationRuntimeSource) ||
+  !/AgeePageObservationRuntime\.createPageObservationRuntime/.test(contentSource)
+) {
   throw new Error("content snapshot must include whole-document reading text, not only actionable elements");
 }
 
@@ -742,11 +750,12 @@ if (/captureScreenshot\(|captureScreenshotViaDebugger\(|browserScreenshotEvidenc
 }
 
 if (
-  !/snapshotId/.test(contentSource) ||
-  !/viewport:\s*\{/.test(contentSource) ||
-  !/capturedAt:\s*new Date\(\)\.toISOString\(\)/.test(contentSource) ||
-  !/elementSummaries:\s*out\.map/.test(contentSource) ||
-  !/documentContext:\s*documentContext\.metadata/.test(contentSource) ||
+  !/snapshotId/.test(pageObservationRuntimeSource) ||
+  !/viewport:\s*\{/.test(pageObservationRuntimeSource) ||
+  !/capturedAt,/.test(pageObservationRuntimeSource) ||
+  !/elementSummaries:\s*elements\.map/.test(pageObservationRuntimeSource) ||
+  !/documentContext:\s*documentContext\.metadata/.test(pageObservationRuntimeSource) ||
+  !/pageObservation\.snapshot\(\)/.test(contentSource) ||
   !/scope:\s*"whole_rendered_document"/.test(documentContextSource) ||
   !/coverage:\s*complete \? "complete" : "distributed_sample"/.test(documentContextSource)
 ) {
@@ -1115,6 +1124,7 @@ for (const file of [
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content.js",
+  "extension/page-observation-runtime.js",
   "extension/offscreen.js",
   "extension/offscreen-audio-worklet.js",
   "extension/livekit-voice.js",

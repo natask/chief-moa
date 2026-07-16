@@ -20,6 +20,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/livekit-voice.js",
   "extension/media-confirm.js",
   "extension/media-confirmation-runtime.js",
+  "extension/page-observation-runtime.js",
   "extension/offscreen-audio-worklet.js",
   "extension/offscreen-livekit.js",
   "extension/offscreen-voice-bridge.js",
