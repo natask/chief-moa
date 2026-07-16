@@ -72,18 +72,31 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var reply = ""
     @Published public private(set) var status = "Ready"
     @Published public private(set) var isSending = false
+    @Published public private(set) var voiceState = VoiceTranscriptState()
 
     private let store: any GatewayConnectionStore
     private let sender: any GatewayChatSending
+    private let voiceController: any VoiceCaptureControlling
     private let sessionID: String
+    private var voiceGeneration: UInt64 = 0
+    private var voiceReleaseRequested = false
 
     public convenience init() {
-        self.init(store: SystemGatewayConnectionStore(), sender: URLSessionGatewayChatSender())
+        self.init(
+            store: SystemGatewayConnectionStore(),
+            sender: URLSessionGatewayChatSender(),
+            voiceController: VoiceCaptureController()
+        )
     }
 
-    public init(store: any GatewayConnectionStore, sender: any GatewayChatSending) {
+    public init(
+        store: any GatewayConnectionStore,
+        sender: any GatewayChatSending,
+        voiceController: (any VoiceCaptureControlling)? = nil
+    ) {
         self.store = store
         self.sender = sender
+        self.voiceController = voiceController ?? VoiceCaptureController()
         origin = store.loadOrigin()
         token = store.loadToken()
         sessionID = store.loadSessionID()
@@ -133,6 +146,69 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         prompt = ""
         reply = ""
         status = "Ready"
+        voiceState.apply(.reset)
+    }
+
+    public func startVoice() async {
+        guard !voiceState.isActive else { return }
+        voiceGeneration &+= 1
+        let generation = voiceGeneration
+        voiceReleaseRequested = false
+        voiceState.apply(.begin)
+        do {
+            guard isConfigured else { throw MoaMacError.missingToken }
+            guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
+            let turnID = "turn-\(UUID().uuidString.lowercased())"
+            try await voiceController.start(
+                origin: url,
+                bearerToken: token,
+                sessionID: sessionID,
+                turnID: turnID
+            ) { [weak self] event in
+                guard let self, self.voiceGeneration == generation else { return }
+                self.voiceState.apply(.server(event))
+            }
+            guard voiceGeneration == generation else {
+                await voiceController.cancel()
+                return
+            }
+            voiceState.apply(.captureStarted)
+            if voiceReleaseRequested {
+                try await voiceController.stopAndCommit()
+            }
+        } catch VoiceCaptureError.microphoneDenied {
+            voiceState.apply(.permissionDenied)
+        } catch MoaMacError.missingToken {
+            voiceState.apply(.failed("Add your gateway origin and token first"))
+        } catch MoaMacError.invalidDestination {
+            voiceState.apply(.failed("Use a canonical HTTPS gateway origin"))
+        } catch {
+            voiceState.apply(.failed("Could not start microphone transcription"))
+            await voiceController.cancel()
+        }
+    }
+
+    public func finishVoice() async {
+        guard voiceState.isActive else { return }
+        voiceReleaseRequested = true
+        let wasStarting = voiceState.phase == .requestingPermission || voiceState.phase == .connecting
+        voiceState.apply(.release)
+        guard !wasStarting else { return }
+        do {
+            try await voiceController.stopAndCommit()
+        } catch {
+            voiceState.apply(.interrupted("Microphone capture was interrupted"))
+            await voiceController.cancel()
+        }
+    }
+
+    public func cancelVoice() async {
+        voiceGeneration &+= 1
+        voiceReleaseRequested = false
+        await voiceController.cancel()
+        if voiceState.isActive {
+            voiceState.apply(.interrupted("Transcription canceled"))
+        }
     }
 }
 #endif

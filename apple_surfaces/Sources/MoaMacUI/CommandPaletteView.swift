@@ -8,6 +8,7 @@ public struct CommandPaletteView: View {
     private let shortcutLabel: String
     @FocusState private var promptFocused: Bool
     @State private var editingConnection = false
+    @State private var voicePressActive = false
 
     public init(model: CommandModel, shortcutLabel: String = "Control-Space", dismiss: @escaping () -> Void = {}) {
         self.model = model
@@ -31,7 +32,7 @@ public struct CommandPaletteView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Gateway connection")
-                Button(action: dismiss) { Image(systemName: "xmark") }
+                Button(action: cancelAndDismiss) { Image(systemName: "xmark") }
                     .buttonStyle(.plain)
                     .help("Hide")
             }
@@ -51,12 +52,42 @@ public struct CommandPaletteView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
             }
 
+            if !model.voiceState.partial.isEmpty || !model.voiceState.final.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(model.voiceState.final.isEmpty ? "Live transcript" : "Final transcript")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(model.voiceState.final.isEmpty ? model.voiceState.partial : model.voiceState.final)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .padding(12)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("Ask Aggie anything…", text: $model.prompt, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .focused($promptFocused)
                     .onSubmit { send() }
+                Image(systemName: model.voiceState.isActive ? "waveform.circle.fill" : "mic.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(model.voiceState.isActive ? .red : .purple)
+                    .contentShape(Circle())
+                    .help("Hold to transcribe")
+                    .accessibilityLabel("Hold to transcribe")
+                    .onLongPressGesture(minimumDuration: 0.05, maximumDistance: 80) {
+                        // The pressing callback owns capture start/stop.
+                    } onPressingChanged: { pressing in
+                        if pressing, !voicePressActive {
+                            voicePressActive = true
+                            Task { await model.startVoice() }
+                        } else if !pressing, voicePressActive {
+                            voicePressActive = false
+                            Task { await model.finishVoice() }
+                        }
+                    }
                 Button(action: send) {
                     if model.isSending { ProgressView().controlSize(.small) }
                     else { Image(systemName: "arrow.up.circle.fill").font(.title2) }
@@ -67,7 +98,11 @@ public struct CommandPaletteView: View {
             .padding(12)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
 
-            Text("\(shortcutLabel) to toggle · Return to send · no screen context attached")
+            Text(model.voiceState.message)
+                .font(.caption2)
+                .foregroundStyle(model.voiceState.phase == .denied || model.voiceState.phase == .failed ? .red : .secondary)
+
+            Text("\(shortcutLabel) to toggle · Return to send · hold the mic to transcribe · no screen context attached")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -76,7 +111,7 @@ public struct CommandPaletteView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.16)))
         .onAppear { promptFocused = true }
-        .onExitCommand(perform: dismiss)
+        .onExitCommand(perform: cancelAndDismiss)
     }
 
     private var connectionEditor: some View {
@@ -102,6 +137,13 @@ public struct CommandPaletteView: View {
 
     private func send() {
         Task { await model.submit(); promptFocused = true }
+    }
+
+    private func cancelAndDismiss() {
+        Task {
+            await model.cancelVoice()
+            dismiss()
+        }
     }
 }
 #endif
