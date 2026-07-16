@@ -32,7 +32,7 @@ test("source-size policy recognizes production code but excludes tests and scrip
   assert.equal(lineCount("one\ntwo\n"), 2);
   assert.equal(MAX_SOURCE_LINES, 2000);
   assert.equal(TARGET_PRODUCTION_LINES, 50000);
-  assert.equal(LEGACY_PRODUCTION_LINE_CEILING, 95208);
+  assert.equal(LEGACY_PRODUCTION_LINE_CEILING, 94945);
   assert.equal(MAX_TEST_TO_PRODUCTION_RATIO, 2);
 });
 

@@ -329,6 +329,14 @@
       fallback tests plus an account-connection health integration smoke.
       Enforce a focused 90% line/branch/function gate, verified at 100% for all
       three metrics. Reduce `server.js` to 12,686 lines.
+- [x] 2.55 Consolidate duplicated audio/video note blob and JSON persistence,
+      quotas, lookup, streaming, deletion, and HTTP handling into the precisely
+      named `media-note-store.js` and `media-note-http.js` modules while retaining
+      public factories, routes, stored formats, and response headers. Add focused
+      90% line/branch/function gates for both shared modules and wrappers. Reduce
+      the gateway voice/media pool by 263 physical production lines, from 753
+      lines across the two implementations to 490 lines across the wrappers and
+      shared modules, and ratchet the repository ceiling to 94,945 lines.
 
 ## 3. Other Oversized Surfaces
 

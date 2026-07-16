@@ -10,7 +10,7 @@ const MAX_SOURCE_LINES = 2000;
 const TARGET_PRODUCTION_LINES = 50000;
 // Lower after every accepted reduction. Set to TARGET_PRODUCTION_LINES once
 // migration reaches the final hard maximum.
-const LEGACY_PRODUCTION_LINE_CEILING = 95208;
+const LEGACY_PRODUCTION_LINE_CEILING = 94945;
 const MAX_TEST_TO_PRODUCTION_RATIO = 2;
 const SOURCE_EXTENSIONS = new Set([".cjs", ".css", ".go", ".html", ".java", ".js", ".kt", ".mjs", ".py", ".rs", ".swift", ".ts", ".tsx"]);
 const EXCLUDED_PARTS = new Set(["node_modules", "build", "dist", "coverage", "vendor"]);

@@ -39,7 +39,7 @@ between reported categories, and feature-parity repairs may add bounded code.
 No surface may spend another surface's budget without updating this ledger with
 measured evidence.
 
-Until the final target is reached, 95,208 is also a repository-wide non-growth
+Until the final target is reached, 94,945 is also the repository-wide non-growth
 debt ceiling. It ratchets down after each accepted reduction so new bounded
 files cannot recreate removed complexity elsewhere. When the ceiling reaches
 50,000, the final target replaces the migration ceiling permanently.
@@ -50,13 +50,13 @@ These are target architecture pools, not reductions already achieved. A review
 credits only the measured before/after delta after native verification.
 
 Every gateway file and each line of `gateway/server.js` is assigned to exactly
-one pool below; the five current gateway values reconcile to 57,384 lines. A
+one pool below; the five current gateway values reconcile to 57,121 lines. A
 migration may move code between pools, but only a reduction in their combined
 measured total counts as savings.
 
 | Pool | Current evidence | Target | Planned saving | Consolidation mechanism |
 | --- | ---: | ---: | ---: | --- |
-| Gateway voice and media | 23,349 | 9,000 | 14,349 | One staged turn pipeline, provider drivers, shared Google auth/instructions, event-derived diagnosis, and one transactional draft/media persistence contract. |
+| Gateway voice and media | 23,086 | 9,000 | 14,086 | One staged turn pipeline, provider drivers, shared Google auth/instructions, event-derived diagnosis, and one transactional draft/media persistence contract. |
 | Gateway work and agents | 9,592 | 4,000 | 5,592 | One intent/work aggregate; work history, graph, runs, workers, and broker views become projections or compatibility adapters rather than parallel authorities. |
 | Gateway profile and product domains | 8,130 | 4,000 | 4,130 | Shared versioned storage and schema validation for profile, companion, account, release, OTA, and UI-spec domains without merging their authority boundaries. |
 | Gateway context and protocol | 5,333 | 3,000 | 2,333 | One admitted context artifact and reducer; remove repeated legacy context assembly only after compatibility migration evidence. |
@@ -64,7 +64,13 @@ measured total counts as savings.
 | Browser orchestration and runtime | 15,424 | 9,000 | 6,424 | One background transport/session coordinator, bounded content controllers, shared schemas, and development-only reload behavior outside the shipped runtime. |
 | Android application | 14,944 | 10,000 | 4,944 | Thin service/activity shells over shared voice, overlay, approval, action, and receipt controllers; no platform authority moves to the gateway. |
 | Website application | 4,128 | 3,000 | 1,128 | Reusable pet-studio state/rendering components and shared bounded proxy handling. |
-| **Total** | **95,208** | **49,328** | **45,880** | |
+| **Total** | **94,945** | **49,328** | **45,617** | |
+
+The media-note persistence and HTTP consolidation reduced the gateway voice and
+media pool by 263 physical production lines (753 before, 490 after). The shared
+`media-note-store.js` and `media-note-http.js` modules retain the audio/video
+factories, routes, stored JSON shape, blob naming, quota behavior, and streaming
+headers behind focused 90% production coverage gates.
 
 Extraction alone does not earn a saving. If code merely moves from an entrypoint
 to a new module, the ledger is unchanged. Compatibility code is removed only

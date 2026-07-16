@@ -111,6 +111,25 @@ test("store ignores corrupt metadata and missing directories", (t) => {
   assert.equal(store.status().count, 0);
 });
 
+test("handlers can own the default audio-note store", async (t) => {
+  const handlers = createAudioNoteHandlers({ dataDir: tempDir(t) });
+  const response = new MemoryResponse();
+  handlers.list(response, new URL("/v1/audio-notes", "http://local"));
+  await response.done;
+  assert.deepEqual(response.json(), { notes: [] });
+});
+
+test("store supports its public default options", (t) => {
+  const cwd = tempDir(t);
+  const previousCwd = process.cwd();
+  try {
+    process.chdir(cwd);
+    assert.equal(createAudioNotesStore().status().endpoint, "/v1/audio-notes");
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
 test("create handler reports stream, size, storage, and event failures", async (t) => {
   const dataDir = tempDir(t);
   const store = createAudioNotesStore({ dataDir });
