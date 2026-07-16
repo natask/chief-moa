@@ -59,19 +59,9 @@ public enum GatewayChatReplyDecoder {
     public static func decode(_ data: Data) throws -> GatewayChatReply {
         guard data.count <= maximumResponseBytes else { throw GatewayChatError.responseTooLarge }
         guard let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              !containsAuthorityShapedField(raw),
               let text = raw["text"] as? String else { throw GatewayChatError.invalidResponse }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.utf8.count <= maximumTextBytes else { throw GatewayChatError.invalidResponse }
         return GatewayChatReply(text: trimmed)
-    }
-
-    private static func containsAuthorityShapedField(_ value: Any) -> Bool {
-        if let object = value as? [String: Any] {
-            let blocked = Set(["action", "actions", "command", "commands", "executable", "script", "tool", "tool_calls"])
-            return object.contains { key, child in blocked.contains(key.lowercased()) || containsAuthorityShapedField(child) }
-        }
-        if let array = value as? [Any] { return array.contains(where: containsAuthorityShapedField) }
-        return false
     }
 }
