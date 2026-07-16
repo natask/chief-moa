@@ -36,6 +36,21 @@ private func input(
     #expect(value.origin.y + 420 + PanelLayoutPolicy.notchGap == 930)
 }
 
+@Test func impossibleFiniteSafeAreaRequestsAppKitCenterFallback() {
+    #expect(PanelLayoutPolicy.decision(for: input(safeAreaTop: 10_000)) == nil)
+    #expect(PanelLayoutPolicy.decision(for: input(safeAreaTop: CGFloat.greatestFiniteMagnitude)) == nil)
+}
+
+@Test func safeAreaExactlyAtVisibleBottomRemainsDeterministic() throws {
+    let value = try #require(PanelLayoutPolicy.decision(for: input(
+        screen: CGRect(x: 100, y: 100, width: 1_000, height: 900),
+        visible: CGRect(x: 100, y: 120, width: 1_000, height: 840),
+        safeAreaTop: 880
+    )))
+    #expect(value.placement == .belowNotch)
+    #expect(value.origin == CGPoint(x: 320, y: 120))
+}
+
 @Test(arguments: [
     (false, CGFloat(38)),
     (true, CGFloat(0)),
