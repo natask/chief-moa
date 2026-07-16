@@ -142,6 +142,12 @@ deleting, or excluding meaningful failure-path and integration tests.
   bounded 40-second reload window received no client poll, so active reload
   remains unverified and still requires one manual reload at
   `chrome://extensions`.
+- Browser extension: version `0.1.53` was verified with all 45 unit tests, the
+  exact production coverage ratchet, and the real headless-Chromium smoke, then
+  packaged as `browser_extension/dist/A.G.-0.1.53.zip` (420,178 bytes; SHA-256
+  `a433ecf3c010b8a68a4db139734a1c8ac530255614e6d9009e9c1f6cd7dffe13`). Active
+  reload was confirmed: the loaded unpacked extension observed the version bump
+  and polled again after reloading.
 - Gateway: the complete production-only run passed 1014 tests with one skip, but
   no isolated preview, backup/restore evidence, or state-compatibility rollout
   was established. The branch was therefore not pushed through the
