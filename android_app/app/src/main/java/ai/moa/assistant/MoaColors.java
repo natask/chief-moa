@@ -22,9 +22,12 @@ final class MoaColors {
     // Surfaces. Cards are opaque so underlying app content never bleeds
     // through; elevation reads from the hairline steps, not translucency.
     static final int SURFACE_0 = 0xFF000000;
-    static final int PANEL_BG = 0xFF000000;      // opaque true-black card
+    static final int PANEL_BG = 0xFF000000;      // opaque true-black overlay card
+    static final int APP_CARD_BG = 0xFF000000;   // opaque true-black full-app card
     static final int PANEL_BORDER = 0x24FFFFFF;  // 14% white hairline
-    static final int RAISED = 0xFF121212;        // assistant bubble / card fill
+    // Assistant bubble fill only — one neutral step above the true-black card
+    // so bubbles stay distinguishable. Not a card/surface background.
+    static final int RAISED = 0xFF121212;
     static final int RAISED_BORDER = 0x17FFFFFF; // 9% white hairline
     static final int COMPOSER_BG = 0xFF0A0A0A;
     static final int COMPOSER_BORDER = 0x24FFFFFF;

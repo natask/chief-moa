@@ -240,10 +240,14 @@ The Android overlay SHALL render its chat panel, voice transcript card, and
 full-app surfaces as opaque true-black native surfaces.
 
 #### Scenario: Cards are opaque true black
-- **WHEN** the chat panel or voice transcript card renders
-- **THEN** its card background is opaque true black with hairline borders
+- **WHEN** the chat panel, voice transcript card, or a full-app settings card
+  renders
+- **THEN** its card background is opaque true black (#000000) with hairline
+  borders, elevation, and typography carrying the hierarchy
 - **AND** underlying app content does not bleed through the card
 - **AND** surface fills carry no color cast
+- **AND** bubble and control fills may sit one neutral opaque step above the
+  black card so they remain distinguishable
 
 ### Requirement: User-Removable Overlay
 The Android overlay SHALL provide discoverable local ways to remove the orb.

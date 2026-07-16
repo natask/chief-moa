@@ -12,6 +12,9 @@ screenshots in `scratch/mobile-ui-enhance/screens/` and
 - Open the chat panel and confirm the card is opaque true black (no underlying
   app content bleeding through, no green cast), with hairline borders.
 - Start a voice turn and confirm the transcript card is the same native black.
+- Open the full app: confirm the settings cards are literal true black with
+  hairline borders (no gray or green-tinted card fill), and chat bubbles in the
+  overlay still read one step lighter than their card.
 - With the panel or transcript open, tap the wallpaper/another app: confirm the
   lion orb + panel + transcript all fade in place and nothing closes; composer
   draft text, chat messages, transcript rows, and a playing reply survive.

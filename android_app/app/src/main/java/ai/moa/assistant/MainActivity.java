@@ -1436,7 +1436,7 @@ public final class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        card.setBackground(MoaDrawables.rounded(MoaColors.RAISED, dp(20), MoaColors.RAISED_BORDER, dp(1)));
+        card.setBackground(MoaDrawables.rounded(MoaColors.APP_CARD_BG, dp(20), MoaColors.RAISED_BORDER, dp(1)));
         card.setElevation(dp(6));
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
