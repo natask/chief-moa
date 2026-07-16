@@ -44,6 +44,7 @@ function createSurfaceProgramBroker({ envelope, adapter, clock = () => Date.now(
   let writeTail = Promise.resolve();
   let receiptTail = Promise.resolve();
   let previousReceiptSha256 = null;
+  let revoked = false;
 
   async function persistReceipt(entry) {
     const persist = receiptTail.then(async () => {
@@ -100,22 +101,27 @@ function createSurfaceProgramBroker({ envelope, adapter, clock = () => Date.now(
 
   async function invoke(capabilityId, definition, args, callId, startedAt) {
     let preState;
+    let dispatched = false;
     const inputSha256 = await sha256(args);
     try {
+      if (revoked) throw new Error("surface_program_revoked");
       preState = await revalidate();
+      if (revoked) throw new Error("surface_program_revoked");
+      dispatched = true;
       const result = await dispatch(capabilityId, args);
       const postState = await adapter.currentBinding(envelope.bindings.tab_id).catch(() => null);
       const entry = { call_id: callId, capability_id: capabilityId, status: "succeeded", input_sha256: inputSha256, pre_state_sha256: preState.state_sha256, post_state_sha256: postState?.state_sha256 || null, started_at: startedAt, finished_at: new Date(clock()).toISOString(), previous_receipt_sha256: null, result_sha256: await sha256(result ?? null) };
       await persistReceipt(entry);
       return result;
     } catch (error) {
-      const entry = { call_id: callId, capability_id: capabilityId, status: definition.risk === "read_only" ? "failed" : "indeterminate", input_sha256: inputSha256, pre_state_sha256: preState?.state_sha256 || null, post_state_sha256: null, started_at: startedAt, finished_at: new Date(clock()).toISOString(), previous_receipt_sha256: null, error: String(error?.message || error).slice(0, 500) };
+      const entry = { call_id: callId, capability_id: capabilityId, status: revoked && !dispatched ? "rejected" : definition.risk === "read_only" ? "failed" : "indeterminate", input_sha256: inputSha256, pre_state_sha256: preState?.state_sha256 || null, post_state_sha256: null, started_at: startedAt, finished_at: new Date(clock()).toISOString(), previous_receipt_sha256: null, error: String(error?.message || error).slice(0, 500) };
       await persistReceipt(entry);
       throw error;
     }
   }
 
   async function call(capabilityId, rawArgs = {}) {
+    if (revoked) throw new Error("surface_program_revoked");
     const definition = capabilityDefinition(capabilityId);
     if (!definition || !allowed.has(capabilityId)) throw new Error("capability_not_allowed");
     if (callCount >= envelope.limits.tool_calls) throw new Error("tool_call_limit_exceeded");
@@ -142,10 +148,11 @@ function createSurfaceProgramBroker({ envelope, adapter, clock = () => Date.now(
 
   return Object.freeze({
     call,
+    revoke: () => { revoked = true; },
     revalidate,
     assertResultSize,
     trace: () => trace.map((entry) => ({ ...entry })),
-    stats: () => ({ call_count: callCount, active_calls: activeCalls, handle_count: handles.size }),
+    stats: () => ({ call_count: callCount, active_calls: activeCalls, handle_count: handles.size, revoked }),
   });
 }
 

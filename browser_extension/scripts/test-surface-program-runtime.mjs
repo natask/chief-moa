@@ -175,6 +175,25 @@ test("broker enforces expiry, state, call, parallel, result, and failure boundar
   await postStateFail.call("browser.page.snapshot", {});
   assert.equal(postStateFail.trace()[0].post_state_sha256, null);
   assert.throws(() => postStateFail.assertResultSize("x".repeat(20_000)), /result_too_large/);
+
+  let releaseWrite;
+  let dispatchedWrites = 0;
+  const blockedWrite = new Promise((resolve) => { releaseWrite = resolve; });
+  const revokeAdapter = { ...elementsAdapter, click: async () => { dispatchedWrites += 1; if (dispatchedWrites === 1) await blockedWrite; return { applied: true }; } };
+  const revoked = createSurfaceProgramBroker({ envelope, adapter: revokeAdapter, clock: () => Date.parse("2026-07-16T12:00:30Z") });
+  const [revokedHandle] = await revoked.call("browser.page.query_elements", { selector: "x" });
+  const firstWrite = revoked.call("browser.page.click", { element_id: revokedHandle.element_id });
+  const queuedWrite = revoked.call("browser.page.click", { element_id: revokedHandle.element_id });
+  const queuedRejected = assert.rejects(queuedWrite, /revoked/);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  revoked.revoke();
+  assert.equal(revoked.stats().revoked, true);
+  await assert.rejects(revoked.call("browser.page.snapshot", {}), /revoked/);
+  releaseWrite();
+  await firstWrite;
+  await queuedRejected;
+  assert.equal(dispatchedWrites, 1, "a queued write began after bridge revocation");
+  assert.equal(revoked.trace().at(-1).status, "rejected");
 });
 
 test("Chrome adapter uses only exact tab injection and rejects malformed inputs", async () => {

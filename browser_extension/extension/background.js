@@ -835,11 +835,12 @@ async function executeSurfaceProgramRequest(request, deviceId) {
     sandboxResult = { ok: false, error: String(error?.message || error) };
   }
   run.active = false;
+  broker.revoke();
   const drained = await waitForSurfaceProgramCalls(broker, Date.now() + 250);
   activeSurfacePrograms.delete(envelope.execution_id);
 
-  let status = sandboxResult?.ok && drained ? "completed" : sandboxResult?.error === "program_wall_time_exceeded" ? "timed_out" : drained ? "failed" : "indeterminate";
-  let error = status === "completed" ? "" : sandboxResult?.error || (drained ? "surface_program_failed" : "in_flight_tool_call_indeterminate");
+  let status = sandboxResult?.ok && drained ? "completed" : !drained ? "indeterminate" : sandboxResult?.error === "program_wall_time_exceeded" ? "timed_out" : "failed";
+  let error = status === "completed" ? "" : status === "indeterminate" ? "indeterminate" : sandboxResult?.error || "surface_program_failed";
   try {
     broker.assertResultSize(sandboxResult?.result);
   } catch (sizeError) {
