@@ -809,13 +809,26 @@ async function assertProviderSessionConfig(dataDir) {
     "session-config must carry the supported voice catalog in the profile-control instruction",
   );
   assert.ok(
-    systemText.includes("primary language: en-US"),
-    "session-config must name the primary reply language",
+    systemText.includes("primary language: en-US (English)"),
+    "session-config must lead with the stable primary reply language code and retain its label",
   );
   assert.ok(
-    systemText.includes("user input primary language: am-ET"),
-    "session-config must keep the user input language in Moa-owned context",
+    systemText.includes("user input primary language: am-ET (Amharic)"),
+    "session-config must lead with the stable input language code and retain its label",
   );
+
+  const geezSetup = provider.setupMessage({
+    effectiveProfile: {
+      ...agentProfile.effective(),
+      language: "gez",
+      language_primary: "gez",
+      input_languages: "gez",
+      input_language_primary: "gez",
+    },
+  });
+  const geezSystemText = geezSetup.systemInstruction.parts.map((part) => String(part.text || "")).join("\n");
+  assert.ok(geezSystemText.includes("primary language: gez (Geʽez)"), "Geʽez reply language must remain code-first and human-readable");
+  assert.ok(geezSystemText.includes("user input primary language: gez (Geʽez)"), "Geʽez input language must remain code-first and human-readable");
 
   const legacySetup = provider.setupMessage({
     effectiveProfile: {
@@ -975,6 +988,7 @@ function gatewayEnv({ port, dataDir, fakeUrl }) {
     PATH: process.env.PATH || "",
     HOME: process.env.HOME || "",
     TMPDIR: process.env.TMPDIR || os.tmpdir(),
+    NODE_PATH: process.env.NODE_PATH || "",
     HOST: "127.0.0.1",
     PORT: String(port),
     DATA_DIR: dataDir,

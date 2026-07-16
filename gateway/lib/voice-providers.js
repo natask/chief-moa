@@ -3673,10 +3673,10 @@ function profileLanguageInstruction(profile) {
   return [
     "Moa language profile:",
     `- mode: ${mode}`,
-    primary ? `- primary language: ${languageInstructionName(primary)}` : "",
-    configured ? `- configured language set: ${configured.split(", ").map(languageInstructionName).join(", ")}` : "",
-    inputPrimary ? `- user input primary language: ${languageInstructionName(inputPrimary)}` : "",
-    inputConfigured ? `- user input language set: ${inputConfigured.split(", ").map(languageInstructionName).join(", ")}` : "",
+    primary ? `- primary language: ${profileLanguageCodeFirst(primary)}` : "",
+    configured ? `- configured language set: ${configured.split(", ").map(profileLanguageCodeFirst).join(", ")}` : "",
+    inputPrimary ? `- user input primary language: ${profileLanguageCodeFirst(inputPrimary)}` : "",
+    inputConfigured ? `- user input language set: ${inputConfigured.split(", ").map(profileLanguageCodeFirst).join(", ")}` : "",
     `- output policy: ${output}`,
     `- automatic durable language switching: ${autoSwitch ? "allowed" : "disabled"}`,
     autoSwitch
@@ -3684,6 +3684,8 @@ function profileLanguageInstruction(profile) {
       : "Do not change the durable language or output policy unless the user explicitly asks for a profile change.",
   ].filter(Boolean).join("\n");
 }
+
+const profileLanguageCodeFirst = (value) => languageInstructionName(value).replace(/^(.+) \(([^()]*)\)$/, "$2 ($1)");
 
 function transcriptionText(value) {
   if (!value) return "";
