@@ -20,6 +20,30 @@ const extensionPath = join(root, "extension");
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `sidepanel-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
+const GATEWAY_SETTING_IDS = [
+  "system_prompt", "assistant_name", "user_address", "user_name", "user_nickname",
+  "model", "temperature", "voice_max_chars", "language", "voice", "speaking_rate",
+  "voice_tone", "language_mode", "language_primary", "language_output",
+  "language_auto_switch", "input_languages", "input_language_primary",
+  "response_modality", "voice_provider", "stt_provider", "reasoning_provider",
+  "tts_provider", "tool_policy", "autonomy_level", "memory_policy", "recovery_mode",
+  "active_companion_id", "active_companion_name", "active_companion_source",
+  "active_companion_version",
+];
+const GATEWAY_SETTINGS = GATEWAY_SETTING_IDS.map((id, index) => ({
+  id,
+  title: `Gateway ${id.replaceAll("_", " ")}`,
+  category: index < 5 ? "identity" : "gateway",
+  scope: "global",
+  description: `Canonical gateway profile setting ${id}.`,
+  aliases: [id.replaceAll("_", " ")],
+  value: `current-${id}`,
+  default_value: `default-${id}`,
+  readable: true,
+  writable: !id.startsWith("active_companion_"),
+  managed: id.startsWith("active_companion_"),
+  redacted: false,
+}));
 
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -115,9 +139,19 @@ async function main() {
   mkdirSync(profilePath, { recursive: true });
 
   const gateway = createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
     if (request.url === "/fixture") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end("<!doctype html><title>Recovery fixture</title><main>Microphone recovery fixture</main>");
+      return;
+    }
+    if (url.pathname === "/v1/agent/settings") {
+      const query = String(url.searchParams.get("q") || "").toLowerCase();
+      const settings = query
+        ? GATEWAY_SETTINGS.filter((setting) => `${setting.id} ${setting.title} ${setting.description}`.toLowerCase().includes(query))
+        : GATEWAY_SETTINGS;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ version: "profile-settings/v1", count: settings.length, settings }));
       return;
     }
     response.writeHead(200, { "content-type": "application/json" });
@@ -324,15 +358,27 @@ async function main() {
       const renderedIds = [...document.querySelectorAll(".setting-row")].map((row) => row.dataset.settingId);
       await panel.runSettingsQuery("list");
       const allIds = [...document.querySelectorAll(".setting-row")].map((row) => row.dataset.settingId);
-      return { spokenIds, renderedIds, allIds };
+      const allRows = [...document.querySelectorAll(".setting-row")].map((row) => ({
+        id: row.dataset.settingId,
+        current: row.querySelector(".setting-row-current")?.textContent || "",
+      }));
+      return { spokenIds, renderedIds, allIds, allRows };
     })()`);
+    const currentById = new Map(parity.allRows.map((row) => [row.id, row.current]));
     if (
       parity.spokenIds[0] !== "browser.microphone_permission" ||
       parity.renderedIds[0] !== parity.spokenIds[0] ||
+      parity.allIds.length !== 37 ||
+      new Set(parity.allIds).size !== 37 ||
+      parity.allRows.some((row) => !row.current.startsWith("Current: ")) ||
       !["browser.gateway_url", "browser.gateway_token", "browser.livekit_voice", "browser.background_automation", "browser.microphone_permission", "browser.agent_role"]
-        .every((id) => parity.allIds.includes(id))
+        .every((id) => parity.allIds.includes(id)) ||
+      !GATEWAY_SETTING_IDS.every((id) => (
+        parity.allIds.includes(`gateway.${id}`) &&
+        currentById.get(`gateway.${id}`) === `Current: current-${id}`
+      ))
     ) {
-      throw new Error(`spoken/typed settings identities or complete local All projection diverged: ${JSON.stringify(parity)}`);
+      throw new Error(`spoken/typed settings identities or complete merged All projection diverged: ${JSON.stringify(parity)}`);
     }
     const writes = await evaluate(pageCdp, `new Promise(async (resolveWrites) => {
       const port = chrome.runtime.connect({ name: "agee-panel" });
@@ -441,7 +487,7 @@ async function main() {
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
-        "typed/spoken settings identities matched, All exposed every local control, brokered writes failed closed/redacted, microphone walkthrough opened, " +
+        "typed/spoken settings identities matched, All exposed 6 local + 31 gateway controls with unique ids/current values, brokered writes failed closed/redacted, microphone walkthrough opened, " +
         "initial microphone denial stayed visible until its explicit recovery action opened the focused walkthrough, " +
         "the page overlay preserved the same structured start-denial action without auto-navigation, " +
         "settings search selected the grounded microphone row, " +

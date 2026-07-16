@@ -171,12 +171,16 @@ const port = {
 
 const storageWrites = [];
 let storageReject = false;
+let storageChangeListener = null;
 const chrome = {
   runtime: { connect() { return port; } },
-  storage: { local: {
-    async get() { if (storageReject) throw new Error("storage failed"); return { ageeBrowserAgentRole: "help" }; },
-    async set(value) { storageWrites.push(value); },
-  } },
+  storage: {
+    local: {
+      async get() { if (storageReject) throw new Error("storage failed"); return { ageeBrowserAgentRole: "help" }; },
+      async set(value) { storageWrites.push(value); },
+    },
+    onChanged: { addListener(listener) { storageChangeListener = listener; } },
+  },
 };
 
 let audioConstructThrows = false;
@@ -214,6 +218,7 @@ const original = {
   chrome: globalThis.chrome,
   document: globalThis.document,
   documentPictureInPicture: globalThis.documentPictureInPicture,
+  navigatorDescriptor: Object.getOwnPropertyDescriptor(globalThis, "navigator"),
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
   window: globalThis.window,
@@ -228,6 +233,27 @@ const panel = await import(`../extension/sidepanel.js?test=${Date.now()}`);
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(document.getElementById("status").textContent, "Ready.");
 assert.equal(document.getElementById("agentModeSelector").dataset.agentMode, "help");
+assert.ok(storageChangeListener);
+storageChangeListener({}, "sync");
+storageChangeListener({}, "local");
+storageChangeListener({ ageeBrowserAgentRole: { newValue: "collaborate" } }, "local");
+assert.equal(document.getElementById("agentModeSelector").dataset.agentMode, "collaborate");
+
+Object.defineProperty(globalThis, "navigator", {
+  configurable: true,
+  value: { permissions: { query: async () => ({ state: "granted" }) } },
+});
+await panel.runSettingsQuery("list");
+assert.equal(posted.at(-1).microphonePermission, "granted");
+globalThis.navigator.permissions.query = async () => ({ state: "unsupported" });
+await panel.runSettingsQuery("list");
+assert.equal(posted.at(-1).microphonePermission, "unknown");
+globalThis.navigator.permissions.query = async () => { throw new Error("permission unavailable"); };
+await panel.runSettingsQuery("list");
+assert.equal(posted.at(-1).microphonePermission, "unknown");
+Object.defineProperty(globalThis, "navigator", { configurable: true, value: {} });
+await panel.runSettingsQuery("list");
+assert.equal(posted.at(-1).microphonePermission, "unknown");
 
 document.getElementById("settingsSearch").value = "microphone";
 await document.getElementById("settingsForm").emit("submit");
@@ -251,6 +277,60 @@ await settingsDetail.children[2].emit("click");
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(posted.at(-1).cmd, "openOptions");
 assert.equal(posted.at(-1).target, "microphone_permission");
+
+responseOverrides.set("openOptions", { ok: false });
+panel.renderSettingDetail({
+  id: "browser.microphone_permission",
+  current: null,
+  default: [],
+  deep_link: { target: "microphone_permission" },
+});
+let recoveryAction = settingsDetail.children[2];
+await recoveryAction.emit("click");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(recoveryAction.disabled, false);
+responseOverrides.set("openOptions", "throw");
+panel.renderSettingDetail({ id: "browser.microphone_permission", deep_link: { target: "microphone_permission" } });
+recoveryAction = settingsDetail.children[2];
+await recoveryAction.emit("click");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(recoveryAction.disabled, false);
+responseOverrides.delete("openOptions");
+
+assert.match(panel.settingMetadata({ current: {}, default: "", constraints: [] }), /Owner: unknown/);
+assert.match(panel.settingMetadata({ current: [], default: undefined }), /Current: None/);
+responseOverrides.set("settingsQuery", { ok: false });
+await panel.selectSetting({ id: "browser.gateway_token", title: "Fallback title", current: "fallback" });
+assert.equal(settingsDetail.children[0].textContent, "Fallback title");
+responseOverrides.delete("settingsQuery");
+
+panel.renderSettingsResults({ error: "catalog offline" });
+assert.match(settingsResults.children[0].textContent, /catalog offline/);
+panel.renderSettingsResults({ settings: [] });
+assert.match(settingsResults.children[0].textContent, /No registered settings/);
+document.getElementById("settingsSearch").value = "";
+assert.equal(await panel.runSettingsQuery("search"), null);
+assert.equal(document.activeElement, document.getElementById("settingsSearch"));
+assert.equal(await panel.runSettingsQuery("recommend"), null);
+assert.equal(await panel.projectSpokenSettingsQuery({ settingsQueryRendered: true }, "show all settings"), null);
+assert.equal(await panel.projectSpokenSettingsQuery({}, "hello there"), null);
+responseOverrides.set("settingsQuery", {
+  ok: true,
+  setting: { id: "browser.agent_role", title: "Role", current: "help" },
+  gateway_error: "offline",
+});
+const exactSpoken = await panel.projectSpokenSettingsQuery({}, "Get setting browser.agent_role");
+assert.equal(exactSpoken.settings[0].id, "browser.agent_role");
+assert.match(document.getElementById("status").textContent, /Browser settings shown/);
+responseOverrides.delete("settingsQuery");
+
+responseOverrides.set("settingsQuery", "throw");
+document.getElementById("settingsSearch").value = "privacy";
+await document.getElementById("settingsRecommend").emit("click");
+await document.getElementById("settingsAll").emit("click");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(document.getElementById("status").dataset.state, "error");
+responseOverrides.delete("settingsQuery");
 
 document.getElementById("settingsSearch").value = "token";
 await panel.runSettingsQuery("search");
@@ -385,6 +465,11 @@ panel.handleVoiceEvent({ event: { type: "turn_done", status: "error" } });
 assert.match(active.ui.ag.textContent, /Voice turn failed/);
 active = await panel.startTurn("voice", { youText: "" });
 panel.handleVoiceEvent({ event: { type: "turn_done", status: "no_speech" } });
+assert.equal(active.done, true);
+active = await panel.startTurn("voice", { youText: "" });
+panel.handleVoiceEvent({ event: { type: "turn_done", status: "completed" } });
+runTimer(1500);
+await new Promise((resolve) => setImmediate(resolve));
 assert.equal(active.done, true);
 active = await panel.startTurn("voice", { youText: "" });
 panel.handleVoiceEvent({ event: {
@@ -561,6 +646,8 @@ assert.equal(document.getElementById("status").dataset.state, "error");
 globalThis.chrome = original.chrome;
 globalThis.document = original.document;
 globalThis.documentPictureInPicture = original.documentPictureInPicture;
+if (original.navigatorDescriptor) Object.defineProperty(globalThis, "navigator", original.navigatorDescriptor);
+else delete globalThis.navigator;
 globalThis.setTimeout = original.setTimeout;
 globalThis.clearTimeout = original.clearTimeout;
 globalThis.window = original.window;
