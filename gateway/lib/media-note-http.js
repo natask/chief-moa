@@ -59,11 +59,11 @@ function createMediaNoteHttpHandlers(options) {
       return;
     }
     const filePath = options.blobPath(id);
-    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    const stat = filePath && fs.existsSync(filePath) ? fs.statSync(filePath) : null;
+    if (!stat || !stat.isFile()) {
       sendJson(response, 404, { error: `${options.label} ${options.mediaSegment} not found` });
       return;
     }
-    const stat = fs.statSync(filePath);
     response.writeHead(200, {
       "content-type": note.content_type || "application/octet-stream",
       "content-length": stat.size,
