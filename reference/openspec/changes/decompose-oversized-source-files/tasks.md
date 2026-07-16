@@ -404,6 +404,12 @@
       97.03% branches, and 100% functions; reduce `content.js` to 4,298 lines
       and raise the exact whole-extension ratchet to 49.69% lines, 30.53%
       branches, and 26.14% functions with 43 passing unit tests.
+- [x] 4.4l Remove the uncovered duplicate UI-spec sanitizer from `content.js`
+      and make the already-loaded, focused `ui-spec-runtime.js` the single
+      sanitization authority. Preserve its 100% lines, 99.15% branches, and
+      100% functions gate; reduce `content.js` to 4,155 lines and raise the
+      exact whole-extension ratchet to 49.98% lines, 31.14% branches, and
+      26.39% functions.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
