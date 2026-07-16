@@ -40,6 +40,7 @@ async function main() {
     await step("chat-turns auth required", () => assertChatTurnsAuthRequired(baseUrl));
     const sessionId = `chat_smoke_${Date.now().toString(36)}`;
     await step("chat turns persist + reload in order", () => assertChatTurnHistory(baseUrl, sessionId));
+    await step("typed chat reports queued agents with intent and stable id", () => assertTypedAgentStatus(baseUrl, sessionId));
     await step("unknown session returns empty list", () => assertEmptyChatHistory(baseUrl, sessionId));
     await step("voice audio auth required", () => assertAudioAuthRequired(baseUrl));
     await step("voice audio 404 shape", () => assertAudioNotFound(baseUrl));
@@ -51,6 +52,7 @@ async function main() {
       checks: [
         "GET /v1/sessions/:id/chat-turns requires a token",
         "two chat turns under one session id both persist and reload in order",
+        "typed chat reports shared queued agents as Markdown with intent, status, and stable id",
         "unknown session returns empty turn list",
         "GET /v1/voice/audio/:turn_id requires a token",
         "GET /v1/voice/audio/:turn_id for missing turn returns 404 JSON (not 500)",
@@ -125,6 +127,35 @@ async function assertEmptyChatHistory(baseUrl, usedSessionId) {
   assert.equal(history.total, 0, "total must be 0 for unknown session");
 }
 
+async function assertTypedAgentStatus(baseUrl, sessionId) {
+  const prompt = "Compare the current browser voice gesture behavior";
+  const launched = await postJson(`${baseUrl}/v1/agent/runs`, {
+    session_id: sessionId,
+    conversation_id: sessionId,
+    source: "chat-turns-smoke",
+    harness: "echo",
+    prompt,
+    wait: false,
+  });
+  assert.equal(launched.status, 202, `queued run must be accepted: ${JSON.stringify(launched.json)}`);
+  const runId = launched.json?.run?.id;
+  assert.ok(runId, "queued run response must include a stable id");
+
+  const status = await postJson(`${baseUrl}/v1/chat`, {
+    session_id: `${sessionId}_status`,
+    conversation_id: `${sessionId}_status`,
+    source: "chat-turns-smoke",
+    messages: [{ role: "user", content: "What agents are running?" }],
+  });
+  assert.equal(status.status, 200, `typed status query must succeed: ${JSON.stringify(status.json)}`);
+  assert.match(status.json.text, /### Queued agents/);
+  assert.match(status.json.text, new RegExp(`\\*\\*${runId}\\*\\*`));
+  assert.match(status.json.text, /Compare the current browser voice gesture behavior/);
+  assert.match(status.json.text, /`queued`/);
+  assert.equal(status.json.work_history?.intent?.kind, "status_query");
+  assert.ok(status.json.work_history?.refs?.queued_run_ids?.includes(runId));
+}
+
 async function assertAudioAuthRequired(baseUrl) {
   const unauth = await requestRaw(`${baseUrl}/v1/voice/audio/some-turn-id`, { auth: false });
   assert.equal(unauth.status, 401, "voice audio must require a token");
@@ -172,6 +203,7 @@ function gatewayEnv({ port, dataDir }) {
     OPENAI_API_KEY: "",
     GOOGLE_API_KEY: "",
     GEMINI_API_KEY: "",
+    MOA_WORKER_PULL: "1",
   };
 }
 

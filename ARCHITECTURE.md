@@ -1045,6 +1045,18 @@ launch a new fork, attach it to several active runs, or dismiss it as irrelevant
 The user must be able to inspect which runs are active and what each is trying
 to accomplish.
 
+Agent inspection is conversational first. A status question such as "what
+agents are running?" is parsed deterministically before model execution on both
+the voice-turn and typed-chat routes. The gateway folds the shared work-history
+and legacy agent-run stores into one read-only answer: Markdown display groups
+active, queued, and blocked runs, while the separate speech string names each
+run's user request, lifecycle state, latest bounded progress, worker when known,
+and stable run ID. Internally injected session context is removed from the
+public prompt preview, so routing and status surfaces describe the user's work
+rather than gateway scaffolding. A running-scope query excludes historical
+completed/failed runs; broader overview queries may include recent terminal
+work. This status path never starts, stops, pauses, or retargets an agent.
+
 ### Context And Threads
 
 ```text
@@ -1143,7 +1155,9 @@ Endpoints live under `/v1/work-history/*`: `turns` (spoken/text entry),
 (+ `requests`). `POST /v1/voice/turns` routes matching transcripts through the
 same path before the legacy dispatch branch, so a status question never
 launches work and an explicit "queue a run" creates a queued run instead of
-starting a harness.
+starting a harness. `POST /v1/chat` recognizes the same read-only status intent
+before browser-page delegation or model execution and persists the resulting
+typed turn normally, including bounded run references in `work_history`.
 
 ### Router Activation Loop
 

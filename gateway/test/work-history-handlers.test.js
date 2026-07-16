@@ -9,6 +9,7 @@ const {
   mergeRunStatusSummaries,
   workHistoryChangedDetail,
   workHistoryDeploymentTarget,
+  workHistoryStatusDisplay,
   workHistoryStatusSpeech,
 } = require("../lib/work-history-handlers");
 
@@ -247,7 +248,8 @@ test("pure status and changed-detail helpers cover empty and evidence-rich proje
   assert.equal(workHistoryDeploymentTarget("deploy it"), "");
 
   const projected = agentRunStatusSummary([
-    { id: "q", status: "queued", updated_at: "2" }, { id: "a", status: "claimed", updated_at: "1" },
+    { id: "q", status: "queued", prompt_preview: "Compare voice providers", updated_at: "2" },
+    { id: "a", status: "claimed", prompt_preview: "Fix the browser gesture", output_preview: "Tests are running", updated_at: "1" },
     { id: "c", status: "completed" }, { id: "f", status: "failed" }, { id: "x", status: "canceled" }, { id: "t", status: "timed-out" },
   ]);
   assert.equal(projected.failed.length, 3);
@@ -256,6 +258,13 @@ test("pure status and changed-detail helpers cover empty and evidence-rich proje
   assert.equal(workHistoryStatusSpeech({ scope: "waiting" }, structuredClone(EMPTY_SUMMARY), ""), "Nothing is waiting on you.");
   assert.equal(workHistoryStatusSpeech({ scope: "overview" }, structuredClone(EMPTY_SUMMARY), ""), "No work-history tasks or runs recorded yet.");
   assert.equal(workHistoryStatusSpeech({ scope: "changed" }, structuredClone(EMPTY_SUMMARY), "changed"), "changed");
+  assert.match(workHistoryStatusSpeech({ scope: "running" }, mergeRunStatusSummaries(structuredClone(EMPTY_SUMMARY), projected), ""), /Fix the browser gesture/);
+  assert.doesNotMatch(workHistoryStatusSpeech({ scope: "running" }, mergeRunStatusSummaries(structuredClone(EMPTY_SUMMARY), projected), ""), /Recently completed/);
+  const markdown = workHistoryStatusDisplay({ scope: "running" }, mergeRunStatusSummaries(structuredClone(EMPTY_SUMMARY), projected), "");
+  assert.match(markdown, /### Active agents/);
+  assert.match(markdown, /\*\*a\*\* — Fix the browser gesture `claimed` — Tests are running/);
+  assert.match(markdown, /### Queued agents/);
+  assert.equal(workHistoryStatusDisplay({ scope: "running" }, structuredClone(EMPTY_SUMMARY), ""), "No agents are running, queued, or blocked.");
 
   const store = { runDetail: async () => ({
     status: "completed", before_snapshot: { branch: "main", commit_sha: "1234567890abcdef" }, after_snapshot: { commit_sha: "fedcba987654" },
