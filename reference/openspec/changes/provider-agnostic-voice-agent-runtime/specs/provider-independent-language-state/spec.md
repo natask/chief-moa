@@ -46,10 +46,23 @@ settings, and the change SHALL remain active until changed again.
 The gateway SHALL translate Moa language state into provider-specific language
 hints, prompts, or setup fields when the selected provider supports them.
 
+For Chirp 3, the gateway SHALL keep provider language recognition in `auto`
+mode and translate the configured input-language state into one bounded custom
+transcription prompt shared by streaming and batch recognition. Provider
+language detection is evidence only; it SHALL NOT replace the configured Moa
+language state or constrain which language Chirp may recognize.
+
 #### Scenario: Provider supports language hints
 - **WHEN** the selected STT, live, or TTS provider supports language hints
 - **THEN** the gateway sends the configured Moa language state through the
   provider's supported mechanism
+
+#### Scenario: Chirp streams with automatic recognition
+- **WHEN** Chirp 3 streaming STT starts for a configured input-language profile
+- **THEN** the recognition request uses `languageCodes=["auto"]`
+- **AND** its custom prompt names the configured input languages and requires
+  verbatim, non-translated transcription with language switches preserved
+- **AND** the same prompt contract is used by batch fallback recognition
 
 #### Scenario: Provider lacks language hints
 - **WHEN** the selected provider does not support explicit language hints

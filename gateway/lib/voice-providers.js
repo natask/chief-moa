@@ -7,6 +7,7 @@ const { execFileSync } = require("node:child_process");
 const { WebSocket } = require("ws");
 const { safeSystemPromptForProvider } = require("./agent-profile");
 const { voiceOptionsPayload } = require("./profile-options");
+const { buildChirpTranscriptionPrompt } = require("./chirp-transcription-prompt");
 const { createSttStage, createReasonerStage, createTtsStage } = require("./voice-stages");
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
@@ -27,20 +28,8 @@ const DEFAULT_GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 const DEFAULT_VERTEX_LIVE_MODEL = "gemini-live-2.5-flash-native-audio";
 const DEFAULT_VERTEX_LIVE_LOCATION = "us-central1";
 const DEFAULT_CHIRP_MODEL = "chirp_3";
-const CHIRP_MAX_RESTRICTED_LANGUAGE_CODES = 2;
-const CHIRP_3_ONLY_LANGUAGE_CODES = [
-  "af-ZA", "sq-AL", "am-ET", "ar-DZ", "ar-BH", "ar-EG", "ar-IL", "ar-JO",
-  "ar-KW", "ar-LB", "ar-MR", "ar-MA", "ar-OM", "ar-QA", "ar-SA", "ar-PS",
-  "ar-SY", "ar-TN", "ar-AE", "ar-YE", "ar-XA", "ar-IQ", "hy-AM", "as-IN",
-  "ast-ES", "az-AZ", "eu-ES", "bn-BD", "bn-IN", "bg-BG", "my-MM", "yue-Hant-HK",
-  "cmn-Hant-TW", "cs-CZ", "en-PH", "et-EE", "fil-PH", "gl-ES", "ka-GE", "gu-IN",
-  "ha-NG", "iw-IL", "hu-HU", "is-IS", "id-ID", "jv-ID", "kn-IN", "kk-KZ",
-  "km-KH", "ky-KG", "lo-LA", "lv-LV", "lt-LT", "lb-LU", "mk-MK", "ms-MY",
-  "ml-IN", "mt-MT", "mi-NZ", "mr-IN", "mn-MN", "ne-NP", "nso-ZA", "no-NO",
-  "or-IN", "fa-IR", "pa-Guru-IN", "sr-RS", "sk-SK", "sl-SI", "es-MX", "sw-KE",
-  "sw", "ta-IN", "te-IN", "th-TH", "uz-UZ", "cy-GB", "wo-SN", "xh-ZA", "yo-NG",
-  "zu-ZA",
-];
+const CHIRP_MAX_PROMPT_LANGUAGE_CODES = 2;
+const CHIRP_AUTO_LANGUAGE_CODES = Object.freeze(["auto"]);
 const GEMINI_LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const VERTEX_LIVE_EXPRESS_ENDPOINT = "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent";
 const PROVIDER_TYPES = ["native_live", "stt", "reasoning", "tts"];
@@ -602,7 +591,9 @@ class CascadedVoiceProvider {
     this.projectId = chirpProjectId(env);
     this.location = String(env.CHIRP_LOCATION || env.GCP_LOCATION || env.GOOGLE_CLOUD_LOCATION || "us").trim() || "us";
     this.model = String(env.CHIRP_MODEL || env.VOICE_STT_MODEL || DEFAULT_CHIRP_MODEL).trim() || DEFAULT_CHIRP_MODEL;
-    this.envLanguageCodes = languageCodes(env.CHIRP_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODE || env.GEMINI_LIVE_LANGUAGE_CODE || env.MODEL_LANGUAGE || "en-US");
+    // Backward-compatible env fallback for the language names placed in the
+    // Chirp custom prompt. Recognition itself always stays language-agnostic.
+    this.envPromptLanguageCodes = languageCodes(env.CHIRP_PROMPT_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODE || env.GEMINI_LIVE_LANGUAGE_CODE || env.MODEL_LANGUAGE || "en-US");
     this.timeoutMs = Math.max(5000, numberFrom(env.CHIRP_TIMEOUT_MS || env.VOICE_PROVIDER_TIMEOUT_MS, 30000));
     this.cloudTtsTimeoutMs = Math.max(1, numberFrom(env.CLOUD_TTS_TIMEOUT_MS, 20000));
     this.testChirpEndpoint = env.MOA_MODE === "local" ? String(env.MOA_TEST_CHIRP_ENDPOINT || "").trim() : "";
@@ -632,7 +623,7 @@ class CascadedVoiceProvider {
     this.sttStage = createSttStage({
       id: "chirp",
       capabilities: { partial_transcripts: this.streamingSttFlagEnabled(), language_hints: true },
-      transcribe: ({ turn, languageCodes }) => this.runSttStage(turn, languageCodes),
+      transcribe: ({ turn }) => this.runSttStage(turn),
     });
     this.reasonerStage = this.reasoner
       ? createReasonerStage({
@@ -680,6 +671,10 @@ class CascadedVoiceProvider {
   }
 
   sttLanguageCodes(turnOrProfile) {
+    return CHIRP_AUTO_LANGUAGE_CODES.slice();
+  }
+
+  sttPromptLanguageCodes(turnOrProfile) {
     const profile = this.profileForTurn(turnOrProfile);
     if (profile) {
       const set = String(profile?.input_languages || profile?.input_language_primary || "").trim();
@@ -696,13 +691,16 @@ class CascadedVoiceProvider {
       }
       return codes;
     }
-    return this.envLanguageCodes;
+    return this.envPromptLanguageCodes;
+  }
+
+  sttCustomPrompt(turnOrProfile, promptCodes = this.sttPromptLanguageCodes(turnOrProfile)) {
+    return buildChirpTranscriptionPrompt(promptCodes);
   }
 
   assertModelSupportsLanguages(codes = this.sttLanguageCodes()) {
-    const chirp3Only = chirp3OnlyLanguages(codes);
-    if (chirp3Only.length > 0 && !isChirp3Model(this.model)) {
-      throw new Error(`chirp language codes ${chirp3Only.join(", ")} require model=chirp_3, but CHIRP_MODEL is ${this.model || "unset"}`);
+    if (!isChirp3Model(this.model)) {
+      throw new Error(`automatic prompt-based transcription requires model=chirp_3, but CHIRP_MODEL is ${this.model || "unset"}`);
     }
   }
 
@@ -712,7 +710,7 @@ class CascadedVoiceProvider {
 
   status() {
     const codes = this.sttLanguageCodes();
-    const chirp3Only = chirp3OnlyLanguages(codes);
+    const promptLanguageCodes = this.sttPromptLanguageCodes();
     const runtime = voiceRuntimeStatus({
       env: this.env,
       names: this.names,
@@ -729,11 +727,11 @@ class CascadedVoiceProvider {
       endpoint: redactEndpoint(this.endpoint()),
       auth: this.authStatus(),
       language_codes: codes,
-      // "restricted": the request truly limits recognition to language_codes.
-      // "auto": language-agnostic (auto-detect) because CHIRP_LANGUAGE_CODES=auto.
-      language_recognition: codes[0] === "auto" ? "auto" : "restricted",
-      requires_chirp_3: chirp3Only.length > 0,
-      chirp_3_only_languages: chirp3Only,
+      language_recognition: "auto",
+      prompt_language_codes: promptLanguageCodes,
+      custom_prompt_configured: true,
+      requires_chirp_3: true,
+      chirp_3_only_languages: [],
       // "cascaded": STT -> gateway LLM turn -> hosted Cloud TTS reply audio.
       // "stt_only": transcript only; the device speaks the reply.
       pipeline: this.cascaded() ? "cascaded" : "stt_only",
@@ -784,6 +782,7 @@ class CascadedVoiceProvider {
       throw new Error("chirp STT provider requires GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT plus GCP_SERVICE_ACCOUNT_KEY, GOOGLE_APPLICATION_CREDENTIALS, CHIRP_ACCESS_TOKEN, or gcloud ADC on the gateway machine");
     }
     const sttLanguageCodes = this.sttLanguageCodes(turn);
+    const promptLanguageCodes = this.sttPromptLanguageCodes(turn);
     this.assertModelSupportsLanguages(sttLanguageCodes);
     // A typed text turn (side panel / text surfaces) carries its transcript in
     // turn.syntheticText and records no audio: skip the STT leg entirely.
@@ -792,13 +791,15 @@ class CascadedVoiceProvider {
       throw new Error("cannot send an empty audio turn to chirp");
     }
 
-    // Leg 1 — streaming Chirp 3 STT, restricted to the configured languages.
+    // Leg 1 — streaming Chirp 3 STT in language-agnostic mode, guided by the
+    // turn-pinned profile's custom transcription prompt.
     let transcription = { text: typedText, languageRejected: false };
     const sttStartedAtMs = Date.now();
     await voiceStageStart(hooks, "stt", {
       provider_id: this.sttProviderId,
       model: this.model,
       language_codes: sttLanguageCodes,
+      prompt_language_codes: promptLanguageCodes,
       audio_bytes: turn.audioBytes || 0,
       skipped: Boolean(typedText),
     });
@@ -809,6 +810,7 @@ class CascadedVoiceProvider {
           provider_id: this.sttProviderId,
           model: this.model,
           language_codes: sttLanguageCodes,
+          prompt_language_codes: promptLanguageCodes,
           transcript_chars: String(transcription.text || "").length,
           transcript_language_rejected: transcription.languageRejected === true,
         });
@@ -817,6 +819,7 @@ class CascadedVoiceProvider {
           provider_id: this.sttProviderId,
           model: this.model,
           language_codes: sttLanguageCodes,
+          prompt_language_codes: promptLanguageCodes,
         });
         throw error;
       }
@@ -1652,13 +1655,13 @@ class CascadedVoiceProvider {
     return !(this.ttsProviderId === "gemini-tts" && this.clientRateModeEnabled());
   }
 
-  // The reply (OUTPUT) language from the effective agent profile, falling back to
-  // the primary STT language. This is output policy, distinct from the restricted
-  // INPUT languages the STT leg recognizes.
+  // The reply (OUTPUT) language from the effective agent profile, falling back
+  // to the first language named in the STT prompt. Chirp recognition itself is
+  // language-agnostic.
   replyLanguage(turnOrProfile) {
     const profile = this.profileForTurn(turnOrProfile);
     const fromProfile = String(profile?.language || profile?.language_primary || "").trim();
-    return fromProfile || this.sttLanguageCodes(turnOrProfile)[0] || "en-US";
+    return fromProfile || this.sttPromptLanguageCodes(turnOrProfile)[0] || "en-US";
   }
 
   canSynthesize(language) {
@@ -1739,19 +1742,13 @@ class CascadedVoiceProvider {
   }
 
   // Per-turn streaming decision: the env flag is on, the in-process streaming
-  // breaker has not latched, and the configured language/model combination is
-  // legal for streamingRecognize (Chirp-3-only languages require model=chirp_3,
-  // the same restriction the batch path asserts). A rejection here degrades the
-  // turn to the batch path — it never fails the turn.
+  // breaker has not latched, and Chirp 3 is selected. `auto` is legal for the
+  // streaming RecognitionConfig just as it is for batch recognition; the same
+  // profile-derived custom prompt guides both paths.
   streamingSttEnabled(codes = this.sttLanguageCodes()) {
     if (!this.streamingSttFlagEnabled()) return false;
     if (voiceStreamingTripped()) return false;
-    // "auto" (language-agnostic) is a batch-only convenience; streaming keeps
-    // the restricted-language contract.
-    if (!Array.isArray(codes) || codes.length === 0 || codes[0] === "auto") return false;
-    const chirp3Only = chirp3OnlyLanguages(codes);
-    if (chirp3Only.length > 0 && !isChirp3Model(this.model)) return false;
-    return true;
+    return Array.isArray(codes) && codes.length > 0 && isChirp3Model(this.model);
   }
 
   // Lazily build (or reuse) the Google Speech v2 streaming client. The gRPC
@@ -1810,7 +1807,7 @@ class CascadedVoiceProvider {
     return `projects/${this.projectId}/locations/${this.location}/recognizers/_`;
   }
 
-  streamingRecognitionConfig(codes, sampleRate, channels) {
+  streamingRecognitionConfig(codes, sampleRate, channels, customPrompt = this.sttCustomPrompt()) {
     return {
       recognizer: this.recognizerResource(),
       streamingConfig: {
@@ -1822,7 +1819,10 @@ class CascadedVoiceProvider {
           },
           languageCodes: codes,
           model: this.model,
-          features: { enableAutomaticPunctuation: true },
+          features: {
+            enableAutomaticPunctuation: true,
+            customPromptConfig: { customPrompt },
+          },
         },
         streamingFeatures: { interimResults: true },
       },
@@ -1844,7 +1844,12 @@ class CascadedVoiceProvider {
     }
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
-    const configMessage = this.streamingRecognitionConfig(codes, sampleRate, channels);
+    const configMessage = this.streamingRecognitionConfig(
+      codes,
+      sampleRate,
+      channels,
+      this.sttCustomPrompt(turn),
+    );
     try {
       return createStreamingSttSession({
         // @google-cloud/speech v2's public streamingRecognize() currently
@@ -1888,7 +1893,7 @@ class CascadedVoiceProvider {
   // stored PCM. Any streaming shortfall (disabled, empty, error) degrades to the
   // windowed batch path over the stored file — a broken stream never fails the
   // turn.
-  async runSttStage(turn, codes = this.sttLanguageCodes()) {
+  async runSttStage(turn) {
     const stream = turn?.sttStream;
     if (stream && typeof stream.finalize === "function") {
       try {
@@ -1908,14 +1913,14 @@ class CascadedVoiceProvider {
         reportVoiceStreamingFault(`stt_stream_finalize: ${cleanError(error)}`);
       }
     }
-    return this.transcribePcmWindowed(turn, codes);
+    return this.transcribePcmWindowed(turn, this.sttPromptLanguageCodes(turn));
   }
 
   // Batch path with no length limit: batch :recognize caps inline audio (~60s),
   // so audio longer than a 55s window is split on frame boundaries, each window
   // transcribed independently and the transcripts concatenated. Short audio
   // takes the single-request path unchanged.
-  async transcribePcmWindowed(turn, sttLanguageCodes = this.sttLanguageCodes()) {
+  async transcribePcmWindowed(turn, promptLanguageCodes = this.sttPromptLanguageCodes(turn)) {
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
     const audio = fs.readFileSync(turn.pcmPath);
@@ -1925,14 +1930,14 @@ class CascadedVoiceProvider {
     let windowBytes = Math.max(frameBytes, Math.floor(55 * bytesPerSecond));
     windowBytes -= windowBytes % frameBytes; // align to a whole sample frame
     if (audio.length <= windowBytes) {
-      return this.transcribePcmBuffer(audio, sampleRate, channels, sttLanguageCodes);
+      return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes);
     }
     const texts = [];
     let anyRejected = false;
     for (let offset = 0; offset < audio.length; offset += windowBytes) {
       const window = audio.subarray(offset, Math.min(offset + windowBytes, audio.length));
       if (window.length < frameBytes) break;
-      const part = await this.transcribePcmBuffer(window, sampleRate, channels, sttLanguageCodes);
+      const part = await this.transcribePcmBuffer(window, sampleRate, channels, promptLanguageCodes);
       if (part.text) texts.push(part.text);
       if (part.languageRejected) anyRejected = true;
     }
@@ -1940,15 +1945,17 @@ class CascadedVoiceProvider {
     return { text, languageRejected: anyRejected && !text, windowed: true };
   }
 
-  async transcribePcmFile(turn, sttLanguageCodes = this.sttLanguageCodes()) {
+  async transcribePcmFile(turn, promptLanguageCodes = this.sttPromptLanguageCodes(turn)) {
     const audio = fs.readFileSync(turn.pcmPath);
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
-    return this.transcribePcmBuffer(audio, sampleRate, channels, sttLanguageCodes);
+    return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes);
   }
 
-  async transcribePcmBuffer(audio, sampleRate, channels, sttLanguageCodes = this.sttLanguageCodes()) {
+  async transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes = this.sttPromptLanguageCodes()) {
     const token = await this.accessToken();
+    const sttLanguageCodes = this.sttLanguageCodes();
+    const customPrompt = this.sttCustomPrompt(null, promptLanguageCodes);
     const sttHeaders = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
@@ -1963,12 +1970,9 @@ class CascadedVoiceProvider {
       headers: sttHeaders,
       body: JSON.stringify({
         config: {
-          // explicitDecodingConfig fixes the audio ENCODING (LINEAR16 PCM). It
-          // is deliberately used instead of autoDecodingConfig: pairing
-          // auto-decoding with languageCodes demotes the codes to hints and
-          // Chirp keeps auto-detecting the language. With explicit decoding plus
-          // a capped languageCodes list (primary + at most one alternate),
-          // recognition is RESTRICTED to the configured languages.
+          // Explicit decoding describes the raw PCM container. Language
+          // recognition remains provider-neutral `auto`; configured Moa input
+          // languages affect only the custom prompt below.
           explicitDecodingConfig: {
             encoding: "LINEAR16",
             sampleRateHertz: sampleRate,
@@ -1978,6 +1982,7 @@ class CascadedVoiceProvider {
           model: this.model,
           features: {
             enableAutomaticPunctuation: true,
+            customPromptConfig: { customPrompt },
           },
         },
         content: Buffer.isBuffer(audio) ? audio.toString("base64") : Buffer.from(audio).toString("base64"),
@@ -2758,13 +2763,13 @@ class GeminiLiveVoiceProvider {
           },
           {
             name: "update_agent_profile",
-            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a clear preference about your voice or language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. You understand any language in the supported catalog (every Google Chirp 3 language); call get_profile_options for the exact BCP-47 codes. `input_languages` is the SET of languages you understand — set it when the user says what THEY speak or what language you should hear, listen for, understand, transcribe, or detect ('I only speak Amharic', 'listen for English and Amharic'); recognition is constrained to exactly that set (at most two codes). To switch which of the understood languages leads right now ('right now I want to speak Amharic'), set `input_language_primary` to a code already in that set. `language` is what YOU reply in ('speak Amharic', 'answer in English'). If the user asks for both hearing and replying, set both fields in one call. Reply language and understood languages are separate settings; do not collapse them. Do not set response_modality='text' for goodbye, bye, stop, hush, or silence requests; those are current-turn controls, not durable profile changes. After calling, confirm briefly in the new setting language only.",
+            description: "Change your own durable settings. CALL THIS YOURSELF, without being told to, whenever the user states a clear preference about your voice or language. Use get_profile_options when you need the allowed voices/languages. Use scope='device' only when the user says this device/phone/browser; use scope='global' for all devices/everywhere/default. You understand any language in the supported catalog (every Google Chirp 3 language); call get_profile_options for the exact BCP-47 codes. `input_languages` is the SET of languages named in the STT transcription prompt — set it when the user says what THEY speak or what language you should hear, listen for, understand, transcribe, or detect ('I only speak Amharic', 'listen for English and Amharic'); Chirp recognition itself remains automatic. To switch which understood language the prompt emphasizes first ('right now I want to speak Amharic'), set `input_language_primary` to a code already in that set. `language` is what YOU reply in ('speak Amharic', 'answer in English'). If the user asks for both hearing and replying, set both fields in one call. Reply language and understood languages are separate settings; do not collapse them. Do not set response_modality='text' for goodbye, bye, stop, hush, or silence requests; those are current-turn controls, not durable profile changes. After calling, confirm briefly in the new setting language only.",
             parameters: {
               type: "OBJECT",
               properties: {
                 profile: {
                   type: "OBJECT",
-                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". Set `user_name` when the user tells you their name (\"my name is X\", \"I am X\"). Set `user_nickname` when the user asks to be called something specific (\"call me X\"). Set `user_address` when the user sets the honorific or form of address you must use for them (\"address me as X\", \"call me sir/master/boss\"). These four identity fields are injected into every session automatically - persist them instead of remembering them ad hoc. LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list the USER may speak (the STT recognizer is constrained to exactly this set, at most two codes). Valid codes are any in the supported catalog (get_profile_options lists them; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP); an unsupported code is dropped and the prior value kept. Set `input_language_primary` to a code already in `input_languages` to make that language lead recognition right now. Set `language_auto_switch` false to lock the reply language. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice_max_chars (max characters spoken per reply, a positive integer), voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
+                  description: "Profile fields to persist. IDENTITY: set `assistant_name` when the user says \"your name is X\", \"you are X\", or \"call yourself X\". Set `user_name` when the user tells you their name (\"my name is X\", \"I am X\"). Set `user_nickname` when the user asks to be called something specific (\"call me X\"). Set `user_address` when the user sets the honorific or form of address you must use for them (\"address me as X\", \"call me sir/master/boss\"). These four identity fields are injected into every session automatically - persist them instead of remembering them ad hoc. LANGUAGE: `language` is the comma-separated BCP-47 code list YOU may reply in; `input_languages` is the comma-separated BCP-47 code list named in the STT custom prompt while Chirp recognition remains automatic. Valid codes are any in the supported catalog (get_profile_options lists them; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP); an unsupported code is dropped and the prior value kept. Set `input_language_primary` to a code already in `input_languages` to make the prompt emphasize that language first. Set `language_auto_switch` false to lock the reply language. MODALITY: `response_modality` is how non-Live surfaces deliver replies - \"text\" (write), \"speech\" (speak), or \"auto\". Native Live voice still speaks because the provider is audio-only. Do not set \"text\" for goodbye, bye, stop, hush, or silence requests. Other fields: system_prompt, assistant_name, model, temperature, voice_max_chars (max characters spoken per reply, a positive integer), voice (valid ids from get_profile_options, with masculine/feminine aliases mapped by the gateway), language_mode, language_output, voice_provider, stt_provider, reasoning_provider, tts_provider, tool_policy, autonomy_level, memory_policy, recovery_mode.",
                 },
                 scope: {
                   type: "STRING",
@@ -3513,10 +3518,9 @@ function pcmFromWav(buffer) {
   return buffer.subarray(44);
 }
 
-// Parse configured language codes into a Chirp language-RESTRICTED list: primary
-// code plus at most one alternate. This is the difference between "restrict" and
-// "hint" on Chirp — more than two codes turns restriction into auto-detection.
-// The literal value "auto" (language-agnostic) is passed through untouched.
+// Parse configured language codes into the bounded list used to build Chirp's
+// custom prompt. Recognition itself always uses ["auto"]. The literal `auto`
+// represents a prompt with no named language preference.
 function languageCodes(value) {
   const codes = String(value || "")
     .split(/[,\s]+/)
@@ -3529,15 +3533,7 @@ function languageCodes(value) {
   if (!restricted.length) {
     return ["en-US"];
   }
-  return restricted.slice(0, CHIRP_MAX_RESTRICTED_LANGUAGE_CODES);
-}
-
-// Chirp-3-only languages (e.g. am-ET) require the chirp_3 model. Returns the
-// list of configured codes that would silently degrade on an older model, so
-// the provider can assert chirp_3 before it issues a recognize call.
-function chirp3OnlyLanguages(codes) {
-  const only = new Set(CHIRP_3_ONLY_LANGUAGE_CODES.map((code) => code.toLowerCase()));
-  return (Array.isArray(codes) ? codes : []).filter((code) => only.has(String(code).toLowerCase()));
+  return restricted.slice(0, CHIRP_MAX_PROMPT_LANGUAGE_CODES);
 }
 
 function isChirp3Model(model) {

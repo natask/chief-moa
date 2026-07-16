@@ -73,6 +73,34 @@ test("remove deletes blob and metadata and frees quota", async () => {
   assert.ok(next.id);
 });
 
+test("blob-backed notes finalize, read, stream, and delete through the blob store", async () => {
+  const dataDir = tempDataDir();
+  const calls = { finalized: [], read: [], streamed: [], deleted: [] };
+  let streamResult = { stream: { id: "remote-stream" }, size: 12 };
+  const blobStore = {
+    finalizeSpool: (key, options) => calls.finalized.push({ key, options }),
+    readBytes: async (key) => { calls.read.push(key); return Buffer.from("remote"); },
+    getReadStream: async (key) => { calls.streamed.push(key); return streamResult; },
+    delete: async (key) => { calls.deleted.push(key); },
+  };
+  const store = createVideoNotesStore({ dataDir, blobStore });
+  const note = store.create({ bytes: Buffer.from("spool"), content_type: "video/mp4" });
+
+  assert.equal(calls.finalized.length, 1);
+  assert.equal(calls.finalized[0].options.contentType, "video/mp4");
+  assert.deepEqual(await store.readBytes(note.id), Buffer.from("remote"));
+  assert.deepEqual(await store.stream(note.id), {
+    stream: { id: "remote-stream" },
+    size: 12,
+    contentType: "video/mp4",
+  });
+  streamResult = null;
+  assert.equal(await store.stream(note.id), null);
+  assert.equal(await store.remove(note.id), true);
+  assert.equal(calls.deleted.length, 1);
+  assert.equal(store.get(note.id), null);
+});
+
 test("store reloads existing totals from disk", () => {
   const dataDir = tempDataDir();
   const first = createVideoNotesStore({ dataDir, maxTotalBytes: 10 });

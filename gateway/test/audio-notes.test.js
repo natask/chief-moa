@@ -74,6 +74,11 @@ test("store normalizes formats and metadata and survives reload", async (t) => {
   assert.equal(stream.readable, true);
   stream.resume();
   await new Promise((resolve, reject) => stream.once("close", resolve).once("error", reject));
+  const streamed = await store.stream(binary.id);
+  assert.equal(streamed.size, 1);
+  assert.equal(streamed.contentType, "audio/ogg");
+  streamed.stream.resume();
+  await new Promise((resolve, reject) => streamed.stream.once("close", resolve).once("error", reject));
   assert.equal(store.get("bad/path"), null);
   assert.equal(store.get("missing"), null);
   assert.equal(store.audioPath("missing"), "");
@@ -94,6 +99,29 @@ test("store rejects empty and over-quota bodies without deleting bytes", (t) => 
   const note = store.create({ bytes: Buffer.from([1, 2]) });
   assert.throws(() => store.create({ bytes: Buffer.from([3]) }), (error) => error.statusCode === 507);
   assert.deepEqual(fs.readFileSync(store.audioPath(note.id)), Buffer.from([1, 2]));
+});
+
+test("blob-backed notes finalize and stream through the blob store", async (t) => {
+  const dataDir = tempDir(t);
+  const calls = { finalized: [], streamed: [] };
+  let streamResult = { stream: { id: "remote-audio" }, size: 8 };
+  const blobStore = {
+    finalizeSpool: (key, options) => calls.finalized.push({ key, options }),
+    getReadStream: async (key) => { calls.streamed.push(key); return streamResult; },
+  };
+  const store = createAudioNotesStore({ dataDir, blobStore });
+  const note = store.create({ bytes: Buffer.from("spool"), content_type: "audio/ogg" });
+
+  assert.equal(calls.finalized.length, 1);
+  assert.equal(calls.finalized[0].options.contentType, "audio/ogg");
+  assert.deepEqual(await store.stream(note.id), {
+    stream: { id: "remote-audio" },
+    size: 8,
+    contentType: "audio/ogg",
+  });
+  streamResult = null;
+  assert.equal(await store.stream(note.id), null);
+  assert.equal(await store.stream("missing"), null);
 });
 
 test("store ignores corrupt metadata and missing directories", (t) => {
@@ -203,6 +231,11 @@ test("sendAudio streams bytes with fallback content type", async (t) => {
     store: {
       get: () => ({ id: "note", content_type: "" }),
       audioPath: () => filePath,
+      stream: async () => ({
+        stream: fs.createReadStream(filePath),
+        size: 2,
+        contentType: "application/octet-stream",
+      }),
     },
   });
   const response = new MemoryResponse();
@@ -211,4 +244,18 @@ test("sendAudio streams bytes with fallback content type", async (t) => {
   assert.equal(response.statusCode, 200);
   assert.equal(response.headers["content-type"], "application/octet-stream");
   assert.deepEqual(Buffer.concat(response.chunks), Buffer.from([7, 8]));
+});
+
+test("sendAudio reports blob read failures", async () => {
+  const handlers = createAudioNoteHandlers({
+    store: {
+      get: () => ({ id: "note" }),
+      stream: async () => { throw new Error("bucket unavailable"); },
+    },
+  });
+  const response = new MemoryResponse();
+  await handlers.sendAudio(response, new URL("/v1/audio-notes/note/audio", "http://local"));
+  await response.done;
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.json().error, "audio note read failed: bucket unavailable");
 });

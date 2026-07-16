@@ -14,7 +14,7 @@ function providers(overrides = {}) {
     ...overrides.primary,
   };
   const sidecar = {
-    status: () => ({ provider: "chirp", configured: true, model: "chirp-3", language_codes: ["en-US"], voice_stt: { streaming_recognition: true } }),
+    status: () => ({ provider: "chirp", configured: true, model: "chirp-3", language_codes: ["auto"], prompt_language_codes: ["en-US"], voice_stt: { streaming_recognition: true } }),
     createStreamingSttSession: (turn, hooks) => { calls.stream.push({ turn, hooks }); return { id: "stream" }; },
     runSttStage: (turn, languages) => { calls.stt.push({ turn, languages }); return { text: "final" }; },
     sttLanguageCodes: () => ["en-US", "am-ET"],
@@ -31,7 +31,7 @@ test("status merges primary evidence with bounded sidecar diagnostics", () => {
     selected_providers: { native_live: "native", transcript_sidecar: "sidecar-id" },
     transcript_sidecar: {
       enabled: true, provider: "chirp", configured: true, model: "chirp-3",
-      language_codes: ["en-US"], streaming: true,
+      language_codes: ["auto"], prompt_language_codes: ["en-US"], streaming: true,
     },
   });
 
@@ -41,7 +41,7 @@ test("status merges primary evidence with bounded sidecar diagnostics", () => {
   });
   assert.deepEqual(new TranscriptSidecarVoiceProvider(sparse.primary, sparse.sidecar, "fallback").status().transcript_sidecar, {
     enabled: true, provider: "fallback", configured: false, model: null,
-    language_codes: [], streaming: false,
+    language_codes: [], prompt_language_codes: [], streaming: false,
   });
 });
 

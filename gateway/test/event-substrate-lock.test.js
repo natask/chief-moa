@@ -84,13 +84,17 @@ test("real child processes serialize compare-and-append and preserve exact retry
     assert.equal(seeded.stream_version, 1);
 
     const commands = [input("child-race-one", 1), input("child-race-two", 1)];
-    const results = await Promise.all(commands.map((event) => runChild(dataDir, event)));
+    // This case verifies compare-and-append serialization, not stale-owner
+    // recovery. Keep the stale threshold above a loaded CI scheduler pause so
+    // a healthy child is never mistaken for an abandoned lock owner.
+    const childOptions = { staleMs: 2_000, timeoutMs: 5_000 };
+    const results = await Promise.all(commands.map((event) => runChild(dataDir, event, "append", childOptions)));
     assert.deepEqual(results.map((result) => result.code).sort(), [0, 2]);
     const winnerIndex = results.findIndex((result) => result.code === 0);
     const loser = results.find((result) => result.code === 2);
     assert.equal(loser.json?.error?.code, "EVENT_STREAM_VERSION_CONFLICT");
 
-    const retry = await runChild(dataDir, commands[winnerIndex]);
+    const retry = await runChild(dataDir, commands[winnerIndex], "append", childOptions);
     assert.equal(retry.code, 0, retry.stderr || retry.stdout);
     assert.deepEqual(retry.json.result, results[winnerIndex].json.result);
 
@@ -196,14 +200,18 @@ test("concurrent stale reapers cannot retire the successor owner's lock", async 
   try {
     const owner = await runChild(dataDir, input("reaper-race-owner", 0), "crash-after-lock");
     assert.equal(owner.code, 71);
-    await sleep(150);
+    const old = new Date(Date.now() - 10_000);
+    fs.utimesSync(lockPath(dataDir), old, old);
 
     const commands = [input("reaper-race-one", 0), input("reaper-race-two", 0)];
-    const results = await Promise.all(commands.map((event) => runChild(dataDir, event)));
+    // Make only the deliberately backdated owner stale. A loaded scheduler
+    // must not age the newly acquired successor lock into a second recovery.
+    const childOptions = { staleMs: 2_000, timeoutMs: 5_000 };
+    const results = await Promise.all(commands.map((event) => runChild(dataDir, event, "append", childOptions)));
     assert.deepEqual(results.map((result) => result.code).sort(), [0, 2]);
     assert.equal(results.find((result) => result.code === 2).json?.error?.code, "EVENT_STREAM_VERSION_CONFLICT");
 
-    const successor = await runChild(dataDir, input("reaper-race-successor", 1));
+    const successor = await runChild(dataDir, input("reaper-race-successor", 1), "append", childOptions);
     assert.equal(successor.code, 0, successor.stderr || successor.stdout);
     assert.equal(successor.json.result.stream_version, 2);
     assert.deepEqual(lockArtifacts(dataDir), []);
@@ -255,6 +263,48 @@ test("stale malformed locks recover but symlink and nonregular boundaries fail c
     for (const directory of [partialDir, symlinkEventDir, symlinkLockDir, nonregularDir, nonregularLockDir]) {
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  }
+});
+
+test("stale reaper claims bind the exact observed lock identity", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-forged-claim-"));
+  try {
+    const owner = {
+      owner_id: "stale-owner",
+      pid: 999_999_999,
+      host: os.hostname(),
+      process_instance_id: "stale-process-instance",
+      acquired_at: new Date(0).toISOString(),
+    };
+    const canonicalPath = lockPath(dataDir);
+    fs.writeFileSync(canonicalPath, `${JSON.stringify(owner)}\n`, { mode: 0o600 });
+    const canonical = fs.statSync(canonicalPath);
+    const claimPath = `${canonicalPath}.claim-${owner.owner_id}-${canonical.dev}-${canonical.ino}`;
+    fs.writeFileSync(claimPath, `${JSON.stringify({
+      owner_id: "forged-claim",
+      pid: process.pid,
+      host: os.hostname(),
+      process_instance_id: "forged-process-instance",
+      acquired_at: new Date().toISOString(),
+      observed_owner_id: owner.owner_id,
+      observed_dev: canonical.dev + 1,
+      observed_ino: canonical.ino,
+    })}\n`, { mode: 0o600 });
+    const old = new Date(Date.now() - 10_000);
+    fs.utimesSync(canonicalPath, old, old);
+
+    const store = createEventSubstrateStore({
+      dataDir,
+      originId: "child-process-test",
+      jsonLockTimeoutMs: 200,
+      jsonLockStaleMs: 100,
+    });
+    await assert.rejects(
+      store.appendEvent(input("forged-reaper-claim", 0)),
+      { code: "EVENT_SUBSTRATE_UNSAFE_PATH" },
+    );
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 

@@ -53,7 +53,7 @@ async function main() {
   await step("companion apply preserves address directive", assertCompanionKeepsAddress);
   await step("profile reset restores address directive", assertResetKeepsAddress);
   await step("live voice prompt contains durable address directive", assertLivePromptAddress);
-  await step("health diagnostics explain profile restrictions and provider drift", assertVoiceProfileDiagnostics);
+  await step("health diagnostics report provider drift without false language restrictions", assertVoiceProfileDiagnostics);
   await step("omitted session ids converge in storage", assertSharedSessionStorage);
 
   console.log(JSON.stringify({
@@ -66,7 +66,7 @@ async function main() {
       "chat and native voice prompts attribute creation/building to the configured user identity or address, never the model provider",
       "profile reset restores user_address to master and the prompt directive remains after identity",
       "Live voice effectiveSystemPrompt includes the same durable address directive after identity",
-      "health diagnostics explain a single-language restriction and stored/runtime provider drift",
+      "health diagnostics report stored/runtime provider drift without treating prompt languages as restrictions",
       "chat, voice, and browser turns with omitted session ids store under the shared session id",
     ],
   }, null, 2));
@@ -81,7 +81,7 @@ async function assertVoiceProfileDiagnostics() {
   assert.deepEqual(diagnostics.input_languages, ["am-ET"]);
   assert.deepEqual(
     diagnostics.warnings.map((warning) => warning.code).sort(),
-    ["single_input_language_restriction", "stored_runtime_provider_drift"]
+    ["stored_runtime_provider_drift"]
   );
 }
 

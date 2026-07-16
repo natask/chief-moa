@@ -71,7 +71,7 @@ async function main() {
     assert.equal(turn.transcription_only, false);
     assert.equal(turn.tts_spoke, true, "record must note hosted TTS spoke");
     assert.equal(turn.reply_language, "en-US");
-    assert.deepEqual(turn.input_languages, ["en-US", "am-ET"], "record must carry the restricted input languages");
+    assert.deepEqual(turn.input_languages, ["en-US", "am-ET"], "record must carry the configured input prompt languages");
     assert.ok(turn.audio && turn.audio.bytes > 0, "record must reference stored user audio bytes");
     assert.ok(turn.assistant_audio && turn.assistant_audio.bytes > 0, "record must reference stored assistant audio bytes");
 
