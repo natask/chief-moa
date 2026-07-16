@@ -141,9 +141,14 @@ test("broker argument and binding validators reject escalation", () => {
   assert.throws(() => validateCapabilityArgs("browser.page.click", { element_id: "" }), /invalid_element_id/);
   assert.throws(() => validateCapabilityArgs("browser.page.query_elements", { selector: "x", limit: 0 }), /invalid_limit/);
   assert.throws(() => validateCapabilityArgs("browser.page.query_elements", { selector: "x", limit: 101 }), /invalid_limit/);
+  assert.throws(() => validateCapabilityArgs("browser.page.query_elements", { selector: "x".repeat(501) }), /invalid_selector/);
+  assert.throws(() => validateCapabilityArgs("browser.page.query_elements", { selector: "x", limit: 1.5 }), /invalid_limit/);
+  assert.throws(() => validateCapabilityArgs("browser.page.wait", { selector: "x", timeout_ms: 1.5 }), /invalid_timeout/);
+  assert.throws(() => validateCapabilityArgs("browser.page.fill", { element_id: "e", text: "x".repeat(4001) }), /invalid_text/);
   assert.throws(() => validateCapabilityArgs("browser.page.wait", { selector: "x", text: 1 }), /invalid_text/);
   assert.equal(bindingsMatch({ tab_id: 1, window_id: 2, origin: "x", document_id: "d", page_epoch: 1, observation_sha256: "o", state_sha256: "s" }, { tab_id: 1, window_id: 2, origin: "x", document_id: "d", page_epoch: 1, observation_sha256: "o", state_sha256: "s" }), true);
   assert.equal(bindingsMatch({ tab_id: 1 }, { tab_id: 2 }), false);
+  assert.equal(bindingsMatch({ tab_id: 1 }, null), false);
   assert.throws(() => createSurfaceProgramBroker({}), /configuration/);
 });
 
@@ -155,6 +160,8 @@ test("broker enforces expiry, state, call, parallel, result, and failure boundar
   await assert.rejects(expired.revalidate(), /expired/);
   const stale = createSurfaceProgramBroker({ envelope, adapter: { ...adapter, currentBinding: async () => ({ ...baseBinding, document_id: "other" }) }, clock: () => Date.parse("2026-07-16T12:00:30Z") });
   await assert.rejects(stale.revalidate(), /stale/);
+  await assert.rejects(stale.call("browser.page.snapshot", {}), /stale/);
+  assert.equal(stale.trace()[0].status, "stale_state");
   const oneCallEnvelope = { ...envelope, limits: { ...envelope.limits, tool_calls: 1, parallel_calls: 1, result_bytes: 1024 } };
   const limited = createSurfaceProgramBroker({ envelope: oneCallEnvelope, adapter, clock: () => Date.parse("2026-07-16T12:00:30Z") });
   await limited.call("browser.page.snapshot", {});
@@ -191,6 +198,10 @@ test("broker enforces expiry, state, call, parallel, result, and failure boundar
   await postStateFail.call("browser.page.snapshot", {});
   assert.equal(postStateFail.trace()[0].post_state_sha256, null);
   assert.throws(() => postStateFail.assertResultSize("x".repeat(20_000)), /result_too_large/);
+
+  const missingPostState = createSurfaceProgramBroker({ envelope, adapter: { ...elementsAdapter, click: async () => ({ applied: true }), currentBinding: (() => { let calls = 0; return async () => (++calls < 4 ? baseBinding : null); })() }, clock: () => Date.parse("2026-07-16T12:00:30Z") });
+  const [missingPostHandle] = await missingPostState.call("browser.page.query_elements", { selector: "x" });
+  await assert.rejects(missingPostState.call("browser.page.click", { element_id: missingPostHandle.element_id }), /post_state_unavailable/);
 
   let releaseWrite;
   let dispatchedWrites = 0;

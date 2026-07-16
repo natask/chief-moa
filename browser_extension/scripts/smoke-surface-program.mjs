@@ -24,7 +24,7 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
 function server() {
-  const state = { heartbeat: null, request: null, claimed: false, receipts: [], toolReceipts: [], events: [] };
+  const state = { heartbeat: null, request: null, claimed: false, receipts: [], toolReceipts: [], events: [], failedToolReceiptOnce: false, failedTerminalEventOnce: false };
   const instance = createServer(async (req, res) => {
     let body = ""; for await (const chunk of req) body += chunk;
     const json = body ? JSON.parse(body) : {};
@@ -36,8 +36,14 @@ function server() {
       if (state.request && !state.claimed) { state.claimed = true; return send({ request: state.request }); }
       return send({});
     }
-    if (/\/tool-receipts$/.test(req.url || "")) { state.toolReceipts.push(json); return send({ ok: true }); }
-    if (/\/events$/.test(req.url || "")) { state.events.push(json); return send({ ok: true }); }
+    if (/\/tool-receipts$/.test(req.url || "")) {
+      if (!state.failedToolReceiptOnce) { state.failedToolReceiptOnce = true; res.writeHead(503, { "content-type": "application/json" }); res.end('{"error":"synthetic retry"}'); return; }
+      state.toolReceipts.push(json); return send({ ok: true });
+    }
+    if (/\/events$/.test(req.url || "")) {
+      if (json.kind === "terminal" && !state.failedTerminalEventOnce) { state.failedTerminalEventOnce = true; res.writeHead(503, { "content-type": "application/json" }); res.end('{"error":"synthetic retry"}'); return; }
+      state.events.push(json); return send({ ok: true });
+    }
     if (/\/receipts$/.test(req.url || "")) { state.receipts.push(json); return send({ ok: true }); }
     return send({});
   });
@@ -97,7 +103,8 @@ async function main() {
     assert(receipt.tool_attempts?.count >= 7, "expected many local tool calls");
     assert(!("device_id" in receipt) && receipt.claimant?.surface_type === "browser_extension", "terminal receipt was not the closed browser shape");
     assert(receipt.previous_receipt_sha256 === receipt.tool_attempts.last_receipt_sha256, "terminal receipt did not continue the tool chain");
-    await waitFor(() => loopback.state.events.at(-1)?.kind === "terminal", 5000);
+    await evaluate(workerCdp, `chrome.alarms.create("agee-browser-task-poll",{when:Date.now()+10}).then(()=>true)`);
+    await waitFor(() => loopback.state.events.some((event) => event.kind === "terminal"), 15000);
     const records = await evaluate(workerCdp, `chrome.storage.local.get("ageeSurfaceProgramRecordsV1").then(v=>v.ageeSurfaceProgramRecordsV1)`);
     const localRecord = Object.values(records)[0];
     assert(localRecord.tool_receipts.length === receipt.tool_attempts.count, "tool receipts were not durably recorded before terminal");
@@ -107,6 +114,8 @@ async function main() {
     assert(loopback.state.toolReceipts.length === receipt.tool_attempts.count, "tool receipts were not uploaded individually");
     const uploadedEvents = [...new Map(loopback.state.events.map((event) => [event.event_id, event])).values()].sort((a, b) => a.sequence - b.sequence);
     assert(uploadedEvents.length === localRecord.events.length && uploadedEvents.every((event, index) => event.sequence === index + 1), `lifecycle events were not uploaded idempotently: remote=${uploadedEvents.length} local=${localRecord.events.length}`);
+    assert(uploadedEvents.at(-1)?.kind === "terminal", "uploaded lifecycle did not end in a terminal event");
+    assert(loopback.state.failedToolReceiptOnce && loopback.state.failedTerminalEventOnce && localRecord.outbox.length === 0, "durable upload outbox did not recover from synthetic transport failures");
     const state = await evaluate(pageCdp, `({status:document.querySelector('#status').textContent,note:document.querySelector('#note').value})`);
     assert(state.status === "done" && state.note === "done locally", JSON.stringify(state));
     loopback.state.claimed = false;
@@ -123,7 +132,11 @@ async function main() {
     const recovered = await waitFor(() => loopback.state.receipts[3], 10000);
     assert(recovered.status === "completed", JSON.stringify(recovered));
     console.log(`surface program smoke passed: isolated Chrome for Testing, localhost fixture/fake gateway, ${receipt.tool_attempts.count} local calls, infinite-loop preemption and recovery, no screenshots or personal profile`);
-  } catch (error) { throw new Error(`${error.message}\nFixture state: ${JSON.stringify({ claimed: loopback.state.claimed, receipt_count: loopback.state.receipts.length, tool_receipt_count: loopback.state.toolReceipts.length, event_count: loopback.state.events.length, heartbeat_keys: Object.keys(loopback.state.heartbeat || {}) })}\nChrome stderr:\n${chromeErrors}`); }
+  } catch (error) {
+    let localRecords = null;
+    try { localRecords = workerCdp ? await evaluate(workerCdp, `chrome.storage.local.get("ageeSurfaceProgramRecordsV1").then(v=>v.ageeSurfaceProgramRecordsV1||null)`) : null; } catch {}
+    throw new Error(`${error.message}\nFixture state: ${JSON.stringify({ claimed: loopback.state.claimed, receipt_count: loopback.state.receipts.length, tool_receipt_count: loopback.state.toolReceipts.length, event_count: loopback.state.events.length, heartbeat_keys: Object.keys(loopback.state.heartbeat || {}), local_records: localRecords })}\nChrome stderr:\n${chromeErrors}`);
+  }
   finally { workerCdp?.close(); pageCdp?.close(); loopback.instance.close(); chrome.kill("SIGTERM"); await delay(500); try { rmSync(profileRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
 }
 function assert(condition, message) { if (!condition) throw new Error(message); }
