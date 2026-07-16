@@ -95,6 +95,9 @@ const focusedThresholds = new Map([
   ["extension/livekit-voice.js", 90],
   ["extension/proactive-confirm.js", 90],
   ["extension/offscreen-audio-worklet.js", 90],
+  ["extension/voice-capture-gesture.js", 90],
+  ["extension/voice-draft-protocol.js", 90],
+  ["extension/ui-spec-runtime.js", 90],
 ]);
 const focusedResults = [];
 for (const [relative, minimum] of focusedThresholds) {
