@@ -23,7 +23,7 @@ source-note outcome is either in scope or named in the follow-on map.
 
 ## 1. Gateway Canonical Projection
 
-- [ ] 1.1 Implement the gateway ticket in `tickets.md`: one authenticated,
+- [x] 1.1 Implement the gateway ticket in `tickets.md`: one authenticated,
       bounded mixed-source session-message projection with stable identities,
       untruncated bounded long text, deterministic order, deduplication, and
       completeness metadata.
@@ -32,10 +32,10 @@ Acceptance: the seeded mixed-source gateway acceptance in `tickets.md` passes.
 
 ## 2. Durable Browser Workspace
 
-- [ ] 2.1 Freeze the gateway response fixture, then implement the browser voice
+- [x] 2.1 Freeze the gateway response fixture, then implement the browser voice
       ticket: side-panel hydration, canonical render identity, close/reopen and
       worker-restart recovery, visible load/retry failure, and overlay handoff.
-- [ ] 2.2 Keep browser action/CDP execution out of scope; if canonical messages
+- [x] 2.2 Keep browser action/CDP execution out of scope; if canonical messages
       already contain terminal receipt refs, display only their bounded read-only
       state and prove no action/approval behavior changed.
 
@@ -44,20 +44,20 @@ and existing automation smokes remain green.
 
 ## 3. Android Full-App History
 
-- [ ] 3.1 Implement the Android ticket against the same frozen gateway fixture:
+- [x] 3.1 Implement the Android ticket against the same frozen gateway fixture:
       full-app mixed-source history, stable row identity, loading/error states,
       exact retained text, completion labels, and bounded linked status.
-- [ ] 3.2 Preserve the overlay as current capture/result/status and approval UI;
+- [x] 3.2 Preserve the overlay as current capture/result/status and approval UI;
       do not add canonical scrollback to overlay windows.
 
 Acceptance: the Android process-refresh acceptance in `tickets.md` passes.
 
 ## 4. Integrated Verification And Release Evidence
 
-- [ ] 4.1 Run the exact candidate through gateway focused checks, extension
+- [x] 4.1 Run the exact candidate through gateway focused checks, extension
       verify/side-panel/general smokes in an isolated profile, Android unit/build
       checks, and strict OpenSpec validation.
-- [ ] 4.2 Create a gateway preview with isolated state where supported and build
+- [x] 4.2 Create a gateway preview with isolated state where supported and build
       collision-free extension and Android release artifacts.
 - [ ] 4.3 Promote, reload, or install only when rollback, compatibility,
       no-interruption, drain, backup/restore, and post-change smoke evidence are
