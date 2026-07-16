@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "A.G.",
-  "version": "0.1.62",
+  "version": "0.1.67",
   "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -27,6 +27,13 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "sandbox": {
+    "pages": ["program-sandbox.html"]
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';",
+    "sandbox": "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-eval';"
   },
   "content_scripts": [
     {
