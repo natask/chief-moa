@@ -104,8 +104,9 @@
 - [x] 11.1 Show `X` and `↑` controls for every tap-started Android voice draft.
 - [x] 11.2 Prevent single-, double-, triple-, and fourth-tap resolution from
       silently committing a draft; keep hold-release as the fast commit path.
-- [x] 11.3 Keep chat and voice cards mutually exclusive and dock the open card
-      wholly above or below the orb, including while the orb moves.
+- [x] 11.3 Keep chat and voice cards mutually exclusive and anchored to the orb,
+      including while the orb moves. Section 12 supersedes the original
+      above-or-below placement rule.
 - [x] 11.4 Add drag-to-remove plus explicit chat-header and notification Hide actions.
 - [x] 11.5 Verify Android unit tests, `assembleDebug`, and strict OpenSpec validation.
 - [ ] 11.6 Publish the committed Android OTA artifact and verify its update metadata.
@@ -120,3 +121,23 @@ Release note: commit `5106d52` produced Android artifact
 Stable Android publication remains blocked because the protected publish job is
 not configured to run, and the Chrome Web Store upload gate was skipped; the
 local unpacked-extension reload signal completed without a client acknowledgement.
+
+## 12. Native Android Overlay Interaction Polish
+
+- [ ] 12.1 Replace glyph-only overlay actions with native Android dark controls
+      for Close/Cancel, Send, the grab affordance, and the bottom drag-removal
+      target, including native touch feedback and accessibility semantics.
+- [ ] 12.2 Make drag-to-dismiss stop capture/playback and atomically remove every
+      overlay-owned window, including the orb, cards, composer, draft controls,
+      grab line, status, and removal target.
+- [ ] 12.3 Keep every message, image, transcript, response, composer, and status
+      surface wholly above the orb/grab line with a visible gap while content
+      changes or the orb moves.
+- [ ] 12.4 Make double-click start a distinct parallel voice session and fresh
+      branch without clearing or replacing the prior visible message or
+      canceling its active run.
+- [ ] 12.5 Make one single click during a double-click-started session stop and
+      commit only that active capture exactly once without creating another
+      session.
+- [ ] 12.6 Verify with focused Android tests, `assembleDebug`, strict OpenSpec
+      validation, and the manual overlay gesture/layout checklist.

@@ -12,10 +12,12 @@ The Android app SHALL provide an overlay control that remains available above ot
 - **THEN** the assistant orb remains available without opening the full Moa app
 
 ### Requirement: Tap-Based Voice Loop
-The overlay SHALL make the primary voice loop available through simple orb gestures.
+With voice-first gestures disabled, the overlay SHALL preserve the legacy voice
+loop through simple orb gestures.
 
 #### Scenario: Single tap opens chat menu
-- **WHEN** the user single taps the orb while no command speech is active
+- **WHEN** voice-first gestures are disabled and the user single taps the orb
+  while no command speech is active
 - **THEN** the app opens the chat menu for typed input
 - **AND** it does not start, stop, or submit a voice turn
 
@@ -25,7 +27,8 @@ The overlay SHALL make the primary voice loop available through simple orb gestu
 - **AND** it does not start voice capture or toggle the chat menu
 
 #### Scenario: Double-click-and-hold push-to-talk
-- **WHEN** the user double-clicks and holds the orb while no voice turn is active
+- **WHEN** voice-first gestures are disabled and the user double-clicks and
+  holds the orb while no voice turn is active
 - **THEN** the app starts a push-to-talk voice turn after the second press is held
 - **AND** displays a live transcript overlay
 - **AND** releasing the orb submits the best available speech without waiting
@@ -91,7 +94,20 @@ The Android app SHALL show current speech text while the user is speaking.
 - **WHEN** the assistant response starts for a submitted voice turn
 - **THEN** the visible user transcript fades out
 - **AND** the assistant response appears in the same compact voice surface
-- **AND** previous voice-turn messages are not shown in that surface
+- **AND** ordinary previous voice-turn messages are not added as full scrollback
+- **AND** a prior visible message retained for a parallel voice session remains
+  visible until explicitly dismissed or replaced by that session's result
+
+### Requirement: Native Dark Overlay Controls
+The Android overlay SHALL use platform-native interactive controls and dark
+surface styling for its local actions without replacing the branded orb.
+
+#### Scenario: Native overlay actions are presented
+- **WHEN** the overlay shows Close/Cancel, Send, grab, or removal actions
+- **THEN** each action uses a native Android interactive control
+- **AND** provides native pressed feedback, enabled state, accessibility role,
+  and content description
+- **AND** uses readable black/dark styling with consistent icon sizing
 
 ### Requirement: Reviewable Tap Voice Draft
 When voice-first gestures are enabled, the Android overlay SHALL treat a tap
@@ -100,47 +116,71 @@ voice turn as a reversible draft rather than an implicit submission.
 #### Scenario: Tap starts a draft
 - **WHEN** the user taps the idle orb
 - **THEN** the overlay begins voice capture
-- **AND** immediately shows `X` to discard on the left of the orb and `↑` to
-  Send on the right of the orb
-- **AND** those controls remain independent of the transcript card above or below
+- **AND** immediately shows a native Cancel control on the left of the orb and a
+  native Send control on the right of the orb
+- **AND** those controls remain independent of the content surface above the
+  reserved orb/grab-line band
 
 #### Scenario: User explicitly sends
-- **WHEN** a tap-started draft is active and the user taps `↑`
+- **WHEN** a tap-started draft is active and the user taps Send
 - **THEN** Android commits that voice turn exactly once
 - **AND** ends the draft capture loop
 
 #### Scenario: User discards
-- **WHEN** a tap-started draft is active and the user taps `X`
+- **WHEN** a tap-started draft is active and the user taps Cancel
 - **THEN** Android cancels capture and discards the draft locally
 - **AND** submits no voice turn
 
 #### Scenario: Orb tap cannot silently send
 - **WHEN** a tap-started draft is active and the user taps the orb again
 - **THEN** Android does not commit the draft
-- **AND** the visible `X` and `↑` controls remain the disposition authority
+- **AND** the visible Cancel and Send controls remain the disposition authority
+
+### Requirement: Parallel Double-Click Voice Session
+When voice-first gestures are enabled, Android SHALL give a quick double-click
+and the following single-click a state-specific parallel-session meaning.
+
+#### Scenario: Double-click starts a distinct parallel session
+- **WHEN** a prior message is visible and the user double-clicks the orb
+- **THEN** Android starts capture with a distinct local voice-session identity
+- **AND** requests a fresh branch context for the next turn
+- **AND** does not clear, replace, or reuse the prior visible message identity
+- **AND** does not cancel an agent run associated with the prior session
+
+#### Scenario: Single click ends the parallel session
+- **WHEN** the double-click-started session is capturing
+- **AND** the user single-clicks the orb
+- **THEN** Android stops capture and commits its buffered utterance exactly once
+- **AND** does not create an ordinary tap draft or another session
 
 ### Requirement: Orb-Anchored Mobile Surface
 The Android overlay SHALL keep at most one large interactive card visible and
-place that card predictably relative to the orb.
+place its bounded content surface predictably above the reserved orb/grab-line
+interaction band.
 
-#### Scenario: Surface fits above the orb
-- **WHEN** the chat or transcript card opens and has enough room above the orb
-- **THEN** the entire card is placed above the orb with a visible gap
-
-#### Scenario: Surface must flip below
-- **WHEN** the card cannot fit above the orb
-- **THEN** the entire card is placed below the orb and clamped to the display
+#### Scenario: Content surface opens or changes size
+- **WHEN** a message, image, transcript, response, composer, or status opens or
+  changes size
+- **THEN** the complete bounded surface is placed above the orb/grab line with a
+  visible gap and clamped to the display
+- **AND** content is constrained or scrolled rather than placed across or below
+  the interaction band
 
 #### Scenario: Orb moves with an open surface
 - **WHEN** the user drags the orb while a card is open
-- **THEN** the card follows and recomputes its above-or-below placement
+- **THEN** the content surface follows and recomputes its above-band placement
+- **AND** never covers or crosses the orb/grab line
 
 ### Requirement: User-Removable Overlay
 The Android overlay SHALL provide discoverable local ways to remove the orb.
 
 #### Scenario: Drag to remove
 - **WHEN** the user drags the orb into the visible removal target and releases
-- **THEN** Android stops the overlay service and removes the orb and open card
+- **THEN** Android stops active capture and playback and stops the overlay
+  service
+- **AND** removes every overlay-owned window, including the orb, cards,
+  composer, draft controls, grab line, status, and removal target
+- **AND** leaves no detached overlay window visible
 
 #### Scenario: Explicit hide fallback
 - **WHEN** the user taps Hide in the chat header or overlay notification

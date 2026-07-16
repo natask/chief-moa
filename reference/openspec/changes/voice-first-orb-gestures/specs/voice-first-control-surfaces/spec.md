@@ -11,16 +11,26 @@ for chat and double-click-and-hold for voice.
 - **WHEN** the voice-first Android flag is enabled and the user single-taps the
   orb while idle
 - **THEN** Android starts hands-free voice on the current active thread
-- **AND** Android shows `X` to the left of the orb and `↑` to its right
+- **AND** Android shows native Cancel to the left of the orb and native Send to
+  its right
 - **AND** a later single tap does not send the current utterance
-- **AND** only the visible `↑` commits the draft
+- **AND** only the visible Send control commits the draft
 
-#### Scenario: Double tap starts a fresh voice thread
+#### Scenario: Double tap starts a parallel voice session
 - **WHEN** the voice-first Android flag is enabled and the user double-taps the
   orb
-- **THEN** Android cancels any just-started or pending current-thread voice loop
-- **AND** Android starts the next voice turn with the explicit fresh-thread
-  client context action
+- **THEN** Android starts capture with a distinct local voice-session identity
+- **AND** starts the next voice turn with the explicit fresh-thread client
+  context action
+- **AND** if a prior message is visible, does not reuse, clear, or replace its
+  identity or visible presentation
+
+#### Scenario: Single tap ends a double-tap-started session
+- **WHEN** a double-tap-started Android voice session is capturing
+- **AND** the user single-taps the orb
+- **THEN** Android stops capture and commits the buffered utterance exactly once
+- **AND** does not start an ordinary single-tap draft
+- **AND** does not treat the tap as the first click of another chord
 
 #### Scenario: Triple tap opens chat without leaving a hot mic
 - **WHEN** the voice-first Android flag is enabled and the user triple-taps the
@@ -33,6 +43,32 @@ for chat and double-click-and-hold for voice.
 - **WHEN** the voice-first Android flag is disabled
 - **THEN** a single tap opens chat
 - **AND** double-click-and-hold remains the voice capture gesture
+
+### Requirement: Android native dark overlay interaction
+When voice-first gestures are enabled, Android SHALL render overlay actions with
+platform-native interactive controls and SHALL reserve the orb/grab-line band
+from content overlap.
+
+#### Scenario: Native dark controls are shown
+- **WHEN** Android shows Cancel, Send, grab, or removal actions
+- **THEN** each action uses a native Android control with native pressed feedback
+- **AND** exposes an accessibility role, label, enabled state, and content
+  description
+- **AND** uses the overlay's black/dark visual treatment
+
+#### Scenario: Content remains above the interaction band
+- **WHEN** a transcript, reply, generated image, composer, or status changes size
+  or the orb moves
+- **THEN** Android lays out the complete content surface above the orb/grab-line
+  band with a visible gap
+- **AND** no content covers or crosses that band
+
+#### Scenario: Drag removal clears the overlay atomically
+- **WHEN** the user releases the orb over the bottom removal target
+- **THEN** Android stops active overlay capture and playback
+- **AND** removes the orb, grab line, content surface, composer, draft controls,
+  status, and removal target
+- **AND** leaves no detached overlay window visible
 
 ### Requirement: Browser voice-first drafts match Android disposition controls
 The browser extension SHALL, when `ageeVoiceFirstGesturesEnabled` is enabled,
