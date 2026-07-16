@@ -169,8 +169,15 @@
     return !!lower && (isPromptProfileControl(lower) || isIdentityProfileControl(lower) || isLanguageProfileControl(lower) || isVoiceProfileControl(lower));
   }
 
+  function isSettingsQueryTranscript(text) {
+    const lower = normalizeSpokenCommand(text);
+    if (!lower || !/\b(settings?|preferences?|configuration)\b/.test(lower)) return false;
+    if (/\b(set|change|update|enable|disable|turn on|turn off|clear)\b/.test(lower)) return true;
+    return /\b(list|show|find|search|recommend|useful|what|which|tell me|all|every)\b/.test(lower);
+  }
+
   function shouldRouteLiveTranscriptThroughGateway(text) {
-    return isProfileControlTranscript(text) || isPageContextTranscript(text);
+    return isProfileControlTranscript(text) || isSettingsQueryTranscript(text) || isPageContextTranscript(text);
   }
 
   const root = global || globalThis;
@@ -179,6 +186,7 @@
     finiteNumber,
     isPageContextTranscript,
     isProfileControlTranscript,
+    isSettingsQueryTranscript,
     mergeLiveVoiceTranscript,
     normalizeAssistantAudioSegment,
     normalizeSpokenCommand,

@@ -3,7 +3,7 @@
 // provider API keys and no direct model calls live in the browser; the gateway
 // owns model routing and credentials.
 
-import { DEFAULT_GATEWAY_URL, gatewayUrlDiagnostic, getEffectiveGatewayConfig } from "./config.js";
+import { DEFAULT_GATEWAY_URL, gatewayUrlDiagnostic, getEffectiveGatewayConfig, normalizeGatewayUrl } from "./config.js";
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
@@ -18,7 +18,14 @@ import {
   OPTIONS_RECOVERY_STORAGE_KEY,
   createOptionsRecovery,
 } from "./options-recovery.js";
-import { normalizeGatewaySetting, readBrowserSettings } from "./browser-settings-registry.js";
+import {
+  normalizeGatewaySetting,
+  mergeSettingsResults,
+  parseBrowserSettingWriteIntent,
+  parseSettingsQueryIntent,
+  readBrowserSettings,
+  validateBrowserSettingWrite,
+} from "./browser-settings-registry.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   buildAgentLoopObservationPayload,
@@ -1713,6 +1720,57 @@ async function maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId) {
   });
   const summary = lines.join("\n");
   send(tabId, { cmd: "done", cueId, summary, speak: lines[0] });
+  await saveTaskState(cueId, { status: "done", instruction, step: 1, lastResult: summary.slice(0, 400), tabId });
+  return true;
+}
+
+async function maybeAnswerSettingsQuery(tabId, instruction, signal, cueId) {
+  const intent = parseSettingsQueryIntent(instruction);
+  if (!intent) return false;
+  send(tabId, { cmd: "progress", cueId, text: "searching registered settings…" });
+  throwIfAborted(signal);
+  const payload = await querySettingsForPanel({
+    ...intent,
+    limit: intent.operation === "list" ? 100 : 20,
+    microphonePermission: "unknown",
+  });
+  const settings = payload.setting ? [payload.setting] : Array.isArray(payload.settings) ? payload.settings : [];
+  const visual = { ...payload, settings, count: settings.length };
+  send(tabId, { cmd: "settingsResults", cueId, payload: visual });
+  const summary = settings.length
+    ? `${intent.operation === "list" ? "Registered settings" : "Matching settings"}: ${settings.map((setting) => setting.title || setting.id).join(", ")}.`
+    : "No registered settings matched that request.";
+  send(tabId, { cmd: "done", cueId, summary });
+  await saveTaskState(cueId, { status: "done", instruction, step: 1, lastResult: summary.slice(0, 400), tabId });
+  return true;
+}
+
+async function maybeApplyBrowserSettingChange(tabId, instruction, signal, cueId) {
+  const intent = parseBrowserSettingWriteIntent(instruction);
+  if (!intent) return false;
+  throwIfAborted(signal);
+  let approval;
+  if (intent.id === "browser.background_automation" && intent.value === true) {
+    const response = await ask(tabId, {
+      cmd: "confirm",
+      text: "Allow background browser automation under consent version 1? A.G. may claim queued work, open background tabs, and run bounded allowlisted actions until you turn it off.",
+    }).catch(() => null);
+    if (response?.ok !== true) {
+      const summary = "Background automation was not enabled because explicit approval was not granted.";
+      send(tabId, { cmd: "done", cueId, summary });
+      return true;
+    }
+    approval = { approved: true, setting_id: intent.id, consent_version: BACKGROUND_AUTOMATION_CONSENT_VERSION };
+  }
+  send(tabId, { cmd: "progress", cueId, text: "applying registered browser setting…" });
+  const result = await writeSettingByOwner({ ...intent, approval });
+  if (!result.ok) {
+    send(tabId, { cmd: "error", cueId, text: `Setting was not changed: ${result.message || result.error}.` });
+    return true;
+  }
+  const receipt = result.receipt;
+  const summary = `${receipt.setting_id} updated to ${String(receipt.current)}. ${receipt.takes_effect}.`;
+  send(tabId, { cmd: "done", cueId, summary, settings_receipt: receipt });
   await saveTaskState(cueId, { status: "done", instruction, step: 1, lastResult: summary.slice(0, 400), tabId });
   return true;
 }
@@ -3629,6 +3687,12 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
       send(tabId, { cmd: "done", cueId, summary: "", text: "" });
       return;
     }
+    if (await maybeApplyBrowserSettingChange(tabId, instruction, signal, cueId)) {
+      return;
+    }
+    if (await maybeAnswerSettingsQuery(tabId, instruction, signal, cueId)) {
+      return;
+    }
     if (await maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId)) {
       return;
     }
@@ -4593,6 +4657,7 @@ async function browserSettingsState(microphonePermission) {
     [LIVEKIT_VOICE_FLAG_KEY]: false,
     [BACKGROUND_AUTOMATION_KEY]: false,
     [BACKGROUND_AUTOMATION_CONSENT_KEY]: 0,
+    ageeBrowserAgentRole: "delegate",
   });
   return {
     gatewayUrl: cfg.gatewayUrl || "",
@@ -4602,6 +4667,7 @@ async function browserSettingsState(microphonePermission) {
     backgroundAutomationConsentCurrent:
       stored[BACKGROUND_AUTOMATION_CONSENT_KEY] === BACKGROUND_AUTOMATION_CONSENT_VERSION,
     microphonePermission,
+    agentRole: stored.ageeBrowserAgentRole,
   };
 }
 
@@ -4625,7 +4691,8 @@ async function gatewaySettingsQuery(cfg, { operation, id, query, limit }) {
 
 async function querySettingsForPanel(msg) {
   const operation = String(msg.operation || (msg.id ? "get" : msg.query ? "search" : "list")).toLowerCase();
-  const limit = Math.max(1, Math.min(Number(msg.limit || 20) || 20, 20));
+  const maximum = operation === "list" ? 100 : 20;
+  const limit = Math.max(1, Math.min(Number(msg.limit || maximum) || maximum, maximum));
   const state = await browserSettingsState(msg.microphonePermission);
   const local = readBrowserSettings({ operation, id: msg.id, query: msg.query, limit }, state);
   if (operation === "get" && String(msg.id || "").startsWith("browser.")) return local;
@@ -4647,15 +4714,110 @@ async function querySettingsForPanel(msg) {
     return { ok: false, error: "unknown_setting", setting_id: String(msg.id || ""), gateway_error: gatewayError };
   }
   if (!local.ok) return local;
-  const settings = [...local.settings, ...gatewaySettings].slice(0, limit);
+  const settings = mergeSettingsResults(local.settings, gatewaySettings, { operation, limit });
   return {
     ok: true,
     operation,
     query: String(msg.query || ""),
     count: settings.length,
+    total: settings.length,
     settings,
     ...(gatewayError ? { gateway_error: gatewayError } : {}),
   };
+}
+
+function settingsWriteReceipt(settingId, current, options = {}) {
+  return {
+    version: 1,
+    setting_id: settingId,
+    owner: settingId.startsWith("gateway.") ? "gateway" : "browser_extension",
+    status: "applied",
+    current,
+    redacted: options.redacted === true,
+    takes_effect: options.takesEffect || "immediately",
+  };
+}
+
+async function writeBrowserSetting(msg) {
+  const checked = validateBrowserSettingWrite(msg);
+  if (!checked.ok) return checked;
+  const { id, value } = checked;
+  if (id === "browser.gateway_url") {
+    const normalized = normalizeGatewayUrl(value);
+    if (normalized) {
+      const diagnostic = gatewayUrlDiagnostic(normalized);
+      if (!diagnostic.ok) return { ok: false, error: "invalid_setting_value", setting_id: id, message: diagnostic.message };
+    }
+    await chrome.storage.local.set({
+      ageeGatewayUrl: normalized,
+      ageeGatewayUserSet: true,
+      ...(!normalized ? { ageeGatewayToken: "" } : {}),
+    });
+    return { ok: true, receipt: settingsWriteReceipt(id, normalized || "disconnected", { takesEffect: "next gateway request" }) };
+  }
+  if (id === "browser.gateway_token") {
+    const token = String(value).trim();
+    await chrome.storage.local.set({ ageeGatewayToken: token });
+    return {
+      ok: true,
+      receipt: settingsWriteReceipt(id, token ? "configured (value redacted)" : "not configured", {
+        redacted: true,
+        takesEffect: "next gateway request",
+      }),
+    };
+  }
+  if (id === "browser.livekit_voice") {
+    await chrome.storage.local.set({ [LIVEKIT_VOICE_FLAG_KEY]: value });
+    return { ok: true, receipt: settingsWriteReceipt(id, value, { takesEffect: "next voice session" }) };
+  }
+  if (id === "browser.agent_role") {
+    const role = String(value).toLowerCase();
+    await chrome.storage.local.set({ ageeBrowserAgentRole: role });
+    return { ok: true, receipt: settingsWriteReceipt(id, role, { takesEffect: "next browser turn" }) };
+  }
+  if (id === "browser.background_automation") {
+    await chrome.storage.local.set({
+      [BACKGROUND_AUTOMATION_KEY]: value,
+      [BACKGROUND_AUTOMATION_CONSENT_KEY]: value ? BACKGROUND_AUTOMATION_CONSENT_VERSION : 0,
+    });
+    await syncBackgroundAutomationRuntime();
+    return { ok: true, receipt: settingsWriteReceipt(id, value, { takesEffect: "next background claim" }) };
+  }
+  return { ok: false, error: "setting_not_writable", setting_id: id };
+}
+
+async function writeGatewaySetting(msg) {
+  const id = String(msg.id || "").trim().toLowerCase();
+  const gatewayId = id.replace(/^gateway\./, "");
+  if (!gatewayId || id === gatewayId) return { ok: false, error: "unknown_setting", setting_id: id };
+  const cfg = await getConfig();
+  let catalogSetting;
+  try {
+    catalogSetting = await callGateway(cfg, `/v1/agent/settings/${encodeURIComponent(gatewayId)}`, { method: "GET" });
+  } catch (error) {
+    return { ok: false, error: "unknown_setting", setting_id: id, gateway_error: String(error?.message || error) };
+  }
+  if (!catalogSetting?.id || catalogSetting.managed === true || catalogSetting.writable === false) {
+    return { ok: false, error: catalogSetting?.id ? "setting_not_writable" : "unknown_setting", setting_id: id };
+  }
+  const payload = await putGatewayProfile(cfg, { [gatewayId]: msg.value }, undefined, "agee-settings-broker", {
+    scope: msg.scope === "device" ? "device" : "global",
+  });
+  const effective = payload?.profile?.[gatewayId];
+  return {
+    ok: true,
+    receipt: settingsWriteReceipt(id, catalogSetting.redacted ? "configured (value redacted)" : effective, {
+      redacted: catalogSetting.redacted === true,
+      takesEffect: "next admitted turn",
+    }),
+  };
+}
+
+async function writeSettingByOwner(msg) {
+  const id = String(msg.id || "").trim().toLowerCase();
+  if (id.startsWith("browser.")) return writeBrowserSetting({ ...msg, id });
+  if (id.startsWith("gateway.")) return writeGatewaySetting({ ...msg, id });
+  return { ok: false, error: "unknown_setting", setting_id: id };
 }
 
 async function handlePanelRequest(msg) {
@@ -4665,6 +4827,9 @@ async function handlePanelRequest(msg) {
   }
   if (msg.cmd === "settingsQuery") {
     return querySettingsForPanel(msg);
+  }
+  if (msg.cmd === "settingsWrite") {
+    return writeSettingByOwner(msg);
   }
   if (msg.cmd === "browserRoleTurn") {
     const role = normalizeBrowserAgentRole(msg.role);
