@@ -171,6 +171,13 @@ deleting, or excluding meaningful failure-path and integration tests.
   `7c627bc535379969337703922a04f57f4f30414554f6b7164bf1557c4ba329bc`). Active
   reload was confirmed when the loaded unpacked extension observed the version
   bump and polled again after reloading.
+- Browser extension: collision-safe version `0.1.59` was verified with all 49
+  unit tests, the exact production coverage ratchet, and the real
+  headless-Chromium smoke, then retained as
+  `browser_extension/dist/A.G.-0.1.59.zip` (422,440 bytes; SHA-256
+  `50267b25543f5f64aae12b91e87bd11923fcff531172df57bee4862773f7b7b5`). Active
+  reload was confirmed when the loaded unpacked extension observed the version
+  bump and polled again after reloading.
 - Gateway: the complete production-only run passed 1014 tests with one skip, but
   no isolated preview, backup/restore evidence, or state-compatibility rollout
   was established. The branch was therefore not pushed through the
