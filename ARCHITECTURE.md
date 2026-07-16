@@ -68,13 +68,7 @@ Moa Gateway
 
 Execution machine
   Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
-  build/test commands, desktop/browser/server automation. A local execution
-  machine may use a supported MCP adapter such as `@tweeks/mcp` to control the
-  same local Chrome profile through the Tweeks extension. That adapter starts
-  read-only; write/full-control remains a separate user opt-in in Tweeks. A
-  hosted gateway cannot invoke this local stdio/native-messaging bridge
-  directly: Aggie must route through an authenticated execution worker/device
-  capability and retain proposal/receipt state.
+  build/test commands, desktop/browser/server automation.
 
 External APIs
   Own: third-party systems such as email, calendar, repo hosts, docs, payments,

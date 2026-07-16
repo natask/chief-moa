@@ -213,34 +213,3 @@ and approved-action paths; no parallel perception or execution API is added.
 
 Acceptance: verification, commit, package, reload status, and post-reload smoke
 are recorded as distinct evidence; no step is claimed from an earlier one.
-
-## 11. Tweeks MCP External Adapter And Browser Journeys
-
-- [x] 11.1 Verify the supported `@tweeks/mcp@1.1.0` path without copying its
-      implementation: install the native host, activate the installed Tweeks
-      extension, register the MCP server with Codex, call `get_system_info`, and
-      invoke one read-only live-browser tool.
-
-Acceptance: the MCP server reports version 1.1.0, the installed Tweeks
-extension reports connected, and a read-only tab listing succeeds. Write/full
-control remains separately user-controlled in the Tweeks extension.
-
-- [ ] 11.2 Add an execution-worker/device adapter that advertises the connected
-      Tweeks MCP tool manifest to the gateway and executes only proposal-bound
-      calls locally with receipts. Do not make the hosted gateway connect to a
-      local native-messaging socket directly.
-
-Acceptance: a browser-origin Aggie turn can select the connected local adapter,
-queue a bounded call, receive its local receipt, and report offline/read-only/
-full-control states honestly; no Tweeks or provider credential reaches the
-gateway.
-
-- [ ] 11.3 Add separately verified user journeys for (a) opening a new tab at
-      a URL or search query, (b) finding products on Amazon from a description,
-      (c) attaching an image as bounded reasoning evidence for product
-      discovery, and (d) handing the selected result tab back to the user.
-
-Acceptance: description and image fixtures both produce a visible result tab
-and evidence-backed summary. Purchase, checkout, account changes, and other
-commerce side effects remain outside the discovery envelope and require their
-own explicit approval policy.

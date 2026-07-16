@@ -63,28 +63,6 @@ The current Moa extension already owns complementary pieces:
 - the browser-situated-agent change defines observation anchors, the on-page
   annotation layer, workspace, delegation envelope, and local receipts.
 
-## Supported External Adapter: Tweeks MCP
-
-Tweeks also publishes a supported local MCP bridge, `@tweeks/mcp`. Version
-1.1.0 was installed, activated, and invoked read-only on 2026-07-16 against the
-locally installed Tweeks extension: `get_system_info` reported the extension
-connected and `browser_get_tabs` returned the live tab catalog. Its advertised
-tools cover script inspection/install/update/toggle/removal and browser tabs,
-navigation, screenshots, click/fill/text/query/snapshot/wait/hover/scroll,
-JavaScript evaluation, console/network inspection, and userscript menu
-commands.
-
-This is the preferred interoperability path when an execution harness such as
-Codex needs Tweeks-owned browser automation. It replaces the earlier idea of
-scraping or copying Tweeks implementation details. The bridge is local to one
-Chrome profile, uses native messaging, starts read-only, and requires a
-separate user opt-in for writes/full control. It does not by itself make the
-hosted Moa gateway capable of invoking a user's browser; that requires a
-gateway-to-execution-worker/device tool route with explicit availability,
-authority, receipts, and offline behavior. Moa's own userscript runtime remains
-necessary for first-party artifacts, local stop/rollback, and operation when
-Tweeks is absent.
-
 ## Considered Shapes
 
 ### A. Declarative-only page runtime
