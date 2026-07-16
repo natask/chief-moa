@@ -548,20 +548,20 @@ async function brokerToolRequest(call, deps, spec, input, options = {}) {
       !Object.values(input).some((value) => value !== "" && value != null)) {
     return { ok: false, error: spec.field ? `${spec.field} is required to ${spec.label}` : `input is required to ${spec.label}` };
   }
-  const sourceSurface = trustedTurnSurface(call) !== "unknown"
-    ? trustedTurnSurface(call) : resolveTurnSurface(call);
+  const trustedSourceSurface = trustedTurnSurface(call);
   let request;
   try {
     request = await deps.createToolRequest({
       tool: spec.tool,
       target_surface_type: spec.surface,
-      ...((call && call.device_id && sourceSurface === resolveTargetSurface(spec.surface))
+      ...((call && call.device_id && trustedSourceSurface === resolveTargetSurface(spec.surface))
         ? { target_device_id: call.device_id }
         : {}),
       input,
       source: (call && call.source) || "surface-skill",
-      source_surface_type: sourceSurface,
-      source_device_id: (call && call.device_id) || "",
+      source_surface_type: trustedSourceSurface,
+      source_device_id: trustedSourceSurface !== "unknown" && call && call.device_id
+        ? call.device_id : "",
       session_id: (call && (call.conversation_id || call.session_id)) || "",
       branch_id: (call && call.branch_id) || "default",
       instruction: `Surface skill: ${spec.label}.`,

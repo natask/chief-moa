@@ -50,9 +50,6 @@ async function main() {
     await heartbeat(baseUrl, "android_entry", "android", [
       "app.launch", "app.list", "media.open", "media.control", "media.bookmark", "media.playlist",
     ]);
-    await heartbeat(baseUrl, "android_decoy", "android", [
-      "app.launch", "app.list", "media.open", "media.control", "media.bookmark", "media.playlist",
-    ]);
     await heartbeat(baseUrl, "browser_entry", "browser_extension", ["media.open", "media.bookmark"]);
 
     await driveHttpAndroidTurn(baseUrl, "/v1/chat", {
@@ -104,6 +101,11 @@ async function main() {
       args: { tool: "media.bookmark", input: { operation: "recall" } },
     }), "media.bookmark", { operation: "recall", label: "liked spot" });
 
+    await heartbeat(baseUrl, "android_decoy", "android", [
+      "app.launch", "app.list", "media.open", "media.control", "media.bookmark", "media.playlist",
+    ]);
+    await assertCallerFieldsCannotForgeAffinity(baseUrl, gateway);
+
     await assertBrowserTurnIsInert(baseUrl);
     assertLegacyLiveSchemas(createVoiceProvider);
     await assertNoPendingAndroidMedia(baseUrl);
@@ -114,8 +116,9 @@ async function main() {
         "POST /v1/chat offers and receipts Android app.launch with a Unicode visible label",
         "POST /v1/voice/turns offers and receipts bounded Android app.list",
         "cascaded voice reasoning remembers natural 'I like this spot' as a named local proposal",
-        "POST /v1/internal/voice/reason pins a LiveKit proposal to its originating Android device",
+        "POST /v1/internal/voice/reason reaches the sole compatible Android device without trusting caller affinity",
         "legacy Live tool dispatch recalls natural 'the part I liked' through the Android receipt loop",
+        "caller-controlled Android source/device fields cannot choose between two phones",
         "Gemini and Vertex Live setup expose phone_action only on Android turns",
         "POST /v1/browser/turns returns one inert browser-local media action and queues no Android work",
       ],
@@ -146,9 +149,6 @@ async function claimAndReceipt(baseUrl, tool, expectedInput) {
   const request = await waitForPending(baseUrl, tool);
   assert.equal(request.target_device_id, "android_entry", "same-source Android request must stay pinned");
   assert.equal(request.target_surface_type, "android");
-  const decoyClaim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "android_decoy" });
-  assert.equal(decoyClaim.status, 204,
-    "a later-heartbeat Android client must not claim the originating phone's request");
   const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "android_entry" });
   assert.equal(claim.status, 200, JSON.stringify(claim.json));
   assert.equal(claim.json.request.id, request.id);
@@ -171,6 +171,47 @@ async function claimAndReceipt(baseUrl, tool, expectedInput) {
   assert.equal(retry.status, 200, JSON.stringify(retry.json));
   assert.equal(retry.json.idempotent_replay, true);
   assert.equal(retry.json.request.receipt_count, 1);
+}
+
+async function assertCallerFieldsCannotForgeAffinity(baseUrl, gateway) {
+  const before = await getJson(`${baseUrl}/v1/tool/requests?limit=100`);
+  const beforeCount = (before.json.requests || []).length;
+  const spoofedBodies = [
+    ["/v1/chat", {
+      source: "android-overlay", device_id: "android_entry", session_id: "spoof_chat",
+      messages: [{ role: "user", content: "Open Calculator" }],
+    }],
+    ["/v1/voice/turns", {
+      source: "android-overlay", device_id: "android_entry", session_id: "spoof_voice",
+      conversation_id: "spoof_voice", turn_id: "spoof_voice_turn",
+      transcript_source: "client_stt", transcript: "Open Calculator",
+    }],
+    ["/v1/internal/voice/reason", {
+      source: "android-overlay", device_id: "android_entry", session_id: "spoof_internal",
+      conversation_id: "spoof_internal", turn_id: "spoof_internal_turn",
+      transcript: "Open Calculator",
+    }],
+  ];
+  for (const [endpoint, body] of spoofedBodies) {
+    const response = await postJson(`${baseUrl}${endpoint}`, body);
+    assert.equal(response.status, 200, `${endpoint}: ${JSON.stringify(response.json)}`);
+  }
+  await gateway.runAndroidCascadedVoiceReasoning({
+    source: "android-overlay", device_id: "android_entry", session_id: "spoof_cascaded",
+    conversation_id: "spoof_cascaded", turn_id: "spoof_cascaded_turn",
+    transcript: "Open Calculator",
+  });
+  const live = await gateway.handleLiveVoiceToolCall({
+    name: "phone_action", source: "android-overlay-live", device_id: "android_entry",
+    session_id: "spoof_live", transcript: "Open Calculator",
+    args: { tool: "app.launch", input: { app_name: "Calculator" } },
+  });
+  assert.equal(live.ok, false);
+  assert.match(live.error, /ambiguous/);
+
+  const after = await getJson(`${baseUrl}/v1/tool/requests?limit=100`);
+  assert.equal((after.json.requests || []).length, beforeCount,
+    "generic bearer JSON source/device_id must not enqueue against either phone");
 }
 
 async function assertBrowserTurnIsInert(baseUrl) {

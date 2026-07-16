@@ -134,7 +134,6 @@ const {
   validateMacosProactiveBody,
 } = require("./lib/macos-proactive-turn");
 const {
-  markTrustedTurnSurface,
   resolveTurnSurface,
   surfaceExecuteCapabilities,
   surfaceClassicTools,
@@ -2181,10 +2180,10 @@ async function handleChat(request, response) {
       source: body.source || "chat",
       transcript: userText,
     };
-    const trustedChatToolCall = resolveTurnSurface(chatToolCall) === "android"
-      ? markTrustedTurnSurface(chatToolCall, "android") : chatToolCall;
-    const chatToolDefs = cascadedVoiceProfileTools(trustedChatToolCall);
-    const phoneTool = surfacePhoneActionTool(trustedChatToolCall, surfaceSkillDeps());
+    // A bearer token authenticates the user, not a particular phone. Keep the
+    // caller's device_id as context only; it must not become routing authority.
+    const chatToolDefs = cascadedVoiceProfileTools(chatToolCall);
+    const phoneTool = surfacePhoneActionTool(chatToolCall, surfaceSkillDeps());
     if (phoneTool) chatToolDefs.push(phoneTool);
     const toolTurn = await callModelToolLoop(modelMessages, profile, chatToolDefs);
     text = String(toolTurn.text || "");
@@ -4759,10 +4758,10 @@ async function handleVoiceTurn(request, response) {
         source,
         transcript,
       };
-      const voiceToolCall = resolveTurnSurface(voiceToolCallInput) === "android"
-        ? markTrustedTurnSurface(voiceToolCallInput, "android") : voiceToolCallInput;
-      const voiceToolDefs = cascadedVoiceProfileTools(voiceToolCall);
-      const phoneTool = surfacePhoneActionTool(voiceToolCall, surfaceSkillDeps());
+      // source/device_id are caller JSON. They are context, never a private
+      // device principal, so this path cannot pin a local action to that id.
+      const voiceToolDefs = cascadedVoiceProfileTools(voiceToolCallInput);
+      const phoneTool = surfacePhoneActionTool(voiceToolCallInput, surfaceSkillDeps());
       if (phoneTool) voiceToolDefs.push(phoneTool);
       const toolTurn = await callModelToolLoop(modelMessages, profile, voiceToolDefs);
       text = String(toolTurn.text || "");
@@ -7727,9 +7726,9 @@ async function handleLiveVoiceToolCall(call) {
   const name = String(call?.name || "").trim();
   const args = call?.args && typeof call.args === "object" && !Array.isArray(call.args) ? call.args : {};
   if (name === "phone_action") {
-    const trustedCall = resolveTurnSurface(call) === "android"
-      ? markTrustedTurnSurface(call, "android") : call;
-    const tool = surfacePhoneActionTool(trustedCall, surfaceSkillDeps());
+    // Legacy Live fields originate in the client event. Do not promote a
+    // source string or device_id into gateway-owned affinity.
+    const tool = surfacePhoneActionTool(call, surfaceSkillDeps());
     return tool ? tool.handler(args) : liveToolBlocked(name, "phone actions are not available on browser-sourced turns");
   }
   if (name === "launch_agent_run") {
@@ -9584,16 +9583,13 @@ async function runCascadedVoiceReasoning(input) {
   return withTimeout(runCascadedVoiceReasoningInner(input), MODEL_FETCH_TIMEOUT_MS, "cascaded voice reasoning");
 }
 
-const TRUSTED_ANDROID_VOICE_REASONING = Symbol("trustedAndroidVoiceReasoning");
-
-// Only server-owned Android voice entrypoints receive this wrapper. A caller
-// cannot gain device affinity by supplying a source string in JSON; the private
-// symbol survives only the in-process handoff to the tool broker.
+// Compatibility name for the Android voice provider. The provider connection
+// is authenticated as the user today, not as a particular device, so this
+// wrapper deliberately grants no device affinity. A future paired-device
+// authenticator may mark the downstream call only after validating its own
+// gateway-owned principal.
 function runAndroidCascadedVoiceReasoning(input) {
-  return runCascadedVoiceReasoning({
-    ...input,
-    [TRUSTED_ANDROID_VOICE_REASONING]: true,
-  });
+  return runCascadedVoiceReasoning(input);
 }
 
 async function runCascadedVoiceReasoningInner(input) {
@@ -9724,18 +9720,16 @@ async function runCascadedVoiceReasoningInner(input) {
     source: input?.source || "voice-cascaded",
     transcript,
   };
-  const toolCall = input?.[TRUSTED_ANDROID_VOICE_REASONING] === true
-    ? markTrustedTurnSurface(toolCallInput, "android") : toolCallInput;
-  const toolDefs = cascadedVoiceProfileTools(toolCall)
-    .concat(cascadedAgentRunTools(toolCall))
+  const toolDefs = cascadedVoiceProfileTools(toolCallInput)
+    .concat(cascadedAgentRunTools(toolCallInput))
     .concat([companionMotionTool()])
-    .concat(surfaceClassicTools(toolCall, surfaceSkillDeps()));
+    .concat(surfaceClassicTools(toolCallInput, surfaceSkillDeps()));
   if (!nativeWebSearchEnabled(resolveReasoningProvider(profile))) {
     const exaSearch = createExaSearchTool();
     if (exaSearch) toolDefs.push(exaSearch);
   }
   if (voiceExecuteToolEnabled()) {
-    toolDefs.push(cascadedExecuteToolDef(toolCall));
+    toolDefs.push(cascadedExecuteToolDef(toolCallInput));
   }
   // Streaming: when the voice pipeline passes on_speak_delta, run the
   // streaming twin of the tool loop and forward final-answer deltas through
@@ -12687,8 +12681,14 @@ function createToolRequest(body) {
   const targetSurfaceRaw = body.target_surface_type || body.targetSurfaceType || body.surface_type || "";
   const targetSurfaceType = targetSurfaceRaw ? sanitizeSurfaceType(targetSurfaceRaw) : "";
   if (!targetDeviceId) {
-    const device = findDeviceClientForTool({ surfaceType: targetSurfaceType, tool });
-    targetDeviceId = device?.device_id || device?.id || "";
+    const candidates = deviceClientsForTool({ surfaceType: targetSurfaceType, tool });
+    if (candidates.length > 1) {
+      throw new Error("target device is ambiguous; choose a device through an authenticated device principal");
+    }
+    if (candidates.length === 0 && targetSurfaceType) {
+      throw new Error("no compatible online target device is available");
+    }
+    targetDeviceId = candidates[0]?.device_id || candidates[0]?.id || "";
   }
   if (!targetDeviceId && !targetSurfaceType) {
     throw new Error("target_device_id or target_surface_type is required");
@@ -12722,13 +12722,13 @@ function createToolRequest(body) {
   return requestRecord;
 }
 
-function findDeviceClientForTool({ surfaceType, tool }) {
+function deviceClientsForTool({ surfaceType, tool }) {
   const targetSurface = sanitizeSurfaceType(surfaceType || "");
   return listDeviceClients()
     .filter((device) => device.online)
     .filter((device) => !targetSurface || device.surface_type === targetSurface)
     .filter((device) => deviceSupportsTool(device, tool))
-    .sort((a, b) => String(b.last_heartbeat_at).localeCompare(String(a.last_heartbeat_at)))[0] || null;
+    .sort((a, b) => String(b.last_heartbeat_at).localeCompare(String(a.last_heartbeat_at)));
 }
 
 function deviceSupportsTool(device, tool) {

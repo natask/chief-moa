@@ -48,12 +48,12 @@ test("canonical phone schema retains app and media tools and has a Gemini-derive
 });
 
 test("app.launch accepts only a warranted visible name and pins the source device", async () => {
-  const call = {
+  const call = markTrustedTurnSurface({
     source: "android-overlay",
     device_id: "android_owner",
     session_id: "session",
     transcript: "Open YouTube Advanced",
-  };
+  }, "android");
   const state = harness(call);
   const result = await runPhoneAction(call, state.deps, {
     tool: "app.launch",
@@ -68,9 +68,9 @@ test("app.launch accepts only a warranted visible name and pins the source devic
   assert.equal(state.created[0].source_device_id, "android_owner");
 });
 
-test("only a gateway-trusted voice surface pins an otherwise ambiguous cascaded source", async () => {
+test("only a gateway-trusted surface pins caller-supplied Android affinity", async () => {
   const untrustedCall = {
-    source: "voice-cascaded",
+    source: "android-overlay",
     device_id: "android_origin",
     transcript: "Open Calculator",
   };
@@ -80,6 +80,8 @@ test("only a gateway-trusted voice surface pins an otherwise ambiguous cascaded 
     input: { app_name: "Calculator" },
   });
   assert.equal(untrusted.created[0].source_surface_type, "unknown");
+  assert.equal(untrusted.created[0].source_device_id, "",
+    "caller-controlled device_id must not be recorded as authenticated origin evidence");
   assert.equal("target_device_id" in untrusted.created[0], false,
     "a caller-controlled source string must not grant device affinity");
 
