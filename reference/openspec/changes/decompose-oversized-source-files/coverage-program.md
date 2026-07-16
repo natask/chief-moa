@@ -115,6 +115,11 @@ deleting, or excluding meaningful failure-path and integration tests.
   bridge received no poll during its bounded 40-second window, so reload of an
   already-loaded unpacked extension remains unverified; one manual reload at
   `chrome://extensions` is required to enable confirmation for later deploys.
+- Browser extension: version `0.1.47` was verified with all 38 unit tests and
+  the real headless-Chromium smoke, then packaged as
+  `browser_extension/dist/A.G.-0.1.47.zip` (418,409 bytes). The bounded reload
+  window again received no client poll, so active reload remains unverified and
+  still requires one manual reload at `chrome://extensions`.
 - Gateway: the complete production-only run passed 1014 tests with one skip, but
   no isolated preview, backup/restore evidence, or state-compatibility rollout
   was established. The branch was therefore not pushed through the
