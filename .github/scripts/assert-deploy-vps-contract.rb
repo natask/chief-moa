@@ -40,6 +40,7 @@ VERIFY_SCRIPT = <<~'BASH'
   set -euo pipefail
   bash -n scripts/vps/*.sh
   bash scripts/vps/test-node-runtime.sh
+  bash scripts/vps/test-preview-tls-proxy.sh
   bash scripts/vps/test-install-promotion-control-plane.sh
   bash scripts/vps/test-update-rollback.sh
   cd gateway

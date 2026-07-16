@@ -43,23 +43,27 @@ project="moa-preview-$suffix"
 restore_project="moa-restore-$suffix"
 preview_port="${MOA_PREVIEW_PORT:-18787}"
 restore_port="${MOA_RESTORE_PORT:-18788}"
+preview_tls_port="${MOA_PREVIEW_TLS_PORT:-18789}"
 preview_root="$MOA_ROOT/previews/$suffix"
 source_dir="$preview_root/source"
 preview_env="$preview_root/preview.env"
 evidence_dir="${MOA_PROMOTION_EVIDENCE_DIR:-$MOA_ROOT/promotion-evidence}"
 evidence_file="$evidence_dir/$target.json"
+preview_tls_container="moa-preview-tls-$suffix"
 
 preview_compose() {
   GATEWAY_PORT="$preview_port" GATEWAY_BIND=127.0.0.1 \
     docker compose -p "$project" -f "$source_dir/docker-compose.yml" --env-file "$preview_env" "$@"
 }
 cleanup() {
+  docker rm -f "$preview_tls_container" >/dev/null 2>&1 || true
   preview_compose down -v >/dev/null 2>&1 || true
   git -C "$APP_DIR" worktree remove --force "$source_dir" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 mkdir -p "$preview_root" "$evidence_dir"
 preview_compose down -v >/dev/null 2>&1 || true
+docker rm -f "$preview_tls_container" >/dev/null 2>&1 || true
 git -C "$APP_DIR" worktree remove --force "$source_dir" >/dev/null 2>&1 || true
 git -C "$APP_DIR" worktree add --detach "$source_dir" "$target" >/dev/null
 
@@ -93,11 +97,23 @@ APP_DIR="$source_dir" ENV_FILE="$preview_env" SCRATCH_PROJECT="$restore_project"
 
 MOA_BUILD_SHA="$target" MOA_BUILD_REF="$REF" MOA_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   preview_compose up -d --build --wait
-preview_url="http://127.0.0.1:$preview_port"
-curl -fsS --max-time 5 "$preview_url/health" >/dev/null
-unauthorized="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$preview_url/v1/supervisor/status")"
+preview_upstream_url="http://127.0.0.1:$preview_port"
+preview_url="https://127.0.0.1:$preview_tls_port"
+curl -fsS --max-time 5 "$preview_upstream_url/health" >/dev/null
+start_preview_tls_proxy "$preview_tls_container" "$preview_tls_port" "$preview_upstream_url"
+wait_for_preview_tls() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    curl -kfsS --max-time 3 "$preview_url/health" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  echo "promotion blocked: TLS preview did not become healthy at $preview_url" >&2
+  return 1
+}
+wait_for_preview_tls
+unauthorized="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 5 "$preview_url/v1/supervisor/status")"
 [ "$unauthorized" = "401" ] || { echo "promotion blocked: preview auth gate returned $unauthorized" >&2; exit 1; }
-curl -fsS --max-time 5 -H "Authorization: Bearer $preview_token" "$preview_url/v1/supervisor/status" >/dev/null
+curl -kfsS --max-time 5 -H "Authorization: Bearer $preview_token" "$preview_url/v1/supervisor/status" >/dev/null
 
 # Recheck immediately before minting apply authority. update.sh checks again
 # after its final backup/restore pass and immediately before checkout mutation.

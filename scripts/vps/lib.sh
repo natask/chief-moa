@@ -69,3 +69,12 @@ node_runtime() {
     -e MOA_PRODUCTION_PROMOTER_ID -e MOA_RECOVERY_WORKER_ID -e MOA_RECOVERY_CLAIM_ID \
     "$image" node "$@"
 }
+
+start_preview_tls_proxy() {
+  local name="$1" listen_port="$2" upstream_url="$3"
+  local image="${MOA_PREVIEW_TLS_IMAGE:-caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648}"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker run -d --name "$name" --network host "$image" caddy reverse-proxy \
+    --internal-certs --disable-redirects \
+    --from "https://127.0.0.1:$listen_port" --to "$upstream_url" >/dev/null
+}
