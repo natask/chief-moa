@@ -365,6 +365,13 @@
       lines/branches/functions. Raise the exact whole-extension ratchet to
       34.02% lines, 16.39% branches, and 15.05% functions with 35 passing unit
       tests and a passing real headless-Chromium smoke.
+- [x] 4.4f Replace anonymous VM-string execution for the voice-capture gesture,
+      voice-draft protocol, and UI-spec runtime with attributable production
+      module imports; extend boundary cases and enforce focused 90% gates.
+      Verified respectively at 100%/100%/100%, 100%/91.56%/100%, and
+      100%/99.15%/100% for lines/branches/functions. Raise the exact
+      whole-extension ratchet to 38.14% lines, 21.56% branches, and 18.19%
+      functions while reducing conservative zero metadata to five files.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
