@@ -29,13 +29,13 @@ public final class SystemMacAccessibilityAuthority: MacAccessibilityProgramAutho
 
     public func validate(bindings: MacLocalProgramEnvelope.Bindings, now: Date) throws {
         try lock.withLock {
-            guard bindings.grantID == grantID, bindings.bundleID == process.bundleID,
+            guard bindings.localGrantID == grantID, bindings.bundleID == process.bundleID,
                   bindings.pid == process.pid, bindings.processGeneration == Self.generation(process),
                   bindings.signingIdentity == process.signingIdentity else { throw LocalProgramError.staleTarget }
             try validateProcess()
             guard let current,
                   current.binding.windowID == bindings.windowID,
-                  current.binding.observationID == bindings.observationID,
+                  current.binding.observationID == bindings.axSnapshotID,
                   Self.digest(current) == bindings.stateSHA256,
                   now < current.binding.expiresAt else { throw LocalProgramError.staleObservation }
         }
@@ -68,7 +68,7 @@ public final class SystemMacAccessibilityAuthority: MacAccessibilityProgramAutho
     }
 
     public func perform(_ request: MacAXActionRequest, executionID: String,
-                        sequence: Int, now: Date) throws -> MacLocalActionReceipt {
+                        sequence: Int, now: Date) throws -> MacAXActionOutcome {
         try lock.withLock {
             try validateProcess()
             guard let current, current.binding.observationID == request.observationID,
@@ -94,13 +94,8 @@ public final class SystemMacAccessibilityAuthority: MacAccessibilityProgramAutho
             handles.removeAll(keepingCapacity: false)
             self.current = nil
             let digestInput = "\(process.bundleID)|\(process.pid)|\(Self.generation(process))|\(current.binding.windowID)|\(request.observationID)|\(request.handle)|\(request.action)"
-            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-            return MacLocalActionReceipt(receiptID: UUID().uuidString, executionID: executionID,
-                capabilityID: "macos.accessibility.\(request.action)", sequence: sequence,
-                inputSHA256: Self.digest((try? encoder.encode(request)) ?? Data()),
-                preStateSHA256: Self.digest(current), postStateSHA256: nil,
-                targetDigest: Self.digest(Data(digestInput.utf8)), status: "succeeded",
-                summary: "semantic AX action executed", startedAt: now, finishedAt: now)
+            return MacAXActionOutcome(postStateSHA256: nil,
+                resourceID: "ax_\(Self.digest(Data(digestInput.utf8)).prefix(24))")
         }
     }
 
