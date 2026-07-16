@@ -806,62 +806,29 @@ proposal. Role prose cannot change this typed authority. Browser voice
 voice turns remain a separate follow-up until committed transcripts and browser
 evidence can enter the same browser-turn lifecycle without prompt-only routing.
 
-### Privacy-first proactive browser assistance
+### Browser context privacy
 
-Proactive help is a distinct local mode, not an alias for continuous/ambient
-upload. It starts only after the user grants the current tab/document for at
-most ten minutes. The content script samples bounded structural affordance
-counts while the page is visible, rejects sensitive surfaces, and feeds a
-deterministic packaged classifier. It does not read page body, title, selected
-text, form values, pixels, accessibility data, or cross-tab history. At most one
-generic card is created per grant. Observation, suppression, expiry, and
-dismissal make no gateway request.
+The former proactive **Local** mode is removed. Its structural classifier knew
+that a page contained forms, tables, tasks, or document-like elements but
+deliberately excluded their meaning. The resulting generic suggestions did not
+provide enough context for useful model help, and locality was presented as a
+role instead of a data-handling choice. The browser no longer samples page
+structure for suggestions, renders proactive cards, or sends packaged generic
+prompts through a separate proactive endpoint.
 
-The on-page card is a non-authoritative preview in an untrusted DOM. Every
-proactive page control requires trusted activation. Review may only open
-`proactive-confirm.html`; page script/CSS cannot authorize a request or change
-the canonical disclosure. The extension-owned confirmation shows the exact URL,
-`POST`, JSON content type, authorization presence with its value hidden,
-`redirect: error`, exact body and SHA-256 digest, Chief Moa retention boundary,
-configured-provider processing warning, exclusions, and the independent
-`enabled`/`disabled` background-connectivity state. Only its trusted Allow
-activation can proceed.
+Future page-context work must expose concrete user choices over context types
+and scope. A user can, for example, approve extracted page text while excluding
+a screenshot. The browser may locally extract, summarize, redact, and preserve
+a selected representation, but it must show the exact outbound context and
+destination before the user approves release through the normal browser-turn
+path. The UI must distinguish source content, local transformed/retained data,
+and outbound model context.
 
-The worker binds both transitions to the exact top-level tab/document/frame. It
-revalidates document/frame and sensitivity before opening confirmation and again
-after Allow, then verifies expiry, destination/body digests, and record identity.
-It atomically consumes and removes the grant, marks the confirmation as inert
-in-flight status, and prevents any second decision before sending at most one
-`POST /v1/proactive/turns` body tagged `proactive_accept_v1` with redirects
-blocked. It does not attach screen/page evidence, observed structural counts,
-actions, tasks, workflows, broker instructions, or agent instructions.
-
-The gateway endpoint enforces an exact body and packaged-prompt allowlist,
-requires a configured exact bearer token even in local mode, then calls the
-configured model provider directly under a text-only contract. Provider
-requests use one fixed system message plus one allowlisted prompt, no tool
-schema, hard output/response limits, and a timeout covering body consumption;
-Vertex token exchange is timed and bounded. It does
-not enter voice/browser routing, expose tools, start an agent/task/workflow,
-publish a broker event, or persist a conversation/turn. Chief Moa's
-non-persistence does not imply provider non-retention: the configured provider
-still processes the packaged prompt under its own data policy. Any returned
-action/proposal key—including null/deep fields—or a truncated bounded response
-scan is refused as an unnegotiated protocol violation and creates only a
-bounded, content-free, serialized local receipt.
-
-The ordinary injected command composer remains light DOM and is not a
-confidential surface: the host page can inspect or interfere with it. Sensitive
-command entry belongs in the extension-owned side panel. The proactive preview
-does not render gateway origin or background-consent state into the host DOM;
-those facts appear only in `proactive-confirm.html`.
-
-Navigation, reload, history/hash change, tab close, service-worker restart,
-destination change, expiry, newly detected sensitivity, or entry into a normal
-command, voice, ambient, or browser-agent workflow revokes the grant and pending
-confirmation. Classification is one bounded event-driven traversal; a no-card
-result stops observation rather than polling indefinitely. Contract:
-`reference/openspec/changes/privacy-first-browser-proactive-helper`.
+Privacy means informed scope and consent, not systematically minimizing context
+until the model cannot perform the requested task. Existing independent privacy
+rules remain: no passive gateway startup, background automation is versioned
+and default-off, heartbeat excludes page/owner metadata, provider credentials
+stay off the browser, and model output remains a proposal.
 
 The browser has no passive gateway startup path. A fresh install does not save
 or contact a packaged hosted destination. The privacy migration preserves an
@@ -1505,17 +1472,7 @@ queues.
   accessibility-backed screen context and visible UI operations.
 - `gateway/server.js`: HTTP API, voice router, model calls,
   conversation storage, agent-run execution, device-client registry, and
-  cross-device tool-request queue. Its separate `POST /v1/proactive/turns`
-  handler enforces the packaged browser prompt allowlist and calls the configured
-  model directly without router/tool/agent/durable-work capabilities or turn
-  persistence.
-- `gateway/lib/proactive-turn.js`: exact proactive request/client validators,
-  four packaged prompt allowlist, fixed no-tools system contract, bounded inert
-  response shape, and deterministic no-provider fallbacks.
-- `gateway/scripts/smoke-proactive-turn.js`: isolated-port/data-store acceptance
-  smoke for the proactive endpoint's exact request schema, rejection matrix,
-  bounded text response, and unchanged conversation/task/workflow/broker-event/
-  agent-run stores (`npm run smoke:proactive-turn`).
+  cross-device tool-request queue.
 - `gateway/lib/broker-router.js`: deterministic broker route selection for
   sessions, projects, active runs, workflows, and new forks.
 - `gateway/lib/broker-launcher.js`: bounded broker context-pack construction,
@@ -1593,13 +1550,10 @@ queues.
 - `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
 - `browser_extension/extension`: thin browser client for command,
-  voice, page context, settings, engine-served UI spec rendering, and
-  engine-routed browser actions, including the background agent-loop poll
-  (`pollBrowserAgentTasks`) behind versioned, default-off consent and a local,
-  explicit-grant proactive helper whose observe/dismiss path has no network and
-  whose final authorization is isolated in extension-owned
-  `proactive-confirm.html`. Its accepted request uses only the gateway's strict
-  `POST /v1/proactive/turns` text capability. UI spec smoke:
+  voice, explicitly invoked page context, settings, engine-served UI spec
+  rendering, and engine-routed browser actions, including the background
+  agent-loop poll (`pollBrowserAgentTasks`) behind versioned, default-off
+  consent. UI spec smoke:
   `browser_extension/scripts/smoke-ui-spec.mjs` (`npm run smoke:ui-spec`).
   Agent-loop smoke:
   `browser_extension/scripts/smoke-agent-loop.mjs`

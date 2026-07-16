@@ -32,7 +32,6 @@ Agee starts as a Chrome Manifest V3 extension because the browser is the smalles
 
 Files:
 
-- `extension/proactive-helper.js`
 - `extension/content.js`
 - `extension/overlay.css`
 
@@ -44,11 +43,6 @@ Responsibilities:
 - Collect visible interactable page elements.
 - Execute constrained page actions.
 - Show progress, completion, and errors.
-- After an explicit per-tab grant, collect only bounded structural affordance
-  counts for deterministic local suggestion classification.
-- Render at most one non-authoritative proactive preview. Every proactive page
-  control requires a trusted activation; Review may only ask the worker to open
-  the extension-owned confirmation and cannot authorize networking.
 
 The content script is the only component that touches the page DOM. It must not
 request microphone access from the page origin; browser voice capture belongs to
@@ -57,10 +51,9 @@ the extension offscreen document so Chrome grants the microphone to the
 
 The packaged manifest currently injects the inert UI shell on matching pages so
 the on-page mark and hotkeys are immediately available. Injection is not an
-observation grant: proactive sampling is off, page-derived proactive state is
-kept in memory only, and the service worker rejects signals until the user
-explicitly grants that tab/document. Restricted and sensitive pages are
-suppressed. Automated QA uses only localhost fixtures in a throwaway profile.
+observation grant. The removed Local-suggestions mode no longer samples page
+structure or renders generic proactive cards. Automated QA uses only localhost
+fixtures in a throwaway profile.
 
 ### Background Service Worker
 
@@ -88,46 +81,11 @@ Remote task/tool polling and heartbeat require current, versioned background
 automation consent; missing or unreadable consent fails closed. Heartbeat never
 contains page URL/title or the active-owner object.
 
-For proactive help, the worker owns the ephemeral tab/document/frame grant and
-pending-confirmation maps. It revalidates the exact top-frame document and
-sensitivity before opening confirmation and again before sending, verifies the
-immutable request URL/body digests, atomically consumes the grant and marks the
-confirmation as inert in-flight status, and calls
-only `POST /v1/proactive/turns` with `redirect: "error"`. It also reports the
-separate background-connectivity consent as an explicit `enabled`/`disabled`
-state.
-
-### Proactive Confirmation Page
-
-Files:
-
-- `extension/proactive-confirm.html`
-- `extension/proactive-confirm.css`
-- `extension/proactive-confirm.js`
-
-Responsibilities:
-
-- Provide the final authorization surface from the `chrome-extension://`
-  origin, isolated from page DOM and CSS.
-- Render the worker's immutable exact URL, method, content type,
-  authorization-presence indicator, `redirect: error` policy, JSON body, body
-  SHA-256 digest, Chief Moa retention boundary, provider-processing warning,
-  exclusions, and explicit background-connectivity state.
-- Require trusted activation on Allow and Cancel.
-- Send only a one-time opaque confirmation token and the user's decision; never
-  accept request details from the web page.
-
-The page card is a preview only. Host-page script or CSS can alter that preview,
-so it is never an authority. A page activation can at most open this
-extension-owned window; only its trusted Allow activation can authorize the
-exact request already held by the worker.
-
-The existing command composer is still injected into ordinary page DOM. A host
-page can inspect or interfere with that light-DOM UI, just as it can observe
+The existing command composer is injected into ordinary page DOM. A host page
+can inspect or interfere with that light-DOM UI, just as it can observe
 keystrokes elsewhere in its own document. Do not treat the on-page composer as
 a confidential input surface; sensitive command entry belongs in the
-extension-owned side panel. The proactive page preview therefore exposes no
-gateway origin, token fact, or background-consent state.
+extension-owned side panel.
 
 ### Offscreen Voice Document
 
@@ -162,8 +120,7 @@ Responsibilities:
 - Show the packaged hosted destination as a suggestion without silently saving
   or contacting it.
 - Keep background connectivity/automation off until current disclosure is
-  accepted. Local proactive help is enabled only by the per-tab page control,
-  not an Options preference.
+  accepted.
 - Seed/check the one-time extension microphone permission.
 - Read and write gateway-owned runtime profile fields such as system prompt,
   model selection, temperature, language, and voice settings.
@@ -196,16 +153,7 @@ Current messages are intentionally small:
 ```ts
 type OverlayToWorker =
   | { cmd: "run"; instruction: string }
-  | { cmd: "proactiveGrantStart" }
-  | { cmd: "proactiveGrantStop"; grantId: string; reason: string }
-  | { cmd: "proactiveGrantStatus"; grantId: string }
-  | { cmd: "proactiveSignal"; grantId: string; signals: StructuralSignals }
-  | { cmd: "proactiveConfirmationOpen"; grantId: string; kind: "form" | "table" | "tasks" | "document"; cueId: string }
   | { cmd: "cancel" };
-
-type ConfirmationPageToWorker =
-  | { cmd: "proactiveConfirmationDetails"; token: string }
-  | { cmd: "proactiveConfirmationDecision"; token: string; decision: "allow" | "cancel" };
 
 type WorkerToContent =
   | { cmd: "ping" }
@@ -216,39 +164,7 @@ type WorkerToContent =
   | { cmd: "act"; action: Action; index?: number; text?: string; url?: string; direction?: "up" | "down" }
   | { cmd: "progress"; text: string }
   | { cmd: "done"; summary: string }
-  | { cmd: "proactiveGrantRevoked"; grantId: string; reason: string }
-  | { cmd: "proactiveConfirmationResult"; cueId: string; grantId: string; ok: boolean; summary?: string; reason?: string }
   | { cmd: "error"; text: string };
-
-type StructuralSignals = {
-  schema_version: 1;
-  article_count: number;
-  heading_count: number;
-  paragraph_count: number;
-  link_count: number;
-  table_count: number;
-  list_count: number;
-  task_count: number;
-  form_count: number;
-  editable_count: number;
-  button_count: number;
-};
-
-// Every count is an integer clamped to 0..100. Unknown keys are dropped.
-
-type ProactiveRequest = {
-  source: "proactive_accept_v1";
-  transcript: PackagedProactivePrompt;
-  modality: "text";
-  client: {
-    platform: "browser";
-    source: "agee-extension";
-    input: "text";
-  };
-};
-
-// The worker, not the page, builds this exact body. The confirmation page gets
-// a read-only rendering and SHA-256 digest; it sends only token + decision.
 
 type Action =
   | "click"
@@ -268,10 +184,8 @@ Current hardening:
 - Risky DOM actions and cross-origin navigation ask for user confirmation.
 - Non-HTTP(S) navigation is blocked.
 - Task status is checkpointed to `chrome.storage.local` after major steps so a worker interruption leaves evidence of the last known state.
-- Proactive grants are service-worker-memory-only, bound to tab/document, and
-  consumed before a disclosed accept request.
-- Page content can produce evidence or a suggestion proposal; it cannot enable
-  observation, accept itself, enable automation, or execute an action.
+- Page content can produce evidence after explicit invocation; it cannot enable
+  observation, grant authority, enable automation, or execute an action.
 
 Next hardening step:
 
@@ -327,46 +241,22 @@ browser-side execution. A receipt includes compact action results, page state,
 and screenshot metadata. Raw provider keys stay out of the browser, and raw
 screenshot payloads are not posted back in receipts.
 
-## Proactive Local Helper
+## Context Sharing Direction
 
-The proactive path is deliberately separate from the invoked page-aware agent
-loop and explicit ambient upload:
+The structural **Local suggestions** helper is removed. It protected page data
+by discarding the meaning that would have made the model useful, and its label
+confused a context-handling choice with an interaction role.
 
-1. The user grants the current tab/document for up to ten minutes.
-2. Sensitive-page preflight runs before every sample.
-3. `proactive-helper.js` receives only clamped structural counts/booleans and
-   returns at most one deterministic generic page preview after one bounded
-   visible-page traversal. If no card matches, observation and its timers stop.
-4. Dismiss, expiry, navigation, tab close, history change, destination change,
-   normal workflow entry, or service-worker restart purges the grant and pending
-   confirmation without a proactive network request.
-5. A trusted page Review activation may open `proactive-confirm.html`; it cannot
-   authorize a request. The extension-owned window shows the immutable canonical
-   request and requires a separate trusted Allow activation.
-6. The worker revalidates the exact document/frame and sensitivity before
-   opening confirmation and again before final consumption. It verifies expiry,
-   destination URL digest, body digest, and record identity, then removes the
-   grant and marks the confirmation consuming with no intervening await.
-7. It sends one `POST /v1/proactive/turns` request with
-   `source: proactive_accept_v1` and `redirect: "error"`. No screenshot, title,
-   URL, body, selection, observed count, element label, form value, action, task,
-   workflow, broker, or agent instruction is attached.
-8. The gateway endpoint strictly allowlists the packaged body and calls the
-   configured provider directly for bounded text. It always requires a
-   configured exact bearer token, including in local mode. OpenAI-compatible
-   and Vertex calls use exact no-tool envelopes plus output-token,
-   response-byte, and end-to-end body-consumption time limits; Vertex token
-   exchange is timed and bounded too. It does not enter a router,
-   expose tools, start an agent/task/workflow, publish a broker event, or persist
-   a conversation/turn. The provider still processes the prompt under its own
-   data policy.
-9. Any nested/scalar action or proposal key, null-valued key, or response-scan
-   truncation is refused as a protocol violation and recorded only in a bounded,
-   content-free local receipt through serialized writes.
+A future replacement should begin with an explicit user request and concrete
+context controls. The user may include page text or a selection while excluding
+a screenshot. Local extraction may summarize, redact, or preserve a local
+version. Before release, an extension-owned review surface should distinguish
+the source, the local transformed/retained representation, the exact outbound
+payload, and the destination. The user can edit, approve, or cancel; approved
+context then uses the normal browser-turn path.
 
-This mode may truthfully say that **page observation stays local**. It must not
-claim that the whole extension is offline when the user has separately enabled
-background gateway connectivity.
+Privacy means informed scope and consent. It does not require sending less
+information when the user deliberately wants richer model understanding.
 
 ## Security Rules
 
@@ -376,28 +266,14 @@ background gateway connectivity.
 - Keep provider API keys and subscriptions out of the extension entirely.
 - Route model/API-backed actions through the configured gateway.
 - Capture screenshots only after user invocation.
-- Make no gateway call on fresh/default extension startup, privacy migration,
-  proactive observation, suppression, expiry, or dismissal. A persisted current
-  background-automation opt-in intentionally starts polling/heartbeat.
-- Treat every page-hosted proactive control as untrusted unless its activation
-  is trusted. Page Review can only open extension-owned confirmation; only a
-  trusted Allow activation from the exact extension confirmation URL/token can
-  authorize networking.
-- Bind grants and confirmations to the exact top-level tab/document/frame;
-  revalidate before confirmation and before atomic final consumption.
-- Revoke proactive state when a normal command, voice, ambient, or browser-agent
-  workflow starts.
+- Make no gateway call on fresh/default extension startup or privacy migration.
+  A persisted current background-automation opt-in intentionally starts
+  polling/heartbeat.
 - Default background automation off and gate every task/tool/agent poll,
   alarm, and heartbeat with current versioned consent.
 - Never put page or active-owner metadata in heartbeat.
-- Suppress proactive observation when the closed password/autocomplete/form/
-  recognized-sensitive-route marker set matches; do not claim perfect semantic
-  detection of every sensitive page.
-- Restrict proactive networking to the exact disclosed
-  `POST /v1/proactive/turns` request with `redirect: "error"`; never route it
-  through voice/browser turns, tools, agents, tasks, workflows, or the broker.
-- Refuse returned action/proposal keys and incomplete bounded scans; record only
-  serialized, bounded, content-free local protocol-violation receipts.
+- For future context sharing, expose concrete context types and exact outbound
+  preview; support useful no-screenshot choices and explicit approval.
 - Restrict model actions to the explicit action DSL.
 - Block non-HTTP(S) navigation.
 - Confirm cross-origin navigation.
@@ -440,8 +316,8 @@ If userScripts are added later, they should be an explicit opt-in path with a wa
 - Runtime profile settings read/write through gateway endpoints.
 - Fresh/default state makes no passive gateway request and background automation
   is off/fail-closed.
-- Proactive observe/dismiss has zero network and no persistent page-derived data.
-- Proactive acceptance is disclosed, exactly once, text-only, and action-inert.
+- No Local suggestion control, structural sampler, proactive card, confirmation
+  flow, or proactive request remains.
 - Screenshot capture path lives in the background worker.
 - Gateway-routed action proposals use a constrained action schema.
 - Content script can snapshot visible affordances.
