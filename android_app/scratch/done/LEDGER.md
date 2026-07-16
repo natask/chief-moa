@@ -1,3 +1,4 @@
+- Released the keyboard fade-hold on API 26-29 IME dismissal via back-pre-IME and window-focus signals, and made start reposition carry open panel/transcript surfaces along the drag anchor path — agent: Claude Code/Fable 5 — 90eb7113
 - Centered the lion under the Start button's actual touch with button-center fallback and running-service reposition, and guarded the family fade so keyboard/composer engagement never parks the overlay or hides the IME — agent: Claude Code/Fable 5 — b540dd0a
 - Reskinned the overlay and full app to opaque native-black surfaces and remapped outside taps from close to a fade of the lion/panel/transcript family with a consumed wake touch — agent: Claude Code/Fable 5 — 14eb5c7f
 - Android steering pre-generates replacement identity, reports exact device ownership, cancels stale provider work immediately, and opens the new mic turn without waiting for cancellation acknowledgement — agent: Codex/GPT-5 — integration candidate
