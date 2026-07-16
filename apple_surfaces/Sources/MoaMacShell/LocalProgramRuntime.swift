@@ -1,22 +1,21 @@
 #if os(macOS)
 import Foundation
-import JavaScriptCore
 import MoaMacCore
 
-@objc protocol MacProgramBridgeExport: JSExport {
-    func call(_ capabilityID: String, _ inputJSON: String) -> String
-}
-
-/// The only native object placed into an agent-created JavaScript context.
-/// It dispatches closed semantic capabilities; it does not expose AppKit,
-/// Objective-C, filesystem, network, Apple Events, JXA, or shell authority.
-final class MacProgramBridge: NSObject, MacProgramBridgeExport, @unchecked Sendable {
+/// Parent-side semantic capability broker. The JavaScript helper has no direct
+/// AppKit, Accessibility, filesystem, network, Apple Events, JXA, or shell bridge.
+final class MacProgramBridge: @unchecked Sendable {
     private let authority: any MacAccessibilityProgramAuthority
     private let executionID: String
     private let allowed: Set<String>
     private let maximumCalls: Int
     private let deadline: Date
     private let preStateSHA256: String
+    private let journal: any MacProgramJournaling
+    private let claimant: MacReceiptClaimant
+    private let programSHA256: String
+    private let catalogSHA256: String
+    private let bindingsSHA256: String
     private let now: @Sendable () -> Date
     private(set) var calls = 0
     private(set) var receipts: [MacLocalActionReceipt] = []
@@ -25,6 +24,9 @@ final class MacProgramBridge: NSObject, MacProgramBridgeExport, @unchecked Senda
     init(authority: any MacAccessibilityProgramAuthority, executionID: String,
          allowed: Set<String>, maximumCalls: Int, deadline: Date,
          preStateSHA256: String,
+         journal: any MacProgramJournaling,
+         claimant: MacReceiptClaimant, programSHA256: String,
+         catalogSHA256: String, bindingsSHA256: String,
          now: @escaping @Sendable () -> Date) {
         self.authority = authority
         self.executionID = executionID
@@ -32,19 +34,32 @@ final class MacProgramBridge: NSObject, MacProgramBridgeExport, @unchecked Senda
         self.maximumCalls = maximumCalls
         self.deadline = deadline
         self.preStateSHA256 = preStateSHA256
+        self.journal = journal
+        self.claimant = claimant; self.programSHA256 = programSHA256
+        self.catalogSHA256 = catalogSHA256; self.bindingsSHA256 = bindingsSHA256
         self.now = now
     }
 
     func call(_ capabilityID: String, _ inputJSON: String) -> String {
         let startedAt = now()
         let inputDigest = MacLocalProgramDigest.data(Data(inputJSON.utf8))
+        var toolCallID: String?
         do {
             if let failure { throw failure }
-            guard allowed.contains(capabilityID) else { throw LocalProgramError.capabilityDenied }
+            guard try !journal.isStopRequested(executionID: executionID) else {
+                throw LocalProgramError.stopped
+            }
             let calledAt = startedAt
             guard calledAt < deadline else { throw LocalProgramError.expired }
             calls += 1
             guard calls <= maximumCalls else { throw LocalProgramError.toolBudgetExceeded }
+            let callID = "call_\(executionID)_\(calls)"
+            toolCallID = callID
+            try journal.beginTool(executionID: executionID,
+                pending: .init(toolCallID: callID, capabilityID: capabilityID,
+                    inputSHA256: inputDigest, preStateSHA256: preStateSHA256,
+                    sequence: calls, startedAt: calledAt))
+            guard allowed.contains(capabilityID) else { throw LocalProgramError.capabilityDenied }
             guard let data = inputJSON.data(using: .utf8), data.count <= 8 * 1024 else {
                 throw LocalProgramError.invalidInput
             }
@@ -83,50 +98,73 @@ final class MacProgramBridge: NSObject, MacProgramBridgeExport, @unchecked Senda
                 let request = try JSONDecoder().decode(MacAXActionRequest.self, from: data)
                 let expected = "macos.accessibility.\(request.action)"
                 guard capabilityID == expected else { throw LocalProgramError.invalidInput }
-                let receipt = try authority.perform(request, executionID: executionID,
+                let outcome = try authority.perform(request, executionID: executionID,
                     sequence: calls, now: calledAt)
-                receipts.append(receipt)
-                return try Self.json(receipt)
+                let normalized = receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
+                    toolCallID: callID, capabilityID: capabilityID, attempt: 1,
+                    inputSHA256: inputDigest, status: "succeeded",
+                    summary: "semantic_ax_action_executed", resourceID: outcome.resourceID,
+                    postStateSHA256: outcome.postStateSHA256,
+                    startedAt: startedAt, finishedAt: now())
+                try journal.finishTool(executionID: executionID, receipt: normalized, at: now())
+                receipts.append(normalized)
+                return try Self.json(normalized)
             }
-            receipts.append(Self.receipt(executionID: executionID, capabilityID: capabilityID,
-                sequence: calls, inputSHA256: inputDigest, preStateSHA256: preStateSHA256,
-                status: "succeeded", summary: "bounded local read completed",
-                startedAt: startedAt, finishedAt: now()))
+            let receipt = self.receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
+                toolCallID: callID, capabilityID: capabilityID, attempt: 1,
+                inputSHA256: inputDigest, status: "succeeded", summary: "bounded_local_read_completed",
+                resourceID: nil, postStateSHA256: nil,
+                startedAt: startedAt, finishedAt: now())
+            try journal.finishTool(executionID: executionID, receipt: receipt, at: now())
+            receipts.append(receipt)
             return output
         }
         catch let error as LocalProgramError {
             failure = error
-            receipts.append(Self.receipt(executionID: executionID, capabilityID: capabilityID,
-                sequence: max(calls, 1), inputSHA256: inputDigest, preStateSHA256: preStateSHA256,
-                status: Self.receiptStatus(error), summary: "local capability did not complete",
-                startedAt: startedAt, finishedAt: now()))
+            let receipt = self.receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
+                toolCallID: toolCallID ?? "call_\(executionID)_rejected_\(calls + 1)",
+                capabilityID: capabilityID, attempt: 1, inputSHA256: inputDigest,
+                status: Self.receiptStatus(error), summary: "local_capability_did_not_complete",
+                resourceID: nil, postStateSHA256: nil,
+                startedAt: startedAt, finishedAt: now())
+            if toolCallID != nil { try? journal.finishTool(executionID: executionID, receipt: receipt, at: now()) }
+            receipts.append(receipt)
             return Self.errorJSON(error)
         } catch {
             let wrapped = LocalProgramError.executionFailed("host operation failed")
             failure = wrapped
-            receipts.append(Self.receipt(executionID: executionID, capabilityID: capabilityID,
-                sequence: max(calls, 1), inputSHA256: inputDigest, preStateSHA256: preStateSHA256,
-                status: "failed", summary: "local capability did not complete",
-                startedAt: startedAt, finishedAt: now()))
+            let receipt = self.receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
+                toolCallID: toolCallID ?? "call_\(executionID)_failed_\(calls + 1)",
+                capabilityID: capabilityID, attempt: 1, inputSHA256: inputDigest,
+                status: "failed", summary: "local_capability_did_not_complete",
+                resourceID: nil, postStateSHA256: nil,
+                startedAt: startedAt, finishedAt: now())
+            if toolCallID != nil { try? journal.finishTool(executionID: executionID, receipt: receipt, at: now()) }
+            receipts.append(receipt)
             return Self.errorJSON(wrapped)
         }
     }
 
-    private static func receipt(executionID: String, capabilityID: String, sequence: Int,
-                                inputSHA256: String, preStateSHA256: String, status: String,
-                                summary: String, startedAt: Date, finishedAt: Date) -> MacLocalActionReceipt {
-        let target = MacLocalProgramDigest.data(Data("\(capabilityID)|\(preStateSHA256)".utf8))
-        return MacLocalActionReceipt(receiptID: "tool_\(UUID().uuidString.lowercased())",
-            executionID: executionID, capabilityID: capabilityID, sequence: sequence,
+    private func receipt(receiptID: String, toolCallID: String, capabilityID: String, attempt: Int,
+                         inputSHA256: String, status: String, summary: String,
+                         resourceID: String?, postStateSHA256: String?,
+                         startedAt: Date, finishedAt: Date) -> MacLocalActionReceipt {
+        MacLocalActionReceipt.make(receiptID: receiptID, executionID: executionID,
+            claimant: claimant, toolCallID: toolCallID, attempt: attempt,
+            capabilityID: capabilityID, programSHA256: programSHA256,
+            catalogSHA256: catalogSHA256, bindingsSHA256: bindingsSHA256,
             inputSHA256: inputSHA256, preStateSHA256: preStateSHA256,
-            postStateSHA256: nil, targetDigest: target, status: status,
-            summary: summary, startedAt: startedAt, finishedAt: finishedAt)
+            startedAt: startedAt, finishedAt: finishedAt, status: status,
+            result: .init(summary: summary, resourceID: resourceID),
+            postStateSHA256: postStateSHA256,
+            previousReceiptSHA256: receipts.last?.receiptSHA256)
     }
 
     private static func receiptStatus(_ error: LocalProgramError) -> String {
         switch error {
         case .staleObservation, .staleTarget, .unknownHandle: "stale_state"
         case .expired: "timed_out"
+        case .stopped: "stopped"
         case .capabilityDenied, .approvalRequired, .unsupportedAction, .invalidInput: "rejected"
         default: "failed"
         }
@@ -167,12 +205,22 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
     private let authority: any MacAccessibilityProgramAuthority
     private let now: @Sendable () -> Date
     private let localAdvertisement: MacLocalProgramAdvertisement
+    private let journal: any MacProgramJournaling
+    private let clientInstanceID: String
+    private let runnerURL: URL?
+    private let runnersLock = NSLock()
+    private var runners: [String: MacProgramRunnerHandle] = [:]
 
     public init(deviceID: String, authority: any MacAccessibilityProgramAuthority,
+                clientInstanceID: String, journal: any MacProgramJournaling,
+                runnerURL: URL? = nil,
                 now: @escaping @Sendable () -> Date = Date.init) {
         self.deviceID = deviceID
         self.authority = authority
         self.now = now
+        self.clientInstanceID = clientInstanceID
+        self.journal = journal
+        self.runnerURL = runnerURL
         let issuedAt = now()
         self.localAdvertisement = .init(deviceID: deviceID, issuedAt: issuedAt,
             expiresAt: issuedAt.addingTimeInterval(24 * 60 * 60))
@@ -180,22 +228,36 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
 
     public var advertisement: MacLocalProgramAdvertisement { localAdvertisement }
 
+    public func requestStop(executionID: String) throws {
+        try journal.requestStop(executionID: executionID, at: now())
+        runnersLock.withLock { runners[executionID] }?.stop()
+    }
+    public func lifecycleEvents(executionID: String) throws -> [MacProgramLifecycleEvent] { try journal.events(executionID: executionID) }
+    public func terminalReceipt(executionID: String) throws -> MacProgramTerminalReceipt? {
+        try journal.terminalReceipt(executionID: executionID)
+    }
+
     public func execute(_ envelope: MacLocalProgramEnvelope,
                         approvedProgramSHA256: String) -> MacLocalProgramResult {
         var bridge: MacProgramBridge?
         var executionStartedAt: Date?
+        var accepted = false
         do {
             let startedAt = now()
             try envelope.validate(advertisement: localAdvertisement, now: startedAt)
             guard approvedProgramSHA256 == envelope.program.sha256 else {
                 throw LocalProgramError.approvalRequired
             }
-            try Self.validateProgramSource(envelope.program.source)
             try authority.validate(bindings: envelope.bindings, now: startedAt)
-            executionStartedAt = startedAt
-            guard let context = JSContext(virtualMachine: JSVirtualMachine()) else {
-                throw LocalProgramError.executionFailed("JavaScriptCore unavailable")
+            switch try journal.claim(envelope, claimantDeviceID: deviceID,
+                                     clientInstanceID: clientInstanceID, at: startedAt) {
+            case .accepted: accepted = true
+            case .replay(let terminal):
+                if let terminal { return terminal }
+                throw LocalProgramError.replayed
             }
+            try journal.markStarted(executionID: envelope.executionID, at: startedAt)
+            executionStartedAt = startedAt
             let createdBridge = MacProgramBridge(authority: authority,
                 executionID: envelope.executionID,
                 allowed: Set(envelope.catalog.allowedCapabilityIDs),
@@ -203,35 +265,42 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
                 deadline: min(envelope.expiresAt,
                     startedAt.addingTimeInterval(Double(envelope.limits.wallMS) / 1_000)),
                 preStateSHA256: envelope.bindings.stateSHA256,
+                journal: journal,
+                claimant: .init(deviceID: deviceID, clientInstanceID: clientInstanceID),
+                programSHA256: envelope.program.sha256,
+                catalogSHA256: envelope.catalog.sha256,
+                bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings),
                 now: now)
             bridge = createdBridge
-            var exception: String?
-            context.exceptionHandler = { _, value in
-                if let value { exception = value.toString() }
-                else { exception = "JavaScript exception" }
+            guard let executableURL = runnerURL ?? Self.defaultRunnerURL() else {
+                throw LocalProgramError.executionFailed("program runner unavailable")
             }
-            context.setObject(createdBridge, forKeyedSubscript: "__moaMacHost" as NSString)
-            context.evaluateScript(Self.bootstrap)
-            guard exception == nil else { throw LocalProgramError.executionFailed(exception!) }
-
-            let wrapped = "JSON.stringify((function(){\n\(envelope.program.source)\n})())"
-            let value = context.evaluateScript(wrapped)
+            let handle = MacProgramRunnerHandle()
+            runnersLock.withLock { runners[envelope.executionID] = handle }
+            defer { _ = runnersLock.withLock { runners.removeValue(forKey: envelope.executionID) } }
+            let outcome = try MacProgramProcessRunner.run(executableURL: executableURL,
+                source: envelope.program.source, wallMS: envelope.limits.wallMS,
+                handle: handle, call: createdBridge.call)
             if let failure = createdBridge.failure { throw failure }
-            if let exception { throw LocalProgramError.executionFailed(exception) }
-            guard now().timeIntervalSince(startedAt) * 1_000 <= Double(envelope.limits.wallMS) else {
-                throw LocalProgramError.expired
+            if try journal.isStopRequested(executionID: envelope.executionID) {
+                throw LocalProgramError.stopped
             }
-            let output: String
-            if let value { output = value.toString() }
-            else { output = "null" }
+            if outcome.timedOut { throw LocalProgramError.expired }
+            if let error = outcome.error { throw LocalProgramError.executionFailed(error) }
+            let output = outcome.outputJSON ?? "null"
             guard output.utf8.count <= envelope.limits.resultBytes else {
                 throw LocalProgramError.outputTooLarge
             }
-            return result(envelope, status: "completed", resultJSON: output,
+            let completed = result(envelope, status: "completed", resultJSON: output,
                 error: nil, bridge: createdBridge, startedAt: executionStartedAt)
+            try journal.finish(executionID: envelope.executionID, result: completed, at: now())
+            return completed
         } catch {
-            return result(envelope, status: "failed", resultJSON: nil,
+            let status = (error as? LocalProgramError) == .stopped ? "stopped" : "failed"
+            let failed = result(envelope, status: status, resultJSON: nil,
                 error: Self.safeError(error), bridge: bridge, startedAt: executionStartedAt)
+            if accepted { try? journal.finish(executionID: envelope.executionID, result: failed, at: now()) }
+            return failed
         }
     }
 
@@ -249,58 +318,17 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
             startedAt: startedAt, finishedAt: now())
     }
 
-    /// JavaScriptCore has no supported per-context interrupt or heap-budget API.
-    /// Until execution is isolated in a killable helper, reject source constructs
-    /// that can create unbounded computation or dynamically recover constructors.
-    private static func validateProgramSource(_ source: String) throws {
-        let denied = #"(\b(?:while|for|do|function|class|import|export|with|debugger|constructor|prototype|__proto__|eval)\b|=>)"#
-        if source.range(of: denied, options: .regularExpression) != nil {
-            throw LocalProgramError.unsafeProgram
-        }
+    private static func defaultRunnerURL() -> URL? {
+        let executable = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+        let workingDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let candidates = [
+            executable.deletingLastPathComponent().appendingPathComponent("MoaMacProgramRunner"),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/MoaMacProgramRunner"),
+            workingDirectory.appendingPathComponent(".build/debug/MoaMacProgramRunner"),
+            workingDirectory.appendingPathComponent(".build/arm64-apple-macosx/debug/MoaMacProgramRunner"),
+        ]
+        return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) })
     }
-
-    private static let bootstrap = #"""
-    "use strict";
-    const host = __moaMacHost;
-    const decode = value => {
-      const result = JSON.parse(value);
-      if (result && result.ok === false) throw new Error(result.error || "host operation failed");
-      return result;
-    };
-    const call = (capability, input = {}) => decode(host.call(capability, JSON.stringify(input)));
-    const accessibility = Object.freeze({
-      observe: () => call("macos.accessibility.observe"),
-      find: (query = {}) => call("macos.accessibility.find", query),
-      press: input => call("macos.accessibility.press", {...input, action:"press"}),
-      confirm: input => call("macos.accessibility.confirm", {...input, action:"confirm"}),
-      cancel: input => call("macos.accessibility.cancel", {...input, action:"cancel"}),
-      increment: input => call("macos.accessibility.increment", {...input, action:"increment"}),
-      decrement: input => call("macos.accessibility.decrement", {...input, action:"decrement"}),
-      show_menu: input => call("macos.accessibility.show_menu", {...input, action:"show_menu"}),
-      set_value: input => call("macos.accessibility.set_value", {...input, action:"set_value"})
-    });
-    globalThis.tools = Object.freeze({macos:Object.freeze({
-      accessibility,
-      app:Object.freeze({current:()=>call("macos.app.current")}),
-      window:Object.freeze({current:()=>call("macos.window.current")})
-    })});
-    delete globalThis.__moaMacHost;
-    delete globalThis.fetch;
-    delete globalThis.XMLHttpRequest;
-    delete globalThis.WebSocket;
-    delete globalThis.require;
-    delete globalThis.process;
-    delete globalThis.eval;
-    delete globalThis.Function;
-    delete globalThis.Promise;
-    delete globalThis.Array;
-    delete globalThis.Map;
-    delete globalThis.Set;
-    delete globalThis.WeakMap;
-    delete globalThis.WeakSet;
-    delete globalThis.RegExp;
-    Object.freeze(globalThis.tools);
-    """#
 
     private static func safeError(_ error: Error) -> String {
         switch error {
