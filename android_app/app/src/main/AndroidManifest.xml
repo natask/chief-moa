@@ -75,6 +75,12 @@
         </service>
 
         <service
+            android:name=".MoaProgramRuntimeService"
+            android:exported="false"
+            android:isolatedProcess="true"
+            android:process=":moa_program_runtime" />
+
+        <service
             android:name=".MoaQuickTileService"
             android:exported="true"
             android:icon="@drawable/ic_moa_orb"

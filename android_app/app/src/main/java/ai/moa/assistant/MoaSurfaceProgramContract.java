@@ -17,12 +17,12 @@ import java.util.regex.Pattern;
 final class MoaSurfaceProgramContract {
     static final int MAX_SOURCE_BYTES = 65_536;
     static final int MAX_WALL_MS = 30_000;
-    static final int MAX_MEMORY_BYTES = 32 * 1024 * 1024;
     static final int MAX_TOOL_CALLS = 100;
-    static final int MAX_PARALLEL_CALLS = 8;
+    static final int MAX_PARALLEL_CALLS = 1;
     static final int MAX_RESULT_BYTES = 65_536;
     static final int MAX_LOG_BYTES = 32_768;
     static final long MAX_LIFETIME_MS = 5 * 60_000L;
+    private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
     private static final Pattern ID = Pattern.compile("^[A-Za-z0-9._:-]{1,200}$");
     private static final Pattern SHA = Pattern.compile("^[a-f0-9]{64}$");
     private static final Set<String> ROOT = set("version", "type", "execution_id", "session_id", "turn_id", "target", "runtime", "program", "catalog", "bindings", "limits", "approval_policy", "idempotency_key", "issued_at", "expires_at");
@@ -65,8 +65,7 @@ final class MoaSurfaceProgramContract {
         exact(catalog, set("version", "sha256", "allowed_capability_ids"), "invalid_catalog_shape");
         integer(catalog, "version", MoaScriptExecutionCatalog.VERSION, MoaScriptExecutionCatalog.VERSION);
         rejectIf(!MoaScriptExecutionCatalog.sha256().equals(digest(catalog, "sha256")), "catalog_mismatch");
-        Set<String> allowed = stringSet(array(catalog, "allowed_capability_ids"));
-        rejectIf(allowed.isEmpty(), "capability_escalation");
+        Set<String> allowed = sortedStringSet(array(catalog, "allowed_capability_ids"), "invalid_capability_ids");
         rejectIf(!MoaScriptExecutionCatalog.ids().containsAll(allowed), "capability_escalation");
 
         JSONObject bindings = object(input, "bindings");
@@ -75,17 +74,17 @@ final class MoaSurfaceProgramContract {
         String expectedPackage = id(bindings, "package_name");
         String windowId = id(bindings, "window_id");
         String observationId = id(bindings, "observation_id");
-        long observationGeneration = integer(bindings, "observation_generation", 1, Long.MAX_VALUE);
+        long observationGeneration = integer(bindings, "observation_generation", 1, MAX_SAFE_INTEGER);
         String observationDigest = digest(bindings, "state_sha256");
 
         Limits limits = parseLimits(object(input, "limits"));
-        rejectIf(limits.sourceBytes != source.getBytes(StandardCharsets.UTF_8).length, "source_bytes_mismatch");
+        rejectIf(source.getBytes(StandardCharsets.UTF_8).length > limits.sourceBytes, "source_bytes_mismatch");
         JSONObject approval = object(input, "approval_policy");
         exact(approval, set("program", "always_ask"), "invalid_approval_shape");
         String programApproval = text(approval, "program", 80);
         rejectIf(!"preauthorized".equals(programApproval) && !"local_policy".equals(programApproval)
                 && !"approval_required".equals(programApproval), "invalid_approval_policy");
-        Set<String> alwaysAsk = stringSet(array(approval, "always_ask"));
+        Set<String> alwaysAsk = sortedStringSet(array(approval, "always_ask"), "invalid_approval_shape");
         rejectIf(!MoaScriptExecutionCatalog.EFFECT_CLASSES.containsAll(alwaysAsk), "approval_effect_escalation");
 
         long issuedAt = instant(input, "issued_at");
@@ -98,15 +97,15 @@ final class MoaSurfaceProgramContract {
                 digest(catalog, "sha256"), allowed, MoaProgramJson.copy(bindings),
                 MoaProgramJson.sha256(MoaProgramJson.canonical(bindings)), expectedPackage, windowId,
                 observationId, observationGeneration, observationDigest, limits, programApproval, alwaysAsk,
-                idempotencyKey, issuedAt, expiresAt);
+                idempotencyKey, issuedAt, expiresAt, MoaProgramJson.sha256(MoaProgramJson.canonical(input)));
     }
 
     private static Limits parseLimits(JSONObject input) {
         exact(input, set("source_bytes", "wall_ms", "memory_bytes", "tool_calls", "parallel_calls", "result_bytes", "log_bytes"), "invalid_limits_shape");
+        rejectIf(input.opt("memory_bytes") != JSONObject.NULL, "invalid_memory_bytes");
         return new Limits(
                 integer(input, "source_bytes", 1, MAX_SOURCE_BYTES),
                 integer(input, "wall_ms", 100, MAX_WALL_MS),
-                integer(input, "memory_bytes", 1024 * 1024, MAX_MEMORY_BYTES),
                 integer(input, "tool_calls", 1, MAX_TOOL_CALLS),
                 integer(input, "parallel_calls", 1, MAX_PARALLEL_CALLS),
                 integer(input, "result_bytes", 1, MAX_RESULT_BYTES),
@@ -120,28 +119,28 @@ final class MoaSurfaceProgramContract {
         final String bindingsSha256, expectedPackage, windowId, observationId, observationDigest;
         final long observationGeneration, issuedAtMs, expiresAtMs;
         final Limits limits;
-        final String programApproval, idempotencyKey;
+        final String programApproval, idempotencyKey, proposalSha256;
         final Set<String> alwaysAsk;
 
         Proposal(String executionId, String sessionId, String turnId, String deviceId, String source,
                  String programSha256, String catalogSha256, Set<String> allowedCapabilityIds,
                  JSONObject bindings, String bindingsSha256, String expectedPackage, String windowId,
                  String observationId, long observationGeneration, String observationDigest, Limits limits, String programApproval, Set<String> alwaysAsk,
-                 String idempotencyKey, long issuedAtMs, long expiresAtMs) {
+                 String idempotencyKey, long issuedAtMs, long expiresAtMs, String proposalSha256) {
             this.executionId = executionId; this.sessionId = sessionId; this.turnId = turnId; this.deviceId = deviceId;
             this.source = source; this.programSha256 = programSha256; this.catalogSha256 = catalogSha256;
             this.allowedCapabilityIds = Collections.unmodifiableSet(new LinkedHashSet<>(allowedCapabilityIds));
             this.bindings = bindings; this.bindingsSha256 = bindingsSha256; this.expectedPackage = expectedPackage;
             this.windowId = windowId; this.observationId = observationId; this.observationGeneration = observationGeneration;
             this.observationDigest = observationDigest; this.limits = limits; this.programApproval = programApproval;
-            this.alwaysAsk = Collections.unmodifiableSet(new LinkedHashSet<>(alwaysAsk)); this.idempotencyKey = idempotencyKey; this.issuedAtMs = issuedAtMs; this.expiresAtMs = expiresAtMs;
+            this.alwaysAsk = Collections.unmodifiableSet(new LinkedHashSet<>(alwaysAsk)); this.idempotencyKey = idempotencyKey; this.issuedAtMs = issuedAtMs; this.expiresAtMs = expiresAtMs; this.proposalSha256 = proposalSha256;
         }
     }
 
     static final class Limits {
-        final int sourceBytes, wallMs, memoryBytes, toolCalls, parallelCalls, resultBytes, logBytes;
-        Limits(long sourceBytes, long wallMs, long memoryBytes, long toolCalls, long parallelCalls, long resultBytes, long logBytes) {
-            this.sourceBytes = (int) sourceBytes; this.wallMs = (int) wallMs; this.memoryBytes = (int) memoryBytes;
+        final int sourceBytes, wallMs, toolCalls, parallelCalls, resultBytes, logBytes;
+        Limits(long sourceBytes, long wallMs, long toolCalls, long parallelCalls, long resultBytes, long logBytes) {
+            this.sourceBytes = (int) sourceBytes; this.wallMs = (int) wallMs;
             this.toolCalls = (int) toolCalls; this.parallelCalls = (int) parallelCalls;
             this.resultBytes = (int) resultBytes; this.logBytes = (int) logBytes;
         }
@@ -158,8 +157,8 @@ final class MoaSurfaceProgramContract {
     private static String text(JSONObject input, String key, int max) { String value = input.optString(key, null); rejectIf(value == null, "invalid_" + key); rejectIf(value.trim().isEmpty(), "invalid_" + key); rejectIf(value.length() > max, "invalid_" + key); return value; }
     private static String digest(JSONObject input, String key) { String value = input.optString(key, null); rejectIf(value == null, "invalid_" + key); rejectIf(!SHA.matcher(value).matches(), "invalid_" + key); return value; }
     private static long integer(JSONObject input, String key, long min, long max) { Object raw = input.opt(key); rejectIf(!(raw instanceof Number), "invalid_" + key); double value = ((Number) raw).doubleValue(); long integer = ((Number) raw).longValue(); rejectIf(!Double.isFinite(value), "invalid_" + key); rejectIf(value != integer, "invalid_" + key); rejectIf(integer < min, "invalid_" + key); rejectIf(integer > max, "invalid_" + key); return integer; }
-    private static long instant(JSONObject input, String key) { try { return Instant.parse(input.optString(key, null)).toEpochMilli(); } catch (Exception error) { fail("invalid_" + key); return 0; } }
-    private static Set<String> stringSet(JSONArray input) { Set<String> result = new LinkedHashSet<>(); for (int i = 0; i < input.length(); i++) { Object value = input.opt(i); rejectIf(!(value instanceof String) || !ID.matcher((String) value).matches() || !result.add((String) value), "invalid_capability_ids"); } return result; }
+    private static long instant(JSONObject input, String key) { try { String raw = input.getString(key); rejectIf(!raw.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"), "invalid_" + key); return Instant.parse(raw).toEpochMilli(); } catch (Rejected error) { throw error; } catch (Exception error) { fail("invalid_" + key); return 0; } }
+    private static Set<String> sortedStringSet(JSONArray input, String code) { Set<String> result = new LinkedHashSet<>(); String previous = null; for (int i = 0; i < input.length(); i++) { Object value = input.opt(i); rejectIf(!(value instanceof String) || !ID.matcher((String) value).matches() || !result.add((String) value), code); String current = (String) value; rejectIf(previous != null && previous.compareTo(current) >= 0, code); previous = current; } return result; }
     private static void exact(JSONObject input, Set<String> expected, String code) { rejectIf(input == null, code); Set<String> actual = new HashSet<>(); Iterator<String> keys = input.keys(); while (keys.hasNext()) actual.add(keys.next()); rejectIf(!actual.equals(expected), code); }
     private static Set<String> set(String... values) { return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values))); }
     private static void fail(String code) { throw new Rejected(code); }
