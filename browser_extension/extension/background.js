@@ -837,6 +837,7 @@ async function executeSurfaceProgramRequest(request, deviceId) {
   run.active = false;
   broker.revoke();
   const drained = await waitForSurfaceProgramCalls(broker, Date.now() + 250);
+  if (!drained) await broker.finalizeUnresolved();
   activeSurfacePrograms.delete(envelope.execution_id);
 
   let status = sandboxResult?.ok && drained ? "completed" : !drained ? "indeterminate" : sandboxResult?.error === "program_wall_time_exceeded" ? "timed_out" : "failed";

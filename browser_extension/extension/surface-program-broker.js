@@ -45,6 +45,7 @@ function createSurfaceProgramBroker({ envelope, adapter, clock = () => Date.now(
   let receiptTail = Promise.resolve();
   let previousReceiptSha256 = null;
   let revoked = false;
+  const activeAttempts = new Map();
 
   async function persistReceipt(entry) {
     const persist = receiptTail.then(async () => {
@@ -99,22 +100,29 @@ function createSurfaceProgramBroker({ envelope, adapter, clock = () => Date.now(
     }
   }
 
-  async function invoke(capabilityId, definition, args, callId, startedAt) {
+  async function invoke(capabilityId, definition, args, attempt) {
     let preState;
     let dispatched = false;
     const inputSha256 = await sha256(args);
+    attempt.input_sha256 = inputSha256;
     try {
       if (revoked) throw new Error("surface_program_revoked");
       preState = await revalidate();
+      attempt.pre_state_sha256 = preState.state_sha256;
       if (revoked) throw new Error("surface_program_revoked");
       dispatched = true;
+      attempt.dispatched = true;
       const result = await dispatch(capabilityId, args);
       const postState = await adapter.currentBinding(envelope.bindings.tab_id).catch(() => null);
-      const entry = { call_id: callId, capability_id: capabilityId, status: "succeeded", input_sha256: inputSha256, pre_state_sha256: preState.state_sha256, post_state_sha256: postState?.state_sha256 || null, started_at: startedAt, finished_at: new Date(clock()).toISOString(), previous_receipt_sha256: null, result_sha256: await sha256(result ?? null) };
+      attempt.settled = true;
+      if (attempt.finalized) throw new Error("surface_program_finalized_indeterminate");
+      const entry = { call_id: attempt.call_id, capability_id: capabilityId, status: "succeeded", input_sha256: inputSha256, pre_state_sha256: preState.state_sha256, post_state_sha256: postState?.state_sha256 || null, started_at: attempt.started_at, finished_at: new Date(clock()).toISOString(), previous_receipt_sha256: null, result_sha256: await sha256(result ?? null) };
       await persistReceipt(entry);
       return result;
     } catch (error) {
-      const entry = { call_id: callId, capability_id: capabilityId, status: revoked && !dispatched ? "rejected" : definition.risk === "read_only" ? "failed" : "indeterminate", input_sha256: inputSha256, pre_state_sha256: preState?.state_sha256 || null, post_state_sha256: null, started_at: startedAt, finished_at: new Date(clock()).toISOString(), previous_receipt_sha256: null, error: String(error?.message || error).slice(0, 500) };
+      attempt.settled = true;
+      if (attempt.finalized) throw error;
+      const entry = { call_id: attempt.call_id, capability_id: capabilityId, status: revoked && !dispatched ? "rejected" : definition.risk === "read_only" ? "failed" : "indeterminate", input_sha256: inputSha256, pre_state_sha256: preState?.state_sha256 || null, post_state_sha256: null, started_at: attempt.started_at, finished_at: new Date(clock()).toISOString(), previous_receipt_sha256: null, error: String(error?.message || error).slice(0, 500) };
       await persistReceipt(entry);
       throw error;
     }
@@ -131,14 +139,32 @@ function createSurfaceProgramBroker({ envelope, adapter, clock = () => Date.now(
     activeCalls += 1;
     const callId = `${envelope.execution_id}:call:${callCount}`;
     const startedAt = new Date(clock()).toISOString();
+    const attempt = { call_id: callId, capability_id: capabilityId, started_at: startedAt, input_sha256: null, pre_state_sha256: null, dispatched: false, settled: false, finalized: false };
+    activeAttempts.set(callId, attempt);
     try {
-      if (definition.risk === "read_only") return await invoke(capabilityId, definition, args, callId, startedAt);
-      const queued = writeTail.then(() => invoke(capabilityId, definition, args, callId, startedAt));
+      if (definition.risk === "read_only") return await invoke(capabilityId, definition, args, attempt);
+      const queued = writeTail.then(() => invoke(capabilityId, definition, args, attempt));
       writeTail = queued.catch(() => {});
       return await queued;
     } finally {
       activeCalls -= 1;
+      activeAttempts.delete(callId);
     }
+  }
+
+  async function finalizeUnresolved() {
+    revoked = true;
+    const unresolved = [...activeAttempts.values()].filter((attempt) => attempt.dispatched && !attempt.settled && !attempt.finalized);
+    for (const attempt of unresolved) {
+      attempt.finalized = true;
+      await persistReceipt({
+        call_id: attempt.call_id, capability_id: attempt.capability_id, status: "indeterminate",
+        input_sha256: attempt.input_sha256, pre_state_sha256: attempt.pre_state_sha256,
+        post_state_sha256: null, started_at: attempt.started_at, finished_at: new Date(clock()).toISOString(),
+        previous_receipt_sha256: null, error: "effect_outcome_indeterminate",
+      });
+    }
+    return unresolved.length;
   }
 
   function assertResultSize(result) {
@@ -149,6 +175,7 @@ function createSurfaceProgramBroker({ envelope, adapter, clock = () => Date.now(
   return Object.freeze({
     call,
     revoke: () => { revoked = true; },
+    finalizeUnresolved,
     revalidate,
     assertResultSize,
     trace: () => trace.map((entry) => ({ ...entry })),

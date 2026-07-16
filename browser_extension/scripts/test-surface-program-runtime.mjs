@@ -194,6 +194,22 @@ test("broker enforces expiry, state, call, parallel, result, and failure boundar
   await queuedRejected;
   assert.equal(dispatchedWrites, 1, "a queued write began after bridge revocation");
   assert.equal(revoked.trace().at(-1).status, "rejected");
+
+  let releaseIndeterminate;
+  const indeterminateEffect = new Promise((resolve) => { releaseIndeterminate = resolve; });
+  const indeterminate = createSurfaceProgramBroker({ envelope, adapter: { ...elementsAdapter, click: () => indeterminateEffect }, clock: () => Date.parse("2026-07-16T12:00:30Z") });
+  const [indeterminateHandle] = await indeterminate.call("browser.page.query_elements", { selector: "x" });
+  const lateWrite = indeterminate.call("browser.page.click", { element_id: indeterminateHandle.element_id });
+  const lateRejected = assert.rejects(lateWrite, /finalized_indeterminate/);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  indeterminate.revoke();
+  assert.equal(await indeterminate.finalizeUnresolved(), 1);
+  assert.equal(indeterminate.trace().at(-1).status, "indeterminate");
+  const finalizedReceipt = indeterminate.trace().at(-1).receipt_sha256;
+  releaseIndeterminate({ applied: true });
+  await lateRejected;
+  assert.equal(indeterminate.trace().filter((entry) => entry.capability_id === "browser.page.click").length, 1);
+  assert.equal(indeterminate.trace().at(-1).receipt_sha256, finalizedReceipt, "late effect completion changed the durable receipt chain");
 });
 
 test("Chrome adapter uses only exact tab injection and rejects malformed inputs", async () => {
