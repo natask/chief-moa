@@ -13,7 +13,8 @@
 //      transcription_only and tts_spoke=true.
 //   2. am-ET cascade: Cloud TTS has no Amharic voice, so no hosted audio is
 //      streamed (tts_spoke=false) but the reply text is still returned for the
-//      device to speak. The STT leg still restricts to {en-US, am-ET} + chirp_3.
+//      device to speak. STT remains Chirp 3 provider-auto with the fixed
+//      best-effort Geʽez/Amharic/English prompt.
 //   3. STT-only (no reasoner) stays transcription_only=true and streams no audio.
 
 const assert = require("node:assert");
@@ -23,6 +24,7 @@ const path = require("node:path");
 const { WebSocket } = require("ws");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
+const EXPECTED_TRANSCRIPTION_PROMPT = "This speaker uses only Geʽez (ግዕዝ), Amharic (አማርኛ), and English. Transcribe verbatim in Ethiopic or Latin script as spoken; do not translate, transliterate, or use Devanagari.";
 const SERVER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "moa-cascaded-server-"));
 process.env.DATA_DIR = SERVER_DATA_DIR;
 process.env.ANDROID_OTA_DIR = path.join(SERVER_DATA_DIR, "android-ota");
@@ -110,12 +112,12 @@ async function profileDerivedSttLanguages(tempDir) {
   });
 
   assert.deepEqual(provider.status().language_codes, ["auto"]);
-  assert.deepEqual(provider.status().prompt_language_codes, ["am-ET"], "profile input_languages must override the env prompt");
+  assert.deepEqual(provider.status().prompt_language_codes, ["gez", "am-ET", "en-US"], "prompt language contract remains fixed");
   const events = [];
   await provider.processTurn(makeTurn(tempDir, "profile-am"), recordingHooks(events));
   const sttCall = calls.find((c) => c.kind === "stt");
   assert.deepEqual(sttCall.body.config.languageCodes, ["auto"]);
-  assert.match(sttCall.body.config.features.customPromptConfig.customPrompt, /Amharic/);
+  assert.equal(sttCall.body.config.features.customPromptConfig.customPrompt, EXPECTED_TRANSCRIPTION_PROMPT);
 
   const turnScopedCalls = [];
   stubFetch({ sttTranscript: "hello", calls: turnScopedCalls });
@@ -137,7 +139,7 @@ async function profileDerivedSttLanguages(tempDir) {
     },
   });
   assert.deepEqual(turnScopedProvider.status().language_codes, ["auto"]);
-  assert.deepEqual(turnScopedProvider.status().prompt_language_codes, ["en-US"], "global prompt status stays based on the global profile");
+  assert.deepEqual(turnScopedProvider.status().prompt_language_codes, ["gez", "am-ET", "en-US"], "global prompt status remains fixed");
   await turnScopedProvider.processTurn(makeTurn(tempDir, "profile-turn-am", {
     effectiveProfile: {
       input_languages: "am-ET,en-US",
@@ -152,12 +154,12 @@ async function profileDerivedSttLanguages(tempDir) {
     ["auto"],
     "recognize request must stay automatic for a per-turn effective profile",
   );
-  assert.match(turnScopedSttCall.body.config.features.customPromptConfig.customPrompt, /Amharic.*English/,
-    "custom prompt must prefer the per-turn effective profile over the global profile");
+  assert.equal(turnScopedSttCall.body.config.features.customPromptConfig.customPrompt, EXPECTED_TRANSCRIPTION_PROMPT,
+    "per-turn profile changes must not alter the fixed prompt contract");
 }
 
-// Explicit switching ("right now I want to speak X") reorders the prompt so
-// the chosen language leads. Recognition remains automatic.
+// Explicit switching changes semantic profile state, not the fixed provider
+// prompt or provider-auto recognition configuration.
 async function sttPrimaryFollowsProfilePrimary(tempDir) {
   const makeProvider = (inputPrimary) => createVoiceProvider({
     env: {
@@ -180,17 +182,16 @@ async function sttPrimaryFollowsProfilePrimary(tempDir) {
   const englishLead = makeProvider("en-US");
   assert.deepEqual(
     englishLead.status().prompt_language_codes,
-    ["en-US", "am-ET"],
-    "with en-US primary, the prompt must lead with en-US",
+    ["gez", "am-ET", "en-US"],
+    "with en-US primary, the prompt language contract remains fixed",
   );
 
-  // "right now I want to speak Amharic": the model set input_language_primary to
-  // am-ET (already in the set); the prompt now leads with am-ET, same set.
+  // "right now I want to speak Amharic" changes semantic behavior only.
   const amharicLead = makeProvider("am-ET");
   assert.deepEqual(
     amharicLead.status().prompt_language_codes,
-    ["am-ET", "en-US"],
-    "with am-ET primary, the same prompt set must lead with am-ET",
+    ["gez", "am-ET", "en-US"],
+    "with am-ET primary, the prompt language contract remains fixed",
   );
 
   const calls = [];
@@ -203,8 +204,8 @@ async function sttPrimaryFollowsProfilePrimary(tempDir) {
     ["auto"],
     "recognize request must remain automatic",
   );
-  assert.match(sttCall.body.config.features.customPromptConfig.customPrompt, /Amharic.*English/,
-    "recognize prompt must lead with the profile's understood primary");
+  assert.equal(sttCall.body.config.features.customPromptConfig.customPrompt, EXPECTED_TRANSCRIPTION_PROMPT,
+    "semantic primary changes must not alter the fixed prompt");
 }
 
 async function turnDoneCarriesCascadedMetadata(tempDir) {
@@ -392,11 +393,13 @@ async function enUsCascade(tempDir) {
   );
   assert.ok(events.find((e) => e.type === "audio").bytes > 0, "hosted TTS must stream audio bytes");
   assert.ok(calls.some((c) => c.kind === "tts"), "Cloud TTS synthesize must be called for en-US");
-  // STT recognition stays automatic while the two configured languages shape
-  // the bounded custom prompt.
+  // STT recognition stays automatic. The fixed prompt is provider guidance,
+  // not a hard allowlist, and keeps the tested Geʽez/Amharic/English order plus
+  // verbatim, native-script, no-translation/no-transliteration/no-Devanagari
+  // semantics regardless of the legacy env language list.
   const sttCall = calls.find((c) => c.kind === "stt");
   assert.deepEqual(sttCall.body.config.languageCodes, ["auto"]);
-  assert.match(sttCall.body.config.features.customPromptConfig.customPrompt, /English.*Amharic/);
+  assert.equal(sttCall.body.config.features.customPromptConfig.customPrompt, EXPECTED_TRANSCRIPTION_PROMPT);
   assert.equal(sttCall.body.config.model, "chirp_3");
   assert.ok(sttCall.body.config.explicitDecodingConfig, "STT must use explicit decoding, not auto");
 }
