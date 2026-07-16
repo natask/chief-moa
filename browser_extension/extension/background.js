@@ -2249,12 +2249,17 @@ function handleOffscreenVoiceError(id, error, code = error?.code) {
     event: {
       type: "error",
       code: "microphone_capture_failed",
+      failure_code: code || "microphone_capture_failed",
       recoverable: false,
       message,
-      recovery: {
-        target: MICROPHONE_RECOVERY_TARGET,
-        action_label: "Take me to microphone setup",
-      },
+      ...(code === "microphone_permission_denied"
+        ? {
+            recovery: {
+              target: MICROPHONE_RECOVERY_TARGET,
+              action_label: "Take me to microphone setup",
+            },
+          }
+        : {}),
     },
   });
   closeVoiceSession(id, "microphone capture failed");
