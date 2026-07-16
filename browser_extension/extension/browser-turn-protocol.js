@@ -115,10 +115,16 @@ function browserTurnActions(data) {
 
 function browserTurnSummary(data) {
   const reply = browserTurnReplyText(data);
-  const actions = browserTurnActions(data);
+  const actions = browserTurnActions(data).filter((action) => !["media.open", "media.bookmark"].includes(action?.type || action?.tool));
+  const receiptText = (Array.isArray(data?.local_action_receipts) ? data.local_action_receipts : [])
+    .map((receipt) => String(receipt?.summary || "").trim()).filter(Boolean).join("\n");
   const actionNotice = actions.length
     ? `Gateway proposed ${actions.length} browser action${actions.length === 1 ? "" : "s"}; not executed in this slice.`
     : "";
+  if (reply && receiptText && actionNotice) return `${reply}\n\n${receiptText}\n\n${actionNotice}`;
+  if (reply && receiptText) return `${reply}\n\n${receiptText}`;
+  if (receiptText && actionNotice) return `${receiptText}\n\n${actionNotice}`;
+  if (receiptText) return receiptText;
   if (reply && actionNotice) return `${reply}\n\n${actionNotice}`;
   if (reply) return reply;
   if (actionNotice) return actionNotice;

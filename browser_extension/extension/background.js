@@ -13,7 +13,7 @@ import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { sendToOffscreenReceiver, waitForOffscreenReceiver } from "./offscreen-voice-bridge.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
-import { browserLocalToolManifest } from "./browser-automation-contract.js";
+import { browserLocalToolManifest as browserAutomationLocalToolManifest } from "./browser-automation-contract.js";
 import { createBrowserAutomationRuntime } from "./browser-automation-runtime.js";
 import { createBrowserCommandRuntime } from "./browser-command-runtime.js";
 import {
@@ -21,6 +21,13 @@ import {
   OPTIONS_RECOVERY_STORAGE_KEY,
   createOptionsRecovery,
 } from "./options-recovery.js";
+import {
+  browserLocalToolManifest as browserMediaLocalToolManifest,
+  createBrowserMediaRuntime,
+  mediaActionsFromTurn,
+} from "./browser-media-runtime.js";
+import { createMediaConfirmationRuntime } from "./media-confirmation-runtime.js";
+import { createToolReceiptRuntime } from "./tool-receipt-runtime.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   MAX_SCREENSHOT_BASE64_CHARS,
@@ -43,6 +50,13 @@ import {
   normalizeBrowserSnapshot,
 } from "./browser-turn-protocol.js";
 
+function browserLocalToolManifest() {
+  return [...browserAutomationLocalToolManifest(), ...browserMediaLocalToolManifest()]
+    .filter((entry, index, entries) => entries.findIndex((candidate) => candidate.tool === entry.tool) === index);
+}
+
+const mediaConfirmation = createMediaConfirmationRuntime({ chromeApi: chrome }), browserMedia = createBrowserMediaRuntime({ ask, callGateway, confirmMedia: mediaConfirmation.confirm, getConfig, storage: chrome.storage.local, tabs: chrome.tabs });
+const toolReceipts = createToolReceiptRuntime({ callGateway, execute: executeBrowserToolRequest, storage: chrome.storage.local });
 chrome.runtime.onInstalled.addListener(async () => {
   await initializePrivacyState();
   await ensureContentOnOpenTabs();
@@ -191,7 +205,10 @@ async function callGateway(cfg, path, {
     ? await readGatewayResponseTextBounded(resp, maxResponseBytes)
     : await resp.text();
   if (!resp.ok) {
-    throw new Error(formatGatewayHttpError(cfg, path, resp, text));
+    const error = new Error(formatGatewayHttpError(cfg, path, resp, text));
+    error.gatewayStatus = resp.status;
+    error.gatewayResponseText = text.slice(0, 2000);
+    throw error;
   }
   if (resp.status === 204 || !text.trim()) {
     return null;
@@ -593,7 +610,6 @@ const DEV_RELOAD_POLL_MS = 1500;
 const DEVICE_CLIENT_HEARTBEAT_MS = 15000;
 let browserTaskPollInFlight = false;
 let browserTaskPollTimer = null;
-let browserToolRequestPollInFlight = false;
 let devReloadPollTimer = null;
 let devReloadPollInFlight = false;
 let deviceClientHeartbeatTimer = null;
@@ -664,40 +680,17 @@ async function pollBrowserTasks() {
 }
 
 async function pollBrowserToolRequests() {
-  if (browserToolRequestPollInFlight) return;
-  browserToolRequestPollInFlight = true;
-  try {
-    if (!(await isBackgroundAutomationEnabled())) return;
-    const cfg = await getConfig();
-    if (!cfg.gatewayUrl) return;
-    const deviceId = await getStableDeviceId();
-    const claimed = await callGateway(cfg, "/v1/tool/requests/claim", {
-      body: {
-        device_id: deviceId,
-        surface_type: "browser_extension",
-        local_tool_manifest: browserLocalToolManifest(),
-      },
-    });
-    const request = claimed?.request;
-    if (!request?.id) return;
-    const receipt = await executeBrowserToolRequest(request);
-    await callGateway(cfg, `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, {
-      body: {
-        device_id: deviceId,
-        ...receipt,
-      },
-    });
-  } catch {
-    // Background polling stays quiet; claimed work reports through receipts.
-  } finally {
-    browserToolRequestPollInFlight = false;
-  }
+  if (!(await isBackgroundAutomationEnabled())) return;
+  const cfg = await getConfig();
+  if (!cfg.gatewayUrl) return;
+  await toolReceipts.poll({ cfg, deviceId: await getStableDeviceId(), localToolManifest: browserLocalToolManifest() });
 }
 
 async function executeBrowserToolRequest(request) {
   const tool = String(request?.tool || "");
   const input = request?.input && typeof request.input === "object" ? request.input : {};
   try {
+    if (tool === "media.open" || tool === "media.bookmark") return browserMedia.execute({ tool, input });
     const automationReceipt = await browserAutomationRuntime.execute(request);
     if (automationReceipt) return automationReceipt;
     if (tool === "browser.tab.list") {
@@ -1985,7 +1978,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
   // a structured action on the turn result instead of relying on a baked-in
   // keyword detector. Handle known action types here; ignore unknown ones so a
   // future gateway envelope never breaks this client.
-  const tweakActionHandled = await maybeApplyTurnActions(tabId, data, signal, cueId);
+  const tweakActionHandled = await maybeApplyTurnActions(tabId, data, signal, cueId, instruction);
   if (tweakActionHandled) {
     return data;
   }
@@ -2015,22 +2008,18 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
   return data;
 }
 
-// Collect structured actions off a gateway turn result. The gateway may attach a
-// single `action` or an `actions` array; we accept either shape.
-function turnActions(data) {
-  const out = [];
-  if (data && typeof data.action === "object" && data.action) out.push(data.action);
-  if (data && Array.isArray(data.actions)) out.push(...data.actions.filter((a) => a && typeof a === "object"));
-  return out;
-}
-
-// Execute known gateway-proposed actions from a turn. Only `page_tweak` is
-// handled today: forward the pre-planned record to the content world's tweaks
-// module as tweak:applyRecord, which validates and compiles it locally. Unknown
-// action types are ignored silently. Returns true when a page_tweak action was
-// applied and a done summary was already sent.
-async function maybeApplyTurnActions(tabId, data, signal, cueId) {
-  const actions = turnActions(data);
+// Execute validated media, sampler, or page-tweak proposals locally and report
+// whether this function already completed the visible cue.
+async function maybeApplyTurnActions(tabId, data, signal, cueId, sourceText) {
+  const actions = browserTurnActions(data);
+  const mediaAction = mediaActionsFromTurn(data)[0];
+  if (mediaAction) {
+    throwIfAborted(signal);
+    const receipt = await browserMedia.execute(mediaAction, { tabId, sourceText });
+    send(tabId, { cmd: "done", cueId, summary: receipt.summary, speak: receipt.summary });
+    await saveTaskState(cueId, { status: receipt.ok ? "done" : "error", instruction: "", step: 1, lastResult: receipt.summary, tabId });
+    return true;
+  }
   const samplerAction = actions.find((a) => a.type === "voice_sampler");
   if (samplerAction) {
     await startVoiceSampler(tabId, cueId, samplerAction, signal);
@@ -2777,6 +2766,17 @@ async function forwardVoiceSessionEvent(session, event) {
     deliverVoiceSessionEvent(session, { event: parsed });
     return;
   }
+  if (parsed?.type === "transcript_final") session.mediaIntentText = String(parsed.text || "");
+  const voiceMediaAction = mediaActionsFromTurn(parsed)[0];
+  if (voiceMediaAction) {
+    const key = JSON.stringify(voiceMediaAction).slice(0, 2000);
+    const executed = session.executedMediaActionKeys ||= new Set();
+    if (!executed.has(key)) {
+      executed.add(key);
+      const receipt = await browserMedia.execute(voiceMediaAction, { tabId: session.tabId, sourceText: session.mediaIntentText });
+      deliverVoiceSessionEvent(session, { event: { type: "media_action_receipt", ...receipt } });
+    }
+  }
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
   });
@@ -3505,6 +3505,8 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   }
 
   const data = await waitForBrowserTurnAnswer(cfg, started, signal);
+  const mediaAction = mediaActionsFromTurn(data)[0];
+  if (mediaAction) data.local_action_receipts = [...(Array.isArray(data.local_action_receipts) ? data.local_action_receipts : []), await browserMedia.execute(mediaAction, { tabId, sourceText: text })];
   const summary = browserTurnSummary(data);
   const speak = String(data?.speak || data?.result?.speak || "").trim();
   if (options.delivery !== "return") {
