@@ -1003,6 +1003,32 @@ const startLiveVoiceTurnBody = sourceBetween(
 if (/setInputText\(\s*""/.test(startLiveVoiceTurnBody)) {
   throw new Error("starting browser voice must not clear an existing typed draft");
 }
+if (
+  !/if \(options\.openText !== false\) openTextSurface\(\{\s*fresh:\s*false\s*\}\)/.test(startLiveVoiceTurnBody) ||
+  !/awaitingExplicitDisposition:\s*options\.autoCommit === false/.test(startLiveVoiceTurnBody) ||
+  !/autoCommit:\s*options\.autoCommit !== false/.test(startLiveVoiceTurnBody)
+) {
+  throw new Error("live voice startup must honor hidden capture UI and preserve explicit versus automatic disposition");
+}
+
+const handleLiveVoiceMessageBody = sourceBetween(
+  contentSource,
+  /function handleLiveVoiceMessage\(/,
+  /function playLiveAssistantPcm\(/,
+  "handleLiveVoiceMessage"
+);
+const commitLiveVoiceTurnBody = sourceBetween(
+  contentSource,
+  /async function commitLiveVoiceTurn\(/,
+  /function applyLiveVoiceFinalTranscriptPolicy\(/,
+  "commitLiveVoiceTurn"
+);
+if (
+  !/if \(state\.awaitingExplicitDisposition\) \{[\s\S]{0,160}state\.pendingFinalTranscript = text;[\s\S]{0,80}return;/.test(handleLiveVoiceMessageBody) ||
+  !/state\.awaitingExplicitDisposition = false;[\s\S]{0,220}applyLiveVoiceFinalTranscriptPolicy/.test(commitLiveVoiceTurnBody)
+) {
+  throw new Error("non-auto-committing voice must defer transcript-final routing until explicit disposition");
+}
 
 if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(contentSource)) {
   throw new Error("voice button click must open the input surface and prime audio before starting live voice");
@@ -1271,9 +1297,15 @@ if (!/const STOP_PHRASES = \[/.test(contentSource) || !/function isStopCommand\(
   throw new Error("content.js must mirror the stop-intent matcher inline (STOP_PHRASES + isStopCommand)");
 }
 
-// Live voice path: a final transcript that is a stop command must halt before
-// the overlap and gateway-route checks, and must not be sent on as a turn.
-if (!/if \(msg\.type === "transcript_final" && isStopCommand\(text\)\) \{\s*\n\s*haltForStopCommand\(state\);/.test(contentSource)) {
+// Live voice path: after any required explicit disposition, a final transcript
+// that is a stop command must halt before overlap and gateway routing.
+const finalTranscriptPolicyBody = sourceBetween(
+  contentSource,
+  /function applyLiveVoiceFinalTranscriptPolicy\(/,
+  /function routeLiveTranscriptThroughGateway\(/,
+  "applyLiveVoiceFinalTranscriptPolicy"
+);
+if (!/if \(isStopCommand\(text\)\) \{\s*\n\s*haltForStopCommand\(state\);/.test(finalTranscriptPolicyBody)) {
   throw new Error("content.js live voice path must short-circuit a stop transcript to haltForStopCommand before routing");
 }
 if (!/function haltForStopCommand\(/.test(contentSource) || !/stopAllLiveVoiceTurns\("cancel"\);\s*\n\s*stopSpeaking\(\);/.test(contentSource)) {

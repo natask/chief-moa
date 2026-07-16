@@ -1839,7 +1839,7 @@
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
-    openTextSurface({ fresh: false });
+    if (options.openText !== false) openTextSurface({ fresh: false });
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
@@ -1871,6 +1871,8 @@
       assistantText: "",
       assistantSpeechSuppressed: false,
       transcript: "",
+      awaitingExplicitDisposition: options.autoCommit === false,
+      pendingFinalTranscript: "",
       gatewayRouted: false,
       incognito: context.action === "incognito",
       assistantSpeechOverlap: preserveAssistantPlayback,
@@ -1976,18 +1978,15 @@
       if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
       ensureVoiceCueCard(state, text, "");
-      // Fast local stop path: a whole-utterance "stop / shut up / be quiet"
-      // halts playback and every live turn at once, silently. It never sends the
-      // transcript on as a turn and never produces an assistant reply.
-      if (msg.type === "transcript_final" && isStopCommand(text)) {
-        haltForStopCommand(state);
-        return;
-      }
-      if (msg.type === "transcript_final" && isCurrentTurn && applySpeechOverlapPolicyFromTranscript(state, text)) {
-        return;
-      }
-      if (msg.type === "transcript_final" && isCurrentTurn && shouldRouteLiveTranscriptThroughGateway(text)) {
-        routeLiveTranscriptThroughGateway(state, text);
+      // Transcript-final policy runs immediately for ordinary auto-commit voice.
+      // Gesture captures hold it inert until the user's stop/send disposition,
+      // so recognized speech cannot become settings or page-control work early.
+      if (msg.type === "transcript_final") {
+        if (state.awaitingExplicitDisposition) {
+          state.pendingFinalTranscript = text;
+          return;
+        }
+        applyLiveVoiceFinalTranscriptPolicy(state, text, { isCurrentTurn });
       }
       return;
     }
@@ -2120,6 +2119,12 @@
   async function commitLiveVoiceTurn() {
     const state = liveVoice;
     if (!state || !isLiveVoiceStateActive(state)) return;
+    state.awaitingExplicitDisposition = false;
+    const pendingFinalTranscript = state.pendingFinalTranscript;
+    state.pendingFinalTranscript = "";
+    if (pendingFinalTranscript && applyLiveVoiceFinalTranscriptPolicy(state, pendingFinalTranscript, { isCurrentTurn: true })) {
+      return;
+    }
     state.committed = true;
     stopLiveCapture(state);
     setVoiceState(false);
@@ -2142,6 +2147,22 @@
     } else {
       state.commitWhenReady = true;
     }
+  }
+
+  function applyLiveVoiceFinalTranscriptPolicy(state, text, { isCurrentTurn = liveVoice === state } = {}) {
+    if (!state || !text) return false;
+    if (isStopCommand(text)) {
+      haltForStopCommand(state);
+      return true;
+    }
+    if (isCurrentTurn && applySpeechOverlapPolicyFromTranscript(state, text)) {
+      return true;
+    }
+    if (isCurrentTurn && shouldRouteLiveTranscriptThroughGateway(text)) {
+      routeLiveTranscriptThroughGateway(state, text);
+      return true;
+    }
+    return false;
   }
 
   function routeLiveTranscriptThroughGateway(state, transcript) {
