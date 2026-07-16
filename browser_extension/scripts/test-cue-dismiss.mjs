@@ -1,17 +1,16 @@
-// Unit test for the pure cue-card selection/formatting helpers that back the
-// persistent-overlay cascade-dismiss control and the language chip.
+// Unit test for the pure cue-card selection helper that backs the
+// persistent-overlay cascade-dismiss control, plus integration assertions for
+// the language-chip formatter extracted into the companion policy runtime.
 //
-// content.js is a plain (non-module) content script, so these helpers cannot
-// be imported directly like extension/voice-sampler-runtime.js. Instead this
-// test extracts the exact function source for each pure helper out of
-// extension/content.js by brace-matching on its signature, then evaluates
-// that source in an isolated vm context — so the test runs against the real
-// production code, not a hand-copied duplicate that could drift from it.
+// content.js is a plain (non-module) content script, so its remaining helper is
+// evaluated from the exact production function source in an isolated context.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const contentSource = readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
+await import(`../extension/content-companion-policy-runtime.js?cue-test=${Date.now()}`);
+const companionPolicy = globalThis.AgeeContentCompanionPolicyRuntime;
 
 function extractFunction(source, name) {
   const signature = `function ${name}(`;
@@ -36,12 +35,12 @@ function extractFunction(source, name) {
   return source.slice(start, end);
 }
 
-const helperNames = ["selectCascadeDismissIds", "shortLangTag", "parseLanguageCodes", "formatLanguageChipText"];
+const helperNames = ["selectCascadeDismissIds"];
 const helperSource = helperNames.map((name) => extractFunction(contentSource, name)).join("\n\n");
 
 const context = vm.createContext({});
 vm.runInContext(
-  `${helperSource}\nglobalThis.__cueHelpers = { selectCascadeDismissIds, shortLangTag, parseLanguageCodes, formatLanguageChipText };`,
+  `${helperSource}\nglobalThis.__cueHelpers = { selectCascadeDismissIds };`,
   context,
 );
 const vmHelpers = context.__cueHelpers;
@@ -50,7 +49,7 @@ const vmHelpers = context.__cueHelpers;
 // values on the way out so assert.deepEqual (which is prototype-strict) can
 // compare them normally.
 const selectCascadeDismissIds = (...args) => [...vmHelpers.selectCascadeDismissIds(...args)];
-const formatLanguageChipText = (...args) => String(vmHelpers.formatLanguageChipText(...args));
+const formatLanguageChipText = (...args) => companionPolicy.formatLanguageChipText(...args);
 
 // ---- selectCascadeDismissIds -------------------------------------------
 // Oldest-first card list, mirroring #agee-log DOM order (appendChild == newest last).

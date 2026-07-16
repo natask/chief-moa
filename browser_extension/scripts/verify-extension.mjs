@@ -151,9 +151,11 @@ if (
   mainContentScript.js.indexOf("page-observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-voice-policy-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-voice-policy-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "browser-command-transcript-runtime\.js", "document-context\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("content-companion-policy-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-companion-policy-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "browser-command-transcript-runtime\.js", "document-context\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
-  throw new Error("steering, command transcript, document context, page observation, and voice policy runtimes must load before content.js");
+  throw new Error("content policy runtimes must load before content.js in declared and dynamic injection paths");
 }
 if (
   packageJson.scripts?.["test:unit"] !== "node --test scripts/test-*.mjs" ||

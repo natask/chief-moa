@@ -31,7 +31,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["ui-spec-runtime.js", "steering-ui.js", "browser-command-transcript-runtime.js", "document-context.js", "page-observation-runtime.js", "content-voice-policy-runtime.js", "content.js"],
+      "js": ["ui-spec-runtime.js", "steering-ui.js", "browser-command-transcript-runtime.js", "document-context.js", "page-observation-runtime.js", "content-voice-policy-runtime.js", "content-companion-policy-runtime.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
