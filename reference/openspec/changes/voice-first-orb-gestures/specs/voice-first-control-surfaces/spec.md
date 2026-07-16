@@ -56,7 +56,10 @@ socket close.
 #### Scenario: Unexpected remote close retains evidence
 - **WHEN** a committed voice session closes remotely before turn completion
 - **THEN** Android keeps the recognized utterance visible
-- **AND** reports the close code while offering retry
+- **AND** reports the close code while keeping native Send visible
+- **WHEN** the user taps Send
+- **THEN** Android consumes retry admission exactly once
+- **AND** routes the preserved transcript without duplicating its chat row
 
 ### Requirement: Browser converges on the same chord
 The browser voice-first surface SHALL converge on the same single/double/triple

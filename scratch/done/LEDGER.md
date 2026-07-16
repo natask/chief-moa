@@ -1,2 +1,3 @@
+- Kept Send functional after a remote voice close with one-shot preserved-text retry admission — agent: Codex/GPT-5 — hygiene-android-native-black-voice-20260716-retry
 - Made Android voice taps idempotent, corrected streaming transcripts, and separated local cancels from real socket drops — agent: Codex/GPT-5 — hygiene-android-native-black-voice-20260716
 - Exposed validated immutable gateway build identity in health and wired it into VPS image builds — agent: Codex/GPT-5 — fdb3c329df0046c1e92ce64755cc01ff8366f8c9
