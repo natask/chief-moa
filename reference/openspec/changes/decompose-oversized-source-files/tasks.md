@@ -392,6 +392,12 @@
       ratchet to 47.26% lines, 27.19% branches, and 23.67% functions with 38
       passing unit tests and reduce conservative zero metadata to the two
       oversized orchestration files.
+- [x] 4.4j Extract bounded page observation, visible-text collection, action
+      indexing, labels, and local confirmation policy from `content.js` into a
+      focused runtime. Verified at 100% lines, 95.83% branches, and 100%
+      functions; reduce `content.js` to 4,499 lines and raise the exact
+      whole-extension ratchet to 48.36% lines, 28.52% branches, and 24.85%
+      functions with 42 passing unit tests.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
