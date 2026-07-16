@@ -84,7 +84,7 @@ async function browserProgramRuntimeManifest(deviceId = "") {
     target: { surface_type: "browser_extension", device_id: deviceId },
     runtime: { runtime_id: SURFACE_PROGRAM_RUNTIME_ID, language: "javascript", bridge_version: 1, entrypoint: "main" },
     catalog: { ...catalog, sha256: await sha256({ version: SURFACE_PROGRAM_CATALOG_VERSION, capabilities: CAPABILITIES }) },
-    limits: { source_bytes: MAX_SOURCE_BYTES, wall_ms: 30_000, memory_bytes: 32 * 1024 * 1024, tool_calls: 100, parallel_calls: 8, result_bytes: 64 * 1024, log_bytes: 32 * 1024 },
+    limits: { source_bytes: MAX_SOURCE_BYTES, wall_ms: 30_000, memory_bytes: null, tool_calls: 100, parallel_calls: 8, result_bytes: 64 * 1024, log_bytes: 32 * 1024 },
     issued_at: new Date(now).toISOString(),
     expires_at: new Date(now + 90_000).toISOString(),
   };
@@ -133,7 +133,7 @@ async function validateSurfaceProgramEnvelope(input, { nowMs = Date.now(), expec
   exactKeys(input.limits, ["source_bytes", "wall_ms", "memory_bytes", "tool_calls", "parallel_calls", "result_bytes", "log_bytes"], "limits");
   if (input.limits.source_bytes !== sourceBytes) throw new Error("source_bytes_mismatch");
   boundedInteger(input.limits.wall_ms, "wall_ms", 100, 30_000);
-  boundedInteger(input.limits.memory_bytes, "memory_bytes", 1024 * 1024, 64 * 1024 * 1024);
+  if (input.limits.memory_bytes !== null) throw new Error("unsupported_memory_limit");
   boundedInteger(input.limits.tool_calls, "tool_calls", 1, 100);
   boundedInteger(input.limits.parallel_calls, "parallel_calls", 1, Math.min(16, input.limits.tool_calls));
   boundedInteger(input.limits.result_bytes, "result_bytes", 1024, 64 * 1024);

@@ -1,61 +1,45 @@
 (() => {
   "use strict";
 
-  function createToolNamespace(call) {
-    return Object.freeze({
-      browser: Object.freeze({
-        page: Object.freeze({
-          snapshot: (args = {}) => call("browser.page.snapshot", args),
-          queryElements: (args = {}) => call("browser.page.query_elements", args),
-          getText: (args = {}) => call("browser.page.get_text", args),
-          wait: (args = {}) => call("browser.page.wait", args),
-          click: (args = {}) => call("browser.page.click", args),
-          fill: (args = {}) => call("browser.page.fill", args),
-          type: (args = {}) => call("browser.page.type", args),
-        }),
-        tab: Object.freeze({ get: (args = {}) => call("browser.tab.get", args) }),
-      }),
-    });
-  }
-
-  function runProgram(port, source) {
-    const pending = new Map();
-    let nextCall = 1;
-    const call = (capabilityId, args) => new Promise((resolve, reject) => {
-      const callId = nextCall++;
-      pending.set(callId, { resolve, reject });
-      port.postMessage({ type: "tool_call", call_id: callId, capability_id: capabilityId, args });
-    });
-    port.onmessage = (event) => {
-      const message = event.data || {};
-      if (message.type !== "tool_result") return;
-      const waiting = pending.get(message.call_id);
-      if (!waiting) return;
-      pending.delete(message.call_id);
-      if (message.ok) waiting.resolve(message.result);
-      else waiting.reject(new Error(String(message.error || "local tool failed")));
-    };
-    port.start();
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    const execute = new AsyncFunction("tools", `"use strict";\n${source}\n//# sourceURL=aggie-surface-program.js`);
-    Promise.resolve(execute(createToolNamespace(call))).then(
-      (result) => {
-        try { port.postMessage({ type: "program_result", ok: true, result }); }
-        catch { port.postMessage({ type: "program_result", ok: false, error: "program_result_not_cloneable" }); }
-      },
-      (error) => port.postMessage({ type: "program_result", ok: false, error: String(error?.message || error).slice(0, 2000) }),
-    ).finally(() => port.close());
-  }
-
   let started = false;
   addEventListener("message", (event) => {
     if (started) return;
-    if (event.source !== parent || event.data?.type !== "surface_program_start" || typeof event.data?.source !== "string") return;
+    if (event.source !== parent || event.data?.type !== "surface_program_start") return;
     const [port] = event.ports || [];
-    if (!port) return;
+    if (!port || typeof event.data?.source !== "string") return;
     started = true;
-    runProgram(port, event.data.source);
+    const workerUrl = URL.createObjectURL(new Blob([`(${globalThis.AgeeProgramWorkerRuntime.toString()})()`], { type: "text/javascript" }));
+    const worker = new Worker(workerUrl);
+    URL.revokeObjectURL(workerUrl);
+    let terminal = false;
+    const close = () => {
+      if (terminal) return;
+      terminal = true;
+      worker.terminate();
+      port.close();
+    };
+    worker.onmessage = (workerEvent) => {
+      if (terminal) return;
+      const message = workerEvent.data || {};
+      try { port.postMessage(message); }
+      catch { port.postMessage({ type: "program_result", ok: false, error: "program_result_not_cloneable" }); }
+      if (message.type === "program_result") close();
+    };
+    worker.onerror = () => {
+      if (!terminal) port.postMessage({ type: "program_result", ok: false, error: "program_worker_failed" });
+      close();
+    };
+    port.onmessage = (portEvent) => {
+      if (portEvent.data?.type === "program_cancel") { close(); return; }
+      if (!terminal && portEvent.data?.type === "tool_result") worker.postMessage(portEvent.data);
+    };
+    port.start();
+    worker.postMessage({
+      type: "program_start",
+      source: event.data.source,
+      result_bytes: event.data.result_bytes,
+      memory_bytes: event.data.memory_bytes,
+      log_bytes: event.data.log_bytes,
+    });
   });
-
-  globalThis.AgeeProgramSandboxQa = Object.freeze({ createToolNamespace, runProgram });
 })();

@@ -26,7 +26,7 @@ async function fixtureEnvelope(overrides = {}) {
       program: { source, sha256: await sha256(source) },
       catalog: { version: runtime.catalog.version, sha256: runtime.catalog.sha256, allowed_capability_ids: CAPABILITIES.map((item) => item.name) },
       bindings: binding,
-      limits: { source_bytes: utf8Bytes(source), wall_ms: 5000, memory_bytes: 16 * 1024 * 1024, tool_calls: 20, parallel_calls: 4, result_bytes: 16 * 1024, log_bytes: 0 },
+      limits: { source_bytes: utf8Bytes(source), wall_ms: 5000, memory_bytes: null, tool_calls: 20, parallel_calls: 4, result_bytes: 16 * 1024, log_bytes: 0 },
       approval_policy: { program: "preauthorized", always_ask: [] }, idempotency_key: "idem_fixture",
       issued_at: "2026-07-16T12:00:00.000Z", expires_at: "2026-07-16T12:01:00.000Z", ...overrides,
     },

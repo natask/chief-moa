@@ -79,14 +79,17 @@ async function main() {
     await waitFor(() => loopback.state.heartbeat?.runtime_advertisements?.[0] && loopback.state.heartbeat?.current_binding?.origin === `http://127.0.0.1:${loopback.port}`, 25000);
     const ad = loopback.state.heartbeat.runtime_advertisements[0];
     const binding = loopback.state.heartbeat.current_binding;
-    const now = Date.now();
-    loopback.state.request = { id: "request_fixture", tool: "surface.program.execute", input: {
-      version: 1, type: "surface.execution.proposed", execution_id: "exec_fixture", session_id: "session_fixture", turn_id: "turn_fixture",
-      target: ad.target, runtime: ad.runtime, program: { source, sha256: digest(source) },
+    const makeRequest = (suffix, programSource, wallMs = 5000) => {
+      const now = Date.now();
+      return { id: `request_${suffix}`, tool: "surface.program.execute", input: {
+      version: 1, type: "surface.execution.proposed", execution_id: `exec_${suffix}`, session_id: "session_fixture", turn_id: `turn_${suffix}`,
+      target: ad.target, runtime: ad.runtime, program: { source: programSource, sha256: digest(programSource) },
       catalog: { version: ad.catalog.version, sha256: ad.catalog.sha256, allowed_capability_ids: ad.catalog.capability_ids }, bindings: binding,
-      limits: { source_bytes: Buffer.byteLength(source), wall_ms: 5000, memory_bytes: 16*1024*1024, tool_calls: 20, parallel_calls: 4, result_bytes: 16384, log_bytes: 0 },
-      approval_policy: { program: "preauthorized", always_ask: [] }, idempotency_key: "idem_fixture", issued_at: new Date(now).toISOString(), expires_at: new Date(now+30000).toISOString(),
+      limits: { source_bytes: Buffer.byteLength(programSource), wall_ms: wallMs, memory_bytes: null, tool_calls: 20, parallel_calls: 4, result_bytes: 16384, log_bytes: 0 },
+      approval_policy: { program: "preauthorized", always_ask: [] }, idempotency_key: `idem_${suffix}`, issued_at: new Date(now).toISOString(), expires_at: new Date(now+30000).toISOString(),
     }};
+    };
+    loopback.state.request = makeRequest("fixture", source);
     const receipt = await waitFor(() => loopback.state.receipts[0], 30000);
     assert(receipt.status === "completed", JSON.stringify(receipt));
     assert(receipt.tool_attempts?.count >= 7, "expected many local tool calls");
@@ -101,7 +104,17 @@ async function main() {
     loopback.state.claimed = false;
     const replay = await waitFor(() => loopback.state.receipts[1], 10000);
     assert(replay.receipt_sha256 === receipt.receipt_sha256, "one-shot replay did not return the recorded terminal receipt");
-    console.log(`surface program smoke passed: isolated Chrome for Testing, localhost fixture/fake gateway, ${receipt.tool_attempts.count} local calls, no screenshots or personal profile`);
+    loopback.state.request = makeRequest("infinite", "while (true) {}", 250);
+    loopback.state.claimed = false;
+    const timeoutStarted = Date.now();
+    const timedOut = await waitFor(() => loopback.state.receipts[2], 5000);
+    assert(timedOut.status === "timed_out", JSON.stringify(timedOut));
+    assert(Date.now() - timeoutStarted < 5000, "infinite program was not promptly preempted");
+    loopback.state.request = makeRequest("recovery", "return await tools.browser.tab.get({});");
+    loopback.state.claimed = false;
+    const recovered = await waitFor(() => loopback.state.receipts[3], 10000);
+    assert(recovered.status === "completed", JSON.stringify(recovered));
+    console.log(`surface program smoke passed: isolated Chrome for Testing, localhost fixture/fake gateway, ${receipt.tool_attempts.count} local calls, infinite-loop preemption and recovery, no screenshots or personal profile`);
   } catch (error) { throw new Error(`${error.message}\nChrome stderr:\n${chromeErrors}`); }
   finally { workerCdp?.close(); pageCdp?.close(); loopback.instance.close(); chrome.kill("SIGTERM"); await delay(500); try { rmSync(profileRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
 }

@@ -830,7 +830,7 @@ async function executeSurfaceProgramRequest(request, deviceId) {
   let sandboxResult;
   try {
     await ensureOffscreenVoiceDocument();
-    sandboxResult = await chrome.runtime.sendMessage({ cmd: "surfaceProgramRun", execution_id: envelope.execution_id, run_token: runToken, source: envelope.program.source, wall_ms: envelope.limits.wall_ms });
+    sandboxResult = await chrome.runtime.sendMessage({ cmd: "surfaceProgramRun", execution_id: envelope.execution_id, run_token: runToken, source: envelope.program.source, wall_ms: envelope.limits.wall_ms, result_bytes: envelope.limits.result_bytes, memory_bytes: envelope.limits.memory_bytes, log_bytes: envelope.limits.log_bytes });
   } catch (error) {
     sandboxResult = { ok: false, error: String(error?.message || error) };
   }
