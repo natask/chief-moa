@@ -1,6 +1,8 @@
 #if os(macOS)
 import AppKit
 import Carbon.HIToolbox
+import CoreGraphics
+import MoaMacCore
 import MoaMacShell
 import MoaMacUI
 import SwiftUI
@@ -62,9 +64,18 @@ private final class CommandPanel: NSPanel {
 
     private func position(_ panel: NSPanel) {
         let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
-        guard let frame = screen?.visibleFrame else { panel.center(); return }
-        let size = panel.frame.size
-        panel.setFrameOrigin(NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2 + 80))
+        guard let screen else { panel.center(); return }
+        let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+            .map { CGDirectDisplayID($0.uint32Value) }
+        let decision = PanelLayoutPolicy.decision(for: PanelLayoutInput(
+            screenFrame: screen.frame,
+            visibleFrame: screen.visibleFrame,
+            panelSize: panel.frame.size,
+            safeAreaTop: screen.safeAreaInsets.top,
+            isBuiltInDisplay: displayID.map { CGDisplayIsBuiltin($0) != 0 } ?? false
+        ))
+        guard let decision else { panel.center(); return }
+        panel.setFrameOrigin(decision.origin)
     }
 }
 
