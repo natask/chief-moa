@@ -1,9 +1,9 @@
 package ai.moa.assistant;
 
 final class MoaColors {
-    // Warm-ember dark glass theme, aligned with the browser extension's
-    // overlay tokens (--agee-*): neutral near-black surfaces (no green cast),
-    // one amber-to-gold accent, violet reserved for the user's own bubbles.
+    // Native black theme: opaque true-black surfaces (OLED black, no tint and
+    // no glass translucency), structure carried by white hairline borders, one
+    // amber-to-gold accent, violet reserved for the user's own bubbles.
     static final int INK = 0xFF0B0C0E;           // dark text on gold fills
     static final int PAPER = 0xFFF4F4F6;         // primary text on dark
     static final int MUTED = 0xFF9B9BA4;         // secondary text
@@ -19,13 +19,14 @@ final class MoaColors {
     static final int OK = GOLD;
     static final int WARN = EMBER;
 
-    // Surfaces (dark glass: layered translucency reads as elevation).
-    static final int SURFACE_0 = 0xFF0B0C0E;
-    static final int PANEL_BG = 0xF50E0F12;      // ~rgba(14,15,18,0.96)
+    // Surfaces. Cards are opaque so underlying app content never bleeds
+    // through; elevation reads from the hairline steps, not translucency.
+    static final int SURFACE_0 = 0xFF000000;
+    static final int PANEL_BG = 0xFF000000;      // opaque true-black card
     static final int PANEL_BORDER = 0x24FFFFFF;  // 14% white hairline
-    static final int RAISED = 0xFF17181C;        // assistant bubble / card fill
+    static final int RAISED = 0xFF121212;        // assistant bubble / card fill
     static final int RAISED_BORDER = 0x17FFFFFF; // 9% white hairline
-    static final int COMPOSER_BG = 0xFF101114;
+    static final int COMPOSER_BG = 0xFF0A0A0A;
     static final int COMPOSER_BORDER = 0x24FFFFFF;
 
     // User bubble: violet tint.

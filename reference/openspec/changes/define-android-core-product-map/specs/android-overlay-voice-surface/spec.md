@@ -135,6 +135,50 @@ place that card predictably relative to the orb.
 - **WHEN** the user drags the orb while a card is open
 - **THEN** the card follows and recomputes its above-or-below placement
 
+### Requirement: Outside-Tap Family Fade
+The Android overlay SHALL treat the lion orb and its attached chat and voice
+transcript surfaces as one fade family. A tap outside every family window SHALL
+fade the whole family in place instead of closing any surface.
+
+#### Scenario: Tap outside fades without closing
+- **WHEN** the user taps outside the lion orb, the chat panel, and the voice
+  transcript card
+- **THEN** every visible family window fades to a dim opacity in place
+- **AND** no surface is closed and no chat message, composer draft, transcript
+  row, or live voice turn is cancelled or lost
+
+#### Scenario: Touching the faded family restores it
+- **WHEN** the family is faded and the user touches any family window
+- **THEN** the whole family returns to full opacity
+- **AND** that wake touch is consumed: it does not press a control, start a
+  voice gesture, focus the composer, or swipe a transcript row
+
+#### Scenario: Same gesture is not both outside and inside
+- **WHEN** a single tap lands on one family window while sibling overlay
+  windows report the same gesture as an outside touch
+- **THEN** the family does not fade for that gesture
+
+#### Scenario: Showing a surface wakes the family
+- **WHEN** the chat panel or a fresh voice transcript card is opened while the
+  family is faded
+- **THEN** the family returns to full opacity before the surface shows
+
+#### Scenario: Explicit close still closes
+- **WHEN** the user uses an explicit close control (the panel's close button,
+  Hide, drag-to-remove, or a collapse action)
+- **THEN** the existing close behavior applies unchanged; only the outside tap
+  is remapped from close to fade
+
+### Requirement: Native Black Overlay Surfaces
+The Android overlay SHALL render its chat panel, voice transcript card, and
+full-app surfaces as opaque true-black native surfaces.
+
+#### Scenario: Cards are opaque true black
+- **WHEN** the chat panel or voice transcript card renders
+- **THEN** its card background is opaque true black with hairline borders
+- **AND** underlying app content does not bleed through the card
+- **AND** surface fills carry no color cast
+
 ### Requirement: User-Removable Overlay
 The Android overlay SHALL provide discoverable local ways to remove the orb.
 

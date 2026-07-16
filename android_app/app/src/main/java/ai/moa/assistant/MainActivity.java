@@ -1454,7 +1454,7 @@ public final class MainActivity extends Activity {
         EditText input = new EditText(this);
         input.setHint(hint);
         input.setText(value);
-        input.setHintTextColor(0x72EEF8E8);
+        input.setHintTextColor(0x72F4F4F6);
         input.setTextColor(MoaColors.PAPER);
         input.setTextSize(15);
         input.setSingleLine(true);

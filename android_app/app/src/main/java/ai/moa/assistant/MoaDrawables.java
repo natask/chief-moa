@@ -38,17 +38,6 @@ final class MoaDrawables {
         return drawable;
     }
 
-    // Rounded vertical gradient with a hairline border. Used for the panel card
-    // and for raised bubbles so they read with a little depth.
-    static GradientDrawable roundedGradient(int top, int bottom, int radius, int strokeColor, int strokeWidth) {
-        GradientDrawable drawable = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{top, bottom});
-        drawable.setCornerRadius(radius);
-        if (strokeWidth > 0) {
-            drawable.setStroke(strokeWidth, strokeColor);
-        }
-        return drawable;
-    }
-
     // Per-corner rounded fill. Lets a chat bubble round three corners hard and
     // tuck the corner nearest its owner so it reads as "from" that side.
     static GradientDrawable roundedCorners(int color, float[] radii, int strokeColor, int strokeWidth) {

@@ -94,6 +94,9 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams transcriptParams;
     private View orbRemoveTarget;
     private boolean orbRemoveTargetActive;
+    // Outside-tap fade for the lion + chat/transcript family. Decisions live in
+    // the policy; this service only animates alpha and schedules the confirm.
+    private final MoaOverlayFadePolicy fadePolicy = new MoaOverlayFadePolicy();
     // Two surfaces hang off the orb. TAP opens the chat panel: a polished card
     // with bubbles + composer, the place to read the conversation and type.
     // DOUBLE-CLICK-AND-HOLD opens the voice surface: a compact native transcript
@@ -439,7 +442,7 @@ public final class OverlayService extends Service {
         builder.addAction(R.drawable.ic_moa_orb, "Hide", hidePendingIntent);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             builder.setCategory(Notification.CATEGORY_SERVICE);
-            builder.setColor(0xFFF4D35E);
+            builder.setColor(MoaColors.GOLD);
         }
         return builder.build();
     }
@@ -547,15 +550,19 @@ public final class OverlayService extends Service {
                 size,
                 size,
                 overlayType(),
+                // WATCH_OUTSIDE_TOUCH feeds the family fade: a tap that lands
+                // outside the lion and every attached surface dims the family
+                // instead of closing anything.
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                 android.graphics.PixelFormat.TRANSLUCENT
         );
         orbParams.gravity = Gravity.TOP | Gravity.START;
         orbParams.x = getResources().getDisplayMetrics().widthPixels - size - dp(ORB_EDGE_MARGIN_DP);
         orbParams.y = dp(164);
-        orbView.setOnTouchListener(new MoaOrbTouchListener(
+        MoaOrbTouchListener orbGestures = new MoaOrbTouchListener(
                 this,
                 windowManager,
                 orbView,
@@ -578,7 +585,12 @@ public final class OverlayService extends Service {
                 this::showOrbRemoveTarget,
                 this::updateOrbDragSurfaces,
                 this::finishOrbDrag
-        ));
+        );
+        // The fade gate runs first: while the family is faded, the touch that
+        // restores opacity is consumed and never becomes a talk/drag gesture.
+        MoaOverlayFadePolicy.WindowGate orbFadeGate = fadePolicy.newWindowGate();
+        orbView.setOnTouchListener((view, event) ->
+                handleFamilyTouch(orbFadeGate, event) || orbGestures.onTouch(view, event));
 
         windowManager.addView(orbView, orbParams);
     }
@@ -638,7 +650,7 @@ public final class OverlayService extends Service {
         }
         TextView target = text("Remove orb", MoaColors.PAPER, 14, true);
         target.setGravity(Gravity.CENTER);
-        target.setBackground(MoaDrawables.rounded(0xF01B1C20, dp(28), MoaColors.PANEL_BORDER, dp(1)));
+        target.setBackground(MoaDrawables.rounded(MoaColors.PANEL_BG, dp(28), MoaColors.PANEL_BORDER, dp(1)));
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                 dp(150),
                 dp(58),
@@ -678,7 +690,7 @@ public final class OverlayService extends Service {
         target.setText(active ? "Release to remove" : "Remove orb");
         target.setTextColor(active ? MoaColors.PAPER : MoaColors.MUTED);
         target.setBackground(MoaDrawables.rounded(
-                active ? 0xF0B3261E : 0xF01B1C20,
+                active ? 0xF0B3261E : MoaColors.PANEL_BG,
                 dp(28),
                 active ? 0x80FF8A80 : MoaColors.PANEL_BORDER,
                 dp(1)
@@ -718,6 +730,8 @@ public final class OverlayService extends Service {
         }
 
         loadSettings();
+        // Opening a surface is engagement: the family never appears half-dim.
+        restoreFamilyOpacity();
 
         panelView = createPanel();
         int width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(20), dp(380));
@@ -727,8 +741,10 @@ public final class OverlayService extends Service {
                 overlayType(),
                 // NOT_TOUCH_MODAL lets touches outside the panel reach the app
                 // underneath; WATCH_OUTSIDE_TOUCH delivers those outside touches
-                // to us as ACTION_OUTSIDE so the first tap off the panel closes
-                // the overlay UI back to just the orb.
+                // as ACTION_OUTSIDE so the first tap off the family fades the
+                // lion + chat/transcript surfaces without closing them. The
+                // FamilyFadeFrame root handles both the outside reports and the
+                // consumed wake tap.
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -739,14 +755,6 @@ public final class OverlayService extends Service {
         // kept independent from keyboard animation.
         panelParams.gravity = Gravity.TOP | Gravity.START;
         panelParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
-
-        panelView.setOnTouchListener((view, event) -> {
-            if (event.getActionMasked() == android.view.MotionEvent.ACTION_OUTSIDE) {
-                dismissOverlayUi();
-                return true;
-            }
-            return false;
-        });
 
         positionSurfaceNearOrb(panelView, panelParams);
         windowManager.addView(panelView, panelParams);
@@ -829,6 +837,99 @@ public final class OverlayService extends Service {
         }
     }
 
+    private static MoaOverlayFadePolicy.TouchKind familyTouchKind(int actionMasked) {
+        switch (actionMasked) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                return MoaOverlayFadePolicy.TouchKind.DOWN;
+            case android.view.MotionEvent.ACTION_MOVE:
+                return MoaOverlayFadePolicy.TouchKind.MOVE;
+            case android.view.MotionEvent.ACTION_UP:
+                return MoaOverlayFadePolicy.TouchKind.UP;
+            case android.view.MotionEvent.ACTION_CANCEL:
+                return MoaOverlayFadePolicy.TouchKind.CANCEL;
+            case android.view.MotionEvent.ACTION_OUTSIDE:
+                return MoaOverlayFadePolicy.TouchKind.OUTSIDE;
+            default:
+                return MoaOverlayFadePolicy.TouchKind.OTHER;
+        }
+    }
+
+    // Routes one window's touch event through the fade contract. True when the
+    // event belongs to the fade family (an outside report, or a consumed wake
+    // gesture) and must not reach the window's own gesture logic.
+    private boolean handleFamilyTouch(MoaOverlayFadePolicy.WindowGate gate, android.view.MotionEvent event) {
+        MoaOverlayFadePolicy.Action action =
+                gate.onTouch(familyTouchKind(event.getActionMasked()), event.getEventTime());
+        switch (action) {
+            case FADE_REQUEST:
+                scheduleFamilyFade(event.getEventTime());
+                return true;
+            case RESTORE_AND_CONSUME:
+                applyFamilyFade(false);
+                return true;
+            case CONSUME:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void scheduleFamilyFade(long eventTime) {
+        if (!fadePolicy.shouldScheduleFadeConfirm(eventTime)) {
+            return;
+        }
+        mainHandler.postDelayed(() -> {
+            if (fadePolicy.confirmFade(eventTime)) {
+                applyFamilyFade(true);
+            }
+        }, MoaOverlayFadePolicy.OUTSIDE_CONFIRM_MS);
+    }
+
+    // Programmatic wake for surface show/dismiss paths. Touch-driven wakes go
+    // through handleFamilyTouch so the wake gesture is also consumed.
+    private void restoreFamilyOpacity() {
+        if (fadePolicy.restore()) {
+            applyFamilyFade(false);
+        }
+    }
+
+    private void applyFamilyFade(boolean faded) {
+        float alpha = faded ? MoaOverlayFadePolicy.FADED_ALPHA : 1f;
+        fadeFamilyWindow(orbView, alpha);
+        fadeFamilyWindow(panelView, alpha);
+        fadeFamilyWindow(transcriptView, alpha);
+        if (faded) {
+            // Attention moved to the app underneath; the draft text survives.
+            hideKeyboard();
+        }
+    }
+
+    private void fadeFamilyWindow(View view, float alpha) {
+        if (view == null) {
+            return;
+        }
+        view.animate().alpha(alpha).setDuration(160).start();
+    }
+
+    // Root frame for the chat panel and transcript card windows. Fade-family
+    // decisions run before child dispatch so a wake tap on a faded card can
+    // never also press a pill, focus the composer, or swipe a transcript row.
+    private final class FamilyFadeFrame extends FrameLayout {
+        private final MoaOverlayFadePolicy.WindowGate gate = fadePolicy.newWindowGate();
+
+        FamilyFadeFrame(android.content.Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(android.view.MotionEvent event) {
+            if (handleFamilyTouch(gate, event)) {
+                return true;
+            }
+            return super.dispatchTouchEvent(event);
+        }
+    }
+
     // The voice surface is a compact transcript, not a transport log. It shows
     // what the user said and what Moa is saying, while connection/commit state
     // is rendered only as subtle surface state.
@@ -848,10 +949,12 @@ public final class OverlayService extends Service {
         }
         cancelAutoDismiss();
         removePanel();
+        // A fresh voice surface is engagement: wake the family before it shows.
+        restoreFamilyOpacity();
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(MoaDrawables.roundedGradient(0xF4101D18, 0xF40A1410, dp(24), 0x33F4D35E, dp(1)));
+        card.setBackground(MoaDrawables.rounded(MoaColors.PANEL_BG, dp(24), MoaColors.PANEL_BORDER, dp(1)));
         card.setElevation(dp(26));
         card.setPadding(dp(16), dp(14), dp(16), dp(16));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -879,7 +982,7 @@ public final class OverlayService extends Service {
         ));
         renderVoiceTranscriptRows();
 
-        FrameLayout shell = new FrameLayout(this);
+        FrameLayout shell = new FamilyFadeFrame(this);
         shell.setPadding(dp(16), 0, dp(16), 0);
         shell.addView(card, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -891,9 +994,12 @@ public final class OverlayService extends Service {
                 width,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 overlayType(),
+                // WATCH_OUTSIDE_TOUCH so an off-family tap fades the transcript
+                // with the rest of the family instead of leaving it solid.
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                 android.graphics.PixelFormat.TRANSLUCENT
         );
         transcriptParams.gravity = Gravity.TOP | Gravity.START;
@@ -1419,10 +1525,10 @@ public final class OverlayService extends Service {
     }
 
     private View createPanel() {
-        FrameLayout shell = new FrameLayout(this);
-        // Rounded dark card: a soft top-to-bottom gradient plus a hairline border
+        FrameLayout shell = new FamilyFadeFrame(this);
+        // Rounded native-black card: opaque true black with a hairline border
         // and real elevation so it reads as a raised surface, not a flat box.
-        shell.setBackground(MoaDrawables.roundedGradient(0xF20D1A15, MoaColors.PANEL_BG, dp(26), MoaColors.PANEL_BORDER, dp(1)));
+        shell.setBackground(MoaDrawables.rounded(MoaColors.PANEL_BG, dp(26), MoaColors.PANEL_BORDER, dp(1)));
         shell.setElevation(dp(28));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             shell.setOutlineSpotShadowColor(0xFF000000);
@@ -1600,7 +1706,7 @@ public final class OverlayService extends Service {
 
         composer = new EditText(this);
         composer.setHint("Message A.G.");
-        composer.setHintTextColor(0x66B8C9C2);
+        composer.setHintTextColor(0x66F4F4F6);
         composer.setTextColor(MoaColors.PAPER);
         composer.setTextSize(15);
         composer.setMinLines(1);
@@ -2718,8 +2824,10 @@ public final class OverlayService extends Service {
     // clearVoiceLog=false is used when this is an internal pre-reset before
     // starting a brand-new turn (PTT hold, audio note): the prior transcript
     // rows must persist and the new turn appends to them. A genuine user close
-    // (Done button, tap-outside, end-loop) clears the stack.
+    // (Done button, the panel's ×, end-loop) clears the stack. A tap outside
+    // the family is NOT a close: it only fades the surfaces in place.
     private void dismissOverlayUi(boolean clearVoiceLog) {
+        restoreFamilyOpacity();
         cancelAudioNoteCapture();
         discardWarmMic();
         pushToTalkVoiceTurn = false;
@@ -2749,6 +2857,7 @@ public final class OverlayService extends Service {
     // but remove large overlay surfaces so settings and operational status are
     // usable without the overlay stealing focus.
     private void collapseInteractiveSurfaces() {
+        restoreFamilyOpacity();
         cancelAudioNoteCapture();
         discardWarmMic();
         cancelVoiceSampler();

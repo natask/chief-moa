@@ -1,5 +1,31 @@
 # Manual QA Checklist
 
+## Native Black UI + Family Fade (PENDING live screenshot QA)
+
+Status 2026-07-16: implemented and unit-verified on branch
+`worktree-moa-native-black-ui`; no Android device was attached, so live
+screenshot QA is PENDING. Design was validated against the existing
+screenshots in `scratch/mobile-ui-enhance/screens/` and
+`scratch/agent-loop/moa-mobile-current-20260714.png` (green-glass baseline).
+
+- Install the debug APK and start the overlay.
+- Open the chat panel and confirm the card is opaque true black (no underlying
+  app content bleeding through, no green cast), with hairline borders.
+- Start a voice turn and confirm the transcript card is the same native black.
+- With the panel or transcript open, tap the wallpaper/another app: confirm the
+  lion orb + panel + transcript all fade in place and nothing closes; composer
+  draft text, chat messages, transcript rows, and a playing reply survive.
+- Touch any faded surface (lion, panel, or transcript): confirm the whole
+  family returns to full opacity and that touch does NOT press a button, start
+  a voice gesture, or swipe a row.
+- Tap the lion again after the wake touch: confirm normal gestures work.
+- With only the lion visible, tap elsewhere: confirm the lion alone fades and a
+  touch on it restores full opacity without starting talk.
+- While typing in the composer, confirm keystrokes on the keyboard do not fade
+  the family.
+- Capture screenshots of: black panel, black transcript, faded family, restored
+  family; store them under `scratch/mobile-ui-enhance/screens/`.
+
 ## Overlay Voice
 
 - Install the debug APK.
