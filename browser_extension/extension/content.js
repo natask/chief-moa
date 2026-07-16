@@ -2,6 +2,7 @@
 
 (() => {
   const AGGIE_ROOT_ID = "agee-root";
+  const CONTENT_RUNTIME_VERSION = String(chrome.runtime.getManifest().version || "unknown");
   const existingAggies = () => Array.from(document.querySelectorAll(`#${AGGIE_ROOT_ID}`));
   const pruneDuplicateAggies = () => {
     const nodes = existingAggies();
@@ -12,11 +13,11 @@
   };
 
   if (window.top !== window) return;
-  if (window.__ageeLoaded) {
+  if (window.__ageeLoaded === CONTENT_RUNTIME_VERSION) {
     pruneDuplicateAggies();
     return;
   }
-  window.__ageeLoaded = true;
+  window.__ageeLoaded = CONTENT_RUNTIME_VERSION;
   existingAggies().forEach((node) => node.remove());
 
   // ---- Overlay UI -------------------------------------------------------
@@ -258,6 +259,11 @@
   let newThreadArmed = false;
   let newThreadLabel = "";
 
+  function armNewThread(label = "") {
+    newThreadArmed = true;
+    newThreadLabel = String(label || "").trim().slice(0, 120);
+  }
+
   // Parse a typed context slash command. Returns true when the input was a mode
   // command (and was handled + shown in the result stack) so the caller skips
   // the normal gateway turn.
@@ -282,8 +288,7 @@
       return true;
     }
     if (command === "new") {
-      newThreadArmed = true;
-      newThreadLabel = rest.slice(0, 120);
+      armNewThread(rest);
       showContextModeCue(
         raw,
         newThreadLabel
@@ -909,8 +914,7 @@
       stopSpeaking();
     }
     if (freshThread) {
-      newThreadArmed = true;
-      newThreadLabel = "";
+      armNewThread();
     }
     voiceFirstCaptureOrigin = origin;
     startLiveVoiceTurn({
