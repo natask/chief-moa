@@ -51,10 +51,12 @@ EOF
 args="$*"
 case "$args" in
   *fetch\ origin) exit 0 ;;
+  *"rev-parse cccccccccccccccccccccccccccccccccccccccc^{commit}"*) printf '%040d\n' 0 | tr 0 c ;;
   *"rev-parse origin/master^{commit}"*) printf '%040d\n' 0 | tr 0 c ;;
+  *"merge-base --is-ancestor cccccccccccccccccccccccccccccccccccccccc cccccccccccccccccccccccccccccccccccccccc"*) exit 0 ;;
   *"rev-parse HEAD"*) cat "$TEST_STATE/current" ;;
   *"rev-parse --short HEAD"*) cut -c1-12 "$TEST_STATE/current" ;;
-  *"checkout --force --detach origin/master"*)
+  *"checkout --force --detach cccccccccccccccccccccccccccccccccccccccc"*)
     printf '%040d\n' 0 | tr 0 c >"$TEST_STATE/current"
     [ "$TEST_FAILURE" != checkout ] || exit 41 ;;
   *"checkout --force --detach master"*) exit 41 ;;
@@ -124,7 +126,8 @@ EOF
   PATH="$case_dir/bin:$PATH" TEST_STATE="$case_dir" TEST_FAILURE="$failure" \
     APP_DIR="$case_dir/app" ENV_FILE="$case_dir/env" BACKUP_DIR="$case_dir/backups" \
     MOA_PROMOTION_RECEIPT_FILE="$case_dir/receipt.json" MOA_PROMOTION_JOURNAL_FILE="$case_dir/journal.json" \
-    bash "$case_dir/scripts/update.sh" --ref master --evidence "$case_dir/evidence.json" \
+    bash "$case_dir/scripts/update.sh" --ref master --commit cccccccccccccccccccccccccccccccccccccccc \
+      --evidence "$case_dir/evidence.json" \
     >"$case_dir/stdout" 2>"$case_dir/stderr"
   status=$?
   set -e

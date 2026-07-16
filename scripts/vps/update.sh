@@ -17,10 +17,12 @@ source "$SCRIPT_DIR/lib.sh"
 
 REF="${MOA_REF:-master}"
 EVIDENCE_FILE="${MOA_PROMOTION_EVIDENCE_FILE:-}"
+EXPECTED_COMMIT="${MOA_EXPECTED_COMMIT:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref) REF="$2"; shift 2 ;;
+    --commit) EXPECTED_COMMIT="$2"; shift 2 ;;
     --evidence) EVIDENCE_FILE="$2"; shift 2 ;;
     --skip-backup)
       echo "--skip-backup was removed: active promotion requires backup and scratch-restore evidence" >&2
@@ -108,8 +110,20 @@ trap promotion_exit EXIT
 # claim chain and records isolated preview, drain/resume, compatibility and
 # rollback evidence. Merely having a green CI run is not promotion authority.
 git -C "$APP_DIR" fetch origin
-candidate_sha="$(git -C "$APP_DIR" rev-parse "origin/$REF^{commit}" 2>/dev/null \
-  || git -C "$APP_DIR" rev-parse "$REF^{commit}")"
+if [ -n "$EXPECTED_COMMIT" ]; then
+  [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]] || { echo "--commit must be a full lowercase Git SHA" >&2; exit 64; }
+  candidate_sha="$(git -C "$APP_DIR" rev-parse "$EXPECTED_COMMIT^{commit}")"
+  [ "$candidate_sha" = "$EXPECTED_COMMIT" ] || { echo "Pinned candidate did not resolve exactly" >&2; exit 65; }
+  verified_ref_sha="$(git -C "$APP_DIR" rev-parse "origin/$REF^{commit}" 2>/dev/null \
+    || git -C "$APP_DIR" rev-parse "$REF^{commit}")"
+  git -C "$APP_DIR" merge-base --is-ancestor "$candidate_sha" "$verified_ref_sha" || {
+    echo "Pinned candidate is not in the current verified $REF history" >&2
+    exit 65
+  }
+else
+  candidate_sha="$(git -C "$APP_DIR" rev-parse "origin/$REF^{commit}" 2>/dev/null \
+    || git -C "$APP_DIR" rev-parse "$REF^{commit}")"
+fi
 [ -n "$EVIDENCE_FILE" ] || {
   echo "MOA_PROMOTION_EVIDENCE_FILE or --evidence is required" >&2
   exit 65
@@ -156,8 +170,7 @@ if [ -f "$receipt_file" ]; then
   cp -p -- "$receipt_file" "$receipt_backup"
 fi
 promotion_mutated=1
-git -C "$APP_DIR" checkout --force --detach "origin/$REF" 2>/dev/null \
-  || git -C "$APP_DIR" checkout --force --detach "$REF"
+git -C "$APP_DIR" checkout --force --detach "$candidate_sha"
 new_sha="$(git -C "$APP_DIR" rev-parse --short HEAD)"
 
 # 3. Rebuild and recreate only the gateway. Volumes and other services stay.

@@ -136,7 +136,8 @@ node_runtime "$source_dir/scripts/vps/create-promotion-evidence.js" \
   --backup-restore-ref "$backup_ref" --rollback-ref "$rollback_ref" \
   --post-apply-smoke-ref "$post_smoke_ref"
 
-MOA_PROMOTION_EVIDENCE_FILE="$evidence_file" "$SCRIPT_DIR/update.sh" --ref "$REF" --evidence "$evidence_file"
+MOA_PROMOTION_EVIDENCE_FILE="$evidence_file" "$SCRIPT_DIR/update.sh" \
+  --ref "$REF" --commit "$target" --evidence "$evidence_file"
 trap - EXIT
 cleanup
 echo "promotion complete: $current -> $target"
