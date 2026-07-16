@@ -11,6 +11,7 @@ const { createSttStage, createReasonerStage, createTtsStage } = require("./voice
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
 const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition");
+const { phoneActionGeminiDeclaration } = require("./surface-skills");
 const {
   adcAccessToken,
   authorizedUserAccessToken,
@@ -2696,6 +2697,7 @@ class GeminiLiveVoiceProvider {
       },
       tools: [{
         functionDeclarations: [
+          ...((tool) => tool ? [tool] : [])(phoneActionGeminiDeclaration(turn)),
           {
             name: "launch_agent_run",
             description: "Start a durable A.G. gateway agent run on the home machine for work that should continue outside the live voice response.",

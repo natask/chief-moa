@@ -10,7 +10,11 @@
 //      and once a heartbeated android client claims + receipts it, the
 //      capability resolves with that receipt.
 //   3. the classic phone_action tool brokers the same way (url.open).
-//   4. the browser_agent_task capability creates a browser agent-loop task.
+//   4. all four bounded media tools route only to Android and await receipts,
+//      including media.playlist through the single classic fallback schema.
+//   5. browser-local media.open/media.bookmark route only to the browser client.
+//   6. media calls do not create background browser agent/CDP tasks.
+//   7. the existing browser_agent_task capability still works when explicit.
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -48,15 +52,65 @@ async function main() {
       source: "agee-extension-smoke",
       conversation_id: "surface_smoke_session",
       branch_id: "default",
+      transcript: "Search and open the browser local video and remember this video spot as browser spot.",
       delegation_envelope: confirmedEnvelope(instruction, url),
+    };
+    const phoneCall = {
+      ...call,
+      source: "android-overlay-smoke",
+      transcript: "Open Chrome. Open that link on my phone. Dial that phone number. Open and play the YouTube video. Seek back 15 seconds. Remember this video spot as favorite explanation. Rename the Road trip playlist to Road trip favorites.",
     };
 
     await step("resolveTurnSurface canonicalizes sources", () => assertSurfaceResolution());
     await step("android client heartbeats with phone tools", () => heartbeatAndroid(baseUrl));
-    await step("phone_open_app capability brokers an android app.launch and resolves with the receipt", () => assertPhoneOpenApp(baseUrl, deps, call));
-    await step("classic phone_action tool brokers url.open the same way", () => assertClassicPhoneAction(baseUrl, deps, call));
+    await step("browser client heartbeats with local media tools", () => heartbeatBrowser(baseUrl));
+    await step("browser-local media.open targets only the browser client", () => assertBrowserMediaCapability(baseUrl, deps, call, {
+      capability: "media_open",
+      tool: "media.open",
+      args: { query: "browser local video", app: "YouTube Advanced", preferred_package: "raw.package.override" },
+      expectedInput: { query: "browser local video", app_name: "YouTube Advanced" },
+    }));
+    await step("browser-local media.bookmark targets only the browser client", () => assertBrowserMediaCapability(baseUrl, deps, call, {
+      capability: "media_bookmark",
+      tool: "media.bookmark",
+      args: { operation: "remember", label: "browser spot" },
+      expectedInput: { operation: "remember", label: "browser spot" },
+    }));
+    await step("explicit browser intent selects browser-local media from another source", () => assertBrowserMediaCapability(baseUrl, deps, {
+      ...call,
+      source: "android-overlay-smoke",
+      intended_surface_type: "browser_extension",
+    }, {
+      capability: "media_open",
+      tool: "media.open",
+      args: { query: "explicit browser destination" },
+      expectedInput: { query: "explicit browser destination" },
+    }));
+    await step("phone_open_app brokers a visible app label and rejects package authority", () => assertPhoneOpenApp(baseUrl, deps, phoneCall));
+    await step("classic phone_action tool brokers url.open the same way", () => assertClassicPhoneAction(baseUrl, deps, phoneCall));
+    await step("media.open routes only to Android and awaits its receipt", () => assertMediaCapability(baseUrl, deps, phoneCall, {
+      capability: "phone_media_open",
+      tool: "media.open",
+      args: { video_id: "dQw4w9WgXcQ", position_ms: 42000, app_name: "YouTube" },
+      expectedInput: { video_id: "dQw4w9WgXcQ", position_ms: 42000, app_name: "YouTube" },
+    }));
+    await step("media.control routes only to Android and awaits its receipt", () => assertMediaCapability(baseUrl, deps, phoneCall, {
+      capability: "phone_media_control",
+      tool: "media.control",
+      args: { action: "seek_by", offset_ms: -15000 },
+      expectedInput: { action: "seek_by", offset_ms: -15000 },
+    }));
+    await step("media.bookmark routes only to Android and awaits its receipt", () => assertMediaCapability(baseUrl, deps, phoneCall, {
+      capability: "phone_media_bookmark",
+      tool: "media.bookmark",
+      args: { operation: "remember", label: "favorite explanation", note: "Return here later." },
+      expectedInput: { operation: "remember", label: "favorite explanation", note: "Return here later." },
+    }));
+    await step("classic phone_action brokers media.playlist without another top-level tool", () => assertClassicMediaPlaylist(baseUrl, deps, phoneCall));
+    await step("media input is bounded before brokering", () => assertBoundedMediaInput(deps, phoneCall));
+    await step("media requests create no browser agent/CDP task", () => assertNoBrowserTask(baseUrl));
     await step("browser_agent_task capability creates a browser agent-loop task", () => assertBrowserAgentTask(baseUrl, deps, call));
-    await step("no device claims -> capability returns queued", () => assertQueuedOnTimeout(baseUrl, call));
+    await step("no device claims -> capability returns queued", () => assertQueuedOnTimeout(baseUrl, phoneCall));
 
     console.log(JSON.stringify({
       ok: true,
@@ -64,8 +118,16 @@ async function main() {
       checks: [
         "resolveTurnSurface maps android-overlay->android and agee-extension/browser->browser",
         "phone_open_app creates an android-targeted app.launch tool_request",
+        "app.launch canonicalizes a visible label to app_name and rejects raw package identifiers",
         "a heartbeated android client claims + receipts it and the capability resolves with the receipt",
         "the classic phone_action tool brokers url.open through the same path",
+        "browser-local media.open and media.bookmark select only the browser client and return its receipt",
+        "an explicit intended browser surface selects browser-local media even from another source",
+        "model-authored preferred_package is absent from brokered media input",
+        "media.open, media.control, media.bookmark, and media.playlist target Android and return Android receipts",
+        "the single classic phone_action schema supports media tools without adding top-level classic tools",
+        "invalid media input is rejected before a tool_request is created",
+        "media requests create no browser agent/CDP tasks",
         "browser_agent_task creates a browser agent-loop task and returns task_id + agent_run_id",
         "a brokered action with no claiming device returns { queued: true, request_id }",
       ],
@@ -98,6 +160,23 @@ async function heartbeatAndroid(baseUrl) {
       { tool: "url.open", risk: "navigation", approval: "implicit_user_command" },
       { tool: "phone.dial", risk: "external_side_effect", approval: "target_app_confirmation" },
       { tool: "contact.open", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "media.open", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "media.control", risk: "media_control", approval: "implicit_user_command" },
+      { tool: "media.bookmark", risk: "local_state", approval: "implicit_user_command" },
+      { tool: "media.playlist", risk: "external_side_effect", approval: "local_confirmation" },
+    ],
+  });
+  assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
+}
+
+async function heartbeatBrowser(baseUrl) {
+  const heartbeat = await postJson(`${baseUrl}/v1/device-clients/heartbeat`, {
+    device_id: "browser_surface_smoke",
+    surface_type: "browser_extension",
+    session_id: "surface_smoke_session",
+    local_tool_manifest: [
+      { tool: "media.open", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "media.bookmark", risk: "local_state", approval: "implicit_user_command" },
     ],
   });
   assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
@@ -106,9 +185,14 @@ async function heartbeatAndroid(baseUrl) {
 async function assertPhoneOpenApp(baseUrl, deps, call) {
   const caps = surfaceExecuteCapabilities(call, deps);
   assert.ok(caps.phone_open_app, "phone_open_app capability must exist");
-  // Kick off the capability; it creates the tool_request then polls for a
-  // receipt. Concurrently, drive the android device that claims + receipts it.
-  const capPromise = caps.phone_open_app.run({ app: "com.android.chrome" });
+  const rawPackage = await caps.phone_open_app.run({ package: "com.android.chrome" });
+  assert.equal(rawPackage.ok, false);
+  assert.match(rawPackage.error, /raw package/);
+  const packageAsApp = await caps.phone_open_app.run({ app: "com.android.chrome" });
+  assert.equal(packageAsApp.ok, false);
+  assert.match(packageAsApp.error, /not an Android package identifier/);
+
+  const capPromise = caps.phone_open_app.run({ app: "Chrome" });
 
   const request = await waitForPendingToolRequest(baseUrl, "app.launch");
   assert.equal(request.target_surface_type, "android", "phone_open_app must target the android surface");
@@ -117,10 +201,12 @@ async function assertPhoneOpenApp(baseUrl, deps, call) {
   const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "android_surface_smoke" });
   assert.equal(claim.status, 200, `android must claim the request: ${JSON.stringify(claim.json)}`);
   assert.equal(claim.json.request.tool, "app.launch");
-  assert.equal(claim.json.request.input.app, "com.android.chrome", "the app arg must survive into the tool_request input");
+  assert.deepEqual(claim.json.request.input, { app_name: "Chrome" }, "the visible app label must canonicalize to app_name");
 
   const receipt = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, {
     device_id: "android_surface_smoke",
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `surface_${request.id}`,
     ok: true,
     summary: "Launched Chrome.",
     local_receipt: { tool: "app.launch", success: true },
@@ -151,6 +237,8 @@ async function assertClassicPhoneAction(baseUrl, deps, call) {
   assert.equal(claim.json.request.input.url, "https://example.test/pricing");
   const receipt = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, {
     device_id: "android_surface_smoke",
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `surface_${request.id}`,
     ok: true,
     summary: "Opened the URL.",
   });
@@ -159,6 +247,140 @@ async function assertClassicPhoneAction(baseUrl, deps, call) {
   const result = await capPromise;
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.tool, "url.open");
+}
+
+async function assertBrowserMediaCapability(baseUrl, deps, call, testCase) {
+  const caps = surfaceExecuteCapabilities(call, deps);
+  const capability = caps[testCase.capability];
+  assert.ok(capability, `${testCase.capability} browser-local capability must exist`);
+  assert.match(capability.description, /current browser client/);
+  assert.match(capability.description, /never falls back to Android/);
+
+  const resultPromise = capability.run(testCase.args);
+  const request = await waitForPendingToolRequest(baseUrl, testCase.tool);
+  assert.equal(request.target_surface_type, "browser_extension", `${testCase.tool} must target the browser surface`);
+  assert.equal(request.target_device_id, "browser_surface_smoke", `${testCase.tool} must select the browser claimant`);
+  assert.notEqual(request.target_device_id, "android_surface_smoke");
+
+  const androidClaim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "android_surface_smoke" });
+  assert.equal(androidClaim.status, 204, `Android must not claim browser-local ${testCase.tool}`);
+  const browserClaim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "browser_surface_smoke" });
+  assert.equal(browserClaim.status, 200, JSON.stringify(browserClaim.json));
+  assert.equal(browserClaim.json.request.id, request.id);
+  assert.deepEqual(browserClaim.json.request.input, testCase.expectedInput);
+  assert.equal(Object.hasOwn(browserClaim.json.request.input, "preferred_package"), false, "raw package overrides must not reach a client");
+
+  const receipt = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, {
+    device_id: "browser_surface_smoke",
+    claim_id: browserClaim.json.request.claim_id,
+    receipt_id: `surface_${request.id}`,
+    ok: true,
+    summary: `Browser completed ${testCase.tool}.`,
+    local_receipt: { tool: testCase.tool, success: true },
+  });
+  assert.equal(receipt.status, 200, JSON.stringify(receipt.json));
+  const result = await resultPromise;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.receipt.device_id, "browser_surface_smoke");
+
+  const classic = surfaceClassicTools(call, deps);
+  assert.equal(classic.filter((tool) => tool.name === "browser_media_action").length, 1, "browser classic fallback stays one media tool");
+}
+
+async function assertMediaCapability(baseUrl, deps, call, testCase) {
+  const caps = surfaceExecuteCapabilities(call, deps);
+  const capability = caps[testCase.capability];
+  assert.ok(capability, `${testCase.capability} capability must exist`);
+  assert.match(capability.description, new RegExp(testCase.tool.replace(".", "\\.")));
+
+  const resultPromise = capability.run(testCase.args);
+  const request = await waitForPendingToolRequest(baseUrl, testCase.tool);
+  assert.equal(request.target_surface_type, "android", `${testCase.tool} must target Android`);
+  assert.equal(request.target_device_id, "android_surface_smoke", `${testCase.tool} must select the Android claimant`);
+  assert.notEqual(request.target_surface_type, "browser_extension", `${testCase.tool} must never target the browser`);
+
+  const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "android_surface_smoke" });
+  assert.equal(claim.status, 200, JSON.stringify(claim.json));
+  assert.equal(claim.json.request.tool, testCase.tool);
+  for (const [key, value] of Object.entries(testCase.expectedInput)) {
+    assert.deepEqual(claim.json.request.input[key], value, `${testCase.tool}.${key} must survive unchanged`);
+  }
+
+  const receipt = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, {
+    device_id: "android_surface_smoke",
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `surface_${request.id}`,
+    ok: true,
+    summary: `Android completed ${testCase.tool}.`,
+    local_receipt: { tool: testCase.tool, success: true },
+  });
+  assert.equal(receipt.status, 200, JSON.stringify(receipt.json));
+
+  const result = await resultPromise;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.type, "tool_request_receipt");
+  assert.equal(result.tool, testCase.tool);
+  assert.equal(result.request_id, request.id);
+  assert.equal(result.receipt.device_id, "android_surface_smoke");
+}
+
+async function assertClassicMediaPlaylist(baseUrl, deps, call) {
+  const tools = surfaceClassicTools(call, deps);
+  assert.equal(tools.filter((tool) => tool.name === "phone_action").length, 1, "classic fallback stays one phone_action tool");
+  assert.equal(tools.filter((tool) => tool.name.startsWith("media_")).length, 0, "classic fallback must not add one schema per media action");
+  const phoneAction = tools.find((tool) => tool.name === "phone_action");
+  for (const tool of ["media.open", "media.control", "media.bookmark", "media.playlist"]) {
+    assert.ok(phoneAction.parameters.properties.tool.enum.includes(tool), `${tool} must be available through phone_action`);
+  }
+
+  const resultPromise = phoneAction.handler({
+    tool: "media.playlist",
+    input: { operation: "rename", playlist_name: "Road trip", new_name: "Road trip favorites" },
+  });
+  const request = await waitForPendingToolRequest(baseUrl, "media.playlist");
+  assert.equal(request.target_surface_type, "android");
+  const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "android_surface_smoke" });
+  assert.equal(claim.status, 200, JSON.stringify(claim.json));
+  assert.deepEqual(claim.json.request.input, {
+    operation: "rename",
+    playlist_name: "Road trip",
+    replacement_name: "Road trip favorites",
+  });
+  assert.equal(Object.hasOwn(claim.json.request.input, "new_name"), false, "playlist rename alias must be canonicalized");
+  const receipt = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, {
+    device_id: "android_surface_smoke",
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `surface_${request.id}`,
+    ok: true,
+    summary: "Android locally approved and completed media.playlist.",
+  });
+  assert.equal(receipt.status, 200, JSON.stringify(receipt.json));
+  const result = await resultPromise;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.tool, "media.playlist");
+  assert.equal(result.receipt.device_id, "android_surface_smoke");
+}
+
+async function assertBoundedMediaInput(deps, call) {
+  const caps = surfaceExecuteCapabilities(call, deps);
+  const invalidVideo = await caps.phone_media_open.run({ video_id: "not-eleven!!" });
+  assert.equal(invalidVideo.ok, false);
+  assert.match(invalidVideo.error, /exactly 11/);
+  const invalidSeek = await caps.phone_media_control.run({ action: "seek_to" });
+  assert.equal(invalidSeek.ok, false);
+  assert.match(invalidSeek.error, /position_ms is required/);
+  const classicPhoneAction = surfaceClassicTools(call, deps).find((tool) => tool.name === "phone_action");
+  const invalidRename = await classicPhoneAction.handler({
+    tool: "media.playlist",
+    input: { operation: "rename", playlist_name: "Road trip" },
+  });
+  assert.equal(invalidRename.ok, false);
+  assert.match(invalidRename.error, /replacement_name or new_name is required/);
+}
+
+async function assertNoBrowserTask(baseUrl) {
+  const tasks = await getJson(`${baseUrl}/v1/browser/agent-tasks?limit=100`);
+  assert.deepEqual(tasks.tasks || [], [], "Android media proposals must not fall back to browser agent/CDP tasks");
 }
 
 async function assertBrowserAgentTask(baseUrl, deps, call) {

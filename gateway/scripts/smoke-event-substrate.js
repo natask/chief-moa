@@ -191,6 +191,8 @@ async function assertToolReceiptMirror(baseUrl) {
 
   const receipt = await postJson(`${baseUrl}/v1/tool/requests/${requestId}/receipts`, {
     device_id: "android_event_smoke",
+    claim_id: claimed.json.request.claim_id,
+    receipt_id: `event_${requestId}`,
     ok: true,
     summary: "spoke locally",
     local_receipt: { tool: "audio.speak", ok: true },

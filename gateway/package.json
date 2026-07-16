@@ -80,6 +80,7 @@
     "smoke:message-broker": "node scripts/smoke-message-broker.js",
     "smoke:aggie-protocol": "node scripts/smoke-aggie-surface-protocol.js",
     "smoke:device-hub": "node scripts/smoke-device-hub.js",
+    "smoke:surface-entrypoints": "node scripts/smoke-surface-entrypoints.js",
     "smoke:video-notes": "node scripts/smoke-video-notes.js",
     "smoke:live-interrupt-handoff": "node scripts/smoke-live-interrupt-handoff.js",
     "smoke:live-stacked-agents": "node scripts/smoke-live-stacked-agents.js",

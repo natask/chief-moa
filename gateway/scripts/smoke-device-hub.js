@@ -126,16 +126,31 @@ async function claimAndReceiptAndroidSpeech(baseUrl, requestId) {
   assert.equal(claim.json.request.id, requestId);
   assert.equal(claim.json.request.tool, "audio.speak");
   assert.equal(claim.json.request.input.text, "Hello from browser smoke.");
+  assert.match(claim.json.request.claim_id, /^claim_[a-f0-9]{20}$/);
 
-  const receipt = await postJson(`${baseUrl}/v1/tool/requests/${requestId}/receipts`, {
+  const receiptBody = {
     device_id: "android_smoke",
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `smoke_${requestId}`,
+    idempotency_key: `smoke_${requestId}`,
     ok: true,
     summary: "Android spoke the requested text.",
     local_receipt: { tool: "audio.speak", success: true },
-  });
+  };
+  const receipt = await postJson(`${baseUrl}/v1/tool/requests/${requestId}/receipts`, receiptBody);
   assert.equal(receipt.status, 200, JSON.stringify(receipt.json));
   assert.equal(receipt.json.request.status, "completed");
   assert.equal(receipt.json.receipt.ok, true);
+  assert.equal(receipt.json.idempotent_replay, false);
+
+  const retry = await postJson(`${baseUrl}/v1/tool/requests/${requestId}/receipts`, receiptBody);
+  assert.equal(retry.status, 200, JSON.stringify(retry.json));
+  assert.equal(retry.json.idempotent_replay, true);
+  assert.deepEqual(retry.json.receipt, receipt.json.receipt);
+  assert.equal(retry.json.request.receipt_count, 1);
+
+  const terminalClaim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "android_smoke" });
+  assert.equal(terminalClaim.status, 204, "a terminal request must never be claimable again");
 }
 
 async function queueBrowserTabOpen(baseUrl) {
@@ -166,6 +181,8 @@ async function claimAndReceiptBrowserTab(baseUrl, requestId) {
 
   const receipt = await postJson(`${baseUrl}/v1/tool/requests/${requestId}/receipts`, {
     device_id: "browser_smoke",
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `smoke_${requestId}`,
     ok: true,
     summary: "Browser opened https://example.com/.",
     local_receipt: { tool: "browser.tab.open", success: true },
