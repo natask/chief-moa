@@ -281,6 +281,9 @@
 - [x] 4.7b Extract Android context-control state from overlay orchestration with
       a focused 90% gate. Verified at 100% lines, branches, and methods; reduce
       `OverlayService.java` to 3,959 lines.
+- [x] 4.7c Extract orb-removal-target rendering plus generic overlay animation
+      and detachment mechanics after the orb-drag integration, restoring the
+      `OverlayService.java` non-growth ceiling at 3,959 lines.
 - [x] 4.8 Repair Apple protocol drift, move executable shell behavior into
       test-linked modules, and add an exact, fail-closed coverage classifier.
       Current deterministic baseline: 84.60% lines, 85.42% functions, and

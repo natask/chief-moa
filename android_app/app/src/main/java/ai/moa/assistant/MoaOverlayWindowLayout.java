@@ -52,4 +52,26 @@ final class MoaOverlayWindowLayout {
             // The window was detached before this display-frame update applied.
         }
     }
+
+    static void animateIn(View view, int translationY) {
+        view.setAlpha(0f);
+        view.setTranslationY(translationY);
+        view.setScaleX(0.97f);
+        view.setScaleY(0.97f);
+        view.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
+                .setDuration(170)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .start();
+    }
+
+    static void detach(WindowManager windowManager, View view) {
+        if (view == null || view.getParent() == null) {
+            return;
+        }
+        try {
+            windowManager.removeView(view);
+        } catch (IllegalArgumentException ignored) {
+            // Already detached.
+        }
+    }
 }

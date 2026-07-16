@@ -585,7 +585,6 @@ public final class OverlayService extends Service {
             });
         });
     }
-
     private void updateAnchoredSurfacePositions() {
         applyLatestOrbDragFrame();
     }
@@ -601,28 +600,8 @@ public final class OverlayService extends Service {
         if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
             return;
         }
-        TextView target = text("Remove orb", MoaColors.PAPER, 14, true);
-        target.setGravity(Gravity.CENTER);
-        target.setBackground(MoaDrawables.rounded(0xF01B1C20, dp(28), MoaColors.PANEL_BORDER, dp(1)));
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                dp(150),
-                dp(58),
-                overlayType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                android.graphics.PixelFormat.TRANSLUCENT
-        );
-        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(34);
-        windowManager.addView(target, params);
-        orbRemoveTarget = target;
-        target.setAlpha(0f);
-        target.setScaleX(0.9f);
-        target.setScaleY(0.9f);
-        target.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(140).start();
+        orbRemoveTarget = MoaOrbRemoveTarget.show(this, windowManager, overlayType());
     }
-
     private void updateOrbDragSurfaces() {
         if (orbDragFrameCoalescer != null) {
             orbDragFrameCoalescer.request();
@@ -667,18 +646,8 @@ public final class OverlayService extends Service {
             return;
         }
         orbRemoveTargetActive = active;
-        TextView target = (TextView) orbRemoveTarget;
-        target.setText(active ? "Release to remove" : "Remove orb");
-        target.setTextColor(active ? MoaColors.PAPER : MoaColors.MUTED);
-        target.setBackground(MoaDrawables.rounded(
-                active ? 0xF0B3261E : 0xF01B1C20,
-                dp(28),
-                active ? 0x80FF8A80 : MoaColors.PANEL_BORDER,
-                dp(1)
-        ));
-        target.animate().scaleX(active ? 1.08f : 1f).scaleY(active ? 1.08f : 1f).setDuration(100).start();
+        MoaOrbRemoveTarget.update(this, (TextView) orbRemoveTarget, active);
     }
-
     private void finishOrbDrag(Boolean completedDrop) {
         if (orbDragFrameCoalescer != null) {
             orbDragFrameCoalescer.flush();
@@ -709,7 +678,7 @@ public final class OverlayService extends Service {
         newThreadPill = null;
         incognitoPill = null;
         contextControlsRow = null;
-        detachView(panel);
+        MoaOverlayWindowLayout.detach(windowManager, panel);
         cancelAutoDismiss();
         View transcript = transcriptView;
         transcriptView = null;
@@ -718,7 +687,7 @@ public final class OverlayService extends Service {
         voiceTranscriptScroll = null;
         voiceMetaLine = null;
         voiceLanguageLine = null;
-        detachView(transcript);
+        MoaOverlayWindowLayout.detach(windowManager, transcript);
         removeVoiceDraftControls();
         removeOrbRemoveTarget();
         removeOrb();
@@ -731,7 +700,7 @@ public final class OverlayService extends Service {
         }
         View target = orbRemoveTarget;
         orbRemoveTarget = null;
-        detachView(target);
+        MoaOverlayWindowLayout.detach(windowManager, target);
     }
 
     private void togglePanel() {
@@ -782,7 +751,7 @@ public final class OverlayService extends Service {
         panelOpen = true;
         panelView.post(() -> positionSurfaceNearOrb(panelView, panelParams));
         renderMessages();
-        animateSurfaceIn(panelView);
+        MoaOverlayWindowLayout.animateIn(panelView, dp(18));
         mainHandler.postDelayed(() -> {
             if (composer == null) {
                 return;
@@ -793,21 +762,6 @@ public final class OverlayService extends Service {
                 inputMethodManager.showSoftInput(composer, InputMethodManager.SHOW_IMPLICIT);
             }
         }, 180);
-    }
-
-    private void animateSurfaceIn(View view) {
-        view.setAlpha(0f);
-        view.setTranslationY(dp(18));
-        view.setScaleX(0.97f);
-        view.setScaleY(0.97f);
-        view.animate()
-                .alpha(1f)
-                .translationY(0f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .setDuration(170)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator())
-                .start();
     }
 
     private void removePanel() {
@@ -834,19 +788,8 @@ public final class OverlayService extends Service {
                 .scaleY(0.97f)
                 .setDuration(130)
                 .setInterpolator(new android.view.animation.AccelerateInterpolator())
-                .withEndAction(() -> detachView(dying))
+                .withEndAction(() -> MoaOverlayWindowLayout.detach(windowManager, dying))
                 .start();
-    }
-
-    private void detachView(View view) {
-        if (view == null || view.getParent() == null) {
-            return;
-        }
-        try {
-            windowManager.removeView(view);
-        } catch (IllegalArgumentException ignored) {
-            // Already detached.
-        }
     }
 
     private void hideKeyboard() {
@@ -926,7 +869,7 @@ public final class OverlayService extends Service {
         windowManager.addView(shell, transcriptParams);
         transcriptView = shell;
         shell.post(() -> positionSurfaceNearOrb(transcriptView, transcriptParams));
-        animateSurfaceIn(card);
+        MoaOverlayWindowLayout.animateIn(card, dp(18));
     }
 
     private View createVoiceHeader() {
@@ -1051,8 +994,8 @@ public final class OverlayService extends Service {
     }
 
     private void removeVoiceDraftControls() {
-        detachView(voiceCancelControl);
-        detachView(voiceSendControl);
+        MoaOverlayWindowLayout.detach(windowManager, voiceCancelControl);
+        MoaOverlayWindowLayout.detach(windowManager, voiceSendControl);
         voiceCancelControl = null;
         voiceSendControl = null;
         voiceCancelControlParams = null;
@@ -1484,7 +1427,7 @@ public final class OverlayService extends Service {
                 .translationY(dp(12))
                 .setDuration(140)
                 .setInterpolator(new android.view.animation.AccelerateInterpolator())
-                .withEndAction(() -> detachView(dying))
+                .withEndAction(() -> MoaOverlayWindowLayout.detach(windowManager, dying))
                 .start();
     }
 
