@@ -1535,13 +1535,17 @@ execution machine connects outbound to claim queued runs.
 
 ## Source-Size Guardrail
 
-Owned production files have a 2,000-line limit. Files already above that limit
-are explicit architecture debt with exact non-growth ceilings in
-`scripts/source-size-policy.js`; every extraction lowers or removes its ceiling.
-The repository-wide production total is reported as a trend toward the 60,000
-line milestone and 10,000-line ultimate goal, not as a hard ceiling that would
-forbid adding a new bounded module. The active
-`decompose-oversized-source-files` change owns the extraction backlog.
+Owned production and behavior-bearing UI source has a final hard maximum of
+50,000 physical lines. Every tracked owned file is classified exactly once;
+unknown, multiply classified, or unproven generated/vendor files fail closed.
+The 2,000-line per-file maximum is an emergency review and model-context bound,
+not a desired module size. Existing oversized files and the repository total
+have exact non-growth debt ceilings in `scripts/source-size-policy.js`; ratchet
+them after every accepted reduction until the 50,000-line maximum is permanent.
+Paths follow `surface/domain/role`, with composition entrypoints converging to
+500 lines or fewer. The active
+[`decompose-oversized-source-files`](reference/openspec/changes/decompose-oversized-source-files/target-source-architecture.md)
+change owns the budgets, target trees, migration waves, and review backlog.
 
 ## Deployment Finish Loop
 

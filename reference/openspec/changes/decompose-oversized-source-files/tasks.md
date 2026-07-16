@@ -5,9 +5,10 @@
 - [x] 1.1 Inventory tracked production source files above 2,000 lines.
 - [x] 1.2 Add a repository source-size policy with explicit debt ceilings.
 - [x] 1.3 Run the policy from the gateway test suite.
-- [x] 1.4 Critique the 10,000-line/2x-test proposal, retain both as ultimate
-      constraints, and add a 60,000-line first milestone to prevent destructive
-      metric chasing.
+- [x] 1.4 Critique the initial line-count/2x-test proposal, retain the test-ratio
+      protection, and stage the reduction to prevent destructive metric chasing;
+      the final line target is superseded by the explicit 50,000-line contract
+      in 1.10.
 - [x] 1.5 Add a production-only 90% lines/branches/functions gate for the first
       extracted slice.
 - [ ] 1.6 Extend the production-only coverage gate to every changed surface.
@@ -17,6 +18,19 @@
 - [x] 1.9 Record audited per-surface baselines, exact scope rules, staged
       implementation tickets, and non-vacuous acceptance checks in
       `coverage-program.md`.
+- [x] 1.10 Ratchet every oversized-file debt ceiling and the repository-wide
+      production/UI debt ceiling to the exact `f70977d2` baseline, and set the
+      final target to 50,000 lines without making the current 95,208-line tree
+      fail solely for remaining migration debt.
+- [x] 1.11 Record the 50,000-line surface budgets, target directory trees,
+      naming grammar, migration waves, savings ledger, and four-round review
+      protocol in `target-source-architecture.md`.
+- [ ] 1.12 Replace the path-heuristic source classifier with an exhaustive
+      tracked-file manifest that recognizes every owned implementation
+      extension, classifies each file exactly once, reports every category, and
+      requires generated/vendor provenance.
+- [ ] 1.13 Enforce the target naming grammar, the 500-line composition ceiling,
+      and domain-local mirrored test names for new and moved files.
 
 ## 2. Gateway Decomposition
 
@@ -495,8 +509,27 @@
       handlers and browser code. Verified at 96.09% lines, 90.40% branches,
       and 97.47% functions with 42 passing tests.
 
+## 5. Four Review Rounds
+
+- [ ] 5.1 **Inventory review:** classify every tracked owned file, reconcile the
+      baseline by surface/category, reject accounting gaps, and lock exact debt
+      ceilings and feature-parity smoke inventories.
+- [ ] 5.2 **Gateway review:** consolidate voice/media durability, canonical
+      intent/work projections, context assembly, provider plumbing, and route
+      composition toward the 24,000-line gateway budget while preserving all
+      public compatibility contracts until migration evidence allows removal.
+- [ ] 5.3 **Client-surface review:** converge browser, Android, and website code
+      on their 9,000, 10,000, and 3,000-line budgets with platform-native
+      permissions, approvals, execution, and receipts unchanged.
+- [ ] 5.4 **Independent acceptance review:** inspect names and boundaries,
+      compare public API/runtime smoke inventories, run each surface's exact
+      production coverage gate, verify no test or adversarial case was deleted
+      for accounting, and accept only an exactly classified total at or below
+      50,000 lines.
+
 ## Verification
 
 - `node scripts/source-size-policy.js`
+- `cd gateway && node --test test/source-size-policy.test.js`
 - `cd gateway && npm run check`
 - Surface-native verification for each later extraction.

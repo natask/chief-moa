@@ -7,8 +7,10 @@ const { execFileSync } = require("node:child_process");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const MAX_SOURCE_LINES = 2000;
-const TARGET_PRODUCTION_LINES = 60000;
-const ULTIMATE_PRODUCTION_LINES = 10000;
+const TARGET_PRODUCTION_LINES = 50000;
+// Lower after every accepted reduction. Set to TARGET_PRODUCTION_LINES once
+// migration reaches the final hard maximum.
+const LEGACY_PRODUCTION_LINE_CEILING = 95208;
 const MAX_TEST_TO_PRODUCTION_RATIO = 2;
 const SOURCE_EXTENSIONS = new Set([".cjs", ".css", ".go", ".html", ".java", ".js", ".kt", ".mjs", ".py", ".rs", ".swift", ".ts", ".tsx"]);
 const EXCLUDED_PARTS = new Set(["node_modules", "build", "dist", "coverage", "vendor"]);
@@ -17,13 +19,13 @@ const EXCLUDED_PARTS = new Set(["node_modules", "build", "dist", "coverage", "ve
 // extraction; remove the entry once the file is at or below MAX_SOURCE_LINES.
 const LEGACY_DEBT_CEILINGS = Object.freeze({
   "android_app/app/src/main/java/ai/moa/assistant/OverlayService.java": 3959,
-  "browser_extension/extension/background.js": 5460,
-  "browser_extension/extension/content.js": 4614,
+  "browser_extension/extension/background.js": 4659,
+  "browser_extension/extension/content.js": 2988,
   "gateway/lib/voice-drafts.js": 5950,
   "gateway/lib/voice-providers.js": 4049,
   "gateway/lib/voice-session-server.js": 2279,
   "gateway/lib/work-history.js": 2032,
-  "gateway/server.js": 15939,
+  "gateway/server.js": 12537,
 });
 
 function lineCount(text) {
@@ -78,13 +80,21 @@ function auditSourceSizes({ root = REPO_ROOT, files = trackedFiles(root) } = {})
   oversized.sort((a, b) => b.lines - a.lines || a.path.localeCompare(b.path));
   violations.sort((a, b) => b.lines - a.lines || a.path.localeCompare(b.path));
   const testToProductionRatio = productionLines ? testLines / productionLines : 0;
+  const productionLineCeiling = Math.max(TARGET_PRODUCTION_LINES, LEGACY_PRODUCTION_LINE_CEILING);
+  if (productionLines > productionLineCeiling) {
+    violations.push({
+      path: "<production-line-total>",
+      lines: productionLines,
+      ceiling: productionLineCeiling,
+    });
+  }
   if (testToProductionRatio > MAX_TEST_TO_PRODUCTION_RATIO) {
     violations.push({ path: "<test-to-production-ratio>", lines: testLines, ceiling: productionLines * MAX_TEST_TO_PRODUCTION_RATIO });
   }
   return {
     maxLines: MAX_SOURCE_LINES,
     targetProductionLines: TARGET_PRODUCTION_LINES,
-    ultimateProductionLines: ULTIMATE_PRODUCTION_LINES,
+    productionLineCeiling,
     productionLines,
     productionFiles,
     testLines,
@@ -99,7 +109,7 @@ function formatAudit(audit) {
   const rows = audit.oversized.map((item) => `${String(item.lines).padStart(6)}  ${item.path} (ceiling ${item.ceiling})`);
   return [
     `Production source limit: ${audit.maxLines} lines per file`,
-    `Production total (trend only): ${audit.productionLines} lines (milestone ${audit.targetProductionLines}, ultimate ${audit.ultimateProductionLines})`,
+    `Production total: ${audit.productionLines} lines (debt ceiling ${audit.productionLineCeiling}, final target ${audit.targetProductionLines})`,
     `Test total: ${audit.testLines} lines (${audit.testToProductionRatio.toFixed(3)}x production, limit ${MAX_TEST_TO_PRODUCTION_RATIO}x)`,
     ...rows,
   ].join("\n");
@@ -128,10 +138,10 @@ if (require.main === module) {
 
 module.exports = {
   LEGACY_DEBT_CEILINGS,
+  LEGACY_PRODUCTION_LINE_CEILING,
   MAX_SOURCE_LINES,
   MAX_TEST_TO_PRODUCTION_RATIO,
   TARGET_PRODUCTION_LINES,
-  ULTIMATE_PRODUCTION_LINES,
   auditSourceSizes,
   formatAudit,
   isProductionSource,

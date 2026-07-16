@@ -27,21 +27,51 @@ source file fails when it exceeds 2,000 lines unless it is in the legacy-debt
 map. A debt file fails if it grows beyond its recorded ceiling. Lowering a
 ceiling after an extraction makes the improvement permanent.
 
-The initial pre-classifier cross-surface baseline was 75,802 production lines
-in the working tree, including non-ignored untracked source files. The first
-reviewed simplification milestone is 60,000 owned production lines. The 10,000
-line ultimate goal remains explicit, but reaching it requires evidence-backed
-scope reduction and deduplication across Android, browser, and gateway—not
-minification or moving owned behavior into dependencies.
+At `f70977d2`, the existing classifier reports 95,208 owned production and UI
+lines. The final acceptance target is at most 50,000 lines. Reaching it requires
+evidence-backed consolidation and deduplication across Android, browser,
+gateway, and website code—not minification, moving owned behavior into
+dependencies, relabeling source as generated, or deleting coverage.
 
-The production total is a trend metric rather than a hard ceiling: a bounded
-new module may legitimately increase it. Per-file ceilings remain the hard
-ratchet, so consolidation cannot hide growth in an already oversized file.
+The 2,000-line ceiling is a hard emergency boundary: a larger file cannot be
+reviewed reliably as one responsibility and routinely exhausts a model's useful
+context with unrelated behavior. It does not bless 1,999-line modules. New
+files above 1,000 lines require explicit review, composition entrypoints must
+converge to at most 500 lines, and each extraction should choose the smallest
+domain boundary that can be tested independently.
+
+Every tracked owned file must be classified exactly once as executable, UI,
+operational tooling, migration/schema, generated/vendor, test, or fixture.
+Executable and UI categories count toward the 50,000-line acceptance total.
+The inventory must recognize all owned implementation extensions, reject
+unknown or multiply classified files, count tracked files only, and prevent
+generated/vendor status from being asserted without provenance. Operational,
+migration, fixture, and test categories remain visible as separate totals so
+code cannot disappear from the report.
+
+While the tree is above the final target, 95,208 lines is the repository-wide
+non-growth debt ceiling as well as the per-file ceilings. A bounded new module
+may be legitimate only when the same change keeps the total at or below the
+recorded ceiling. Lower the total ceiling after every measured reduction. When
+the ceiling reaches 50,000, 50,000 becomes the permanent hard maximum. This
+prevents a collection of individually bounded files from hiding total growth.
 Test and smoke source is measured independently and may not exceed 2x owned
 production source. The ratio gate must not be satisfied by deleting meaningful
 failure-path, adversarial, or integration coverage.
 Coverage is measured per surface over eligible executable production source;
 test/smoke files and UI markup/styles cannot inflate the reported percentage.
+
+## Naming and discoverability
+
+The target path grammar is `surface/domain/role-file`. Directories name product
+domains; files name one domain noun plus one role: `routes`, `service`, `store`,
+`policy`, `schema`, `adapter`, `controller`, `view`, or `composition`. A model
+must be able to select the likely file from the path without opening every
+neighbor. New catch-all `utils`, `helpers`, `common`, `misc`, and flat `lib`
+files are not accepted. Domain-local tests mirror the production name.
+
+The complete budgets, directory trees, migration waves, and savings ledger are
+recorded in [`target-source-architecture.md`](target-source-architecture.md).
 
 ## Extraction Order
 
