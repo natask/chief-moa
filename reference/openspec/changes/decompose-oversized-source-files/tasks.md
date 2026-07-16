@@ -372,6 +372,13 @@
       100%/99.15%/100% for lines/branches/functions. Raise the exact
       whole-extension ratchet to 38.14% lines, 21.56% branches, and 18.19%
       functions while reducing conservative zero metadata to five files.
+- [x] 4.4g Add an injectable production seam to the flag-gated offscreen
+      LiveKit room lifecycle and test state mapping, pre-connect microphone
+      buffering, audio attachment, participant events, teardown failures, and
+      message dispatch. Enforce a focused 90% gate, verified at 100% lines,
+      93.93% branches, and 100% functions. Raise the exact whole-extension
+      ratchet to 39.13% lines, 22.00% branches, and 18.79% functions while
+      reducing conservative zero metadata to four files.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
