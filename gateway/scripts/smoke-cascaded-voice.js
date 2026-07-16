@@ -78,6 +78,8 @@ async function main() {
     await playbackProgressPersistsOnIncompleteTurn(tempDir);
     await playbackTailCanDowngradeCompletedTurn(tempDir);
     await stalePlaybackProgressIsRejected(tempDir);
+    await spokenProgressPersistsOnInterruptedTurn(tempDir);
+    await spokenProgressWalksAndroidPlayedMs(tempDir);
     console.log("smoke-cascaded-voice: ok");
   } finally {
     global.fetch = previousFetch;
@@ -1103,7 +1105,12 @@ function makeSegmentedHungLiveProvider(options = {}) {
             audio_bytes: firstPcm.length,
             pcm_ms: 120,
           });
-          await hooks.sendAudio(firstPcm);
+          // segmentTextMeta mirrors the meta createStreamingReplyPipeline puts
+          // on every frame (sendAudio(pcm, { segmentIndex, segmentText })) —
+          // the ONLY feed of the frame->text ledger behind spoken_progress.
+          await hooks.sendAudio(firstPcm, options.segmentTextMeta === true
+            ? { segmentIndex: 0, segmentText: firstText }
+            : undefined);
           await hooks.onAssistantAudioSegment({
             segment_index: 1,
             text_start: firstText.length + 1,
@@ -1112,7 +1119,9 @@ function makeSegmentedHungLiveProvider(options = {}) {
             audio_bytes: secondPcm.length,
             pcm_ms: 140,
           });
-          await hooks.sendAudio(secondPcm);
+          await hooks.sendAudio(secondPcm, options.segmentTextMeta === true
+            ? { segmentIndex: 1, segmentText: secondText }
+            : undefined);
           if (options.complete === true) {
             resolveDone({
               provider: "gemini-live",
@@ -1729,6 +1738,116 @@ async function stalePlaybackProgressIsRejected(tempDir) {
   assert.equal(connection.turn.playbackProgress, null, "rejected playback progress must not mutate the active turn");
   await connection.handleCancelTurn({ type: "cancel_turn", turn_id: "turn_playback_reject" });
   await commitPromise;
+}
+
+// spoken_progress variant of the interruption cutoff: the frame->text ledger
+// (sendAudio meta.segmentText) plus the browser's cancel_turn played_segments
+// report must persist spoken_progress on the incomplete canonical record, and
+// the durable context builder must quote the exact words where speech stopped
+// (interruptedAssistantLabel) so "continue" resumes from that point.
+async function spokenProgressPersistsOnInterruptedTurn(tempDir) {
+  const sessionId = "sess_spoken_progress";
+  const turnId = "turn_spoken_progress";
+  const provider = makeSegmentedHungLiveProvider({ segmentTextMeta: true });
+  const records = [];
+  const dataDir = path.join(tempDir, "session-spoken-progress");
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const events = [];
+  const connection = new VoiceSessionConnection(fakeWs(events), {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    onTurnCompleted: async (record) => {
+      records.push(record);
+      return record;
+    },
+  });
+
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: sessionId,
+    conversation_id: sessionId,
+    turn_id: turnId,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 40, frequencyHz: 240, sampleRate: 16000, volume: 0.2 }));
+  const commitPromise = connection.handleCommitTurn({ type: "commit_turn", turn_id: turnId }).catch((error) => {
+    throw new Error(`spoken progress commit must not reject: ${error?.message || error}`);
+  });
+  // The ledger entry lands only after the frame's socket write succeeds; wait
+  // on the ledger itself so the cancel below cannot race the second frame.
+  await waitFor(() => (connection.turn?.assistantSegments?.length || 0) >= 2, 5000, "frame->text ledger for both segments");
+
+  // Browser interruption report: exactly one of the two sent segments finished
+  // playing before the user cut the reply off.
+  await connection.handleCancelTurn({ type: "cancel_turn", turn_id: turnId, played_segments: 1 });
+  await commitPromise;
+
+  await waitFor(() => records.some((record) => record.status === "canceled"), 5000, "canceled turn canonical record");
+  const canceledRecord = records.find((record) => record.status === "canceled");
+  assert.ok(canceledRecord, `expected a canceled canonical record, got ${JSON.stringify(records)}`);
+  const progress = canceledRecord.spoken_progress;
+  assert.ok(progress, "interrupted canonical turn must persist spoken_progress from the frame->text ledger");
+  assert.equal(progress.segments_sent, 2, "both ledger segments must count as sent");
+  assert.equal(progress.segments_played, 1, "the client report must bound played segments below sent");
+  assert.equal(progress.client_reported, true, "a cancel_turn played_segments report must mark the cutoff client-reported");
+  assert.equal(progress.spoken_text, "First sentence leaves early.", "spoken_text must be exactly the played prefix");
+  assert.ok(String(progress.unspoken_text || "").includes("stays unheard"), `unspoken_text must carry the unplayed segment, got ${JSON.stringify(progress.unspoken_text)}`);
+
+  await recordStreamingVoiceTurn(canceledRecord);
+  const context = durableSessionContextBlock({ sessionId, branchId: "default" });
+  assert.match(context, /interrupted by the user mid-speech/i, `durable context must label the interrupted reply, got ${JSON.stringify(context)}`);
+  assert.ok(context.includes('the last words spoken aloud were: "First sentence leaves early."'), `durable context must quote the exact spoken words, got ${JSON.stringify(context)}`);
+}
+
+// Android variant of the same report: cancel_turn carries the AudioTrack clock
+// (played_ms) instead of a segment count. spokenProgressForTurn walks the
+// per-segment pcm durations (120ms + 140ms here) and counts only segments whose
+// audio had fully played — 130ms of playback means exactly one.
+async function spokenProgressWalksAndroidPlayedMs(tempDir) {
+  const turnId = "turn_spoken_progress_ms";
+  const provider = makeSegmentedHungLiveProvider({ segmentTextMeta: true });
+  const records = [];
+  const dataDir = path.join(tempDir, "session-spoken-progress-ms");
+  const sessionsDir = path.join(dataDir, "voice-sessions");
+  const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const connection = new VoiceSessionConnection(fakeWs([]), {
+    request: {},
+    sessionsDir,
+    providerEventsFile,
+    voiceProvider: provider,
+    onTurnCompleted: async (record) => {
+      records.push(record);
+      return record;
+    },
+  });
+
+  await connection.handleSessionStart({
+    type: "session_start",
+    session_id: "sess_spoken_progress_ms",
+    turn_id: turnId,
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  });
+  connection.handleAudio(generatePcm16Tone({ durationMs: 40, frequencyHz: 240, sampleRate: 16000, volume: 0.2 }));
+  const commitPromise = connection.handleCommitTurn({ type: "commit_turn", turn_id: turnId }).catch((error) => {
+    throw new Error(`played_ms commit must not reject: ${error?.message || error}`);
+  });
+  await waitFor(() => (connection.turn?.assistantSegments?.length || 0) >= 2, 5000, "frame->text ledger for both segments");
+
+  await connection.handleCancelTurn({ type: "cancel_turn", turn_id: turnId, played_ms: 130 });
+  await commitPromise;
+
+  await waitFor(() => records.some((record) => record.status === "canceled"), 5000, "canceled turn canonical record");
+  const progress = records.find((record) => record.status === "canceled")?.spoken_progress;
+  assert.ok(progress, "interrupted canonical turn must persist spoken_progress from a played_ms report");
+  assert.equal(progress.segments_played, 1, "130ms on a 120ms+140ms ledger must count exactly one fully-played segment");
+  assert.equal(progress.played_ms, 130, "the Android playback clock must persist on spoken_progress");
+  assert.equal(progress.client_reported, true);
+  assert.equal(progress.spoken_text, "First sentence leaves early.");
 }
 
 function makeTurn(tempDir, tag, overrides = {}) {
