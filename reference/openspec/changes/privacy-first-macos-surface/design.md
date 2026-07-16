@@ -113,6 +113,39 @@ cryptographic identity claim. Optional gateway sync is default-off, must be
 disclosed and bound into the action approval, and occurs only after the terminal
 local record exists.
 
+### Bounded surface-program execution
+
+During a separately enabled, visible network grant, MoaMac may advertise the
+`macos.javascriptcore-ax.v1` profile and receive one canonical proposal at a
+time. The program runs in a killable helper process and sees only frozen
+Promise-returning semantic tools plus bounded cancellation, progress, and result
+channels. The raw JavaScriptCore host object, AppKit, ApplicationServices,
+filesystem, process, network, Apple Events, JXA, and shell facilities are not
+part of the generated-code realm. Source declares and the helper invokes the
+literal `main` entrypoint advertised by the profile.
+
+The application owns proposal validation, exact target revalidation, approval,
+pending-effect durability, Accessibility calls, post-state proof, receipt
+chaining, cancellation, and gateway synchronization. Invalid but identifiable
+proposals receive a durable sequence-1 rejection. Gateway delivery preserves
+local journal order: a tool receipt precedes its `tool_finished` event and the
+terminal receipt precedes the terminal event. Pausing or stopping revokes the
+client and helper before another claim.
+
+The low-level public Accessibility C API is isolated behind a typed injected
+seam. Synthetic element graphs cover the substantive traversal, binding, action,
+and error-normalization adapter without reading a live application or changing
+TCC. The raw C translation shell owns no proposal, approval, receipt, or success
+policy.
+
+Swift's LLVM coverage output for this package exposes regions, lines, and
+functions but reports no branch counter. Therefore the executable-policy gate
+uses LLVM regions as the branch proxy and requires more than 90% regions, lines,
+and functions for each substantive runtime module. Only the minimal raw C API
+translation shell is reported separately; it is never exercised against the
+user's live Accessibility state during automated QA. Source-discovery tests
+ensure executable policy cannot migrate into that shell unnoticed.
+
 ## Aggie and portability
 
 Read-only context uses the canonical Aggie turn context once that facade lands.
