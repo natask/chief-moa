@@ -481,6 +481,143 @@ async function main() {
     }
     await evaluate(workerCdp, `chrome.tabs.update(${ping.tabId}, { active: true }).then(() => chrome.tabs.remove(${Number(typedSearchTab.id)}))`);
 
+    const passivePresentation = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        await chrome.tabs.sendMessage(tabId, { cmd: "open" });
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const input = document.querySelector("#agee-input");
+            const pageButton = document.querySelector("#delete-button");
+            if (!input || !pageButton) return;
+            input.value = "passive draft stays";
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            pageButton.dataset.ageePassiveClicks = "0";
+            pageButton.addEventListener("click", () => {
+              pageButton.dataset.ageePassiveClicks = String(Number(pageButton.dataset.ageePassiveClicks || 0) + 1);
+            }, { once: true });
+            window.__ageePassiveSmokeCalls = [];
+            window.__ageePassiveSmokeOrig = chrome.runtime.sendMessage.bind(chrome.runtime);
+            chrome.runtime.sendMessage = (message, ...rest) => {
+              const clean = JSON.parse(JSON.stringify(message || {}));
+              window.__ageePassiveSmokeCalls.push(clean);
+              if (clean.cmd === "voiceSessionStart") {
+                return Promise.resolve({ ok: true, voiceSessionId: "passive-session-stays" });
+              }
+              if (["voiceSessionAttach", "voiceSessionControl", "voiceSessionClose"].includes(clean.cmd)) {
+                return Promise.resolve({ ok: true });
+              }
+              return window.__ageePassiveSmokeOrig(message, ...rest);
+            };
+            document.querySelector("#agee-voice")?.click();
+          },
+        });
+        await sleep(100);
+        await chrome.tabs.sendMessage(tabId, {
+          cmd: "voiceSessionEvent",
+          voiceSessionId: "passive-session-stays",
+          event: { type: "transcript_partial", text: "Passive history stays" },
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const pageButton = document.querySelector("#delete-button");
+            pageButton?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+            pageButton?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, composed: true }));
+            pageButton?.click();
+            pageButton?.focus();
+          },
+        });
+        await sleep(220);
+        const read = async () => {
+          const [snapshot] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              const root = document.querySelector("#agee-root");
+              const launcher = document.querySelector("#agee-launcher");
+              const panel = document.querySelector("#agee-panel");
+              const input = document.querySelector("#agee-input");
+              const voice = document.querySelector("#agee-voice");
+              const calls = window.__ageePassiveSmokeCalls || [];
+              return {
+                passive: root?.classList.contains("agee-passive") || false,
+                open: root?.classList.contains("agee-open") || false,
+                launcherOpacity: getComputedStyle(launcher).opacity,
+                panelOpacity: getComputedStyle(panel).opacity,
+                draft: input?.value || "",
+                cue: document.querySelector("#agee-log")?.textContent || "",
+                listening: voice?.classList.contains("listening") || false,
+                pageClicks: Number(document.querySelector("#delete-button")?.dataset.ageePassiveClicks || 0),
+                sessionStarts: calls.filter((call) => call.cmd === "voiceSessionStart").map((call) => call.voiceSessionId || "started"),
+                sessionMutations: calls.filter((call) => ["voiceSessionControl", "voiceSessionClose"].includes(call.cmd)),
+              };
+            },
+          });
+          return snapshot?.result || {};
+        };
+        const outside = await read();
+
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const input = document.querySelector("#agee-input");
+            input?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+            input?.focus();
+          },
+        });
+        const inside = await read();
+
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const pageButton = document.querySelector("#delete-button");
+            pageButton?.focus();
+            pageButton?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+          },
+        });
+        const focusedOutside = await read();
+        await chrome.tabs.sendMessage(tabId, { cmd: "open" });
+        await sleep(40);
+        const reopened = await read();
+
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            if (window.__ageePassiveSmokeOrig) chrome.runtime.sendMessage = window.__ageePassiveSmokeOrig;
+          },
+        });
+        await chrome.tabs.sendMessage(tabId, { cmd: "stop" }).catch(() => {});
+        return { outside, inside, focusedOutside, reopened };
+      })()
+    `);
+    const passiveStatePersisted = (state) =>
+      state?.open === true &&
+      state?.draft === "passive draft stays" &&
+      String(state?.cue || "").includes("Passive history stays") &&
+      state?.listening === true &&
+      state?.sessionStarts?.length === 1 &&
+      state?.sessionMutations?.length === 0;
+    if (
+      passivePresentation?.outside?.passive !== true ||
+      passivePresentation?.outside?.pageClicks !== 1 ||
+      Number(passivePresentation?.outside?.launcherOpacity) > 0.4 ||
+      Number(passivePresentation?.outside?.panelOpacity) > 0.32 ||
+      !passiveStatePersisted(passivePresentation.outside)
+    ) {
+      throw new Error(`outside page tap did not preserve and de-emphasize the overlay: ${JSON.stringify(passivePresentation)}`);
+    }
+    if (passivePresentation?.inside?.passive !== false || !passiveStatePersisted(passivePresentation.inside)) {
+      throw new Error(`inside overlay interaction did not restore presentation: ${JSON.stringify(passivePresentation)}`);
+    }
+    if (passivePresentation?.focusedOutside?.passive !== true || passivePresentation?.reopened?.passive !== false) {
+      throw new Error(`outside focus/message-open presentation transition failed: ${JSON.stringify(passivePresentation)}`);
+    }
+    if (!passiveStatePersisted(passivePresentation.reopened)) {
+      throw new Error(`message open changed overlay draft/history/session state: ${JSON.stringify(passivePresentation)}`);
+    }
+
     const shortcutVoice = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};

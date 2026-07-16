@@ -388,6 +388,8 @@
     loadActiveCompanionPet();
     loadLanguageChip();
     AgeeSteeringUi.observePageIdentity({ element: pageIdentityEl, document, location, window });
+    document.addEventListener("pointerdown", handlePresentationPointerDown, true);
+    document.addEventListener("focusin", handlePresentationFocusIn, true);
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
@@ -981,10 +983,33 @@
     syncTalkModeUi();
   }
 
+  // Clicking back into the page never dismisses or mutates the assistant. It
+  // only de-emphasizes the attached presentation so the page remains readable
+  // underneath. Capture phase lets us observe the pointer without consuming it;
+  // the page still owns the complete pointer/click sequence.
+  function setPresentationPassive(passive) {
+    if (!root) return;
+    root.classList.toggle("agee-passive", passive === true);
+  }
+
+  function eventTargetsOverlay(event) {
+    const target = event?.target;
+    return !!(root && target instanceof Node && root.contains(target));
+  }
+
+  function handlePresentationPointerDown(event) {
+    setPresentationPassive(!eventTargetsOverlay(event));
+  }
+
+  function handlePresentationFocusIn(event) {
+    setPresentationPassive(!eventTargetsOverlay(event));
+  }
+
   function toggle(force) {
     const was = open;
     open = typeof force === "boolean" ? force : !open;
     if (!root) build();
+    if (open) setPresentationPassive(false);
     root.classList.toggle("agee-open", open);
     if (open) {
       positionPanel(); // anchor the surface to the mark, not a fixed corner
@@ -1028,6 +1053,7 @@
 
   function openTextSurface({ fresh = false } = {}) {
     if (!root) build();
+    setPresentationPassive(false);
     toggle(true);
     if (fresh) {
       setInputText("");
