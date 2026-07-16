@@ -60,6 +60,7 @@ async function main() {
     server = await startGateway({ port, dataDir, fakeUrl: fakeLive.url });
 
     await step("live tool: response_modality settable + validated", () => assertLiveModalityTool(wsUrl, fakeLive));
+    await step("live tool: canonical settings list + recommend", () => assertLiveSettingsRead(wsUrl, fakeLive));
     await step("live tool: revert previous + reset", () => assertLiveRevertTool(baseUrl, wsUrl, fakeLive));
     await step("live tool: propose_page_tweak accept + reject", () => assertLivePageTweakTool(wsUrl, fakeLive));
     await step("http turn: modality + undo + reset", () => assertHttpRevert(baseUrl));
@@ -70,8 +71,9 @@ async function main() {
       checks: [
         "store revertLast undoes last change (global); reset restores defaults; both append a version",
         "store revertLast (device scope) undoes the last device change without breaking the profile",
-        "Gemini Live setup exposes update_agent_profile, revert_agent_profile, propose_page_tweak",
-        "live update_agent_profile sets response_modality=text; an invalid value is dropped (kept previous)",
+        "Gemini Live setup exposes read_agent_settings, update_agent_profile, revert_agent_profile, propose_page_tweak",
+        "live update_agent_profile sets response_modality=text; invalid values are kept previous; unknown fields reject atomically",
+        "live read_agent_settings lists all canonical settings, recommends only catalog settings, and rejects unknown ids",
         "live revert_agent_profile mode=previous undoes the last change; mode=reset restores defaults",
         "live propose_page_tweak returns a page_tweak action for a valid record and rejects an unknown kind, never failing the turn",
         "http 'reply in text' persists response_modality=text; 'undo that' reverts; 'reset your settings' restores defaults",
@@ -149,7 +151,7 @@ async function assertSetupTools(dataDir) {
   });
   const setup = provider.setupMessage();
   const toolNames = (setup.tools?.[0]?.functionDeclarations || []).map((tool) => tool.name);
-  for (const name of ["update_agent_profile", "revert_agent_profile", "propose_page_tweak"]) {
+  for (const name of ["read_agent_settings", "update_agent_profile", "revert_agent_profile", "propose_page_tweak"]) {
     assert.ok(toolNames.includes(name), `Gemini Live setup must expose ${name}, got ${JSON.stringify(toolNames)}`);
   }
 }
@@ -200,6 +202,29 @@ async function assertLiveModalityTool(wsUrl, fakeLive) {
   }, { transcript: "reply in text from now on" });
   assert.equal(invalid.ok, true, `invalid modality must not fail the turn: ${JSON.stringify(invalid)}`);
   assert.ok(!(Array.isArray(invalid.changed) && invalid.changed.includes("response_modality")), "invalid modality must not change the field");
+
+  const unknown = await runLiveToolCall(wsUrl, fakeLive, "update_agent_profile", {
+    profile: { response_modality: "speech", imaginary_setting: true },
+    reason: "smoke-unknown",
+  }, { transcript: "reply out loud from now on" });
+  assert.equal(unknown.ok, false, "mixed known and unknown fields must be rejected atomically");
+  assert.equal(unknown.error, "unknown_profile_fields");
+  assert.deepEqual(unknown.unknown_fields, ["imaginary_setting"]);
+}
+
+async function assertLiveSettingsRead(wsUrl, fakeLive) {
+  const listed = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", { operation: "list" });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.count, 31);
+  assert.ok(listed.settings.every((setting) => setting.id && setting.readable === true));
+  const recommended = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", {
+    operation: "recommend",
+    query: "I want concise spoken answers",
+    limit: 3,
+  });
+  assert.equal(recommended.settings[0].id, "voice_max_chars");
+  const unknown = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", { operation: "get", id: "imaginary_setting" });
+  assert.equal(unknown.error, "unknown_setting");
 }
 
 async function assertLiveRevertTool(baseUrl, wsUrl, fakeLive) {
