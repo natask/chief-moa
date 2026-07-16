@@ -10,9 +10,11 @@
 //   1. retranscribe round-trips on a stored turn: the fresh transcript is
 //      returned AND persisted non-destructively (original kept as revision 0,
 //      the new one appended, retranscribed:true).
-//   2. a prompt-language override changes the custom prompt while recognition
-//      remains automatic.
-//   3. a missing PCM returns 404 (e.g. incognito-deleted audio).
+//   2. a semantic language override shapes the prompt while provider STT stays
+//      on `auto`.
+//   3. a disallowed-script candidate is retained as rejected evidence without
+//      replacing the canonical transcript.
+//   4. a missing PCM returns 404 (e.g. incognito-deleted audio).
 
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -98,21 +100,40 @@ async function main() {
       "a provider event records the re-transcription",
     );
 
-    // 2. The backwards-compatible language_codes override shapes the prompt;
-    // recognition itself remains automatic.
+    // 2. Semantic override is echoed/stored, while provider recognition stays
+    // auto and the same three-language verbatim prompt reaches batch STT.
     fakeGoogle.reset();
     fakeGoogle.setTranscript("amharic retranscription");
     const withCodes = await postRetranscribe(baseUrl, sessionId, turnId, { language_codes: ["am-ET"] });
     assert.equal(withCodes.status, 200, "override request succeeds");
     assert.deepEqual(withCodes.body.language_codes, ["am-ET"], "override codes are echoed back");
-    assert.deepEqual(withCodes.body.prompt_language_codes, ["am-ET"]);
+    assert.deepEqual(withCodes.body.prompt_language_codes, ["gez", "am-ET", "en-US"]);
     assert.deepEqual(withCodes.body.recognition_language_codes, ["auto"]);
     assert.deepEqual(fakeGoogle.lastLanguageCodes(), ["auto"], "recognition remains automatic");
-    assert.match(fakeGoogle.lastCustomPrompt(), /Amharic/);
-    assert.doesNotMatch(fakeGoogle.lastCustomPrompt(), /English/);
+    assert.match(fakeGoogle.lastCustomPrompt(), /Geʽez.*Amharic.*English/i);
+    assert.match(fakeGoogle.lastCustomPrompt(), /verbatim/i);
+    assert.match(fakeGoogle.lastCustomPrompt(), /transliterate.*Devanagari/i);
     assert.equal(withCodes.body.revision, 2, "second retranscription is revision 2");
 
-    // 3. Missing PCM -> 404.
+    // 3. The exact live failure remains provider evidence, never canonical.
+    fakeGoogle.setTranscript("वायरस सभा አንቺ...");
+    const rejected = await postRetranscribe(baseUrl, sessionId, turnId, { language_codes: ["gez", "am-ET", "en-US"] });
+    assert.equal(rejected.status, 200, "policy rejection is an audited retranscription result");
+    assert.equal(rejected.body.accepted, false);
+    assert.equal(rejected.body.language_rejected, true);
+    assert.equal(rejected.body.transcript, "");
+    assert.equal(rejected.body.candidate_transcript, "वायरस सभा አንቺ...");
+    assert.deepEqual(rejected.body.disallowed_scripts, ["Devanagari"]);
+    const afterRejected = JSON.parse(fs.readFileSync(path.join(turnDir, `${turnId}.json`), "utf8"));
+    assert.equal(afterRejected.transcript, "amharic retranscription", "rejected retranscription must not replace canonical text");
+    assert.equal(afterRejected.transcript_revisions[3].accepted, false);
+    assert.equal(afterRejected.transcript_revisions[3].candidate_transcript, "वायरस सभा አንቺ...");
+    assert.ok(
+      afterRejected.references.voice_session.provider_events.some((event) => event.type === "transcript_retranscribe_rejected"),
+      "bounded provider evidence records the rejected candidate",
+    );
+
+    // 4. Missing PCM -> 404.
     const missing = await postRetranscribe(baseUrl, sessionId, "no_such_turn", {});
     assert.equal(missing.status, 404, "missing PCM returns 404");
 
@@ -184,6 +205,7 @@ async function startGateway({ port, dataDir, env }) {
       PATH: process.env.PATH || "",
       HOME: process.env.HOME || "",
       TMPDIR: process.env.TMPDIR || os.tmpdir(),
+      NODE_PATH: process.env.NODE_PATH || "",
       HOST: "127.0.0.1",
       PORT: String(port),
       DATA_DIR: dataDir,

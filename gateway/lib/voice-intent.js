@@ -829,7 +829,8 @@ function looksLikeLanguageControl(transcript) {
   if (!lower) {
     return false;
   }
-  const verb = /\b(?:speak|speaking|talk|understand|understands|understood|listen|hear|heard|recognize|recognise|process|reply|respond|answer|say|switch|change|set|use|make|adjust)\b/.test(lower);
+  const verb = /\b(?:speak|speaking|talk|understand|understands|understood|listen|hear|heard|recognize|recognise|process|reply|respond|answer|say|switch|change|set|use|make|adjust|store|stotre|save)\b/.test(lower)
+    || /\bshould\s+be\b/.test(lower);
   if (!verb) {
     return false;
   }

@@ -118,6 +118,7 @@
     "test:voice-chunker": "node scripts/test-voice-chunker.js",
     "smoke:cascaded-reasoner": "node scripts/smoke-cascaded-reasoner.js",
     "smoke:voice-audio-storage": "node scripts/smoke-voice-audio-storage.js",
+    "smoke:stt-transcript-policy": "node scripts/smoke-stt-transcript-policy.js",
     "smoke:streaming-stt": "node scripts/smoke-streaming-stt.js",
     "smoke:voice-retranscribe": "node scripts/smoke-voice-retranscribe.js",
     "smoke:audio-notes": "node scripts/smoke-audio-notes.js",

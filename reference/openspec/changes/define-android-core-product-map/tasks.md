@@ -69,6 +69,11 @@
       agents and clients can list supported voices/languages dynamically, map
       masculine/feminine tone requests to valid voice ids, and reject unsupported
       profile values before persistence.
+- [x] 7.8 Make bare language switches durable by default, support explicit
+      one-response overrides, apply a tool-selected language on the same cascaded
+      turn, keep Chirp STT provider-auto with a best-effort
+      Geʽez/Amharic/English prompt, and use `gez` -> `am-ET` only for TTS
+      compatibility.
 
 ## 8. Verification Harness
 

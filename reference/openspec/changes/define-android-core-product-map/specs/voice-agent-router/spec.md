@@ -85,6 +85,22 @@ audio voice sessions.
 - **AND** the gateway health response reports the selected provider and whether
   it is configured
 
+#### Scenario: Language tool changes the current cascaded response
+- **WHEN** the cascaded reasoning model calls a durable or one-response language tool
+- **THEN** the gateway waits for that tool result before starting TTS for the turn
+- **AND** returns the selected semantic reply language on `turn_done`
+- **AND** does not synthesize the first chunk in the previous language
+
+#### Scenario: Chirp transcribes the supported three-language speech set
+- **WHEN** a streaming, batch, windowed-batch, or retranscription STT request is
+  sent to Chirp 3
+- **THEN** its provider `language_codes` are exactly `["auto"]`
+- **AND** the same custom prompt requests verbatim, untranslated transcription
+  of only expected Geʽez, Amharic, and English speech in Ethiopic or Latin script
+- **AND** the prompt explicitly avoids Hindi/Devanagari substitution
+- **AND** health and turn records distinguish provider-auto recognition from
+  semantic profile input languages and label the prompt boundary best-effort
+
 ### Requirement: Gateway Tool Catalog Boundary
 The gateway SHALL expose third-party and local integrations through typed tool
 sources rather than direct model-executed commands.

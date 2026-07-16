@@ -404,10 +404,10 @@ reply languages change only through `update_agent_profile` (or the
 `set_languages` code-mode skill on the execute path), and the Live safety gate
 accepts language fields on the model's word while every other profile field
 still requires the deterministic parser to confirm the user asked. STT input
-languages stay explicitly user-specified (profile `input_languages`) — the
-gateway never auto-detects what the user speaks; Chirp recognition is
-constrained to exactly that set, and `input_language_primary` reorders it so
-one understood language leads recognition. Every write passes through the same
+languages stay explicitly user-specified as semantic profile state
+(`input_languages`), while Chirp 3 recognition uses provider `auto` plus a
+best-effort fixed transcription prompt. `input_language_primary` remains agent
+semantic state and never changes the provider locale. Every write passes through the same
 sanitizer as the HTTP path (persona-prompt override stripping, the language
 allowlist, per-field coercion), so no tool value can blank a field or break the
 app; a rejected value keeps the previous setting and returns a structured
@@ -467,6 +467,17 @@ path: an out-of-catalog language is dropped by the sanitizer with the previous
 setting kept, and the reply states the language is not in the supported set
 rather than silently failing.
 
+Geʽez is the explicit compatibility exception. The profile stores semantic
+language `gez` (including Ge'ez, Giz, `ግዕዝ`, and `ግእዝ` aliases). Chirp STT
+still receives `languageCodes:["auto"]` plus one strong verbatim prompt naming
+only Geʽez, Amharic, and English, their scripts, and the Hindi/Devanagari failure
+to avoid; the prompt is guidance, not a hard provider allowlist. Gemini TTS
+receives the `am-ET` provider language tag. `/v1/agent/profile/options` labels
+this `support_level: compatibility`; the gateway never claims that Chirp has a
+native `gez` locale. A bare language switch is durable until changed again. An
+explicit "this response only" request uses a non-persisted turn-language tool
+result and automatically returns to the saved language on the next turn.
+
 Voice turns can also become replayable verification evidence. When retention is
 enabled, the gateway stores or references the user audio, transcript, assistant
 text, assistant audio, profile version, provider version, and expected-test
@@ -483,9 +494,8 @@ PCM files:
 - `native_live`: one bundled STT + LLM + TTS provider. Gemini Live (Gemini
   Developer) or Vertex Live. It auto-detects the INPUT language and cannot be
   constrained, which mistranscribes English.
-- `cascaded`: Chirp 3 streaming STT with automatic language recognition guided
-  by the configured input-language prompt, then the gateway's model-agnostic
-  LLM turn, then hosted TTS reply
+- `cascaded`: Chirp 3 streaming STT in provider-auto mode with the bounded
+  Geʽez/Amharic/English prompt, then the gateway's model-agnostic LLM turn, then hosted TTS reply
   audio (gemini-tts or classic Cloud TTS). The reasoning model is swappable at
   boot (`MODEL_PROVIDER`/`MODEL_ID`) and at runtime per profile
   (`model`, `reasoning_provider` — settable by voice through
@@ -516,9 +526,8 @@ signals rather than audio-derived model guesses. Contract:
 ### Cascaded voice pipeline and the switch
 
 ```text
-Chirp 3 STT (automatic language recognition; the agent profile's
-             input_languages become a per-turn custom transcription prompt;
-             CHIRP_PROMPT_LANGUAGE_CODES is only the boot fallback)
+Chirp 3 STT (provider languageCodes:["auto"] on streaming, batch, and replay;
+             semantic input_languages stay turn-pinned and auditable)
   -> gateway LLM turn (model-agnostic; swappable per profile via `model` +
      `reasoning_provider`; reply language/voice from the agent profile as
      OUTPUT policy; injects durable session context, gbrain recall, a
@@ -535,20 +544,21 @@ Chirp 3 STT (automatic language recognition; the agent profile's
 The active pipeline is selected per deployment/session by provider names,
 falling back to env:
 
-- Cascaded `{en-US, am-ET}`: `VOICE_PROVIDER=chirp`,
-  `VOICE_TTS_PROVIDER=cloud-tts`, `CHIRP_MODEL=chirp_3`,
-  `CHIRP_PROMPT_LANGUAGE_CODES=en-US,am-ET`. The reasoning stage is the gateway
+- Cascaded Geʽez/Amharic/English: `VOICE_PROVIDER=chirp`,
+  `VOICE_TTS_PROVIDER=cloud-tts`, `CHIRP_MODEL=chirp_3`. The reasoning stage is the gateway
   (`VOICE_REASONING_PROVIDER=gateway`).
 - Legacy Gemini Live: `VOICE_PROVIDER=gemini-live` (all three stages), with
   `GEMINI_API_KEY` and `GEMINI_LIVE_*`.
 
-On Chirp, both batch and streaming requests send `languageCodes:["auto"]` and
-the turn-pinned profile's primary plus one alternate language become a bounded
-`customPromptConfig.customPrompt`. That prompt asks for verbatim transcription,
-preserved language changes, and native writing systems; it does not reject a
-detected language outside the configured set. This contract requires
-`chirp_3`, which the provider asserts before a recognize call. Classic Google
-Cloud TTS has no Amharic voice,
+On Chirp, every streaming, batch, windowed-batch, and retranscription request
+uses `languageCodes:["auto"]` with explicit LINEAR16 decoding and the same
+custom prompt. The prompt requests verbatim transcription without translation,
+limits expected speech to Geʽez/Amharic/English, requires Ethiopic or Latin
+script as appropriate, and explicitly rejects Hindi/Devanagari substitution.
+This is best-effort provider guidance; the health payload reports provider
+`language_codes`, semantic `input_languages`, fixed `prompt_language_codes`,
+and `prompt_constraint` separately. The provider asserts `chirp_3` before a
+recognize call. Classic Google Cloud TTS has no Amharic voice,
 but the gemini-tts leg (`gemini-3.1-flash-tts`) synthesizes any language the
 model speaks, including am-ET, so hosted reply audio covers both catalog
 languages. On gemini-tts the reasoning model is prompted to direct the
@@ -557,11 +567,16 @@ delivery: a leading `[style: ...]` line becomes the synthesis style prompt
 `[short pause]` stay in the spoken text (`input.text`), while the displayed
 and stored transcript is stripped clean of both.
 
-The prompt-language set is read from the agent profile per turn (mirroring how
+The semantic input set is read from the agent profile per turn (mirroring how
 the reply language already works), so a spoken or typed language change applies
-without a gateway restart. Provider-reported detected language remains
-observability evidence only; it neither selects policy nor causes a transcript
-to be dropped.
+without a gateway restart and remains visible on the canonical turn. Provider
+recognition stays automatic and the fixed three-language prompt stays unchanged.
+
+Language-control turns defer streaming TTS until the model's profile or
+one-response language tool returns. The current response then uses the selected
+semantic language immediately; ordinary turns keep the low-latency pinned
+streaming path. This prevents chunk one from being synthesized in the previous
+language while a durable switch is being applied.
 
 A voice turn can never end silently, and it must end honestly. Model and TTS
 calls run under bounded timeouts, every commit/text turn error also emits

@@ -91,10 +91,10 @@ const VOICE_ALIAS_TO_ID = Object.freeze({
 });
 const VOICE_ALIASES_BY_KEY = new Map(Object.entries(VOICE_ALIAS_TO_ID).map(([alias, id]) => [normalizeSpeechKey(alias), id]));
 
-// Supported languages are the ones Google Chirp 3 (Speech-to-Text V2, model
-// `chirp_3`) can transcribe. The gateway names the profile's `input_languages`
-// in Chirp's custom prompt while recognition remains automatic. Reply-language
-// (TTS) support may be
+// Supported semantic languages are exposed to the model and persisted in the
+// profile. Chirp recognition is provider `auto` and a prompt describes the
+// expected languages; profile codes are not sent as provider locale constraints.
+// Reply-language (TTS) support may be
 // narrower: gemini-tts synthesizes any language the model speaks, classic
 // cloud-tts only the ones with a hosted voice; where TTS lacks a language the
 // pipeline returns text (never on-device TTS). `keys` are spoken english-name
@@ -103,8 +103,17 @@ const VOICE_ALIASES_BY_KEY = new Map(Object.entries(VOICE_ALIAS_TO_ID).map(([ali
 // pass. They are not a transcript sniffer — nothing here reads the raw turn to
 // switch languages. The bare language name is registered on the primary regional
 // variant only, so a name resolves to one canonical code.
-function defineLanguage(code, label, keys = [], nativeNames = []) {
-  return { code, label, keys, native_names: nativeNames };
+function defineLanguage(code, label, keys = [], nativeNames = [], compatibility = {}) {
+  return {
+    code,
+    label,
+    keys,
+    native_names: nativeNames,
+    recognition_code: code,
+    synthesis_code: compatibility.synthesis_code || code,
+    support_level: compatibility.support_level || "native",
+    compatibility_note: compatibility.compatibility_note || "",
+  };
 }
 
 const LANGUAGE_OPTIONS = Object.freeze([
@@ -146,6 +155,21 @@ const LANGUAGE_OPTIONS = Object.freeze([
   defineLanguage("af-ZA", "Afrikaans", ["afrikaans"]),
   defineLanguage("sq-AL", "Albanian", ["albanian"], ["shqip"]),
   defineLanguage("am-ET", "Amharic", ["amharic", "a m h a r i c", "a-m-h-a-r-i-c"], ["አማርኛ", "amarNa"]),
+  // Chirp 3 does not expose a Geʽez locale (`gez` is rejected by the API).
+  // Keep the user's semantic language in the profile. STT uses provider auto
+  // plus an explicit prompt; only TTS uses the closest Ethiopic-script locale.
+  // This is not a claim of native provider support.
+  defineLanguage(
+    "gez",
+    "Geʽez",
+    ["geez", "ge ez", "ge- ez", "giz", "classical ethiopic"],
+    ["ግዕዝ", "ግእዝ"],
+    {
+      synthesis_code: "am-ET",
+      support_level: "compatibility",
+      compatibility_note: "Chirp 3 has no Geʽez locale; STT uses provider auto with a Geʽez/Amharic/English prompt, while TTS uses am-ET compatibility.",
+    },
+  ),
   defineLanguage("ar-XA", "Arabic", ["arabic"], ["العربية"]),
   defineLanguage("ar-EG", "Arabic (Egypt)", ["egyptian arabic"]),
   defineLanguage("ar-SA", "Arabic (Saudi Arabia)", ["saudi arabic", "gulf arabic"]),
@@ -399,7 +423,31 @@ function languageOptionsPayload() {
     label: language.label,
     code: language.code,
     aliases: language.keys.slice(),
+    recognition_code: language.recognition_code,
+    synthesis_code: language.synthesis_code,
+    support_level: language.support_level,
+    ...(language.compatibility_note ? { compatibility_note: language.compatibility_note } : {}),
   }));
+}
+
+function languageOption(value) {
+  const code = normalizeLanguageCode(value);
+  return code ? LANGUAGE_BY_CODE.get(code.toLowerCase()) || null : null;
+}
+
+function providerRecognitionLanguageCode(value) {
+  const option = languageOption(value);
+  return option ? option.recognition_code : String(value || "").trim();
+}
+
+function providerSynthesisLanguageCode(value) {
+  const option = languageOption(value);
+  return option ? option.synthesis_code : String(value || "").trim();
+}
+
+function languageInstructionName(value) {
+  const option = languageOption(value);
+  return option ? `${option.label} (${option.code})` : String(value || "").trim();
 }
 
 // Read-only membership test: does the text name a supported language (by english
@@ -616,10 +664,10 @@ function profileOptionsPayload(options = {}) {
 // still flows through the profile sanitizer (normalizeLanguageList), which drops
 // any code not in the catalog and never blanks a field.
 //
-//   understand / input_languages   -> languages named in the STT custom prompt
-//                                      (provider recognition remains automatic)
-//   understand_primary / speaking  -> reorder the prompt's language emphasis
-//                                      ("right now I want to speak X")
+//   understand / input_languages   -> semantic agent state (the languages the
+//                                      user asks to be understood)
+//   understand_primary / speaking  -> reorder which understood language is primary
+//                                      right now ("right now I want to speak X")
 //   reply / language               -> the language(s) the assistant replies in
 //   reply_primary                  -> the primary reply language
 //   lock (bool)                    -> true disables automatic reply-language switching
@@ -677,6 +725,9 @@ module.exports = {
   normalizeLanguageCode,
   normalizeLanguageList,
   normalizeLanguageListValue,
+  providerRecognitionLanguageCode,
+  providerSynthesisLanguageCode,
+  languageInstructionName,
   languageControlPatch,
   mentionsSupportedLanguage,
   languageOptionsPayload,

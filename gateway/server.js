@@ -25,6 +25,8 @@ const {
   supportedLanguagesSentence,
   languageControlPatch,
   canonicalVoice,
+  normalizeLanguageCode,
+  languageInstructionName,
 } = require("./lib/profile-options");
 const voiceL10n = require("./lib/voice-l10n");
 const { createCompanionCatalogStore, COMMAND_VERBS: COMPANION_COMMAND_VERBS } = require("./lib/companion-catalog");
@@ -7695,9 +7697,10 @@ function liveToolProfilePatch(args) {
   return patch;
 }
 
-// Language control is model-owned: the model reasons about which languages are
-// understood (the STT constrained set) and replied in, and changes them by tool
-// call — there is no deterministic transcript matcher for language anymore. So
+// Language control is model-owned: the model reasons about semantic language
+// defaults and reply language, then changes them by tool call. Chirp itself
+// stays provider-auto with a fixed prompt; profile fields are not a hard STT
+// allowlist. There is no deterministic language switcher. So
 // these fields pass the Live safety gate on the model's word (still validated by
 // the sanitizer). Every OTHER field (voice, name, persona, providers, modality)
 // still requires the deterministic parser to confirm the user asked, so the
@@ -7752,6 +7755,13 @@ async function handleLiveVoiceToolCall(call) {
   }
   if (name === "update_agent_profile") {
     return liveToolUpdateAgentProfile(call, args);
+  }
+  if (name === "respond_once_in_language") {
+    const language = normalizeLanguageCode(args.language);
+    if (!language) {
+      return { ok: false, error: "unsupported language", supported: supportedLanguagesSentence() };
+    }
+    return { ok: true, type: "turn_language", language, label: languageInstructionName(language), persisted: false };
   }
   if (name === "revert_agent_profile") {
     return liveToolRevertAgentProfile(call, args);
@@ -8867,7 +8877,10 @@ async function handleVoiceRetranscribe(request, response, url) {
   const overrideCodes = normalizeRetranscribeLanguageCodes(body.prompt_language_codes || body.promptLanguageCodes || body.language_codes || body.languageCodes);
   const codes = overrideCodes.length > 0
     ? overrideCodes
-    : (typeof provider.sttPromptLanguageCodes === "function" ? provider.sttPromptLanguageCodes() : ["en-US"]);
+    : (typeof provider.inputLanguageCodes === "function" ? provider.inputLanguageCodes() : ["en-US"]);
+  const promptLanguageCodes = Array.isArray(provider.status?.().prompt_language_codes)
+    ? provider.status().prompt_language_codes
+    : ["gez", "am-ET", "en-US"];
   const syntheticTurn = {
     turnId,
     pcmPath,
@@ -8883,6 +8896,8 @@ async function handleVoiceRetranscribe(request, response, url) {
     return;
   }
   const transcript = String(transcription?.text || "").trim();
+  const rejected = transcription?.languageRejected === true;
+  const rejectedCandidate = String(transcription?.rejection?.candidate_text || "").slice(0, 1000);
   const now = new Date().toISOString();
 
   const record = readVoiceTurnRecord(sessionId, turnId);
@@ -8902,8 +8917,20 @@ async function handleVoiceRetranscribe(request, response, url) {
       });
     }
     revision = revisions.length;
-    revisions.push({
+    revisions.push(rejected ? {
       revision,
+      accepted: false,
+      candidate_transcript: rejectedCandidate,
+      transcript_source: "stt-retranscribe-rejected",
+      source: "retranscribe",
+      rejection_reason: "disallowed_script",
+      disallowed_scripts: transcription?.rejection?.disallowed_scripts || [],
+      language_codes: codes,
+      windowed: transcription?.windowed === true,
+      created_at: now,
+    } : {
+      revision,
+      accepted: true,
       transcript,
       transcript_source: "stt-retranscribe",
       source: "retranscribe",
@@ -8913,17 +8940,24 @@ async function handleVoiceRetranscribe(request, response, url) {
     });
     record.transcript_revisions = revisions;
     record.retranscribed = true;
-    record.transcript = transcript;
-    record.transcript_source = "stt-retranscribe";
+    if (!rejected) {
+      record.transcript = transcript;
+      record.transcript_source = "stt-retranscribe";
+    }
     record.updated_at = now;
     const voiceSession = record.references?.voice_session;
     if (voiceSession && typeof voiceSession === "object") {
       const providerEvents = Array.isArray(voiceSession.provider_events) ? voiceSession.provider_events : [];
       providerEvents.push({
-        type: "transcript_retranscribed",
+        type: rejected ? "transcript_retranscribe_rejected" : "transcript_retranscribed",
         ts: now,
         revision,
-        transcript_chars: transcript.length,
+        transcript_chars: rejected ? rejectedCandidate.length : transcript.length,
+        ...(rejected ? {
+          candidate_text: rejectedCandidate,
+          rejection_reason: "disallowed_script",
+          disallowed_scripts: transcription?.rejection?.disallowed_scripts || [],
+        } : {}),
         language_codes: codes,
         windowed: transcription?.windowed === true,
       });
@@ -8939,9 +8973,14 @@ async function handleVoiceRetranscribe(request, response, url) {
       ts: now,
       session_id: sessionId,
       turn_id: turnId,
-      type: "transcript_retranscribed",
+      type: rejected ? "transcript_retranscribe_rejected" : "transcript_retranscribed",
       revision,
-      transcript_chars: transcript.length,
+      transcript_chars: rejected ? rejectedCandidate.length : transcript.length,
+      ...(rejected ? {
+        candidate_text: rejectedCandidate,
+        rejection_reason: "disallowed_script",
+        disallowed_scripts: transcription?.rejection?.disallowed_scripts || [],
+      } : {}),
       language_codes: codes,
       windowed: transcription?.windowed === true,
     }) + "\n");
@@ -8953,14 +8992,20 @@ async function handleVoiceRetranscribe(request, response, url) {
     session_id: sessionId,
     turn_id: turnId,
     transcript,
-    transcript_source: "stt-retranscribe",
+    transcript_source: rejected ? "stt-retranscribe-rejected" : "stt-retranscribe",
     retranscribed: true,
+    accepted: !rejected,
+    ...(rejected ? {
+      candidate_transcript: rejectedCandidate,
+      rejection_reason: "disallowed_script",
+      disallowed_scripts: transcription?.rejection?.disallowed_scripts || [],
+    } : {}),
     revision,
     language_codes: codes,
-    prompt_language_codes: codes,
+    prompt_language_codes: promptLanguageCodes,
     recognition_language_codes: ["auto"],
     windowed: transcription?.windowed === true,
-    language_rejected: transcription?.languageRejected === true,
+    language_rejected: rejected,
     audio_bytes: stat.size,
     record_updated: Boolean(record),
     updated_at: now,
@@ -9625,7 +9670,14 @@ async function runCascadedVoiceReasoningInner(input) {
   // chat reply here; control and agent-run turns are recorded by the caller, and
   // a profile-control turn is applied AND its confirmation spoken by the
   // streaming turn recorder, so none of them are answered as a chat turn here.
-  const classification = classifyVoiceTurnWithPersona(input?.persona, {}, transcript);
+  let classification = classifyVoiceTurnWithPersona(input?.persona, {}, transcript);
+  const profileIntent = classification === "profile_control" ? parseProfileControlIntent(transcript) : null;
+  if (profileIntent?.subject === "language") {
+    // Language switching belongs to the agent tool loop, including the clearest
+    // phrasings. The deterministic parser remains a keyless HTTP fallback, but
+    // must not preempt the model on a cascaded voice turn.
+    classification = "chat";
+  }
   if (classification !== "chat") {
     stashContextDecision(reasonSessionId, turnId, { decision: contextDecision, thread: filingThread });
     return { speak: "", display: transcript, language: replyLanguage, model: profile.model || MODEL_ID, classification };
@@ -9767,6 +9819,11 @@ async function runCascadedVoiceReasoningInner(input) {
   stashContextDecision(input?.session_id || input?.conversation_id || "", input?.turn_id || "", { decision: contextDecision, thread: filingThread });
   // Re-read the profile: a tool may have changed voice_max_chars this turn.
   const effectiveAfter = agentProfile.effective(profileOptions);
+  const oneTurnLanguage = turnLanguageFromToolResults(toolTurn.tool_results);
+  const responseLanguage = oneTurnLanguage
+    || effectiveAfter.language_primary
+    || String(effectiveAfter.language || "").split(",")[0].trim()
+    || replyLanguage;
   // Split expressive direction out of the reply: the DISPLAY/stored transcript
   // stays clean; the whitelisted inline tags and a leading style prompt only feed
   // the Gemini-TTS leg (input.text + input.prompt). Other TTS providers get the
@@ -9794,7 +9851,7 @@ async function runCascadedVoiceReasoningInner(input) {
       display: "",
       tts_text: "",
       tts_style: "",
-      language: replyLanguage,
+      language: responseLanguage,
       model: effectiveAfter.model || MODEL_ID,
       classification: "control",
       actions: [{ type: "control", name: "stop" }],
@@ -9806,7 +9863,7 @@ async function runCascadedVoiceReasoningInner(input) {
     display: displaySpeak,
     tts_text: ttsText,
     tts_style: useExpressiveTts ? expressive.style : "",
-    language: replyLanguage,
+    language: responseLanguage,
     model: effectiveAfter.model || MODEL_ID,
     classification: "chat",
     ...(turnActions.length ? { actions: turnActions } : {}),
@@ -9832,6 +9889,17 @@ function collectCascadedToolActions(toolResults) {
     }
   }
   return actions.slice(0, 8);
+}
+
+function turnLanguageFromToolResults(toolResults) {
+  if (!Array.isArray(toolResults)) return "";
+  for (let index = toolResults.length - 1; index >= 0; index -= 1) {
+    const result = toolResults[index]?.result;
+    if (result?.ok === true && result?.type === "turn_language") {
+      return normalizeLanguageCode(result.language);
+    }
+  }
+  return "";
 }
 
 // One extra system block when the session speaks AS a companion (a website
@@ -9972,7 +10040,7 @@ function cascadedExecuteCapabilities(call) {
       run: (args) => liveToolRevertAgentProfile(call, args || {}),
     },
     set_languages: {
-      description: "Set which languages you understand and reply in, in one call, from the supported catalog (call profile_options for codes). Args: { understand?: string|string[] (the FULL set of languages you understand — the STT recognizer is constrained to exactly this set, at most two), understand_primary?: string (a code already in `understand` to lead recognition right now, e.g. \"right now I want to speak Amharic\"), reply?: string|string[] (the language(s) you reply in), reply_primary?: string, lock?: boolean (true = do not auto-switch reply language), scope?: \"global\"|\"device\", reason?: string }. Persists through the same sanitizer as update_agent_profile; an unsupported code is dropped and the prior value kept.",
+      description: "Set semantic understood-language defaults and reply languages in one call (use profile_options for codes). Active Chirp STT always uses provider auto plus one fixed best-effort prompt expecting Geʽez (`gez`), Amharic (`am-ET`), and English (`en-US`); these settings never become a hard provider allowlist. Args: { understand?: string|string[] (the semantic set the user asks you to understand; use up to those three for this speech pipeline), understand_primary?: string (a code already in `understand` that leads the agent's current language behavior), reply?: string|string[] (the language(s) you reply in), reply_primary?: string, lock?: boolean (true = do not auto-switch reply language), scope?: \"global\"|\"device\", reason?: string }. Persists through the same sanitizer as update_agent_profile; an unsupported code is dropped and the prior value kept.",
       run: (args) => {
         const patch = languageControlPatch(args || {});
         if (Object.keys(patch).length === 0) {
@@ -10159,7 +10227,7 @@ function cascadedVoiceProfileTools(call) {
   return [
     {
       name: "update_agent_profile",
-      description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks or wants you to hear, listen for, understand, transcribe, or detect. These codes shape the automatic STT transcription prompt (at most two); they do not reject other detected languages. Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language the prompt emphasizes first (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Set both fields in one call when the user asks you to listen in one language set and respond, speak, or reply in another. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `speaking_rate` (0.5–2.0; 1.0 = normal speed) when asked to speak faster or slower, and `voice_tone` (a few words like \"warm, upbeat\"; \"neutral\" clears it) when asked for a different voice mood. Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in the new setting language only.",
+      description: "Change your own durable settings when the user asks. Bare language requests persist; only explicit one-response requests use respond_once_in_language. `language` is what YOU reply in; `input_languages` is semantic profile state for languages the USER asks you to understand, not a hard STT allowlist. Active Chirp STT always uses provider `auto` plus one fixed best-effort prompt expecting Geʽez (`gez`), Amharic (`am-ET`), and English (`en-US`). Valid profile codes come from get_profile_options; unsupported values are dropped and prior values kept. Geʽez maps to `am-ET` only for TTS compatibility, never STT. `input_language_primary` records which understood language leads the agent's current behavior. Set both input and reply fields when requested. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `speaking_rate` (0.5–2.0; 1.0 = normal speed) when asked to speak faster or slower, and `voice_tone` (a few words like \"warm, upbeat\"; \"neutral\" clears it) when asked for a different voice mood. Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Continue the current turn in the new language immediately, without a separate English confirmation.",
       parameters: {
         type: "object",
         properties: {
@@ -10178,6 +10246,24 @@ function cascadedVoiceProfileTools(call) {
           return { ok: false, error: "no supported profile fields provided", supported_fields: agentProfile.fields() };
         }
         return applyAgentProfilePatch(call, args || {}, patch, "voice-cascaded-tool");
+      },
+    },
+    {
+      name: "respond_once_in_language",
+      description: "Use a language for only the current response without changing the durable profile. Call this only when the user explicitly says the language is temporary, such as 'for this response only', 'just this once', or 'then switch back'. Args: { language: string }. After the tool result, answer the current request in that language; the next turn automatically uses the prior durable language.",
+      parameters: {
+        type: "object",
+        properties: {
+          language: { type: "string", description: "A supported language name or BCP-47 code from get_profile_options." },
+        },
+        required: ["language"],
+      },
+      handler: (args) => {
+        const language = normalizeLanguageCode(args?.language);
+        if (!language) {
+          return { ok: false, error: "unsupported language", supported: supportedLanguagesSentence() };
+        }
+        return { ok: true, type: "turn_language", language, label: languageInstructionName(language), persisted: false };
       },
     },
     {
@@ -10241,7 +10327,7 @@ function replyLanguageDirective(profile) {
   if (!language) {
     return "";
   }
-  return `Reply in ${language}. Keep the spoken answer short, direct, and TTS-safe.`;
+  return `Reply in ${languageInstructionName(language)}. Keep the spoken answer short, direct, and TTS-safe.`;
 }
 
 // Tell the reasoner it OWNS language control by tool call. A deterministic
@@ -10255,13 +10341,15 @@ function languageControlDirective(profile) {
   const reply = String(profile?.language || profile?.language_primary || "").trim();
   return [
     "Language control (you own this; the gateway does not guess from your words):",
-    understand ? `- You currently understand: ${understand}. These languages guide automatic speech transcription; preserve other detected languages too.` : "",
+    understand ? `- Current semantic understood-language profile: ${understand}. This controls your language defaults, not a hard provider recognition allowlist.` : "",
     reply ? `- You currently reply in: ${reply}.` : "",
-    "- If the user says which languages THEY speak (\"I only speak English and Amharic\", \"I speak only these two\"), call update_agent_profile with input_languages set to exactly that set.",
+    "- Chirp STT always uses provider auto plus one fixed best-effort prompt expecting Geʽez (`gez`), Amharic (`am-ET`), and English (`en-US`). Profile language fields never replace that provider configuration.",
+    "- If the user names languages THEY speak, call update_agent_profile with those semantic input_languages (up to the three expected speech languages).",
     "- If the user says to lead with one of those right now (\"right now I want to speak Amharic\"), set input_language_primary to that code.",
-    "- If the user asks which language YOU reply in (\"answer in English\"), set language. Understood languages and reply language are separate settings.",
-    "- Understood and reply languages may be any code in the supported catalog; call get_profile_options if unsure. Confirm briefly after changing.",
-    "- When you change the reply language, confirm the change out loud IN THE NEW LANGUAGE (one short sentence — e.g. after switching to Amharic, confirm in Amharic) so the user hears the switch immediately. Your later replies then stay in that language.",
+    "- A bare request such as 'switch to X', 'speak X', or 'answer in X' means a DURABLE switch: call update_agent_profile. Keep using X on later turns until the user changes it again.",
+    "- Only when the user explicitly limits the request ('for this response only', 'just this once', or 'then switch back') call respond_once_in_language. It never changes the saved profile.",
+    "- Call get_profile_options if unsure about profile codes. Geʽez is code gez; only TTS maps it to am-ET.",
+    "- After either language tool returns, continue the CURRENT response in the selected language. Do not insert a separate English confirmation or defer the switch to the next turn. If the user asked only to switch, one natural short acknowledgment in the new language is enough.",
   ].filter(Boolean).join("\n");
 }
 
@@ -10293,7 +10381,7 @@ function voiceToolAckDirective() {
 
 // Canned spoken acknowledgment for a tool round the model started silently.
 // Localized to the reply language for the two active catalog languages.
-const QUICK_VOICE_TOOLS = new Set(["get_profile_options", "context_management"]);
+const QUICK_VOICE_TOOLS = new Set(["get_profile_options", "respond_once_in_language", "context_management"]);
 function cascadedToolAckText(language) {
   const code = String(language || "").trim().toLowerCase();
   if (code.startsWith("am")) {
@@ -10344,8 +10432,12 @@ async function recordStreamingVoiceTurn(turn) {
   const incomplete = turn.incomplete === true;
   const turnStatus = String(turn.status || (incomplete ? "interrupted" : "completed"));
   const hasRealTranscript = Boolean(transcript && transcriptSource !== "synthetic");
+  const providerClassification = ["chat", "agent_run", "multi_agent", "profile_control", "control"]
+    .includes(String(turn.classification || ""))
+    ? String(turn.classification)
+    : "";
   const liveClassification = !incomplete && hasRealTranscript
-    ? classifyVoiceTurnWithPersona(turn.persona, { source: turn.source || "voice-live" }, transcript)
+    ? (providerClassification || classifyVoiceTurnWithPersona(turn.persona, { source: turn.source || "voice-live" }, transcript))
     : "";
   const classification = incomplete ? "interrupted" : (liveClassification || "chat");
   const baseRecord = {

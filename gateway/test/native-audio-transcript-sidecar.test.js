@@ -40,7 +40,7 @@ test("a duplex provider composes with an off-by-default Chirp transcript sidecar
     configured: true,
     model: "chirp_3",
     language_codes: ["auto"],
-    prompt_language_codes: ["en-US", "am-ET"],
+    prompt_language_codes: ["gez", "am-ET", "en-US"],
     streaming: true,
   });
   assert.equal(on.status().provider, "test-duplex-audio");
