@@ -21,9 +21,9 @@ state, and verification evidence belong in repo files.
 
 ```text
 Android app
-  Owns: overlay UI, full app UI, voice capture, screen context, Android
-  permissions, approvals, phone-local actions, local action receipts, and
-  package-installer handoff for app updates.
+  Owns: overlay UI, full app UI, opt-in input-method UI and editor binding,
+  voice capture, screen context, Android permissions, approvals, phone-local
+  actions, local action receipts, and package-installer handoff for app updates.
 
 Browser extension
   Owns: browser-local UI, text/voice capture, page context collection, and
@@ -681,6 +681,19 @@ listable (`GET /v1/audio-notes`) and playable
 `/v1` routes. Evaluating or improving notes is a later change; this slice
 only captures and stores. Contract:
 `reference/openspec/changes/record-mode-audio-notes/proposal.md`.
+
+### Android input method (local insertion candidate)
+
+The opt-in `MoaInputMethodService` is a separate Android-owned input surface.
+It classifies each `EditorInfo` before showing candidate content, clears the
+ephemeral candidate whenever the editor generation changes, and revalidates the
+bound editor immediately before an exact `InputConnection.commitText` call.
+Password, private, missing, and unsupported editors fail closed. The initial
+candidate is fixed local QA text: this proves activation, sensitive-editor
+suppression, stale-editor refusal, and insertion without adding microphone,
+gateway transcription, accessibility typing, action expansion, or submit
+behavior. Production dictation remains dependent on the separately verified
+capture/transcription contract.
 
 ### Browser Extension Thin Client
 
@@ -1401,6 +1414,11 @@ queues.
   local routing for screen context and local action commands.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
   accessibility-backed screen context and visible UI operations.
+- `android_app/app/src/main/java/ai/moa/assistant/MoaInputMethodService.java`:
+  opt-in keyboard surface for policy-gated, editor-bound exact text insertion.
+- `android_app/app/src/main/java/ai/moa/assistant/MoaEditorSensitivityPolicy.java`
+  and `MoaEditorSessionBinding.java`: pure fail-closed IME privacy and freshness
+  policy with a focused 90-percent coverage gate.
 - `gateway/server.js`: HTTP API, voice router, model calls,
   conversation storage, agent-run execution, device-client registry, and
   cross-device tool-request queue.
