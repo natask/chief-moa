@@ -165,6 +165,23 @@ test("reply and action aliases form inert summaries", () => {
   assert.equal(browserTurnHasAnswer({}), false);
 });
 
+test("turn summaries include local receipts while excluding handled media actions", () => {
+  assert.equal(browserTurnSummary({
+    text: "Opened the page",
+    local_action_receipts: [{ summary: "Opened Example" }],
+    actions: [{ type: "media.open" }, { tool: "media.bookmark" }],
+  }), "Opened the page\n\nOpened Example");
+
+  assert.equal(browserTurnSummary({
+    local_action_receipts: [{ summary: "Saved locally" }, { summary: "  " }],
+    actions: [{ type: "browser.click" }],
+  }), "Saved locally\n\nGateway proposed 1 browser action; not executed in this slice.");
+
+  assert.equal(browserTurnSummary({
+    local_action_receipts: [{ summary: "Saved locally" }],
+  }), "Saved locally");
+});
+
 test("pending states stop being pending as soon as an answer arrives", () => {
   for (const status of ["", "queued", "pending", "accepted", "created", "running", "working", "started", "processing", "in_progress"]) {
     assert.equal(browserTurnIsPending({ status }), true, status || "empty");
