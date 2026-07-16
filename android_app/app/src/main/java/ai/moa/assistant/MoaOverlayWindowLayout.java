@@ -15,18 +15,24 @@ final class MoaOverlayWindowLayout {
             int screenHeight,
             int margin,
             int gap,
-            int orbX,
-            int orbY,
+            View orb,
+            WindowManager.LayoutParams orbParams,
             int orbSize,
             int surfaceWidth,
             int fallbackHeight
     ) {
-        if (surface == null || params == null) {
+        if (surface == null || params == null || orbParams == null) {
             return;
         }
         int height = surface.getMeasuredHeight() > 0 ? surface.getMeasuredHeight() : fallbackHeight;
         MoaOrbOverlayGeometry.Position position = MoaOrbOverlayGeometry.anchoredSurface(
-                screenWidth, screenHeight, margin, gap, orbX, orbY, orbSize, surfaceWidth, height);
+                screenWidth, screenHeight, margin, gap, orbParams.x, orbParams.y, orbSize, surfaceWidth, height);
+        if (position.orbY != orbParams.y) {
+            // Always-above rule: the orb yields (moves down) so the whole card
+            // plus gap stays on-screen above it.
+            orbParams.y = position.orbY;
+            update(windowManager, orb, orbParams);
+        }
         params.x = position.x;
         params.y = position.y;
         update(windowManager, surface, params);

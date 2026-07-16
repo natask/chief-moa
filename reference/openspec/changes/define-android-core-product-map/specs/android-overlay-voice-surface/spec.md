@@ -102,7 +102,7 @@ voice turn as a reversible draft rather than an implicit submission.
 - **THEN** the overlay begins voice capture
 - **AND** immediately shows `X` to discard on the left of the orb and `↑` to
   Send on the right of the orb
-- **AND** those controls remain independent of the transcript card above or below
+- **AND** those controls remain independent of the transcript card above the orb
 
 #### Scenario: User explicitly sends
 - **WHEN** a tap-started draft is active and the user taps `↑`
@@ -121,26 +121,41 @@ voice turn as a reversible draft rather than an implicit submission.
 
 ### Requirement: Orb-Anchored Mobile Surface
 The Android overlay SHALL keep at most one large interactive card visible and
-place that card predictably relative to the orb.
+keep that card wholly above the orb at all times, before and after the card's
+content expands.
 
 #### Scenario: Surface fits above the orb
 - **WHEN** the chat or transcript card opens and has enough room above the orb
 - **THEN** the entire card is placed above the orb with a visible gap
 
-#### Scenario: Surface must flip below
-- **WHEN** the card cannot fit above the orb
-- **THEN** the entire card is placed below the orb and clamped to the display
+#### Scenario: Surface would not fit above the orb
+- **WHEN** the card (at its measured height) cannot fit above the orb's current
+  position
+- **THEN** the orb is repositioned down just enough that the entire card plus
+  gap stays on-screen above it
+- **AND** the card is never placed below the orb
 
-#### Scenario: Orb moves with an open surface
-- **WHEN** the user drags the orb while a card is open
-- **THEN** the card follows and recomputes its above-or-below placement
+#### Scenario: Orb moves or the card remeasures with an open surface
+- **WHEN** the user drags the orb while a card is open, or the open card's
+  content grows or shrinks
+- **THEN** the placement is recomputed continuously so the card stays wholly
+  above the orb, repositioning the orb when required
+
+#### Scenario: Whole card can be dismissed discoverably
+- **WHEN** a chat or transcript card is open
+- **THEN** the card shows a visible close control that dismisses the entire
+  message surface in one tap
+- **AND** swiping transcript rows away continues to work and closes the card
+  once no rows remain
 
 ### Requirement: User-Removable Overlay
 The Android overlay SHALL provide discoverable local ways to remove the orb.
 
 #### Scenario: Drag to remove
 - **WHEN** the user drags the orb into the visible removal target and releases
-- **THEN** Android stops the overlay service and removes the orb and open card
+- **THEN** Android removes the orb, every open card, and every control window in
+  the same release, then stops the overlay service
+- **AND** no overlay window visibly outlives the orb
 
 #### Scenario: Explicit hide fallback
 - **WHEN** the user taps Hide in the chat header or overlay notification
