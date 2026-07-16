@@ -428,6 +428,13 @@
       at 100% lines, 93.33% branches, and 100% functions; reduce `content.js`
       to 3,954 lines and raise the exact whole-extension ratchet to 51.76%
       lines, 33.42% branches, and 28.33% functions with 46 passing unit tests.
+- [x] 4.4p Extract privacy-first proactive sensitivity detection and structural
+      page-count collection from `content.js`, retaining overlay exclusion,
+      ten 100-count signal caps, a 2,000-node traversal cap, and fail-closed
+      helper/walker behavior. Verify the focused runtime at 100% lines, 92.64%
+      branches, and 100% functions; reduce `content.js` to 3,890 lines and raise
+      the exact whole-extension ratchet to 52.36% lines, 34.39% branches, and
+      28.87% functions with 47 passing unit tests.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
