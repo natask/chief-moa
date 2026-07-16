@@ -687,7 +687,7 @@ async function pollBrowserToolRequests() {
         device_id: deviceId,
         surface_type: "browser_extension",
         local_tool_manifest: browserLocalToolManifest(),
-        runtime_advertisements: [await browserProgramRuntimeManifest(deviceId)],
+        execution_runtimes: [await browserProgramRuntimeManifest(deviceId)],
       },
     });
     const request = claimed?.request;
@@ -1378,7 +1378,7 @@ async function heartbeatDeviceClient() {
         surface_type: "browser_extension",
         status: "online",
         local_tool_manifest: browserLocalToolManifest(),
-        runtime_advertisements: [runtimeAdvertisement],
+        execution_runtimes: [runtimeAdvertisement],
         current_binding: sessionAdvertisement.surface_program_binding,
         metadata: {
           source: "agee-extension",
@@ -1422,11 +1422,13 @@ function browserLocalToolManifest() {
     { tool: SURFACE_PROGRAM_TOOL, risk: "mixed_browser_local", approval: "preauthorized_program" },
     ...SURFACE_PROGRAM_CAPABILITIES.map((capability) => ({
       tool: capability.capability_id,
+      capability_id: capability.capability_id,
       description: capability.description,
       input_schema: capability.input_schema,
       output_schema: capability.output_schema,
       risk: capability.effect_class,
       approval: capability.approval_class,
+      approval_class: capability.approval_class,
       effect_class: capability.effect_class,
       concurrency: capability.concurrency,
       idempotency: capability.idempotency,

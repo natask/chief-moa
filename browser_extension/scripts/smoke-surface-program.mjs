@@ -78,8 +78,8 @@ async function main() {
     workerCdp = new Cdp(worker.webSocketDebuggerUrl); pageCdp = new Cdp(page.webSocketDebuggerUrl);
     await evaluate(workerCdp, `chrome.storage.local.set(${JSON.stringify({ ageeGatewayUrl: `http://127.0.0.1:${loopback.port}`, ageeGatewayToken: "fixture", ageeBackgroundAutomationEnabled: true, ageeBackgroundAutomationConsentVersion: 1 })}).then(()=>true)`);
     await evaluate(workerCdp, `chrome.tabs.query({url:${JSON.stringify(url)}}).then(([tab])=>chrome.tabs.update(tab.id,{active:true}).then(()=>tab.id))`);
-    await waitFor(() => loopback.state.heartbeat?.runtime_advertisements?.[0] && loopback.state.heartbeat?.current_binding?.origin === `http://127.0.0.1:${loopback.port}`, 25000);
-    const ad = loopback.state.heartbeat.runtime_advertisements[0];
+    await waitFor(() => loopback.state.heartbeat?.execution_runtimes?.[0] && loopback.state.heartbeat?.current_binding?.origin === `http://127.0.0.1:${loopback.port}`, 25000);
+    const ad = loopback.state.heartbeat.execution_runtimes[0];
     const binding = loopback.state.heartbeat.current_binding;
     const makeRequest = (suffix, programSource, wallMs = 5000) => {
       const now = Date.now();
@@ -123,7 +123,7 @@ async function main() {
     const recovered = await waitFor(() => loopback.state.receipts[3], 10000);
     assert(recovered.status === "completed", JSON.stringify(recovered));
     console.log(`surface program smoke passed: isolated Chrome for Testing, localhost fixture/fake gateway, ${receipt.tool_attempts.count} local calls, infinite-loop preemption and recovery, no screenshots or personal profile`);
-  } catch (error) { throw new Error(`${error.message}\nChrome stderr:\n${chromeErrors}`); }
+  } catch (error) { throw new Error(`${error.message}\nFixture state: ${JSON.stringify({ claimed: loopback.state.claimed, receipt_count: loopback.state.receipts.length, tool_receipt_count: loopback.state.toolReceipts.length, event_count: loopback.state.events.length, heartbeat_keys: Object.keys(loopback.state.heartbeat || {}) })}\nChrome stderr:\n${chromeErrors}`); }
   finally { workerCdp?.close(); pageCdp?.close(); loopback.instance.close(); chrome.kill("SIGTERM"); await delay(500); try { rmSync(profileRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
 }
 function assert(condition, message) { if (!condition) throw new Error(message); }
