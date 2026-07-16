@@ -418,16 +418,55 @@ restores defaults, both scoped global or per-device and both appending a new
 profile version so history stays append-only and every voice change is itself
 reversible by voice.
 
-Public web search follows a different boundary from code mode. On ordinary
-Vertex reasoning calls the gateway offers the model provider's native Google
-Search tool, so retrieval and grounding remain provider-visible. Providers
-whose current gateway protocol cannot expose native search may receive a
-bounded Exa `web_search` function when its gateway-side key is configured.
-Search never becomes arbitrary QuickJS network access: code mode still sees
-only registered `tools.moa.*` integration capabilities. Retrieved page text is
-untrusted evidence, not instruction or execution authority, and answers are
-prompted to cite the source URLs they use. Forced control-plane calls such as
-context preflight remain function-only and do not receive search.
+Public web search follows a different boundary from code mode. Every ordinary
+answer-producing route assembles the same explicit search capability state:
+provider-native search when supported, otherwise the configured bounded
+gateway search function, otherwise unavailable with a reason. This applies to
+Android chat, browser turns/evidence, browser HTTP voice, cascaded voice, broker
+direct-answer/research, and resumed image/video turns. Search availability may
+vary by provider configuration, but it must not vary accidentally by route.
+Forced control-plane calls such as context preflight, transcription, TTS, and
+the privacy-first proactive endpoint keep narrower contracts and receive no
+search.
+
+Search remains read-only evidence retrieval. It never becomes arbitrary
+QuickJS, userscript, or CDP network access; code mode still sees only registered
+`tools.moa.*` capabilities. Search credentials stay gateway-side. Retrieved
+content is untrusted evidence, not instruction or execution authority. Turn
+records retain normalized source URLs used in an answer and bounded invocation
+metadata rather than unrestricted raw result bodies.
+
+### Unified reasoning evidence boundary
+
+Ordinary answer routes use the versioned `moa.reasoning-turn.v2` contract. It
+binds authenticated turn/session/branch/source/role/query identity to authorized
+observation and `evidence_asset.v1` references, an inspectable capability
+snapshot, and a retention policy. The gateway resolves those references into
+provider-native text/image/video inputs immediately before inference. Opaque,
+expired, stale, or unauthorized references are omitted with a reason; merely
+storing an asset never makes it visible to a model or harness.
+
+For an explicitly submitted current-page question, the browser may include its
+already-authorized bounded semantic snapshot and optional visible-tab JPEG in
+the initial turn. Valid initial evidence avoids a mandatory evidence follow-up.
+Raw pixels are request-only by default; the turn may retain their digest,
+dimensions, byte count, grant, and provider-processing receipt. Optional means
+the answer may use or ignore the evidence semantically, not that the provider
+avoids processing pixels included in its request. Capture failure, validation
+failure, or a provider without image input degrades honestly to authorized
+semantic/text evidence. Android accessibility summaries fit the same evidence
+envelope, but Android pixels remain unavailable until Android owns and verifies
+a separate visible platform-granted capture path.
+
+A model may propose `moa.video-evidence-request.v1` when motion over time is
+needed. The proposal has zero capture authority. Only a trusted user action in
+the owning Surface may open a picker, obtain screen/microphone permission,
+record, stop, upload, or delete video. The resulting bounded video asset resumes
+the original reasoning turn with the same query, session, branch, role,
+delegation envelope, and ordinary capabilities; it does not become an unrelated
+generic voice turn. Actual provider video support is checked explicitly. Frame
+or transcript derivation is separately disclosed and never presented as though
+the provider received the original video.
 
 Browser page tweaks follow the proposal boundary: `propose_page_tweak` is
 available only on browser-sourced turns, and the gateway validates the proposed
@@ -440,6 +479,34 @@ declarative record, and the browser extension compiles the CSS locally and
 applies it. This keeps the no-eval boundary: the model cannot send CSS or JS
 strings, only a kind and bounded params, and an unknown kind or malformed params
 returns a `page_tweak_rejected` result instead of failing the turn.
+
+Generated page programs are a separate, explicit private-runtime lane described
+by `moa.browser-program.v2`; they do not weaken the declarative tweak contract.
+Each immutable program revision binds complete inspectable source and digest,
+mode, world, exact tab/document/frame/origin scope, execution profile,
+profile-discriminated authority, bridge grants, limits, and rollback metadata.
+Standalone authority binds direct approval and approved source/scope digests
+without fabricated Delegate records. Delegated authority binds the typed
+Delegate role, task, run, envelope, exact grants, and an optional checkpoint
+approval when applicable.
+The extension revalidates all bindings immediately before execution or
+registration, owns stop/review/removal, and writes the canonical local receipt.
+Generated source never runs in privileged extension code.
+
+Two authority profiles prevent contradictory universal rules. The safe default,
+`reviewed_standalone_v1`, is default-off, requires direct approval for every
+changed revision, runs top-frame `USER_SCRIPT` under exact host access, verifies
+registration/removal, and permits no `MAIN` or CDP fallback. The separately
+opted-in `delegated_runtime_v1` requires a confirmed Delegate envelope. That
+envelope may preauthorize exact `script.evaluate`/`script.persist` classes, so
+in-envelope hash-bound revisions need no redundant confirmation. Arbitrary-code
+authority, site scope, frame scope, `MAIN`, bridge handlers, and CDP
+`Runtime.evaluate` remain independent visible grants; `MAIN` and CDP are never
+silent fallbacks. Scope/world/bridge widening, origin/document change,
+checkpoints, stale evidence, destructive application effects, or an expired
+envelope pause before execution. Visual hide/detach/insert/restyle/draw effects
+do not become reversible merely because JavaScript performed them, and deleting
+application data remains a destructive site action.
 
 Spoken input must never be lost. Each stored voice turn keeps the exact final
 transcript with a transcript source label (real STT, typed text, or synthetic
@@ -1290,6 +1357,14 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
 - `observation`: ephemeral, locally scoped evidence from a page, accessibility
   tree, voice, or explicitly captured screen. It is not intent or instruction,
   and remote retention requires an explicit policy/release boundary.
+- `evidence_asset`: a versioned bounded semantic, image, or video input with
+  provenance, capture grant, digest, freshness, provider-use, and retention
+  metadata. It carries evidence only and grants no capture or execution
+  authority.
+- `browser_program`: an immutable generated page-program revision binding full
+  inspectable source/hash, execution profile, world, exact scope, authority,
+  limits, rollback metadata, and local receipts. It never executes in
+  privileged extension code.
 - `assistance_suggestion`: a visible, expiring proposal to help, derived from an
   observation. It cannot execute, become durable intent, create a task, or
   launch a run until the user accepts it.

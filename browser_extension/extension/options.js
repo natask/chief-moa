@@ -1,5 +1,11 @@
 import { DEFAULT_GATEWAY_URL, gatewayUrlDiagnostic, getEffectiveGatewayConfig, normalizeGatewayUrl } from "./config.js";
 import { parseSettingsIntent, PROFILE_FIELDS } from "./settings-intent.js";
+import {
+  CAPABILITY_STATES,
+  DELEGATED_PROFILE,
+  REVIEWED_PROFILE,
+  createUserScriptsRuntime,
+} from "./user-scripts-runtime.js";
 
 const gatewayUrlEl = document.getElementById("gatewayUrl");
 const gatewayTokenEl = document.getElementById("gatewayToken");
@@ -117,6 +123,63 @@ if (backgroundAutomationEl) {
     if (backgroundAutomationStatusEl) {
       backgroundAutomationStatusEl.textContent = backgroundAutomationEl.checked ? "On" : "Off";
       backgroundAutomationStatusEl.style.color = "#777";
+    }
+  });
+}
+
+const userScriptsRuntime = createUserScriptsRuntime();
+const USER_SCRIPT_CONTROLS = Object.freeze([
+  {
+    element: document.getElementById("reviewedUserScripts"),
+    status: document.getElementById("reviewedUserScriptsStatus"),
+    profile: REVIEWED_PROFILE,
+  },
+  {
+    element: document.getElementById("delegatedUserScripts"),
+    status: document.getElementById("delegatedUserScriptsStatus"),
+    profile: DELEGATED_PROFILE,
+  },
+]);
+
+function userScriptStateLabel(state) {
+  return ({
+    [CAPABILITY_STATES.DISABLED]: "Off",
+    [CAPABILITY_STATES.AVAILABLE]: "Available (not connected to the agent)",
+    [CAPABILITY_STATES.CHROME_TOGGLE_REQUIRED]: "Chrome's Allow User Scripts toggle is off",
+    [CAPABILITY_STATES.PERMISSION_REVOKED]: "Permission or exact site access was revoked",
+    [CAPABILITY_STATES.UNSUPPORTED]: "Unsupported by this Chrome version",
+    disable_blocked: "Disable blocked; a registration may still be live",
+  })[state] || "Unavailable";
+}
+
+async function refreshUserScriptControl(control) {
+  const result = await userScriptsRuntime.capability(control.profile);
+  control.element.checked = result.state !== CAPABILITY_STATES.DISABLED;
+  control.status.textContent = userScriptStateLabel(result.state);
+  control.status.style.color = result.state === CAPABILITY_STATES.AVAILABLE ? "#35a35a" : "#777";
+}
+
+for (const control of USER_SCRIPT_CONTROLS) {
+  if (!control.element || !control.status) continue;
+  refreshUserScriptControl(control).catch(() => {
+    control.status.textContent = "Unavailable";
+    control.status.style.color = "#c0392b";
+  });
+  control.element.addEventListener("change", async () => {
+    control.element.disabled = true;
+    let refresh = true;
+    try {
+      const result = await userScriptsRuntime.setProfileEnabled(control.profile, control.element.checked === true);
+      refresh = result.state !== "disable_blocked";
+      control.element.checked = result.state !== CAPABILITY_STATES.DISABLED;
+      control.status.textContent = userScriptStateLabel(result.state);
+      control.status.style.color = result.state === CAPABILITY_STATES.AVAILABLE ? "#35a35a" : "#777";
+    } catch {
+      control.status.textContent = "Could not update the local user-script setting";
+      control.status.style.color = "#c0392b";
+    } finally {
+      control.element.disabled = false;
+      if (refresh) await refreshUserScriptControl(control).catch(() => {});
     }
   });
 }

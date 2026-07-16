@@ -26,6 +26,7 @@ const requiredFiles = [
   "extension/vendor/livekit-client.esm.js",
   "extension/options.html",
   "extension/options.js",
+  "extension/user-scripts-runtime.js",
   "extension/settings-intent.js",
   "extension/overlay.css",
   "extension/sidepanel.html",
@@ -49,6 +50,7 @@ const requiredFiles = [
   "scripts/smoke-live-voice-main.mjs",
   "scripts/smoke-ui-spec.mjs",
   "scripts/smoke-unified-browser-agent.mjs",
+  "scripts/smoke-user-scripts.mjs",
   "scripts/test-voice-sampler-lifecycle.mjs",
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-browser-context-adapter.mjs",
@@ -81,7 +83,7 @@ const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
-const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel"];
+const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "userScripts"];
 const requiredHostPermissions = ["http://*/*", "https://*/*", "wss://api.agee.app/*"];
 
 if (!/MAX_SAMPLES = 16/.test(voiceSamplerSource) || !/voice-sampler\/v1/.test(voiceSamplerSource)) {

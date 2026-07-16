@@ -182,12 +182,20 @@ JavaScript, HTML, CSS, remote URLs, or arbitrary method names.
 - **THEN** the extension rejects the block
 - **AND** preserves the last valid workspace/artifact state
 
-### Requirement: Explicit reversible page changes
+### Requirement: Packaged helpers and generated programs use distinct effect lanes
 
-Generated content SHALL NOT mutate the current page unless it is represented by
-an allowlisted page-change proposal, bound to fresh local evidence, permitted by
-the active agent and any delegation envelope, and approved where required. Every applied
-change SHALL produce a local receipt and a defined undo result.
+The browser SHALL distinguish packaged page-change helpers from arbitrary
+generated page programs. A packaged helper SHALL use an allowlisted proposal,
+fresh local evidence and preconditions, active-agent and delegation policy, and
+approval where required; every applied helper SHALL produce a local receipt and
+a defined undo result. A generated program SHALL instead use
+`moa.browser-program.v2` under its selected execution profile and exact local
+authority. Every program attempt SHALL produce a local effect receipt, but
+SHALL report cleanup/rollback as supported, unavailable, attempted, succeeded,
+or failed rather than claiming arbitrary mutation is universally reversible.
+Deleting application data SHALL remain a destructive application action even
+when JavaScript performs it and SHALL NOT travel through a visual/page-helper
+effect class.
 
 #### Scenario: Approved editable text change
 
@@ -204,6 +212,22 @@ change SHALL produce a local receipt and a defined undo result.
   before an approved proposal executes
 - **THEN** the extension rejects the proposal as stale
 - **AND** performs no page mutation
+
+#### Scenario: Authorized program has no complete inverse
+
+- **WHEN** an authorized generated program applies a page effect but declares no
+  complete cleanup or inverse revision
+- **THEN** the receipt records that rollback is unavailable
+- **AND** packaged stop prevents new executions without claiming to reverse the
+  completed effect
+
+#### Scenario: Program attempts destructive application deletion
+
+- **WHEN** generated JavaScript would delete an application record rather than
+  hide, detach, restyle, insert, or annotate page presentation
+- **THEN** the browser routes it through the destructive application-action
+  policy and approval lane
+- **AND** rejects visual-modification authority as insufficient
 
 ### Requirement: Companion without authority escalation
 
