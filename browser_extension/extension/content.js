@@ -180,6 +180,23 @@
     visibleDwellMs: 1200,
     confirmationTimeoutMs: 2 * 60 * 1000 + 35 * 1000,
   });
+  const {
+    isVideoNoteActive,
+    stopVideoNoteMode,
+    toggleRecordMode,
+    toggleVideoNoteMode,
+  } = window.AgeeContentNoteControllerRuntime.createContentNoteControllerRuntime({
+    sendMessage: safeRuntimeSendMessage,
+    isExtensionContextInvalidated,
+    openSurface: () => openTextSurface({ fresh: false }),
+    isVoiceActive: () => Boolean(liveVoice || listening),
+    setCaptureState: setNoteCaptureState,
+    newCueId,
+    materializeCue,
+    updateCue,
+    reactLauncher,
+    now: () => Date.now(),
+  });
   const COMPANION_PET_COLORS = {
     graphite: ["#555a62", "#262a30"],
     green: ["#208553", "#0f5534"],
@@ -390,7 +407,7 @@
       e.stopPropagation();
       // Shift+click records a video note (screen + narration); a plain click
       // keeps the audio note. A video recording in progress stops on any click.
-      if (videoNoteActive || e.shiftKey) {
+      if (isVideoNoteActive() || e.shiftKey) {
         toggleVideoNoteMode();
         return;
       }
@@ -3071,176 +3088,21 @@
     beginManualVoiceGesture();
   }
 
-  // ---- Record mode: raw audio notes -------------------------------------
-  // Record mode is an audio_note capture, not a voice turn. The content script
-  // only sends runtime messages; the background owns the offscreen microphone
-  // capture, the PCM buffer, and the /v1/audio-notes upload. No voice session,
-  // no STT, no LLM, no TTS can run on this path by construction.
-  let recordActive = false;
-  let recordPending = false;
-  let recordStartedAt = 0;
-
-  function setRecordState(active) {
-    recordActive = active;
+  // Audio/video note capture state is owned by the extracted controller. The
+  // content script only projects that state onto the shared record control.
+  function setNoteCaptureState(kind, active) {
     if (root) root.classList.toggle("agee-recording", active);
     if (recordButton) {
       recordButton.classList.toggle("recording", active);
-      setTooltip(recordButton, active ? "Finish the recording" : "Capture an audio note (⇧click: video note)");
-      recordButton.setAttribute("aria-label", active ? "Stop recording" : "Record note");
+      const isVideo = kind === "video";
+      setTooltip(recordButton, active
+        ? (isVideo ? "Finish the video note" : "Finish the recording")
+        : "Capture an audio note (⇧click: video note)");
+      recordButton.setAttribute("aria-label", active
+        ? (isVideo ? "Stop video note" : "Stop recording")
+        : "Record note");
     }
   }
-
-  function toggleRecordMode() {
-    if (recordPending) return;
-    openTextSurface({ fresh: false });
-    if (recordActive) {
-      stopRecordMode();
-      return;
-    }
-    // Refuse while a voice turn is live or starting in this tab. The overlay
-    // knows about a starting voice turn before the background has registered
-    // its session, so this local guard closes the client half of the race;
-    // the background's voiceStartPending mutex closes the other half.
-    if (liveVoice || listening) {
-      const cueId = newCueId();
-      materializeCue(cueId, "Audio note", "");
-      updateCue(cueId, "Voice is active. Stop voice before recording a note.", "error");
-      return;
-    }
-    startRecordMode();
-  }
-
-  function startRecordMode() {
-    recordPending = true;
-    safeRuntimeSendMessage({ cmd: "recordSessionStart" }).then((res) => {
-      recordPending = false;
-      if (!res && isExtensionContextInvalidated()) return;
-      if (!res?.ok) {
-        const cueId = newCueId();
-        materializeCue(cueId, "Audio note", "");
-        updateCue(cueId, res?.error || "Could not start recording.", "error");
-        return;
-      }
-      recordStartedAt = Date.now();
-      setRecordState(true);
-    }).catch((error) => {
-      recordPending = false;
-      const cueId = newCueId();
-      materializeCue(cueId, "Audio note", "");
-      updateCue(cueId, String(error?.message || error), "error");
-    });
-  }
-
-  function stopRecordMode() {
-    recordPending = true;
-    const startedAt = recordStartedAt;
-    setRecordState(false);
-    const cueId = newCueId();
-    materializeCue(cueId, "Audio note", "storing...");
-    safeRuntimeSendMessage({ cmd: "recordSessionStop" }).then((res) => {
-      recordPending = false;
-      if (!res && isExtensionContextInvalidated()) return;
-      if (res?.stored) {
-        const durationMs = Number(res.note?.duration_ms ?? res.durationMs) ||
-          (startedAt ? Date.now() - startedAt : 0);
-        const seconds = Math.max(1, Math.round(durationMs / 1000));
-        updateCue(cueId, `note stored (${seconds}s)`, "done");
-        reactLauncher("done");
-        return;
-      }
-      updateCue(cueId, res?.error || "Audio note upload failed.", "error");
-      reactLauncher("error");
-    }).catch((error) => {
-      recordPending = false;
-      updateCue(cueId, String(error?.message || error), "error");
-      reactLauncher("error");
-    });
-  }
-  // ---- End record mode ---------------------------------------------------
-
-  // ---- Video note mode -----------------------------------------------------
-  // Shift+click on the record button captures a screen recording with mic
-  // narration: show and tell instead of describe. The background owns the
-  // desktopCapture picker, the offscreen recording, the /v1/video-notes upload,
-  // and the follow-up gateway turn; the reply lands on this cue via the normal
-  // progress/done messages, exactly like a typed command.
-  let videoNoteActive = false;
-  let videoNotePending = false;
-
-  function setVideoNoteState(active) {
-    videoNoteActive = active;
-    if (root) root.classList.toggle("agee-recording", active);
-    if (recordButton) {
-      recordButton.classList.toggle("recording", active);
-      setTooltip(recordButton, active ? "Finish the video note" : "Capture an audio note (⇧click: video note)");
-      recordButton.setAttribute("aria-label", active ? "Stop video note" : "Record note");
-    }
-  }
-
-  function toggleVideoNoteMode() {
-    if (videoNotePending || recordPending) return;
-    openTextSurface({ fresh: false });
-    if (videoNoteActive) {
-      stopVideoNoteMode();
-      return;
-    }
-    if (recordActive) {
-      const cueId = newCueId();
-      materializeCue(cueId, "Video note", "");
-      updateCue(cueId, "An audio note is recording. Finish it before starting a video note.", "error");
-      return;
-    }
-    if (liveVoice || listening) {
-      const cueId = newCueId();
-      materializeCue(cueId, "Video note", "");
-      updateCue(cueId, "Voice is active. Stop voice before recording a video note.", "error");
-      return;
-    }
-    startVideoNoteMode();
-  }
-
-  function startVideoNoteMode() {
-    videoNotePending = true;
-    safeRuntimeSendMessage({ cmd: "videoSessionStart" }).then((res) => {
-      videoNotePending = false;
-      if (!res && isExtensionContextInvalidated()) return;
-      if (!res?.ok) {
-        const cueId = newCueId();
-        materializeCue(cueId, "Video note", "");
-        updateCue(cueId, res?.error || "Could not start the video note.", "error");
-        return;
-      }
-      setVideoNoteState(true);
-    }).catch((error) => {
-      videoNotePending = false;
-      const cueId = newCueId();
-      materializeCue(cueId, "Video note", "");
-      updateCue(cueId, String(error?.message || error), "error");
-    });
-  }
-
-  function stopVideoNoteMode() {
-    videoNotePending = true;
-    setVideoNoteState(false);
-    const cueId = newCueId();
-    materializeCue(cueId, "Video note", "storing...");
-    safeRuntimeSendMessage({ cmd: "videoSessionStop", cueId }).then((res) => {
-      videoNotePending = false;
-      if (!res && isExtensionContextInvalidated()) return;
-      if (res?.stored) {
-        // The reply arrives on this same cue as progress/done messages.
-        updateCue(cueId, "video stored — sending to A.G. ...", "running");
-        return;
-      }
-      updateCue(cueId, res?.error || "Video note upload failed.", "error");
-      reactLauncher("error");
-    }).catch((error) => {
-      videoNotePending = false;
-      updateCue(cueId, String(error?.message || error), "error");
-      reactLauncher("error");
-    });
-  }
-  // ---- End video note mode -------------------------------------------------
 
   function clearVoiceHotkeyHoldTimer() {
     if (!voiceHotkeyHoldTimer) return;
@@ -3673,7 +3535,7 @@
       case "videoNoteAutoStop":
         // Chrome's "Stop sharing" bar or the length cap ended the capture:
         // finish the note exactly like a stop press.
-        if (videoNoteActive) stopVideoNoteMode();
+        if (isVideoNoteActive()) stopVideoNoteMode();
         return false;
       case "agentRevoked":
         handleAgentRevoked(msg);

@@ -15,6 +15,7 @@ const requiredFiles = [
   "extension/content-companion-policy-runtime.js",
   "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
+  "extension/content-note-controller-runtime.js",
   "extension/content-proactive-controller-runtime.js",
   "extension/content-proactive-observation-runtime.js",
   "extension/content-voice-policy-runtime.js",
@@ -92,6 +93,7 @@ const configSource = readFileSync("extension/config.js", "utf8");
 const contentCompanionPolicySource = readFileSync("extension/content-companion-policy-runtime.js", "utf8");
 const contentContextControlSource = readFileSync("extension/content-context-control-runtime.js", "utf8");
 const contentExtensionApiSource = readFileSync("extension/content-extension-api-runtime.js", "utf8");
+const contentNoteControllerSource = readFileSync("extension/content-note-controller-runtime.js", "utf8");
 const contentProactiveControllerSource = readFileSync("extension/content-proactive-controller-runtime.js", "utf8");
 const contentProactiveObservationSource = readFileSync("extension/content-proactive-observation-runtime.js", "utf8");
 const contentVoicePolicySource = readFileSync("extension/content-voice-policy-runtime.js", "utf8");
@@ -154,7 +156,9 @@ if (
   mainContentScript.js.indexOf("content-proactive-observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-proactive-controller-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-proactive-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-proactive-observation-runtime\.js", "content-proactive-controller-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("content-note-controller-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-note-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-proactive-observation-runtime\.js", "content-proactive-controller-runtime\.js", "content-note-controller-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("content support runtimes must load before content.js in declared and dynamic injection paths");
 }
@@ -213,6 +217,17 @@ if (
   !/AgeeContentProactiveControllerRuntime\.createContentProactiveControllerRuntime\(\{[\s\S]{0,1000}confirmationTimeoutMs:/.test(contentSource)
 ) {
   throw new Error("proactive grant and confirmation lifecycle must stay behind the extracted content controller");
+}
+if (
+  !/function createContentNoteControllerRuntime/.test(contentNoteControllerSource) ||
+  !/function toggleRecordMode/.test(contentNoteControllerSource) ||
+  !/function toggleVideoNoteMode/.test(contentNoteControllerSource) ||
+  !/recordSessionStart/.test(contentNoteControllerSource) ||
+  !/videoSessionStop/.test(contentNoteControllerSource) ||
+  /function (?:toggleRecordMode|startRecordMode|stopRecordMode|toggleVideoNoteMode|startVideoNoteMode|stopVideoNoteMode)\(/.test(contentSource) ||
+  !/AgeeContentNoteControllerRuntime\.createContentNoteControllerRuntime\(\{[\s\S]{0,800}now: \(\) => Date\.now\(\)/.test(contentSource)
+) {
+  throw new Error("audio and video note capture orchestration must stay behind the extracted content controller");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -289,7 +304,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-proactive-observation-runtime\.js", "content-proactive-controller-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-proactive-observation-runtime\.js", "content-proactive-controller-runtime\.js", "content-note-controller-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentProactiveControllerSource) ||
@@ -877,17 +892,17 @@ if (
 ) {
   throw new Error("record cap must be exact: append only the remaining room before stopping capture");
 }
-if (!/function toggleRecordMode\(\)[\s\S]{0,800}liveVoice \|\| listening/.test(contentSource)) {
+if (!/function toggleRecordMode\(\)[\s\S]{0,500}isVoiceActive\(\)/.test(contentNoteControllerSource)) {
   throw new Error("content record toggle must refuse while a voice turn is live or starting in this tab");
 }
 if (
   !/querySelector\("#agee-record"\)/.test(contentSource) ||
-  !/cmd:\s*"recordSessionStart"/.test(contentSource) ||
-  !/cmd:\s*"recordSessionStop"/.test(contentSource) ||
+  !/cmd:\s*"recordSessionStart"/.test(contentNoteControllerSource) ||
+  !/cmd:\s*"recordSessionStop"/.test(contentNoteControllerSource) ||
   !/agee-recording/.test(contentSource) ||
-  !/note stored \(/.test(contentSource)
+  !/note stored \(/.test(contentNoteControllerSource)
 ) {
-  throw new Error("content.js must expose the #agee-record toggle backed by background record handlers and a stored/failed receipt");
+  throw new Error("content note controller must back #agee-record with background handlers and a stored/failed receipt");
 }
 if (
   !/#agee-record\.recording/.test(overlayCssSource) ||
@@ -895,13 +910,7 @@ if (
 ) {
   throw new Error("overlay.css must carry distinct recording visuals for the record control and the mark");
 }
-const recordContentBody = sourceBetween(
-  contentSource,
-  /\/\/ ---- Record mode: raw audio notes/,
-  /\/\/ ---- End record mode/,
-  "content record mode block"
-);
-if (/getUserMedia|new\s+WebSocket|fetch\(|\/v1\/voice\/sessions|session_start/.test(recordContentBody)) {
+if (/getUserMedia|new\s+WebSocket|fetch\(|\/v1\/voice\/sessions|session_start/.test(contentNoteControllerSource)) {
   throw new Error("content record mode must only send runtime messages; no mic, sockets, or gateway fetches in the page");
 }
 
@@ -1163,6 +1172,7 @@ for (const file of [
   "extension/content-companion-policy-runtime.js",
   "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
+  "extension/content-note-controller-runtime.js",
   "extension/content-proactive-controller-runtime.js",
   "extension/content-proactive-observation-runtime.js",
   "extension/content-voice-policy-runtime.js",
