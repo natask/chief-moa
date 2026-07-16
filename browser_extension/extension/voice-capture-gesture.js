@@ -47,13 +47,13 @@
     const active = capturing === true;
     if (count === 1) {
       if (!active) return "start_current";
-      return captureOrigin === "single" ? "commit_current" : "noop";
+      return captureOrigin === "double" ? "commit_new" : "commit_current";
     }
     if (count === 2) {
       if (active && captureOrigin === "double") return "commit_new";
       return active ? "cancel_then_start_new" : "start_new";
     }
-    if (count === 3) return active ? "cancel_then_open_chat" : "open_chat";
+    if (count === 3) return active ? "open_chat_preserve_capture" : "open_chat";
     return "noop";
   }
 

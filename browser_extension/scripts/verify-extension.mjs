@@ -110,6 +110,7 @@ const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
 const optionsRecoverySource = readFileSync("extension/options-recovery.js", "utf8");
 const sidepanelHtmlSource = readFileSync("extension/sidepanel.html", "utf8");
+const sidepanelSource = readFileSync("extension/sidepanel.js", "utf8");
 const coverageSource = readFileSync("scripts/coverage-extension.mjs", "utf8");
 const extensionSmokeSource = readFileSync("scripts/smoke-extension.mjs", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "userScripts"];
@@ -162,7 +163,7 @@ if (
   mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("document-context.js") < 0 ||
   mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "document-context\.js", "content\.js"\]/.test(backgroundSource)
+  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "document-context\.js", "voice-capture-gesture\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("steering-ui.js and document-context.js must load before content.js");
 }
@@ -494,7 +495,6 @@ if (
 ) {
   throw new Error("background.js must bridge the side panel: PANEL_TAB_ID routing in send(), the agee-panel port, and a synchronous sidePanel.open from the action click and open-agee-panel command");
 }
-const sidepanelSource = readFileSync("extension/sidepanel.js", "utf8");
 const browserAgentRoleRuntimeSource = readFileSync("extension/browser-agent-role-runtime.js", "utf8");
 const steeringUiSource = readFileSync("extension/steering-ui.js", "utf8");
 if (
@@ -1050,16 +1050,15 @@ const voiceFirstTapBody = sourceBetween(
   contentSource,
   /function handleVoiceFirstTap\(/,
   /function armVoiceFirstChainReset\(/,
-  "voice-first tap chain"
+  "canonical mark tap chain"
 );
 if (
-  !/armVoiceFirstChainReset\(\(\) => resolveVoiceFirstTapChain\(chain\)\)/.test(voiceFirstTapBody) ||
+  !/resolveVoiceFirstTapChain/.test(voiceFirstTapBody) ||
+  !/AgeeVoiceCaptureGesture\.resolveVoiceFirstTransition/.test(contentSource) ||
   !/function toggleVoiceFirstCapture\(/.test(contentSource) ||
   !/function toggleFreshThreadVoiceCapture\(/.test(contentSource) ||
-  !/voiceFirstCaptureOrigin !== origin[\s\S]{0,40}return "noop"/.test(contentSource) ||
-  !/voiceFirstCaptureOrigin === "double"/.test(contentSource) ||
   !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
-  !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}openTextSurface/.test(contentSource)
+  !/open_chat_preserve_capture[\s\S]{0,220}openTextSurface/.test(contentSource)
 ) {
   throw new Error("mark gestures must defer collision-safe single/double/triple actions and support either stop gesture");
 }
@@ -1109,22 +1108,8 @@ const startLauncherDragBody = sourceBetween(
   /function moveLauncherDrag\(/,
   "launcher pointerdown handler"
 );
-if (!/isLauncherSecondTap\(e\)[\s\S]{0,140}scheduleLauncherDoubleClickHold\(e\)/.test(startLauncherDragBody)) {
-  throw new Error("launcher voice must require a double-click-and-hold, not a first-press hold");
-}
-
-const launcherDoubleClickHoldBody = sourceBetween(
-  contentSource,
-  /function scheduleLauncherDoubleClickHold\(/,
-  /function cancelLauncherDoubleClickHold\(/,
-  "launcher double-click-hold handler"
-);
-if (
-  !/beginManualVoiceGesture\(\)/.test(launcherDoubleClickHoldBody) ||
-  !/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) ||
-  !/holdToTalkActive = true/.test(launcherDoubleClickHoldBody)
-) {
-  throw new Error("double-click-and-hold must start recording on the second press and use the hold threshold only to decide release-to-commit");
+if (!/beginVoiceFirstPress\(e\)/.test(startLauncherDragBody)) {
+  throw new Error("launcher pointerdown must always enter the canonical voice gesture machine");
 }
 
 if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {

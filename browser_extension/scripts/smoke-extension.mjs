@@ -1419,6 +1419,7 @@ async function main() {
             "steering-ui.js",
             "browser-command-transcript-runtime.js",
             "document-context.js",
+            "voice-capture-gesture.js",
             "content.js",
           ],
         });

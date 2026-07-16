@@ -75,13 +75,9 @@
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
-  // Voice-first gesture experiment (off by default). When the flag is on the
-  // mark remaps to: single click = current-thread capture toggle, still hold =
-  // push-to-talk, double-click = fresh-thread capture toggle, and triple-click
-  // = text chat. Flag off keeps the legacy contract untouched.
-  const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
+  // Canonical mark contract: single click toggles current-thread capture,
+  // double click starts/stops fresh-thread capture, and triple click opens chat.
   const VOICE_FIRST_HOLD_MS = 260;
-  let voiceFirstGestures = false;
   let voiceFirstHoldTimer = null;
   let voiceFirstTapChain = null;
   let voiceFirstHoldStartedTurn = false;
@@ -387,20 +383,14 @@
     restoreLauncherPosition();
     restoreMascotScale();
     restoreUiChimePreference();
-    restoreVoiceFirstGestures();
+    applyGestureModeHints();
     loadAvatarBehaviorRuntime();
     loadUiSpec();
     loadActiveCompanionPet();
     loadLanguageChip();
     AgeeSteeringUi.observePageIdentity({ element: pageIdentityEl, document, location, window });
-    // Launcher gestures intentionally match the Android orb:
-    //   single click            -> chat menu
-    //   first press + movement  -> drag the mark
-    //   double-click and hold   -> manual push-to-talk
-    // With the voice-first flag on (ageeVoiceFirstGesturesEnabled) the map
-    // becomes: single click -> current-thread voice toggle, still hold ->
-    // push-to-talk, double-click -> fresh-thread voice toggle, triple-click ->
-    // text chat.
+    // Single click toggles current-thread capture, double-click starts or stops
+    // fresh-thread capture, triple-click opens chat, and a still hold is PTT.
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -619,22 +609,9 @@
       top: rect.top,
       moved: false,
     };
-    if (voiceFirstGestures) {
-      cancelLauncherTap();
-      doubleClickHoldPending = false;
-      launcherSecondTapAction = null;
-      beginVoiceFirstPress(e);
-    } else if (isLauncherSecondTap(e)) {
-      cancelLauncherTap();
-      scheduleLauncherDoubleClickHold(e);
-    } else {
-      cancelLauncherTap();
-      doubleClickHoldPending = false;
-      holdToTalkActive = false;
-      holdToTalkPointerId = null;
-      launcherSecondTapAction = null;
-    }
-    launcher.setPointerCapture(e.pointerId);
+    launcherSecondTapAction = null;
+    beginVoiceFirstPress(e);
+    try { launcher.setPointerCapture(e.pointerId); } catch {}
     launcher.addEventListener("pointermove", moveLauncherDrag);
     launcher.addEventListener("pointerup", stopLauncherDrag);
     launcher.addEventListener("pointercancel", stopLauncherDrag);
@@ -643,7 +620,6 @@
   function moveLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
     if (holdToTalkActive && e.pointerId === holdToTalkPointerId) {
-      if (!voiceFirstGestures) return;
       // Voice-first escape hatch: a large move during push-to-talk turns the
       // gesture into a drag (hold-then-move muscle memory). Cancel only a
       // capture the hold itself started; a hold riding an existing talk-mode
@@ -661,7 +637,6 @@
     const dy = e.clientY - dragState.startY;
     if (Math.abs(dx) + Math.abs(dy) > LAUNCHER_DRAG_SLOP) {
       dragState.moved = true;
-      cancelLauncherDoubleClickHold({ cancelStartedVoice: true });
       clearVoiceFirstHoldTimer();
     }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
@@ -670,25 +645,18 @@
   function stopLauncherDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
     const wasHoldToTalk = holdToTalkActive && e.pointerId === holdToTalkPointerId;
-    const wasPendingDoubleClickHold = doubleClickHoldPending && e.pointerId === holdToTalkPointerId;
     const moved = dragState.moved;
     const chainCount = dragState.chainCount || 0;
     const downMs = e.timeStamp - dragState.startTime;
     dragState = null;
-    launcher.releasePointerCapture(e.pointerId);
+    try { launcher.releasePointerCapture(e.pointerId); } catch {}
     launcher.removeEventListener("pointermove", moveLauncherDrag);
     launcher.removeEventListener("pointerup", stopLauncherDrag);
     launcher.removeEventListener("pointercancel", stopLauncherDrag);
-    cancelLauncherDoubleClickHold({ cancelStartedVoice: e.type === "pointercancel" });
     clearVoiceFirstHoldTimer();
     if (wasHoldToTalk) {
       finishLauncherPushToTalk();
       resetVoiceFirstTapChain();
-      return;
-    }
-    if (!voiceFirstGestures && wasPendingDoubleClickHold) {
-      // The second press already started or stopped voice. A quick release
-      // keeps that toggle state; a held release commits in the hold branch.
       return;
     }
     if (moved) {
@@ -697,11 +665,7 @@
       return;
     }
     if (e.type === "pointercancel" || downMs > LAUNCHER_TAP_MAX_MS) return;
-    if (voiceFirstGestures) {
-      handleVoiceFirstTap(e, chainCount);
-      return;
-    }
-    scheduleLauncherTap(e);
+    handleVoiceFirstTap(e, chainCount);
   }
 
   function isLauncherSecondTap(e) {
@@ -884,17 +848,20 @@
 
   function resolveVoiceFirstTapChain(chain) {
     if (!chain) return;
-    if (chain.count === 1) {
+    const transition = AgeeVoiceCaptureGesture.resolveVoiceFirstTransition({
+      tapCount: chain.count,
+      capturing: voiceFirstCaptureActive(),
+      captureOrigin: voiceFirstCaptureOrigin,
+    });
+    if (transition === "start_current" || transition === "commit_current" || transition === "commit_new") {
       toggleVoiceFirstCapture("single");
       return;
     }
-    if (chain.count === 2) {
+    if (transition === "start_new" || transition === "cancel_then_start_new") {
       toggleFreshThreadVoiceCapture();
       return;
     }
-    if (chain.count === 3) {
-      // Chat must never inherit a hot microphone or commit a pending capture.
-      if (liveVoice && listening) cancelTalkMode();
+    if (transition === "open_chat" || transition === "open_chat_preserve_capture") {
       openTextSurface({ fresh: false });
     }
   }
@@ -910,8 +877,7 @@
       boundaryId: `steer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}` };
     if (origin === "single") beginCurrentThreadSteeringCapture(replacement);
     else {
-      if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel", replacement);
-      stopSpeaking();
+      parkPriorVoiceForSeparateCapture();
     }
     if (freshThread) {
       armNewThread();
@@ -929,11 +895,17 @@
     return "on";
   }
 
+  function parkPriorVoiceForSeparateCapture() {
+    for (const state of liveVoiceStates) {
+      if (state.committed !== true) continue;
+      state.assistantSpeechSuppressed = true;
+      stopLivePlayback(state);
+    }
+    stopSpeaking();
+  }
+
   function toggleVoiceFirstCapture(origin) {
     if (voiceFirstCaptureActive()) {
-      // Capture toggles are provenance-matched. A single click cannot send a
-      // fresh-thread turn that was intentionally started with a double-click.
-      if (voiceFirstCaptureOrigin !== origin) return "noop";
       voiceFirstCaptureOrigin = null;
       commitLiveVoiceTurn();
       syncTalkModeUi();
@@ -966,21 +938,10 @@
     if (root) root.classList.toggle("agee-talk", conversationActive === true);
   }
 
-  function restoreVoiceFirstGestures() {
-    safeStorageLocalGet({ [VOICE_FIRST_GESTURES_KEY]: false })
-      .then((stored) => {
-        voiceFirstGestures = stored[VOICE_FIRST_GESTURES_KEY] === true;
-        applyGestureModeHints();
-      })
-      .catch(() => {});
-  }
-
   function applyGestureModeHints() {
-    if (root) root.classList.toggle("agee-voice-first", voiceFirstGestures === true);
+    if (root) root.classList.add("agee-voice-first");
     if (launcher) {
-      launcher.dataset.ageeTip = voiceFirstGestures
-        ? "Click to start or stop; hold to talk; double-click for a new thread; triple-click for chat"
-        : "Click to type, drag to move, scroll to resize, hold to talk";
+      launcher.dataset.ageeTip = "Click to start or stop; hold to talk; double-click for a new thread; triple-click for chat";
     }
     syncTalkModeUi();
   }
@@ -3909,12 +3870,6 @@
           }
           if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
             configure().catch(() => {});
-          }
-          if (changes[VOICE_FIRST_GESTURES_KEY]) {
-            voiceFirstGestures = changes[VOICE_FIRST_GESTURES_KEY].newValue === true;
-            resetVoiceFirstTapChain();
-            clearVoiceFirstHoldTimer();
-            applyGestureModeHints();
           }
         });
       } catch (error) {
