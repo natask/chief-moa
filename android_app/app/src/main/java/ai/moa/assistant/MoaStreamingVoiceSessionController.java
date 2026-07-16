@@ -15,8 +15,6 @@ final class MoaStreamingVoiceSessionController {
     static final long DRAFT_READY_TIMEOUT_MS = 10000;
     static final long DRAFT_CONTROL_ACK_TIMEOUT_MS = 6000;
 
-    private static final long AUTO_COMMIT_MIN_RECORDING_MS = 650;
-    private static final long AUTO_COMMIT_SILENCE_MS = 700;
     // NOT a product limit on how long the user may speak. Audio is streamed to
     // the gateway frame-by-frame, so an utterance can run indefinitely. Once
     // speech has been heard, the turn ends on the silence VAD above; this 30-min
@@ -69,7 +67,7 @@ final class MoaStreamingVoiceSessionController {
 
         void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
 
-        void onSessionClosed();
+        void onSessionClosed(MoaVoiceSessionTermination termination);
 
         void onError(String message, Throwable error);
     }
@@ -312,7 +310,7 @@ final class MoaStreamingVoiceSessionController {
             }
             socket.close();
         }
-        post(() -> callback.onSessionClosed());
+        post(() -> callback.onSessionClosed(MoaVoiceSessionTermination.localCancel()));
     }
 
     /** Cancel immediately while persisting the identity of the replacement turn. */
@@ -601,9 +599,10 @@ final class MoaStreamingVoiceSessionController {
             long now = SystemClock.elapsedRealtime();
             long recordingAge = now - recordingStartedAtMs;
             boolean heardSpeech = lastVoiceActivityAtMs > 0;
-            boolean silentAfterSpeech = heardSpeech
-                    && recordingAge >= AUTO_COMMIT_MIN_RECORDING_MS
-                    && now - lastVoiceActivityAtMs >= AUTO_COMMIT_SILENCE_MS;
+            boolean silentAfterSpeech = MoaVoiceEndpointingPolicy.shouldCommit(
+                    recordingAge,
+                    heardSpeech ? now - lastVoiceActivityAtMs : 0,
+                    heardSpeech);
             boolean backstopReached = recordingAge >= AUTO_COMMIT_STUCK_VAD_BACKSTOP_MS;
             boolean noSpeechTimedOut = !heardSpeech && recordingAge >= AUTO_COMMIT_NO_SPEECH_TIMEOUT_MS;
             shouldCommit = silentAfterSpeech || (heardSpeech && backstopReached);
@@ -771,7 +770,8 @@ final class MoaStreamingVoiceSessionController {
             mainHandler.removeCallbacks(autoCommitCheck);
             mainHandler.removeCallbacks(pendingCommitTimeout);
             if (wasActive) {
-                post(() -> callback.onSessionClosed());
+                post(() -> callback.onSessionClosed(
+                        MoaVoiceSessionTermination.remoteClose(code, reason)));
             }
         }
 

@@ -114,10 +114,15 @@ voice turn as a reversible draft rather than an implicit submission.
 - **THEN** Android cancels capture and discards the draft locally
 - **AND** submits no voice turn
 
-#### Scenario: Orb tap cannot silently send
+#### Scenario: Orb tap sends through the shared commit path
 - **WHEN** a tap-started draft is active and the user taps the orb again
-- **THEN** Android does not commit the draft
-- **AND** the visible `X` and `↑` controls remain the disposition authority
+- **THEN** Android commits the draft exactly once
+- **AND** the visible `X` and `↑` controls remain available until commit begins
+
+#### Scenario: Natural silence also sends
+- **WHEN** speech has been heard and the user pauses for the endpointing window
+- **THEN** Android commits the same draft exactly once
+- **AND** the endpointing window is longer than the previous 700 ms threshold
 
 ### Requirement: Orb-Anchored Mobile Surface
 The Android overlay SHALL keep at most one large interactive card visible and

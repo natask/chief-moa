@@ -2,37 +2,33 @@
 
 ## Status
 
-The manual gesture contract below was authorized on 2026-07-15 and is
-implemented for Android and the browser extension behind their existing
-voice-first settings. The earlier review-before-send `X — orb/mascot — Send`
-contract is superseded and its side controls have been removed.
+The current-thread gesture contract below supersedes the 2026-07-15 fresh-thread
+double-click mapping. Android implements it behind the existing voice-first
+setting; browser convergence remains a separate implementation lane.
 
 ## Why
 
 The orb/mascot should be a dependable microphone control with the same muscle
-memory on phone and browser. Capture starts and ends only through an explicit
-user gesture. Silence detection must not decide when a normal manual turn ends,
-and a hidden multi-click collision must never send or leak a pending capture.
+memory on phone and browser. Multi-click resolution must never replace a durable
+thread or leak a pending capture, and all automatic/manual send paths must be
+idempotent.
 
 ## Accepted Contract
 
-- Single click toggles a manual capture in the current thread. The first click
-  starts capture (and may interrupt current assistant speech); the next single
-  click stops and sends it once.
+- Single click starts capture in the current thread; during capture it sends once.
 - A still click-and-hold is push-to-talk in that same thread. Capture starts
   after the hold threshold and release stops and sends it once. Movement before
   the threshold remains a drag; a large movement after capture begins cancels
   capture and escapes into drag.
-- Double-click toggles a manual capture in a fresh thread. The first double-click
-  starts with `context_action:"new"`; the next double-click stops and sends that
-  fresh-thread capture. If current-thread capture was active, the first
-  double-click cancels it without sending before starting fresh.
-- Triple-click cancels any pending capture without sending and opens chat.
+- Double-click starts/continues the current durable thread and never issues a
+  fresh-thread action or replaces an active capture.
+- Triple-click hard-interrupts active capture/playback/response without erasing
+  prior transcript history.
 - Fourth click and beyond do nothing.
 - Drag repositions the mark and its open card. The Android removal target and
   explicit Hide actions retain their existing behavior.
-- No separate X/Send draft controls own disposition. The gesture that started
-  capture, hold release, or triple-click is the authority.
+- Tap drafts retain native X/Send alternatives. Orb tap, Send, and natural
+  post-speech silence converge on the same idempotent commit; X cancels locally.
 
 The mapping is identical across Android and the browser extension. Keyboard
 shortcuts retain their existing meanings.
@@ -72,10 +68,13 @@ for reliable system-wide insertion, and the browser must never infer submit.
 
 - Android and the browser extension own gesture detection and local UI state.
 - The gateway owns delivery-mode admission and provider routing.
-- Chat remains reachable by triple-click.
+- Chat remains reachable from the normal chat surface; triple-click is reserved
+  for hard interruption.
 - This unit does not add conversational mode switching,
   `capture_block`, notebook/IME, video routing, or automatic agent dispatch.
-- Model output, screen context, and silence cannot change capture disposition.
+- Model output and screen context cannot change capture disposition.
+- Concurrent capture while prior response audio continues requires a split
+  Android controller and gateway causal queue and is not claimed by this unit.
 
 ## Verification
 

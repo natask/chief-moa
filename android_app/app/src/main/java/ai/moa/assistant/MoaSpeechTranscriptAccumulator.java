@@ -20,6 +20,16 @@ final class MoaSpeechTranscriptAccumulator {
         return transcript;
     }
 
+    String updateCumulative(String nextText) {
+        transcript = normalizeSpaces(nextText);
+        return transcript;
+    }
+
+    String finalizeExact(String finalText) {
+        transcript = normalizeSpaces(finalText);
+        return transcript;
+    }
+
     static String merge(String current, String addition) {
         String left = normalizeSpaces(current);
         String right = normalizeSpaces(addition);

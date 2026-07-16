@@ -10,26 +10,18 @@ final class MoaOrbTouchActionDispatcher {
             List<MoaVoiceFirstTapResolver.Action> actions,
             Runnable onStartTalkLoop,
             Runnable onSendTalkLoop,
-            Runnable onCancelTalkLoop,
-            Runnable onStartFreshTalkLoop,
-            Runnable onOpenChat
+            Runnable onHardInterrupt
     ) {
         for (MoaVoiceFirstTapResolver.Action action : actions) {
             switch (action) {
-                case START_OR_INTERRUPT:
+                case START_OR_CONTINUE:
                     onStartTalkLoop.run();
                     break;
                 case STOP_AND_SEND:
                     onSendTalkLoop.run();
                     break;
-                case CANCEL_CAPTURE:
-                    onCancelTalkLoop.run();
-                    break;
-                case START_FRESH:
-                    onStartFreshTalkLoop.run();
-                    break;
-                case OPEN_CHAT:
-                    onOpenChat.run();
+                case HARD_INTERRUPT:
+                    onHardInterrupt.run();
                     break;
                 default:
                     break;
