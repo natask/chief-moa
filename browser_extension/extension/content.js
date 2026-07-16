@@ -139,6 +139,12 @@
     decodeBase64: (value) => atob(value),
     ByteArray: Uint8Array,
   });
+  const {
+    consumeContextControls,
+    maybeHandleContextSlashCommand,
+  } = window.AgeeContentContextControlRuntime.createContentContextControlRuntime({
+    onModeCue: showContextModeCue,
+  });
   const COMPANION_PET_COLORS = {
     graphite: ["#555a62", "#262a30"],
     green: ["#208553", "#0f5534"],
@@ -187,63 +193,6 @@
   const cues = new Map();
   const activeCues = new Set();
   const revokedCueIds = new Set();
-
-  // Client thread controls. "/new [label]" arms a one-shot fresh thread for the
-  // next turn; "/incognito" toggles a persistent no-persistence mode. The
-  // explicit client control always wins over the model's own context choice.
-  let incognitoMode = false;
-  let newThreadArmed = false;
-  let newThreadLabel = "";
-
-  // Parse a typed context slash command. Returns true when the input was a mode
-  // command (and was handled + shown in the result stack) so the caller skips
-  // the normal gateway turn.
-  function maybeHandleContextSlashCommand(instruction) {
-    const raw = String(instruction || "").trim();
-    if (!raw.startsWith("/")) return false;
-    const match = raw.match(/^\/(\w+)\s*(.*)$/);
-    if (!match) return false;
-    const command = match[1].toLowerCase();
-    const rest = String(match[2] || "").trim();
-    if (command === "incognito") {
-      const arg = rest.toLowerCase();
-      if (arg === "on") incognitoMode = true;
-      else if (arg === "off") incognitoMode = false;
-      else incognitoMode = !incognitoMode;
-      showContextModeCue(
-        "/incognito",
-        incognitoMode
-          ? "Incognito on. Turns are answered but not saved."
-          : "Incognito off. Turns are saved again."
-      );
-      return true;
-    }
-    if (command === "new") {
-      newThreadArmed = true;
-      newThreadLabel = rest.slice(0, 120);
-      showContextModeCue(
-        raw,
-        newThreadLabel
-          ? `New thread armed ("${newThreadLabel}"). The next turn starts fresh.`
-          : "New thread armed. The next turn starts fresh."
-      );
-      return true;
-    }
-    return false;
-  }
-
-  // Resolve and consume the context control for the turn about to be sent.
-  // Incognito is persistent; the new-thread arm is one-shot.
-  function consumeContextControls() {
-    if (incognitoMode) return { action: "incognito", label: "" };
-    if (newThreadArmed) {
-      const label = newThreadLabel;
-      newThreadArmed = false;
-      newThreadLabel = "";
-      return { action: "new", label };
-    }
-    return { action: "", label: "" };
-  }
 
   function showContextModeCue(label, statusText) {
     const cueId = newCueId();

@@ -13,6 +13,7 @@ const requiredFiles = [
   "extension/browser-context-adapter.js",
   "extension/config.js",
   "extension/content-companion-policy-runtime.js",
+  "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
@@ -87,6 +88,7 @@ const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentCompanionPolicySource = readFileSync("extension/content-companion-policy-runtime.js", "utf8");
+const contentContextControlSource = readFileSync("extension/content-context-control-runtime.js", "utf8");
 const contentExtensionApiSource = readFileSync("extension/content-extension-api-runtime.js", "utf8");
 const contentVoicePolicySource = readFileSync("extension/content-voice-policy-runtime.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
@@ -142,9 +144,11 @@ if (
   mainContentScript.js.indexOf("content-companion-policy-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-extension-api-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-extension-api-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("content-context-control-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-context-control-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
-  throw new Error("page observation, voice policy, companion policy, and extension API runtimes must load before content.js in declared and dynamic injection paths");
+  throw new Error("page observation, voice policy, companion policy, extension API, and context-control runtimes must load before content.js in declared and dynamic injection paths");
 }
 if (
   !/AgeeContentCompanionPolicyRuntime/.test(contentCompanionPolicySource) ||
@@ -170,6 +174,15 @@ if (
   !/AgeeContentExtensionApiRuntime\.createContentExtensionApiRuntime\(\{[\s\S]{0,240}getChrome:[\s\S]{0,160}decodeBase64:[\s\S]{0,120}ByteArray: Uint8Array/.test(contentSource)
 ) {
   throw new Error("content extension API calls must stay behind the extracted stale-context safety runtime");
+}
+if (
+  !/function createContentContextControlRuntime/.test(contentContextControlSource) ||
+  !/function maybeHandleContextSlashCommand/.test(contentContextControlSource) ||
+  !/function consumeContextControls/.test(contentContextControlSource) ||
+  /function (?:maybeHandleContextSlashCommand|consumeContextControls)\(/.test(contentSource) ||
+  !/AgeeContentContextControlRuntime\.createContentContextControlRuntime\(\{[\s\S]{0,120}onModeCue: showContextModeCue/.test(contentSource)
+) {
+  throw new Error("content thread and incognito controls must stay behind the extracted context-control runtime");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -245,7 +258,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
@@ -1117,6 +1130,7 @@ for (const file of [
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content-companion-policy-runtime.js",
+  "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
