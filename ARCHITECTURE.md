@@ -282,21 +282,22 @@ the manual push-to-talk path. Recording starts only after the second press is
 held briefly, and release commits the turn without waiting for silence
 detection. Continuous voice is an optional secondary loop for launch paths that
 do not have a release event, where silence commits each turn and the mic re-arms
-after the reply. The browser extension
-mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
-Cmd+. (Ctrl+.) mirrors the browser mark's double-click voice path. A quick
-Cmd+. tap, or a quick mark double-click, toggles a manual voice turn on; the
-next quick Cmd+. tap or double-click commits it. Holding Cmd+. or holding the
-second mark click uses push-to-talk: capture starts immediately, browser
-silence auto-commit is disabled, and release commits the turn without re-arming
-the mic. The browser mark's single click opens the chat menu, and first-press
-hold with movement only repositions the mark. Browser voice can opt a session
+after the reply. In the browser, Cmd+, (Ctrl+,) opens the text intent field and
+Cmd+. (Ctrl+.) toggles a manual voice turn; holding Cmd+. uses push-to-talk.
+Browser voice can opt a session
 into background assistant speech, where starting a new spoken turn opens a new
 gateway voice turn without stopping already queued assistant audio.
 
-An experimental voice-first gesture mode (off by default; browser flag
-`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
-the primary surface toward voice. Android uses the reviewable v4 contract:
+The browser mark gesture is canonical, not optional: one click starts a manual
+current-thread capture and the next single click stops and sends it exactly
+once. Double-click starts a fresh-thread capture without cancelling the
+foreground provider turn: the client suppresses prior playback while its text
+and generation continue. Either a single click or another double-click stops
+and sends that fresh capture. Triple-click opens chat without cancelling active
+work, and a still hold remains push-to-talk. Microphone failures stay visible in
+the current surface rather than opening Options automatically.
+
+Android uses the reviewable v4 contract behind its `voice_first_gestures` preference:
 Single click starts a draft with visible `X — orb — ↑` controls (discard and the
 single Send action); later orb taps never commit it. Those controls are separate
 overlay windows beside the orb, so the transcript card above or below the orb is
@@ -308,9 +309,7 @@ confirms cancels capture and escapes into a drag). The one open chat/transcript
 card follows the orb and flips wholly above or below it. Dragging into the
 bottom removal target, or choosing Hide in the chat header/foreground
 notification, stops the overlay service and removes all overlay windows. The
-flag off keeps Android's legacy gesture contract. The browser flag uses the
-same `X — mascot — ↑` draft controls and explicit-send rule; its flag-off mapping
-and keyboard shortcuts remain unchanged. Contract:
+flag off keeps Android's legacy gesture contract. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface stays small: it shows the current intent/result and compact

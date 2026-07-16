@@ -38,6 +38,19 @@ assertEqual(gesture.resolveTapAction({ tapCount: 4, listening: false, conversati
 assertEqual(gesture.resolveTapAction({ tapCount: 1, listening: false, conversationActive: true }), "toggle_send", "active conversation sends");
 assertEqual(gesture.resolveTapAction({ tapCount: 0, listening: false, conversationActive: false }), "toggle_voice", "missing count defaults");
 
+for (const [input, expected, label] of [
+  [{ tapCount: 1, capturing: false }, "start_current", "single starts current capture"],
+  [{ tapCount: 1, capturing: true, captureOrigin: "single" }, "commit_current", "single stops current capture"],
+  [{ tapCount: 1, capturing: true, captureOrigin: "double" }, "commit_new", "single stops fresh capture"],
+  [{ tapCount: 2, capturing: false }, "start_new", "double starts fresh capture"],
+  [{ tapCount: 2, capturing: true, captureOrigin: "double" }, "commit_new", "double stops fresh capture"],
+  [{ tapCount: 2, capturing: true, captureOrigin: "single" }, "cancel_then_start_new", "double switches to fresh capture"],
+  [{ tapCount: 3, capturing: true, captureOrigin: "double" }, "open_chat_preserve_capture", "triple preserves capture"],
+  [{ tapCount: 4, capturing: true, captureOrigin: "single" }, "noop", "fourth click is inert"],
+]) {
+  assertEqual(gesture.resolveVoiceFirstTransition(input), expected, label);
+}
+
 const mutableAdmission = { voiceFirstEnabled: true, draftControlsEnabled: true };
 const latchedAdmission = gesture.latchAdmission(mutableAdmission);
 mutableAdmission.voiceFirstEnabled = false;

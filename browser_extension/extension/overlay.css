@@ -90,49 +90,6 @@
   transition: transform 0.2s ease;
 }
 
-/* Reviewable voice draft: disposition belongs beside the mascot, never in the
-   transcript panel above or below it. JS keeps the full X—mascot—Send chord in
-   the viewport while the mascot moves or resizes. */
-#agee-root .agee-draft-control {
-  appearance: none;
-  position: absolute;
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  background: rgba(29, 30, 34, 0.96);
-  color: var(--agee-ink);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
-  cursor: pointer;
-  font-size: 26px;
-  font-weight: 700;
-  line-height: 1;
-  padding: 0 0 2px;
-  pointer-events: auto;
-  touch-action: manipulation;
-}
-#agee-root .agee-draft-control[hidden] {
-  display: none;
-}
-#agee-root .agee-draft-control:hover {
-  background: rgba(49, 50, 55, 0.98);
-  transform: translateY(-1px);
-}
-#agee-root .agee-draft-control:focus-visible {
-  outline: 2px solid var(--agee-gold);
-  outline-offset: 3px;
-}
-#agee-root .agee-draft-control.agee-draft-send {
-  border-color: rgba(255, 255, 255, 0.32);
-  background: var(--agee-gold);
-  color: #17140b;
-  font-size: 27px;
-}
-#agee-root .agee-draft-control.agee-draft-send:hover {
-  background: #ffe28e;
-}
 /* The lion breathes: a single combined transform (scale + bob) so the
    animation stays compositor-only. */
 #agee-launcher .agee-bird {

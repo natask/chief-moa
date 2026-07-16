@@ -66,25 +66,6 @@ if (livekitVoiceEl) {
   });
 }
 
-// Experimental voice-first mark gestures flag (off by default). Read live by
-// content.js: single click = reviewable draft with side controls, hold =
-// push-to-talk, double-click = text surface. Off keeps the legacy gesture map.
-const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
-const voiceFirstGesturesEl = document.getElementById("voiceFirstGestures");
-const voiceFirstGesturesStatusEl = document.getElementById("voiceFirstGesturesStatus");
-if (voiceFirstGesturesEl) {
-  chrome.storage.local.get({ [VOICE_FIRST_GESTURES_KEY]: false }).then((stored) => {
-    voiceFirstGesturesEl.checked = stored[VOICE_FIRST_GESTURES_KEY] === true;
-  });
-  voiceFirstGesturesEl.addEventListener("change", async () => {
-    await chrome.storage.local.set({ [VOICE_FIRST_GESTURES_KEY]: voiceFirstGesturesEl.checked === true });
-    if (voiceFirstGesturesStatusEl) {
-      voiceFirstGesturesStatusEl.textContent = voiceFirstGesturesEl.checked ? "On (experimental)" : "Off";
-      voiceFirstGesturesStatusEl.style.color = "#777";
-    }
-  });
-}
-
 // Background automation is off by default and version-consented. Read by background.js before it
 // claims any gateway-queued browser work: it gates BOTH the legacy
 // pollBrowserTasks() batch path and the new pollBrowserAgentTasks() agent-loop.

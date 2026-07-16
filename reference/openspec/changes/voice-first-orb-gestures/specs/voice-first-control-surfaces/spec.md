@@ -34,23 +34,28 @@ for chat and double-click-and-hold for voice.
 - **THEN** a single tap opens chat
 - **AND** double-click-and-hold remains the voice capture gesture
 
-### Requirement: Browser voice-first drafts match Android disposition controls
-The browser extension SHALL, when `ageeVoiceFirstGesturesEnabled` is enabled,
-start a reviewable voice draft whose cancel and Send controls flank the mascot
-and remain independent of the text/result panel.
+### Requirement: Browser mark gestures directly control canonical capture
+The browser extension SHALL always map single, double, triple, and hold gestures
+to one canonical capture contract without a user-visible gesture setting.
 
-#### Scenario: Browser click starts a reviewable draft
-- **WHEN** the browser voice-first flag is enabled and the user clicks the idle mascot
-- **THEN** the browser starts a non-auto-committing voice draft
-- **AND** shows `X` to the mascot's left and `↑` to its right
+#### Scenario: Single click toggles current-thread capture
+- **WHEN** the user single-clicks the idle mascot
+- **THEN** the browser starts a non-auto-committing current-thread capture
+- **WHEN** the user single-clicks again
+- **THEN** the browser stops and sends that capture exactly once
 
-#### Scenario: Browser mascot cannot silently send
-- **WHEN** a browser voice draft is active and the user clicks the mascot again
-- **THEN** the draft remains active
-- **AND** no commit is sent
+#### Scenario: Either click stops fresh-thread capture
+- **WHEN** the user double-clicks the idle mascot
+- **THEN** the browser starts a fresh-thread capture while prior generation may continue
+- **WHEN** the user then single-clicks or double-clicks
+- **THEN** the browser stops and sends the fresh-thread capture exactly once
 
-#### Scenario: Browser side controls own disposition
-- **WHEN** the user clicks `X`
-- **THEN** the browser cancels and discards the draft locally
-- **WHEN** the user instead clicks `↑`
-- **THEN** the browser commits that voice turn exactly once
+#### Scenario: Triple click opens chat without cancelling work
+- **WHEN** the user triple-clicks the mascot
+- **THEN** the browser opens chat
+- **AND** does not cancel an active capture or provider generation
+
+#### Scenario: Microphone failure stays in place
+- **WHEN** extension-owned microphone capture fails
+- **THEN** the browser reports the failure in the current surface
+- **AND** does not open Options automatically

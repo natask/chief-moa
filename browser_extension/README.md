@@ -103,19 +103,16 @@ Voice uses an extension offscreen document for microphone capture, so websites
 do not need per-site microphone approval for A.G. turns. Capture starts before
 the gateway has finished opening the voice session; early PCM chunks queue until
 `session_ready`, then flush in order before any commit so the first syllables are
-preserved. Cmd/Ctrl+. and the Moa mark's legacy double-click share one voice contract:
-quick tap/double-click toggles a manual turn on, the next quick press commits
-it, and holding Cmd/Ctrl+. or the second mark click captures only for the hold
-and commits on release. The Moa mark mirrors Android for text and movement:
-single click opens the chat menu, and click-and-hold while moving drags the
-mark.
-With experimental voice-first gestures enabled, one mascot click instead starts
-a reviewable, non-auto-committing draft and shows `X — mascot — ↑`. Only the
-side controls discard or send; another mascot click does not send. A still hold
-keeps the fast push-to-talk path and commits on release.
+preserved. Cmd/Ctrl+. retains its keyboard voice toggle and hold-to-talk
+contract. On the Moa mark, one click starts current-thread capture and the next
+single click stops and sends it. Double-click starts fresh-thread capture while
+the prior response continues generating with its device audio suppressed;
+either a single click or another double-click stops and sends that capture.
+Triple-click opens chat. A still hold keeps push-to-talk and commits on release.
+Click-and-hold while moving drags the mark.
 If Chrome blocks offscreen microphone capture, the overlay shows a visible
-permission error and opens the A.G. Options page; grant the microphone there or
-set Microphone to Allow for the extension from `chrome://extensions`.
+permission error without opening another page; grant the microphone from the
+toolbar Options page or set Microphone to Allow from `chrome://extensions`.
 Explicit open-tab commands such as `open https://example.com in a new tab`
 create a browser tab locally; open-and-report requests still run through the
 background browser task path with receipts.

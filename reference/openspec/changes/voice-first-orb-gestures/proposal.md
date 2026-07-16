@@ -1,4 +1,20 @@
-# Voice-First Orb Gestures (Experimental)
+# Voice-First Orb Gestures
+
+## Current Browser Contract (Accepted 2026-07-16)
+
+- First single click starts current-thread capture; the next single click stops
+  and sends it exactly once.
+- Double-click starts fresh-thread capture while the foreground response keeps
+  generating with its device audio suppressed.
+- Either a single click or another double-click stops and sends that fresh turn.
+- Triple-click opens chat without cancelling active capture or generation.
+- Hold and release remains push-to-talk.
+- This mapping is canonical. It has no experimental flag, user-visible gesture
+  setting, click-to-type fallback, or review-draft side controls.
+- A microphone error remains visible in the current surface and never opens
+  Options automatically.
+
+This is extension-owned interaction state and requires no gateway change.
 
 ## Why
 
@@ -123,25 +139,21 @@ it. This is distinct from sending a turn to Moa:
   active voice draft is preferred for exploration because double/triple/fourth
   click meanings are already crowded and poorly discoverable.
 
-Flags:
-
-- Browser: `ageeVoiceFirstGesturesEnabled` in `chrome.storage.local`, checkbox
-  under Experimental in options.
-- Android: `MoaPrefs` boolean `voice_first_gestures`, toggle in the settings
-  app.
+Android retains its `MoaPrefs` boolean `voice_first_gestures`. The browser has
+no gesture flag or user-visible gesture setting.
 
 ## Non-Goals
 
 - No chat removal yet; triple click keeps it reachable.
 - No change to the Cmd+./Cmd+, hotkeys (they already match the proposed shape).
 - No gateway, voice-session protocol, or provider changes.
-- No default-on flip; that decision follows the experiment.
+- Android default behavior remains a separate surface decision.
 
 ## Boundaries
 
 - Android and the browser extension own gesture detection and local UI state.
 - The gateway voice contract is reused untouched.
-- With the flag off, both surfaces keep the legacy contract byte-for-byte.
+- Android keeps its existing flag boundary; the browser mapping is unconditional.
 
 ## Verification
 
@@ -152,6 +164,8 @@ Flags:
   double-click starts a new voice thread; triple-click opens chat; hold-to-talk
   release commits; open cards remain wholly above or below the moved orb; and
   dragging onto Remove hides the orb. Flag off restores the legacy gestures.
-- Browser manual QA with the flag on: one mascot click starts a draft with
-  `X` and `↑` beside the mascot; another mascot click does not send; `X`
-  discards; `↑` commits once; and hold-release remains push-to-talk.
+- Browser manual QA: one mascot click starts capture and the next single click
+  sends it once; double-click starts a fresh capture and either a single click
+  or another double-click sends it once; triple-click opens chat without
+  cancelling active work; hold-release remains push-to-talk; and microphone
+  denial reports in place without opening Options.
