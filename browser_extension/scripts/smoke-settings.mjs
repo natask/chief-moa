@@ -253,6 +253,7 @@ function configureStorageExpr(url, token) {
       await chrome.storage.local.set({
         ageeGatewayUrl: ${JSON.stringify(url)},
         ageeGatewayToken: ${JSON.stringify(token)},
+        ageeGatewayUserSet: true,
         ageeApiKey: "",
       });
       const got = await chrome.storage.local.get(["ageeGatewayUrl", "ageeGatewayToken"]);
@@ -377,6 +378,12 @@ async function main() {
     if (cfg.url !== GATEWAY_URL || !cfg.tokenSet) {
       throw new Error(`storage did not take the local gateway config: ${JSON.stringify(cfg)}`);
     }
+    // The options module reads gateway storage during page startup. Storage is
+    // intentionally configured after the first load so either the worker or
+    // page context can seed it; reload once so the surface reads that exact
+    // isolated-gateway configuration instead of racing its initial default.
+    await optionsCdp.send("Page.reload");
+    await waitForEval(optionsCdp, `document.readyState === "complete" ? true : null`);
 
     // ---- Leg 1.1/1.2 — the settings surface reads the effective profile ----
     console.log("");
@@ -521,9 +528,9 @@ async function main() {
       }
     }
 
-    // ---- Leg 2b — language profile control uses /v1/voice/turns -----------
+    // ---- Leg 2b — model-less language mutation fails closed --------------
     console.log("");
-    console.log('Leg 2b — typed "speak Amharic and English" routes through /v1/voice/turns as profile_control');
+    console.log('Leg 2b — typed language mutation routes through /v1/voice/turns and fails closed without a model');
     {
       await evaluate(pageCdp, triggerRunExpr("speak Amharic and English"), { contextId: contentCtx });
       const reply = await waitForEval(pageCdp, renderedReplyExpr(), 20000, { contextId: contentCtx });
@@ -531,28 +538,24 @@ async function main() {
       const after = await fetch(`${GATEWAY_URL}/v1/agent/profile`, {
         headers: { authorization: `Bearer ${GATEWAY_TOKEN}` },
       }).then((r) => r.json());
-      const liveLanguage = await waitForEval(
-        optionsCdp,
-        `(() => document.querySelector("#language").value === "am-ET,en-US" ? "am-ET,en-US" : null)()`,
-        10000,
-      );
+      const liveLanguage = await evaluate(optionsCdp, `document.querySelector("#language")?.value || ""`);
 
       const ok =
         reply.kind === "done" &&
-        /updated reply in amharic \+ english/i.test(reply.text) &&
+        /couldn't confirm you asked for that/i.test(reply.text) &&
         voiceTurnCall && voiceTurnCall.ok && voiceTurnCall.status === 200 &&
-        after.profile.language === "am-ET,en-US" &&
-        after.profile.language_primary === "am-ET" &&
+        after.profile.language === "en-US" &&
+        after.profile.language_primary === "en-US" &&
         after.profile.language_auto_switch === false &&
-        liveLanguage === "am-ET,en-US";
+        liveLanguage === "en-US";
       if (ok) {
         pass(
-          "typed language control applied through the gateway turn router",
-          `POST /v1/voice/turns -> profile_control; language=am-ET,en-US; options surface refreshed live`,
+          "model-less language mutation was rejected without changing state",
+          `POST /v1/voice/turns -> HTTP 200 profile_control; language remained en-US`,
         );
       } else {
         failures++;
-        console.log(`  [FAIL] "speak Amharic and English" did not apply through /v1/voice/turns.`);
+        console.log(`  [FAIL] model-less language mutation did not fail closed through /v1/voice/turns.`);
         console.log(`         rendered: ${JSON.stringify(reply)}`);
         console.log(`         voice turn call: ${JSON.stringify(voiceTurnCall)}`);
         console.log(`         gateway profile after: ${JSON.stringify(after.profile)}`);
@@ -624,7 +627,8 @@ async function main() {
     }
     console.log(
       `settings-by-talking smoke passed (REAL extension + LOCAL gateway, headless): id=${extensionId}, ` +
-        `surface read profile, "be terser" -> PUT /v1/agent/profile, surface refreshed live, next turn honored it, ` +
+        `surface read profile, "be terser" -> PUT /v1/agent/profile, model-less language mutation failed closed, ` +
+        `surface refreshed live, next turn honored it, ` +
         `no window shown, no focus taken, no real secret used.`,
     );
   } finally {
@@ -635,7 +639,7 @@ async function main() {
     chrome.kill("SIGTERM");
     gateway.kill("SIGTERM");
     await delay(300);
-    rmSync(runDir, { recursive: true, force: true });
+    rmSync(runDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

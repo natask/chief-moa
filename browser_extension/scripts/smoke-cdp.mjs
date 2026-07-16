@@ -438,7 +438,7 @@ async function main() {
     gateway?.gateway?.kill("SIGTERM");
     chrome.kill("SIGTERM");
     await delay(300);
-    rmSync(runDir, { recursive: true, force: true });
+    rmSync(runDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

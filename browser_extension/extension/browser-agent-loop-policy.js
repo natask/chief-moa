@@ -103,6 +103,7 @@ function validateAgentLoopAction(action, normalizeNavigationUrl) {
 
 export {
   AGENT_LOOP_MAX_SUMMARY,
+  MAX_SCREENSHOT_BASE64_CHARS,
   agentLoopScreenshotObservation,
   buildAgentLoopObservationPayload,
   clampAgentLoopMaxSteps,

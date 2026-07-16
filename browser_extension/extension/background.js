@@ -23,6 +23,7 @@ import {
 } from "./options-recovery.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
+  MAX_SCREENSHOT_BASE64_CHARS,
   buildAgentLoopObservationPayload,
   clampAgentLoopMaxSteps,
   validateAgentLoopAction,
@@ -825,7 +826,7 @@ const browserAutomationRuntime = createBrowserAutomationRuntime({
   activeTab: async () => (await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []))[0] || null,
   snapshot: async (tabId) => (await ensureContent(tabId), normalizeBrowserSnapshot(await ask(tabId, { cmd: "snapshot" }))),
   act: (tabId, request) => ask(tabId, { cmd: "act", ...request, background: false }),
-  screenFromSnapshot: snapToScreen, maxScreenshotChars: MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS,
+  screenFromSnapshot: snapToScreen, maxScreenshotChars: MAX_SCREENSHOT_BASE64_CHARS,
 });
 const browserCommandRuntime = createBrowserCommandRuntime({ automation: browserAutomationRuntime, send, saveTaskState, throwIfAborted });
 
@@ -2244,7 +2245,6 @@ function handleOffscreenVoiceError(id, error, code = error?.code) {
   if (!session) return;
   const message = extensionMicCaptureMessage(error, code);
   session.setupErrorMessage = message;
-  chrome.runtime.openOptionsPage?.().catch(() => {});
   deliverVoiceSessionEvent(session, {
     event: {
       type: "error",

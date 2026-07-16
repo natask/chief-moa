@@ -94,6 +94,35 @@ async function waitForTarget(port, predicate, timeoutMs = 15000) {
   throw new Error("Timed out waiting for Chrome target");
 }
 
+async function waitForAgeeWorker(port, timeoutMs = 15000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const candidates = (await targets(port)).filter(
+      (target) => target.type === "service_worker" && /^chrome-extension:\/\/[a-p]+\/background\.js$/.test(target.url || ""),
+    );
+    for (const target of candidates) {
+      const candidate = new Cdp(target.webSocketDebuggerUrl);
+      try {
+        await candidate.send("Runtime.enable");
+        const manifest = await evaluate(candidate, `(() => {
+          try {
+            const value = globalThis.chrome?.runtime?.getManifest?.();
+            return value?.name === "A.G." && value.permissions?.includes("userScripts") ? value : null;
+          } catch {
+            return null;
+          }
+        })()`);
+        if (manifest) return { target, worker: candidate };
+      } catch {
+        // A component worker or a worker that restarted while CDP attached.
+      }
+      candidate.close();
+    }
+    await delay(150);
+  }
+  throw new Error("Timed out waiting for the A.G. extension service worker");
+}
+
 async function probe(worker) {
   return evaluate(worker, `(async () => {
     const methods = ["getScripts", "execute", "register", "update", "unregister"];
@@ -134,13 +163,9 @@ async function main() {
   let runtimePage;
   try {
     const port = Number((await waitForFile(join(profilePath, "DevToolsActivePort"))).split("\n")[0]);
-    const workerTarget = await waitForTarget(
-      port,
-      (target) => target.type === "service_worker" && /^chrome-extension:\/\/[a-p]+\/background\.js$/.test(target.url || ""),
-    );
+    const { target: workerTarget, worker: ageeWorker } = await waitForAgeeWorker(port);
     const extensionId = workerTarget.url.match(/^chrome-extension:\/\/([a-p]+)\//)[1];
-    worker = new Cdp(workerTarget.webSocketDebuggerUrl);
-    await worker.send("Runtime.enable");
+    worker = ageeWorker;
 
     const browserInfo = await fetch(`http://127.0.0.1:${port}/json/version`).then((response) => response.json());
     browser = new Cdp(browserInfo.webSocketDebuggerUrl);
