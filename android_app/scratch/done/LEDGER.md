@@ -1,4 +1,5 @@
 - Added Android media and overlay parity: preferred YouTube variants, guarded MediaSession controls, valid-id saved spots, approved playlist actions, anchored drag/dismiss, neutral styling, and selection-safe swipe — agent: codex/gpt-5 — c9065a31
+- Centered the lion under the Start button's actual touch with button-center fallback and running-service reposition, and guarded the family fade so keyboard/composer engagement never parks the overlay or hides the IME — agent: Claude Code/Fable 5 — b540dd0a
 - Reskinned the overlay and full app to opaque native-black surfaces and remapped outside taps from close to a fade of the lion/panel/transcript family with a consumed wake touch — agent: Claude Code/Fable 5 — 14eb5c7f
 - Android steering pre-generates replacement identity, reports exact device ownership, cancels stale provider work immediately, and opens the new mic turn without waiting for cancellation acknowledgement — agent: Codex/GPT-5 — integration candidate
 - Marked interrupted Android assistant replies at a compact steering boundary and turn-gated hosted audio so stale callbacks cannot resume speech over the new mic turn — agent: codex/gpt-5 — 0f077607
