@@ -7,6 +7,7 @@ const requiredFiles = [
   "extension/background.js",
   "extension/browser-agent-loop-policy.js",
   "extension/browser-agent-role-runtime.js",
+  "extension/browser-media-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
   "extension/browser-turn-protocol.js",
@@ -28,8 +29,14 @@ const requiredFiles = [
   "extension/offscreen.js",
   "extension/offscreen-audio-worklet.js",
   "extension/livekit-voice.js",
+  "extension/media-confirm.html",
+  "extension/media-confirm.css",
+  "extension/media-confirm.js",
+  "extension/media-confirmation-runtime.js",
+  "extension/tool-receipt-runtime.js",
   "extension/voice-sampler.js",
   "extension/voice-sampler-runtime.js",
+  "extension/youtube-media.js",
   "extension/offscreen-livekit.html",
   "extension/offscreen-livekit.js",
   "extension/vendor/livekit-client.esm.js",
@@ -83,6 +90,11 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const browserMediaSource = readFileSync("extension/browser-media-runtime.js", "utf8");
+const mediaConfirmHtmlSource = readFileSync("extension/media-confirm.html", "utf8");
+const mediaConfirmSource = readFileSync("extension/media-confirm.js", "utf8");
+const mediaConfirmationRuntimeSource = readFileSync("extension/media-confirmation-runtime.js", "utf8");
+const toolReceiptRuntimeSource = readFileSync("extension/tool-receipt-runtime.js", "utf8");
 const browserAgentLoopPolicySource = readFileSync("extension/browser-agent-loop-policy.js", "utf8");
 const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
@@ -234,7 +246,8 @@ if (
   /seedGatewayConfig\s*\(/.test(backgroundSource) ||
   !/BACKGROUND_AUTOMATION_CONSENT_VERSION = 1/.test(backgroundSource) ||
   !/return false;\s*\n\s*}\s*\n}\s*\n\s*async function pollBrowserTasks/.test(backgroundSource) ||
-  !/if \(!\(await isBackgroundAutomationEnabled\(\)\)\) return;[\s\S]{0,180}\/v1\/tool\/requests\/claim/.test(backgroundSource) ||
+  !/async function pollBrowserToolRequests\(\)[\s\S]{0,260}if \(!\(await isBackgroundAutomationEnabled\(\)\)\) return;[\s\S]{0,260}toolReceipts\.poll/.test(backgroundSource) ||
+  !/\/v1\/tool\/requests\/claim/.test(toolReceiptRuntimeSource) ||
   !/source: "proactive_accept_v1"/.test(backgroundSource) ||
   !/\/v1\/proactive\/turns/.test(backgroundSource) ||
   !/redirect: "error"/.test(backgroundSource) ||
@@ -693,19 +706,74 @@ if (!/const owner = await getActiveBrowserAgentOwner\(\);[\s\S]{0,420}chrome\.ta
 
 if (
   !/\/v1\/device-clients\/heartbeat/.test(backgroundSource) ||
-  !/function browserLocalToolManifest/.test(backgroundSource) ||
-  !/browser\.tab\.open/.test(backgroundSource) ||
-  !/browser\.tab\.list/.test(backgroundSource) ||
-  !/browser\.tab\.close/.test(backgroundSource) ||
-  !/browser\.tab\.activate/.test(backgroundSource) ||
-  !/browser\.tab\.reload/.test(backgroundSource) ||
-  !/browser\.cdp\.execute/.test(backgroundSource) ||
+  !/function browserLocalToolManifest/.test(browserMediaSource) ||
+  !/browser\.tab\.open/.test(browserMediaSource) ||
+  !/browser\.tab\.list/.test(browserMediaSource) ||
+  !/browser\.tab\.close/.test(browserMediaSource) ||
+  !/browser\.tab\.activate/.test(browserMediaSource) ||
+  !/browser\.tab\.reload/.test(browserMediaSource) ||
+  !/browser\.cdp\.execute/.test(browserMediaSource) ||
+  !/media\.open/.test(browserMediaSource) ||
+  !/media\.bookmark/.test(browserMediaSource) ||
   !/function executeCdpActionsOnTab/.test(backgroundSource) ||
-  !/\/v1\/tool\/requests\/claim/.test(backgroundSource) ||
+  !/\/v1\/tool\/requests\/claim/.test(toolReceiptRuntimeSource) ||
+  !/request\.claim_id/.test(toolReceiptRuntimeSource) ||
+  !/idempotency_key: receiptId/.test(toolReceiptRuntimeSource) ||
+  !/status: "executing"/.test(toolReceiptRuntimeSource) ||
+  !/function terminalReceiptRejection/.test(toolReceiptRuntimeSource) ||
   !/function maybeRequestAndroidSpeak/.test(backgroundSource) ||
   !/tool:\s*"audio\.speak"/.test(backgroundSource)
 ) {
   throw new Error("extension must heartbeat as a browser device client and expose browser tab/CDP tool requests");
+}
+
+if (
+  !/EXTENSION-OWNED CONFIRMATION/.test(mediaConfirmHtmlSource) ||
+  !/event\.isTrusted/.test(mediaConfirmSource) ||
+  !/mediaConfirmationDetails/.test(mediaConfirmSource) ||
+  !/mediaConfirmationDecision/.test(mediaConfirmSource) ||
+  !/CONFIRMATION_TTL_MS = 2 \* 60 \* 1000/.test(mediaConfirmationRuntimeSource) ||
+  !/sender\?\.id === chromeApi\.runtime\.id/.test(mediaConfirmationRuntimeSource) ||
+  !/url\.pathname === "\/media-confirm\.html"/.test(mediaConfirmationRuntimeSource) ||
+  !/message\?\.digest !== record\.digest/.test(mediaConfirmationRuntimeSource) ||
+  !/pending\.delete\(record\.id\)/.test(mediaConfirmationRuntimeSource) ||
+  !/confirmMedia/.test(browserMediaSource) ||
+  /cmd:\s*"confirm"/.test(browserMediaSource) ||
+  !/explicitMediaOpenIntent\(options\.sourceText\)/.test(browserMediaSource) ||
+  !/aliases:\s*\[\]/.test(browserMediaSource) ||
+  !/provider:\s*"youtube"/.test(browserMediaSource) ||
+  /preferred_instance/.test(browserMediaSource) ||
+  !/sync_status:\s*"deferred"/.test(browserMediaSource) ||
+  !/function readCachedBookmarks/.test(browserMediaSource) ||
+  !/BOOKMARK_OUTBOX_KEY = "ageeMediaBookmarkOutbox"/.test(browserMediaSource) ||
+  !/function flushMediaOutbox/.test(browserMediaSource) ||
+  !/existing\.length >= MAX_LOCAL_RECORDS/.test(browserMediaSource) ||
+  !/Local media sync queue is full; nothing was changed/.test(browserMediaSource) ||
+  !/operation === "delete" && record\.server_id === remote\.id/.test(browserMediaSource) ||
+  !/function validRemoteId/.test(browserMediaSource) ||
+  !/typeof value === "string" && \/\^\[A-Za-z0-9_-\]\{1,120\}\$\//.test(browserMediaSource) ||
+  !/function validOutboxId/.test(browserMediaSource) ||
+  !/idempotency_key: `browser_\$\{localId\}`/.test(browserMediaSource) ||
+  !/function validIdempotencyKey/.test(browserMediaSource) ||
+  !/no\|zero\|neither\|nor\|none/.test(browserMediaSource) ||
+  !/match_type: "exact_alias"/.test(browserMediaSource) ||
+  !/match_type: "token_overlap"/.test(browserMediaSource) ||
+  !/`\/v1\/media\/bookmarks\?limit=100/.test(browserMediaSource) ||
+  !/retryPending \? "needs_retry" : remoteId \? "synced" : "local_only"/.test(browserMediaSource) ||
+  /Remote delete deferred/.test(browserMediaSource)
+) {
+  throw new Error("browser media mutations and uncorrelated opens must cross a one-shot extension-owned trusted-click confirmation boundary");
+}
+if (
+  !/mediaYouTubeSearchResults/.test(contentSource) ||
+  !/ytd-video-renderer, ytd-rich-item-renderer/.test(contentSource) ||
+  !/a#video-title\[href\]/.test(contentSource) ||
+  /mediaYouTubeSearchResults[\s\S]{0,2200}msg\.(?:selector|url|href)/.test(contentSource) ||
+  !/operation: "search_open"/.test(browserMediaSource) ||
+  !/selectYouTubeSearchResult/.test(browserMediaSource) ||
+  !/searchApproval !== approvedSearchNavigation/.test(browserMediaSource)
+) {
+  throw new Error("browser YouTube search must use a fixed extension-owned exact title/channel policy and confirm before uncorrelated navigation");
 }
 
 if (

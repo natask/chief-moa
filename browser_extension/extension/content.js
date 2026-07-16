@@ -2684,6 +2684,12 @@
       applyLiveVoicePageTweak(state, msg.action || (msg.record ? { type: "page_tweak", record: msg.record } : null));
       return;
     }
+    if (msg.type === "media_action_receipt") {
+      const text = String(msg.summary || (msg.ok ? "Media action completed." : "Media action failed.")).trim();
+      ensureVoiceCueCard(state, state.transcript || "Voice", text);
+      updateCue(state.cueId, text, msg.ok ? "running" : "error");
+      return;
+    }
     if (msg.type === "revoked") {
       revokeLiveVoiceState(state, msg.reason || "revoked");
       return;
@@ -3780,6 +3786,52 @@
       case "snapshot":
         reply(pageObservation.snapshot());
         return true;
+      case "mediaCurrentState": {
+        // Media identity and playback position are read only for this explicit
+        // background command. Ordinary snapshots and page context never include
+        // HTMLMediaElement state.
+        const videos = [...document.querySelectorAll("video")].filter((video) => Number.isFinite(video.currentTime));
+        const video = videos.length === 1 ? videos[0] : videos.find((candidate) => !candidate.paused && !candidate.ended);
+        if (!video) {
+          reply({ ok: false, error: "No unambiguous HTML video is available on this page." });
+          return true;
+        }
+        reply({
+          ok: true,
+          url: location.href,
+          title: document.title || "",
+          position_seconds: Math.max(0, Math.floor(video.currentTime)),
+          paused: video.paused === true,
+        });
+        return true;
+      }
+      case "mediaYouTubeSearchResults": {
+        const host = location.hostname.toLowerCase();
+        if (!new Set(["youtube.com", "www.youtube.com"]).has(host) || location.pathname !== "/results") {
+          reply({ ok: false, error: "This is not a supported YouTube search page." });
+          return true;
+        }
+        const results = [];
+        const seen = new Set();
+        for (const card of [...document.querySelectorAll("ytd-video-renderer, ytd-rich-item-renderer")].slice(0, 48)) {
+          const link = card.querySelector("a#video-title[href]");
+          if (!link) continue;
+          let url;
+          try { url = new URL(link.getAttribute("href"), location.origin); } catch { continue; }
+          const ids = url.pathname === "/watch" ? url.searchParams.getAll("v") : [];
+          if (ids.length !== 1 || !/^[A-Za-z0-9_-]{11}$/.test(ids[0]) || seen.has(ids[0])) continue;
+          const channelNode = card.querySelector("ytd-channel-name a, #channel-name a, .ytd-channel-name");
+          seen.add(ids[0]);
+          results.push({
+            video_id: ids[0],
+            title: String(link.getAttribute("title") || link.textContent || "").replace(/\s+/g, " ").trim().slice(0, 160),
+            channel: String(channelNode?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
+          });
+          if (results.length >= 24) break;
+        }
+        reply({ ok: true, ready: document.readyState === "complete" || results.length > 0, results });
+        return true;
+      }
       case "act":
         act(msg).then(reply);
         return true;

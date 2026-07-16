@@ -6,6 +6,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/background.js",
   "extension/browser-agent-loop-policy.js",
   "extension/browser-agent-role-runtime.js",
+  "extension/browser-media-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
   "extension/browser-turn-protocol.js",
@@ -17,6 +18,8 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/livekit-voice.js",
+  "extension/media-confirm.js",
+  "extension/media-confirmation-runtime.js",
   "extension/page-observation-runtime.js",
   "extension/offscreen-audio-worklet.js",
   "extension/offscreen-livekit.js",
@@ -27,12 +30,14 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/settings-intent.js",
   "extension/sidepanel.js",
   "extension/stop-intent.js",
+  "extension/tool-receipt-runtime.js",
   "extension/tweaks.js",
   "extension/ui-spec-runtime.js",
   "extension/voice-capture-gesture.js",
   "extension/voice-draft-protocol.js",
   "extension/voice-sampler-runtime.js",
   "extension/voice-sampler.js",
+  "extension/youtube-media.js",
 ]);
 
 const EXCLUDED_SOURCE_FILES = Object.freeze({
