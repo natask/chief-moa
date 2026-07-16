@@ -1,0 +1,95 @@
+name: Build macOS QA artifact
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/macos-qa-artifact.yml"
+      - "apple_surfaces/**"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/macos-qa-artifact.yml"
+      - "apple_surfaces/**"
+  workflow_dispatch: {}
+
+concurrency:
+  group: macos-qa-artifact-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Test and package unsigned-distribution QA app
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Test Apple surfaces
+        working-directory: apple_surfaces
+        run: swift test
+
+      - name: Package versioned QA archive
+        id: package
+        working-directory: apple_surfaces
+        shell: bash
+        env:
+          MOA_MAC_BUILD: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          MOA_MAC_VERSION="$version" bash scripts/package-moa-mac.sh
+
+          archives="$(find dist -maxdepth 1 -type f -name "MoaMac-${version}-${MOA_MAC_BUILD}-*.zip" -print)"
+          archive_count="$(printf '%s\n' "$archives" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [[ "$archive_count" != 1 ]]; then
+            echo "Expected exactly one versioned QA archive, found $archive_count." >&2
+            exit 1
+          fi
+
+          archive="$archives"
+          checksum="${archive}.sha256"
+          [[ -f "$checksum" ]] || { echo "Missing checksum: $checksum" >&2; exit 1; }
+          (cd dist && shasum -a 256 -c "$(basename "$checksum")")
+
+          app="dist/MoaMac.app"
+          codesign --verify --deep --strict "$app"
+          bash scripts/scan-moa-mac.sh "$app"
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+          bundle_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")"
+          [[ "$bundle_version" == "$version" && "$bundle_build" == "$MOA_MAC_BUILD" ]]
+
+          digest="$(awk '{print $1}' "$checksum")"
+          size="$(stat -f '%z' "$archive")"
+          architectures="$(lipo -archs "$app/Contents/MacOS/MoaMac" | tr ' ' '-')"
+          {
+            echo "version=$version"
+            echo "build=$MOA_MAC_BUILD"
+            echo "architectures=$architectures"
+            echo "archive=apple_surfaces/$archive"
+            echo "checksum=apple_surfaces/$checksum"
+            echo "sha256=$digest"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### macOS QA artifact"
+            echo "- Version/build: \`$version ($MOA_MAC_BUILD)\`"
+            echo "- Architectures: \`$architectures\`"
+            echo "- SHA-256: \`$digest\`"
+            echo "- Size: $size bytes"
+            echo "- State: packaged ad-hoc-signed QA artifact only; not notarized, published, installed, or production-ready"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload QA archive and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: moa-mac-qa-${{ steps.package.outputs.version }}-${{ steps.package.outputs.build }}-${{ steps.package.outputs.architectures }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}
