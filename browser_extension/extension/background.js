@@ -12,6 +12,26 @@ import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
+import {
+  AGENT_LOOP_MAX_SUMMARY,
+  buildAgentLoopObservationPayload,
+  clampAgentLoopMaxSteps,
+  validateAgentLoopAction,
+} from "./browser-agent-loop-policy.js";
+import {
+  browserEvidencePage,
+  browserTurnActions,
+  browserTurnClient,
+  browserTurnEvidenceRequestId,
+  browserTurnFailed,
+  browserTurnId,
+  browserTurnIsPending,
+  browserTurnNeedsEvidence,
+  browserTurnReplyText,
+  browserTurnStatusPath,
+  browserTurnSummary,
+  normalizeBrowserSnapshot,
+} from "./browser-turn-protocol.js";
 
 chrome.runtime.onInstalled.addListener(async () => {
   await initializePrivacyState();
@@ -1199,22 +1219,8 @@ function browserLocalToolManifest() {
 // over the wire) before executing it in a persistent background tab that never
 // becomes active. Gated by the same ageeBackgroundAutomationEnabled setting as
 // the legacy batch path; only one agent-loop task runs at a time.
-const AGENT_LOOP_MAX_STEPS_CAP = 40;
-const AGENT_LOOP_DEFAULT_MAX_STEPS = 24;
-const AGENT_LOOP_MAX_TYPE_TEXT = 2000;
-const AGENT_LOOP_MAX_SELECT_TEXT = 200;
-const AGENT_LOOP_MAX_KEY_TEXT = 32;
-const AGENT_LOOP_MAX_SUMMARY = 2000;
-const AGENT_LOOP_MAX_PAGE_TEXT = 6000;
-const AGENT_LOOP_MAX_ACTION_RESULT = 500;
 let browserAgentTaskPollInFlight = false;
 let agentLoopTaskActive = false;
-
-function clampAgentLoopMaxSteps(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return AGENT_LOOP_DEFAULT_MAX_STEPS;
-  return Math.min(AGENT_LOOP_MAX_STEPS_CAP, Math.max(1, Math.floor(n)));
-}
 
 // Same 2s cadence/alarm structure as pollBrowserTasks. Claim one agent-loop task
 // and drive it to completion. While a task is active we do not claim another.
@@ -1282,7 +1288,7 @@ async function runAgentLoopTask(task, cfg, controller, cueId) {
         signal,
         body: { observation },
       });
-      const validation = validateAgentLoopAction(response?.action);
+      const validation = validateAgentLoopAction(response?.action, allowedBrowserTaskUrl);
       if (!validation.ok) {
         await finishAgentLoopTask(cfg, taskId, "failed", `rejected action ${validation.kind}`);
         return;
@@ -1337,88 +1343,13 @@ async function ensureAgentLoopContent(tabId) {
 async function buildAgentLoopObservation(tabId, step, { withScreenshot, lastAction, lastActionResult }) {
   await ensureAgentLoopContent(tabId);
   const snapshot = await collectBrowserSnapshot(tabId);
-  const elements = (snapshot.elements || []).slice(0, MAX_ELEMENTS).map((element) => ({
-    i: element.i,
-    tag: String(element.tag || ""),
-    type: String(element.type || ""),
-    label: String(element.label || "").slice(0, 80),
-  }));
-  const observation = {
-    url: String(snapshot.url || ""),
-    title: String(snapshot.title || ""),
-    elements,
-    step,
-  };
-  const pageText = String(snapshot.pageText || "").trim();
-  if (pageText) observation.page_text = pageText.slice(0, AGENT_LOOP_MAX_PAGE_TEXT);
-  if (withScreenshot) {
-    const shot = await captureScreenshotViaDebugger(tabId);
-    observation.screenshot = agentLoopScreenshotObservation(shot);
-  }
-  if (lastAction) observation.last_action = lastAction;
-  if (lastActionResult) observation.last_action_result = String(lastActionResult).slice(0, AGENT_LOOP_MAX_ACTION_RESULT);
-  return observation;
-}
-
-// Reuse the existing 420KB base64 evidence cap; oversized shots are omitted.
-function agentLoopScreenshotObservation(base64) {
-  const data = String(base64 || "");
-  if (!data) return { encoding: "omitted", reason: "screenshot capture failed" };
-  if (data.length > MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS) {
-    return { encoding: "omitted", reason: "screenshot too large for gateway observation payload" };
-  }
-  return { encoding: "base64_jpeg", data };
-}
-
-// Local allowlist for gateway-proposed actions. Every field is data-validated;
-// nothing is eval'd, compiled, or executed as a code string. An unknown kind or
-// out-of-bounds params returns { ok:false } so the caller finishes failed.
-function validateAgentLoopAction(action) {
-  if (!action || typeof action !== "object") return { ok: false, kind: "(none)" };
-  const kind = String(action.kind || "");
-  const isIndex = (value) => Number.isInteger(value) && value >= 0;
-  switch (kind) {
-    case "click":
-    case "clear":
-      if (!isIndex(action.index)) return { ok: false, kind };
-      return { ok: true, kind, action: { kind, index: action.index } };
-    case "type":
-      if (!isIndex(action.index) || typeof action.text !== "string" || action.text.length > AGENT_LOOP_MAX_TYPE_TEXT) {
-        return { ok: false, kind };
-      }
-      return { ok: true, kind, action: { kind, index: action.index, text: action.text } };
-    case "select":
-      if (!isIndex(action.index) || typeof action.text !== "string" || action.text.length > AGENT_LOOP_MAX_SELECT_TEXT) {
-        return { ok: false, kind };
-      }
-      return { ok: true, kind, action: { kind, index: action.index, text: action.text } };
-    case "scroll": {
-      const direction = action.direction === "up" ? "up" : action.direction === "down" ? "down" : null;
-      if (!direction) return { ok: false, kind };
-      return { ok: true, kind, action: { kind, direction } };
-    }
-    case "navigate": {
-      const url = allowedBrowserTaskUrl(action.url);
-      if (!url) return { ok: false, kind };
-      return { ok: true, kind, action: { kind, url } };
-    }
-    case "key":
-      if (typeof action.text !== "string" || !action.text || action.text.length > AGENT_LOOP_MAX_KEY_TEXT) {
-        return { ok: false, kind };
-      }
-      return { ok: true, kind, action: { kind, text: action.text } };
-    case "wait":
-    case "screenshot":
-      return { ok: true, kind, action: { kind } };
-    case "finish": {
-      const status = action.status === "blocked" ? "blocked" : action.status === "done" ? "done" : null;
-      if (!status) return { ok: false, kind };
-      const summary = typeof action.summary === "string" ? action.summary.slice(0, AGENT_LOOP_MAX_SUMMARY) : "";
-      return { ok: true, kind, action: { kind, status, summary } };
-    }
-    default:
-      return { ok: false, kind: kind || "(unknown)" };
-  }
+  const screenshot = withScreenshot ? await captureScreenshotViaDebugger(tabId) : "";
+  return buildAgentLoopObservationPayload(snapshot, step, {
+    withScreenshot,
+    screenshot,
+    lastAction,
+    lastActionResult,
+  });
 }
 
 // Execute one validated action against the persistent background tab. Element
@@ -2226,7 +2157,7 @@ async function ensureContent(tabId) {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "proactive-helper.js", "content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "proactive-helper.js", "steering-ui.js", "content.js"] });
   }
 }
 
@@ -2423,9 +2354,6 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
 }
 
-// Set the active thread for the shared session, or mint a new/fork/incognito
-// branch, and return the resolved branch id. Streaming voice must do this before
-// opening the WS session because the socket branch is fixed at session start.
 async function switchThreadBranch(cfg, action, label) {
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
@@ -2440,7 +2368,12 @@ async function switchThreadBranch(cfg, action, label) {
   });
   return String(data?.thread?.branch_id || data?.active?.branch_id || data?.branch_id || "").trim();
 }
-
+async function activeThreadBranch(cfg) {
+  const sessionId = await getStableSessionId();
+  const path = `/v1/threads/active?session_id=${encodeURIComponent(sessionId)}&surface=agee-extension`;
+  const data = await callGateway(cfg, path, { method: "GET" });
+  return String(data?.active?.branch_id || data?.branch_id || "default").trim() || "default";
+}
 async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
@@ -2491,14 +2424,11 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
   };
 
   let cfg;
-  let branchForSession = cueId;
+  let branchForSession = "default";
   let ticket;
+  const action = String(contextAction || "").trim();
   try {
     cfg = await getConfig();
-    // Resolve the thread branch for an incognito / new-thread voice turn before
-    // minting the ticket, so the WS session opens on the right branch. An incognito
-    // switch that fails must not fall back to a persisted branch — fail the start.
-    const action = String(contextAction || "").trim();
     if (action === "incognito" || action === "new" || action === "fork") {
       let resolvedBranch = "";
       try {
@@ -2513,14 +2443,14 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       } else if (action === "incognito") {
         throw abortSetup("Could not start a private voice turn: the gateway did not return an incognito branch.");
       }
+    } else {
+      try { branchForSession = await activeThreadBranch(cfg); }
+      catch { branchForSession = "default"; }
     }
     ticket = await createVoiceSessionTicket(cfg);
     if (voiceSessions.get(id) !== session || session.closed) {
       throw new Error(session.setupErrorMessage || "Voice session closed during setup.");
     }
-    // Re-check after the awaits above: a record session that slipped in before
-    // the mutex was visible must win. Abort this voice start cleanly instead of
-    // stealing the microphone from the in-flight audio note.
     if (activeRecordSession()) {
       throw abortSetup("An audio note recording is in progress. Stop recording before starting voice.");
     }
@@ -2584,7 +2514,8 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         conversation_id: ticket.conversation_id || ticket.session_id,
         branch_id: branchForSession,
         turn_id: turnId,
-        all_branches_context: true,
+        all_branches_context: false,
+        ...(action ? { context_action: action } : {}),
         client: {
           platform: "browser",
           source: "agee-extension",
@@ -3520,48 +3451,6 @@ async function collectBrowserSnapshot(tabId) {
   }
 }
 
-function normalizeBrowserSnapshot(snap) {
-  const raw = snap && typeof snap === "object" ? snap : {};
-  const elements = Array.isArray(raw.elements) ? raw.elements : [];
-  const elementSummaries = Array.isArray(raw.elementSummaries) && raw.elementSummaries.length
-    ? raw.elementSummaries.map((item) => String(item || ""))
-    : elements.slice(0, MAX_ELEMENTS).map((element) => {
-      const type = element.type ? ` ${element.type}` : "";
-      const label = element.label ? ` ${element.label}` : "";
-      return `[${element.i}] <${element.tag}${type}>${label}`;
-    });
-  return {
-    ...raw,
-    url: String(raw.url || ""),
-    title: String(raw.title || ""),
-    pageText: String(raw.pageText || raw.page_text || ""),
-    elements,
-    snapshotId: raw.snapshotId || raw.snapshot_id || `snap_${crypto.randomUUID?.() || Date.now().toString(36)}`,
-    viewport: raw.viewport && typeof raw.viewport === "object" ? raw.viewport : null,
-    capturedAt: raw.capturedAt || raw.captured_at || new Date().toISOString(),
-    elementSummaries,
-  };
-}
-
-function browserTurnClient(deviceId, input) {
-  return {
-    platform: "browser",
-    source: "agee-extension",
-    device_id: deviceId,
-    input,
-  };
-}
-
-function browserEvidencePage(snapshot) {
-  return {
-    url: snapshot.url || "",
-    title: snapshot.title || "",
-    snapshot_id: snapshot.snapshotId || "",
-    captured_at: snapshot.capturedAt || "",
-    viewport: snapshot.viewport || null,
-  };
-}
-
 async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, options = {}) {
   const text = String(instruction || "").trim() || "Describe this page";
   const inputKind = options.input || "text";
@@ -3582,7 +3471,6 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   const delegationEnvelope = role === "delegate" && options.delegationConfirmed === true
     ? browserDelegationEnvelope(text, snapshot.url)
     : null;
-
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
   const client = browserTurnClient(deviceId, inputKind);
@@ -3592,7 +3480,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
     session_id: sessionId,
     conversation_id: sessionId,
     branch_id: cueId || "browser-agent",
-    all_branches_context: true,
+    ...(options.contextAction ? { context_action: options.contextAction, all_branches_context: false } : { all_branches_context: true }),
     client,
   };
 
@@ -3662,98 +3550,6 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
     lastResult: summary.slice(0, 500),
   });
   return data;
-}
-
-function browserTurnId(data) {
-  return data?.id || data?.turn_id || data?.browser_turn_id || data?.turn?.id || data?.turn?.turn_id || null;
-}
-
-function browserTurnStatusPath(data) {
-  const raw = data?.status_url || data?.statusUrl || data?.turn?.status_url || data?.turn?.statusUrl || "";
-  if (raw) {
-    try {
-      const url = new URL(raw);
-      return `${url.pathname}${url.search || ""}`;
-    } catch {
-      return String(raw);
-    }
-  }
-  const id = browserTurnId(data);
-  return id ? `/v1/browser/turns/${encodeURIComponent(id)}/status` : "";
-}
-
-function browserTurnNeedsEvidence(data) {
-  const status = String(data?.status || data?.state || data?.turn?.status || "").toLowerCase();
-  return status === "needs_evidence";
-}
-
-function browserTurnEvidenceRequestId(data) {
-  const requests = [
-    ...(Array.isArray(data?.evidence_request_ids) ? data.evidence_request_ids : []),
-    ...(Array.isArray(data?.turn?.evidence_request_ids) ? data.turn.evidence_request_ids : []),
-  ].map((value) => String(value || "").trim()).filter(Boolean);
-  return requests[0] || "";
-}
-
-function browserTurnReplyText(data) {
-  const result = data?.result && typeof data.result === "object" ? data.result : {};
-  const turn = data?.turn && typeof data.turn === "object" ? data.turn : {};
-  for (const value of [
-    data?.display,
-    data?.text,
-    data?.answer,
-    data?.summary,
-    result.display,
-    result.text,
-    result.answer,
-    result.summary,
-    turn.display,
-    turn.text,
-    turn.answer,
-    turn.summary,
-  ]) {
-    const text = String(value || "").trim();
-    if (text) return text;
-  }
-  return "";
-}
-
-function browserTurnActions(data) {
-  const result = data?.result && typeof data.result === "object" ? data.result : {};
-  return [
-    ...(Array.isArray(data?.actions) ? data.actions : []),
-    ...(Array.isArray(data?.proposals) ? data.proposals : []),
-    ...(Array.isArray(data?.action_proposals) ? data.action_proposals : []),
-    ...(Array.isArray(result.actions) ? result.actions : []),
-    ...(Array.isArray(result.proposals) ? result.proposals : []),
-    ...(Array.isArray(result.action_proposals) ? result.action_proposals : []),
-  ];
-}
-
-function browserTurnSummary(data) {
-  const reply = browserTurnReplyText(data);
-  const actions = browserTurnActions(data);
-  const actionNotice = actions.length
-    ? `Gateway proposed ${actions.length} browser action${actions.length === 1 ? "" : "s"}; not executed in this slice.`
-    : "";
-  if (reply && actionNotice) return `${reply}\n\n${actionNotice}`;
-  if (reply) return reply;
-  if (actionNotice) return actionNotice;
-  return "The gateway returned an empty browser-agent response.";
-}
-
-function browserTurnHasAnswer(data) {
-  return Boolean(browserTurnReplyText(data) || browserTurnActions(data).length);
-}
-
-function browserTurnIsPending(data) {
-  const status = String(data?.status || data?.state || data?.turn?.status || "").toLowerCase();
-  return ["", "queued", "pending", "accepted", "created", "running", "working", "started", "processing", "in_progress"].includes(status) && !browserTurnHasAnswer(data);
-}
-
-function browserTurnFailed(data) {
-  const status = String(data?.status || data?.state || data?.turn?.status || "").toLowerCase();
-  return ["error", "failed", "cancelled", "canceled"].includes(status);
 }
 
 async function waitForBrowserTurnAnswer(cfg, initial, signal) {
@@ -3848,6 +3644,7 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
         input: "text",
         role: explicitRole,
         delegationConfirmed: contextControls.delegationConfirmed === true,
+        ...contextControls,
       });
       return;
     }
@@ -3864,7 +3661,7 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
       return;
     }
     if (looksLikePageContextQuestion(instruction)) {
-      await runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, { input: "text" });
+      await runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, { input: "text", ...contextControls });
       return;
     }
     await runViaGateway(tabId, instruction, cfg, signal, cueId, contextControls);

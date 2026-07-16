@@ -85,7 +85,7 @@ class GatewayLLMStream extends llm.LLMStream {
     const transcript = lastUserText(this.chatCtx);
     this.#session.lastUserTranscript = transcript;
     this.#session.turnId = `turn_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-    const reply = await this.callReason(transcript);
+    const reply = await requestReason(this.#config, this.#session, transcript);
     this.#session.lastReply = reply;
 
     const chunk: ChatChunk = {
@@ -95,20 +95,22 @@ class GatewayLLMStream extends llm.LLMStream {
     this.queue.put(chunk);
   }
 
-  private async callReason(transcript: string): Promise<ReasonReply> {
+}
+
+export async function requestReason(config: GatewayConfig, session: LiveKitTurnState, transcript: string): Promise<ReasonReply> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.#config.token) {
-      headers.Authorization = `Bearer ${this.#config.token}`;
+    if (config.token) {
+      headers.Authorization = `Bearer ${config.token}`;
     }
-    const response = await fetch(`${this.#config.url}/v1/internal/voice/reason`, {
+    const response = await fetch(`${config.url}/v1/internal/voice/reason`, {
       method: "POST",
       headers,
       body: JSON.stringify({
         transcript,
-        session_id: this.#session.sessionId,
-        branch_id: this.#session.branchId,
-        turn_id: this.#session.turnId,
-        device_id: this.#session.deviceId,
+        session_id: session.sessionId,
+        branch_id: session.branchId,
+        turn_id: session.turnId,
+        device_id: session.deviceId,
         source: "voice-livekit",
       }),
     });
@@ -131,11 +133,10 @@ class GatewayLLMStream extends llm.LLMStream {
       language: String(json.language || "").trim(),
       classification: String(json.classification || "chat"),
     };
-  }
 }
 
 // Read the most recent user text from the chat context.
-function lastUserText(chatCtx: ChatContext): string {
+export function lastUserText(chatCtx: ChatContext): string {
   const items = chatCtx.items;
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const item = items[i];

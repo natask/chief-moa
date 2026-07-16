@@ -11,12 +11,8 @@ const talkBtn = document.getElementById("talk");
 const form = document.getElementById("form");
 const textInput = document.getElementById("text");
 const sendBtn = document.getElementById("sendBtn");
-const agentModeSelector = document.getElementById("agentModeSelector");
-const agentModeButtons = [...document.querySelectorAll("[data-agent-mode-option]")];
 
 const TURN_WATCHDOG_MS = 90000;
-const BROWSER_AGENT_ROLE_KEY = "ageeBrowserAgentRole";
-const BROWSER_AGENT_ROLES = new Set(["delegate", "help", "collaborate", "explain"]);
 
 let port = null;
 let nextReqId = 1;
@@ -29,25 +25,13 @@ const playbackSources = new Set();
 
 // One turn at a time. `turn` is null when idle.
 let turn = null;
-let selectedAgentRole = "delegate";
-
-function setAgentRole(value, { persist = true } = {}) {
-  const role = String(value || "").trim().toLowerCase();
-  selectedAgentRole = BROWSER_AGENT_ROLES.has(role) ? role : "delegate";
-  if (agentModeSelector) agentModeSelector.dataset.agentMode = selectedAgentRole;
-  for (const button of agentModeButtons) {
-    button.setAttribute("aria-pressed", String(button.dataset.agentModeOption === selectedAgentRole));
-  }
-  if (persist) chrome.storage.local.set({ [BROWSER_AGENT_ROLE_KEY]: selectedAgentRole }).catch(() => {});
+function roleForInstruction(text) {
+  const value = String(text || "").trim().toLowerCase();
+  if (/^(explain|describe|tell me (?:about|how|why))\b/.test(value)) return "explain";
+  if (/^(help me|guide me|show me how)\b/.test(value)) return "help";
+  if (/^(collaborate|work with me|pair with me)\b/.test(value)) return "collaborate";
+  return "delegate";
 }
-
-for (const button of agentModeButtons) {
-  button.addEventListener("click", () => setAgentRole(button.dataset.agentModeOption));
-}
-
-chrome.storage.local.get({ [BROWSER_AGENT_ROLE_KEY]: "delegate" }).then((stored) => {
-  setAgentRole(stored[BROWSER_AGENT_ROLE_KEY], { persist: false });
-}).catch(() => setAgentRole("delegate", { persist: false }));
 
 function setStatus(text, state = "idle") {
   statusEl.textContent = text;
@@ -527,7 +511,7 @@ form.addEventListener("submit", async (e) => {
   const state = newTurnState("text", text);
   turn = state;
   armWatchdog(state);
-  const role = selectedAgentRole;
+  const role = roleForInstruction(text);
   let delegationConfirmed = false;
   if (role === "delegate") {
     delegationConfirmed = await confirmDelegation(state);

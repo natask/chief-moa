@@ -169,7 +169,7 @@ class ChirpSpeechStream extends stt.SpeechStream {
 
 // --- Speech v2 helpers -----------------------------------------------------
 
-function recognizeEndpoint(projectId: string, location: string): string {
+export function recognizeEndpoint(projectId: string, location: string): string {
   const host = location === "global" ? "speech.googleapis.com" : `${location}-speech.googleapis.com`;
   return `https://${host}/v2/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/recognizers/_:recognize`;
 }
@@ -181,7 +181,7 @@ interface ChirpRecognizeResponse {
   }>;
 }
 
-function extractTranscript(json: ChirpRecognizeResponse, fallbackLanguage: string): { text: string; language: string } {
+export function extractTranscript(json: ChirpRecognizeResponse, fallbackLanguage: string): { text: string; language: string } {
   const parts: string[] = [];
   let language = fallbackLanguage;
   for (const result of json.results || []) {
@@ -206,7 +206,7 @@ function asLanguageCode(code: string): LanguageCode {
   return code as unknown as LanguageCode;
 }
 
-function concatPcm16(frames: AudioFrame[]): Buffer {
+export function concatPcm16(frames: AudioFrame[]): Buffer {
   let samples = 0;
   for (const frame of frames) {
     samples += frame.data.length;
@@ -234,7 +234,7 @@ interface GoogleCredential {
   refresh_token?: string;
 }
 
-async function serviceAccountToken(cred: GoogleCredential): Promise<CachedToken> {
+export async function serviceAccountToken(cred: GoogleCredential): Promise<CachedToken> {
   if (!cred.client_email || !cred.private_key) {
     throw new Error("service_account credential is missing client_email/private_key");
   }
@@ -262,7 +262,7 @@ async function serviceAccountToken(cred: GoogleCredential): Promise<CachedToken>
   return parseTokenResponse(response);
 }
 
-async function authorizedUserToken(cred: GoogleCredential): Promise<CachedToken> {
+export async function authorizedUserToken(cred: GoogleCredential): Promise<CachedToken> {
   if (!cred.client_id || !cred.client_secret || !cred.refresh_token) {
     throw new Error("authorized_user credential is missing client_id/client_secret/refresh_token");
   }
@@ -279,7 +279,7 @@ async function authorizedUserToken(cred: GoogleCredential): Promise<CachedToken>
   return parseTokenResponse(response);
 }
 
-async function parseTokenResponse(response: Response): Promise<CachedToken> {
+export async function parseTokenResponse(response: Response): Promise<CachedToken> {
   const text = await response.text();
   if (!response.ok) {
     throw new Error(`google token exchange failed (${response.status}): ${text.slice(0, 200)}`);
@@ -294,6 +294,6 @@ async function parseTokenResponse(response: Response): Promise<CachedToken> {
   };
 }
 
-function base64Url(input: string | Buffer): string {
+export function base64Url(input: string | Buffer): string {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }

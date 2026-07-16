@@ -42,6 +42,21 @@
     return "noop";
   }
 
+  function resolveVoiceFirstTransition({ tapCount, capturing, captureOrigin } = {}) {
+    const count = Math.max(1, Number(tapCount || 1));
+    const active = capturing === true;
+    if (count === 1) {
+      if (!active) return "start_current";
+      return captureOrigin === "single" ? "commit_current" : "noop";
+    }
+    if (count === 2) {
+      if (active && captureOrigin === "double") return "commit_new";
+      return active ? "cancel_then_start_new" : "start_new";
+    }
+    if (count === 3) return active ? "cancel_then_open_chat" : "open_chat";
+    return "noop";
+  }
+
   function latchAdmission({ voiceFirstEnabled, draftControlsEnabled } = {}) {
     const voiceFirst = voiceFirstEnabled === true;
     return Object.freeze({
@@ -82,6 +97,7 @@
     continueTapChain,
     latchAdmission,
     resolveTapAction,
+    resolveVoiceFirstTransition,
     resolveHoldDirection,
     resolveDraftHoldAction,
   };

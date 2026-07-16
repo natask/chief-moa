@@ -16,15 +16,14 @@ const EXCLUDED_PARTS = new Set(["node_modules", "build", "dist", "coverage", "ve
 // Existing debt may shrink but may not grow. Lower these ceilings after every
 // extraction; remove the entry once the file is at or below MAX_SOURCE_LINES.
 const LEGACY_DEBT_CEILINGS = Object.freeze({
-  "android_app/app/src/main/java/ai/moa/assistant/OverlayService.java": 4094,
-  "browser_extension/extension/background.js": 5663,
+  "android_app/app/src/main/java/ai/moa/assistant/OverlayService.java": 3959,
+  "browser_extension/extension/background.js": 5460,
   "browser_extension/extension/content.js": 4614,
   "gateway/lib/voice-drafts.js": 5950,
   "gateway/lib/voice-providers.js": 3939,
   "gateway/lib/voice-session-server.js": 2155,
   "gateway/lib/work-history.js": 2032,
-  "gateway/server.js": 16518,
-  "website/public/pets/index.html": 2244,
+  "gateway/server.js": 15939,
 });
 
 function lineCount(text) {

@@ -1,0 +1,13 @@
+{
+  "name": "chief-moa-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "test:coverage": "c8 --all --include='functions/**/*.js' --include='public/**/*.js' --exclude='test/**' --check-coverage --lines=90 --branches=90 --functions=90 node --test"
+  },
+  "devDependencies": {
+    "c8": "^10.1.3",
+    "jsdom": "^26.1.0"
+  }
+}

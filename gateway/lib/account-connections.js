@@ -378,6 +378,7 @@ function createAccountConnectionStore(options = {}) {
       surface_type: target.surface_type || "android",
       channel: target.channel || "credential_health",
       tool: "notification.account_connection",
+      reason,
       input: {
         connection_id: record.id,
         provider_label: provider?.label || record.provider,

@@ -90,49 +90,6 @@
   transition: transform 0.2s ease;
 }
 
-/* Reviewable voice draft: disposition belongs beside the mascot, never in the
-   transcript panel above or below it. JS keeps the full X—mascot—Send chord in
-   the viewport while the mascot moves or resizes. */
-#agee-root .agee-draft-control {
-  appearance: none;
-  position: absolute;
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  background: rgba(29, 30, 34, 0.96);
-  color: var(--agee-ink);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
-  cursor: pointer;
-  font-size: 26px;
-  font-weight: 700;
-  line-height: 1;
-  padding: 0 0 2px;
-  pointer-events: auto;
-  touch-action: manipulation;
-}
-#agee-root .agee-draft-control[hidden] {
-  display: none;
-}
-#agee-root .agee-draft-control:hover {
-  background: rgba(49, 50, 55, 0.98);
-  transform: translateY(-1px);
-}
-#agee-root .agee-draft-control:focus-visible {
-  outline: 2px solid var(--agee-gold);
-  outline-offset: 3px;
-}
-#agee-root .agee-draft-control.agee-draft-send {
-  border-color: rgba(255, 255, 255, 0.32);
-  background: var(--agee-gold);
-  color: #17140b;
-  font-size: 27px;
-}
-#agee-root .agee-draft-control.agee-draft-send:hover {
-  background: #ffe28e;
-}
 #agee-proactive-indicator {
   position: absolute;
   right: -0.55em;
@@ -671,20 +628,6 @@
   background: rgba(38, 120, 74, 0.32);
   color: #b2f5cf;
 }
-#agee-mode-select {
-  appearance: none;
-  align-self: center;
-  width: 82px;
-  height: 34px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--agee-ink);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  padding: 0 10px;
-}
 #agee-input {
   width: 100%;
   min-width: 0;
@@ -1130,12 +1073,80 @@ button.agee-ui-list-row:hover {
   display: none;
 }
 
+/* Local page grounding stays visible at the top of the compact surface. The
+   canonical conversation remains gateway-owned and is fetched only when the
+   user opens History. */
+#agee-page-context {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 12px 2px;
+}
+#agee-page-identity {
+  color: var(--agee-muted);
+  flex: 1;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#agee-history-button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--agee-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+#agee-history-button:hover,
+#agee-history-button:focus-visible,
+#agee-history-button[aria-expanded="true"] {
+  color: var(--agee-text);
+}
+#agee-history-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+#agee-history[hidden] {
+  display: none;
+}
+#agee-history {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  max-height: 38vh;
+  overflow-y: auto;
+  padding: 4px 12px 8px;
+}
+.agee-history-turn {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 8px 0;
+}
+.agee-history-turn:first-child {
+  border-top: 0;
+}
+.agee-history-turn p,
+.agee-history-empty {
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.agee-history-you {
+  color: var(--agee-muted);
+  margin-bottom: 4px !important;
+}
+.agee-history-assistant {
+  color: #e7e7ea;
+}
+
 /* ---- Result stack: cue cards ---------------------------------------------- */
-/* The log sits above the composer and holds the answer cards. It shows
-   whenever it has content, so replies stack right above where you type. Cards
-   persist until the user dismisses one (see .agee-cue-dismiss) instead of
-   fading on their own — the log is scrollable and height-capped so it never
-   swallows the page. */
+/* The log sits above the composer and holds transient answer cards. Terminal
+   cards linger briefly or can be dismissed immediately; canonical history is
+   opened separately. The log is height-capped so it never swallows the page. */
 #agee-log {
   display: none;
   max-height: 38vh;
@@ -1276,6 +1287,9 @@ button.agee-ui-list-row:hover {
 }
 .agee-cue-running .agee-cue-name::after {
   content: " · thinking";
+}
+.agee-cue-done.agee-cue-steered .agee-cue-name::after {
+  content: " · steered";
 }
 .agee-cue-done .agee-cue-name {
   color: #b7c7bd;
@@ -1532,12 +1546,6 @@ button.agee-ui-list-row:hover {
     min-width: 44px;
     height: 32px;
     padding: 0 5px;
-    font-size: 10px;
-  }
-  #agee-mode-select {
-    width: 64px;
-    height: 32px;
-    padding-inline: 7px;
     font-size: 10px;
   }
   #agee-voice,

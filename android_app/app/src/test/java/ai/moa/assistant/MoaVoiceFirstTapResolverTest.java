@@ -10,81 +10,118 @@ import static org.junit.Assert.assertFalse;
 
 public final class MoaVoiceFirstTapResolverTest {
     @Test
-    public void singleTapStartsContinuingVoiceWhenIdle() {
+    public void tapStartsOrInterruptsWhenNoManualCaptureIsActive() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
 
         assertEquals(
-                Collections.singletonList(MoaVoiceFirstTapResolver.Action.START_CONTINUE_TALK),
-                resolver.tapUp(false)
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.START_OR_INTERRUPT),
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.NONE)
         );
-        assertEquals(Collections.emptyList(), resolver.resolve());
         assertFalse(resolver.hasOpenChord());
     }
 
     @Test
-    public void singleTapWhileListeningNeverCommitsDraft() {
+    public void singleTapStopsAndSendsCurrentThreadCapture() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
 
-        assertEquals(Collections.emptyList(), resolver.tapUp(true));
-        assertEquals(Collections.emptyList(), resolver.resolve());
+        assertEquals(
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.STOP_AND_SEND),
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD)
+        );
     }
 
     @Test
-    public void doubleTapStartsFreshVoiceThreadWhenIdle() {
+    public void singleTapDoesNotSendFreshThreadCapture() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
 
         assertEquals(
-                Collections.singletonList(MoaVoiceFirstTapResolver.Action.START_CONTINUE_TALK),
-                resolver.tapUp(false)
+                Collections.emptyList(),
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD)
         );
+    }
+
+    @Test
+    public void doubleTapStartsFreshThreadWhenIdle() {
+        MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
+        resolver.tapUp();
+
+        assertEquals(
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.START_FRESH),
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.NONE)
+        );
+    }
+
+    @Test
+    public void doubleTapReplacesActiveCaptureWithFreshThread() {
+        MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
+        resolver.tapUp();
+
         assertEquals(
                 Arrays.asList(
-                        MoaVoiceFirstTapResolver.Action.CANCEL_TALK_LOOP,
-                        MoaVoiceFirstTapResolver.Action.START_FRESH_TALK
+                        MoaVoiceFirstTapResolver.Action.CANCEL_CAPTURE,
+                        MoaVoiceFirstTapResolver.Action.START_FRESH
                 ),
-                resolver.tapUp(true)
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD)
         );
-        assertEquals(Collections.emptyList(), resolver.resolve());
     }
 
     @Test
-    public void doubleTapWhileListeningSupersedesDraftWithFreshThread() {
+    public void secondDoubleTapStopsFreshThreadCapture() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
+        resolver.tapUp();
 
-        assertEquals(Collections.emptyList(), resolver.tapUp(true));
         assertEquals(
-                Arrays.asList(
-                        MoaVoiceFirstTapResolver.Action.CANCEL_TALK_LOOP,
-                        MoaVoiceFirstTapResolver.Action.START_FRESH_TALK
-                ),
-                resolver.tapUp(true)
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.STOP_AND_SEND),
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD)
         );
-        assertEquals(Collections.emptyList(), resolver.resolve());
     }
 
     @Test
-    public void tripleTapCancelsFreshThreadAndOpensChat() {
+    public void tripleTapCancelsActiveCaptureAndOpensChat() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
+        resolver.tapUp();
+        resolver.tapUp();
 
-        resolver.tapUp(false);
-        resolver.tapUp(true);
         assertEquals(
                 Arrays.asList(
-                        MoaVoiceFirstTapResolver.Action.CANCEL_TALK_LOOP,
+                        MoaVoiceFirstTapResolver.Action.CANCEL_CAPTURE,
                         MoaVoiceFirstTapResolver.Action.OPEN_CHAT
                 ),
-                resolver.tapUp(true)
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD)
         );
-        assertEquals(Collections.emptyList(), resolver.resolve());
     }
 
     @Test
-    public void resetClearsOpenDraftChord() {
+    public void tripleTapOpensChatWithoutVoiceActionWhenIdle() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
+        resolver.tapUp();
+        resolver.tapUp();
 
-        resolver.tapUp(true);
-        resolver.reset();
+        assertEquals(
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.OPEN_CHAT),
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.NONE)
+        );
+    }
 
-        assertEquals(Collections.emptyList(), resolver.resolve());
+    @Test
+    public void fourthTapAndBeyondAreInert() {
+        MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
+        resolver.tapUp();
+        resolver.tapUp();
+        resolver.tapUp();
+
+        assertEquals(
+                Collections.emptyList(),
+                resolver.resolve(MoaVoiceFirstTapResolver.CaptureOrigin.NONE)
+        );
     }
 }

@@ -1668,10 +1668,12 @@ async function playbackTailCanDowngradeCompletedTurn(tempDir) {
     turn_id: "turn_after_tail_interrupt",
     format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
   });
-  const replacement = records.at(-1);
-  assert.equal(replacement?.status, "replaced");
-  assert.equal(replacement?.incomplete, true);
-  assert.ok(replacement?.playback_progress?.estimated_text.includes("Second sentence"), "tail interruption must persist the accumulated played prefix");
+  const interrupted = records.at(-1);
+  assert.equal(interrupted?.status, "interrupted");
+  assert.equal(interrupted?.incomplete, true);
+  assert.equal(interrupted?.turn_relation?.kind, "steering");
+  assert.equal(interrupted?.turn_relation?.next_turn_id, "turn_after_tail_interrupt");
+  assert.ok(interrupted?.playback_progress?.estimated_text.includes("Second sentence"), "tail interruption must persist the accumulated played prefix");
 }
 
 async function stalePlaybackProgressIsRejected(tempDir) {

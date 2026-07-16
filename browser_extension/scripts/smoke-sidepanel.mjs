@@ -153,31 +153,16 @@ async function main() {
     await pageCdp.send("Runtime.enable");
     await waitForEval(pageCdp, 'document.readyState === "complete" && document.getElementById("status")?.textContent === "Ready."');
 
-    const roleUi = await evaluate(pageCdp, `(async () => {
-      const selector = document.getElementById("agentModeSelector");
-      const buttons = [...document.querySelectorAll("[data-agent-mode-option]")];
-      const initial = selector?.dataset.agentMode || "";
-      document.getElementById("agentModeCollaborate")?.click();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      const stored = await chrome.storage.local.get("ageeBrowserAgentRole");
-      return {
-        initial,
-        selected: selector?.dataset.agentMode || "",
-        stored: stored.ageeBrowserAgentRole || "",
-        pressed: buttons.filter((button) => button.getAttribute("aria-pressed") === "true").map((button) => button.dataset.agentModeOption),
-      };
-    })()`);
-    if (
-      roleUi?.initial !== "delegate" ||
-      roleUi?.selected !== "collaborate" ||
-      roleUi?.stored !== "collaborate" ||
-      JSON.stringify(roleUi?.pressed) !== JSON.stringify(["collaborate"])
-    ) {
-      throw new Error(`side-panel role selector did not persist one explicit role: ${JSON.stringify(roleUi)}`);
+    const roleUi = await evaluate(pageCdp, `(() => ({
+      selectors: document.querySelectorAll("#agentModeSelector, [data-agent-mode-option]").length,
+      roles: [roleForInstruction("explain this"), roleForInstruction("help me do this"),
+        roleForInstruction("work with me"), roleForInstruction("organize this page")],
+    }))()`);
+    if (roleUi?.selectors !== 0 || JSON.stringify(roleUi?.roles) !== JSON.stringify(["explain", "help", "collaborate", "delegate"])) {
+      throw new Error(`side-panel conversational roles are not selector-free: ${JSON.stringify(roleUi)}`);
     }
 
     await evaluate(pageCdp, `(() => {
-      document.getElementById("agentModeDelegate")?.click();
       const input = document.getElementById("text");
       input.value = "organize this page";
       document.getElementById("form")?.requestSubmit();
@@ -209,7 +194,7 @@ async function main() {
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
-        "role selector persisted Collaborate, Delegate confirmation cancelled safely, chrome.sidePanel.open available.",
+        "conversational roles had no selector, Delegate confirmation cancelled safely, chrome.sidePanel.open available.",
     );
   } finally {
     workerCdp?.close();

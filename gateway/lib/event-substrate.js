@@ -1158,9 +1158,21 @@ function readRegularFileSnapshot(filePath, label, { allowMissing = false } = {})
   const before = lstatRegularBoundary(filePath, label, { allowMissing });
   if (!before) return null;
   const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
-  const handle = fs.openSync(filePath, flags);
+  let handle;
   try {
-    const after = verifyOpenedRegularBoundary(filePath, handle, before, label);
+    handle = fs.openSync(filePath, flags);
+  } catch (error) {
+    if (allowMissing && error?.code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    let after;
+    try {
+      after = verifyOpenedRegularBoundary(filePath, handle, before, label);
+    } catch (error) {
+      if (allowMissing && error?.code === "ENOENT") return null;
+      throw error;
+    }
     return { stat: after, content: fs.readFileSync(handle, "utf8") };
   } finally {
     fs.closeSync(handle);
@@ -1214,4 +1226,18 @@ module.exports = {
   // store.withStreamLock instead.
   acquireJsonStreamDirLock,
   releaseJsonStreamDirLock,
+  eventSubstrateTestInternals: Object.freeze({
+    createPostgresEventSubstrateStore,
+    jsonAppendLockIsStale,
+    listJsonLockArtifacts,
+    lockObservation,
+    processIsAlive,
+    quarantineStreamLockDir,
+    readRegularFileSnapshot,
+    retrySync,
+    sameFileIdentity,
+    unlinkArtifactWithIdentity,
+    lstatRegularBoundary,
+    verifyOpenedRegularBoundary,
+  }),
 };

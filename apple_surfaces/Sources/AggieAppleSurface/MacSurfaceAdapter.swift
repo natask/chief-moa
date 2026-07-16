@@ -204,13 +204,13 @@ public actor MacSurfaceAdapter {
 
     public func holdProposal(_ data: Data, expectedSurface: SurfaceIdentity) throws -> InertMacActionProposal {
         let proposal = try AggieEnvelopeDecoder.decodeProposal(data)
-        guard proposal.surface == expectedSurface, proposal.surface.kind == "macos" else {
+        guard proposal.surface == expectedSurface, proposal.surface.kind == .macOS else {
             throw MacSurfaceAdapterError.wrongSurface
         }
         return InertMacActionProposal(
             proposalID: proposal.payload.proposalID,
             proposalMessageID: proposal.messageID,
-            kind: proposal.payload.kind,
+            kind: proposal.payload.kind.rawValue,
             expiresAt: proposal.payload.expiresAt,
             proposalDigest: try AggieDigest.proposal(proposal)
         )

@@ -28,10 +28,20 @@ const {
 } = require("./lib/profile-options");
 const voiceL10n = require("./lib/voice-l10n");
 const { createCompanionCatalogStore, COMMAND_VERBS: COMPANION_COMMAND_VERBS } = require("./lib/companion-catalog");
+const { createCompanionHandlers } = require("./lib/companion-handlers");
+const { createPetCollectionHandlers } = require("./lib/pet-collection-handlers");
+const { createPetCoreHandlers } = require("./lib/pet-core-handlers");
+const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
+const { createProfileHandlers } = require("./lib/profile-handlers");
+const { createAgentRunHandlers } = require("./lib/agent-run-handlers");
+const { createAgentRunLaunchHandlers } = require("./lib/agent-run-launch-handlers");
+const { createRouterActivationHandlers } = require("./lib/router-activation-handlers");
+const { createAgentWorkerHandlers } = require("./lib/agent-worker-handlers");
 const { createCompanionRuntimeAuthority, createBillingRuntimeAuthority } = require("./lib/runtime-authority");
 const { createBillingDomain } = require("./lib/billing-domain");
 const { createUiSpecStore } = require("./lib/ui-spec");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
+const { createSelfExtensionHandlers } = require("./lib/self-extension-handlers");
 const { createBrain } = require("./lib/brain");
 const { createThreadStore, isIncognitoBranch, newBranchId } = require("./lib/thread-store");
 const { buildContextArtifact, contextArtifactReceipt } = require("./lib/context-artifact");
@@ -65,6 +75,7 @@ const { createEventSubstrateStore, normalizeEventType } = require("./lib/event-s
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { buildIdentity } = require("./lib/build-identity");
 const { createWorkHistoryStore } = require("./lib/work-history");
+const { createWorkHistoryHandlers } = require("./lib/work-history-handlers");
 const { createSemanticTelemetryStore, opaqueLifecycleId } = require("./lib/semantic-telemetry-store");
 const { createIntentRuntime } = require("./lib/intent-runtime");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
@@ -74,6 +85,7 @@ const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-
 const { createBlobStore } = require("./lib/blob-store");
 const { createVoiceTurnAudio } = require("./lib/voice-turn-audio");
 const { createVideoNoteHandlers, createVideoNotesStore, videoInlinePart } = require("./lib/video-notes");
+const { createVoiceModeHandlers, createVoiceModeStore, routingFor } = require("./lib/voice-modes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
 const {
@@ -375,9 +387,47 @@ const agentProfile = createAgentProfileStore({
     recovery_mode: "normal",
   },
 });
+const voiceModes = createVoiceModeStore({ dataDir: DATA_DIR });
+const voiceModeHandlers = createVoiceModeHandlers({ store: voiceModes, authorized, readJsonBody, sendJson });
 const companionCatalog = createCompanionCatalogStore({
   dataDir: DATA_DIR,
   voiceBinding: companionVoiceBindingOptions(),
+});
+const { routePetCollections } = createPetCollectionHandlers({
+  companionCatalog,
+  catalogVersion: PET_CATALOG_VERSION,
+  authorizedAgent,
+  agentAuthError,
+  readJsonBody,
+  sendJson,
+  cleanError,
+  petInputFromBody,
+  manifestV2FieldsFromBody,
+  petPreviewPayload,
+});
+const { routePetCore } = createPetCoreHandlers({
+  companionCatalog, agentProfile, catalogVersion: PET_CATALOG_VERSION,
+  authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
+  catalogPayload: petCatalogPayload, activePetPayload, profileOptionsFromUrl,
+  profileOptionsFromBody, requireDeviceScope, petInputFromBody,
+  manifestV2FieldsFromBody, companionPetRecord, petPreviewPayload,
+  companionInputFromPetBody, agentProfileRuntimeStatus, summarizePreviewProfile,
+  applyCompanionToProfile, canonicalVoice, petGenerationPlan,
+  petGenerationConfigured, callVertexPetImage,
+});
+const { routePetSharing } = createPetSharingHandlers({
+  companionCatalog,
+  catalogVersion: PET_CATALOG_VERSION,
+  voiceCloneMaxAudioBytes: VOICE_CLONE_MAX_AUDIO_BYTES,
+  authorizedAgent,
+  agentAuthError,
+  readJsonBody,
+  sendJson,
+  cleanError,
+  companionPetRecord,
+  profileOptionsFromBody,
+  requireDeviceScope,
+  applyCompanionToProfile,
 });
 const companionRuntimeAuthority = createCompanionRuntimeAuthority({
   policy: loadCompanionRuntimePolicy(),
@@ -387,6 +437,40 @@ const companionRuntimeAuthority = createCompanionRuntimeAuthority({
   loadState: loadCompanionRuntimeState,
   saveState: saveCompanionRuntimeState,
 });
+const { routeCompanions } = createCompanionHandlers({
+  companionCatalog, agentProfile, companionRuntimeAuthority,
+  authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
+  activeCompanionPayload, profileOptionsFromBody, requireDeviceScope,
+  agentProfileRuntimeStatus, summarizePreviewProfile, applyCompanionToProfile,
+});
+const { routeProfiles } = createProfileHandlers({
+  agentProfile, authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
+  profileOptionsFromUrl, profileOptionsFromBody, requireDeviceScope,
+  agentProfilePayload, readProfileHistory, recordProfileHistory,
+  rejectedLanguageFields, supportedLanguagesSentence, profileApplicationSemantics,
+});
+const { routeAgentRunReads } = createAgentRunHandlers({
+  authorizedAgent, agentAuthError, sendJson, sanitizeId,
+  runExists: (id) => fs.existsSync(agentRunPath(id)),
+  readAgentRun, readAgentEvents, isRunActive: (id) => activeRuns.has(id),
+  listAgentRuns, cancelAgentRunById, agentRunPayload,
+});
+const { routeAgentRunLaunches } = createAgentRunLaunchHandlers({
+  authorizedAgent, agentAuthError, readJsonBody, sendJson, cleanError,
+  sanitizeId, runExists: (id) => fs.existsSync(agentRunPath(id)),
+  readAgentRun, createAgentRun, executeAgentRun, activeRuns,
+  agentRunBodyWithSessionContext, useWorkerPullForAgentRuns, agentRunPayload,
+  appendAgentEvent, truncate, agentPromptWithSessionContext,
+});
+const { routeRouterActivations } = createRouterActivationHandlers({
+  authorizedAgent, agentAuthError, readJsonBody, sendJson,
+  formatScreenContext, agentPromptWithSessionContext, sanitizeHarness,
+  defaultHarness: ROUTER_DEFAULT_HARNESS, cleanError, createAgentRun,
+  appendAgentEvent, truncate, useWorkerPullForAgentRuns, executeAgentRun,
+  activeRuns, readAgentRun, firstLine, sanitizeId,
+  runExists: (id) => fs.existsSync(agentRunPath(id)),
+  readAgentEvents, summarizeAgentRun,
+});
 const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 
 // Engine-served declarative UI spec (tier A). The thin-client extension renders
@@ -394,6 +478,15 @@ const billingRuntimeAuthority = loadBillingRuntimeAuthority();
 // code. The client live-refreshes on change (storage.onChanged pattern).
 const uiSpecStores = new Map();
 const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_DIR });
+const { routeSelfExtensions } = createSelfExtensionHandlers({
+  artifacts: selfExtensionArtifacts,
+  authorizedAgent,
+  agentAuthError,
+  readJsonBody,
+  sendJson,
+  cleanError,
+  recordProductEventBestEffort,
+});
 
 // The Brain: a fail-soft memory layer over the installed gbrain CLI. The
 // Steward recalls the user's facts/persona from here before every model turn so
@@ -431,6 +524,11 @@ const workerPull = createWorkerPullStore({
     listRunsRaw: listAllAgentRunRecords,
   },
 });
+const { routeAgentWorkers } = createAgentWorkerHandlers({
+  authorizedAgent, agentAuthError, readJsonBody, sendJson,
+  workerPull, WorkerPullError, randomId, cleanError, ownerActor,
+  readAgentRun, rememberRunOutcome, syncWorkGraphFromRun, appendAgentEvent,
+});
 
 // Voice work-history control plane: durable tasks, queued runs, before/after
 // repo evidence, verification artifacts, feedback, control requests, and
@@ -443,6 +541,26 @@ const semanticTelemetry = createSemanticTelemetryStore({
     version: require("./package.json").version,
     build_id: process.env.MOA_TELEMETRY_BUILD_ID || undefined,
   },
+});
+const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
+  workHistory,
+  semanticTelemetry,
+  parseWorkHistoryIntent,
+  authorized,
+  deploymentPrincipal,
+  requireDeploymentPrincipal,
+  accountUserId,
+  readJsonBody,
+  sendJson,
+  cleanError,
+  sanitizeOptionalId,
+  randomId,
+  storeBrokerMessage,
+  truncate,
+  listAllAgentRuns,
+  createToolRequest,
+  recordToolRequestProductEvent,
+  emitPreviewTelemetry,
 });
 
 // Intent runtime: durable, event-sourced capture/transition/connect/focus state
@@ -546,14 +664,14 @@ if (ACCOUNT_HEALTH_INTERVAL_MS > 0) {
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
   systemPrompt: SYSTEM_PROMPT,
-  // The voice provider reads the effective profile's `voice` per session, so a
-  // spoken "switch to a female voice" takes effect on the next turn, no restart.
   agentProfile,
+  voiceModeAdmission: (deviceId) => deviceId
+    ? voiceModes.admit(deviceId)
+    : { mode: "ask", version: "voice_mode_default", routing: routingFor("ask") },
+  applyVoiceModeToProfile: (profile, admission) => voiceModes.applyToProfile(profile, admission),
   contextProvider: voiceLiveContextPrompt,
   toolHandler: handleLiveVoiceToolCall,
   onTurnCompleted: recordStreamingVoiceTurn,
-  // Cascaded pipeline: after Chirp STT, run the gateway's durable LLM turn so
-  // the Cloud TTS leg can speak the reply. Only used by the cascaded provider.
   reasoner: runCascadedVoiceReasoning,
   blobStore,
 });
@@ -568,6 +686,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+    if (await voiceModeHandlers(request, response, url)) return;
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/ui")) {
       sendGatewayUi(response);
       return;
@@ -735,48 +854,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/companions" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, companionCatalogPayload(url));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/companions" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateCompanion(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/companions/preview" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCompanionPreview(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/companions/apply" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCompanionApply(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/companions/rollback" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCompanionRollback(request, response);
+    if (await routeCompanions(request, response, url)) {
       return;
     }
 
@@ -792,248 +870,19 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/pets" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, petCatalogPayload(url));
+    if (await routePetCore(request, response, url)) {
       return;
     }
 
-    if (url.pathname === "/v1/agent/pets/active" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, activePetPayload(profileOptionsFromUrl(url)));
+    if (await routePetCollections(request, response, url)) {
       return;
     }
 
-    if (url.pathname === "/v1/agent/pets/agents" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, petAgentsPayload(url));
+    if (await routePetSharing(request, response, url)) {
       return;
     }
 
-    if (url.pathname === "/v1/agent/pets/agents" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreatePetAgent(request, response);
-      return;
-    }
-
-    {
-      const match = url.pathname.match(/^\/v1\/agent\/pets\/agents\/([^/]+)$/);
-      if (match && request.method === "GET") {
-        if (!authorizedAgent(request)) {
-          sendJson(response, 401, agentAuthError());
-          return;
-        }
-        const agent = companionCatalog.getAgent(decodeURIComponent(match[1]));
-        if (!agent) {
-          sendJson(response, 404, { error: "agent not found" });
-          return;
-        }
-        sendJson(response, 200, { version: PET_CATALOG_VERSION, agent });
-        return;
-      }
-    }
-
-    if (url.pathname === "/v1/agent/pets/bookmarks" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, petBookmarksPayload(url));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/bookmarks" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreatePetBookmark(request, response);
-      return;
-    }
-
-    {
-      const match = url.pathname.match(/^\/v1\/agent\/pets\/bookmarks\/([^/]+)$/);
-      if (match && request.method === "GET") {
-        if (!authorizedAgent(request)) {
-          sendJson(response, 401, agentAuthError());
-          return;
-        }
-        const bookmark = companionCatalog.getBookmark(decodeURIComponent(match[1]));
-        if (!bookmark) {
-          sendJson(response, 404, { error: "bookmark not found" });
-          return;
-        }
-        sendJson(response, 200, { version: PET_CATALOG_VERSION, bookmark });
-        return;
-      }
-    }
-
-    if (url.pathname === "/v1/agent/pets" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreatePet(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/preview" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handlePetPreview(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/apply" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handlePetApply(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/generate" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handlePetGenerate(request, response);
-      return;
-    }
-
-    // Shared library: browse published (shared) character manifests, and install
-    // one as a companion profile patch (same authority as apply). Exact-path
-    // routes registered before the /:id/* regexes below so they never collide.
-    if (url.pathname === "/v1/agent/pets/shared" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, petSharedPayload(url));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/pets/install" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handlePetInstall(request, response);
-      return;
-    }
-
-    // Voice-clone job for a character. POST enqueues a consent-gated clone job
-    // (dry-run while Google cloning is allowlist-pending); GET reads job status.
-    {
-      const match = url.pathname.match(/^\/v1\/agent\/pets\/([^/]+)\/voice-clone$/);
-      if (match) {
-        if (!authorizedAgent(request)) {
-          sendJson(response, 401, agentAuthError());
-          return;
-        }
-        const petId = decodeURIComponent(match[1]);
-        if (request.method === "POST") {
-          await handlePetVoiceClone(request, response, petId);
-          return;
-        }
-        if (request.method === "GET") {
-          sendJson(response, 200, petVoiceCloneStatusPayload(petId));
-          return;
-        }
-      }
-    }
-
-    // Publish a character to the shared library (requires approved provenance).
-    {
-      const match = url.pathname.match(/^\/v1\/agent\/pets\/([^/]+)\/publish$/);
-      if (match && request.method === "POST") {
-        if (!authorizedAgent(request)) {
-          sendJson(response, 401, agentAuthError());
-          return;
-        }
-        await handlePetPublish(request, response, decodeURIComponent(match[1]));
-        return;
-      }
-    }
-
-    if (url.pathname === "/v1/agent/profile" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, agentProfilePayload({}, profileOptionsFromUrl(url)));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile" && request.method === "PUT") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleAgentProfilePut(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile/history" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, readProfileHistory({
-        limit: Number(url.searchParams.get("limit") || 50),
-        systemPromptOnly: url.searchParams.get("system_prompt_only") === "1",
-      }));
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile/versions" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const profileOptions = profileOptionsFromUrl(url);
-      sendJson(response, 200, {
-        current_version: agentProfile.currentVersion(profileOptions),
-        scope: profileOptions.scope,
-        device_id: profileOptions.deviceId || "",
-        versions: agentProfile.versions({
-          limit: Number(url.searchParams.get("limit") || 50),
-          deviceId: profileOptions.deviceId,
-        }),
-      });
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile/rollback" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleAgentProfileRollback(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/profile/reset" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleAgentProfileReset(request, response);
+    if (await routeProfiles(request, response, url)) {
       return;
     }
 
@@ -1068,52 +917,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/self-extension/artifacts" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, {
-        artifacts: selfExtensionArtifacts.list({
-          type: url.searchParams.get("type") || "",
-          status: url.searchParams.get("status") || "",
-          limit: Number(url.searchParams.get("limit") || 100),
-        }),
-        active: selfExtensionArtifacts.runtime().active,
-        known: selfExtensionArtifacts.known(),
-      });
-      return;
-    }
-
-    if (url.pathname === "/v1/self-extension/artifacts" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateSelfExtensionArtifact(request, response);
-      return;
-    }
-
-    if (url.pathname === "/v1/self-extension/runtime" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, { runtime: selfExtensionArtifacts.runtime() });
-      return;
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/self-extension/artifacts/") &&
-      url.pathname.endsWith("/apply")
-    ) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.slice("/v1/self-extension/artifacts/".length, -"/apply".length);
-      await handleApplySelfExtensionArtifact(request, response, id);
+    if (await routeSelfExtensions(request, response, url)) {
       return;
     }
 
@@ -1126,102 +930,18 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/v1/agent/workers/registrations" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleCreateWorkerRegistration(request, response);
+    if (await routeAgentWorkers(request, response, url)) {
       return;
     }
 
-    if (url.pathname === "/v1/agent/workers/register" && request.method === "POST") {
-      await handleRegisterWorker(request, response);
+    if (await routeAgentRunReads(request, response, url)) {
       return;
     }
 
-    if (url.pathname === "/v1/agent/workers/claim" && request.method === "POST") {
-      await handleWorkerClaim(request, response);
+    if (await routeAgentRunLaunches(request, response, url)) {
       return;
     }
 
-    if (url.pathname === "/v1/agent/runs" && request.method === "GET") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      sendJson(response, 200, { runs: listAgentRuns(Number(url.searchParams.get("limit") || 25)) });
-      return;
-    }
-
-    if (url.pathname === "/v1/agent/runs" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleAgentRun(request, response);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname.startsWith("/v1/agent/runs/") && url.pathname.endsWith("/cancel")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.replace("/v1/agent/runs/", "").replace("/cancel", "");
-      await handleCancelAgentRun(response, id);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname.startsWith("/v1/agent/runs/") && url.pathname.endsWith("/followups")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.replace("/v1/agent/runs/", "").replace("/followups", "");
-      await handleAgentRunFollowup(request, response, id);
-      return;
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/agent/runs/") &&
-      url.pathname.endsWith("/heartbeat")
-    ) {
-      const id = url.pathname.slice("/v1/agent/runs/".length, -"/heartbeat".length);
-      await handleWorkerHeartbeat(request, response, id);
-      return;
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/agent/runs/") &&
-      url.pathname.endsWith("/events")
-    ) {
-      const id = url.pathname.slice("/v1/agent/runs/".length, -"/events".length);
-      await handleWorkerEvents(request, response, id);
-      return;
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname.startsWith("/v1/agent/runs/") &&
-      url.pathname.endsWith("/result")
-    ) {
-      const id = url.pathname.slice("/v1/agent/runs/".length, -"/result".length);
-      await handleWorkerResult(request, response, id);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/agent/runs/")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.replace("/v1/agent/runs/", "");
-      sendAgentRun(response, id);
-      return;
-    }
 
     if (url.pathname === "/v1/browser/roles" && request.method === "GET") {
       if (!authorized(request)) {
@@ -1618,26 +1338,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    // Router activation loop. The router holds no work: it routes an utterance,
-    // assembles context, LAUNCHES a disposable task agent (an agent run), tracks
-    // its status, and PINGS on completion. It does not speak -- the response is
-    // routing metadata, not an answer.
-    if (url.pathname === "/v1/router/activate" && request.method === "POST") {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      await handleRouterActivate(request, response);
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/v1/router/activations/")) {
-      if (!authorizedAgent(request)) {
-        sendJson(response, 401, agentAuthError());
-        return;
-      }
-      const id = url.pathname.replace("/v1/router/activations/", "");
-      sendRouterActivation(response, id);
+    if (await routeRouterActivations(request, response, url)) {
       return;
     }
 
@@ -2231,100 +1932,6 @@ module.exports = {
   brain,
   agentProfile,
 };
-
-async function handleCreateWorkerRegistration(request, response) {
-  try {
-    const body = await readJsonBody(request);
-    sendJson(response, 201, workerPull.createRegistration(body, { actor: ownerActor() }));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleRegisterWorker(request, response) {
-  try {
-    const body = await readJsonBody(request);
-    sendJson(response, 201, workerPull.registerWorker(body));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleWorkerClaim(request, response) {
-  try {
-    const auth = workerPull.authenticate(request, "agent_runs:claim");
-    const body = await readJsonBody(request);
-    sendJson(response, 200, workerPull.claim(body, auth));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleWorkerHeartbeat(request, response, id) {
-  try {
-    const auth = workerPull.authenticate(request, "agent_runs:heartbeat");
-    const body = await readJsonBody(request);
-    sendJson(response, 200, workerPull.heartbeat(id, body, auth));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleWorkerEvents(request, response, id) {
-  try {
-    const auth = workerPull.authenticate(request, "agent_runs:append_event");
-    const body = await readJsonBody(request);
-    sendJson(response, 200, workerPull.appendEvents(id, body, auth));
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-async function handleWorkerResult(request, response, id) {
-  try {
-    const auth = workerPull.authenticate(request, "agent_runs:complete");
-    const body = await readJsonBody(request);
-    const result = workerPull.result(id, body, auth);
-    sendJson(response, 200, result);
-    // Parity with gateway-executed runs (executeAgentRun's finish): a
-    // worker-reported terminal result must also land in the Brain and the work
-    // graph, or worker-run work never pings the session's project state.
-    // Best-effort; the worker's 200 is already sent.
-    try {
-      const run = readAgentRun(id);
-      rememberRunOutcome(run);
-      syncWorkGraphFromRun(run).catch((error) => {
-        appendAgentEvent(id, "work_node_sync_failed", { error: cleanError(error) });
-      });
-    } catch (error) {
-      appendAgentEvent(id, "completion_hooks_failed", { error: cleanError(error) });
-    }
-  } catch (error) {
-    sendWorkerError(response, error);
-  }
-}
-
-function sendWorkerError(response, error) {
-  if (error instanceof WorkerPullError) {
-    sendJson(response, error.status, {
-      error: {
-        code: error.code,
-        message: error.message,
-        retryable: Boolean(error.retryable),
-      },
-      request_id: randomId("req"),
-    });
-    return;
-  }
-  sendJson(response, 400, {
-    error: {
-      code: "invalid_request",
-      message: cleanError(error),
-      retryable: false,
-    },
-    request_id: randomId("req"),
-  });
-}
 
 function ownerUserId() {
   return sanitizeOptionalId(process.env.MOA_OWNER_USER_ID || "usr_owner", "usr_owner");
@@ -3713,208 +3320,6 @@ async function storeBrokerMessage(body, text) {
 // lifecycle events; clients claim ui.open requests and post receipts. The
 // gateway never executes any of that work itself.
 
-async function routeWorkHistory(request, response, url) {
-  const method = request.method;
-  const pathname = url.pathname;
-
-  try {
-    if (!authorized(request) && !pathname.startsWith("/v1/work-history/deployments")) {
-      sendJson(response, 403, { error: "scoped deployment credentials cannot access general work-history actions" });
-      return true;
-    }
-    if (method === "POST" && pathname === "/v1/work-history/turns") {
-      await handleWorkHistoryTurn(request, response);
-      return true;
-    }
-    if (method === "GET" && pathname === "/v1/work-history/status") {
-      sendJson(response, 200, await workHistory.statusSummary());
-      return true;
-    }
-    if (method === "GET" && pathname === "/v1/work-history/telemetry") {
-      sendJson(response, 200, await semanticTelemetry.query({
-        limit: url.searchParams.get("limit"),
-        name: url.searchParams.get("name"),
-        outcome: url.searchParams.get("outcome"),
-      }));
-      return true;
-    }
-    if (method === "GET" && pathname === "/v1/work-history/tasks") {
-      const summary = await workHistory.statusSummary();
-      sendJson(response, 200, { tasks: summary.tasks });
-      return true;
-    }
-    const taskMatch = pathname.match(/^\/v1\/work-history\/tasks\/([^/]+)$/);
-    if (method === "GET" && taskMatch) {
-      const detail = await workHistory.taskDetail(decodeURIComponent(taskMatch[1]));
-      if (!detail) {
-        sendJson(response, 404, { error: "work task not found" });
-        return true;
-      }
-      sendJson(response, 200, detail);
-      return true;
-    }
-    if (method === "POST" && pathname === "/v1/work-history/runs") {
-      const body = await readJsonBody(request);
-      const run = await workHistory.queueRun({ ...body, actor: body.actor || { kind: "user", id: body.source || "api" } });
-      sendJson(response, 202, { run });
-      return true;
-    }
-    if (method === "POST" && pathname === "/v1/work-history/runs/claim") {
-      const body = await readJsonBody(request);
-      const result = await workHistory.claimRun(body);
-      if (!result.run) {
-        sendJson(response, 204, {});
-        return true;
-      }
-      sendJson(response, 200, result);
-      return true;
-    }
-    const runActionMatch = pathname.match(/^\/v1\/work-history\/runs\/([^/]+)\/(events|snapshots|diffs|verifications)$/);
-    if (method === "POST" && runActionMatch) {
-      const runId = decodeURIComponent(runActionMatch[1]);
-      const body = await readJsonBody(request);
-      const input = { ...body, run_id: runId };
-      if (runActionMatch[2] === "events") {
-        sendJson(response, 201, { event: await workHistory.appendRunEvent(input) });
-      } else if (runActionMatch[2] === "snapshots") {
-        sendJson(response, 201, { snapshot: await workHistory.recordSnapshot(input) });
-      } else if (runActionMatch[2] === "diffs") {
-        sendJson(response, 201, { diff: await workHistory.recordDiff(input) });
-      } else {
-        sendJson(response, 201, { verification: await workHistory.recordVerification(input) });
-      }
-      return true;
-    }
-    const runMatch = pathname.match(/^\/v1\/work-history\/runs\/([^/]+)$/);
-    if (method === "GET" && runMatch) {
-      const detail = await workHistory.runDetail(decodeURIComponent(runMatch[1]));
-      if (!detail) {
-        sendJson(response, 404, { error: "work run not found" });
-        return true;
-      }
-      sendJson(response, 200, detail);
-      return true;
-    }
-    if (method === "POST" && pathname === "/v1/work-history/feedback") {
-      const body = await readJsonBody(request);
-      sendJson(response, 201, await workHistory.attachFeedback(body));
-      return true;
-    }
-    if (method === "POST" && pathname === "/v1/work-history/controls/claim") {
-      const body = await readJsonBody(request);
-      sendJson(response, 200, await workHistory.claimControlRequest(body));
-      return true;
-    }
-    const controlReceiptMatch = pathname.match(/^\/v1\/work-history\/controls\/([^/]+)\/receipt$/);
-    if (method === "POST" && controlReceiptMatch) {
-      const body = await readJsonBody(request);
-      sendJson(response, 200, await workHistory.receiptControlRequest({
-        ...body,
-        control_id: decodeURIComponent(controlReceiptMatch[1]),
-      }));
-      return true;
-    }
-    if (method === "GET" && pathname === "/v1/work-history/deployments") {
-      if (!authorized(request)) throw new Error("scoped deployment credentials cannot list broad deployment history");
-      sendJson(response, 200, await workHistory.deploymentLinks({ target: url.searchParams.get("target") || "" }));
-      return true;
-    }
-    if (method === "POST" && pathname === "/v1/work-history/deployments") {
-      const body = await readJsonBody(request);
-      const operation = body.mode === "applied" ? "apply" : "preview";
-      const principal = requireDeploymentPrincipal(request, operation);
-      const deployment = await workHistory.recordDeployment({
-        ...body,
-        worker_id: principal.id,
-        applied_by_actor: principal.id,
-        actor: principal.actor,
-      });
-      if (operation === "preview" && deployment.request_id && deployment.status === "available") {
-        emitPreviewTelemetry("preview.available", deployment.request_id, "preview_available", "ok");
-      } else if (operation === "preview" && deployment.request_id && deployment.status === "failed") {
-        emitPreviewTelemetry("preview.failed", deployment.request_id, "preview_failure", "error");
-      }
-      sendJson(response, 201, { deployment });
-      return true;
-    }
-    if (method === "POST" && pathname === "/v1/work-history/deployments/requests") {
-      if (!authorized(request)) throw new Error("only the authenticated user may request a deployment");
-      const body = await readJsonBody(request);
-      sendJson(response, 202, { request: await workHistory.requestDeployment({
-        ...body,
-        actor: { kind: "user", id: accountUserId() },
-      }) });
-      return true;
-    }
-    if (method === "GET" && pathname === "/v1/work-history/deployments/requests") {
-      requireDeploymentPrincipal(request, "preview");
-      sendJson(response, 200, { requests: await workHistory.pendingApprovedPreviewRequests({ limit: url.searchParams.get("limit") }) });
-      return true;
-    }
-    const deploymentRequestMatch = pathname.match(/^\/v1\/work-history\/deployments\/requests\/([^/]+)(?:\/(review|claim|verification|effect|adopt|receipt))?$/);
-    if (deploymentRequestMatch) {
-      const requestId = decodeURIComponent(deploymentRequestMatch[1]);
-      const action = deploymentRequestMatch[2] || "";
-      if (method === "GET" && !action) {
-        if (!authorized(request)
-          && !deploymentPrincipal(request, "preview")
-          && !deploymentPrincipal(request, "review")
-          && !deploymentPrincipal(request, "apply")) throw new Error("a scoped deployment credential is required");
-        const detail = await workHistory.deploymentRequestDetail(requestId);
-        if (!detail) sendJson(response, 404, { error: "deployment request not found" });
-        else if (!authorized(request) && deploymentPrincipal(request, "preview")) {
-          const principal = deploymentPrincipal(request, "preview");
-          const claim = [...(detail.claims || [])].reverse().find((item) => item.operation === "preview");
-          if (detail.request?.mode !== "preview" || detail.review?.decision !== "approved" || !["preview_claimed", "preview_available", "verification_failed", "verified"].includes(detail.status) || claim?.worker_id !== principal.id || (claim.lease_expires_at && Date.parse(claim.lease_expires_at) <= Date.now())) {
-            throw new Error("preview credential may only read its current approved preview assignment");
-          }
-          sendJson(response, 200, {
-            request: { request_id: detail.request.request_id, target: detail.request.target, mode: "preview", commit_sha: detail.request.commit_sha, adapter_kind: detail.request.adapter_kind, candidate_refs: detail.request.candidate_refs, artifact_refs: detail.request.artifact_refs, provenance_ref: detail.request.provenance_ref },
-            review: { decision: "approved" }, preview_claim: claim,
-            preview_records: detail.preview_records, latest_preview: detail.latest_preview,
-            latest_preview_verification: detail.latest_preview_verification, status: detail.status,
-          });
-        } else sendJson(response, 200, detail);
-        return true;
-      }
-      if (method === "POST" && action) {
-        const body = { ...(await readJsonBody(request)), request_id: requestId };
-        if (action === "review") {
-          const principal = requireDeploymentPrincipal(request, "review");
-          sendJson(response, 200, await workHistory.reviewDeploymentRequest({ ...body, actor: principal.actor, reviewed_by_actor: principal.id }));
-        } else {
-          const operation = DEPLOYMENT_OPERATIONS_FOR_AUTH.has(body.operation) ? body.operation : (action === "claim" ? "preview" : "apply");
-          const principal = requireDeploymentPrincipal(request, operation);
-          const controlled = { ...body, worker_id: principal.id, created_by_worker_id: principal.id, actor: principal.actor };
-          if (action === "claim") {
-            const result = await workHistory.claimDeploymentRequest(controlled);
-            if (operation === "preview") emitPreviewTelemetry("preview.claimed", requestId, "preview_claim", "ok");
-            sendJson(response, 200, result);
-          }
-          else if (action === "verification") {
-            const result = await workHistory.recordDeploymentVerification(controlled);
-            if (operation === "preview") {
-              emitPreviewTelemetry("preview.verification.completed", requestId, "preview_verification", result.status === "passed" ? "ok" : "error");
-              if (result.status === "failed") emitPreviewTelemetry("preview.failed", requestId, "preview_failure", "error");
-            }
-            sendJson(response, 201, result);
-          }
-          else if (action === "effect") sendJson(response, 201, await workHistory.observeDeploymentOperationEffect(controlled));
-          else if (action === "adopt") sendJson(response, 200, await workHistory.adoptDeploymentOperationEffect(controlled));
-          else sendJson(response, 200, await workHistory.receiptDeploymentOperation(controlled));
-        }
-        return true;
-      }
-    }
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return true;
-  }
-
-  sendJson(response, 404, { error: "unknown work-history endpoint" });
-  return true;
-}
-
 // Intent runtime HTTP surface. Thin, well-guarded bindings over the existing
 // intent-runtime module: capture, list/get projections, drive transitions,
 // connect relations, push/pop transactional focus, and rehydrate by intent or
@@ -4003,372 +3408,6 @@ function emitPreviewTelemetry(name, requestId, operation, outcome) {
       attributes: { environment: "preview", release_channel: "preview", operation, outcome },
     });
   } catch {}
-}
-
-// Control-plane entry for one spoken/typed message. Stores the message broker-
-// first, parses the deterministic work-history intent, executes the durable
-// proposal or projection query, and answers with speakable text plus record ids.
-async function handleWorkHistoryTurn(request, response) {
-  const body = await readJsonBody(request);
-  const transcript = String(body.transcript || body.text || "").trim();
-  if (!transcript) {
-    sendJson(response, 400, { error: "transcript or text is required" });
-    return;
-  }
-  const intent = parseWorkHistoryIntent(transcript);
-  if (!intent) {
-    sendJson(response, 422, {
-      handled: false,
-      error: "no work-history intent recognized; use the normal voice/chat route",
-    });
-    return;
-  }
-  const turnId = sanitizeOptionalId(body.turn_id, randomId("turn"));
-  const { stored: brokerEvent } = await storeBrokerMessage(
-    { ...body, source: body.source || "work-history-turn" },
-    truncate(transcript, 16000),
-  );
-  const result = await executeWorkHistoryIntent(intent, {
-    transcript,
-    turnId,
-    brokerEvent,
-    sessionId: sanitizeOptionalId(body.session_id || body.conversation_id, ""),
-    branchId: sanitizeOptionalId(body.branch_id, "default"),
-    body,
-  });
-  sendJson(response, result.status_code || 200, {
-    handled: true,
-    turn_id: turnId,
-    broker_event_id: brokerEvent.id,
-    intent,
-    speak: result.speak,
-    display: result.display || result.speak,
-    actions: result.actions || [],
-    refs: result.refs || {},
-  });
-}
-
-// Execute one parsed work-history intent. Every branch either appends durable
-// proposal records or answers from projections; none of them starts a harness,
-// opens a UI, applies a deployment, or cancels work without a worker receipt.
-async function executeWorkHistoryIntent(intent, context) {
-  const { transcript, turnId, brokerEvent, sessionId, branchId, body = {} } = context;
-  const topDecision = (brokerEvent?.decisions || [])[0] || null;
-
-  if (intent.kind === "create_work") {
-    const objective = intent.objective || transcript;
-    const task = await workHistory.createTask({
-      title: firstLine(objective).slice(0, 120),
-      objective,
-      owner_hint: intent.owner_hint || "",
-      session_id: sessionId,
-      branch_id: branchId,
-      project_id: body.project_id || "",
-      created_from_broker_event_id: brokerEvent?.id || "",
-      created_from_turn_id: turnId,
-      actor: { kind: "user", id: body.device_id || body.source || "voice" },
-    });
-    let run = null;
-    if (intent.wants_run !== false) {
-      run = await workHistory.queueRun({
-        task_id: task.task_id,
-        objective,
-        owner_hint: intent.owner_hint || "",
-        harness_hint: body.harness || "",
-        session_id: sessionId,
-        branch_id: branchId,
-        project_id: body.project_id || "",
-        created_from_broker_event_id: brokerEvent?.id || "",
-        created_from_turn_id: turnId,
-        route_decision_id: topDecision?.id || "",
-        context_pack_ref: topDecision?.context_pack_id || "",
-        profile_version: brokerEvent?.profile_version || "",
-        actor: { kind: "user", id: body.device_id || body.source || "voice" },
-      });
-    }
-    const speak = run
-      ? `Created task ${task.task_id} and queued run ${run.run_id}. It stays queued until a worker claims it.`
-      : `Created task ${task.task_id}. No run queued yet.`;
-    return {
-      status_code: 202,
-      speak,
-      refs: { task_id: task.task_id, run_id: run?.run_id || "", run_status: run?.status || "" },
-    };
-  }
-
-  if (intent.kind === "status_query") {
-    // "What are my agents doing" must reflect BOTH stores: the work-history
-    // control-plane runs AND the worker-pull agent runs (the queue workers pull
-    // from). We merge the agent-runs projection into the work-history summary so
-    // queued/active/completed/failed answers include runs waiting for a worker.
-    const summary = await workHistory.statusSummary();
-    const agentRuns = agentRunStatusSummary();
-    const merged = mergeRunStatusSummaries(summary, agentRuns);
-    return {
-      speak: workHistoryStatusSpeech(intent, merged, await workHistoryChangedDetail(intent, summary)),
-      refs: {
-        queued_run_ids: merged.queued.map((run) => run.run_id),
-        active_run_ids: merged.active.map((run) => run.run_id),
-        blocked_run_ids: merged.blocked.map((run) => run.run_id),
-        failed_run_ids: merged.failed.map((run) => run.run_id),
-        agent_run_ids: agentRuns.runs.map((run) => run.run_id),
-      },
-    };
-  }
-
-  if (intent.kind === "feedback") {
-    const result = await workHistory.attachFeedback({
-      targets: intent.target ? [intent.target] : [],
-      transcript: intent.text || transcript,
-      summary: firstLine(intent.text || transcript).slice(0, 300),
-      intent: intent.intent,
-      control_action: intent.control_action || "",
-      source_turn_id: turnId,
-      source_broker_event_id: brokerEvent?.id || "",
-      actor: { kind: "user", id: body.device_id || body.source || "voice" },
-    });
-    const targetNames = result.feedback.target_refs.map((ref) => ref.id).join(", ");
-    const speak = intent.intent === "cancellation"
-      ? `Queued a ${intent.control_action || "cancel"} request for ${targetNames}. The owning worker must claim and confirm it; nothing is canceled yet.`
-      : `Attached your feedback to ${targetNames}. The work keeps running.`;
-    return {
-      status_code: intent.intent === "cancellation" ? 202 : 200,
-      speak,
-      refs: {
-        feedback_id: result.feedback.feedback_id,
-        feedback_status: result.feedback.status,
-        control_request_ids: result.control_requests.map((control) => control.control_id),
-      },
-    };
-  }
-
-  if (intent.kind === "deployment_link") {
-    const links = await workHistory.deploymentLinks({ target: workHistoryDeploymentTarget(transcript) });
-    const parts = [];
-    if (links.latest_preview) {
-      parts.push(`Latest preview: ${links.latest_preview.preview_url || links.latest_preview.deployment_id} (${links.latest_preview.status}).`);
-    }
-    if (links.latest_applied) {
-      parts.push(`Active: ${links.latest_applied.active_url || links.latest_applied.deployment_id}, applied at ${links.latest_applied.applied_at || links.latest_applied.recorded_at}.`);
-    }
-    if (parts.length === 0) {
-      parts.push("No deployment records yet. Say 'create a deploy request' to queue one; nothing gets applied without your explicit promotion.");
-    }
-    return {
-      speak: parts.join(" "),
-      refs: {
-        latest_preview_id: links.latest_preview?.deployment_id || "",
-        latest_applied_id: links.latest_applied?.deployment_id || "",
-        preview_url: links.latest_preview?.preview_url || "",
-        active_url: links.latest_applied?.active_url || "",
-      },
-    };
-  }
-
-  if (intent.kind === "deployment_request") {
-    const request = await workHistory.requestDeployment({
-      target: workHistoryDeploymentTarget(transcript),
-      mode: "preview",
-      run_id: intent.target && intent.target.startsWith("wr_") ? intent.target : "",
-      branch: body.branch || "",
-      reason: transcript,
-      source_turn_id: turnId,
-      actor: { kind: "user", id: body.device_id || body.source || "voice" },
-    });
-    return {
-      status_code: 202,
-      speak: `Queued deployment request ${request.request_id} for ${request.target} as a preview. It will not be applied without your explicit promotion.`,
-      refs: { deployment_request_id: request.request_id },
-    };
-  }
-
-  if (intent.kind === "ui_open") {
-    const route = await workHistory.resolveUiRoute({ route_kind: intent.route_kind, target: intent.target });
-    if (!route) {
-      return {
-        status_code: 404,
-        speak: `I could not find a ${intent.route_kind} record to open yet.`,
-        refs: {},
-      };
-    }
-    let toolRequest = null;
-    let queueError = "";
-    try {
-      toolRequest = createToolRequest({
-        tool: "ui.open",
-        target_surface_type: intent.surface || "",
-        source: "work-history-voice",
-        session_id: sessionId,
-        branch_id: branchId,
-        instruction: truncate(transcript, 2000),
-        input: {
-          route_kind: route.route_kind,
-          route_ref: route.route_ref,
-          safe_url: route.safe_url,
-          created_from_turn_id: turnId,
-        },
-      });
-      await recordToolRequestProductEvent(toolRequest, "queued");
-    } catch (error) {
-      // No addressable client: keep the answer useful by returning the link as
-      // text, per the contract. The gateway itself never opens any UI.
-      queueError = cleanError(error);
-    }
-    const surfaceName = intent.surface === "android" ? "your phone" : intent.surface === "browser_extension" ? "your browser" : "a client";
-    const speak = toolRequest
-      ? `Asked ${surfaceName} to open the ${route.route_kind} ${route.route_ref}. It opens only after the client claims the request.`
-      : `No client is reachable right now. Open it yourself at ${route.safe_url}.`;
-    return {
-      status_code: toolRequest ? 202 : 200,
-      speak,
-      actions: toolRequest ? [{ type: "ui_open_requested", request_id: toolRequest.id, safe_url: route.safe_url }] : [],
-      refs: {
-        tool_request_id: toolRequest?.id || "",
-        route_kind: route.route_kind,
-        route_ref: route.route_ref,
-        safe_url: route.safe_url,
-        queue_error: queueError,
-      },
-    };
-  }
-
-  throw new Error(`unsupported work-history intent: ${intent.kind}`);
-}
-
-function workHistoryDeploymentTarget(transcript) {
-  const lower = normalizeSpeech(transcript);
-  if (/\bgateway\b/.test(lower)) return "gateway";
-  if (/\bandroid|phone\b/.test(lower)) return "android";
-  if (/\bextension\b/.test(lower)) return "browser_extension";
-  if (/\bwebsite|site\b/.test(lower)) return "website";
-  return "";
-}
-
-// Speakable status built ONLY from projections. Names ids, states, blocking
-// reasons, and the latest meaningful event; it never launches new work.
-// Project the worker-pull agent-runs store into the same bucket shape the
-// work-history status speech uses, so a status turn reflects runs waiting for a
-// worker to pull them. Read-only; this never launches, claims, or mutates a run.
-function agentRunStatusSummary() {
-  const runs = listAllAgentRuns()
-    .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
-  const norm = (run) => ({
-    run_id: run.id,
-    status: run.status,
-    worker_id: run.claimed_by_worker_id || "",
-    objective: run.prompt_preview || "",
-    latest_summary: run.output_preview || "",
-    blocking_reason: "",
-    source: "agent-runs",
-  });
-  const bucket = (statuses, limit) => runs.filter((run) => statuses.includes(run.status)).slice(0, limit).map(norm);
-  return {
-    runs: runs.slice(0, 50).map(norm),
-    queued: bucket(["queued"], 25),
-    active: bucket(["claimed", "running"], 25),
-    completed: bucket(["completed"], 5),
-    failed: bucket(["failed", "canceled", "timed-out"], 5),
-  };
-}
-
-// Merge the work-history projection with the agent-runs projection. The two
-// stores hold distinct ids, so this is a concat per bucket; work-history-only
-// buckets (blocked, waiting_on_user, tasks) pass through unchanged.
-function mergeRunStatusSummaries(summary, agentRuns) {
-  return {
-    ...summary,
-    queued: [...summary.queued, ...agentRuns.queued],
-    active: [...summary.active, ...agentRuns.active],
-    completed: [...summary.completed, ...agentRuns.completed],
-    failed: [...summary.failed, ...agentRuns.failed],
-    runs: [...summary.runs, ...agentRuns.runs],
-  };
-}
-
-function workHistoryStatusSpeech(intent, summary, changedDetail) {
-  if (intent.scope === "changed" && changedDetail) {
-    return changedDetail;
-  }
-  if (intent.scope === "failed") {
-    if (summary.failed.length === 0) {
-      return "Nothing has failed.";
-    }
-    return summary.failed.map((run) => {
-      const reason = run.blocking_reason || run.latest_summary || "no failure detail recorded";
-      return `Run ${run.run_id} ${run.status}: ${reason}.`;
-    }).join(" ");
-  }
-  if (intent.scope === "waiting") {
-    const waiting = summary.waiting_on_user.concat(summary.queued);
-    if (waiting.length === 0) {
-      return "Nothing is waiting on you.";
-    }
-    return waiting.map((run) => `Run ${run.run_id}: ${run.blocking_reason || run.status}.`).join(" ");
-  }
-  const parts = [];
-  if (summary.active.length > 0) {
-    parts.push(`Active: ${summary.active.map((run) => `${run.run_id} (${run.status}${run.worker_id ? ` on ${run.worker_id}` : ""})`).join(", ")}.`);
-  }
-  if (summary.queued.length > 0) {
-    parts.push(`Queued and waiting for a worker: ${summary.queued.map((run) => run.run_id).join(", ")}.`);
-  }
-  if (summary.blocked.length > 0) {
-    parts.push(`Blocked: ${summary.blocked.map((run) => `${run.run_id} (${run.blocking_reason})`).join("; ")}.`);
-  }
-  if (summary.completed.length > 0) {
-    parts.push(`Completed: ${summary.completed.map((run) => run.run_id).join(", ")}.`);
-  }
-  if (summary.failed.length > 0) {
-    parts.push(`Failed or canceled: ${summary.failed.map((run) => run.run_id).join(", ")}.`);
-  }
-  if (parts.length === 0) {
-    return "No work-history tasks or runs recorded yet.";
-  }
-  return parts.join(" ");
-}
-
-// "What did <run> change" answered from before/after snapshots, the diff ref,
-// and verification artifacts recorded by the claiming worker.
-async function workHistoryChangedDetail(intent, summary) {
-  if (intent.scope !== "changed") {
-    return "";
-  }
-  let runId = intent.target || "";
-  if (!runId) {
-    const candidates = summary.runs
-      .filter((run) => run.diff_count > 0 || ["completed", "running", "claimed"].includes(run.status))
-      .sort((a, b) => String(b.latest_event_at).localeCompare(String(a.latest_event_at)));
-    runId = candidates[0]?.run_id || "";
-  }
-  if (!runId) {
-    return "No runs with recorded changes yet.";
-  }
-  const detail = await workHistory.runDetail(runId);
-  if (!detail) {
-    return `I have no work run named ${runId}.`;
-  }
-  const parts = [`Run ${runId} is ${detail.status}.`];
-  if (detail.before_snapshot && detail.after_snapshot) {
-    parts.push(`It moved ${detail.before_snapshot.branch || "the repo"} from commit ${shortSha(detail.before_snapshot.commit_sha)} to ${shortSha(detail.after_snapshot.commit_sha)}.`);
-  } else if (detail.before_snapshot) {
-    parts.push(`It started from commit ${shortSha(detail.before_snapshot.commit_sha)}; no after snapshot yet.`);
-  } else {
-    parts.push("No repo snapshots recorded yet.");
-  }
-  const diff = detail.diffs.slice(-1)[0];
-  if (diff) {
-    parts.push(`The diff ${diff.diff_id} touches ${diff.stats.files || diff.changed_paths.length} files, +${diff.stats.insertions} -${diff.stats.deletions}.`);
-  }
-  const verification = detail.verifications.slice(-1)[0];
-  if (verification) {
-    parts.push(`Latest verification ${verification.status}: ${verification.command || verification.verification_id}.`);
-  }
-  return parts.join(" ");
-}
-
-function shortSha(sha) {
-  const safe = String(sha || "").trim();
-  return safe ? safe.slice(0, 10) : "unknown";
 }
 
 function brokerMessageText(body) {
@@ -4738,27 +3777,6 @@ function uiSpecPayload(userId = accountUserId()) {
   };
 }
 
-function companionCatalogPayload(url) {
-  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
-  const limit = Number(url?.searchParams?.get("limit") || 100);
-  const profile = agentProfile.effective();
-  const activeCompanion = activeCompanionPayload(profile);
-  return {
-    version: companionCatalog.version,
-    generated_at: new Date().toISOString(),
-    query,
-    active_companion_id: profile.active_companion_id || "",
-    active_companion: activeCompanion,
-    companions: companionCatalog.list({ query, limit }),
-    endpoints: {
-      list: "/v1/agent/companions",
-      create: "/v1/agent/companions",
-      preview: "/v1/agent/companions/preview",
-      apply: "/v1/agent/companions/apply",
-    },
-  };
-}
-
 function petCatalogPayload(url) {
   const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
   const limit = Number(url?.searchParams?.get("limit") || 100);
@@ -4832,232 +3850,6 @@ function activePetPayload(options = {}) {
   };
 }
 
-function petAgentsPayload(url) {
-  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
-  const limit = Number(url?.searchParams?.get("limit") || 100);
-  return {
-    version: PET_CATALOG_VERSION,
-    generated_at: new Date().toISOString(),
-    query,
-    agents: companionCatalog.listAgents({ query, limit }),
-    endpoints: {
-      list: "/v1/agent/pets/agents",
-      create: "/v1/agent/pets/agents",
-      bookmarks: "/v1/agent/pets/bookmarks",
-    },
-  };
-}
-
-function petBookmarksPayload(url) {
-  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
-  const limit = Number(url?.searchParams?.get("limit") || 100);
-  return {
-    version: PET_CATALOG_VERSION,
-    generated_at: new Date().toISOString(),
-    query,
-    bookmarks: companionCatalog.listBookmarks({ query, limit }),
-    endpoints: {
-      list: "/v1/agent/pets/bookmarks",
-      create: "/v1/agent/pets/bookmarks",
-      agents: "/v1/agent/pets/agents",
-    },
-  };
-}
-
-async function handleCreateCompanion(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const companion = companionCatalog.createDraft({
-      text: body?.text || body?.request || body?.prompt || body?.description,
-      name: body?.name,
-      voice: body?.voice,
-      rules: body?.rules,
-    });
-    const preview = companionCatalog.preview({ companion_id: companion.id });
-    sendJson(response, 201, {
-      companion,
-      preview,
-      active_profile_mutated: false,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleCreatePet(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const companion = companionCatalog.createDraft({
-      text: body?.text || body?.request || body?.prompt || body?.description,
-      name: body?.name,
-      voice: body?.voice,
-      pet: petInputFromBody(body),
-      image_data_url: body?.image_data_url || body?.imageDataUrl || body?.source_image || body?.sourceImage,
-      rules: body?.rules,
-      ...manifestV2FieldsFromBody(body),
-    });
-    const preview = companionCatalog.preview({ companion_id: companion.id });
-    sendJson(response, 201, {
-      version: PET_CATALOG_VERSION,
-      pet: companionPetRecord(companion),
-      companion,
-      preview: petPreviewPayload(preview),
-      active_profile_mutated: false,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleCreatePetAgent(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const agent = companionCatalog.createAgent({
-      text: body?.text || body?.request || body?.prompt || body?.description,
-      name: body?.name,
-      voice: body?.voice,
-      pet: petInputFromBody(body),
-      image_data_url: body?.image_data_url || body?.imageDataUrl || body?.source_image || body?.sourceImage,
-      rules: body?.rules,
-      ...manifestV2FieldsFromBody(body),
-    });
-    const preview = companionCatalog.preview({ companion_id: agent.companion_id });
-    sendJson(response, 201, {
-      version: PET_CATALOG_VERSION,
-      agent,
-      preview: petPreviewPayload(preview),
-      active_profile_mutated: false,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleCreatePetBookmark(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const bookmark = companionCatalog.createBookmark(body || {});
-    sendJson(response, 201, {
-      version: PET_CATALOG_VERSION,
-      bookmark,
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-async function handleCompanionPreview(request, response) {
-  const body = await readJsonBody(request);
-  const profileOptions = profileOptionsFromBody(body, "global");
-  // Signed-package previews go through the runtime authority lifecycle; plain
-  // catalog/studio previews keep the live first-party contract.
-  if (body?.package_base64 || body?.package || body?.approval_binding) {
-    try {
-      const current = String(agentProfile.currentVersion(profileOptions));
-      const expected = String(body?.expected_profile_version || "") || current;
-      if (expected !== current) throw new Error("expected_profile_version is stale");
-      sendJson(response, 200, companionRuntimeAuthority.preview({ ...body, scope: profileOptions.scope,
-        device_id: profileOptions.deviceId, expected_profile_version: expected }));
-    } catch (error) {
-      sendJson(response, 400, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
-    }
-    return;
-  }
-  try {
-    const preview = companionCatalog.preview(body || {});
-    const base = agentProfile.effective(profileOptions);
-    const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
-    sendJson(response, 200, {
-      ...preview,
-      mutates_profile: false,
-      profile_version: agentProfile.currentVersion(profileOptions),
-      profile_before: agentProfileRuntimeStatus(profileOptions),
-      profile_preview: summarizePreviewProfile(base, merged),
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-async function handleCompanionApply(request, response) {
-  const body = await readJsonBody(request);
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  // Signed-package applies require the runtime authority's approval binding;
-  // plain catalog/studio applies keep the live first-party contract.
-  if (body?.package_base64 || body?.package || body?.approval_binding || body?.package_digest) {
-    try {
-      sendJson(response, 200, companionRuntimeAuthority.apply({ ...body, scope: profileOptions.scope,
-        device_id: profileOptions.deviceId }));
-    } catch (error) {
-      sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" });
-    }
-    return;
-  }
-  try {
-    const result = applyCompanionToProfile(body || {}, profileOptions, body?.source || "api");
-    sendJson(response, 200, result);
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-async function handleCompanionRollback(request, response) {
-  const body = await readJsonBody(request);
-  try { sendJson(response, 200, companionRuntimeAuthority.rollback(body || {})); }
-  catch (error) { sendJson(response, 409, { error: cleanError(error), code: error?.code || "companion_authority_rejected" }); }
-}
-
-async function handlePetPreview(request, response) {
-  const body = await readJsonBody(request);
-  try {
-    const companionInput = companionInputFromPetBody(body || {});
-    const preview = companionCatalog.preview(companionInput);
-    const profileOptions = profileOptionsFromBody(body, "global");
-    const base = agentProfile.effective(profileOptions);
-    const merged = agentProfile.effectiveWithOverrides(preview.profile_overrides, profileOptions);
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      ...petPreviewPayload(preview),
-      profile_version: agentProfile.currentVersion(profileOptions),
-      profile_before: agentProfileRuntimeStatus(profileOptions),
-      profile_preview: summarizePreviewProfile(base, merged),
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-async function handlePetApply(request, response) {
-  const body = await readJsonBody(request);
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  try {
-    const companionInput = companionInputFromPetBody(body || {});
-    // Optional voice override: `voice` on the apply body re-applies the
-    // companion with that catalog voice as the profile default (the
-    // dashboard's "set as default voice"). Unknown names are ignored.
-    const requestedVoice = canonicalVoice(String(body?.voice || "")) || "";
-    const result = applyCompanionToProfile(
-      companionInput,
-      profileOptions,
-      body?.source || "pet-studio",
-      requestedVoice ? { voice: requestedVoice } : {},
-    );
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      pet: companionPetRecord(result.companion),
-      ...result,
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
 function companionInputFromPetBody(body = {}) {
   const agentId = body?.agent_id || body?.agentId;
   if (!agentId) return body || {};
@@ -5069,221 +3861,6 @@ function companionInputFromPetBody(body = {}) {
     ...body,
     companion_id: agent.companion_id,
   };
-}
-
-async function handlePetGenerate(request, response) {
-  const body = await readJsonBody(request);
-  const plan = petGenerationPlan(body || {});
-  if (!petGenerationConfigured()) {
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      status: "not_configured",
-      configured: false,
-      mutates_profile: false,
-      message: "Pet image generation is configured on the gateway, but live Vertex calls are disabled or missing credentials.",
-      requirement: "Set MOA_PET_ENABLE_VERTEX_GENERATION=1 with Vertex project and Google ADC on the gateway.",
-      plan,
-    });
-    return;
-  }
-
-  try {
-    const generated = await callVertexPetImage(plan, body || {});
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      status: "generated",
-      configured: true,
-      mutates_profile: false,
-      plan,
-      ...generated,
-    });
-  } catch (error) {
-    sendJson(response, 502, {
-      version: PET_CATALOG_VERSION,
-      status: "generation_failed",
-      configured: true,
-      mutates_profile: false,
-      error: cleanError(error),
-      plan,
-    });
-  }
-}
-
-// Voice-clone job endpoint. Consent-gated and (until the Google cloning
-// allowlist clears) dry-run: the plan is stored, the job status is
-// "blocked_allowlist", and the closest canonical voice is bound as the pet's
-// fallback. Reference audio bytes and any credentials are never persisted — only
-// a bounded descriptor (size + sha) — and reference_url is recorded, never
-// fetched server-side in this change. MOA_VOICE_CLONE_LIVE=1 is reserved: it
-// records the job "not_implemented_live" rather than calling any provider API.
-async function handlePetVoiceClone(request, response, petId) {
-  const body = await readJsonBody(request);
-  const pet = companionCatalog.get(petId);
-  if (!pet) {
-    sendJson(response, 404, { error: "companion not found" });
-    return;
-  }
-  const consent = body?.consent && typeof body.consent === "object" && !Array.isArray(body.consent) ? body.consent : {};
-  if (consent.attested !== true) {
-    sendJson(response, 422, { error: "consent.attested must be true to enroll a cloned voice" });
-    return;
-  }
-  const reference = voiceCloneReferenceFromBody(body);
-  if (!reference.ok) {
-    sendJson(response, 422, { error: reference.error });
-    return;
-  }
-  try {
-    const live = String(process.env.MOA_VOICE_CLONE_LIVE || "").trim() === "1";
-    const result = companionCatalog.createVoiceCloneJob({
-      companion_id: petId,
-      consent: { attested: true, subject: String(consent.subject || "") },
-      reference: reference.record,
-      live,
-    });
-    sendJson(response, 201, {
-      version: PET_CATALOG_VERSION,
-      job: result.job,
-      pet: companionPetRecord(result.companion),
-      companion: result.companion,
-      // The clone leg is allowlist-blocked; surface it plainly so callers know
-      // the pet is speaking with the bound canonical fallback for now.
-      blocker: live
-        ? "MOA_VOICE_CLONE_LIVE is set but live cloning is not implemented in this change."
-        : "Google voice cloning is allowlist-gated for this project; the job is stored in dry-run and the closest canonical voice is bound as the fallback.",
-      mutates_profile: false,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-function petVoiceCloneStatusPayload(petId) {
-  const pet = companionCatalog.get(petId);
-  const jobs = companionCatalog.listVoiceCloneJobs(petId);
-  return {
-    version: PET_CATALOG_VERSION,
-    generated_at: new Date().toISOString(),
-    companion_id: pet?.id || "",
-    found: Boolean(pet),
-    voice_binding: pet?.voice_binding || null,
-    voice_clone: pet?.voice_clone || null,
-    job: jobs.length ? jobs[jobs.length - 1] : null,
-    jobs,
-  };
-}
-
-// Validate the clone reference from the request body. Reference audio is capped
-// (decoded bytes), reference URLs are https-only. Returns a bounded descriptor;
-// the raw audio bytes are intentionally discarded here and never stored.
-function voiceCloneReferenceFromBody(body = {}) {
-  const audioBase64 = typeof body?.reference_audio_base64 === "string" ? body.reference_audio_base64.trim() : "";
-  const referenceUrl = typeof body?.reference_url === "string" ? body.reference_url.trim() : "";
-  if (audioBase64) {
-    const normalized = audioBase64.replace(/^data:[^;]+;base64,/, "");
-    let buffer;
-    try {
-      buffer = Buffer.from(normalized, "base64");
-    } catch {
-      buffer = null;
-    }
-    if (!buffer || buffer.length === 0) {
-      return { ok: false, error: "reference_audio_base64 is not valid base64 audio" };
-    }
-    if (buffer.length > VOICE_CLONE_MAX_AUDIO_BYTES) {
-      return { ok: false, error: `reference audio exceeds the ${VOICE_CLONE_MAX_AUDIO_BYTES}-byte cap` };
-    }
-    const sha = crypto.createHash("sha256").update(buffer).digest("hex");
-    return { ok: true, record: { kind: "audio", audio_bytes: buffer.length, audio_sha256: sha } };
-  }
-  if (referenceUrl) {
-    let parsed;
-    try {
-      parsed = new URL(referenceUrl);
-    } catch {
-      return { ok: false, error: "reference_url must be a valid URL" };
-    }
-    if (parsed.protocol !== "https:") {
-      return { ok: false, error: "reference_url must be https" };
-    }
-    return { ok: true, record: { kind: "url", url: parsed.toString() } };
-  }
-  return { ok: false, error: "provide reference_audio_base64 or reference_url" };
-}
-
-// Publish a character to the shared library. Requires provenance.consent_state
-// === "approved"; otherwise 409 with the current state in `reason`.
-async function handlePetPublish(request, response, petId) {
-  await readJsonBody(request).catch(() => ({}));
-  try {
-    const companion = companionCatalog.publishCompanion({ id: petId });
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      pet: companionPetRecord(companion),
-      companion,
-      visibility: companion.visibility,
-    });
-  } catch (error) {
-    if (error?.code === "consent_not_approved") {
-      sendJson(response, 409, {
-        error: cleanError(error),
-        code: "consent_not_approved",
-        reason: error.reason || "unreviewed",
-      });
-      return;
-    }
-    if (error?.code === "not_publishable") {
-      sendJson(response, 409, { error: cleanError(error), code: "not_publishable" });
-      return;
-    }
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
-function petSharedPayload(url) {
-  const query = url?.searchParams?.get("q") || url?.searchParams?.get("query") || "";
-  const limit = Number(url?.searchParams?.get("limit") || 100);
-  const shared = companionCatalog.listShared({ query, limit });
-  return {
-    version: PET_CATALOG_VERSION,
-    generated_at: new Date().toISOString(),
-    query,
-    pets: shared.map(companionPetRecord),
-    companions: shared,
-    endpoints: {
-      shared: "/v1/agent/pets/shared",
-      install: "/v1/agent/pets/install",
-      publish: "/v1/agent/pets/:id/publish",
-    },
-  };
-}
-
-// Install a shared character: a companion profile patch, identical authority to
-// apply. Applying/installing grants no local action authority.
-async function handlePetInstall(request, response) {
-  const body = await readJsonBody(request);
-  const petId = body?.id || body?.companion_id || body?.companionId;
-  const companion = companionCatalog.get(petId);
-  if (!companion) {
-    sendJson(response, 404, { error: "companion not found" });
-    return;
-  }
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  try {
-    const result = applyCompanionToProfile({ companion_id: companion.id }, profileOptions, body?.source || "pet-install");
-    sendJson(response, 200, {
-      version: PET_CATALOG_VERSION,
-      pet: companionPetRecord(result.companion),
-      installed_id: companion.id,
-      visibility: companion.visibility,
-      ...result,
-    });
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
 }
 
 function applyCompanionToProfile(input, profileOptions, source = "api", overrides = {}) {
@@ -5674,237 +4251,6 @@ async function handleUiSpecPut(request, response, userId = accountUserId()) {
   }
 }
 
-async function handleCreateSelfExtensionArtifact(request, response) {
-  const body = await readJsonBody(request);
-  const incoming = body && typeof body === "object" ? (body.artifact || body) : {};
-  try {
-    const artifact = selfExtensionArtifacts.createCandidate(incoming);
-    recordProductEventBestEffort({
-      event_type: "self_extension.artifact.created",
-      stream_id: `self-extension:${artifact.type}`,
-      idempotency_key: `self-extension-artifact-created:${artifact.id}`,
-      occurred_at: artifact.created_at,
-      actor: { kind: "agent", id: "self-extension" },
-      correlation_id: artifact.variant_group_id,
-      payload: {
-        id: artifact.id,
-        type: artifact.type,
-        title: artifact.title,
-        status: artifact.status,
-        variant_group_id: artifact.variant_group_id,
-        parent_id: artifact.parent_id,
-        prompt: artifact.prompt,
-        spec: artifact.spec,
-        preview: artifact.preview,
-        validation: artifact.validation,
-        created_at: artifact.created_at,
-      },
-    });
-    sendJson(response, 201, { artifact });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-async function handleApplySelfExtensionArtifact(request, response, id) {
-  const body = await readJsonBody(request);
-  const applyContext = selfExtensionApplyContextFromBody(body);
-  if (!applyContext.ok) {
-    sendJson(response, 400, { error: `invalid self-extension apply metadata: ${applyContext.errors.join("; ")}` });
-    return;
-  }
-  try {
-    const artifact = selfExtensionArtifacts.apply(id, applyContext.context);
-    if (!artifact) {
-      sendJson(response, 404, { error: "self-extension artifact not found" });
-      return;
-    }
-    const runtime = selfExtensionArtifacts.runtime();
-    recordProductEventBestEffort({
-      event_type: "self_extension.artifact.applied",
-      stream_id: `self-extension:${artifact.type}`,
-      idempotency_key: `self-extension-artifact-applied:${artifact.id}:${artifact.applied_at}`,
-      occurred_at: artifact.applied_at,
-      actor: selfExtensionApplyActor(artifact.apply_context),
-      correlation_id: artifact.variant_group_id,
-      payload: {
-        id: artifact.id,
-        type: artifact.type,
-        title: artifact.title,
-        variant_group_id: artifact.variant_group_id,
-        spec: artifact.spec,
-        preview: artifact.preview,
-        applied_at: artifact.applied_at,
-        apply_context: artifact.apply_context,
-        runtime: runtime.active[artifact.type],
-      },
-    });
-    sendJson(response, 200, { artifact, runtime });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-  }
-}
-
-function selfExtensionApplyActor(applyContext) {
-  const mode = cleanSelfExtensionToken(applyContext?.approval?.mode, 40);
-  const approvedBy = cleanSelfExtensionText(applyContext?.approval?.approved_by, 120);
-  if (mode === "explicit_user") {
-    return { kind: "user", id: approvedBy || "unknown" };
-  }
-  return { kind: "agent", id: approvedBy || "self-extension", mode: mode || "unknown" };
-}
-
-function selfExtensionApplyContextFromBody(body) {
-  const input = body && typeof body === "object" && !Array.isArray(body) ? body : {};
-  const source = input.source && typeof input.source === "object" && !Array.isArray(input.source)
-    ? input.source
-    : input.provenance && typeof input.provenance === "object" && !Array.isArray(input.provenance)
-      ? input.provenance
-      : {};
-  const approval = input.approval && typeof input.approval === "object" && !Array.isArray(input.approval)
-    ? input.approval
-    : {};
-  const sourceKind = cleanSelfExtensionToken(source.kind || input.source_kind, 40);
-  const approvalMode = cleanSelfExtensionToken(approval.mode || input.approval_mode, 40);
-  const errors = [];
-  const sourceKinds = ["user_turn", "agent_run", "manual_api", "smoke"];
-  const approvalModes = ["explicit_user", "developer", "test"];
-  if (!sourceKind) {
-    errors.push("source.kind is required");
-  } else if (!sourceKinds.includes(sourceKind)) {
-    errors.push(`source.kind must be one of: ${sourceKinds.join(", ")}`);
-  }
-  if (!approvalMode) {
-    errors.push("approval.mode is required");
-  } else if (!approvalModes.includes(approvalMode)) {
-    errors.push(`approval.mode must be one of: ${approvalModes.join(", ")}`);
-  }
-  const approvedBy = cleanSelfExtensionText(approval.approved_by || approval.approvedBy || input.approved_by, 120);
-  if (!approvedBy) {
-    errors.push("approval.approved_by is required");
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors, context: {} };
-  }
-  return {
-    ok: true,
-    errors: [],
-    context: {
-      source: {
-        kind: sourceKind,
-        turn_id: cleanSelfExtensionToken(source.turn_id || source.turnId, 120),
-        broker_event_id: cleanSelfExtensionToken(source.broker_event_id || source.brokerEventId, 120),
-        agent_run_id: cleanSelfExtensionToken(source.agent_run_id || source.agentRunId, 120),
-        session_id: cleanSelfExtensionToken(source.session_id || source.sessionId, 120),
-        branch_id: cleanSelfExtensionToken(source.branch_id || source.branchId, 120),
-        device_id: cleanSelfExtensionToken(source.device_id || source.deviceId, 120),
-        surface: cleanSelfExtensionToken(source.surface, 80),
-      },
-      approval: {
-        mode: approvalMode,
-        approved_by: approvedBy,
-        approval_id: cleanSelfExtensionToken(approval.approval_id || approval.approvalId, 120),
-        policy: "self_extension_apply_requires_source_and_approval",
-      },
-      reason: cleanSelfExtensionText(input.reason || approval.reason || source.reason, 240),
-      requested_by: cleanSelfExtensionText(input.requested_by || input.requestedBy || "", 120),
-      recorded_at: new Date().toISOString(),
-    },
-  };
-}
-
-function cleanSelfExtensionToken(value, max) {
-  return typeof value === "string"
-    ? value.trim().replace(/[^a-zA-Z0-9_:-]/g, "").slice(0, max)
-    : "";
-}
-
-function cleanSelfExtensionText(value, max) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-
-async function handleAgentProfilePut(request, response) {
-  const body = await readJsonBody(request);
-  // Accept either a bare patch object or { profile: {...} } / { profile_overrides: {...} }.
-  const patch = body && typeof body === "object"
-    ? (body.profile || body.profile_overrides || body)
-    : {};
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  const before = agentProfile.effective(profileOptions);
-  const beforeVersion = agentProfile.currentVersion(profileOptions);
-  agentProfile.patch(patch, {
-    source: body?.source || "api",
-    reason: "patch",
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
-  const after = agentProfile.effective(profileOptions);
-  const afterVersion = agentProfile.currentVersion(profileOptions);
-  recordProfileHistory(before, after, body?.source, {
-    beforeVersion,
-    afterVersion,
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
-  // A language the pipeline does not support is dropped by the sanitizer (the
-  // previous setting stays), so the turn never breaks. Report the rejection so
-  // the client can tell the user only the supported languages are available.
-  const rejectedLanguages = rejectedLanguageFields(patch);
-  const extra = { application: profileApplicationSemantics() };
-  if (rejectedLanguages.length > 0) {
-    extra.language_rejection = {
-      fields: rejectedLanguages,
-      supported: supportedLanguagesSentence(),
-      message: `That language is not in the supported set (${supportedLanguagesSentence()}), so I kept the previous language.`,
-    };
-  }
-  sendJson(response, 200, agentProfilePayload(extra, profileOptions));
-}
-
-async function handleAgentProfileReset(request, response) {
-  const body = await readJsonBody(request);
-  const profileOptions = profileOptionsFromBody(body, "global");
-  if (!requireDeviceScope(response, profileOptions)) {
-    return;
-  }
-  const before = agentProfile.effective(profileOptions);
-  const beforeVersion = agentProfile.currentVersion(profileOptions);
-  agentProfile.reset({
-    source: body?.source || "api",
-    reason: "reset",
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
-  const after = agentProfile.effective(profileOptions);
-  const afterVersion = agentProfile.currentVersion(profileOptions);
-  recordProfileHistory(before, after, body?.source || "reset", {
-    beforeVersion,
-    afterVersion,
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
-  sendJson(response, 200, agentProfilePayload({ application: profileApplicationSemantics() }, profileOptions));
-}
-
-async function handleAgentProfileRollback(request, response) {
-  const body = await readJsonBody(request);
-  const version = body?.version || body?.profile_version || body?.rollback_to_version;
-  try {
-    const before = agentProfile.effective();
-    const beforeVersion = agentProfile.currentVersion();
-    agentProfile.rollback(version, { source: body?.source || "api", reason: "rollback" });
-    const after = agentProfile.effective();
-    const afterVersion = agentProfile.currentVersion();
-    recordProfileHistory(before, after, body?.source || "rollback", { beforeVersion, afterVersion });
-    sendJson(response, 200, agentProfilePayload({ application: profileApplicationSemantics() }));
-  } catch (error) {
-    sendJson(response, 404, { error: cleanError(error) });
-  }
-}
-
 // Append a history entry whenever the effective profile actually changed. We log
 // which fields changed and, for system_prompt, both the new value and a short
 // preview of the previous one — that is the spine of "how many prompts have I set".
@@ -6048,209 +4394,6 @@ async function handleUpdateProject(request, response, id) {
   }
 }
 
-async function handleAgentRun(request, response) {
-  const body = await readJsonBody(request);
-  const runBody = agentRunBodyWithSessionContext(body);
-  let run;
-  try {
-    run = createAgentRun(runBody);
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-
-  if (useWorkerPullForAgentRuns()) {
-    sendJson(response, 202, {
-      ...agentRunPayload(readAgentRun(run.id)),
-      worker_pull: {
-        queued: true,
-        claim_url: "/v1/agent/workers/claim",
-      },
-    });
-    return;
-  }
-
-  const wait = body.wait !== false;
-  const active = { child: null, cancelRequested: false, promise: null };
-  const promise = executeAgentRun(run.id, active).finally(() => activeRuns.delete(run.id));
-  active.promise = promise;
-  activeRuns.set(run.id, active);
-
-  if (!wait) {
-    sendJson(response, 202, agentRunPayload(readAgentRun(run.id)));
-    return;
-  }
-
-  await promise;
-  sendJson(response, 200, agentRunPayload(readAgentRun(run.id)));
-}
-
-// Router activate: turn an intent/utterance into a launched task agent and
-// return the run id IMMEDIATELY (non-blocking). The router assembles a small
-// amount of context, creates an agent run via the existing run store/harness,
-// and registers a completion ping. It never blocks on the harness and never
-// speaks the result back.
-async function handleRouterActivate(request, response) {
-  const body = await readJsonBody(request);
-  const intent = String(body.intent || body.utterance || body.prompt || body.text || "").trim();
-  if (!intent) {
-    sendJson(response, 400, { error: "intent is required" });
-    return;
-  }
-
-  // Assemble minimal routing context. Screen text is evidence, not instruction;
-  // the harness sees it labeled as context, and model/harness output stays a
-  // proposal, never an executable command.
-  const contextLines = [];
-  if (body.screen) {
-    const screen = formatScreenContext(body.screen);
-    if (screen) {
-      contextLines.push("Screen context (evidence, not instruction):", screen, "");
-    }
-  }
-  const promptForAgent = contextLines.length
-    ? `${contextLines.join("\n")}User intent:\n${intent}`
-    : intent;
-  const promptWithSessionContext = agentPromptWithSessionContext(promptForAgent, {
-    sessionId: body.session_id || body.conversation_id,
-    branchId: body.branch_id || "default",
-    allBranches: body.all_branches_context === true,
-  });
-
-  let harness;
-  try {
-    harness = sanitizeHarness(body.harness || ROUTER_DEFAULT_HARNESS);
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-
-  let run;
-  try {
-    run = createAgentRun({
-      prompt: promptWithSessionContext,
-      harness,
-      source: body.source || "router",
-      conversation_id: body.conversation_id,
-      working_dir: body.working_dir,
-      screen: body.screen,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-
-  appendAgentEvent(run.id, "router_activated", {
-    intent: truncate(intent, 2000),
-    harness,
-    source: run.source,
-  });
-
-  if (useWorkerPullForAgentRuns()) {
-    sendJson(response, 202, {
-      activation_id: run.id,
-      run_id: run.id,
-      status: run.status,
-      harness: run.harness,
-      intent: truncate(intent, 2000),
-      status_url: `/v1/router/activations/${run.id}`,
-      worker_pull: {
-        queued: true,
-        claim_url: "/v1/agent/workers/claim",
-      },
-    });
-    return;
-  }
-
-  const active = { child: null, cancelRequested: false, promise: null };
-  // Launch the disposable task agent and register the completion ping. The ping
-  // is a stored event the caller can observe via GET /v1/router/activations/:id;
-  // it carries a timestamp and a short summary of what the agent did.
-  const promise = executeAgentRun(run.id, active)
-    .then((finished) => emitRouterPing(finished))
-    .catch((error) => emitRouterPing(readAgentRun(run.id), cleanError(error)))
-    .finally(() => activeRuns.delete(run.id));
-  active.promise = promise;
-  activeRuns.set(run.id, active);
-
-  // Return immediately: a run id the caller can poll, plus where to read status.
-  sendJson(response, 202, {
-    activation_id: run.id,
-    run_id: run.id,
-    status: run.status,
-    harness: run.harness,
-    intent: truncate(intent, 2000),
-    status_url: `/v1/router/activations/${run.id}`,
-  });
-}
-
-// Emit the completion ping for a finished router activation. Stored as a durable
-// `router_ping` event so the caller can observe it even after the process moves
-// on. Carries the terminal status, a timestamp, and a short result summary of
-// "what the agent did".
-function emitRouterPing(run, runtimeError) {
-  try {
-    const summary = routerResultSummary(run, runtimeError);
-    appendAgentEvent(run.id, "router_ping", {
-      run_status: run.status,
-      ok: run.status === "completed",
-      summary,
-      finished_at: run.finished_at || new Date().toISOString(),
-    });
-  } catch (error) {
-    // The ping is best-effort observability; a failure here must never crash the
-    // run loop.
-  }
-}
-
-// A short, human-readable summary of what the task agent did, derived from its
-// output. Never includes secrets -- only the harness's own stdout/stderr/error,
-// which is already redacted at the arg level.
-function routerResultSummary(run, runtimeError) {
-  if (run.status === "completed") {
-    const body = firstLine(String(run.output || "").trim());
-    return body || `Task agent ${run.id} completed.`;
-  }
-  const detail = runtimeError || run.error || "unknown error";
-  return `Task agent ${run.id} ${run.status || "ended"}: ${detail}`;
-}
-
-// Read a router activation: the underlying run summary, its lifecycle events,
-// and the completion ping (if any) lifted out for easy observation.
-function sendRouterActivation(response, id) {
-  const safeId = sanitizeId(id);
-  if (!fs.existsSync(agentRunPath(safeId))) {
-    sendJson(response, 404, { error: "router activation not found" });
-    return;
-  }
-  const run = readAgentRun(safeId);
-  const events = readAgentEvents(safeId);
-  const ping = [...events].reverse().find((event) => event.type === "router_ping") || null;
-  sendJson(response, 200, {
-    activation_id: run.id,
-    run: summarizeAgentRun(run),
-    status: run.status,
-    active: activeRuns.has(safeId),
-    ping,
-    events,
-  });
-}
-
-async function handleCancelAgentRun(response, id) {
-  const result = cancelAgentRunById(id);
-  if (!result.ok && result.status === "not_found") {
-    sendJson(response, 404, { error: "agent run not found" });
-    return;
-  }
-
-  if (result.status === "cancel_requested") {
-    sendJson(response, 202, agentRunPayload(result.run));
-    return;
-  }
-
-  sendJson(response, 200, agentRunPayload(result.run));
-}
-
 function cancelAgentRunById(id) {
   let safeId;
   try {
@@ -6294,85 +4437,6 @@ function cancelAgentRunById(id) {
   appendAgentEvent(safeId, "canceled", { error: next.error });
   activeRuns.delete(safeId);
   return { ok: true, status: "canceled_before_active", run: next };
-}
-
-async function handleAgentRunFollowup(request, response, id) {
-  const safeId = sanitizeId(id);
-  if (!fs.existsSync(agentRunPath(safeId))) {
-    sendJson(response, 404, { error: "agent run not found" });
-    return;
-  }
-
-  const parent = readAgentRun(safeId);
-  const body = await readJsonBody(request);
-  const text = String(body.prompt || body.text || body.transcript || "").trim();
-  if (!text) {
-    sendJson(response, 400, { error: "follow-up text is required" });
-    return;
-  }
-
-  appendAgentEvent(parent.id, "follow_up", {
-    text: truncate(text, 4000),
-    source: String(body.source || "android-overlay").slice(0, 80),
-  });
-
-  const continuationPrompt = [
-    "Continue the prior Moa agent run with this new user follow-up.",
-    "",
-    "Parent run:",
-    parent.id,
-    "",
-    "Parent prompt:",
-    truncate(parent.prompt || "", 6000),
-    "",
-    "Parent latest output:",
-    truncate(parent.output || parent.stderr || parent.stdout || "", 6000),
-    "",
-    "New user follow-up:",
-    text,
-  ].join("\n");
-  const promptWithSessionContext = agentPromptWithSessionContext(continuationPrompt, {
-    sessionId: body.session_id || body.conversation_id || parent.conversation_id,
-    branchId: body.branch_id || "default",
-    allBranches: body.all_branches_context === true,
-  });
-
-  let run;
-  try {
-    run = createAgentRun({
-      conversation_id: body.conversation_id || parent.conversation_id,
-      source: body.source || "android-follow-up",
-      harness: body.harness || parent.harness,
-      working_dir: body.working_dir || parent.working_dir,
-      prompt: promptWithSessionContext,
-      screen: body.screen,
-      parent_run_id: parent.id,
-      profile_version: body.profile_version || parent.profile_version,
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: cleanError(error) });
-    return;
-  }
-
-  const active = { child: null, cancelRequested: false, promise: null };
-  if (useWorkerPullForAgentRuns()) {
-    sendJson(response, 202, {
-      ...agentRunPayload(readAgentRun(run.id)),
-      parent_run_id: parent.id,
-      worker_pull: {
-        queued: true,
-        claim_url: "/v1/agent/workers/claim",
-      },
-    });
-    return;
-  }
-  const promise = executeAgentRun(run.id, active).finally(() => activeRuns.delete(run.id));
-  active.promise = promise;
-  activeRuns.set(run.id, active);
-  sendJson(response, 202, {
-    ...agentRunPayload(readAgentRun(run.id)),
-    parent_run_id: parent.id,
-  });
 }
 
 async function supervisorStatusPayload() {
@@ -6662,11 +4726,6 @@ async function reduceWorkNode(nodeId, body = {}) {
 
 async function handleVoiceTurn(request, response) {
   const body = await readJsonBody(request);
-  // A turn may attach a stored video note (video_note_id): the recording IS the
-  // user's question — narration rides the video's audio track — so an empty
-  // transcript is legitimate and the synthetic-transcript refusal does not
-  // apply. Video turns always take the plain chat leg below with the video
-  // attached as a Gemini inline part.
   const videoNote = videoNoteForTurn(body);
   if (!videoNote && String(body.video_note_id || "").trim()) {
     sendJson(response, 404, { error: "video note not found" });
@@ -6677,13 +4736,22 @@ async function handleVoiceTurn(request, response) {
     sendJson(response, 400, { error: "transcript or text is required" });
     return;
   }
-  // A synthetic placeholder is not user speech. Refuse it here so no client can
-  // prompt the model with fabricated transcript text.
   if (!videoNote && normalizeTranscriptSource(body.transcript_source, transcript, "client_stt") === "synthetic") {
     sendJson(response, 422, { error: "no speech was transcribed", code: "no_speech" });
     return;
   }
 
+  const deviceId = profileDeviceIdFromBody(body);
+  const voiceMode = deviceId
+    ? voiceModes.admit(deviceId)
+    : { mode: "ask", version: "voice_mode_default", routing: routingFor("ask") };
+  if (!voiceMode.routing.provider_work_allowed) {
+    sendJson(response, 202, {
+      mode: voiceMode.mode, mode_version: voiceMode.version, routing: voiceMode.routing,
+      classification: "note_capture_required", stored: false, requires_audio_upload: true,
+    });
+    return;
+  }
   if (!videoNote && shouldDelegateVoiceToBrowserTurn(body, transcript)) {
     await handleBrowserTurnBody(response, body, { modality: "voice", legacy: "voice" });
     return;
@@ -6693,7 +4761,6 @@ async function handleVoiceTurn(request, response) {
   const conversationId = sanitizeOptionalId(body.conversation_id || sessionId, sessionId);
   const branchId = sanitizeOptionalId(body.branch_id, "default");
   const turnId = sanitizeOptionalId(body.turn_id, randomId("turn"));
-  const deviceId = profileDeviceIdFromBody(body);
   const profileOptions = { scope: deviceId ? "device" : "global", deviceId };
   const existing = readVoiceTurnRecord(sessionId, turnId);
   if (existing?.response) {
@@ -6702,12 +4769,6 @@ async function handleVoiceTurn(request, response) {
   }
 
   const source = String(body.source || body.client?.source || "android-overlay").slice(0, 80);
-  // Context decision. This HTTP path is tool-less, so the decision is
-  // deterministic: an explicit client context_action or an incognito warrant may
-  // move or skip the thread; phrasing-only new/fork stays continue so a spoken
-  // "let's start" does not fragment the phone conversation. The caller branch
-  // still drives enrichment; only the FILING branch changes (incognito rides an
-  // ephemeral inc- branch that is never persisted).
   const voiceDecision = resolveContextDecision({ text: transcript, contextAction: body.context_action, toolCall: null });
   let voiceEffectiveAction = voiceDecision.action;
   if (voiceEffectiveAction !== "incognito" && voiceDecision.prior_source !== "client") {
@@ -6724,13 +4785,9 @@ async function handleVoiceTurn(request, response) {
   const incognitoTurn = voiceThread.persisted === false;
   const screen = summarizeScreen(body.screen || body.context?.screen);
   const profileVersion = agentProfile.currentVersion(profileOptions);
-  const profile = agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions);
-  // Routing. Default path is the deterministic keyword classifier. When
-  // VOICE_ROUTER_LLM=1 the LLM router produces an ordered action list instead;
-  // its list collapses to the same legacy label for the branches below, and its
-  // dispatch_agent entries (which carry per-run prompt/harness) drive agent
-  // fan-out so one turn can stack several agents. Router failures fall back to
-  // the heuristic inside routeVoiceTurn, so the flag can never harden a turn.
+  const profile = voiceModes.applyToProfile(
+    agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions), voiceMode,
+  );
   let routedActions = null;
   let classification;
   if (videoNote) {
@@ -6748,10 +4805,6 @@ async function handleVoiceTurn(request, response) {
   } else {
     classification = classifyVoiceTurn(body, transcript);
   }
-  // Capture memory-worthy statements ("call me Bob", "talk to me like a baller")
-  // to the Brain deterministically, before we branch on classification, so a
-  // fact lands even when the turn is a control/agent turn that never hits the
-  // model. Best-effort; never blocks the turn. Incognito turns write no memory.
   if (!incognitoTurn && !videoNote) {
     captureMemoryFromTurn(transcript, source);
   }
@@ -6760,8 +4813,6 @@ async function handleVoiceTurn(request, response) {
     id: turnId,
     session_id: sessionId,
     conversation_id: conversationId,
-    // The filing branch: an incognito turn rides an ephemeral inc- branch so the
-    // voice write guards skip persisting it entirely.
     branch_id: filingBranchId,
     profile_version: profileVersion,
     profile_overrides: body.profile_overrides && typeof body.profile_overrides === "object"
@@ -11995,8 +10046,18 @@ async function runCascadedVoiceReasoningInner(input) {
   const transcript = String(input?.transcript || "").trim();
   const deviceId = normalizeDeviceId(input?.device_id || input?.deviceId || "");
   const profileOptions = deviceId ? { deviceId } : {};
-  const profile = agentProfile.effective(profileOptions);
+  const voiceMode = deviceId
+    ? voiceModes.admit(deviceId)
+    : { mode: "ask", version: "voice_mode_default", routing: routingFor("ask") };
+  const profile = voiceModes.applyToProfile(agentProfile.effective(profileOptions), voiceMode);
   const replyLanguage = profile.language_primary || profile.language || "en-US";
+  if (!voiceMode.routing.provider_work_allowed) {
+    return {
+      speak: "", display: "", language: replyLanguage, model: profile.model || MODEL_ID,
+      classification: "note_capture_required", mode: voiceMode.mode, mode_version: voiceMode.version,
+      routing: voiceMode.routing, actions: [{ type: "capture_audio_note", endpoint: "/v1/audio-notes" }],
+    };
+  }
   if (MOA_MODE === "local") {
     const stallMs = Math.max(0, Number(process.env.MOA_TEST_REASONER_STALL_MS || 0));
     if (stallMs > 0) {
@@ -12024,8 +10085,6 @@ async function runCascadedVoiceReasoningInner(input) {
     };
   }
 
-  // Resolve privacy and filing scope before classification. Control and agent
-  // turns must honor explicit/warranted incognito just as chat turns do.
   const prepared = await prepareContextDecision({ text: transcript, contextAction: input?.context_action, profile });
   const contextDecision = prepared.decision;
   const filingThread = planTurnFilingThread({
@@ -12821,6 +10880,7 @@ async function recordStreamingVoiceTurn(turn) {
         : {},
       playback_policy: turn.playback_policy || {},
       provider_events: Array.isArray(turn.provider_events) ? turn.provider_events : [],
+      turn_relation: turn.turn_relation && typeof turn.turn_relation === "object" ? turn.turn_relation : null,
       transcription_only: turn.transcription_only === true,
       incomplete,
       status: turnStatus,
@@ -14689,20 +12749,6 @@ function sendConversation(response, id) {
   sendJson(response, 200, JSON.parse(fs.readFileSync(filePath, "utf8")));
 }
 
-function sendAgentRun(response, id) {
-  const safeId = sanitizeId(id);
-  const filePath = agentRunPath(safeId);
-  if (!fs.existsSync(filePath)) {
-    sendJson(response, 404, { error: "agent run not found" });
-    return;
-  }
-  sendJson(response, 200, {
-    run: readAgentRun(safeId),
-    events: readAgentEvents(safeId),
-    active: activeRuns.has(safeId),
-  });
-}
-
 function readAndroidOtaManifest() {
   try {
     return androidOta.buildLatestManifest(ANDROID_OTA_DIR);
@@ -16226,8 +14272,6 @@ function authorized(request) {
   }
   return request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
 }
-
-const DEPLOYMENT_OPERATIONS_FOR_AUTH = new Set(["preview", "apply", "rollback"]);
 
 function bearerToken(request) {
   const header = String(request.headers.authorization || "");

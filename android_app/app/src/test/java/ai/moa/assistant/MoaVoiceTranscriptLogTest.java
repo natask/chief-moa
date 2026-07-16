@@ -113,4 +113,21 @@ public final class MoaVoiceTranscriptLogTest {
         assertEquals("a1", log.get(1).text);
         assertEquals("a2", log.get(2).text);
     }
+
+    @Test
+    public void steeringMarksCurrentReplyAndCollapsesResolvedRows() {
+        MoaVoiceTranscriptLog log = new MoaVoiceTranscriptLog(20);
+        log.setUser("resolved question", true);
+        log.setAssistant("resolved answer");
+        log.startTurn();
+        log.setUser("current question", true);
+        MoaVoiceTranscriptLog.Entry interrupted = log.setAssistant("partial answer");
+
+        assertTrue(log.markSteeringBoundary());
+
+        assertEquals(2, log.size());
+        assertEquals("current question", log.get(0).text);
+        assertEquals("partial answer", log.get(1).text);
+        assertTrue(interrupted.interrupted);
+    }
 }

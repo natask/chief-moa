@@ -99,6 +99,71 @@ for transcript, audio, interruption, completion, error, and profile application.
 - **THEN** the gateway stores a normalized Moa event and may also retain the raw
   provider event for debugging according to retention policy
 
+### Requirement: Current-Thread Interruption Is Steering
+The gateway SHALL treat a new user turn in the current session, conversation,
+and thread while an assistant turn is committed or playing as
+steering rather than implicitly queueing it. It SHALL stop future assistant
+audio for the superseded turn, persist whatever assistant partial text existed
+at the boundary on that superseded turn, and admit the new turn without waiting
+for the superseded provider generation to finish. Late provider output SHALL NOT
+be attached to the new turn.
+
+Both turns SHALL expose one additive `turn_relation` object with version
+`moa.voice-turn-relation.v1`. Its exact additive fields are `version`, shared
+`boundary_id`, `kind` (`steering`, `fresh_thread`, or `replacement`), `role`
+(`superseded_turn` or `admitted_turn`), `turn_id`, the role-appropriate
+`next_turn_id` or `superseded_turn_id`, `occurred_at`,
+`assistant_audio_policy`, `provider_tail_policy`, `partial_text_policy`, and
+`inherit_partial_context`. The object SHALL appear on `session_ready`, local
+voice metadata, the interruption provider event, and canonical voice-session
+references. Older clients MAY ignore it.
+
+#### Scenario: Current-thread user input steers an active reply
+- **WHEN** the client first sends `cancel_turn` with a pre-generated
+  `boundary_id`, `next_turn_id`, and `replacement_kind=steering`, then opens the
+  replacement for the same authenticated session, conversation, device, and
+  branch
+- **THEN** the old turn is closed as `interrupted` with
+  `turn_relation.kind` = `steering` and its partial assistant text persisted
+- **AND** provider cancellation starts immediately rather than waiting for the
+  replacement socket to connect
+- **AND** the new `session_ready` carries the same `boundary_id`, names the
+  superseded turn, and sets `inherit_partial_context` = true
+- **AND** no later assistant audio or text from the old provider is sent as part
+  of the new turn
+
+#### Scenario: Fresh-thread input does not inherit the active reply
+- **WHEN** the new turn uses another branch or explicitly carries
+  `context_action` = `new`, `fork`, or `incognito`
+- **THEN** its relation kind is `fresh_thread`
+- **AND** `inherit_partial_context` is false
+- **AND** the replacement context is branch-scoped rather than assembled from
+  all branches
+- **AND** double-click fresh-thread capture remains an inspectable new/fork
+  trace rather than steering the current reply
+
+#### Scenario: Cancel has no replacement
+- **WHEN** the client sends `cancel_turn` without a new `session_start`
+- **THEN** the active turn closes without creating an admitted-turn relation
+- **AND** no replacement turn is inferred
+
+#### Scenario: Replacement identity survives socket closure
+- **WHEN** the superseded socket closes after its replacement cancel but before
+  the replacement socket connects
+- **THEN** the gateway retains a bounded pending relation keyed by
+  `next_turn_id`
+- **AND** consumes it only for the exact session, conversation, and non-empty
+  device identity
+- **AND** missing device identity is never treated as a cross-surface wildcard
+
+#### Scenario: Queueing requires an explicit backlog action
+- **WHEN** the user explicitly says to queue or backlog an instruction, or uses
+  a future explicit backlog action
+- **THEN** the broker may record a queued-work decision
+- **AND** ordinary interruption SHALL NOT silently choose that behavior
+- **AND** this requirement does not authorize a selector UI or implement the
+  staged queue executor
+
 ### Requirement: Stored Memory Respects Redaction And Retention Boundaries
 Conversation-memory records SHALL expose only Moa-owned fields and redacted
 provider metadata. PCM retention SHALL follow the current storage boundary:

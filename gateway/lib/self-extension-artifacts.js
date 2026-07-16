@@ -50,7 +50,7 @@ function createSelfExtensionArtifactStore(options = {}) {
 
   function createCandidate(input = {}) {
     const type = normalizeType(input.type);
-    const validation = validateSpec(type, input.spec);
+    const validation = validateSpec(input.spec);
     if (!validation.ok) {
       throw new Error(`invalid ${type} spec: ${validation.errors.join("; ")}`);
     }
@@ -58,13 +58,13 @@ function createSelfExtensionArtifactStore(options = {}) {
     const artifact = {
       id: `art_${crypto.randomBytes(8).toString("hex")}`,
       type,
-      title: cleanText(input.title, 160) || defaultTitle(type, validation.spec),
+      title: cleanText(input.title, 160) || defaultTitle(validation.spec),
       status: "draft",
       variant_group_id: cleanToken(input.variant_group_id || input.variantGroupId, 80) || `var_${crypto.randomBytes(6).toString("hex")}`,
       parent_id: cleanToken(input.parent_id || input.parentId, 80),
       prompt: cleanText(input.prompt || input.intent || input.text, 2000),
       spec: validation.spec,
-      preview: previewFor(type, validation.spec),
+      preview: previewFor(validation.spec),
       validation: {
         ok: true,
         errors: [],
@@ -141,15 +141,12 @@ function createSelfExtensionArtifactStore(options = {}) {
 }
 
 function validateArtifactInput(input = {}) {
-  const type = normalizeType(input.type);
-  return validateSpec(type, input.spec);
+  normalizeType(input.type);
+  return validateSpec(input.spec);
 }
 
-function validateSpec(type, spec) {
-  if (type === "avatar_behavior") {
-    return validateAvatarBehaviorSpec(spec);
-  }
-  return { ok: false, errors: [`unsupported artifact type: ${type}`], warnings: [], spec: {} };
+function validateSpec(spec) {
+  return validateAvatarBehaviorSpec(spec);
 }
 
 function validateAvatarBehaviorSpec(input) {
@@ -198,16 +195,13 @@ function runtimeArtifact(artifact) {
   };
 }
 
-function previewFor(type, spec) {
-  if (type === "avatar_behavior") {
-    return {
-      class_name: `moa-avatar--${spec.trigger}-${spec.motion}-${spec.intensity}`,
-      trigger: spec.trigger,
-      motion: spec.motion,
-      duration: spec.duration,
-    };
-  }
-  return {};
+function previewFor(spec) {
+  return {
+    class_name: `moa-avatar--${spec.trigger}-${spec.motion}-${spec.intensity}`,
+    trigger: spec.trigger,
+    motion: spec.motion,
+    duration: spec.duration,
+  };
 }
 
 function normalizeType(value) {
@@ -218,11 +212,8 @@ function normalizeType(value) {
   return type;
 }
 
-function defaultTitle(type, spec) {
-  if (type === "avatar_behavior") {
-    return `${spec.trigger} ${spec.motion}`;
-  }
-  return type;
+function defaultTitle(spec) {
+  return `${spec.trigger} ${spec.motion}`;
 }
 
 function loadState(storePath) {
@@ -278,7 +269,7 @@ function normalizePersistedArtifact(input) {
   } catch {
     return null;
   }
-  const validation = validateSpec(type, input.spec);
+  const validation = validateSpec(input.spec);
   if (!id || !validation.ok) {
     return null;
   }
@@ -286,7 +277,7 @@ function normalizePersistedArtifact(input) {
   return {
     id,
     type,
-    title: cleanText(input.title, 160) || defaultTitle(type, validation.spec),
+    title: cleanText(input.title, 160) || defaultTitle(validation.spec),
     status: STATUSES.includes(input.status) ? input.status : "draft",
     variant_group_id: cleanToken(input.variant_group_id, 80) || `var_${crypto.randomBytes(6).toString("hex")}`,
     parent_id: cleanToken(input.parent_id, 80),
@@ -320,7 +311,7 @@ function archiveCorruptStore(storePath) {
     return "";
   }
   const stamp = new Date().toISOString().replace(/[^0-9TZ]/g, "");
-  const archivePath = `${storePath}.corrupt-${stamp}`;
+  const archivePath = `${storePath}.corrupt-${stamp}-${crypto.randomUUID().slice(0, 8)}`;
   try {
     fs.copyFileSync(storePath, archivePath);
     return archivePath;

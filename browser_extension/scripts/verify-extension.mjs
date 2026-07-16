@@ -5,9 +5,11 @@ const requiredFiles = [
   "package.json",
   "extension/manifest.json",
   "extension/background.js",
+  "extension/browser-agent-loop-policy.js",
   "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
+  "extension/browser-turn-protocol.js",
   "extension/browser-context-adapter.js",
   "extension/config.js",
   "extension/content.js",
@@ -59,6 +61,13 @@ const requiredFiles = [
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-browser-context-adapter.mjs",
   "scripts/test-browser-agent-role-runtime.mjs",
+  "scripts/test-browser-agent-loop-policy.mjs",
+  "scripts/test-browser-turn-protocol.mjs",
+  "scripts/test-extension-production-sources.mjs",
+  "scripts/test-runtime-intent-modules.mjs",
+  "scripts/extension-production-sources.mjs",
+  "scripts/coverage-extension.mjs",
+  "scripts/coverage-ratchet.json",
 ];
 
 for (const file of requiredFiles) {
@@ -68,6 +77,8 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const browserAgentLoopPolicySource = readFileSync("extension/browser-agent-loop-policy.js", "utf8");
+const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
@@ -111,11 +122,28 @@ if (manifest.manifest_version !== 3) {
 // Pick the next version with scripts/release/next-extension-version.sh.
 
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
-if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js")) {
-  throw new Error("proactive-helper.js must load before content.js");
+if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js") || mainContentScript.js.indexOf("steering-ui.js") < 0 || mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js")) {
+  throw new Error("proactive-helper.js and steering-ui.js must load before content.js");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
+}
+if (
+  packageJson.scripts?.["test:unit"] !== "node --test scripts/test-*.mjs" ||
+  packageJson.scripts?.["test:coverage"] !== "node scripts/coverage-extension.mjs" ||
+  packageJson.scripts?.verify !== "npm run test:unit && node scripts/verify-extension.mjs"
+) {
+  throw new Error("verification must run every focused unit script and expose the production coverage ratchet");
+}
+
+if (
+  /function (?:clampAgentLoopMaxSteps|agentLoopScreenshotObservation|validateAgentLoopAction)\(/.test(backgroundSource) ||
+  !/validateAgentLoopAction\(response\?\.action, allowedBrowserTaskUrl\)/.test(backgroundSource) ||
+  !/function buildAgentLoopObservationPayload\(/.test(browserAgentLoopPolicySource) ||
+  !/function validateAgentLoopAction\(/.test(browserAgentLoopPolicySource) ||
+  !/AGENT_LOOP_MAX_TYPE_TEXT = 2000/.test(browserAgentLoopPolicySource)
+) {
+  throw new Error("browser agent-loop observation and action policy must stay extracted, bounded, and URL-policy injected");
 }
 
 if (
@@ -171,7 +199,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "steering-ui\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
@@ -337,7 +365,7 @@ const voiceProxySetupBody = sourceBetween(
 const voiceStartBody = sourceBetween(
   backgroundSource,
   /async function startVoiceSessionProxy\(/,
-  /\/\/ Set the active thread/,
+  /async function switchThreadBranch\(/,
   "voice proxy mutex wrapper"
 );
 if (voiceProxySetupBody.indexOf("startOffscreenVoiceCapture(id)") < 0) {
@@ -443,19 +471,22 @@ if (
 }
 const sidepanelSource = readFileSync("extension/sidepanel.js", "utf8");
 const browserAgentRoleRuntimeSource = readFileSync("extension/browser-agent-role-runtime.js", "utf8");
+const steeringUiSource = readFileSync("extension/steering-ui.js", "utf8");
 if (
   !/chrome\.runtime\.connect\(\{ name: "agee-panel" \}\)/.test(sidepanelSource) ||
   !/"extension-offscreen"/.test(sidepanelSource) ||
   !/cmd: "browserRoleTurn"/.test(sidepanelSource) ||
-  !/data-agent-mode-option/.test(sidepanelSource) ||
+  !/function roleForInstruction/.test(sidepanelSource) ||
   !/commit_turn/.test(sidepanelSource) ||
   !/documentPictureInPicture/.test(sidepanelSource)
 ) {
-  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture for commit_turn, route typed turns through browserRoleTurn, expose role selection, and offer the document PiP float");
+  throw new Error("sidepanel.js must connect the agee-panel port, use offscreen voice capture for commit_turn, route typed turns through conversational role intent, and offer the document PiP float");
 }
 
 if (
-  !/id="agee-mode-select"/.test(contentSource) ||
+  /id="agee-mode-select"/.test(contentSource) ||
+  /data-agent-mode-option/.test(sidepanelSource) ||
+  !/function roleForInstruction/.test(steeringUiSource) ||
   !/agentRole: role/.test(contentSource) ||
   !/delegationConfirmed/.test(contentSource) ||
   !/agentRole: msg\.agentRole/.test(backgroundSource) ||
@@ -464,7 +495,7 @@ if (
   !/delegation_envelope: delegationEnvelope/.test(backgroundSource) ||
   !/moa\.browser-delegation\.v1/.test(browserAgentRoleRuntimeSource)
 ) {
-  throw new Error("browser agent role controls must route explicit overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
+  throw new Error("browser role intent must have no selector and must route overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
 }
 
 if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {
@@ -615,7 +646,7 @@ if (
   !/\/v1\/browser\/evidence/.test(backgroundSource) ||
   !/\/v1\/browser\/turns/.test(backgroundSource) ||
   !/browserTurnStatusPath/.test(backgroundSource) ||
-  !/\/v1\/browser\/turns\/\$\{encodeURIComponent\(id\)\}\/status/.test(backgroundSource)
+  !/\/v1\/browser\/turns\/\$\{encodeURIComponent\(id\)\}\/status/.test(browserTurnProtocolSource)
 ) {
   throw new Error("background.js must expose one runBrowserAgentTurn orchestrator using browser evidence, turn, and status routes");
 }
@@ -623,14 +654,14 @@ if (
 const browserAgentTurnBody = sourceBetween(
   backgroundSource,
   /async function runBrowserAgentTurn\(/,
-  /function browserTurnId\(/,
+  /async function waitForBrowserTurnAnswer\(/,
   "runBrowserAgentTurn"
 );
 if (/executeAction\(|cmd:\s*"act"|Input\.dispatch|Page\.navigate/.test(browserAgentTurnBody)) {
   throw new Error("runBrowserAgentTurn must not execute browser actions, hidden clicks, draws, or navigation in this slice");
 }
 
-if (!/Gateway proposed \$\{actions\.length\} browser action/.test(backgroundSource) || !/not executed in this slice/.test(backgroundSource)) {
+if (!/Gateway proposed \$\{actions\.length\} browser action/.test(browserTurnProtocolSource) || !/not executed in this slice/.test(browserTurnProtocolSource)) {
   throw new Error("browser-agent action proposals must render as inert proposal status, not execute");
 }
 
@@ -910,15 +941,22 @@ if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*f
   throw new Error("voice button click must open the input surface and prime audio before starting live voice");
 }
 
+const voiceFirstTapBody = sourceBetween(
+  contentSource,
+  /function handleVoiceFirstTap\(/,
+  /function armVoiceFirstChainReset\(/,
+  "voice-first tap chain"
+);
 if (
-  !/id="agee-draft-cancel"[\s\S]{0,240}id="agee-draft-send"/.test(contentSource) ||
-  !/function reviewableVoiceDraftActive\(\)/.test(contentSource) ||
-  !/function sendReviewableVoiceDraft\(\)/.test(contentSource) ||
-  !/autoCommit: false/.test(contentSource) ||
-  !/A later mascot click never owns disposition/.test(contentSource) ||
-  !/#agee-root \.agee-draft-control/.test(overlayCssSource)
+  !/armVoiceFirstChainReset\(\(\) => resolveVoiceFirstTapChain\(chain\)\)/.test(voiceFirstTapBody) ||
+  !/function toggleVoiceFirstCapture\(/.test(contentSource) ||
+  !/function toggleFreshThreadVoiceCapture\(/.test(contentSource) ||
+  !/voiceFirstCaptureOrigin !== origin[\s\S]{0,40}return "noop"/.test(contentSource) ||
+  !/voiceFirstCaptureOrigin === "double"/.test(contentSource) ||
+  !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
+  !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}openTextSurface/.test(contentSource)
 ) {
-  throw new Error("voice-first browser drafts must use visible X—mascot—Send controls without click-to-send or silence auto-commit");
+  throw new Error("voice-first gestures must defer collision-safe single/double/triple actions and preserve fresh-thread capture provenance");
 }
 
 const launcherClickBody = sourceBetween(
@@ -1027,6 +1065,7 @@ if (!/case "ambient":/.test(contentSource) || !/agee-ambient/.test(contentSource
 
 for (const file of [
   "extension/background.js",
+  "extension/browser-agent-loop-policy.js",
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content.js",
@@ -1041,6 +1080,7 @@ for (const file of [
   "extension/options.js",
   "extension/settings-intent.js",
   "extension/stop-intent.js",
+  "extension/browser-turn-protocol.js",
   "extension/dev.js",
   "scripts/dev-extension.mjs",
   "scripts/doctor.mjs",
@@ -1060,6 +1100,12 @@ for (const file of [
   "scripts/test-voice-sampler-lifecycle.mjs",
   "scripts/test-proactive-helper.mjs",
   "scripts/test-cue-dismiss.mjs",
+  "scripts/test-extension-production-sources.mjs",
+  "scripts/test-runtime-intent-modules.mjs",
+  "scripts/test-browser-turn-protocol.mjs",
+  "scripts/test-browser-agent-loop-policy.mjs",
+  "scripts/extension-production-sources.mjs",
+  "scripts/coverage-extension.mjs",
   "scripts/chrome-for-testing.mjs",
 ]) {
   execFileSync(process.execPath, ["--check", file], { stdio: "inherit" });

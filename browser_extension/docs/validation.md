@@ -46,6 +46,28 @@ This launches Chrome and verifies:
 - The content script can type and click on the page.
 - A browser screenshot can be captured.
 
+## Production JavaScript Coverage
+
+Run the focused unit suite and the production-only coverage ratchet with:
+
+```sh
+npm run test:unit
+npm run test:coverage
+```
+
+`scripts/extension-production-sources.mjs` classifies every JavaScript file in
+the packaged extension. Runtime JavaScript is eligible; the developer reload
+page and the vendored LiveKit client are explicitly excluded. Test and smoke
+scripts, HTML, and CSS are outside the production denominator.
+
+The coverage runner combines executed V8 coverage with conservative zero-count
+Istanbul metadata for eligible browser files that the Node unit suite cannot
+load. This keeps lines, branches, and functions in the denominator instead of
+reporting a high percentage over only the easy modules. The checked-in ratchet
+records the current honest baseline and may only move upward toward the 90%
+goal. Real Chromium target coverage remains a later addition; until then,
+browser-only files stay at zero in this gate.
+
 ## Development Loop Check
 
 Run:

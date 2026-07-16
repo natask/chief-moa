@@ -90,7 +90,13 @@ public final class AtomicFileEffectJournal: EffectJournal, @unchecked Sendable {
             let data = try JSONEncoder().encode(records)
             guard data.count <= AggieLimits.replayBytes else { throw AggieProtocolError.tooLarge }
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic, .completeFileProtection])
+            // macOS does not implement iOS complete-file-protection semantics
+            // for arbitrary temporary directories. Keep the crash-safe atomic
+            // replacement and explicitly restrict the resulting journal.
+            try data.write(to: url, options: .atomic)
+            guard chmod(url.path, S_IRUSR | S_IWUSR) == 0 else {
+                throw AggieProtocolError.malformed("journal permissions")
+            }
         }
     }
     private func claimURL(for messageID: String) -> URL {

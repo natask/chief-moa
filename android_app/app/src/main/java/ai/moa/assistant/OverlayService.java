@@ -62,9 +62,6 @@ public final class OverlayService extends Service {
     // a broken or blank turn. No local TTS is used (hosted-audio-only policy).
     private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
     private static final String NOT_SPOKEN_SUFFIX = "\n\n(not spoken)";
-    // Mirror of the "(not spoken)" convention for an incognito turn the gateway
-    // answered but did not persist (context.persisted === false).
-    private static final String NOT_SAVED_SUFFIX = "\n\n(not saved)";
     // Inactivity watchdog for a committed streaming turn. It is armed on commit
     // and RESET by every streaming event (partial/final transcript, assistant
     // text, assistant audio start + each audio frame, turn_progress keepalives).
@@ -111,10 +108,6 @@ public final class OverlayService extends Service {
     private ScrollView voiceTranscriptScroll;
     private TextView voiceMetaLine;
     private TextView voiceLanguageLine;
-    private TextView voiceCancelControl;
-    private TextView voiceSendControl;
-    private WindowManager.LayoutParams voiceCancelControlParams;
-    private WindowManager.LayoutParams voiceSendControlParams;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
     // Persistent, stacked transcript. Each turn appends a fresh user + assistant
     // row; older rows stay until the user swipes them away. The scalar mirrors
@@ -143,6 +136,8 @@ public final class OverlayService extends Service {
     private boolean streamingTurnRetried;
     private MoaVoiceController voiceController;
     private MoaStreamingVoiceSessionController streamingVoiceController;
+    private String pendingReplacementTurnId = "";
+    private boolean nextVoiceCaptureFreshThread;
     private MoaVoiceSamplePlayer voiceSamplePlayer;
     private boolean panelOpen;
     private boolean nextVoiceRunsAgent;
@@ -154,11 +149,10 @@ public final class OverlayService extends Service {
     private boolean currentStreamingTurnCommitRequested;
     private String currentStreamingTranscript = "";
     private final MoaSpeechTranscriptAccumulator streamingTranscriptAccumulator = new MoaSpeechTranscriptAccumulator();
-    private final Map<String, AgentRunState> activeAgentRuns = new HashMap<>();
+    private final MoaAgentRunTracker agentRuns = new MoaAgentRunTracker();
     private boolean agentRunPolling;
     private boolean nextManualVoiceFollowsActiveRun;
     private boolean nextStreamingTurnFollowsActiveRun;
-    private String lastActiveAgentRunId = "";
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
     // Set when a voice-first tap starts the loop, cleared once the first turn
@@ -169,6 +163,8 @@ public final class OverlayService extends Service {
     // Record mode: while enabled, double-click-and-hold captures a raw audio
     // note locally and uploads it on release. Never a voice turn.
     private boolean recordModeEnabled;
+    private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin =
+            MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
     private boolean audioNoteActive;
     private MoaAudioCaptureController audioNoteCapture;
     private ByteArrayOutputStream audioNoteBuffer;
@@ -184,8 +180,7 @@ public final class OverlayService extends Service {
     // incognito is a persistent mode where every turn is answered but never
     // persisted by the gateway. Both are explicit client overrides that always
     // win over the model's own context choice.
-    private boolean newThreadArmed;
-    private boolean incognitoEnabled;
+    private final MoaContextControlState contextControls = new MoaContextControlState();
     private TextView newThreadPill;
     private TextView incognitoPill;
     private LinearLayout contextControlsRow;
@@ -352,7 +347,6 @@ public final class OverlayService extends Service {
         cancelStreamingTurnWatchdog();
         voiceLog.clear();
         removeTranscriptOverlay();
-        removeVoiceDraftControls();
         removePanel();
         removeOrbRemoveTarget();
         removeOrb();
@@ -574,8 +568,9 @@ public final class OverlayService extends Service {
                 this::beginWarmMic,
                 this::discardWarmMic,
                 () -> MoaPrefs.voiceFirstGestures(this),
-                this::isContinuousLoopActive,
+                this::manualTapCaptureOrigin,
                 this::handleOrbStartTalkLoop,
+                this::handleOrbStopAndSend,
                 this::handleOrbStartFreshTalkLoop,
                 this::handleOrbCancelTalkLoop,
                 this::showPanel,
@@ -635,7 +630,6 @@ public final class OverlayService extends Service {
     private void updateAnchoredSurfacePositions() {
         positionSurfaceNearOrb(panelView, panelParams);
         positionSurfaceNearOrb(transcriptView, transcriptParams);
-        updateVoiceDraftControlPositions();
     }
 
     private void showOrbRemoveTarget() {
@@ -942,28 +936,7 @@ public final class OverlayService extends Service {
         container.addView(voiceLanguageLine);
 
         updateVoiceHeaderState();
-        updateVoiceDraftControls();
         return container;
-    }
-
-    private TextView voiceDraftControl(String glyph, String description, boolean affirmative) {
-        TextView control = new TextView(this);
-        control.setText(glyph);
-        control.setContentDescription(description);
-        control.setTextSize(affirmative ? 25 : 24);
-        control.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        control.setGravity(Gravity.CENTER);
-        control.setTextColor(affirmative ? MoaColors.INK : MoaColors.PAPER);
-        control.setBackground(MoaDrawables.circlePressable(
-                affirmative ? MoaColors.GOLD : 0x24FFFFFF,
-                affirmative ? MoaColors.AMBER : 0x3AFFFFFF,
-                affirmative ? 0x33FFFFFF : MoaColors.PANEL_BORDER,
-                dp(1)
-        ));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(42), dp(42));
-        params.rightMargin = dp(10);
-        control.setLayoutParams(params);
-        return control;
     }
 
     private boolean reviewableVoiceDraftActive() {
@@ -975,101 +948,9 @@ public final class OverlayService extends Service {
                     || voiceRuntimeState == VoiceRuntimeState.RECOVERING);
     }
 
-    private void updateVoiceDraftControls() {
-        boolean visible = reviewableVoiceDraftActive();
-        if (!visible) {
-            removeVoiceDraftControls();
-            return;
-        }
-        showVoiceDraftControls();
-        updateVoiceDraftControlPositions();
-    }
-
-    private void showVoiceDraftControls() {
-        if (!Settings.canDrawOverlays(this) || orbView == null) {
-            return;
-        }
-        int size = dp(44);
-        if (voiceCancelControl == null) {
-            voiceCancelControl = voiceDraftControl("×", "Cancel voice draft", false);
-            voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
-            voiceCancelControlParams = draftControlWindowParams(size);
-            windowManager.addView(voiceCancelControl, voiceCancelControlParams);
-        }
-        if (voiceSendControl == null) {
-            voiceSendControl = voiceDraftControl("↑", "Send voice draft", true);
-            voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
-            voiceSendControlParams = draftControlWindowParams(size);
-            windowManager.addView(voiceSendControl, voiceSendControlParams);
-        }
-    }
-
-    private WindowManager.LayoutParams draftControlWindowParams(int size) {
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                size,
-                size,
-                overlayType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                android.graphics.PixelFormat.TRANSLUCENT
-        );
-        params.gravity = Gravity.TOP | Gravity.START;
-        return params;
-    }
-
-    private void updateVoiceDraftControlPositions() {
-        if (voiceCancelControl == null || voiceSendControl == null
-                || voiceCancelControlParams == null || voiceSendControlParams == null
-                || orbView == null || orbParams == null) {
-            return;
-        }
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        int controlSize = voiceCancelControlParams.width;
-        int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
-        int gap = dp(8);
-        int margin = dp(12);
-
-        // Keep the entire X — orb — Send chord reachable. The orb only moves
-        // inward when a reviewable draft is active, and remains freely draggable
-        // within that safe horizontal lane.
-        int minOrbX = margin + controlSize + gap;
-        int maxOrbX = Math.max(minOrbX, screenWidth - margin - controlSize - gap - orbSize);
-        int safeOrbX = Math.max(minOrbX, Math.min(orbParams.x, maxOrbX));
-        if (safeOrbX != orbParams.x) {
-            orbParams.x = safeOrbX;
-            try {
-                windowManager.updateViewLayout(orbView, orbParams);
-            } catch (IllegalArgumentException ignored) {
-                return;
-            }
-        }
-
-        int controlY = orbParams.y + (orbSize - controlSize) / 2;
-        controlY = Math.max(margin, Math.min(controlY, screenHeight - controlSize - margin));
-        voiceCancelControlParams.x = orbParams.x - gap - controlSize;
-        voiceCancelControlParams.y = controlY;
-        voiceSendControlParams.x = orbParams.x + orbSize + gap;
-        voiceSendControlParams.y = controlY;
-        try {
-            windowManager.updateViewLayout(voiceCancelControl, voiceCancelControlParams);
-            windowManager.updateViewLayout(voiceSendControl, voiceSendControlParams);
-        } catch (IllegalArgumentException ignored) {
-            // A state transition removed the controls while they were moving.
-        }
-    }
-
-    private void removeVoiceDraftControls() {
-        detachView(voiceCancelControl);
-        detachView(voiceSendControl);
-        voiceCancelControl = null;
-        voiceSendControl = null;
-        voiceCancelControlParams = null;
-        voiceSendControlParams = null;
-    }
 
     private void discardVoiceDraft() {
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
@@ -1088,6 +969,7 @@ public final class OverlayService extends Service {
         if (!reviewableVoiceDraftActive()) {
             return;
         }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
@@ -1168,7 +1050,10 @@ public final class OverlayService extends Service {
         for (int i = 0; i < count; i++) {
             MoaVoiceTranscriptLog.Entry entry = voiceLog.get(i);
             boolean assistant = !entry.isUser();
-            View row = voiceMessageRow(assistant, entry.text, entry.finalText);
+            String rowText = entry.interrupted
+                    ? entry.text + "\n\nInterrupted · steering"
+                    : entry.text;
+            View row = voiceMessageRow(assistant, rowText, entry.finalText);
             attachSwipeDismiss(row, entry);
             voiceTranscriptColumn.addView(row);
             boolean newestAssistant = assistant && i == count - 1;
@@ -1185,7 +1070,6 @@ public final class OverlayService extends Service {
             }
         }
         updateVoiceHeaderState();
-        updateVoiceDraftControls();
         scrollVoiceTranscriptToBottom();
     }
 
@@ -1327,7 +1211,6 @@ public final class OverlayService extends Service {
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
         voiceRuntimeState = state == null ? VoiceRuntimeState.READY : state;
         updateVoiceHeaderState();
-        updateVoiceDraftControls();
         // Single choke point for the orb's response state so the lion visibly
         // reflects thinking / responding / error without touching other call
         // sites. The watchdog + error paths become visible here for free.
@@ -1660,19 +1543,19 @@ public final class OverlayService extends Service {
     // Arm/disarm the one-shot new-thread state. Re-tapping disarms it; it is also
     // consumed automatically once a turn rides on it.
     private void toggleNewThreadArmed() {
-        newThreadArmed = !newThreadArmed;
+        contextControls.toggleNewThread();
         refreshContextControls();
     }
 
     // Toggle the persistent incognito mode on/off.
     private void toggleIncognito() {
-        incognitoEnabled = !incognitoEnabled;
+        contextControls.toggleIncognito();
         refreshContextControls();
     }
 
     private void refreshContextControls() {
         if (newThreadPill != null) {
-            boolean armed = newThreadArmed;
+            boolean armed = contextControls.isNewThreadArmed();
             newThreadPill.setText(armed ? "New thread armed" : "New thread");
             newThreadPill.setTextColor(armed ? MoaColors.INK : MoaColors.MUTED);
             newThreadPill.setBackground(MoaDrawables.rounded(
@@ -1683,7 +1566,7 @@ public final class OverlayService extends Service {
             ));
         }
         if (incognitoPill != null) {
-            boolean on = incognitoEnabled;
+            boolean on = contextControls.isIncognitoEnabled();
             incognitoPill.setText(on ? "Incognito on" : "Incognito");
             incognitoPill.setTextColor(on ? MoaColors.INK : MoaColors.MUTED);
             incognitoPill.setBackground(MoaDrawables.rounded(
@@ -1695,7 +1578,7 @@ public final class OverlayService extends Service {
         }
         if (contextControlsRow != null) {
             // Persistent tinted status row while incognito is on.
-            contextControlsRow.setBackground(incognitoEnabled
+            contextControlsRow.setBackground(contextControls.isIncognitoEnabled()
                     ? MoaDrawables.rounded(0x22FF8A3D, dp(14), 0x40FF8A3D, dp(1))
                     : null);
         }
@@ -1749,8 +1632,8 @@ public final class OverlayService extends Service {
     private String orbGestureHint() {
         if (MoaPrefs.voiceFirstGestures(this)) {
             return recordModeEnabled
-                    ? "Record mode: press and hold to record a note."
-                    : "Tap to continue. Double-tap for new thread. Triple-tap for chat. Hold to talk. Drag to move.";
+                    ? "Notes mode: tap to start, tap again to store. Hold-release also stores."
+                    : "Tap toggles talk. Double-tap toggles a new thread. Triple-tap opens chat. Hold-release sends.";
         }
         return recordModeEnabled
                 ? "Record mode: double-click and hold to record a note."
@@ -1984,7 +1867,7 @@ public final class OverlayService extends Service {
         // reply so the user knows nothing was saved. The spoken `speak` string is
         // left untouched so the marker is never read aloud.
         if (MoaGatewayClient.turnNotPersisted(response)) {
-            text = appendNotSaved(text);
+            text = MoaContextControlState.appendNotSaved(text);
         }
 
         boolean shouldSpeak = fromVoice && !speakText.isEmpty();
@@ -2107,7 +1990,7 @@ public final class OverlayService extends Service {
                 MoaGatewayClient.GatewayTextResponse reply = gatewayClient().chat(requestBody);
                 mainHandler.post(() -> {
                     updateConversationId(reply.conversationId);
-                    deliverReply(reply.notSaved ? appendNotSaved(reply.text) : reply.text, fromVoice);
+                    deliverReply(reply.notSaved ? MoaContextControlState.appendNotSaved(reply.text) : reply.text, fromVoice);
                 });
             } catch (Exception error) {
                 Log.w(TAG, "gateway chat failed: " + cleanError(error));
@@ -2215,23 +2098,9 @@ public final class OverlayService extends Service {
     // new-thread arm is consumed by the turn it rides on. The gateway treats an
     // explicit context_action as an override that beats the model's own choice.
     private void applyContextControls(JSONObject body) throws JSONException {
-        if (incognitoEnabled) {
-            body.put("context_action", "incognito");
-            return;
-        }
-        if (newThreadArmed) {
-            body.put("context_action", "new");
-            newThreadArmed = false;
+        if (contextControls.applyTo(body)) {
             refreshContextControls();
         }
-    }
-
-    private String appendNotSaved(String text) {
-        String value = safe(text);
-        if (value.isEmpty() || value.endsWith(NOT_SAVED_SUFFIX)) {
-            return value;
-        }
-        return value + NOT_SAVED_SUFFIX;
     }
 
     private String androidDeviceId() {
@@ -2447,51 +2316,13 @@ public final class OverlayService extends Service {
         if (response == null) {
             return;
         }
-
-        JSONObject run = response.optJSONObject("run");
-        if (run != null) {
-            trackAgentRun(run);
-        }
-
-        JSONObject singleRun = response.optJSONObject("agent_run");
-        if (singleRun != null) {
-            trackAgentRun(singleRun);
-        }
-
-        JSONArray runs = response.optJSONArray("agent_runs");
-        if (runs != null) {
-            for (int i = 0; i < runs.length(); i++) {
-                JSONObject item = runs.optJSONObject(i);
-                if (item != null) {
-                    trackAgentRun(item);
-                }
-            }
-        }
-
+        agentRuns.trackResponse(response);
         updateAgentRunStatus();
         ensureAgentRunPolling();
     }
 
-    private void trackAgentRun(JSONObject run) {
-        String id = safe(run.optString("id", ""));
-        if (id.isEmpty()) {
-            return;
-        }
-
-        AgentRunState state = activeAgentRuns.get(id);
-        if (state == null) {
-            state = new AgentRunState(id);
-            activeAgentRuns.put(id, state);
-        }
-        lastActiveAgentRunId = id;
-        state.harness = safe(run.optString("harness", state.harness));
-        state.status = safe(run.optString("status", state.status));
-        state.outputPreview = safe(run.optString("output_preview", state.outputPreview));
-        state.active = run.optBoolean("active", isActiveRunStatus(state.status));
-    }
-
     private void ensureAgentRunPolling() {
-        if (agentRunPolling || activeAgentRuns.isEmpty()) {
+        if (agentRunPolling || !agentRuns.hasRuns()) {
             return;
         }
         agentRunPolling = true;
@@ -2499,56 +2330,36 @@ public final class OverlayService extends Service {
     }
 
     private void pollAgentRunsOnce() {
-        if (activeAgentRuns.isEmpty()) {
+        if (!agentRuns.hasRuns()) {
             agentRunPolling = false;
             updateAgentRunStatus();
             return;
         }
 
-        List<String> ids = new ArrayList<>(activeAgentRuns.keySet());
+        List<String> ids = agentRuns.ids();
         new Thread(() -> {
-            List<AgentRunState> updates = new ArrayList<>();
+            List<MoaAgentRunTracker.State> updates = new ArrayList<>();
             for (String id : ids) {
                 try {
                     JSONObject response = gatewayClient().agentRunDetail(id);
                     JSONObject run = response.optJSONObject("run");
                     if (run != null) {
-                        AgentRunState state = new AgentRunState(id);
-                        state.harness = safe(run.optString("harness", ""));
-                        state.status = safe(run.optString("status", ""));
-                        state.outputPreview = safe(run.optString("output_preview", ""));
-                        state.active = run.optBoolean("active", isActiveRunStatus(state.status));
-                        updates.add(state);
+                        updates.add(MoaAgentRunTracker.pollUpdate(id, run));
                     }
                 } catch (Exception error) {
-                    AgentRunState state = new AgentRunState(id);
-                    state.status = "unknown";
-                    state.outputPreview = cleanError(error);
-                    state.active = false;
-                    updates.add(state);
+                    updates.add(MoaAgentRunTracker.failedPollUpdate(id, cleanError(error)));
                 }
             }
             mainHandler.post(() -> applyAgentRunUpdates(updates));
         }, "moa-agent-run-poll").start();
     }
 
-    private void applyAgentRunUpdates(List<AgentRunState> updates) {
-        for (AgentRunState update : updates) {
-            AgentRunState previous = activeAgentRuns.get(update.id);
-            if (previous == null) {
-                continue;
-            }
-            previous.harness = update.harness.isEmpty() ? previous.harness : update.harness;
-            previous.status = update.status.isEmpty() ? previous.status : update.status;
-            previous.outputPreview = update.outputPreview;
-            previous.active = update.active;
-            if (isTerminalRunStatus(previous.status)) {
-                addMessage(true, agentRunCompletionText(previous));
-                activeAgentRuns.remove(previous.id);
-            }
+    private void applyAgentRunUpdates(List<MoaAgentRunTracker.State> updates) {
+        for (String completion : agentRuns.applyUpdates(updates)) {
+            addMessage(true, completion);
         }
         updateAgentRunStatus();
-        if (activeAgentRuns.isEmpty()) {
+        if (!agentRuns.hasRuns()) {
             agentRunPolling = false;
         } else {
             mainHandler.postDelayed(this::pollAgentRunsOnce, 2500);
@@ -2568,53 +2379,11 @@ public final class OverlayService extends Service {
     }
 
     private String activeFollowUpRunId() {
-        if (!lastActiveAgentRunId.isEmpty() && activeAgentRuns.containsKey(lastActiveAgentRunId)) {
-            return lastActiveAgentRunId;
-        }
-        for (String id : activeAgentRuns.keySet()) {
-            return id;
-        }
-        return "";
+        return agentRuns.activeFollowUpRunId();
     }
 
     private String agentRunStatusText() {
-        if (activeAgentRuns.isEmpty()) {
-            return "Ready";
-        }
-
-        int running = 0;
-        for (AgentRunState state : activeAgentRuns.values()) {
-            if (state.active || isActiveRunStatus(state.status)) {
-                running++;
-            }
-        }
-        int count = running > 0 ? running : activeAgentRuns.size();
-        return count == 1 ? "1 run active" : count + " runs active";
-    }
-
-    private String agentRunCompletionText(AgentRunState state) {
-        String id = state.id.length() > 10 ? state.id.substring(0, 10) : state.id;
-        String base = "Run " + id + " " + state.status + ".";
-        if (!state.outputPreview.isEmpty()) {
-            return base + "\n" + state.outputPreview;
-        }
-        return base;
-    }
-
-    private boolean isActiveRunStatus(String status) {
-        String value = safe(status);
-        return value.isEmpty() || "queued".equals(value) || "running".equals(value);
-    }
-
-    private boolean isTerminalRunStatus(String status) {
-        String value = safe(status);
-        return "completed".equals(value)
-                || "failed".equals(value)
-                || "timed-out".equals(value)
-                || "timed_out".equals(value)
-                || "timeout".equals(value)
-                || "canceled".equals(value)
-                || "unknown".equals(value);
+        return agentRuns.statusText();
     }
 
     private void updateConversationId(String returnedConversationId) {
@@ -2656,12 +2425,16 @@ public final class OverlayService extends Service {
         showPanel();
     }
 
-    // Whether a reviewable hands-free voice draft is running. A tap while active
-    // is deliberately inert; the visible X / + controls own cancel and send.
-    private boolean isContinuousLoopActive() {
-        return continuousVoiceLoop
-                || pendingContinuousVoiceRestart != null
-                || (streamingVoiceActive() && streamingTurnContinuous);
+    // True only while the user owns an open manual capture. Assistant playback
+    // and reasoning are not capture: tapping then interrupts and starts a new turn.
+    private boolean isManualTapCaptureActive() {
+        return audioNoteActive || reviewableVoiceDraftActive();
+    }
+
+    private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin() {
+        return isManualTapCaptureActive()
+                ? manualTapCaptureOrigin
+                : MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
     }
 
     // VOICE-FIRST single quick tap (draft off) = start a reviewable draft with
@@ -2672,24 +2445,57 @@ public final class OverlayService extends Service {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
+        boolean freshThread = nextVoiceCaptureFreshThread;
+        manualTapCaptureOrigin = freshThread
+                ? MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD
+                : MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD;
+        if (recordModeEnabled) {
+            startAudioNoteCapture();
+            return;
+        }
         stopAssistantAudioForBargeIn();
         // Suppress the "didn't catch that" cue for this first turn only: a tap that
         // starts the loop and captures no speech was a barge-in or a stray tap, not
         // a failed utterance. Set after the barge-in teardown clears it.
         suppressFirstTapTurnEmptyCue = true;
         startReviewableVoiceDraft();
+        nextVoiceCaptureFreshThread = false;
     }
 
-    // VOICE-FIRST double quick tap = start a fresh-thread voice turn. The tap
-    // resolver cancels any milliseconds-old or pending current loop first; this
-    // method only arms the one-shot branch choice and opens the normal talk loop.
+    private void handleOrbStopAndSend() {
+        if (audioNoteActive) {
+            finishAudioNoteCapture(false);
+            return;
+        }
+        sendVoiceDraft();
+    }
+
     private void handleOrbStartFreshTalkLoop() {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
-        newThreadArmed = true;
+        if (recordModeEnabled) {
+            startAudioNoteCapture();
+            manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
+            return;
+        }
+        contextControls.armNewThread();
         refreshContextControls();
+        nextVoiceCaptureFreshThread = true;
         handleOrbStartTalkLoop();
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
+    }
+
+    private void handleOrbCancelTalkLoop() {
+        suppressFirstTapTurnEmptyCue = false;
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+        if (audioNoteActive) {
+            cancelAudioNoteCapture();
+        }
+        discardVoiceDraft();
+        voiceLog.clear();
+        removeTranscriptOverlay();
+        updateMicState();
     }
 
     // Stop any assistant audio so a tap-to-talk starts on a quiet mic. Cancels an
@@ -2697,23 +2503,24 @@ public final class OverlayService extends Service {
     // sampler. A fresh session opens immediately after.
     private void stopAssistantAudioForBargeIn() {
         cancelContinuousVoiceRestart();
+        voiceLog.markSteeringBoundary();
+        renderVoiceTranscriptRows();
         if (streamingVoiceActive()) {
-            cancelStreamingVoice();
+            pendingReplacementTurnId = "turn_" + UUID.randomUUID().toString();
+            String boundaryId = "steer_" + UUID.randomUUID().toString();
+            MoaStreamingVoiceSessionController superseded = streamingVoiceController;
+            superseded.cancelForReplacement(
+                    pendingReplacementTurnId,
+                    boundaryId,
+                    nextVoiceCaptureFreshThread ? "fresh_thread" : "steering");
+            streamingVoiceController = null;
+            mainHandler.postDelayed(superseded::destroy, 500);
+            streamingVoiceGeneration++;
         }
         cancelVoiceSampler();
         voiceController.stopQuietly();
     }
 
-    // VOICE-FIRST double tap after a just-started loop = undo it quietly before
-    // chat opens. The session is milliseconds old with nothing meaningful
-    // captured, so it is torn down without a cue.
-    private void handleOrbCancelTalkLoop() {
-        suppressFirstTapTurnEmptyCue = false;
-        cancelStreamingVoice();
-        voiceLog.clear();
-        removeTranscriptOverlay();
-        updateMicState();
-    }
 
     // The escape hatch: a large move after a press-to-talk hold confirmed cancels
     // the capture that hold started (streaming turn or audio note) WITHOUT
@@ -2746,7 +2553,7 @@ public final class OverlayService extends Service {
             if (orbView != null) {
                 orbView.setHeld(true);
             }
-            nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+            nextStreamingTurnFollowsActiveRun = agentRuns.hasRuns();
             nextManualVoiceFollowsActiveRun = false;
             startStreamingVoiceTurn(false, false);
             return;
@@ -2880,7 +2687,7 @@ public final class OverlayService extends Service {
         if (value.isEmpty() || currentStreamingTurnRouted) {
             return false;
         }
-        if (nextStreamingTurnFollowsActiveRun || !activeAgentRuns.isEmpty()) {
+        if (nextStreamingTurnFollowsActiveRun || agentRuns.hasRuns()) {
             currentStreamingTurnRouted = true;
             currentStreamingTurnCommitRequested = false;
             nextStreamingTurnFollowsActiveRun = false;
@@ -2960,6 +2767,7 @@ public final class OverlayService extends Service {
     // While record mode is on, the same gesture records a raw audio note
     // instead: no voice session, no SpeechRecognizer, no STT/LLM/TTS.
     private void handleOrbDoublePressStart() {
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         if (recordModeEnabled) {
             startAudioNoteCapture();
             return;
@@ -3069,6 +2877,7 @@ public final class OverlayService extends Service {
         if (!audioNoteActive) {
             return;
         }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         audioNoteActive = false;
         MoaAudioCaptureController capture = audioNoteCapture;
         audioNoteCapture = null;
@@ -3191,8 +3000,8 @@ public final class OverlayService extends Service {
         if (orbView != null) {
             orbView.setHeld(true);
         }
-        nextManualVoiceFollowsActiveRun = !activeAgentRuns.isEmpty();
-        nextStreamingTurnFollowsActiveRun = !activeAgentRuns.isEmpty();
+        nextManualVoiceFollowsActiveRun = agentRuns.hasRuns();
+        nextStreamingTurnFollowsActiveRun = agentRuns.hasRuns();
         resetVoiceTurnTranscript();
         showTranscriptOverlay("");
         setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
@@ -3273,9 +3082,10 @@ public final class OverlayService extends Service {
             startLocalVoiceTurn(true, true);
             return;
         }
-        // Tap-created drafts never use silence auto-commit. Only the visible +
-        // control can commit; X cancels locally. Continuous here means the draft
-        // remains the active voice surface, not that it auto-rearms after reply.
+        // Tap-created drafts never use silence auto-commit. The matching orb
+        // toggle commits; triple-click cancels locally before opening chat.
+        // Continuous here means the draft remains the active voice surface,
+        // not that it auto-rearms after reply.
         startStreamingVoiceTurn(false, true);
     }
 
@@ -3288,12 +3098,15 @@ public final class OverlayService extends Service {
         // one-shot "new thread" must first resolve their branch through
         // /v1/threads/switch, because the streaming WS branch is fixed at session
         // start and cannot change once the socket is open.
-        String contextAction = incognitoEnabled ? "incognito" : (newThreadArmed ? "new" : "");
-        if (contextAction.isEmpty()) {
+        MoaContextControlState.StreamingChoice choice = contextControls.consumeStreamingChoice();
+        if (choice.consumedNewThread) {
+            refreshContextControls();
+        }
+        if (!choice.requiresBranchSwitch()) {
             openStreamingVoiceSession(autoCommitOnSilence, continuousLoop, "default", false);
             return;
         }
-        resolveThreadBranchThenOpenStreamingVoice(autoCommitOnSilence, continuousLoop, contextAction);
+        resolveThreadBranchThenOpenStreamingVoice(autoCommitOnSilence, continuousLoop, choice.action);
     }
 
     // Resolve the thread branch for an incognito / new-thread streaming voice turn
@@ -3303,12 +3116,6 @@ public final class OverlayService extends Service {
     // than silently opening a persisted session, keeping the incognito guarantee.
     private void resolveThreadBranchThenOpenStreamingVoice(boolean autoCommit, boolean continuous, String action) {
         final boolean incognito = "incognito".equals(action);
-        // Consume the one-shot "new" arm now that we are acting on it; incognito
-        // is a persistent mode and stays on.
-        if (!incognito) {
-            newThreadArmed = false;
-            refreshContextControls();
-        }
         // Release any prior controller/timers so the mic and socket are free while
         // the branch resolves, mirroring openStreamingVoiceSession's entry.
         cancelContinuousVoiceRestart();
@@ -3481,7 +3288,7 @@ public final class OverlayService extends Service {
                 String transcript = safe(streamingTranscriptAccumulator.update(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
-                    if (nextStreamingTurnFollowsActiveRun || !activeAgentRuns.isEmpty()) {
+                    if (nextStreamingTurnFollowsActiveRun || agentRuns.hasRuns()) {
                         currentStreamingTurnRouted = true;
                         nextStreamingTurnFollowsActiveRun = false;
                         addMessage(false, transcript);
@@ -3733,6 +3540,12 @@ public final class OverlayService extends Service {
                 }, 900);
             }
         });
+        if (!pendingReplacementTurnId.isEmpty()) {
+            streamingVoiceController.setTurnIdentity(pendingReplacementTurnId, androidDeviceId());
+            pendingReplacementTurnId = "";
+        } else {
+            streamingVoiceController.setTurnIdentity("", androidDeviceId());
+        }
         // Hand over the gesture-warmed mic (or the mic pre-warmed during the
         // continuous re-arm gap) so the session goes live instantly and, for
         // push-to-talk, drains the pre-roll. Null here means a cold start.
@@ -3934,11 +3747,10 @@ public final class OverlayService extends Service {
     // voice session (its inc- branch is never persisted). The stored chat message
     // was already recorded before this runs, so only the overlay row shows it.
     private void markCurrentReplyNotSaved() {
-        String text = safe(voiceAssistantTranscript);
-        if (text.isEmpty() || text.endsWith(NOT_SAVED_SUFFIX)) {
-            return;
+        String marked = MoaContextControlState.appendNotSaved(voiceAssistantTranscript);
+        if (!marked.equals(safe(voiceAssistantTranscript))) {
+            updateVoiceAssistantTranscript(marked);
         }
-        updateVoiceAssistantTranscript(text + NOT_SAVED_SUFFIX);
     }
 
     private boolean shouldStartVoice(Intent intent) {
@@ -4076,18 +3888,6 @@ public final class OverlayService extends Service {
             this.success = success;
             this.summary = summary == null ? "" : summary.trim();
             this.receipt = receipt;
-        }
-    }
-
-    private static final class AgentRunState {
-        final String id;
-        String harness = "";
-        String status = "queued";
-        String outputPreview = "";
-        boolean active = true;
-
-        AgentRunState(String id) {
-            this.id = id == null ? "" : id.trim();
         }
     }
 

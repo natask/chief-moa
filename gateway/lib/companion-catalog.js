@@ -553,6 +553,10 @@ function createCompanionCatalogStore(options = {}) {
     if (input.companion && typeof input.companion === "object") {
       return companion(input.companion);
     }
+    const inline = companion(input);
+    if (inline) {
+      return inline;
+    }
     return getRaw(input.companion_id || input.companionId || input.id);
   }
 
@@ -1233,9 +1237,10 @@ function cleanPetSpec(input, fallback = {}) {
       || src.sourceImage
       || src.image_data_url
       || src.imageDataUrl
+      || src.sprite?.image_data_url
       || fallback.sourceImage,
   );
-  const assetUrl = cleanAssetUrl(src.asset_url || src.assetUrl || src.sprite_url || src.spriteUrl);
+  const assetUrl = cleanAssetUrl(src.asset_url || src.assetUrl || src.sprite_url || src.spriteUrl || src.sprite?.asset_url);
   const spriteType = sourceImage ? "image-data-url" : assetUrl ? "image-url" : "css-shigmi";
   return {
     version: PET_SPEC_VERSION,
@@ -1250,10 +1255,10 @@ function cleanPetSpec(input, fallback = {}) {
       type: spriteType,
       asset_url: assetUrl,
       image_data_url: sourceImage,
-      frame_width: cleanFrameNumber(src.frame_width || src.frameWidth, 96),
-      frame_height: cleanFrameNumber(src.frame_height || src.frameHeight, 96),
-      frame_count: cleanFrameNumber(src.frame_count || src.frameCount, spriteType === "css-shigmi" ? 1 : 4, 1, 48),
-      transparent: src.transparent !== false,
+      frame_width: cleanFrameNumber(src.frame_width || src.frameWidth || src.sprite?.frame_width, 96),
+      frame_height: cleanFrameNumber(src.frame_height || src.frameHeight || src.sprite?.frame_height, 96),
+      frame_count: cleanFrameNumber(src.frame_count || src.frameCount || src.sprite?.frame_count, spriteType === "css-shigmi" ? 1 : 4, 1, 48),
+      transparent: src.transparent !== false && src.sprite?.transparent !== false,
     },
     behaviors: cleanBehaviorList(src.behaviors, motion),
     actions: cleanPetActions(src.actions, motion),

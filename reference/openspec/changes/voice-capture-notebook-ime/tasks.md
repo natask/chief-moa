@@ -1,7 +1,24 @@
 # Tasks
 
-Every implementation unit has one observable acceptance check. This proposal is
-not authorized for implementation until product/architecture alignment.
+Every implementation unit has one observable acceptance check. Only section 0A
+is authorized; the remaining proposal still requires product/architecture
+alignment.
+
+## 0A. Authorized Ask/Note/Coach Gateway State
+
+- [x] 0A.1 Persist a versioned device-scoped Ask/Note/Coach selection without
+  adding delivery state to the durable base persona.
+- [x] 0A.2 Expose authenticated read/change/history mode routes with the routing
+  decision needed before clients open provider work.
+- [x] 0A.3 Fail closed before model work for Note and apply Coach as a bounded
+  turn-local overlay that disappears after reverting to Ask.
+- [x] 0A.4 Add deterministic unit and gateway smoke coverage for the truth table,
+  persistence, provider denial, persona preservation, and reversion.
+- Acceptance: Note produces zero model requests, Coach preserves the saved base
+  persona while changing the turn policy, and Ask restores normal policy.
+- Rejected: Android/browser mode selectors.
+- Deferred: conversational mode switching, client admission preflight and
+  capture mechanics, capture blocks and notebook, video routing, and deployment.
 
 ## 0. Reconcile Current State
 

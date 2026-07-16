@@ -294,45 +294,61 @@ hold with movement only repositions the mark. Browser voice can opt a session
 into background assistant speech, where starting a new spoken turn opens a new
 gateway voice turn without stopping already queued assistant audio.
 
-An experimental voice-first gesture mode (off by default; browser flag
-`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
-the primary surface toward voice. Android uses the reviewable v4 contract:
-Single click starts a draft with visible `X — orb — ↑` controls (discard and the
-single Send action); later orb taps never commit it. Those controls are separate
-overlay windows beside the orb, so the transcript card above or below the orb is
-never the disposition authority. Double-click cancels the current draft
-and starts a fresh voice thread that does not use the current thread's replies,
-and triple-click cancels voice and opens the demoted chat surface. A still
-first-press hold is push-to-talk (release commits; a large move after the hold
-confirms cancels capture and escapes into a drag). The one open chat/transcript
-card follows the orb and flips wholly above or below it. Dragging into the
-bottom removal target, or choosing Hide in the chat header/foreground
-notification, stops the overlay service and removes all overlay windows. The
-flag off keeps Android's legacy gesture contract. The browser flag uses the
-same `X — mascot — ↑` draft controls and explicit-send rule; its flag-off mapping
-and keyboard shortcuts remain unchanged. Contract:
+The voice-first gesture contract (browser flag
+`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) is manual
+and cross-surface: single click toggles current-thread capture; a still hold is
+push-to-talk in that thread and release sends; double-click toggles capture in a
+fresh thread; triple-click cancels without sending and opens chat. Starting a
+fresh-thread capture cancels an active current-thread capture without sending.
+Large movement after a hold starts cancels capture and escapes into drag. No
+separate X/Send side controls own disposition, and normal manual turns never
+wait for silence detection. The one open chat/transcript card follows the orb
+and flips wholly above or below it. Android drag-to-remove and explicit Hide
+actions keep their existing behavior. Keyboard shortcuts and flag-off legacy
+behavior remain unchanged. Delivery policy is separate from gesture mechanics.
+The gateway owns versioned, device-scoped Ask/Note/Coach admission as internal
+routing state. Clients do not expose a mode selector: the user changes behavior
+conversationally (for example, "take a note" or "coach me") and preflight
+applies the resulting policy before provider work. Spoken changes and a bounded
+status projection are follow-up work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
-The overlay surface stays small: it shows the current intent/result and compact
-run state, not a full scrollback manager. Browser text replies render in the
-result stack above the command input; replies, errors, and voice state never
-clear or replace the user's current input draft. Browser voice keeps that input
-available, shows partial/final user transcript feedback above it, and streams
-assistant text into the result stack above the input. The gateway still stores
+The overlay surface stays small: it visibly identifies the current page using
+bounded local title/origin/path data and shows transient current intent/result
+plus compact run state, not a full scrollback manager. Resolved cue cards linger
+briefly and retire when the next turn begins; the explicit History affordance
+loads canonical gateway turns on demand instead of making the overlay another
+conversation store. Replies, errors, and voice state never clear or replace the
+user's current input draft. Browser voice keeps that input available, shows
+partial/final user transcript feedback above it, and streams assistant text into
+the result stack above the input. The gateway still stores
 durable session, branch, turn, transcript, provider-event, and agent-run
 history. Realtime providers receive a bounded Moa-owned context pack at session
 start so provider memory is not the product database. The gateway's chat and
 cascaded voice paths assemble that pack through a canonical context-artifact
 envelope with versioned cache identity, stable source ids, ranking rationale,
-and secret-like-text redaction before any provider call. If the user wants
-history, they ask Moa for it through the same intent surface instead of
-browsing visible scrollback.
+and secret-like-text redaction before any provider call. History stays out of
+the transient cue stack and appears only when the user opens History.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript
 and assistant text the provider produced before the cutoff. That partial turn
 flows into the next session's context pack, so a user can interrupt the model on
 one device and resume the thread on another against the same dataset.
+Before a steering replacement opens, the client sends `cancel_turn` with a
+pre-generated boundary and next-turn identity. The gateway immediately stops
+provider work, persists the partial text on the old turn, and retains a bounded
+pending relation across socket closure. It consumes that relation only for the
+exact session, conversation, and non-empty device identity when the replacement
+opens. Both records carry the additive `turn_relation` boundary. Provider
+output arriving after cancellation is dropped; it is never attached to the new
+turn. A different branch or explicit `context_action` of `new`, `fork`, or
+`incognito` records a `fresh_thread` boundary with
+`inherit_partial_context:false`; streaming fresh-thread context remains
+branch-scoped. A bare `cancel_turn` has no admitted successor.
+Queueing is a separate, explicit spoken/typed backlog action and is not the
+default for interruption; its execution path remains staged. These conversation
+semantics do not cancel detached `agent_run` work.
 Spoken profile-control requests such as voice and language changes are routed
 through the gateway profile store; Gemini Live reads the effective voice,
 language, and Moa-owned context when the next Live session starts. Profile
@@ -683,6 +699,19 @@ listable (`GET /v1/audio-notes`) and playable
 only captures and stores. Contract:
 `reference/openspec/changes/record-mode-audio-notes/proposal.md`.
 
+### Voice delivery modes
+
+Ask, Note, and Coach are canonical versioned selections scoped by `device_id`
+and stored separately from the agent profile. Authenticated clients read or
+change them at `GET|PUT /v1/voice/mode`; version history is available at
+`GET /v1/voice/mode/versions`. Ask admits the normal conversational pipeline.
+Note denies provider/model work and directs raw audio to `/v1/audio-notes` with
+no reply or agent launch. Coach admits conversation with a bounded instruction
+layered onto a cloned effective profile for that turn only, so the stored base
+persona is unchanged and selecting Ask removes the layer. Client-side mode
+selectors and notebook/capture-block behavior are separate implementation
+slices.
+
 ### Browser Extension Thin Client
 
 ```text
@@ -713,8 +742,16 @@ session is not ready, and sends the release/commit only after that buffered
 audio has flushed. The visible browser loop is hold to capture, release to send,
 processing, then response. When the user enables background assistant speech for
 the current browser session,
-the extension preserves older voice-session event handling and queued playback
-while it starts the next microphone turn. That overlap is scoped to the active
+the extension may preserve older voice-session event handling and queued
+playback while it starts the next microphone turn. An explicit current-thread
+single-click capture is steering and overrides that playback preference: it
+stops old local speech immediately, preserves the already visible text with a
+local steering marker, asynchronously cancels and closes the old provider turn,
+and ignores late old-generation events while the new capture starts immediately.
+A terminal event already buffered by the gateway may still persist on the old
+canonical turn, but it cannot extend the frozen visible cue. Exact canonical
+text/audio splice offsets remain a staged gateway event-contract ticket. That
+overlap is scoped to the active
 page-agent owner: starting a browser agent or voice turn from another tab revokes
 other-tab voice sessions, stops queued assistant playback in those tabs, and
 cancels their browser-local task cues. The active browser-agent owner is shared
@@ -937,6 +974,11 @@ coding, and simple messages can stay on the direct-answer path. Explicit broker
 launch starts at most one selected launchable route in this slice; ordinary
 messages still only store decisions and context packs.
 
+Non-interrupting broker routing refers to detached tasks and `agent_run` work;
+it does not turn an active conversational assistant reply into a queue. A
+current-thread user turn steers that reply by default while detached runs
+continue.
+
 A broadcast turn ("update all active agents ...") fans out across active/forked
 runs: runs the message pertains to receive it as `broker_evidence_attached`, and
 each unrelated fork self-dismisses with a `dismiss_irrelevant` route decision
@@ -994,6 +1036,23 @@ strongest workflow or new-fork route as a non-blocking `agent_run`, stores the
 run id on the route decision and broker event, and appends a `broker_activated`
 event to the run. When a message targets an active run, the gateway appends a
 `broker_evidence_attached` event to that run without canceling it.
+
+Three checked-in principal profiles specialize that same one-run broker path.
+An explicit security-audit intent selects `security`, which is audit-only and
+can emit bounded repair contracts only; accepted repairs and re-verification
+must run separately, with the verifier independent of the repair. Explicit
+deslop, line-count, rearchitecture, or quality-cleanup intent selects
+`simplification`, which may make one behavior-preserving change under frozen
+regression checks in its isolated candidate branch/worktree. It may test and
+commit that candidate but cannot weaken checks, accept its own change, merge,
+deploy, promote, publish, push master, or modify active deployment state; a
+separate independent verifier precedes coordinator-owned integration. Explicit
+fuzzing/adversarial-testing intent selects
+`fuzzing`, which runs against one isolated exact candidate, minimizes and
+deduplicates reproduced failures, and emits bounded repair handoffs without
+editing the candidate. This slice has no recurring scheduler, automatic repair
+fanout, or concurrent principal launch; those require later work-graph and
+worker-workspace integration.
 
 Every user turn is a possible fork. A new spoken or typed message can create a
 new `agent_run` without canceling existing active runs, and subsequent user

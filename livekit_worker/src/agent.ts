@@ -13,11 +13,8 @@
 // to VAD endpointing (am-ET has no turn-detector model, so VAD is the fallback);
 // PTT via turnDetection:'manual' + commitUserTurn()/clearUserTurn() is available.
 
-import { fileURLToPath } from "node:url";
 import {
-  cli,
   defineAgent,
-  ServerOptions,
   voice,
   type JobContext,
   type JobProcess,
@@ -33,14 +30,35 @@ const AGENT_INSTRUCTIONS =
   "You are A.G., a voice assistant. Reasoning, memory, tools, and the reply " +
   "voice are all owned by the Moa gateway; this session only carries audio.";
 
-export default defineAgent({
+export const workerDefinition = {
   // Load the Silero VAD once per worker process (endpointing turn detection).
   prewarm: async (proc: JobProcess) => {
     proc.userData.vad = await SileroVAD.load();
   },
 
-  entry: async (ctx: JobContext) => {
-    const config = loadConfig();
+  entry: async (ctx: JobContext) => initializeJob(ctx),
+};
+
+export interface JobDependencies {
+  loadConfig: typeof loadConfig;
+  resolveSessionChirpConfig: typeof resolveSessionChirpConfig;
+  createSession: (options: ConstructorParameters<typeof voice.AgentSession>[0]) => voice.AgentSession;
+  createAgent: (instructions: string) => voice.Agent;
+  recordTurn: typeof recordTurn;
+  logError: (message: string) => void;
+}
+
+const jobDependencies: JobDependencies = {
+  loadConfig,
+  resolveSessionChirpConfig,
+  createSession: (options) => new voice.AgentSession(options),
+  createAgent: (instructions) => new voice.Agent({ instructions }),
+  recordTurn,
+  logError: (message) => console.error(message),
+};
+
+export async function initializeJob(ctx: JobContext, deps: JobDependencies = jobDependencies): Promise<void> {
+    const config = deps.loadConfig();
     const vad = ctx.proc.userData.vad as VAD;
 
     await ctx.connect();
@@ -58,9 +76,9 @@ export default defineAgent({
     // this session; falls back to MOA_LIVEKIT_LANGS on any fetch problem.
     // One fetch, here, before the ChirpSTT plugin is constructed -- never
     // re-fetched or auto-detected for the rest of the session.
-    const chirpConfig = await resolveSessionChirpConfig(config);
+    const chirpConfig = await deps.resolveSessionChirpConfig(config);
 
-    const session = new voice.AgentSession({
+    const session = deps.createSession({
       vad,
       stt: new ChirpSTT(chirpConfig),
       llm: new GatewayLLM(config.gateway, state),
@@ -78,19 +96,20 @@ export default defineAgent({
         const item = ev.item;
         if (item && "role" in item && item.role === "assistant" && "textContent" in item) {
           const assistantText = (item as { textContent?: string }).textContent || "";
-          void recordTurn(config.gateway, state, assistantText).catch((error) => {
-            console.error(`livekit turn-record failed: ${describe(error)}`);
+          void deps.recordTurn(config.gateway, state, assistantText).catch((error) => {
+            deps.logError(`livekit turn-record failed: ${describe(error)}`);
           });
         }
       },
     );
 
-    const agent = new voice.Agent({ instructions: AGENT_INSTRUCTIONS });
+    const agent = deps.createAgent(AGENT_INSTRUCTIONS);
     await session.start({ agent, room: ctx.room });
-  },
-});
+}
 
-async function recordTurn(gateway: { url: string; token: string }, state: LiveKitTurnState, assistantText: string): Promise<void> {
+export const workerAgent = defineAgent(workerDefinition);
+
+export async function recordTurn(gateway: { url: string; token: string }, state: LiveKitTurnState, assistantText: string): Promise<void> {
   const reply = state.lastReply;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (gateway.token) {
@@ -124,7 +143,7 @@ interface ParticipantMetadata {
   surface?: string;
 }
 
-function parseParticipantMetadata(metadata: string | undefined): ParticipantMetadata {
+export function parseParticipantMetadata(metadata: string | undefined): ParticipantMetadata {
   if (!metadata) {
     return {};
   }
@@ -137,16 +156,14 @@ function parseParticipantMetadata(metadata: string | undefined): ParticipantMeta
 
 // Fallback when a participant carries no metadata: derive a session id from the
 // room name (rooms are minted as moa-{session}-{branch}).
-function roomSessionId(roomName: string | undefined): string {
+export function roomSessionId(roomName: string | undefined): string {
   const name = roomName || "";
   const match = /^moa-(.+)-[^-]+$/.exec(name);
   return match?.[1] || name || "default";
 }
 
-function describe(error: unknown): string {
+export function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// `node dist/agent.js start` (or dev) boots the worker; the agents framework
-// imports this module's default export inside each job process.
-cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url) }));
+export default workerAgent;

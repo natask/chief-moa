@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'jacoco'
 }
 
 def envOrDefault(String name, String fallback) {
@@ -54,6 +55,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            enableUnitTestCoverage true
+        }
         release {
             if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
@@ -65,6 +69,98 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+jacoco {
+    toolVersion = '0.8.12'
+}
+
+def generatedAndroidClassExcludes = [
+        '**/BuildConfig.*',
+        '**/Manifest*.*',
+        '**/R$*.*',
+        '**/R.*'
+]
+
+def debugProductionClasses = files(
+        fileTree(
+                dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
+                excludes: generatedAndroidClassExcludes
+        ),
+        fileTree(
+                dir: layout.buildDirectory.dir('tmp/kotlin-classes/debug'),
+                excludes: generatedAndroidClassExcludes
+        )
+)
+
+def debugProductionSources = files('src/main/java', 'src/main/kotlin')
+
+def debugUnitTestCoverageData = layout.buildDirectory.file(
+        'outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec'
+)
+
+// Production-only baseline after the focused JVM tests landed on 2026-07-15.
+// This is a non-regression ratchet, not the final 90% coverage requirement.
+// Raise these floors as Android lifecycle logic is extracted and tested; never
+// lower them to make verification pass.
+def debugUnitTestCoverageRatchet = [
+        // 1,448 / 8,070 executable production lines.
+        line  : new BigDecimal('0.1794299876084262'),
+        // 976 / 4,477 production branches.
+        branch: new BigDecimal('0.2180031270940361'),
+        // 261 / 1,110 production methods (the JaCoCo function analogue).
+        method: new BigDecimal('0.2351351351351351')
+]
+
+tasks.register('reportDebugUnitTestCoverage', JacocoReport) {
+    group = 'verification'
+    description = 'Reports debug JVM coverage over production Java/Kotlin classes only.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(debugProductionClasses)
+    sourceDirectories.from(debugProductionSources)
+
+    reports {
+        xml.required = true
+        html.required = true
+        csv.required = false
+    }
+}
+
+tasks.register('verifyDebugUnitTestCoverage', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Verifies the production-only debug JVM coverage ratchet.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(debugProductionClasses)
+    sourceDirectories.from(debugProductionSources)
+
+    violationRules {
+        rule {
+            element = 'BUNDLE'
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = debugUnitTestCoverageRatchet.line
+            }
+            limit {
+                counter = 'BRANCH'
+                value = 'COVEREDRATIO'
+                minimum = debugUnitTestCoverageRatchet.branch
+            }
+            limit {
+                counter = 'METHOD'
+                value = 'COVEREDRATIO'
+                minimum = debugUnitTestCoverageRatchet.method
+            }
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyDebugUnitTestCoverage')
 }
 
 dependencies {

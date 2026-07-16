@@ -136,10 +136,14 @@ final class MoaVoiceGatewaySocket {
     }
 
     boolean sendSessionStart(String sessionId, String turnId, String branchId) {
-        return sendSessionStart(sessionId, turnId, branchId, null, "android-overlay");
+        return sendSessionStart(sessionId, turnId, branchId, null, "android-overlay", "");
     }
 
     boolean sendSessionStart(String sessionId, String turnId, String branchId, JSONObject profileOverride, String source) {
+        return sendSessionStart(sessionId, turnId, branchId, profileOverride, source, "");
+    }
+
+    boolean sendSessionStart(String sessionId, String turnId, String branchId, JSONObject profileOverride, String source, String deviceId) {
         try {
             JSONObject format = new JSONObject();
             format.put("encoding", MoaAudioCaptureController.ENCODING);
@@ -154,6 +158,7 @@ final class MoaVoiceGatewaySocket {
             body.put("turn_id", turnId);
             body.put("format", format);
             body.put("source", safe(source).isEmpty() ? "android-overlay" : safe(source));
+            if (!safe(deviceId).isEmpty()) body.put("device_id", safe(deviceId));
             if (profileOverride != null && profileOverride.length() > 0) {
                 body.put("profile_override", profileOverride);
             }
@@ -190,6 +195,23 @@ final class MoaVoiceGatewaySocket {
     // >= 0 (an unavailable position sends the plain cancel_turn unchanged).
     boolean sendCancelTurn(String turnId, long playedMs) {
         return sendTurnEvent("cancel_turn", turnId, playedMs);
+    }
+
+    boolean sendReplacementCancel(String turnId, long playedMs, String nextTurnId,
+            String boundaryId, String replacementKind) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("type", "cancel_turn");
+            body.put("turn_id", turnId);
+            if (playedMs >= 0) body.put("played_ms", playedMs);
+            body.put("next_turn_id", nextTurnId);
+            body.put("boundary_id", boundaryId);
+            body.put("replacement_kind", replacementKind);
+            return sendJson(body);
+        } catch (JSONException error) {
+            reportFailure("Could not build replacement cancel event.", error);
+            return false;
+        }
     }
 
     boolean sendPlaybackProgress(String turnId, MoaAssistantAudioProgressTracker.PlaybackProgress progress, String reason) {

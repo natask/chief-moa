@@ -1,1 +1,6 @@
+- Steering release 0.1.42 removes visible role selectors, resolves the active branch, keeps fresh context branch-scoped, and sends durable replacement identity before immediate cancellation — agent: Codex/GPT-5 — integration candidate
+- Browser overlay now shows current-page identity, retires transient results into on-demand history, and single-click steering freezes accepted text while superseding stale speech — agent: codex/gpt-5 — b3d63250
+- Browser voice toggles now require matching capture provenance, so a single click cannot send a fresh-thread capture started by double-click — agent: codex/gpt-5 — 5ff04790
+- Browser gesture parity release candidate allocated collision-free manifest version 0.1.41 — agent: codex/gpt-5 — b892145d
+- Voice-first browser gestures now toggle current-thread capture on single click, fresh-thread capture on double-click, push-to-talk on hold, and collision-safe chat on triple-click — agent: codex/gpt-5 — 888b6a5a
 - Video notes (extension half): shift-click record = screen+mic WebM via desktopCapture picker + offscreen MediaRecorder (120s/20MiB caps), direct upload to /v1/video-notes, then a /v1/voice/turns video turn whose reply lands on the note's cue; Stop-sharing bar auto-finishes; voice/audio-note/video-note mutually refuse the mic — agent: claude-code/fable-5 — 1865dc3

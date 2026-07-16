@@ -22,11 +22,8 @@
   // ---- Overlay UI -------------------------------------------------------
   let root,
     launcher,
-    draftCancelButton,
-    draftSendButton,
     panel,
     input,
-    agentModeSelect,
     proactiveButton,
     proactiveCardEl,
     proactiveIndicator,
@@ -34,6 +31,9 @@
     recordButton,
     stopButton,
     log,
+    historyButton,
+    historyView,
+    pageIdentityEl,
     langChip,
     uiSpecSurfaceEl,
     pendingConfirm = null,
@@ -79,22 +79,26 @@
   const assistantPlaybackSources = new Set();
   const liveVoiceStates = new Set();
   const liveVoiceBySessionId = new Map();
+  let steeringGeneration = 0;
   const DOUBLE_CLICK_HOLD_MS = 260;
   const LAUNCHER_DOUBLE_CLICK_MS = 280;
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
   // Voice-first gesture experiment (off by default). When the flag is on the
-  // mark remaps to: single click = reviewable voice draft with side controls,
-  // still hold = push-to-talk (a large move
-  // escapes into a drag), double-click = the text surface. Flag off keeps
-  // the legacy contract untouched.
+  // mark remaps to: single click = current-thread capture toggle, still hold =
+  // push-to-talk, double-click = fresh-thread capture toggle, and triple-click
+  // = text chat. Flag off keeps the legacy contract untouched.
   const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
   const VOICE_FIRST_HOLD_MS = 260;
   let voiceFirstGestures = false;
   let voiceFirstHoldTimer = null;
   let voiceFirstTapChain = null;
   let voiceFirstHoldStartedTurn = false;
+  // Preserve how the active capture was admitted so another double-click can
+  // send a double-started turn, while a double-click during a single-started
+  // turn can discard it before opening a fresh thread.
+  let voiceFirstCaptureOrigin = null;
   // Mascot scale: one root scalar (font-size px on #agee-launcher) drives the
   // hit circle, the lion and every animation distance. Scroll on the lion
   // adjusts it; the value persists like the launcher position does.
@@ -114,8 +118,6 @@
   const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
   const UI_SPEC_CACHE_KEY = "ageeUiSpec";
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
-  const BROWSER_AGENT_ROLE_KEY = "ageeBrowserAgentRole";
-  const BROWSER_AGENT_ROLES = new Set(["delegate", "help", "collaborate", "explain"]);
   const PROFILE_CACHE_KEY = "ageeProfileCache";
   // Language chip: what A.G. currently hears (STT) and speaks (reply), read
   // from the cached gateway profile and kept live across a running turn.
@@ -348,9 +350,11 @@
           </span>
         </span>
       </button>
-      <button id="agee-draft-cancel" class="agee-draft-control" type="button" data-agee-tip="Discard voice draft" aria-label="Discard voice draft" hidden>×</button>
-      <button id="agee-draft-send" class="agee-draft-control agee-draft-send" type="button" data-agee-tip="Send voice draft" aria-label="Send voice draft" hidden>↑</button>
       <div id="agee-panel" role="dialog" aria-label="A.G. command">
+        <div id="agee-page-context">
+          <span id="agee-page-identity" aria-live="polite"></span>
+          <button id="agee-history-button" type="button" aria-expanded="false">History</button>
+        </div>
         <div id="agee-voice-state" aria-hidden="true">
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
@@ -358,16 +362,11 @@
         <section id="agee-proactive-card" class="agee-proactive-card" aria-live="polite" hidden></section>
         <div id="agee-ui-surface" aria-live="polite"></div>
         <div id="agee-lang-chip" class="agee-lang-chip" hidden aria-live="polite"></div>
+        <div id="agee-history" hidden></div>
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
           <textarea id="agee-input" rows="1" placeholder="Ask A.G." autocomplete="off" spellcheck="true"></textarea>
-          <select id="agee-mode-select" data-agent-mode-control aria-label="Browser agent role">
-            <option value="delegate" selected>Delegate</option>
-            <option value="help">Help</option>
-            <option value="collaborate">Collaborate</option>
-            <option value="explain">Explain</option>
-          </select>
           <button id="proactiveHelp" type="button" data-agee-proactive="grant" data-agee-tip="Local suggestions for this tab" aria-label="Local suggestions for this tab">Local</button>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
@@ -377,11 +376,8 @@
       <div id="agee-tip" role="tooltip" aria-hidden="true"></div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
-    draftCancelButton = root.querySelector("#agee-draft-cancel");
-    draftSendButton = root.querySelector("#agee-draft-send");
     panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
-    agentModeSelect = root.querySelector("#agee-mode-select");
     proactiveButton = root.querySelector("#proactiveHelp");
     proactiveCardEl = root.querySelector("#agee-proactive-card");
     proactiveIndicator = root.querySelector("#agee-proactive-indicator");
@@ -390,6 +386,9 @@
     stopButton = root.querySelector("#agee-stop");
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-log");
+    historyButton = root.querySelector("#agee-history-button");
+    historyView = root.querySelector("#agee-history");
+    pageIdentityEl = root.querySelector("#agee-page-identity");
     langChip = root.querySelector("#agee-lang-chip");
     voiceState = root.querySelector("#agee-voice-state");
     transcriptEl = root.querySelector("#agee-transcript");
@@ -400,19 +399,20 @@
     restoreLauncherPosition();
     restoreMascotScale();
     restoreUiChimePreference();
-    restoreBrowserAgentRole();
     restoreVoiceFirstGestures();
     loadAvatarBehaviorRuntime();
     loadUiSpec();
     loadActiveCompanionPet();
     loadLanguageChip();
+    AgeeSteeringUi.observePageIdentity({ element: pageIdentityEl, document, location, window });
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
     //   double-click and hold   -> manual push-to-talk
     // With the voice-first flag on (ageeVoiceFirstGesturesEnabled) the map
-    // becomes: single click -> talk toggle with barge-in, still hold ->
-    // push-to-talk, double-click -> text surface.
+    // becomes: single click -> current-thread voice toggle, still hold ->
+    // push-to-talk, double-click -> fresh-thread voice toggle, triple-click ->
+    // text chat.
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -420,22 +420,9 @@
     launcher.addEventListener("pointerdown", startLauncherDrag);
     launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
     window.addEventListener("resize", handleViewportResize);
-    agentModeSelect.addEventListener("change", () => {
-      chrome.storage.local.set({ [BROWSER_AGENT_ROLE_KEY]: selectedBrowserAgentRole() }).catch(() => {});
-    });
-
-    draftCancelButton.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!e.isTrusted) return;
-      cancelTalkMode();
-    });
-    draftSendButton.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!e.isTrusted) return;
-      sendReviewableVoiceDraft();
-    });
+    historyButton.addEventListener("click", () => AgeeSteeringUi.toggleHistorySnapshot({
+      view: historyView, button: historyButton, sendMessage: safeRuntimeSendMessage, positionPanel, document,
+    }));
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -867,7 +854,7 @@
   // the live data-agee-tip text so state-driven labels stay in sync.
   function setupOverlayTooltips() {
     if (!tipEl) return;
-    for (const target of [launcher, draftCancelButton, draftSendButton, proactiveButton, voiceButton, recordButton, stopButton]) {
+    for (const target of [launcher, proactiveButton, voiceButton, recordButton, stopButton]) {
       if (!target) continue;
       target.addEventListener("mouseenter", () => armTooltip(target));
       target.addEventListener("mouseleave", hideTooltip);
@@ -939,7 +926,6 @@
       resizeRaf = null;
       reclampLauncher();
       if (open) positionPanel();
-      positionVoiceDraftControls();
     });
   }
 
@@ -1000,7 +986,6 @@
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
     if (open) positionPanel(); // keep the surface anchored if the mark moves
-    positionVoiceDraftControls();
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
   }
 
@@ -1228,12 +1213,15 @@
       holdToTalkPointerId = pointerId;
       voiceFirstHoldStartedTurn = false;
       if (!(liveVoice && listening)) {
-        if (liveVoice) stopLiveVoiceTurn("cancel");
+        if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
+        stopSpeaking();
         voiceFirstHoldStartedTurn = true;
+        voiceFirstCaptureOrigin = "hold";
         startLiveVoiceTurn({
           preserveAssistantPlayback: assistantSpeechOverlap === true,
           conversation: false,
           autoCommit: false,
+          openText: false,
         });
       }
     }, VOICE_FIRST_HOLD_MS);
@@ -1253,44 +1241,19 @@
 
   function handleVoiceFirstTap(e, chainCount) {
     const count = chainCount + 1;
-    const prevToggled = voiceFirstTapChain ? voiceFirstTapChain.toggled : null;
     resetVoiceFirstTapChain();
-    voiceFirstTapChain = {
+    const chain = {
       count,
       lastTime: e.timeStamp,
       x: e.clientX,
       y: e.clientY,
-      toggled: null,
       timer: null,
     };
-    if (count === 1) {
-      if (conversationActive || (liveVoice && listening)) {
-        // A later mascot click never owns disposition of a reviewable draft.
-        // Keep listening until the visible X or Send control is chosen.
-        voiceFirstTapChain.toggled = "draft-open";
-        armVoiceFirstChainReset();
-        return;
-      }
-      // A click while idle or while the assistant is speaking arms the mic
-      // immediately; starting the turn already stops assistant playback, so
-      // barge-in is built in. A second click within the window cancels this
-      // sub-300ms-old session and opens the text surface instead.
-      voiceFirstTapChain.toggled = toggleTalkMode();
-      armVoiceFirstChainReset();
-      return;
-    }
-    if (count === 2) {
-      // Double click is the text surface. Tap 1 either armed the mic (undo the
-      // milliseconds-old session) or found an existing reviewable draft, which
-      // remains under the visible side controls and is never sent here.
-      if (prevToggled === "on") cancelTalkMode();
-      openTextSurface({ fresh: false });
-      armVoiceFirstChainReset();
-      return;
-    }
-    // Three or more taps add nothing beyond the double; keep the chain alive
-    // so further rapid taps stay inert instead of re-arming the mic.
-    armVoiceFirstChainReset();
+    voiceFirstTapChain = chain;
+    // Resolve only after the multi-click window. In particular, a single click
+    // that would send an active capture waits long enough for a second or third
+    // click to supersede it, so double/triple collisions never send by accident.
+    armVoiceFirstChainReset(() => resolveVoiceFirstTapChain(chain));
   }
 
   function armVoiceFirstChainReset(onExpire) {
@@ -1303,49 +1266,89 @@
     }, LAUNCHER_DOUBLE_CLICK_MS);
   }
 
-  // Single-click review mode. Starting opens a non-auto-committing draft;
-  // disposition belongs to the side controls. The old Off branch remains for
-  // non-gesture callers, but a later mascot click is intercepted above and can
-  // never silently commit. tapTalk keeps an empty first capture quiet.
-  function toggleTalkMode() {
-    if (conversationActive || (liveVoice && listening)) {
-      conversationActive = false;
-      if (liveVoice && listening) commitLiveVoiceTurn();
-      syncTalkModeUi();
-      return "off";
+  function resolveVoiceFirstTapChain(chain) {
+    if (!chain) return;
+    if (chain.count === 1) {
+      toggleVoiceFirstCapture("single");
+      return;
     }
+    if (chain.count === 2) {
+      toggleFreshThreadVoiceCapture();
+      return;
+    }
+    if (chain.count === 3) {
+      // Chat must never inherit a hot microphone or commit a pending capture.
+      if (liveVoice && listening) cancelTalkMode();
+      openTextSurface({ fresh: false });
+    }
+  }
+
+  function voiceFirstCaptureActive() {
+    return liveVoice != null && listening === true && liveVoice.committed !== true;
+  }
+
+  function startVoiceFirstCapture(origin, { freshThread = false } = {}) {
     primeAudio();
-    // Same teardown rule as toggleVoice(): a lingering non-listening turn is
-    // cancelled unless background speech overlap wants it kept playing.
-    if (liveVoice && !(assistantSpeechOverlap === true && liveVoice.committed)) {
-      stopLiveVoiceTurn("cancel");
+    const replacement = { kind: freshThread ? "fresh_thread" : "steering",
+      turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      boundaryId: `steer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}` };
+    if (origin === "single") beginCurrentThreadSteeringCapture(replacement);
+    else {
+      if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel", replacement);
+      stopSpeaking();
     }
+    if (freshThread) {
+      newThreadArmed = true;
+      newThreadLabel = "";
+    }
+    voiceFirstCaptureOrigin = origin;
     startLiveVoiceTurn({
-      preserveAssistantPlayback: assistantSpeechOverlap === true,
+      suppressAssistantPlayback: origin === "single",
+      conversation: false,
       autoCommit: false,
+      openText: false,
+      turnId: replacement.turnId,
     });
     if (liveVoice) liveVoice.tapTalk = true;
     syncTalkModeUi();
     return "on";
   }
 
+  function toggleVoiceFirstCapture(origin) {
+    if (voiceFirstCaptureActive()) {
+      // Capture toggles are provenance-matched. A single click cannot send a
+      // fresh-thread turn that was intentionally started with a double-click.
+      if (voiceFirstCaptureOrigin !== origin) return "noop";
+      voiceFirstCaptureOrigin = null;
+      commitLiveVoiceTurn();
+      syncTalkModeUi();
+      return "off";
+    }
+    return startVoiceFirstCapture(origin);
+  }
+
+  function toggleFreshThreadVoiceCapture() {
+    if (voiceFirstCaptureActive() && voiceFirstCaptureOrigin === "double") {
+      voiceFirstCaptureOrigin = null;
+      commitLiveVoiceTurn();
+      syncTalkModeUi();
+      return "off";
+    }
+    // A double-click supersedes a current-thread capture without sending it,
+    // then starts the new-thread capture. A second double-click sends that turn.
+    if (voiceFirstCaptureActive()) cancelTalkMode();
+    return startVoiceFirstCapture("double", { freshThread: true });
+  }
+
   function cancelTalkMode() {
     conversationActive = false;
+    voiceFirstCaptureOrigin = null;
     stopAllLiveVoiceTurns("cancel");
     syncTalkModeUi();
   }
 
-  function sendReviewableVoiceDraft() {
-    if (!reviewableVoiceDraftActive()) return;
-    conversationActive = false;
-    commitLiveVoiceTurn();
-    syncTalkModeUi();
-    syncVoiceDraftControls();
-  }
-
   function syncTalkModeUi() {
     if (root) root.classList.toggle("agee-talk", conversationActive === true);
-    syncVoiceDraftControls();
   }
 
   function restoreVoiceFirstGestures() {
@@ -1361,7 +1364,7 @@
     if (root) root.classList.toggle("agee-voice-first", voiceFirstGestures === true);
     if (launcher) {
       launcher.dataset.ageeTip = voiceFirstGestures
-        ? "Click to talk, then use X or Send; hold for push-to-talk, double-click to type"
+        ? "Click to start or stop; hold to talk; double-click for a new thread; triple-click for chat"
         : "Click to type, drag to move, scroll to resize, hold to talk";
     }
     syncTalkModeUi();
@@ -2196,9 +2199,25 @@
     return `c_${cueSeq}_${Date.now().toString(36)}`;
   }
 
-  // Cards stack as the user keeps sending. Drop the oldest finished ones past the
-  // cap so the log stays bounded; a running card is never pruned.
-  const MAX_CUE_CARDS = 20;
+  const MAX_CUE_CARDS = 6;
+  const TERMINAL_CUE_LINGER_MS = 12000;
+  function retireResolvedCueCards() {
+    if (!log) return;
+    const cards = [...log.querySelectorAll(".agee-cue")].map((card) => ({
+      id: card.dataset.cue,
+      active: activeCues.has(card.dataset.cue),
+      protected: card.classList.contains("agee-cue-steered"),
+    }));
+    for (const cueId of AgeeSteeringUi.selectResolvedCueIds(cards)) dismissCue(cueId);
+  }
+
+  function scheduleCueRetirement(cueId) {
+    const entry = cues.get(cueId);
+    if (!entry || activeCues.has(cueId)) return;
+    if (entry.dismissTimer) clearTimeout(entry.dismissTimer);
+    entry.cardEl.dataset.retireAfterMs = String(TERMINAL_CUE_LINGER_MS);
+    entry.dismissTimer = setTimeout(() => dismissCue(cueId), TERMINAL_CUE_LINGER_MS);
+  }
   function pruneCueCards() {
     if (!log) return;
     const cards = [...log.querySelectorAll(".agee-cue")];
@@ -2211,13 +2230,6 @@
       removable -= 1;
     }
   }
-
-  // A card is not auto-dismissed once it finishes — the surface is a short
-  // reading log now, not a toast that vanishes while you're still reading it.
-  // Cards persist until the user dismisses one explicitly (see
-  // selectCascadeDismissIds below), and are only ever pruned oldest-first past
-  // MAX_CUE_CARDS. Nothing schedules a timer to remove a finished card anymore;
-  // dismissCue() below is invoked only by an explicit user action.
 
   // Pure selection helper for the dismiss-and-cascade gesture (✕ button or
   // horizontal swipe): given the ordered list of cue cards (oldest first, the
@@ -2468,6 +2480,7 @@
   }
 
   function createCue(cueId, label, { presentation = "card" } = {}) {
+    retireResolvedCueCards();
     if (presentation === "icon") {
       currentCueId = cueId;
       cues.set(cueId, { presentation, label: String(label || "") });
@@ -2482,9 +2495,7 @@
     if (!log) return null;
     let entry = cues.get(cueId);
     if (entry?.cardEl && entry?.statusEl) return entry;
-    // Finished cards from earlier turns are left in place — the log persists
-    // until the user dismisses a card (see selectCascadeDismissIds). A new
-    // turn only ever appends.
+    retireResolvedCueCards();
     currentCueId = cueId;
     const card = document.createElement("div");
     card.className = "agee-cue agee-cue-running";
@@ -2604,10 +2615,9 @@
       entry.cardEl.className = `agee-cue agee-cue-${kind}`;
       activeCues.delete(cueId);
       lastTerminal = kind;
-      // No auto-dismiss timer: the card stays until the user dismisses it.
-      // Turning off "running" just reveals and enables its ✕ control.
       const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
       if (dismissBtn) dismissBtn.disabled = false;
+      scheduleCueRetirement(cueId);
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
@@ -2639,22 +2649,46 @@
     if (agentState === "speaking") setAgentState("idle");
   }
 
+  function beginCurrentThreadSteeringCapture(replacement) {
+    let silencedTurns = 0;
+    steeringGeneration += 1;
+    for (const state of liveVoiceStates) {
+      if (!state?.committed || state.assistantSpeechSuppressed) continue;
+      state.steeringBoundaryText = String(state.assistantText || "").trim();
+      state.assistantSpeechSuppressed = true;
+      state.steeredAtGeneration = steeringGeneration;
+      sendFinalPlaybackProgress(state);
+      stopLivePlayback(state);
+      state.playbackTime = audioCtx?.currentTime || 0;
+      state.pendingAssistantAudioSegments.length = 0;
+      const display = AgeeSteeringUi.formatSteeredAssistantText(state.assistantText, state.steeringBoundaryText);
+      ensureVoiceCueCard(state, state.transcript || "Voice", display);
+      cues.get(state.cueId)?.cardEl?.classList.add("agee-cue-steered");
+      updateCue(state.cueId, display, "done");
+      if (!state.voiceSessionId) state.pendingSteeringReplacement = replacement;
+      sendLiveVoiceControl(state, liveCancelTurnMessage(state, state.framesPlayed || 0, replacement))
+        .finally(() => closeLiveVoiceSession(state, `steered_generation_${steeringGeneration}`));
+      untrackLiveVoiceState(state);
+      silencedTurns += 1;
+    }
+    stopAllAssistantPlayback();
+    window.__ageeLastSteeringBoundary = { generation: steeringGeneration, silencedTurns, at: Date.now() };
+    return silencedTurns;
+  }
   function trackLiveVoiceState(state) {
     if (!state) return;
     liveVoiceStates.add(state);
   }
-
   function attachLiveVoiceSession(state, voiceSessionId) {
     if (!state) return;
     if (state.voiceSessionId) liveVoiceBySessionId.delete(state.voiceSessionId);
     state.voiceSessionId = voiceSessionId || null;
     if (state.voiceSessionId) {
       liveVoiceBySessionId.set(state.voiceSessionId, state);
-      safeRuntimeSendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId })
-        .catch(() => {});
+      safeRuntimeSendMessage({ cmd: "voiceSessionAttach", voiceSessionId: state.voiceSessionId }).catch(() => {});
+      if (state.pendingSteeringReplacement) sendLiveVoiceControl(state, liveCancelTurnMessage(state, 0, state.pendingSteeringReplacement)).finally(() => closeLiveVoiceSession(state, `steered_generation_${state.steeredAtGeneration}`));
     }
   }
-
   function untrackLiveVoiceState(state) {
     if (!state) return;
     // Universal terminal chokepoint for a turn: every done/error/recover/route/
@@ -2793,7 +2827,7 @@
       input.focus();
       return;
     }
-    const role = selectedBrowserAgentRole();
+    const role = AgeeSteeringUi.roleForInstruction(instruction);
     if (role === "delegate") {
       const host = location.hostname || "this page";
       askInlineConfirm(
@@ -2836,19 +2870,6 @@
     });
   }
 
-  function selectedBrowserAgentRole() {
-    const role = String(agentModeSelect?.value || "delegate").trim().toLowerCase();
-    return BROWSER_AGENT_ROLES.has(role) ? role : "delegate";
-  }
-
-  function restoreBrowserAgentRole() {
-    chrome.storage.local.get({ [BROWSER_AGENT_ROLE_KEY]: "delegate" }).then((stored) => {
-      if (!agentModeSelect) return;
-      const role = String(stored[BROWSER_AGENT_ROLE_KEY] || "delegate").trim().toLowerCase();
-      agentModeSelect.value = BROWSER_AGENT_ROLES.has(role) ? role : "delegate";
-    }).catch(() => {});
-  }
-
   function describePage() {
     const cueId = newCueId();
     openTextSurface({ fresh: false });
@@ -2865,51 +2886,9 @@
     if (voiceButton) {
       voiceButton.classList.toggle("listening", listening);
       voiceButton.textContent = "";
-      setTooltip(voiceButton, listening ? "Send what you said" : "Speak your request");
-      voiceButton.setAttribute("aria-label", listening ? "Send voice" : "Start voice");
+      setTooltip(voiceButton, listening ? "Stop and send" : "Start voice");
+      voiceButton.setAttribute("aria-label", listening ? "Stop and send voice" : "Start voice");
     }
-    syncVoiceDraftControls();
-  }
-
-  function reviewableVoiceDraftActive() {
-    return voiceFirstGestures === true
-      && conversationActive === true
-      && listening === true
-      && liveVoice != null
-      && liveVoice.committed !== true;
-  }
-
-  function syncVoiceDraftControls() {
-    if (!draftCancelButton || !draftSendButton || !root) return;
-    const visible = reviewableVoiceDraftActive();
-    draftCancelButton.hidden = !visible;
-    draftSendButton.hidden = !visible;
-    root.classList.toggle("agee-reviewing-voice", visible);
-    if (visible) positionVoiceDraftControls();
-  }
-
-  function positionVoiceDraftControls() {
-    if (!reviewableVoiceDraftActive() || !launcher || !draftCancelButton || !draftSendButton) return;
-    const gap = 10;
-    const margin = 10;
-    let lr = launcher.getBoundingClientRect();
-    const controlWidth = draftCancelButton.offsetWidth || 42;
-    const minLeft = margin + controlWidth + gap;
-    const maxLeft = Math.max(minLeft, window.innerWidth - margin - controlWidth - gap - lr.width);
-    const safeLeft = Math.max(minLeft, Math.min(lr.left, maxLeft));
-    if (Math.abs(safeLeft - lr.left) > 0.5) {
-      placeLauncher(safeLeft, lr.top, false);
-      lr = launcher.getBoundingClientRect();
-    }
-    const controlHeight = draftCancelButton.offsetHeight || 42;
-    const top = Math.max(margin, Math.min(
-      lr.top + (lr.height - controlHeight) / 2,
-      window.innerHeight - controlHeight - margin
-    ));
-    draftCancelButton.style.left = `${Math.round(lr.left - gap - controlWidth)}px`;
-    draftCancelButton.style.top = `${Math.round(top)}px`;
-    draftSendButton.style.left = `${Math.round(lr.right + gap)}px`;
-    draftSendButton.style.top = `${Math.round(top)}px`;
   }
 
   // Drive voice state on the root. The top strip stays hidden; live transcript
@@ -3066,11 +3045,13 @@
   }
 
   async function startLiveVoiceTurn(options = {}) {
-    const preserveAssistantPlayback = options.preserveAssistantPlayback === true || assistantSpeechOverlap === true;
+    const preserveAssistantPlayback = options.suppressAssistantPlayback === true
+      ? false
+      : options.preserveAssistantPlayback === true || assistantSpeechOverlap === true;
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
-    openTextSurface({ fresh: false });
+    if (options.openText !== false) openTextSurface({ fresh: false });
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
@@ -3087,7 +3068,7 @@
 
     const state = {
       cueId,
-      turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      turnId: options.turnId || `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       voiceSessionId: null,
       sessionReady: false,
       committed: false,
@@ -3103,11 +3084,13 @@
       transcript: "",
       gatewayRouted: false,
       incognito: context.action === "incognito",
+      contextControls: context,
       assistantSpeechOverlap: preserveAssistantPlayback,
+      assistantSpeechSuppressed: false,
+      steeringBoundaryText: "",
     };
     trackLiveVoiceState(state);
     liveVoice = state;
-    syncVoiceDraftControls();
 
     try {
       primeAudio();
@@ -3133,13 +3116,14 @@
         throw new Error(session?.error || "gateway did not open a voice session");
       }
       attachLiveVoiceSession(state, session.voiceSessionId);
-      if (state.commitWhenReady) commitLiveVoiceTurn();
+      if (state.commitWhenReady) commitLiveVoiceTurn(state);
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
     }
   }
 
   function handleLiveVoiceMessage(state, payload) {
+    if (state?.steeredAtGeneration && state.steeredAtGeneration <= steeringGeneration) return;
     // Any inbound voice-session event (audio chunk or JSON event) proves the turn
     // is still alive, so push the post-commit watchdog out. No-op until the turn
     // is committed (armed) and after it has ended (timer cleared on untrack).
@@ -3226,17 +3210,21 @@
       const text = String(msg.text || "").trim();
       if (!text) return;
       state.assistantText = text;
+      const displayText = state.assistantSpeechSuppressed
+        ? AgeeSteeringUi.formatSteeredAssistantText(text, state.steeringBoundaryText)
+        : text;
       // The assistant is now replying: flip the mark to speaking as soon as text
       // starts rendering, not only when spoken audio starts. Covers text-first
       // and text-only replies (response_modality text) where assistant_audio_start
       // never arrives, so the mark shows "responding" instead of hanging on
       // "thinking". assistant_audio_start re-asserts speaking; the flip is idempotent.
       if (isCurrentTurn) setAgentState("speaking");
-      ensureVoiceCueCard(state, state.transcript || "Voice", text);
-      updateCue(state.cueId, text, "running");
+      ensureVoiceCueCard(state, state.transcript || "Voice", displayText);
+      updateCue(state.cueId, displayText, "running");
       return;
     }
     if (msg.type === "assistant_audio_segment") {
+      if (state.assistantSpeechSuppressed) return;
       const segment = normalizeAssistantAudioSegment(msg);
       if (segment) state.pendingAssistantAudioSegments.push(segment);
       return;
@@ -3312,6 +3300,7 @@
   function playLiveAssistantPcm(state, buffer) {
     if (!buffer || !buffer.byteLength) return;
     if (!isLiveVoiceStateActive(state)) return;
+    if (state.assistantSpeechSuppressed) return;
     primeAudio();
     if (!audioCtx) return;
     const pcm = new Int16Array(buffer);
@@ -3347,9 +3336,9 @@
     state.playbackTime = startAt + audioBuffer.duration / rate;
   }
 
-  async function commitLiveVoiceTurn() {
-    const state = liveVoice;
-    if (!state || !isLiveVoiceStateActive(state)) return;
+  async function commitLiveVoiceTurn(state = liveVoice) {
+    if (!AgeeSteeringUi.isCurrentLiveVoiceState(state, liveVoice, isLiveVoiceStateActive)) return;
+    voiceFirstCaptureOrigin = null;
     state.committed = true;
     stopLiveCapture(state);
     setVoiceState(false);
@@ -3396,8 +3385,9 @@
       cmd: "run",
       instruction: transcript,
       cueId: state.cueId,
-      agentRole: pageContextTurn ? selectedBrowserAgentRole() : undefined,
-      contextAction: state.incognito ? "incognito" : "",
+      agentRole: pageContextTurn ? AgeeSteeringUi.roleForInstruction(transcript) : undefined,
+      contextAction: state.contextControls.action,
+      threadLabel: state.contextControls.label,
     }).then(() => {
       if (extensionContextInvalidated) removeCueCard(state.cueId);
     }).catch((error) => {
@@ -3405,11 +3395,11 @@
       if (agentState === "thinking") setAgentState("idle");
     });
   }
-
   function stopLiveVoiceTurn(mode = "stop") {
     // Any explicit stop/cancel/error ends conversation mode so the mark does not
     // re-arm the mic after the current turn tears down.
     conversationActive = false;
+    voiceFirstCaptureOrigin = null;
     const state = liveVoice;
     if (!state) {
       setVoiceState(false);
@@ -3421,10 +3411,11 @@
     if (agentState !== "idle") setAgentState("idle");
   }
 
-  function stopAllLiveVoiceTurns(mode = "stop") {
+  function stopAllLiveVoiceTurns(mode = "stop", replacement = null) {
     conversationActive = false;
+    voiceFirstCaptureOrigin = null;
     for (const state of [...liveVoiceStates]) {
-      stopLiveVoiceState(state, mode);
+      stopLiveVoiceState(state, mode, replacement);
     }
     liveVoice = null;
     setVoiceState(false);
@@ -3482,15 +3473,19 @@
     if (agentState !== "idle") setAgentState("idle");
   }
 
-  function stopLiveVoiceState(state, mode = "stop") {
+  function stopLiveVoiceState(state, mode = "stop", replacement = null) {
     if (!isLiveVoiceStateActive(state)) return;
     stopLiveCapture(state);
     // Capture fully-played segments before stopLivePlayback stop()s the sources.
     const playedSegments = state.framesPlayed || 0;
     sendFinalPlaybackProgress(state);
     stopLivePlayback(state);
-    if (mode === "cancel") sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments));
-    closeLiveVoiceSession(state, mode);
+    if (mode === "cancel") {
+      sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments,
+        state.committed ? replacement : null)).finally(() => closeLiveVoiceSession(state, mode));
+    } else {
+      closeLiveVoiceSession(state, mode);
+    }
     if (mode === "revoked") {
       rememberRevokedCue(state.cueId);
       removeCueCard(state.cueId);
@@ -3533,22 +3528,24 @@
     root.dataset.ageeOwnerResult = browserAgentOwner?.last_result || "";
   }
 
-  function liveCancelTurnMessage(state, playedSegments) {
-    // Additive: gateway records where speech stopped from played_segments. When
-    // the counter is absent (older state / never played), send cancel_turn as-is.
+  function liveCancelTurnMessage(state, playedSegments, replacement = null) {
     const message = { type: "cancel_turn", turn_id: state.turnId };
     const played = Number.isFinite(playedSegments) ? playedSegments : state?.framesPlayed;
     if (Number.isFinite(played) && played >= 0) message.played_segments = played;
+    if (replacement?.turnId && replacement?.boundaryId) {
+      message.replacement_kind = replacement.kind === "fresh_thread" ? "fresh_thread" : "steering";
+      message.next_turn_id = replacement.turnId;
+      message.boundary_id = replacement.boundaryId;
+    }
     return message;
   }
-
   function sendLiveVoiceControl(state, message) {
-    if (!state?.voiceSessionId) return;
-    safeRuntimeSendMessage({
+    if (!state?.voiceSessionId) return Promise.resolve({ ok: false });
+    return safeRuntimeSendMessage({
       cmd: "voiceSessionControl",
       voiceSessionId: state.voiceSessionId,
       message,
-    }).catch(() => {});
+    }).catch(() => ({ ok: false }));
   }
 
   function closeLiveVoiceSession(state, reason) {
@@ -3693,8 +3690,11 @@
     }
 
     if (!isLiveVoiceStateActive(state)) return;
-    ensureVoiceCueCard(state, state.transcript || "Voice", summary);
-    updateCue(state.cueId, summary, "done");
+    const displaySummary = state.assistantSpeechSuppressed
+      ? AgeeSteeringUi.formatSteeredAssistantText(summary, state.steeringBoundaryText)
+      : summary;
+    ensureVoiceCueCard(state, state.transcript || "Voice", displaySummary);
+    updateCue(state.cueId, displaySummary, "done");
     reactLauncher("done");
     if (!wasCurrentTurn) return;
     setVoiceState(false);

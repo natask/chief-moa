@@ -1856,7 +1856,7 @@ function deploymentApplyGuard(entry) {
 }
 
 function deploymentRollbackGuard(entry) {
-  if (!latestAppliedRecord(entry) || !entry.receipts.get("apply")) {
+  if (!entry.records.some((record) => record.status === "applied") || !entry.receipts.get("apply")) {
     return { status: "blocked", reason: "no applied deployment receipt exists yet" };
   }
   if (entry.receipts.get("rollback")) {
@@ -2014,7 +2014,6 @@ function assertDeploymentObservedEffect(entry, observed) {
     }
   }
 }
-
 module.exports = {
   createWorkHistoryStore,
   RUN_EVENT_TYPES,
@@ -2029,4 +2028,5 @@ module.exports = {
   DEPLOYMENT_OPERATIONS,
   DEPLOYMENT_GUARD_STATUSES,
   UI_ROUTE_KINDS,
+  workHistoryTestInternals: Object.freeze({ isTerminalRunStatus, taskStream, runStream, streamForTarget, normalizeFeedbackTargets, inferTargetType, eventSummary, idem, deploymentIdem, deploymentPayloadDigest, canonicalJson, assertDeploymentReturnedEvent, actor, requireText, text, integer, plain, refs, deploymentString, workHistoryRef, deploymentRef, deploymentUrl, deploymentRefs, deploymentCandidateRefs, iso, latestPreviewRecord, latestAppliedRecord, latestDeploymentVerification, matchingPreviewVerification, currentEffectAdoption, currentDeploymentClaim, currentDeploymentEffect, isClaimExpired, deploymentApplyGuard, deploymentRollbackGuard, deploymentRequestStatus, deploymentRequestBlockingReason, assertDeploymentOperationClaimable, assertDeploymentOperationClaim, assertDeploymentReceiptAuthority, assertDeploymentEffectAllowed, assertDeploymentObservedEffect }),
 };

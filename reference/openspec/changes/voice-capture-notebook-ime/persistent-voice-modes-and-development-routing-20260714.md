@@ -2,19 +2,21 @@
 
 ## Status
 
-Proposed for product and architecture alignment. This note records current
-runtime evidence and a recommended product shape. It does not authorize app,
-gateway, worker, or deployment implementation.
+The Ask/Note/Coach gateway mode-state slice was authorized on 2026-07-15 as
+internal routing state. Visible client mode selectors are rejected. Capture
+blocks, Dictate, Development routing, video routing, worker changes, and
+deployment remain proposed and are not authorized by this slice.
 
 ## Linearized Intent
 
 1. The lion/orb should be a dependable, low-friction microphone control. Tap to
    start, tap again to stop, with press-and-hold available as an eyes-free
    push-to-talk accelerator.
-2. What happens after stop should come from one persistent user-selected mode,
-   not from a growing vocabulary of double taps, swipes, and hidden gestures.
-3. The user should be able to change that mode conversationally, and the orb
-   should make the current mode visible until it is changed again.
+2. What happens after stop should come from one persistent conversational
+   intent, not from a visible selector or a growing vocabulary of hidden
+   gestures.
+3. The user changes that intent conversationally. The orb may show a compact
+   status while active, but it is not a mode picker.
 4. In an Ask mode, stopping sends the transcript as the message rather than
    merely filling an intermediate text box.
 5. In a Dictate mode, Moa should replace Wispr Flow by inserting selected text
@@ -66,19 +68,39 @@ Capture mechanics stay stable in every mode:
 - still press-and-hold is push-to-talk and applies the same delivery behavior on
   release;
 - drag moves the orb;
-- cancel is always visibly available while a capture is active.
+- triple-click cancels an active capture without sending; a large movement
+  after hold capture starts also cancels and escapes into drag.
 
-Do not make swipe direction or multi-click count the primary mode selector.
-Those gestures may become accelerators after physical-phone QA, but they should
-not be the only way to discover or recover the current behavior.
+Do not use swipe direction, multi-click count, or a visible control as a mode
+selector. Multi-clicks own interruption and branch mechanics. Behavioral intent
+is expressed conversationally.
 
-The selected mode is device-scoped, persistent, and visible next to or through
-the orb. The user can change it by voice (for example, “switch to note mode”)
-or through one compact mode control. A spoken mode change is a control turn and
-does not leak into the next note, dictated field, message, or development
-instruction.
+The admitted policy is device-scoped and persistent. The user changes it by
+voice (for example, “take a note” or “coach me on this”). The orb may report the
+active behavior as status, but offers no selector. A spoken policy change is a
+control turn and does not leak into the next note, dictated field, message, or
+development instruction.
 
 ## Mode Contract
+
+The first gateway slice uses this explicit truth table. Mode selection is
+versioned and device-scoped. Coach is a bounded turn-local instruction layered
+over the saved persona; it never rewrites that persona, and selecting Ask
+removes the overlay on the next turn.
+
+| Mode | Storage | Provider/model work | Assistant reply | Agent dispatch |
+| --- | --- | --- | --- | --- |
+| Ask | Normal conversation-turn policy | Allowed through normal routing | Normal response policy | Existing explicit routing only; mode itself launches nothing |
+| Note | Raw audio through `/v1/audio-notes` | Forbidden | None | Forbidden |
+| Coach | Normal conversation-turn policy | Allowed with bounded coaching overlay | Concise coaching response | Existing explicit routing only; mode itself launches nothing |
+
+Clients SHALL read mode admission before opening a provider-backed voice path.
+A Note admission redirects capture to `/v1/audio-notes`; submitting a transcript
+to the conversational turn route while Note is selected also fails closed with
+a storage-only routing decision. Transcript/notebook processing is a later
+capture-block slice.
+
+The broader proposed mode map remains:
 
 | Mode | Stop/release behavior | Canonical result | Must not do |
 | --- | --- | --- | --- |
