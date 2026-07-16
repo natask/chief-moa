@@ -66,7 +66,7 @@ async function main() {
       checks: [
         "voice create stores broker event + task + queued run, no run.claimed/run.started",
         "worker claim records before/after snapshots, diff, and verification, queryable by run id",
-        "'what is still running' answers from projections and creates no new run",
+        "running status excludes completed history; overview includes it; neither creates a run",
         "a spoken correction adds run.feedback_attached without canceling",
         "a spoken cancel creates a control request; the run cancels only after a worker receipt",
         "preview and applied deployment records stay distinct; no apply event from a voice query",
@@ -203,7 +203,8 @@ async function assertWorkerEvidence(baseUrl, runId) {
 }
 
 async function assertStatusQuery(baseUrl, dataDir, created) {
-  // Seed one queued fixture run so the answer covers queued + completed.
+  // Seed one queued fixture run. A running-scope answer must show current work
+  // without mixing in completed history; the broader overview covers both.
   const queued = await postJson(`${baseUrl}/v1/work-history/runs`, {
     objective: "queued fixture run for status smoke",
   });
@@ -223,7 +224,17 @@ async function assertStatusQuery(baseUrl, dataDir, created) {
   assert.equal(status.status, 200, JSON.stringify(status.json));
   assert.equal(status.json.classification, "work_history");
   assert.match(status.json.display, new RegExp(queued.json.run.run_id));
-  assert.match(status.json.display, new RegExp(created.runId));
+  assert.doesNotMatch(status.json.display, new RegExp(created.runId));
+
+  const overview = await postJson(`${baseUrl}/v1/voice/turns`, {
+    source: "work-history-smoke",
+    session_id: "wh_smoke_session",
+    transcript: "work history status",
+  });
+  assert.equal(overview.status, 200, JSON.stringify(overview.json));
+  assert.equal(overview.json.classification, "work_history");
+  assert.match(overview.json.display, new RegExp(queued.json.run.run_id));
+  assert.match(overview.json.display, new RegExp(created.runId));
 
   assert.equal(await countRunEvents(), beforeCount, "a status question must not queue new work");
   const legacyRuns = await getJson(`${baseUrl}/v1/agent/runs`);
