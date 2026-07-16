@@ -37,6 +37,11 @@ scripting profile it can safely host.
   local capabilities without granting authority.
 - Add closed program proposal, lifecycle event, tool-attempt receipt, and
   terminal program receipt schemas.
+- Ratify one exact V1 profile registry, required/conditional binding fields,
+  approval/effect enums, canonical catalog/JCS digest rules, lifecycle payloads
+  and sequence rules, receipt nullable/hash-chain/linkage rules, advertisement
+  freshness, and opaque artifact references so independent clients interoperate
+  rather than implementing permissive interpretations.
 - Route a whole program to one bound surface. Tool calls inside that program are
   local and do not individually traverse the gateway.
 - Use browser JavaScript for local orchestration, with packaged browser helpers,
@@ -53,6 +58,9 @@ scripting profile it can safely host.
   control runtime.
 - Keep approval, current-state validation, stop controls, permissions, and
   canonical local receipts on the owning surface.
+- Require an independently terminable worker/process or engine interrupt for
+  every advertised program host; finite limits are advertised only when locally
+  enforced, and unavailable per-realm memory accounting is declared `null`.
 - Require isolated fixtures, accounts, browser profiles, app data, and artifact
   paths for QA. Tests must never capture, upload, package, or deploy the user's
   active page or personal desktop state.
@@ -127,7 +135,9 @@ scripting profile it can safely host.
   execution as a server-owned capability.
 - Closed-schema adversarial tests reject unknown semantic/event kinds,
   executable fields in legacy action proposals, capability drift, replay,
-  stale state, forged receipts, and unapproved profile escalation.
+  stale state, forged catalogs/receipts, event gaps/reordering/conflicts,
+  inconsistent receipt chains, sensitive text/artifact references, and
+  unapproved profile escalation.
 - Every new executable module introduced by this change has greater than 90%
   line and branch coverage, measured per module rather than diluted by an
   aggregate repository percentage.
