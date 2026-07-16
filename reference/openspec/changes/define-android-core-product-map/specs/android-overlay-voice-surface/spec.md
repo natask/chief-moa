@@ -196,6 +196,18 @@ fade the whole family in place instead of closing any surface.
 - **AND** once the keyboard is dismissed or the composer loses focus, ordinary
   outside app taps fade the family again
 
+#### Scenario: Keyboard dismissal is observed on every supported API level
+- **WHEN** the user dismisses the keyboard with Back or by tapping the app
+  underneath on API 26-29, where no IME-visibility inset signal exists
+- **THEN** the keyboard hold releases (Back is seen pre-IME on the composer;
+  window-focus loss accompanies the system hiding the IME) and ordinary
+  outside taps fade the family again
+- **AND** tapping the still-focused composer re-engages the hold when the IME
+  re-appears
+- **AND** the one unobservable pre-30 path — the IME's own internal hide
+  affordance — fails conservative: the family stays bright and the keyboard is
+  never hidden, until the next observable signal releases the hold
+
 ### Requirement: Start Placement Under The Finger
 The Android app SHALL center the lion orb on the raw screen point of the
 ACTION_UP touch that activated the Start assistant circle control, clamped only
@@ -219,6 +231,9 @@ to safe display bounds.
   already running
 - **THEN** the existing lion moves to the newly requested center without
   restarting the service or closing any attached surface
+- **AND** any open chat panel or transcript card re-anchors to the lion's new
+  position through the same anchored positioning the drag gesture uses, with
+  no draft, message, or transcript state lost
 
 ### Requirement: Native Black Overlay Surfaces
 The Android overlay SHALL render its chat panel, voice transcript card, and

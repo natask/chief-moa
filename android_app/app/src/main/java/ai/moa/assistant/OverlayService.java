@@ -93,6 +93,10 @@ public final class OverlayService extends Service {
     // Outside-tap fade for the lion + chat/transcript family. Decisions live in
     // the policy; this service only animates alpha and schedules the confirm.
     private final MoaOverlayFadePolicy fadePolicy = new MoaOverlayFadePolicy();
+    // Keyboard guard signals → fade hold. Layered so IME dismissal is observed
+    // on API 26-29 (back pre-IME, window focus loss) as well as through the
+    // API 30+ insets signal; see MoaComposerImeHold for the full contract.
+    private final MoaComposerImeHold composerImeHold = new MoaComposerImeHold();
     // Two surfaces hang off the orb. TAP opens the chat panel: a polished card
     // with bubbles + composer, the place to read the conversation and type.
     // The voice surface is a compact native transcript card showing live user
@@ -604,6 +608,10 @@ public final class OverlayService extends Service {
         requestedOrbCenterPending = false;
         applyOrbCenter(requestedOrbCenterX, requestedOrbCenterY, orbParams.width);
         windowManager.updateViewLayout(orbView, orbParams);
+        // Any open chat panel or transcript card follows the lion to its new
+        // spot through the same anchored path the drag gesture uses — moved in
+        // place, never closed, so no draft or transcript state is lost.
+        updateAnchoredSurfacePositions();
         // Pressing Start is engagement: a parked family wakes at the new spot.
         restoreFamilyOpacity();
     }
@@ -886,7 +894,7 @@ public final class OverlayService extends Service {
         messageScroll = null;
         composer = null;
         // No composer, no keyboard hold: ordinary outside taps fade again.
-        fadePolicy.setFadeHold(false);
+        fadePolicy.setFadeHold(composerImeHold.onPanelClosed());
         runStatusView = null;
         recordModePill = null;
         newThreadPill = null;
@@ -999,9 +1007,25 @@ public final class OverlayService extends Service {
     // never also press a pill, focus the composer, or swipe a transcript row.
     private final class FamilyFadeFrame extends FrameLayout {
         private final MoaOverlayFadePolicy.WindowGate gate = fadePolicy.newWindowGate();
+        private java.util.function.Consumer<Boolean> windowFocusListener;
 
         FamilyFadeFrame(android.content.Context context) {
             super(context);
+        }
+
+        // The panel shell uses this as an IME dismissal signal on API 26-29:
+        // when the panel window loses focus (user tapped the app underneath),
+        // the system hides the IME with it.
+        void setWindowFocusListener(java.util.function.Consumer<Boolean> listener) {
+            windowFocusListener = listener;
+        }
+
+        @Override
+        public void onWindowFocusChanged(boolean hasWindowFocus) {
+            super.onWindowFocusChanged(hasWindowFocus);
+            if (windowFocusListener != null) {
+                windowFocusListener.accept(hasWindowFocus);
+            }
         }
 
         @Override
@@ -1715,7 +1739,13 @@ public final class OverlayService extends Service {
     }
 
     private View createPanel() {
-        FrameLayout shell = new FamilyFadeFrame(this);
+        FamilyFadeFrame shell = new FamilyFadeFrame(this);
+        // API 26-29 IME dismissal signal: losing window focus (tap on the app
+        // underneath) hides the IME system-side, so the keyboard hold releases
+        // with it. Regaining focus does not re-show the IME and never
+        // re-engages the hold.
+        shell.setWindowFocusListener(hasWindowFocus ->
+                fadePolicy.setFadeHold(composerImeHold.onPanelWindowFocusChanged(hasWindowFocus)));
         // Rounded native-black card: opaque true black with a hairline border
         // and real elevation so it reads as a raised surface, not a flat box.
         shell.setBackground(MoaDrawables.rounded(MoaColors.PANEL_BG, dp(26), MoaColors.PANEL_BORDER, dp(1)));
@@ -1732,12 +1762,12 @@ public final class OverlayService extends Service {
             }
         });
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Live IME signal: when the user dismisses the keyboard (back/IME
-            // down) while the composer keeps view focus, release the keyboard
-            // hold so ordinary outside taps fade the family again; when the
-            // IME comes back up, re-engage it.
+            // API 30+ authoritative live IME signal: visibility drives the
+            // keyboard hold directly, covering dismissal paths (like the IME's
+            // own hide affordance) that the 26-29 signals cannot observe.
             shell.setOnApplyWindowInsetsListener((view, insets) -> {
-                fadePolicy.setFadeHold(insets.isVisible(android.view.WindowInsets.Type.ime()));
+                fadePolicy.setFadeHold(composerImeHold.onImeVisibilityChanged(
+                        insets.isVisible(android.view.WindowInsets.Type.ime())));
                 return view.onApplyWindowInsets(insets);
             });
         }
@@ -1898,12 +1928,19 @@ public final class OverlayService extends Service {
         rowParams.topMargin = dp(12);
         row.setLayoutParams(rowParams);
 
-        composer = new EditText(this);
-        // Keyboard guard: typing is engagement, so while the composer is
-        // focused (IME up or imminently up) outside reports must not park the
-        // family or hide the keyboard. The insets listener on the panel shell
-        // releases the hold when the user dismisses the IME while focus stays.
-        composer.setOnFocusChangeListener((v, hasFocus) -> fadePolicy.setFadeHold(hasFocus));
+        MoaComposerEditText composerInput = new MoaComposerEditText(this);
+        // Keyboard guard: while the composer is engaged with the IME, outside
+        // reports must not park the family or hide the keyboard. Engagement
+        // and dismissal both feed MoaComposerImeHold; the tap listener covers
+        // re-summoning the IME when the composer is tapped while still
+        // focused, and the back listener is the API 26-29 dismissal signal.
+        composerInput.setOnFocusChangeListener((v, hasFocus) ->
+                fadePolicy.setFadeHold(composerImeHold.onComposerFocusChanged(hasFocus)));
+        composerInput.setOnClickListener(v ->
+                fadePolicy.setFadeHold(composerImeHold.onComposerTapped()));
+        composerInput.setImeBackListener(() ->
+                fadePolicy.setFadeHold(composerImeHold.onBackWhileImeTarget()));
+        composer = composerInput;
         composer.setHint("Message A.G.");
         composer.setHintTextColor(0x66F4F4F6);
         composer.setTextColor(MoaColors.PAPER);

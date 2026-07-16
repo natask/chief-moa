@@ -182,6 +182,40 @@ public final class MoaOverlayFadePolicyTest {
     }
 
     @Test
+    public void api26BackDismissalRestoresOutsideFade() {
+        // End-to-end pre-API-30 story: composer engaged, Back dismisses the
+        // IME (onKeyPreIme signal), then an ordinary outside tap parks the
+        // family again — the hold must not stay stuck without the insets
+        // signal that only exists on API 30+.
+        MoaOverlayFadePolicy policy = new MoaOverlayFadePolicy();
+        MoaComposerImeHold hold = new MoaComposerImeHold();
+
+        policy.setFadeHold(hold.onComposerFocusChanged(true));
+        assertFalse(policy.shouldScheduleFadeConfirm(1000));
+
+        policy.setFadeHold(hold.onBackWhileImeTarget());
+        assertTrue(policy.shouldScheduleFadeConfirm(2000));
+        assertTrue(policy.confirmFade(2000));
+        assertTrue(policy.isFaded());
+    }
+
+    @Test
+    public void api26AppTapWindowFocusLossRestoresOutsideFade() {
+        // Pre-API-30: tapping the app underneath moves window focus off the
+        // panel and the system hides the IME; the next outside tap parks.
+        MoaOverlayFadePolicy policy = new MoaOverlayFadePolicy();
+        MoaComposerImeHold hold = new MoaComposerImeHold();
+
+        policy.setFadeHold(hold.onComposerFocusChanged(true));
+        assertFalse(policy.shouldScheduleFadeConfirm(1000));
+
+        policy.setFadeHold(hold.onPanelWindowFocusChanged(false));
+        assertTrue(policy.shouldScheduleFadeConfirm(2000));
+        assertTrue(policy.confirmFade(2000));
+        assertTrue(policy.isFaded());
+    }
+
+    @Test
     public void keyboardHoldDoesNotWakeAParkedFamily() {
         MoaOverlayFadePolicy policy = new MoaOverlayFadePolicy();
         assertTrue(policy.shouldScheduleFadeConfirm(1000));
