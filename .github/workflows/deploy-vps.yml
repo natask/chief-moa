@@ -103,6 +103,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.sha }}
+          # The publisher must prove vps-deploy is an ancestor. A depth-1
+          # checkout is rejected by GitHub as "fetch first" even when the
+          # server-side ref is actually fast-forwardable.
+          fetch-depth: 0
 
       - name: Publish vps-deploy ref
         shell: bash

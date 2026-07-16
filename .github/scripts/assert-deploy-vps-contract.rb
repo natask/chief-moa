@@ -172,7 +172,7 @@ def validate_workflow!(workflow)
     {
       "name" => "Check out verified commit",
       "uses" => CHECKOUT_ACTION,
-      "with" => { "ref" => "${{ github.sha }}" }
+      "with" => { "ref" => "${{ github.sha }}", "fetch-depth" => 0 }
     },
     {
       "name" => "Publish vps-deploy ref",
