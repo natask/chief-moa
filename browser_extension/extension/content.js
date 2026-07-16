@@ -115,12 +115,7 @@
   let devReloadTimer = null;
   let devReloadInFlight = false;
   let devReloadVersion = null;
-  const PROFILE_LANGUAGE_NAMES = [
-    "english",
-    "amharic",
-    "a m h a r i c",
-  ];
-  const PROFILE_VOICE_NAMES = ["puck", "charon", "kore", "fenrir", "aoede", "leda", "orus", "zephyr"];
+  const voicePolicy = window.AgeeContentVoicePolicyRuntime;
   const AVATAR_BEHAVIOR_MOTIONS = new Set(["still", "pulse", "hop", "orbit", "float", "shake", "glow"]);
   const AVATAR_BEHAVIOR_TRIGGERS = new Set(["idle", "editing", "listening", "thinking", "speaking", "done", "error", "attention", "busy"]);
   const AVATAR_BEHAVIOR_INTENSITIES = new Set(["subtle", "normal", "strong"]);
@@ -2533,100 +2528,16 @@
     if (root) root.classList.toggle("agee-ambient", ambientState === "on");
   }
 
-  function finiteNumber(...values) {
-    for (const value of values) {
-      const num = Number(value);
-      if (Number.isFinite(num)) return num;
-    }
-    return null;
-  }
-
   function normalizeAssistantAudioSegment(msg) {
-    if (!msg || typeof msg !== "object") return null;
-    const sourceDurationMs = finiteNumber(
-      msg.pcm_ms,
-      msg.source_duration_ms,
-      msg.sourceDurationMs,
-      msg.duration_ms,
-      msg.durationMs,
-    );
-    if (!(sourceDurationMs > 0)) return null;
-    const playbackRate = finiteNumber(msg.playback_rate, msg.playbackRate, msg.rate);
-    const textStartChar = finiteNumber(
-      msg.text_char_start,
-      msg.textStartChar,
-      msg.text_start,
-      msg.textStart,
-    );
-    const textEndChar = finiteNumber(
-      msg.text_char_end,
-      msg.textEndChar,
-      msg.text_end,
-      msg.textEnd,
-    );
-    const segmentIndex = finiteNumber(msg.segment_index, msg.segmentIndex, msg.index);
-    return {
-      segmentIndex: segmentIndex != null ? Math.max(0, Math.round(segmentIndex)) : null,
-      sourceDurationMs,
-      playbackRate: playbackRate && playbackRate > 0 ? playbackRate : null,
-      textStartChar: textStartChar != null ? Math.max(0, Math.round(textStartChar)) : null,
-      textEndChar: textEndChar != null ? Math.max(0, Math.round(textEndChar)) : null,
-    };
+    return voicePolicy.normalizeAssistantAudioSegment(msg);
   }
 
   function recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, fallbackRate) {
-    const meta = state.pendingAssistantAudioSegments?.shift();
-    if (!meta || !source || !audioBuffer) return;
-    const playbackRate = meta.playbackRate || (fallbackRate > 0 ? fallbackRate : 1);
-    state.playedAssistantAudioSegments ||= [];
-    const previous = state.playedAssistantAudioSegments.at(-1);
-    const sourceStartMs = previous
-      ? previous.sourceStartMs + previous.sourceDurationMs
-      : 0;
-    state.playedAssistantAudioSegments.push({
-      segmentIndex: meta.segmentIndex,
-      sourceStartMs,
-      sourceDurationMs: meta.sourceDurationMs,
-      playbackRate,
-      textStartChar: meta.textStartChar,
-      textEndChar: meta.textEndChar,
-      scheduledAt: startAt,
-      wallDurationMs: (audioBuffer.duration / playbackRate) * 1000,
-    });
+    voicePolicy.recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, fallbackRate);
   }
 
   function computePlaybackProgress(state) {
-    if (!state?.playedAssistantAudioSegments?.length) return null;
-    const now = audioCtx?.currentTime;
-    if (!Number.isFinite(now)) return null;
-    let best = null;
-    for (const segment of state.playedAssistantAudioSegments) {
-      if (!(segment?.sourceDurationMs > 0) || !(segment?.sourceStartMs >= 0) || !Number.isFinite(segment?.scheduledAt)) {
-        continue;
-      }
-      const elapsedWallMs = Math.max(0, (now - segment.scheduledAt) * 1000);
-      const playbackRate = segment.playbackRate > 0 ? segment.playbackRate : 1;
-      const playedMs = Math.max(0, Math.min(segment.sourceDurationMs, elapsedWallMs * playbackRate));
-      if (!(playedMs > 0)) continue;
-      const playedToMs = segment.sourceStartMs + playedMs;
-      if (!best || playedToMs > best.played_pcm_ms) {
-        best = {
-          type: "playback_progress",
-          turn_id: state.turnId,
-          segment_index: segment.segmentIndex,
-          playback_rate: playbackRate,
-          played_pcm_ms: Math.round(playedToMs),
-        };
-        if (segment.textStartChar != null && segment.textEndChar != null && segment.textEndChar >= segment.textStartChar) {
-          const span = segment.textEndChar - segment.textStartChar;
-          const playedTextChars = Math.round(span * Math.min(1, playedMs / segment.sourceDurationMs));
-          best.text_char_start = segment.textStartChar;
-          best.text_char_end = segment.textEndChar;
-          best.played_text_char_end = Math.min(segment.textEndChar, segment.textStartChar + playedTextChars);
-        }
-      }
-    }
-    return best;
+    return voicePolicy.computePlaybackProgress(state, audioCtx?.currentTime);
   }
 
   function sendFinalPlaybackProgress(state) {
@@ -2638,21 +2549,7 @@
   }
 
   function mergeLiveVoiceTranscript(previous, incoming) {
-    const prev = String(previous || "").trim();
-    const next = String(incoming || "").trim();
-    if (!prev) return next;
-    if (!next) return prev;
-    if (next.startsWith(prev)) return next;
-    if (prev.endsWith(next)) return prev;
-    const prevWords = prev.split(/\s+/);
-    const nextWords = next.split(/\s+/);
-    const maxOverlap = Math.min(prevWords.length, nextWords.length, 8);
-    for (let count = maxOverlap; count > 0; count -= 1) {
-      const prevTail = prevWords.slice(prevWords.length - count).join(" ").toLowerCase();
-      const nextHead = nextWords.slice(0, count).join(" ").toLowerCase();
-      if (prevTail === nextHead) return prevWords.concat(nextWords.slice(count)).join(" ");
-    }
-    return `${prev} ${next}`;
+    return voicePolicy.mergeLiveVoiceTranscript(previous, incoming);
   }
 
   async function startLiveVoiceTurn(options = {}) {
@@ -3617,22 +3514,11 @@
   }
 
   function shouldRouteLiveTranscriptThroughGateway(text) {
-    return isProfileControlTranscript(text) || isPageContextTranscript(text) || isBrowserCommandTranscript(text);
+    return voicePolicy.shouldRouteLiveTranscriptThroughGateway(text);
   }
 
   function isPageContextTranscript(text) {
-    const raw = String(text || "").trim();
-    if (!raw || raw.length > 260 || raw.split(/\r?\n/).length > 3) return false;
-    const lower = raw.toLowerCase();
-    if (/\bwhat\s+(?:am i|are we)\s+(?:looking at|seeing|viewing)\b|\bwhat(?:'s| is)\s+on\s+(?:my|this|the)\s+screen\b/i.test(raw)) {
-      return true;
-    }
-    if (!/\b(?:this|current|visible|open|active)\s+(?:web\s*)?(?:page|site|tab|screen|view|button|form|field|link)\b/i.test(raw)) {
-      return false;
-    }
-    return /\b(?:summari[sz]e|read|describe|check|inspect|analy[sz]e|explain|review|scan)\b/i.test(raw) ||
-      /\b(?:what|where|which|who|why|how|can|does|is|are|should)\b/i.test(lower) ||
-      /\?$/.test(raw);
+    return voicePolicy.isPageContextTranscript(text);
   }
 
   function isBrowserCommandTranscript(text) {
@@ -3674,102 +3560,15 @@
   }
 
   function parseAssistantSpeechOverlapIntent(text) {
-    const lower = normalizeSpokenCommand(text);
-    if (!lower) return null;
-    const disable =
-      lower.includes("turn barge in back on") ||
-      lower.includes("barge in back on") ||
-      lower.includes("stop talking when i talk") ||
-      lower.includes("stop speaking when i speak") ||
-      lower.includes("interrupt yourself when i talk") ||
-      lower.includes("interrupt yourself when i speak") ||
-      lower.includes("do not talk over me") ||
-      lower.includes("dont talk over me");
-    if (disable) return { enabled: false };
-
-    const enable =
-      lower.includes("continue talking even though i") ||
-      lower.includes("keep talking even though i") ||
-      lower.includes("continue talking while i") ||
-      lower.includes("keep talking while i") ||
-      lower.includes("keep speaking while i") ||
-      lower.includes("continue speaking while i") ||
-      lower.includes("talk in the background") ||
-      lower.includes("speak in the background") ||
-      lower.includes("keep talking in the background") ||
-      lower.includes("do not interrupt yourself") ||
-      lower.includes("don t interrupt yourself") ||
-      lower.includes("dont interrupt yourself");
-    return enable ? { enabled: true } : null;
+    return voicePolicy.parseAssistantSpeechOverlapIntent(text);
   }
 
   function isProfileControlTranscript(text) {
-    const lower = normalizeSpokenCommand(text);
-    if (!lower) return false;
-    return isPromptProfileControl(lower) || isIdentityProfileControl(lower) || isLanguageProfileControl(lower) || isVoiceProfileControl(lower);
-  }
-
-  function isPromptProfileControl(lower) {
-    return lower.includes("what prompt") ||
-      lower.includes("which prompt") ||
-      lower.includes("current prompt") ||
-      /\b(set|change|update)\b.*\b(system )?prompt\b/.test(lower);
-  }
-
-  function isIdentityProfileControl(lower) {
-    return lower.includes("what is your name") ||
-      lower.includes("what s your name") ||
-      lower.includes("who are you") ||
-      /\byour name\b\s*(is|should be|will be)\b/.test(lower) ||
-      /\b(call|name) yourself\b/.test(lower) ||
-      /\b(you are|youre)\b\s+(now\s+)?(called\s+|named\s+)?/.test(lower);
-  }
-
-  function isLanguageProfileControl(lower) {
-    if (
-      lower.includes("what language") ||
-      lower.includes("which language") ||
-      lower.includes("language is active") ||
-      /\b(set|change|update|switch)\b.*\blanguage\b/.test(lower)
-    ) {
-      return true;
-    }
-    if (!containsProfileWord(lower, PROFILE_LANGUAGE_NAMES)) return false;
-    return /\b(speak|talk|reply|respond|answer|say)\b/.test(lower) ||
-      lower.includes(" only ") ||
-      lower.startsWith("only ") ||
-      lower.includes("do not switch") ||
-      lower.includes("don t switch") ||
-      lower.includes("dont switch") ||
-      lower.includes("these languages") ||
-      lower.includes("these two languages");
-  }
-
-  function isVoiceProfileControl(lower) {
-    if (
-      lower.includes("what voice") ||
-      lower.includes("which voice") ||
-      /\b(set|change|switch|use|make)\b.*\bvoice\b/.test(lower)
-    ) {
-      return true;
-    }
-    if (lower.includes("sound like") || lower.includes("speak like")) {
-      return /\b(female|woman|girl|feminine|lady|male|man|guy|masculine|boy)\b/.test(lower) ||
-        containsProfileWord(lower, PROFILE_VOICE_NAMES);
-    }
-    return containsProfileWord(lower, PROFILE_VOICE_NAMES) && /\b(use|switch|set|change)\b/.test(lower);
+    return voicePolicy.isProfileControlTranscript(text);
   }
 
   function normalizeSpokenCommand(value) {
-    return String(value || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function containsProfileWord(lower, values) {
-    return values.some((value) => lower.includes(value));
+    return voicePolicy.normalizeSpokenCommand(value);
   }
 
   async function startDevReloadWatcher() {

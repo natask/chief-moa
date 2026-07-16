@@ -17,6 +17,7 @@ const requiredFiles = [
   "extension/browser-turn-protocol.js",
   "extension/browser-context-adapter.js",
   "extension/config.js",
+  "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/document-context.js",
   "extension/page-observation-runtime.js",
@@ -96,6 +97,7 @@ const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
+const contentVoicePolicySource = readFileSync("extension/content-voice-policy-runtime.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const documentContextSource = readFileSync("extension/document-context.js", "utf8");
 const pageObservationRuntimeSource = readFileSync("extension/page-observation-runtime.js", "utf8");
@@ -147,9 +149,11 @@ if (
   mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("page-observation-runtime.js") < 0 ||
   mainContentScript.js.indexOf("page-observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "browser-command-transcript-runtime\.js", "document-context\.js", "page-observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("content-voice-policy-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-voice-policy-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "browser-command-transcript-runtime\.js", "document-context\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
-  throw new Error("steering, command transcript, document context, and page observation runtimes must load before content.js");
+  throw new Error("steering, command transcript, document context, page observation, and voice policy runtimes must load before content.js");
 }
 if (
   packageJson.scripts?.["test:unit"] !== "node --test scripts/test-*.mjs" ||
@@ -588,7 +592,8 @@ if (
   !/msg\.type === "assistant_audio_segment"/.test(contentSource) ||
   !/pendingAssistantAudioSegments/.test(contentSource) ||
   !/function computePlaybackProgress\(/.test(contentSource) ||
-  !/type:\s*"playback_progress"/.test(contentSource)
+  !/type:\s*"playback_progress"/.test(contentVoicePolicySource) ||
+  !/AgeeContentVoicePolicyRuntime/.test(contentSource)
 ) {
   throw new Error("content.js must correlate assistant_audio_segment metadata with the following PCM frame and derive playback_progress from local playback");
 }
@@ -729,8 +734,8 @@ if (/function describePageViaGateway/.test(backgroundSource) || /callGateway\(cf
 if (
   !/looksLikePageContextQuestion/.test(backgroundSource) ||
   !/looksLikePageContextQuestion\(instruction\)[\s\S]{0,140}runBrowserAgentTurn/.test(backgroundSource) ||
-  !/function isPageContextTranscript/.test(contentSource) ||
-  !/isProfileControlTranscript\(text\) \|\| isPageContextTranscript\(text\)/.test(contentSource)
+  !/function isPageContextTranscript/.test(contentVoicePolicySource) ||
+  !/isProfileControlTranscript\(text\) \|\| isPageContextTranscript\(text\)/.test(contentVoicePolicySource)
 ) {
   throw new Error("typed and final spoken page/current-page questions must route to the shared browser-agent orchestrator");
 }
@@ -950,11 +955,11 @@ if (!/parsed\?\.type === "turn_progress"/.test(backgroundSource)) {
   throw new Error("background.js must route the turn_progress keepalive to the content script like other voice-session events");
 }
 
-if (!/function mergeLiveVoiceTranscript/.test(contentSource) || !/mergeLiveVoiceTranscript\(state\.transcript, incomingText\)/.test(contentSource)) {
+if (!/function mergeLiveVoiceTranscript/.test(contentVoicePolicySource) || !/mergeLiveVoiceTranscript\(state\.transcript, incomingText\)/.test(contentSource)) {
   throw new Error("browser voice transcript fragments must be accumulated instead of replacing early speech");
 }
 
-if (!/function isIdentityProfileControl/.test(contentSource) || !/your name/.test(contentSource) || !/call\|name/.test(contentSource)) {
+if (!/function isIdentityProfileControl/.test(contentVoicePolicySource) || !/your name/.test(contentVoicePolicySource) || !/call\|name/.test(contentVoicePolicySource)) {
   throw new Error("browser Live voice must route spoken assistant-name changes through the gateway profile-control path");
 }
 
@@ -1123,6 +1128,7 @@ for (const file of [
   "extension/browser-agent-loop-policy.js",
   "extension/browser-task-intent.js",
   "extension/config.js",
+  "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/page-observation-runtime.js",
   "extension/offscreen.js",

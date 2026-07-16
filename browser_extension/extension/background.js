@@ -2114,7 +2114,7 @@ async function ensureContent(tabId) {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "steering-ui.js", "browser-command-transcript-runtime.js", "document-context.js", "page-observation-runtime.js", "content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "steering-ui.js", "browser-command-transcript-runtime.js", "document-context.js", "page-observation-runtime.js", "content-voice-policy-runtime.js", "content.js"] });
   }
 }
 
