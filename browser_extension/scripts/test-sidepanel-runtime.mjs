@@ -124,6 +124,7 @@ const port = {
       voiceSessionControl: { ok: true },
       voiceTurnFetch: { turn: { assistant_text: "Recovered reply", transcript: "Recovered words" } },
       browserRoleTurn: { ok: true, summary: "Browser task done" },
+      openOptions: { ok: true },
     };
     const configured = responseOverrides.has(message.cmd) ? responseOverrides.get(message.cmd) : defaultResponses[message.cmd];
     if (configured === "throw") throw new Error("post failed");
@@ -314,8 +315,18 @@ active = await panel.startTurn("voice", { youText: "" });
 panel.handleVoiceEvent({ event: { type: "turn_done", status: "no_speech" } });
 assert.equal(active.done, true);
 active = await panel.startTurn("voice", { youText: "" });
-panel.handleVoiceEvent({ event: { type: "error", code: "microphone_capture_failed" } });
+panel.handleVoiceEvent({ event: {
+  type: "error",
+  code: "microphone_capture_failed",
+  message: "Microphone needs attention.",
+  recovery: { target: "microphone_permission", action_label: "Take me to microphone setup" },
+} });
 assert.equal(active.done, true);
+assert.equal(active.ui.ag.children[1].textContent, "Take me to microphone setup");
+await active.ui.ag.children[1].emit("click");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(posted.at(-1).cmd, "openOptions");
+assert.equal(posted.at(-1).target, "microphone_permission");
 
 active = await panel.startTurn("voice", { youText: "" });
 panel.handleVoiceEvent({ event: { type: "connection_closed" } });

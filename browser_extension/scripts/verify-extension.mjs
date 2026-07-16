@@ -32,6 +32,7 @@ const requiredFiles = [
   "extension/vendor/livekit-client.esm.js",
   "extension/options.html",
   "extension/options.js",
+  "extension/options-recovery.js",
   "extension/settings-intent.js",
   "extension/overlay.css",
   "extension/sidepanel.html",
@@ -93,6 +94,7 @@ const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
+const optionsRecoverySource = readFileSync("extension/options-recovery.js", "utf8");
 const coverageSource = readFileSync("scripts/coverage-extension.mjs", "utf8");
 const extensionSmokeSource = readFileSync("scripts/smoke-extension.mjs", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel"];
@@ -453,6 +455,18 @@ if (
   !/msg\.recoverable === false \|\| msg\.code === "microphone_capture_failed"/.test(contentSource)
 ) {
   throw new Error("extension offscreen microphone failures must be explicit, non-recoverable, and guide the user to grant extension microphone permission");
+}
+
+const micFailureHandler = backgroundSource.match(/function handleOffscreenVoiceError[\s\S]*?\n}/)?.[0] || "";
+if (
+  /openOptionsPage/.test(micFailureHandler) ||
+  !/Take me to microphone setup/.test(backgroundSource) ||
+  !/target:\s*MICROPHONE_RECOVERY_TARGET/.test(backgroundSource) ||
+  !/micRecoveryBanner/.test(optionsHtmlSource) ||
+  !/normalizeOptionsRecovery/.test(optionsSource) ||
+  !/MICROPHONE_RECOVERY_TARGET/.test(optionsRecoverySource)
+) {
+  throw new Error("microphone recovery must render first and open guided Options only after an explicit user action");
 }
 
 if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {

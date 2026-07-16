@@ -46,11 +46,28 @@
       #companionDetails { margin-top: 10px; padding: 10px 12px; border: 1px solid #e2e2e2; border-radius: 8px; font-size: 13px; color: #333; background: #fafafa; min-height: 36px; }
       #companionDetails strong { display: block; margin-bottom: 4px; }
       hr { margin: 28px 0; border: 0; border-top: 1px solid #eee; }
+      .recovery-banner { margin: 20px 0 8px; padding: 16px; border: 1px solid #93b4f5; border-radius: 12px; background: #eef4ff; }
+      .recovery-banner h2 { margin: 0 0 8px; color: #173b78; }
+      .recovery-steps { margin: 10px 0 8px; padding-left: 22px; color: #263a5d; }
+      .recovery-steps li { margin: 6px 0; }
+      #micRecoveryStatus { margin-top: 8px; font-size: 13px; font-weight: 600; color: #173b78; }
+      #grantMic.mic-recovery-focus { outline: 4px solid rgba(37, 99, 235, 0.28); outline-offset: 3px; }
     </style>
   </head>
   <body>
     <h1>A.G.</h1>
     <p class="sub">Open-source browser agent. Cmd/Ctrl+, on any page. Pipes to your self-hosted gateway, your machine.</p>
+
+    <section id="micRecoveryBanner" class="recovery-banner" aria-labelledby="micRecoveryTitle" hidden>
+      <h2 id="micRecoveryTitle">Let’s restore browser voice</h2>
+      <p>A.G. brought you here because the extension microphone needs your attention. Chrome requires you to approve this permission yourself.</p>
+      <ol class="recovery-steps">
+        <li>Click <strong>Grant microphone</strong> below.</li>
+        <li>Choose <strong>Allow</strong> in Chrome’s permission prompt.</li>
+        <li>Return to the page you were on and start voice again.</li>
+      </ol>
+      <div id="micRecoveryStatus" role="status" aria-live="polite">Checking microphone permission…</div>
+    </section>
 
     <h2>Agent gateway</h2>
     <label for="gatewayUrl">Agent gateway URL</label>
