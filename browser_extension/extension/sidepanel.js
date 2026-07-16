@@ -7,6 +7,10 @@
 
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
+const historyEl = document.getElementById("history");
+const historyErrorEl = document.getElementById("historyError");
+const historyErrorTextEl = document.getElementById("historyErrorText");
+const historyRetryBtn = document.getElementById("historyRetry");
 const talkBtn = document.getElementById("talk");
 const form = document.getElementById("form");
 const textInput = document.getElementById("text");
@@ -17,6 +21,10 @@ const TURN_WATCHDOG_MS = 90000;
 let port = null;
 let nextReqId = 1;
 const pending = new Map();
+let reconnectTimer = null;
+let reconnectAttempt = 0;
+let historyRefresh = null;
+let historyRefreshGeneration = 0;
 
 let audioCtx = null;
 let playbackTime = 0;
@@ -47,8 +55,29 @@ function ensurePort() {
     for (const [, entry] of pending) entry.reject(new Error("A.G. background restarted."));
     pending.clear();
     if (turn) failTurn(turn, "A.G. background restarted mid-turn. Try again.");
+    showHistoryError("Saved history may be stale while A.G. reconnects.");
+    scheduleReconnect();
   });
   return port;
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  const delayMs = Math.min(5000, 250 * (2 ** reconnectAttempt));
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    reconnectAttempt += 1;
+    try {
+      ensurePort();
+      await refreshHistory({ reason: "background reconnect" });
+      // A history error is handled by the visible Retry affordance. Once the
+      // worker answered, do not turn a gateway outage into a hidden polling
+      // loop from the panel.
+      reconnectAttempt = 0;
+      return;
+    } catch {}
+    scheduleReconnect();
+  }, delayMs);
 }
 
 function request(msg, timeoutMs = 20000) {
@@ -90,6 +119,148 @@ function onPortMessage(msg) {
 }
 
 // ---- Conversation log -------------------------------------------------------
+
+function firstText(record, fields) {
+  for (const field of fields) {
+    const value = record?.[field];
+    const text = typeof value === "string"
+      ? value.trim()
+      : typeof value?.text === "string"
+        ? value.text.trim()
+        : "";
+    if (text) return text;
+  }
+  return "";
+}
+
+function stableRecordBase(record, index) {
+  return String(
+    record?.message_id || record?.messageId || record?.id || record?.turn_id ||
+    record?.turnId || record?.browser_turn_id || `legacy_${index}`
+  );
+}
+
+function normalizeHistoryMessages(payload) {
+  const records = Array.isArray(payload?.messages)
+    ? payload.messages
+    : Array.isArray(payload?.turns)
+      ? payload.turns
+      : [];
+  const messages = [];
+  records.forEach((record, index) => {
+    if (!record || typeof record !== "object") return;
+    const baseId = stableRecordBase(record, index);
+    const turnId = String(record.turn_id || record.turnId || record.browser_turn_id || "");
+    const rawSpeaker = String(record.speaker || record.role || "").toLowerCase();
+    const speaker = rawSpeaker === "user" || rawSpeaker === "assistant" ? rawSpeaker : "";
+    const source = String(record.source_surface || record.surface || record.source || "").trim();
+    const kind = String(record.source_kind || record.kind || record.input_mode || "").trim();
+    const completion = String(record.completion_state || record.status || "").trim();
+    const meta = [source, kind, completion && completion !== "completed" ? completion : ""].filter(Boolean).join(" · ");
+    if (speaker) {
+      const text = speaker === "user"
+        ? firstText(record, ["text", "content", "user_text", "transcript", "instruction"])
+        : firstText(record, ["text", "content", "assistant_text", "reply_text", "reply", "display"]);
+      if (text) messages.push({ id: baseId, turnId, speaker, text, meta });
+      return;
+    }
+
+    // Legacy `/turns` records pair the user and assistant in one object. Project
+    // them into two stable display messages without using text similarity as an
+    // identity heuristic.
+    const userText = firstText(record, ["user_text", "transcript", "instruction"]);
+    const assistantText = firstText(record, ["assistant_text", "reply_text", "reply", "display", "text"]);
+    if (userText) messages.push({ id: `${baseId}:user`, turnId: turnId || baseId, speaker: "user", text: userText, meta });
+    if (assistantText) messages.push({ id: `${baseId}:assistant`, turnId: turnId || baseId, speaker: "assistant", text: assistantText, meta });
+  });
+
+  const seen = new Set();
+  return messages.filter((message) => {
+    if (!message.id || seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+}
+
+function renderHistory(messages) {
+  const fragment = document.createDocumentFragment();
+  for (const message of messages) {
+    const item = document.createElement("article");
+    item.className = "history-message";
+    item.dataset.messageId = message.id;
+    item.dataset.turnId = message.turnId;
+    item.dataset.speaker = message.speaker;
+    const speaker = document.createElement("div");
+    speaker.className = "speaker";
+    speaker.textContent = message.speaker === "assistant" ? "A.G." : "you";
+    const body = document.createElement("div");
+    body.className = "body";
+    body.textContent = message.text;
+    item.append(speaker, body);
+    if (message.meta) {
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = message.meta;
+      item.appendChild(meta);
+    }
+    fragment.appendChild(item);
+  }
+  historyEl.replaceChildren(fragment);
+}
+
+function showHistoryError(message) {
+  historyEl.dataset.stale = historyEl.children.length ? "true" : "false";
+  historyErrorTextEl.textContent = message || "Could not load saved history.";
+  historyErrorEl.hidden = false;
+}
+
+function clearHistoryError() {
+  historyEl.dataset.stale = "false";
+  historyErrorEl.hidden = true;
+  historyErrorTextEl.textContent = "";
+}
+
+function reconcileTerminalCard(state, messages) {
+  if (!state?.ui?.card) return false;
+  const ids = new Set([state.turnId, state.canonicalTurnId].filter(Boolean));
+  if (!ids.size || !messages.some((message) => ids.has(message.turnId))) return false;
+  state.ui.card.remove();
+  state.ui = null;
+  return true;
+}
+
+async function refreshHistory({ reason = "refresh", reconcileState = null } = {}) {
+  if (historyRefresh) return historyRefresh;
+  const generation = ++historyRefreshGeneration;
+  if (!turn) setStatus(reason === "initial" ? "Loading saved history…" : "Refreshing history…");
+  historyRefresh = request({ cmd: "history" })
+    .then((response) => {
+      if (!response?.ok) throw new Error(response?.error || "Could not load saved history.");
+      const messages = normalizeHistoryMessages(response);
+      if (generation !== historyRefreshGeneration) return false;
+      renderHistory(messages);
+      clearHistoryError();
+      reconcileTerminalCard(reconcileState, messages);
+      if (!turn) setStatus("Ready.");
+      return true;
+    })
+    .catch((error) => {
+      if (generation === historyRefreshGeneration) {
+        showHistoryError(`${String(error?.message || error)} Saved messages were not cleared. Retry when the gateway is available.`);
+        if (!turn) setStatus("History needs attention.", "error");
+      }
+      return false;
+    })
+    .finally(() => {
+      historyRefresh = null;
+    });
+  return historyRefresh;
+}
+
+function refreshAfterTerminal(state) {
+  refreshHistory({ reason: "turn completed", reconcileState: state });
+  setTimeout(() => refreshHistory({ reason: "turn reconciliation", reconcileState: state }), 1200);
+}
 
 function addTurnCard(youText) {
   const card = document.createElement("div");
@@ -240,6 +411,7 @@ function finishTurn(state) {
   talkBtn.textContent = "Hold to talk";
   sendBtn.disabled = false;
   setStatus("Ready.");
+  refreshAfterTerminal(state);
 }
 
 function renderMicrophoneRecovery(state, message, recovery) {
@@ -277,6 +449,7 @@ function failTurn(state, message, recovery = null) {
   talkBtn.dataset.state = "idle";
   talkBtn.textContent = "Hold to talk";
   sendBtn.disabled = false;
+  refreshAfterTerminal(state);
 }
 
 // Recover the stored assistant reply when the live stream died mid-turn: the
@@ -344,6 +517,7 @@ function handleVoiceEvent(payload) {
   }
   if (msg.type === "turn_done") {
     const status = String(msg.status || "completed").toLowerCase();
+    if (msg.turn_id) state.canonicalTurnId = String(msg.turn_id);
     if (status === "error") {
       failTurn(state, String(msg.message || msg.error || "Voice turn failed."));
       return;
@@ -557,10 +731,12 @@ form.addEventListener("submit", async (e) => {
       failTurn(state, String(res?.error || "The browser agent rejected the turn."));
       return;
     }
+    state.canonicalTurnId = String(res.browser_turn_id || res.turn_id || "");
     updateCard(state, { reply: String(res.summary || "Done.") });
     finishTurn(state);
   }).catch((error) => failTurn(state, String(error?.message || error)));
 });
 
 ensurePort();
-setStatus("Ready.");
+historyRetryBtn.addEventListener("click", () => refreshHistory({ reason: "manual retry" }));
+refreshHistory({ reason: "initial" });
