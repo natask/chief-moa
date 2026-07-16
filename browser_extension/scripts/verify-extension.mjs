@@ -5,6 +5,8 @@ const requiredFiles = [
   "package.json",
   "extension/manifest.json",
   "extension/background.js",
+  "extension/browser-automation-contract.js",
+  "extension/browser-automation-runtime.js",
   "extension/browser-agent-loop-policy.js",
   "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
@@ -87,6 +89,7 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const browserAutomationContractSource = readFileSync("extension/browser-automation-contract.js", "utf8");
 const browserAgentLoopPolicySource = readFileSync("extension/browser-agent-loop-policy.js", "utf8");
 const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
@@ -726,13 +729,13 @@ if (!/const owner = await getActiveBrowserAgentOwner\(\);[\s\S]{0,420}chrome\.ta
 
 if (
   !/\/v1\/device-clients\/heartbeat/.test(backgroundSource) ||
-  !/function browserLocalToolManifest/.test(backgroundSource) ||
-  !/browser\.tab\.open/.test(backgroundSource) ||
-  !/browser\.tab\.list/.test(backgroundSource) ||
-  !/browser\.tab\.close/.test(backgroundSource) ||
-  !/browser\.tab\.activate/.test(backgroundSource) ||
-  !/browser\.tab\.reload/.test(backgroundSource) ||
-  !/browser\.cdp\.execute/.test(backgroundSource) ||
+  !/function browserLocalToolManifest/.test(browserAutomationContractSource) ||
+  !/browser\.tab\.open/.test(browserAutomationContractSource) ||
+  !/browser\.tab\.list/.test(browserAutomationContractSource) ||
+  !/browser\.tab\.close/.test(browserAutomationContractSource) ||
+  !/browser\.tab\.activate/.test(browserAutomationContractSource) ||
+  !/browser\.tab\.reload/.test(browserAutomationContractSource) ||
+  !/browser\.cdp\.execute/.test(browserAutomationContractSource) ||
   !/function executeCdpActionsOnTab/.test(backgroundSource) ||
   !/\/v1\/tool\/requests\/claim/.test(backgroundSource) ||
   !/function maybeRequestAndroidSpeak/.test(backgroundSource) ||

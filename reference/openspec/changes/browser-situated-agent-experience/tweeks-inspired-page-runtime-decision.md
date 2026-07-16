@@ -33,10 +33,13 @@ need to distinguish, but all three may be implemented by generated code:
 
 ## Prior Art Inspected
 
-The locally installed Tweeks 0.0.7.20 Chrome package was inspected read-only.
-It is useful behavioral prior art, but the package contains no license granting
-Moa permission to copy its implementation. Moa will reproduce selected product
-behaviors through its own contracts and code.
+The locally installed Tweeks 0.0.7.20 Chrome package was inspected read-only,
+and Tweeks MCP 1.1.0 was later exercised as a public black-box interface. The
+native bridge was removed after the comparison. It is useful behavioral prior
+art, but the package contains no license granting Moa permission to copy its
+implementation. Moa will reproduce selected product behaviors through its own
+contracts and code. The observed MCP contract and selected lessons are recorded
+in `tweeks-mcp-black-box-study.md`.
 
 The useful shape is:
 

@@ -20,6 +20,15 @@ approval, release, or promotion gates.
       `tweeks-inspired-page-runtime-decision.md`: generated evaluation,
       persistent modifications, and page overlays are primary capabilities;
       packaged actions remain convenience helpers and control-plane fallbacks.
+- [x] 0.5 Black-box Tweeks MCP 1.1.0, remove its temporary native/Codex bridge,
+      and incorporate the useful interface behavior into A.G.'s first-party
+      broker: explicit tabs, semantic element locators, bounded reads,
+      retryable target failures, typed risk metadata, and background search.
+
+Acceptance: the real-extension CDP smoke queues `browser.search.open` through
+the gateway broker, receives a local receipt, observes a background Amazon
+search tab without focus theft, and removes the test tab. Unit tests prove
+semantic role/name/test-ID matching and bounded inputs.
 
 Acceptance: the user's correction and unresolved surface choice are recorded
 durably rather than silently collapsed into an explanation-first roadmap.

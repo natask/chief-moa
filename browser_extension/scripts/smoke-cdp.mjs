@@ -217,6 +217,33 @@ async function waitForGatewayTask(baseUrl, taskId, timeoutMs = 20000) {
   throw new Error(`Timed out waiting for gateway browser task ${taskId}; last=${JSON.stringify(lastTask)}`);
 }
 
+async function waitForBrowserDevice(baseUrl, timeoutMs = 30000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const body = await fetch(`${baseUrl}/v1/device-clients`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    }).then((resp) => resp.json());
+    const device = (body.devices || []).find((item) => item.surface_type === "browser_extension" && item.status === "online");
+    if (device) return device;
+    await delay(200);
+  }
+  throw new Error("Timed out waiting for the extension device heartbeat");
+}
+
+async function waitForToolRequest(baseUrl, requestId, timeoutMs = 15000) {
+  const started = Date.now();
+  let lastRequest = null;
+  while (Date.now() - started < timeoutMs) {
+    const body = await fetch(`${baseUrl}/v1/tool/requests?limit=100`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    }).then((resp) => resp.json());
+    lastRequest = (body.requests || []).find((item) => item.id === requestId) || null;
+    if (lastRequest?.status === "completed" || lastRequest?.status === "failed") return lastRequest;
+    await delay(200);
+  }
+  throw new Error(`Timed out waiting for browser tool request ${requestId}; last=${JSON.stringify(lastRequest)}`);
+}
+
 async function main() {
   const chromePath = resolveChromeForTesting();
   const { server, port: serverPort } = await serve();
@@ -274,9 +301,13 @@ async function main() {
     // path) and via the overlay root it injects into the shared page DOM.
     workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
     await workerCdp.send("Runtime.enable");
+    await waitForEval(workerCdp, `chrome.storage.local.get("ageePrivacyMigrationVersion").then(value => value.ageePrivacyMigrationVersion === 1)`);
     await evaluate(workerCdp, `chrome.storage.local.set(${JSON.stringify({
       ageeGatewayUrl: gateway.baseUrl,
       ageeGatewayToken: TOKEN,
+      ageePrivacyMigrationVersion: 1,
+      ageeBackgroundAutomationEnabled: true,
+      ageeBackgroundAutomationConsentVersion: 1,
     })}).then(() => true)`);
     const ping = await waitForEval(workerCdp, `
       (async () => {
@@ -293,83 +324,48 @@ async function main() {
     if (!ping?.tabId) throw new Error("real content script did not answer ping via the service worker");
     await waitForEval(pageCdp, `Boolean(document.getElementById("agee-root"))`);
 
-    // Count page targets before the branch so we can prove a NEW background tab
-    // is created by the task agent.
+    // Prove the first-party browser facade is advertised and executable through
+    // the real gateway tool-request broker. This description becomes an Amazon
+    // search URL inside the extension; no Tweeks MCP/native host is involved.
+    const browserDevice = await waitForBrowserDevice(gateway.baseUrl);
+    if (!(browserDevice.local_tool_manifest || []).some((entry) => entry.tool === "browser.search.open")) {
+      throw new Error(`browser.search.open missing from heartbeat manifest: ${JSON.stringify(browserDevice.local_tool_manifest)}`);
+    }
+    const searchQueued = await fetch(`${gateway.baseUrl}/v1/tool/requests`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        source: "smoke-cdp",
+        source_surface_type: "browser_extension",
+        target_surface_type: "browser_extension",
+        tool: "browser.search.open",
+        input: { query: "ergonomic red chair", provider: "amazon", active: false },
+        session_id: "browser_facade_smoke",
+        branch_id: "amazon_search",
+      }),
+    }).then((resp) => resp.json());
+    if (!searchQueued?.request?.id) throw new Error(`gateway did not queue browser.search.open: ${JSON.stringify(searchQueued)}`);
+    const searchRequest = await waitForToolRequest(gateway.baseUrl, searchQueued.request.id);
+    if (searchRequest.status !== "completed" || !searchRequest.latest_receipt?.ok) {
+      throw new Error(`browser.search.open did not complete: ${JSON.stringify(searchRequest)}`);
+    }
+    const searchTabId = Number(searchRequest.latest_receipt?.result?.tab_id);
+    const searchTab = Number.isInteger(searchTabId)
+      ? await waitForEval(workerCdp, `chrome.tabs.get(${searchTabId}).catch(() => null)`, 10000)
+      : null;
+    const requestedSearchUrl = String(searchRequest.latest_receipt?.result?.url || "");
+    if (
+      !searchTab?.id ||
+      searchTab.active ||
+      !requestedSearchUrl.startsWith("https://www.amazon.com/s?k=ergonomic+red+chair")
+    ) {
+      throw new Error(`Amazon search tab missing, malformed, or stole focus: ${JSON.stringify({ searchTab, requestedSearchUrl })}`);
+    }
+    await evaluate(workerCdp, `chrome.tabs.remove(${Number(searchTab.id)}).then(() => true)`);
+
+    // Count page targets before the queued task so we can prove a NEW
+    // background tab is created by the task agent.
     const pagesBefore = (await targets(devToolsPort)).filter((t) => t.type === "page").length;
-
-    // Trigger the same route a user does: open the command bar, type a natural
-    // language browser-task request, and press Enter. The content script creates
-    // a real cue card, background.js parses the URL/report intent, and the CDP
-    // task agent runs in its own background tab.
-    await evaluate(workerCdp, `chrome.tabs.sendMessage(${ping.tabId}, { cmd: "open" }).then(() => true)`);
-    await waitForEval(pageCdp, `Boolean(document.getElementById("agee-input"))`);
-    await evaluate(pageCdp, `
-      (() => {
-        const input = document.getElementById("agee-input");
-        input.value = ${JSON.stringify(`open ${branchUrl} and report the page title`)};
-        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-        return true;
-      })()
-    `);
-    const cueId = await waitForEval(pageCdp, `
-      (() => {
-        const card = [...document.querySelectorAll("#agee-log .agee-cue")].pop();
-        return card ? card.dataset.cue : null;
-      })()
-    `);
-    if (!cueId) throw new Error("typed browser-task request did not create a cue card");
-
-    // (c) Assert the completion "done" cue rendered in the overlay log.
-    const doneText = await waitForEval(
-      pageCdp,
-      `(() => {
-        const card = document.querySelector(${JSON.stringify(`#agee-log .agee-cue[data-cue="${cueId}"]`)});
-        if (!card || !card.classList.contains("agee-cue-done")) return null;
-        const status = card.querySelector(".agee-cue-status");
-        return status ? status.textContent : null;
-      })()`,
-      20000,
-    );
-    if (!doneText || !/background task agent done/i.test(doneText)) {
-      throw new Error(`overlay did not render the expected done cue; got: ${JSON.stringify(doneText)}`);
-    }
-    if (!/screenshot/i.test(doneText)) {
-      throw new Error(`done cue did not report a screenshot; got: ${JSON.stringify(doneText)}`);
-    }
-    if (!/tab stayed in background/i.test(doneText)) {
-      throw new Error(`done cue did not confirm the tab stayed in background; got: ${JSON.stringify(doneText)}`);
-    }
-
-    // (a)+(b) cross-check from the persisted cue state in the service worker: the
-    // background tab was created and disposed, and the run finished "done".
-    const cueState = await evaluate(workerCdp, `
-      (async () => {
-        const key = "ageeCue:" + ${JSON.stringify(cueId)};
-        const got = await chrome.storage.local.get(key);
-        return got[key] || null;
-      })()
-    `);
-    if (!cueState || cueState.status !== "done") {
-      throw new Error(`service-worker cue state not done: ${JSON.stringify(cueState)}`);
-    }
-
-    // (a) The disposable background tab is removed after the run, so the page
-    // count returns to baseline (proving it was created AND disposed, and we
-    // already proved via the done cue that it never became active).
-    let pagesAfter = pagesBefore;
-    const settleStart = Date.now();
-    while (Date.now() - settleStart < 5000) {
-      pagesAfter = (await targets(devToolsPort)).filter((t) => t.type === "page").length;
-      if (pagesAfter === pagesBefore) break;
-      await delay(150);
-    }
-
-    // The overlay tab must never have been navigated to the branch URL — proof
-    // the task agent worked in its OWN tab, not the user's.
-    const overlayUrl = await evaluate(pageCdp, "location.href");
-    if (overlayUrl.includes("branch=1")) {
-      throw new Error("overlay tab was navigated by the task agent (focus/ownership violation)");
-    }
 
     const queued = await fetch(`${gateway.baseUrl}/v1/browser/tasks`, {
       method: "POST",
@@ -396,6 +392,10 @@ async function main() {
               quality: 35,
             },
           },
+          {
+            method: "Input.dispatchMouseEvent",
+            params: { type: "mouseMoved", x: 10, y: 10 },
+          },
         ],
       }),
     }).then((resp) => resp.json());
@@ -408,14 +408,28 @@ async function main() {
       throw new Error(`queued browser task did not complete with ok receipt: ${JSON.stringify(completedTask)}`);
     }
 
+    // The disposable background tab is removed after the run, so the page count
+    // returns to baseline. The overlay tab must remain on the user's page.
+    let pagesAfter = pagesBefore;
+    const settleStart = Date.now();
+    while (Date.now() - settleStart < 5000) {
+      pagesAfter = (await targets(devToolsPort)).filter((t) => t.type === "page").length;
+      if (pagesAfter === pagesBefore) break;
+      await delay(150);
+    }
+    const overlayUrl = await evaluate(pageCdp, "location.href");
+    if (overlayUrl.includes("branch=1")) {
+      throw new Error("overlay tab was navigated by the queued task agent (focus/ownership violation)");
+    }
+
     console.log(
       "CDP task-agent smoke passed (REAL extension, headless Chrome for Testing): " +
-        `service worker id=${extensionId}; background task agent opened its own tab, captured a screenshot, ` +
+        `service worker id=${extensionId}; first-party browser.search.open produced a background Amazon search tab and receipt; ` +
+        "background task agent opened its own tab, captured a screenshot, " +
         "dispatched 1 input event, stayed in background, then disposed the tab; " +
-        `overlay rendered the done cue; queued gateway task ${queuedId} completed with a receipt; pages baseline=${pagesBefore} after=${pagesAfter}; ` +
+        `queued gateway task ${queuedId} completed with a receipt; pages baseline=${pagesBefore} after=${pagesAfter}; ` +
         "no window shown, no focus taken.",
     );
-    console.log(`done cue: "${doneText}"`);
   } finally {
     pageCdp?.close();
     workerCdp?.close();

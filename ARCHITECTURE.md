@@ -902,6 +902,18 @@ only the engine URL/session token.
 
 ### Background browser agent loop
 
+The extension also advertises a first-party local browser facade through the
+gateway device-tool broker. Its dedicated vocabulary covers navigation,
+description-to-Google/Amazon search, snapshot/query/text/wait/screenshot, and
+click/fill/type. Page tools accept explicit tab IDs and either fresh bounded
+element indexes or semantic role/name/label/placeholder/test-ID locators. The
+extension resolves semantic targets against browser-local page evidence,
+executes actions through the existing local validator, preserves risky-click
+confirmation, and returns bounded receipts with retryable target failures.
+This facade is A.G. code running inside the A.G. extension; Tweeks MCP/native
+messaging is behavioral prior art only and is not a runtime adapter or
+dependency.
+
 ```text
 model tool call or user instruction
   -> gateway creates a browser agent-loop task (`browser_agent_task`) plus a

@@ -4,13 +4,16 @@ import test from "node:test";
 await import(`../extension/page-observation-runtime.js?test=${Date.now()}`);
 const { createPageObservationRuntime, maxObservationAnchors } = globalThis.AgeePageObservationRuntime;
 
-function element({ tag = "BUTTON", label = "", placeholder = "", title = "", name = "", type = "", value = "", innerText = "", root = false, visible = true, rect = null } = {}) {
+function element({ tag = "BUTTON", label = "", placeholder = "", title = "", name = "", type = "", role = "", href = "", testId = "", value = "", innerText = "", root = false, visible = true, rect = null } = {}) {
   const attributes = new Map([
     ["aria-label", label],
     ["placeholder", placeholder],
     ["title", title],
     ["name", name],
     ["type", type],
+    ["role", role],
+    ["href", href],
+    ["data-testid", testId],
   ]);
   return {
     tagName: tag,
@@ -60,7 +63,7 @@ function fixture({ elements = [], textNodes = [], rangeFactory = null, style = n
 }
 
 test("snapshot keeps bounded visible page evidence and anchor identity", () => {
-  const visibleButton = element({ label: "Open details" });
+  const visibleButton = element({ label: "Open details", name: "details", testId: "details-trigger" });
   const hiddenButton = element({ label: "Hidden", visible: false });
   const overlayButton = element({ label: "Overlay", root: true });
   const textParent = element({ tag: "P" });
@@ -91,6 +94,9 @@ test("snapshot keeps bounded visible page evidence and anchor identity", () => {
   const snapshot = runtime.snapshot();
   assert.equal(snapshot.elements.length, 1);
   assert.equal(snapshot.elements[0].label, "Open details");
+  assert.equal(snapshot.elements[0].role, "button");
+  assert.equal(snapshot.elements[0].name, "details");
+  assert.equal(snapshot.elements[0].test_id, "details-trigger");
   assert.equal(snapshot.elements[0].observation_anchor.snapshot_id, snapshot.snapshotId);
   assert.equal(snapshot.pageText, "Visible page text");
   assert.deepEqual(snapshot.viewport, { width: 800, height: 600, deviceScaleFactor: 2, scrollX: 4, scrollY: 8 });

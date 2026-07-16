@@ -92,6 +92,16 @@
       return `[${item.i}] <${item.tag}${type}>${labelText}`;
     }
 
+    function inferredRole(element) {
+      const explicit = element.getAttribute("role");
+      if (explicit) return explicit;
+      if (element.tagName === "A" && element.getAttribute("href")) return "link";
+      if (element.tagName === "BUTTON") return "button";
+      if (["INPUT", "TEXTAREA"].includes(element.tagName)) return element.getAttribute("type") === "search" ? "searchbox" : "textbox";
+      if (element.tagName === "SELECT") return "combobox";
+      return "";
+    }
+
     function needsConfirmation(element, request) {
       if (request.action === "key" && (request.text || "Enter") === "Enter") {
         const active = doc.activeElement;
@@ -109,7 +119,19 @@
         if (element.closest("#agee-root") || !visible(element)) continue;
         const i = indexed.length;
         indexed.push(element);
-        observed.push({ i, tag: element.tagName.toLowerCase(), type: element.getAttribute("type") || "", label: label(element), element });
+        observed.push({
+          i,
+          tag: element.tagName.toLowerCase(),
+          type: element.getAttribute("type") || "",
+          role: inferredRole(element),
+          name: element.getAttribute("name") || "",
+          label: label(element),
+          placeholder: element.getAttribute("placeholder") || "",
+          test_id: element.getAttribute("data-testid") || element.getAttribute("data-test-id") || "",
+          href: element.getAttribute("href") || "",
+          disabled: element.hasAttribute?.("disabled") === true,
+          element,
+        });
         if (observed.length >= MAX_OBSERVATION_ANCHORS) break;
       }
       const capturedAt = clock().toISOString();
@@ -151,4 +173,3 @@
     createPageObservationRuntime,
   });
 })(typeof globalThis !== "undefined" ? globalThis : this);
-
