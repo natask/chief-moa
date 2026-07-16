@@ -1,5 +1,12 @@
 "use strict";
 
+const {
+  PROGRAM_TOOL,
+  canonicalJson,
+  sha256,
+  validateSurfaceProgramTerminalReceipt,
+} = require("./surface-program-protocol");
+
 function createDeviceToolHandlers(deps) {
   const {
     authorized, sendJson, readJsonBody, listDeviceClients, listToolRequests,
@@ -80,7 +87,11 @@ function createDeviceToolHandlers(deps) {
     if (!toolRequestExists(requestId)) { sendJson(response, 404, { error: "tool request not found" }); return; }
     const body = await readJsonBody(request);
     const current = readToolRequest(requestId);
-    const deviceId = normalizeDeviceId(body.device_id || body.deviceId || "");
+    const deviceId = normalizeDeviceId(body.device_id || body.deviceId || body.claimant?.device_id || "");
+    if (current.tool === PROGRAM_TOOL) {
+      await handleSurfaceProgramReceipt(response, current, body, deviceId);
+      return;
+    }
     if (deviceId && current.target_device_id && deviceId !== current.target_device_id) {
       sendJson(response, 403, { error: "receipt device_id does not match request target" }); return;
     }
@@ -106,7 +117,52 @@ function createDeviceToolHandlers(deps) {
     sendJson(response, 200, { request: summarizeToolRequest(next), receipt });
   }
 
-  return { routeDeviceTools, handleDeviceClientHeartbeat, handleCreateToolRequest, handleClaimToolRequest, handleToolRequestReceipt };
+  async function handleSurfaceProgramReceipt(response, current, body, deviceId) {
+    const existing = Array.isArray(current.receipts) ? current.receipts[0] : null;
+    if (existing) {
+      if (existing.terminal_digest === sha256(body)) {
+        sendJson(response, 200, { request: summarizeToolRequest(current), receipt: existing, idempotent_replay: true });
+      } else {
+        sendJson(response, 409, { error: "surface program already has a different terminal receipt" });
+      }
+      return;
+    }
+    if (current.status !== "claimed" || !current.claim_id || !deviceId) {
+      sendJson(response, 409, { error: "surface program must be claimed by an exact device before receipt" });
+      return;
+    }
+    const leaseExpiresMs = Date.parse(current.lease_expires_at || "");
+    const timestamp = now();
+    if (!Number.isFinite(leaseExpiresMs) || Date.parse(timestamp) >= leaseExpiresMs) {
+      sendJson(response, 409, { error: "surface program claim lease expired" });
+      return;
+    }
+    let terminal;
+    try {
+      terminal = validateSurfaceProgramTerminalReceipt(current.input, body, {
+        device_id: current.claimed_by,
+        client_instance_id: current.claimed_client_instance_id,
+      }, { nowMs: Date.parse(timestamp) });
+    } catch (error) {
+      sendJson(response, 400, { error: cleanError(error), code: error.code || "invalid_terminal_receipt" });
+      return;
+    }
+    const receipt = {
+      id: randomId("receipt"), ts: timestamp, ok: terminal.status === "completed",
+      device_id: terminal.claimant.device_id, summary: terminal.status,
+      error: terminal.error?.message || "", result: terminal.result, local_receipt: terminal,
+      terminal_digest: sha256(body),
+    };
+    const status = terminal.status === "completed" ? "completed"
+      : ["stopped", "interrupted"].includes(terminal.status) ? "cancelled" : "failed";
+    const next = updateToolRequest(current.id, {
+      status, updated_at: timestamp, finished_at: timestamp, receipts: [receipt], error: terminal.error?.message || "",
+    });
+    await recordToolRequestProductEvent(next, "receipt", receipt);
+    sendJson(response, 200, { request: summarizeToolRequest(next), receipt });
+  }
+
+  return { routeDeviceTools, handleDeviceClientHeartbeat, handleCreateToolRequest, handleClaimToolRequest, handleToolRequestReceipt, handleSurfaceProgramReceipt };
 }
 
 module.exports = { createDeviceToolHandlers };

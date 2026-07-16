@@ -1,5 +1,12 @@
 "use strict";
 
+const {
+  PROGRAM_TOOL,
+  createSurfaceProgramEnvelope,
+  sanitizeExecutionRuntimes,
+  selectSurfaceRuntime,
+} = require("./surface-program-protocol");
+
 // Per-surface skills. The skills offered to the model depend on the surface a
 // turn came from, while chat history stays shared (one default session). Phone
 // and browser actions are ALWAYS offered because cross-device is the point of
@@ -20,6 +27,8 @@ function resolveTurnSurface(call) {
   const source = String(call && call.source ? call.source : "").toLowerCase();
   if (source.includes("android")) return "android";
   if (source.includes("agee-extension") || source.includes("browser")) return "browser";
+  if (source.includes("macos") || source.includes("moamac") || source.includes("apple")) return "macos";
+  if (source.includes("desktop")) return "desktop";
   return "unknown";
 }
 
@@ -118,7 +127,7 @@ async function awaitToolReceipt(deps, requestId, options = {}) {
     } catch {
       current = null;
     }
-    if (current && (current.status === "completed" || current.status === "failed")) {
+    if (current && ["completed", "failed", "cancelled"].includes(current.status)) {
       const receipts = Array.isArray(current.receipts) ? current.receipts : [];
       return {
         resolved: true,
@@ -204,6 +213,88 @@ async function launchBrowserAgentTask(call, deps, args) {
   }
 }
 
+function runtimeOptions(call, args) {
+  const sourceSurface = resolveTurnSurface(call);
+  const surfaceTypes = {
+    android: "android",
+    browser: "browser_extension",
+    macos: "macos",
+    desktop: "desktop",
+  };
+  return {
+    target_device_id: args.target_device_id || args.device_id || call?.device_id || "",
+    target_surface_type: args.target_surface_type || args.surface_type || surfaceTypes[sourceSurface] || "",
+    runtime_id: args.runtime_id,
+    language: args.language,
+  };
+}
+
+function surfaceRuntimeCatalog(_call, deps) {
+  return (typeof deps.listDeviceClients === "function" ? deps.listDeviceClients() : [])
+    .filter((device) => device.online !== false)
+    .flatMap((device) => sanitizeExecutionRuntimes(device.execution_runtimes || [], {
+      device_id: device.device_id || device.id,
+      surface_type: device.surface_type,
+    }).map((advertisement) => {
+      const descriptors = new Map((device.local_tool_manifest || []).map((tool) => [tool.tool, tool]));
+      return {
+        device_id: device.device_id || device.id,
+        surface_type: device.surface_type,
+        runtime_id: advertisement.runtime.runtime_id,
+        language: advertisement.runtime.language,
+        bridge_version: advertisement.runtime.bridge_version,
+        entrypoint: advertisement.runtime.entrypoint,
+        catalog_version: advertisement.catalog.version,
+        catalog_sha256: advertisement.catalog.sha256,
+        allowed_capability_ids: advertisement.catalog.capability_ids,
+        capabilities: advertisement.catalog.capability_ids.map((id) => ({ id, ...(descriptors.get(id) || {}) })),
+      };
+    }))
+    .slice(0, 16);
+}
+
+async function executeSurfaceProgram(call, deps, args, options = {}) {
+  const selected = selectSurfaceRuntime(
+    typeof deps.listDeviceClients === "function" ? deps.listDeviceClients() : [],
+    runtimeOptions(call, args || {}),
+  );
+  if (!selected) return { ok: false, error: "no exact live surface execution runtime matches the requested target" };
+  let envelope;
+  try {
+    envelope = createSurfaceProgramEnvelope({
+      source: String(args?.source ?? args?.program ?? args?.code ?? ""),
+      session_id: args?.session_id || call?.conversation_id || call?.session_id,
+      turn_id: args?.turn_id || call?.turn_id,
+      bindings: args?.bindings,
+      limits: args?.limits,
+      approval_policy: args?.approval_policy,
+      expires_in_ms: args?.expires_in_ms,
+      idempotency_key: args?.idempotency_key,
+    }, selected, options);
+  } catch (error) {
+    return { ok: false, error: cleanErr(deps, error), code: error.code || "invalid_surface_program" };
+  }
+  let request;
+  try {
+    request = await deps.createToolRequest({
+      tool: PROGRAM_TOOL,
+      target_device_id: envelope.target.device_id,
+      target_surface_type: envelope.target.surface_type,
+      input: envelope,
+      source: call?.source || "surface-program",
+      source_surface_type: resolveTurnSurface(call),
+      session_id: envelope.session_id,
+      branch_id: call?.branch_id || "default",
+      instruction: "Execute one locally validated surface program and return one terminal receipt.",
+    });
+  } catch (error) {
+    return { ok: false, error: cleanErr(deps, error), code: error.code || "surface_program_queue_failed" };
+  }
+  const outcome = await awaitToolReceipt(deps, request.id, options);
+  if (!outcome.resolved) return { ok: true, type: PROGRAM_TOOL, queued: true, request_id: request.id, execution_id: envelope.execution_id };
+  return { ok: outcome.ok, type: PROGRAM_TOOL, queued: false, request_id: request.id, execution_id: envelope.execution_id, status: outcome.status, receipt: outcome.receipt };
+}
+
 // The code-mode capabilities merged into cascadedExecuteCapabilities. Each phone
 // capability creates a brokered tool_request and awaits a receipt; browser_agent
 // _task starts a background browser agent-loop task.
@@ -277,5 +368,7 @@ module.exports = {
   brokerToolRequest,
   launchBrowserAgentTask,
   awaitToolReceipt,
+  executeSurfaceProgram,
+  surfaceRuntimeCatalog,
   PHONE_CAPABILITIES,
 };

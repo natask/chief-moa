@@ -3,6 +3,45 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createDeviceToolHandlers } = require("../lib/device-tool-handlers");
+const {
+  PROGRAM_TOOL,
+  createSurfaceProgramEnvelope,
+  sanitizeExecutionRuntime,
+  sha256,
+  surfaceProgramReceiptBindings,
+} = require("../lib/surface-program-protocol");
+
+const PROGRAM_NOW = Date.parse("2026-07-15T00:00:00.000Z");
+const hex = (letter) => letter.repeat(64);
+
+function programEnvelope() {
+  const advertisement = sanitizeExecutionRuntime({
+    version: 1, type: "surface.runtime.advertised", advertisement_id: "ad-1",
+    target: { surface_type: "browser_extension", device_id: "phone" },
+    runtime: { runtime_id: "browser.javascript.v1", language: "javascript", bridge_version: 1, entrypoint: "main" },
+    catalog: { version: 1, sha256: hex("a"), capability_ids: ["browser.observe"] },
+    limits: { source_bytes: 4096, wall_ms: 30000, memory_bytes: 32 * 1024 * 1024, tool_calls: 10, parallel_calls: 4, result_bytes: 4096, log_bytes: 1024 },
+    issued_at: new Date(PROGRAM_NOW - 1000).toISOString(), expires_at: new Date(PROGRAM_NOW + 60000).toISOString(),
+  });
+  return createSurfaceProgramEnvelope({
+    source: "return await tools.browser.observe({});", session_id: "session-1", turn_id: "turn-1",
+    bindings: { kind: "browser_document", tab_id: 1, window_id: 1, page_epoch: 1, observation_id: "obs", observation_digest: hex("b"), state_sha256: hex("c"), allowed_frames: [0], allowed_worlds: ["ISOLATED"] },
+    approval_policy: { program: "local_policy", always_ask: [] }, expires_in_ms: 30000,
+  }, { device: { device_id: "phone", surface_type: "browser_extension" }, advertisement }, { nowMs: PROGRAM_NOW, executionId: "exec-1", idempotencyKey: "idem-1" });
+}
+
+function terminalReceipt(envelope, overrides = {}) {
+  return {
+    version: 1, type: "surface.execution.receipt", receipt_id: "receipt-local-1",
+    execution_id: envelope.execution_id, session_id: envelope.session_id, turn_id: envelope.turn_id,
+    claimant: { surface_type: "browser_extension", device_id: "phone", client_instance_id: "client-1" },
+    runtime_id: envelope.runtime.runtime_id, ...surfaceProgramReceiptBindings(envelope),
+    started_at: new Date(PROGRAM_NOW + 100).toISOString(), finished_at: new Date(PROGRAM_NOW + 200).toISOString(), status: "completed",
+    tool_attempts: { count: 1, first_receipt_sha256: null, last_receipt_sha256: null },
+    result: { summary: "done", data_sha256: null, artifact_refs: [] }, final_state_sha256: hex("d"),
+    error: { code: null, message: null }, previous_receipt_sha256: null, receipt_sha256: hex("e"), ...overrides,
+  };
+}
 
 function harness(overrides = {}) {
   const events = [];
@@ -146,4 +185,60 @@ test("receipts enforce target and claimant before recording success or failure",
   assert.equal(response.payload.receipt.device_id, "phone");
   assert.match(response.payload.receipt.ts, /^2026-/);
   assert.equal(response.payload.request.status, "failed");
+});
+
+test("surface program receipts require a live exact claim and accept one terminal outcome", async () => {
+  const input = programEnvelope();
+  const current = {
+    id: "req-1", tool: PROGRAM_TOOL, input, status: "claimed", target_device_id: "phone",
+    claimed_by: "phone", claimed_client_instance_id: "client-1", claim_id: "claim-1", claim_attempt: 1,
+    lease_expires_at: new Date(PROGRAM_NOW + 60000).toISOString(), receipts: [],
+  };
+  const state = harness({ readToolRequest: () => current });
+  let response = {};
+  const body = terminalReceipt(input);
+  await state.handlers.handleToolRequestReceipt(request("POST", body), response, "req-1");
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.request.status, "completed");
+  assert.equal(response.payload.receipt.local_receipt.execution_id, "exec-1");
+  assert.equal(state.events[0][1], "receipt");
+
+  const existing = { ...response.payload.receipt, terminal_digest: sha256(body) };
+  const replay = harness({ readToolRequest: () => ({ ...current, receipts: [existing] }) });
+  response = {};
+  await replay.handlers.handleToolRequestReceipt(request("POST", body), response, "req-1");
+  assert.equal(response.payload.idempotent_replay, true);
+
+  response = {};
+  await replay.handlers.handleToolRequestReceipt(request("POST", { ...body, receipt_id: "different" }), response, "req-1");
+  assert.equal(response.status, 409);
+});
+
+test("surface program receipt rejects missing/expired claims and forged terminals", async () => {
+  const input = programEnvelope();
+  const base = {
+    id: "req-1", tool: PROGRAM_TOOL, input, target_device_id: "phone", claimed_by: "phone",
+    claimed_client_instance_id: "client-1", claim_id: "claim-1", claim_attempt: 1,
+    lease_expires_at: new Date(PROGRAM_NOW + 60000).toISOString(), receipts: [],
+  };
+  let state = harness({ readToolRequest: () => ({ ...base, status: "pending" }) });
+  let response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", terminalReceipt(input)), response, "req-1");
+  assert.equal(response.status, 409);
+
+  state = harness({ readToolRequest: () => ({ ...base, status: "claimed", lease_expires_at: new Date(PROGRAM_NOW).toISOString() }) });
+  response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", terminalReceipt(input)), response, "req-1");
+  assert.equal(response.status, 409);
+
+  state = harness({ readToolRequest: () => ({ ...base, status: "claimed" }) });
+  response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", terminalReceipt(input, { runtime_id: "forged" })), response, "req-1");
+  assert.equal(response.status, 400);
+  assert.equal(response.payload.code, "runtime_id_mismatch");
+
+  response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", terminalReceipt(input, { status: "stopped", error: { code: "stopped", message: "user stopped" } })), response, "req-1");
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.request.status, "cancelled");
 });
