@@ -49,6 +49,7 @@ function testParser() {
     ["have the qa agent verify the voice pipeline", { kind: "create_work", owner_hint: "qa" }],
     ["what is still running", { kind: "status_query", scope: "running" }],
     ["which agents are active", { kind: "status_query", scope: "running" }],
+    ["what agents are running", { kind: "status_query", scope: "running" }],
     ["what are my agents doing", { kind: "status_query", scope: "running" }],
     ["how are the agents doing", { kind: "status_query", scope: "running" }],
     ["what's my agent up to", { kind: "status_query", scope: "running" }],

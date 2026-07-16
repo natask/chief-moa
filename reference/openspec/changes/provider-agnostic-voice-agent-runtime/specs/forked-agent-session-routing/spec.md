@@ -30,6 +30,17 @@ do.
 
 #### Scenario: User asks what is running
 - **WHEN** the user asks which agents or threads are active
-- **THEN** Moa can report active run IDs, short intents, status, latest event,
+- **THEN** Moa reports active run IDs, short user-authored intents, status, latest event,
   linked session/turn IDs, and whether each run is waiting, running, blocked, or
   complete
+- **AND** the same read-only projection is available to spoken and typed turns
+- **AND** injected session-context scaffolding is not presented as the run intent
+- **AND** answering the question does not launch, interrupt, pause, cancel, or
+  retarget any run
+
+#### Scenario: Status is rendered for text and speech
+- **WHEN** an active-agent status answer is returned to a user surface
+- **THEN** the display answer groups runs in Markdown by active, queued, and
+  blocked lifecycle state
+- **AND** the speech answer remains concise and includes the stable run ID so
+  the user can refer to that agent conversationally later

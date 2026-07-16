@@ -1213,7 +1213,10 @@ async function handleMacosProactiveTurn(request, response) {
 
 async function handleChat(request, response) {
   const body = await readJsonBody(request);
-  if (shouldDelegateToBrowserTurn(body)) {
+  const preliminaryText = browserTurnInputText(body);
+  const preliminaryWorkHistoryIntent = parseWorkHistoryIntent(preliminaryText);
+  const isAgentStatusQuery = preliminaryWorkHistoryIntent?.kind === "status_query";
+  if (shouldDelegateToBrowserTurn(body) && !isAgentStatusQuery) {
     await handleBrowserTurnBody(response, body, { modality: "text", legacy: "chat" });
     return;
   }
@@ -1246,9 +1249,24 @@ async function handleChat(request, response) {
   const screenContext = formatScreenContext(body.screen);
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const userText = lastUser?.content || "";
+  let workHistoryReply = null;
+  if (isAgentStatusQuery) {
+    const { stored: brokerEvent } = await storeBrokerMessage(
+      { ...body, source: body.source || "chat" }, truncate(userText, 16000),
+    );
+    workHistoryReply = await executeWorkHistoryIntent(preliminaryWorkHistoryIntent, {
+      transcript: userText,
+      turnId,
+      brokerEvent,
+      sessionId,
+      branchId: callerBranchId,
+      body,
+    });
+  }
   const utilityReply = localUtilityReply(userText, effectiveReplyLanguage(profile));
-  const prepared = utilityReply
-    ? { decision: resolveContextDecision({ text: userText, contextAction: body.context_action }), preflight: { attempted: false, tool_called: false, fallback_reason: "local_utility" } }
+  const deterministicReply = workHistoryReply?.display || utilityReply;
+  const prepared = deterministicReply
+    ? { decision: resolveContextDecision({ text: userText, contextAction: body.context_action }), preflight: { attempted: false, tool_called: false, fallback_reason: workHistoryReply ? "work_history_status" : "local_utility" } }
     : await prepareContextDecision({ text: userText, contextAction: body.context_action, profile });
   const decision = prepared.decision;
   if (!decision.thread_label && body.thread_label) decision.thread_label = String(body.thread_label).slice(0, 120);
@@ -1284,8 +1302,8 @@ async function handleChat(request, response) {
   });
 
   let text;
-  if (utilityReply) {
-    text = utilityReply;
+  if (deterministicReply) {
+    text = deterministicReply;
   } else {
     // Offer the same profile tools the voice path uses so a TYPED "speak
     // English" can call update_agent_profile through the shared sanitizer
@@ -1353,6 +1371,7 @@ async function handleChat(request, response) {
       profile_version: profileVersion,
       text,
       context: contextResponseBlock(thread, decision, contextArtifact),
+      ...(workHistoryReply ? { work_history: { intent: preliminaryWorkHistoryIntent, refs: workHistoryReply.refs || {} } } : {}),
     };
     writeChatTurnRecord({
       turn_id: turnId,
@@ -1391,6 +1410,7 @@ async function handleChat(request, response) {
     profile_version: profileVersion,
     text,
     context: contextResponseBlock(thread, decision, contextArtifact),
+    ...(workHistoryReply ? { work_history: { intent: preliminaryWorkHistoryIntent, refs: workHistoryReply.refs || {} } } : {}),
   });
 }
 
@@ -11936,10 +11956,17 @@ function summarizeAgentRun(run) {
     signal: run.signal,
     deleted_at: run.deleted_at || "",
     incognito: run.incognito === true || isIncognitoBranch(run.branch_id || ""),
-    prompt_preview: truncate(String(run.prompt || ""), 160),
+    prompt_preview: truncate(agentRunObjective(run.prompt), 160),
     output_preview: truncate(String(run.output || run.stderr || ""), 240),
     active: activeRuns.has(run.id),
   };
+}
+
+function agentRunObjective(prompt) {
+  const value = String(prompt || "").trim();
+  const marker = "Current user request:\n";
+  const markerIndex = value.lastIndexOf(marker);
+  return markerIndex >= 0 ? value.slice(markerIndex + marker.length).trim() : value;
 }
 
 function isTerminalRunStatus(status) {

@@ -277,8 +277,10 @@ function createWorkHistoryHandlers(deps) {
       const summary = await workHistory.statusSummary();
       const agentRuns = agentRunStatusSummary(listAllAgentRuns());
       const merged = mergeRunStatusSummaries(summary, agentRuns);
+      const changedDetail = await workHistoryChangedDetail(intent, summary, workHistory);
       return {
-        speak: workHistoryStatusSpeech(intent, merged, await workHistoryChangedDetail(intent, summary, workHistory)),
+        speak: workHistoryStatusSpeech(intent, merged, changedDetail),
+        display: workHistoryStatusDisplay(intent, merged, changedDetail),
         refs: {
           queued_run_ids: merged.queued.map((run) => run.run_id), active_run_ids: merged.active.map((run) => run.run_id),
           blocked_run_ids: merged.blocked.map((run) => run.run_id), failed_run_ids: merged.failed.map((run) => run.run_id),
@@ -400,12 +402,57 @@ function workHistoryStatusSpeech(intent, summary, changedDetail) {
     return waiting.map((run) => `Run ${run.run_id}: ${run.blocking_reason || run.status}.`).join(" ");
   }
   const parts = [];
-  if (summary.active.length) parts.push(`Active: ${summary.active.map((run) => `${run.run_id} (${run.status}${run.worker_id ? ` on ${run.worker_id}` : ""})`).join(", ")}.`);
-  if (summary.queued.length) parts.push(`Queued and waiting for a worker: ${summary.queued.map((run) => run.run_id).join(", ")}.`);
-  if (summary.blocked.length) parts.push(`Blocked: ${summary.blocked.map((run) => `${run.run_id} (${run.blocking_reason})`).join("; ")}.`);
-  if (summary.completed.length) parts.push(`Completed: ${summary.completed.map((run) => run.run_id).join(", ")}.`);
-  if (summary.failed.length) parts.push(`Failed or canceled: ${summary.failed.map((run) => run.run_id).join(", ")}.`);
-  return parts.length ? parts.join(" ") : "No work-history tasks or runs recorded yet.";
+  if (summary.active.length) parts.push(`Active: ${summary.active.map((run) => spokenRun(run)).join("; ")}.`);
+  if (summary.queued.length) parts.push(`Queued: ${summary.queued.map((run) => spokenRun(run)).join("; ")}.`);
+  if (summary.blocked.length) parts.push(`Blocked: ${summary.blocked.map((run) => spokenRun(run, run.blocking_reason)).join("; ")}.`);
+  if (intent.scope !== "running") {
+    if (summary.completed.length) parts.push(`Recently completed: ${summary.completed.map((run) => spokenRun(run)).join("; ")}.`);
+    if (summary.failed.length) parts.push(`Failed or canceled: ${summary.failed.map((run) => spokenRun(run, run.blocking_reason || run.latest_summary)).join("; ")}.`);
+  }
+  if (parts.length) return parts.join(" ");
+  return intent.scope === "running" ? "No agents are running, queued, or blocked." : "No work-history tasks or runs recorded yet.";
+}
+
+function workHistoryStatusDisplay(intent, summary, changedDetail) {
+  if (intent.scope === "changed" && changedDetail) return changedDetail;
+  if (intent.scope === "failed" || intent.scope === "waiting") {
+    return workHistoryStatusSpeech(intent, summary, changedDetail);
+  }
+  const groups = [
+    ["Active agents", summary.active],
+    ["Queued agents", summary.queued],
+    ["Blocked agents", summary.blocked],
+  ];
+  if (intent.scope !== "running") {
+    groups.push(["Recently completed", summary.completed], ["Failed or canceled", summary.failed]);
+  }
+  const sections = groups
+    .filter(([, runs]) => runs.length)
+    .map(([heading, runs]) => [
+      `### ${heading}`,
+      ...runs.map((run) => markdownRun(run)),
+    ].join("\n"));
+  if (sections.length) return sections.join("\n\n");
+  return intent.scope === "running" ? "No agents are running, queued, or blocked." : "No work-history tasks or runs recorded yet.";
+}
+
+function spokenRun(run, detail = "") {
+  const objective = compactRunText(run.objective || run.latest_summary || "intent not recorded", 90);
+  const suffix = compactRunText(detail || (run.latest_summary !== run.objective ? run.latest_summary : ""), 80);
+  return `${run.run_id}, ${objective}, is ${run.status}${run.worker_id ? ` on ${run.worker_id}` : ""}${suffix ? `; latest: ${suffix}` : ""}`;
+}
+
+function markdownRun(run) {
+  const objective = compactRunText(run.objective || run.latest_summary || "Intent not recorded", 140);
+  const latest = compactRunText(run.blocking_reason || (run.latest_summary !== run.objective ? run.latest_summary : ""), 160);
+  const worker = run.worker_id ? ` on ${run.worker_id}` : "";
+  return `- **${run.run_id}** — ${objective} \`${run.status}${worker}\`${latest ? ` — ${latest}` : ""}`;
+}
+
+function compactRunText(value, max) {
+  const text = firstLine(value).replace(/\s+/g, " ").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
 }
 
 async function workHistoryChangedDetail(intent, summary, workHistory) {
@@ -443,5 +490,6 @@ module.exports = {
   mergeRunStatusSummaries,
   workHistoryChangedDetail,
   workHistoryDeploymentTarget,
+  workHistoryStatusDisplay,
   workHistoryStatusSpeech,
 };

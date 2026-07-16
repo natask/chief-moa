@@ -85,7 +85,10 @@
 - [ ] 10.2 Add an audio replay smoke that plays a fixture utterance through the gateway voice runtime, stores the observed transcript and assistant response, and emits a pass/fail verdict against expected criteria.
 - [ ] 10.3 Add non-interrupting forked turn routing: a voice/chat turn can start a new `agent_run` with `wait=false` while existing active runs keep running.
 - [ ] 10.4 Link subsequent user turns to relevant active runs as evidence or instruction, with a stored routing reason; irrelevant forks may self-dismiss with a no-op/dismissed result.
-- [ ] 10.5 Expose active fork/run status so the user can ask which agents are active and what each is doing.
+- [x] 10.5 Expose active fork/run status so the user can ask which agents are
+      active and what each is doing. Voice and typed chat now fold the shared
+      stores into concise speech plus Markdown intent/status/run-ID groups;
+      focused parser, handler, and process-level chat smokes cover the path.
 
 ## 11. Stage A: Voice Product Contract And Diagnostics
 

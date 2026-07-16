@@ -95,6 +95,7 @@ function parseCreateWork(lower, raw) {
 function parseStatusQuery(lower, raw) {
   if (/\bwhat(?:'s| is)?\s+(?:still\s+)?running\b/.test(lower)
     || /\bwhich\s+(?:runs?|tasks?|agents?)\s+(?:are|is)\s+(?:still\s+)?(?:running|active|going)\b/.test(lower)
+    || /\bwhat\s+(?:runs?|tasks?|agents?)\s+(?:are\s+)?(?:still\s+)?(?:running|active|going)\b/.test(lower)
     || /\bwhat\s+work\s+is\s+(?:queued|active|running|open)\b/.test(lower)
     || /\bwhat(?:'s| is)?\s+(?:queued|in\s+the\s+queue)\b/.test(lower)
     // "what are my agents doing", "what's my agent up to", "how are the agents doing"
