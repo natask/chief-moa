@@ -106,6 +106,7 @@ const focusedThresholds = new Map([
   ["extension/content-extension-api-runtime.js", 90],
   ["extension/content-context-control-runtime.js", 90],
   ["extension/content-note-controller-runtime.js", 90],
+  ["extension/content-ui-controller-runtime.js", 90],
 ]);
 const focusedResults = [];
 for (const [relative, minimum] of focusedThresholds) {

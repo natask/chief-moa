@@ -151,6 +151,26 @@
     reactLauncher,
     now: () => Date.now(),
   });
+  const {
+    applyUiSpec,
+    loadUiSpec,
+  } = window.AgeeContentUiControllerRuntime.createContentUiControllerRuntime({
+    document,
+    uiSpecRuntime: globalThis.AgeeUiSpecRuntime,
+    storageGet: safeStorageLocalGet,
+    sendMessage: safeRuntimeSendMessage,
+    getRoot: () => root,
+    getSurface: () => uiSpecSurfaceEl,
+    getInput: () => input,
+    anchorPanel: positionPanel,
+    openSurface: () => openTextSurface({ fresh: false }),
+    setInputText,
+    primeAudio,
+    toggleVoice,
+    describePage,
+    submitInstruction,
+    cacheKey: UI_SPEC_CACHE_KEY,
+  });
   const COMPANION_PET_COLORS = {
     graphite: ["#555a62", "#262a30"],
     green: ["#208553", "#0f5534"],
@@ -1040,290 +1060,6 @@
     // with the panel closed.
     if (launcher) launcher.classList.toggle("agee-busy", anyActive());
     syncAvatarBehaviorTrigger();
-  }
-
-  function sanitizeUiSpecPayload(payload) {
-    return globalThis.AgeeUiSpecRuntime.sanitize(payload);
-  }
-
-  function loadUiSpec() {
-    safeStorageLocalGet({ [UI_SPEC_CACHE_KEY]: null })
-      .then((stored) => {
-        const cached = stored?.[UI_SPEC_CACHE_KEY];
-        applyUiSpec(cached ? cached.payload || cached : null);
-      })
-      .catch(() => {});
-  }
-
-  function applyUiSpec(payload) {
-    const spec = sanitizeUiSpecPayload(payload);
-    renderUiSpecSurface(spec);
-  }
-
-  function renderUiSpecSurface(spec) {
-    if (!uiSpecSurfaceEl || !root) return;
-    uiSpecSurfaceEl.replaceChildren();
-    root.classList.remove("agee-has-ui-spec");
-    if (!spec) return;
-    const surface = spec.surfaces[0];
-    const shouldRender = surface.components.length > 0 || spec.isCustomized;
-    if (!surface || !shouldRender) return;
-
-    const shell = document.createElement("section");
-    shell.className = "agee-ui-shell";
-    shell.dataset.surface = surface.id;
-
-    if (surface.title) {
-      const title = document.createElement("div");
-      title.className = "agee-ui-title";
-      title.textContent = surface.title;
-      shell.appendChild(title);
-    }
-
-    if (surface.components.length) {
-      const components = document.createElement("div");
-      components.className = "agee-ui-components";
-      for (const component of surface.components) {
-        const node = renderUiComponent(component);
-        if (node) components.appendChild(node);
-      }
-      if (components.children.length) shell.appendChild(components);
-    }
-
-    if (surface.controls.length) {
-      const controls = document.createElement("div");
-      controls.className = "agee-ui-controls";
-      for (const control of surface.controls) {
-        const node = renderUiControl(control);
-        if (node) controls.appendChild(node);
-      }
-      if (controls.children.length) shell.appendChild(controls);
-    }
-
-    if (shell.children.length <= 1 && !surface.controls.length && !surface.components.length) return;
-    uiSpecSurfaceEl.appendChild(shell);
-    root.classList.add("agee-has-ui-spec");
-    anchorPanel();
-  }
-
-  function renderUiComponent(component) {
-    if (component.type === "card") {
-      const card = document.createElement("article");
-      card.className = `agee-ui-card agee-ui-tone-${component.tone}`;
-      if (component.title) {
-        const title = document.createElement("div");
-        title.className = "agee-ui-card-title";
-        title.textContent = component.title;
-        card.appendChild(title);
-      }
-      if (component.body) {
-        const body = document.createElement("div");
-        body.className = "agee-ui-card-body";
-        body.textContent = component.body;
-        card.appendChild(body);
-      }
-      return card;
-    }
-    if (component.type === "stat") {
-      const stat = document.createElement("div");
-      stat.className = `agee-ui-stat agee-ui-tone-${component.tone}`;
-      const label = document.createElement("div");
-      label.className = "agee-ui-stat-label";
-      label.textContent = component.label;
-      const value = document.createElement("div");
-      value.className = "agee-ui-stat-value";
-      value.textContent = component.value || "-";
-      stat.append(label, value);
-      if (component.delta) {
-        const delta = document.createElement("div");
-        delta.className = "agee-ui-stat-delta";
-        delta.textContent = component.delta;
-        stat.appendChild(delta);
-      }
-      return stat;
-    }
-    if (component.type === "list") {
-      const wrap = document.createElement("div");
-      wrap.className = "agee-ui-list";
-      if (component.title) {
-        const title = document.createElement("div");
-        title.className = "agee-ui-list-title";
-        title.textContent = component.title;
-        wrap.appendChild(title);
-      }
-      for (const item of component.items) {
-        const row = document.createElement(item.action && item.action !== "noop" ? "button" : "div");
-        row.className = "agee-ui-list-row";
-        if (row.tagName === "BUTTON") row.type = "button";
-        const label = document.createElement("span");
-        label.className = "agee-ui-list-label";
-        label.textContent = item.label;
-        row.appendChild(label);
-        if (item.detail) {
-          const detail = document.createElement("span");
-          detail.className = "agee-ui-list-detail";
-          detail.textContent = item.detail;
-          row.appendChild(detail);
-        }
-        if (row.tagName === "BUTTON") {
-          row.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            runUiAction(item.action, item.prompt || item.label, item.label);
-          });
-        }
-        wrap.appendChild(row);
-      }
-      return wrap;
-    }
-    if (component.type === "map") {
-      return renderUiMap(component);
-    }
-    return null;
-  }
-
-  function renderUiMap(component) {
-    const wrap = document.createElement("div");
-    wrap.className = "agee-ui-map-card";
-    if (component.title) {
-      const title = document.createElement("div");
-      title.className = "agee-ui-map-title";
-      title.textContent = component.title;
-      wrap.appendChild(title);
-    }
-    const map = document.createElement("div");
-    map.className = "agee-ui-map";
-    const markers = component.markers.length ? component.markers : [component.center].filter(Boolean);
-    const lats = markers.map((marker) => marker.lat);
-    const lngs = markers.map((marker) => marker.lng);
-    const minLat = Math.min(...lats, component.center?.lat ?? lats[0]);
-    const maxLat = Math.max(...lats, component.center?.lat ?? lats[0]);
-    const minLng = Math.min(...lngs, component.center?.lng ?? lngs[0]);
-    const maxLng = Math.max(...lngs, component.center?.lng ?? lngs[0]);
-    const latSpan = Math.max(maxLat - minLat, 0.01);
-    const lngSpan = Math.max(maxLng - minLng, 0.01);
-    for (const marker of markers) {
-      const pin = document.createElement("span");
-      pin.className = "agee-ui-map-pin";
-      pin.style.left = `${10 + ((marker.lng - minLng) / lngSpan) * 80}%`;
-      pin.style.top = `${90 - ((marker.lat - minLat) / latSpan) * 80}%`;
-      pin.setAttribute("aria-label", marker.label || "map marker");
-      if (marker.label) {
-        const label = document.createElement("span");
-        label.className = "agee-ui-map-pin-label";
-        label.textContent = marker.label;
-        pin.appendChild(label);
-      }
-      map.appendChild(pin);
-    }
-    wrap.appendChild(map);
-    if (component.center?.label) {
-      const meta = document.createElement("div");
-      meta.className = "agee-ui-map-meta";
-      meta.textContent = component.center.label;
-      wrap.appendChild(meta);
-    }
-    return wrap;
-  }
-
-  function renderUiControl(control) {
-    if (control.type === "button") {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "agee-ui-control agee-ui-button";
-      button.textContent = control.label;
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        runUiAction(control.action, control.prompt || control.value || control.label, control.label);
-      });
-      return button;
-    }
-    if (control.type === "text") {
-      const wrap = document.createElement("label");
-      wrap.className = "agee-ui-control agee-ui-text";
-      const inputEl = document.createElement("input");
-      inputEl.type = "text";
-      inputEl.placeholder = control.label || "Ask A.G.";
-      inputEl.value = control.value || "";
-      inputEl.addEventListener("keydown", (event) => {
-        event.stopPropagation();
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        const value = inputEl.value.trim();
-        if (!value) return;
-        runUiAction(control.action, control.prompt || value, control.label, value);
-      });
-      wrap.appendChild(inputEl);
-      return wrap;
-    }
-    if (control.type === "toggle") {
-      const wrap = document.createElement("label");
-      wrap.className = "agee-ui-control agee-ui-toggle";
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = control.checked === true;
-      const text = document.createElement("span");
-      text.textContent = control.label;
-      checkbox.addEventListener("change", () => {
-        const value = checkbox.checked ? "on" : "off";
-        runUiAction(control.action, control.prompt || `${control.label}: ${value}`, control.label, value);
-      });
-      wrap.append(checkbox, text);
-      return wrap;
-    }
-    if (control.type === "select") {
-      const wrap = document.createElement("label");
-      wrap.className = "agee-ui-control agee-ui-select";
-      const label = document.createElement("span");
-      label.textContent = control.label;
-      const select = document.createElement("select");
-      for (const optionText of control.options || []) {
-        const option = document.createElement("option");
-        option.value = optionText;
-        option.textContent = optionText;
-        select.appendChild(option);
-      }
-      select.addEventListener("change", () => {
-        runUiAction(control.action, control.prompt || `${control.label}: ${select.value}`, control.label, select.value);
-      });
-      wrap.append(label, select);
-      return wrap;
-    }
-    return null;
-  }
-
-  function runUiAction(action, prompt, label, value = "") {
-    const resolved = globalThis.AgeeUiSpecRuntime?.resolveAction
-      ? globalThis.AgeeUiSpecRuntime.resolveAction(action, prompt, label, value)
-      : { action, prompt: String(prompt || "").replace(/\{value\}/g, value).trim() };
-    action = resolved.action;
-    const resolvedPrompt = resolved.prompt;
-    if (action === "voice.toggle") {
-      openTextSurface({ fresh: false });
-      primeAudio();
-      toggleVoice();
-      return;
-    }
-    if (action === "command.open") {
-      openTextSurface({ fresh: false });
-      if (input) {
-        if (resolvedPrompt) setInputText(resolvedPrompt, { select: true });
-        input.focus();
-      }
-      return;
-    }
-    if (action === "page.describe") {
-      describePage();
-      return;
-    }
-    if (action === "settings.open") {
-      safeRuntimeSendMessage({ cmd: "openOptions" });
-      return;
-    }
-    if (action === "agent.run") {
-      submitInstruction(resolvedPrompt || label || value);
-    }
   }
 
   function loadAvatarBehaviorRuntime() {

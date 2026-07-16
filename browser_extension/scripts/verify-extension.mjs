@@ -16,6 +16,7 @@ const requiredFiles = [
   "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
   "extension/content-note-controller-runtime.js",
+  "extension/content-ui-controller-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/page-observation-runtime.js",
@@ -83,6 +84,7 @@ const contentCompanionPolicySource = readFileSync("extension/content-companion-p
 const contentContextControlSource = readFileSync("extension/content-context-control-runtime.js", "utf8");
 const contentExtensionApiSource = readFileSync("extension/content-extension-api-runtime.js", "utf8");
 const contentNoteControllerSource = readFileSync("extension/content-note-controller-runtime.js", "utf8");
+const contentUiControllerSource = readFileSync("extension/content-ui-controller-runtime.js", "utf8");
 const contentVoicePolicySource = readFileSync("extension/content-voice-policy-runtime.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const pageObservationRuntimeSource = readFileSync("extension/page-observation-runtime.js", "utf8");
@@ -135,7 +137,9 @@ if (
   mainContentScript.js.indexOf("content-context-control-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-note-controller-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-note-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-note-controller-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("content-ui-controller-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-ui-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-note-controller-runtime\.js", "content-ui-controller-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("content support runtimes must load before content.js in declared and dynamic injection paths");
 }
@@ -183,6 +187,15 @@ if (
   !/AgeeContentNoteControllerRuntime\.createContentNoteControllerRuntime\(\{[\s\S]{0,800}now: \(\) => Date\.now\(\)/.test(contentSource)
 ) {
   throw new Error("audio and video note capture orchestration must stay behind the extracted content controller");
+}
+if (
+  !/function createContentUiControllerRuntime/.test(contentUiControllerSource) ||
+  !/function renderUiSpecSurface/.test(contentUiControllerSource) ||
+  !/function runUiAction/.test(contentUiControllerSource) ||
+  /function (?:loadUiSpec|applyUiSpec|renderUiSpecSurface|renderUiComponent|renderUiMap|renderUiControl|runUiAction)\(/.test(contentSource) ||
+  !/AgeeContentUiControllerRuntime\.createContentUiControllerRuntime\(\{[\s\S]{0,800}anchorPanel: positionPanel[\s\S]{0,500}cacheKey: UI_SPEC_CACHE_KEY/.test(contentSource)
+) {
+  throw new Error("declarative UI presentation and action dispatch must stay behind the extracted content controller");
 }
 if (
   packageJson.scripts?.["test:unit"] !== "node --test scripts/test-*.mjs" ||
@@ -1070,6 +1083,7 @@ for (const file of [
   "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
   "extension/content-note-controller-runtime.js",
+  "extension/content-ui-controller-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/page-observation-runtime.js",

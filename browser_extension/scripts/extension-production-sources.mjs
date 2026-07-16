@@ -14,6 +14,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
   "extension/content-note-controller-runtime.js",
+  "extension/content-ui-controller-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/livekit-voice.js",
