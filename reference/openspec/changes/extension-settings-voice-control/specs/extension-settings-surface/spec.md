@@ -19,8 +19,7 @@ change made elsewhere is reflected.
 - **THEN** the displayed settings match the new effective profile
 
 ### Requirement: Search-first visual settings projection
-After the browser-local catalog merge is implemented, the extension SHALL
-project the merged registered settings catalog into a
+The extension SHALL project the merged registered settings catalog into a
 searchable, Command-K-style command or workspace surface usable with typed
 command and voice input. Results SHALL use bounded packaged UI showing the
 setting name, current value or redacted state, explanation, allowed choices, and
@@ -28,9 +27,11 @@ an explicit change action. The full Options page SHALL remain the deep
 configuration and Chrome permission surface rather than the primary discovery
 path.
 
-This visual projection is a staged browser requirement. The implemented gateway
-runtime-profile catalog and voice tool SHALL NOT be treated as evidence that the
-browser projection or an Android settings registry exists.
+The implemented browser slice covers the typed side-panel projection and
+Cmd/Ctrl+K focus. Spoken result projection, browser-side compare projection, and
+generic settings writes remain staged requirements. Neither the gateway catalog
+nor this browser projection SHALL be treated as evidence that an Android
+settings registry exists.
 
 #### Scenario: Typed search renders selectable settings
 - **WHEN** the user types a settings query in the command or workspace surface

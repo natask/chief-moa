@@ -13,10 +13,6 @@ The point being confirmed is not just "a reply renders" but "the reply came from
 the engine," i.e. the browser routed the action through the engine rather than
 acting on its own.
 
-This slice does **not** make the extension a deployment target. The installed
-package remains unchanged; the proof is that the stable client can route work to
-its configured engine.
-
 ## What Changes
 
 - With a gateway URL + token configured, open the overlay via Cmd+Comma, submit a
@@ -34,8 +30,8 @@ its configured engine.
   approves, executes, and receipts bounded click/draw/annotate actions locally;
   the first implementation slice may leave actual execution as a follow-up.
 - Capture a clear failure message when the gateway is unreachable or unauthorized.
-- Keep the extension package unchanged during the round trip; any behavior comes
-  from the configured engine, not from a browser-side provider call or reload.
+- Keep provider calls and canonical browser-agent state gateway-owned while the
+  packaged extension owns browser-local capture, UI, validation, and execution.
 
 ## Capabilities
 
