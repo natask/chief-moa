@@ -12,6 +12,8 @@ import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
+import { browserLocalToolManifest } from "./browser-automation-contract.js";
+import { createBrowserAutomationRuntime } from "./browser-automation-runtime.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   buildAgentLoopObservationPayload,
@@ -688,6 +690,8 @@ async function executeBrowserToolRequest(request) {
   const tool = String(request?.tool || "");
   const input = request?.input && typeof request.input === "object" ? request.input : {};
   try {
+    const automationReceipt = await browserAutomationRuntime.execute(request);
+    if (automationReceipt) return automationReceipt;
     if (tool === "browser.tab.list") {
       const tabs = await chrome.tabs.query({ currentWindow: input.current_window !== false });
       return {
@@ -808,6 +812,14 @@ async function executeBrowserToolRequest(request) {
     };
   }
 }
+
+const browserAutomationRuntime = createBrowserAutomationRuntime({
+  chromeApi: chrome, allowedUrl: allowedBrowserTaskUrl, captureScreenshot: captureScreenshotViaDebugger,
+  activeTab: async () => (await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []))[0] || null,
+  snapshot: async (tabId) => (await ensureContent(tabId), normalizeBrowserSnapshot(await ask(tabId, { cmd: "snapshot" }))),
+  act: (tabId, request) => ask(tabId, { cmd: "act", ...request, background: false }),
+  screenFromSnapshot: snapToScreen, maxScreenshotChars: MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS,
+});
 
 async function executeGatewayBrowserTask(task) {
   let bgTabId = null;
@@ -1156,19 +1168,6 @@ async function currentBrowserSessionAdvertisement() {
     context_descriptor: contextDescriptor,
     execution_adapters: browserSessionExecutionAdapters(contextDescriptor),
   };
-}
-
-function browserLocalToolManifest() {
-  return [
-    { tool: "browser.tab.list", risk: "read_only", approval: "none" },
-    { tool: "browser.tab.open", risk: "navigation", approval: "implicit_user_command" },
-    { tool: "browser.tab.activate", risk: "navigation", approval: "implicit_user_command" },
-    { tool: "browser.tab.close", risk: "destructive_browser_local", approval: "implicit_user_command" },
-    { tool: "browser.tab.reload", risk: "navigation", approval: "implicit_user_command" },
-    { tool: "browser.cdp.execute", risk: "browser_local_debugger", approval: "implicit_user_command" },
-    { tool: "browser.task.claim", risk: "browser_local", approval: "none" },
-    { tool: "page.snapshot", risk: "read_only", approval: "none" },
-  ];
 }
 
 // ---- Gateway browser agent-loop tasks -------------------------------------
