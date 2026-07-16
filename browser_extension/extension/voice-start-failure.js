@@ -35,10 +35,15 @@ function createVoiceStartError(failure, fallbackMessage = "Voice session closed 
   return error;
 }
 
+function preOpenVoiceStartError(session, fallbackMessage) {
+  return createVoiceStartError(session?.setupFailure, fallbackMessage);
+}
+
 export {
   MICROPHONE_PERMISSION_FAILURE,
   MICROPHONE_RECOVERY_TARGET,
   createVoiceStartError,
   microphoneRecoveryFromStartFailure,
+  preOpenVoiceStartError,
   voiceStartFailure,
 };

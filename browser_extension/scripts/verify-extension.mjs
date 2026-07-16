@@ -442,6 +442,7 @@ if (
 if (
   !/session\.setupFailure =/.test(backgroundSource) ||
   !/createVoiceStartError\(session\.setupFailure/.test(backgroundSource) ||
+  !/reject\(preOpenVoiceStartError\(session, fallbackMessage\)\)/.test(backgroundSource) ||
   !/sendResponse\(voiceStartFailure\(error\)\)/.test(backgroundSource) ||
   !/return voiceStartFailure\(error\)/.test(backgroundSource) ||
   !/microphoneRecoveryFromStartFailure\(res\)/.test(sidepanelSource) ||
