@@ -60,6 +60,7 @@ public enum PanelLayoutPolicy {
                 input.visibleFrame.maxY,
                 input.screenFrame.maxY - input.safeAreaTop
             )
+            guard safeTop.isFinite, safeTop >= input.visibleFrame.minY else { return nil }
             let y = constrainedOrigin(
                 preferred: safeTop - notchGap - input.panelSize.height,
                 length: input.panelSize.height,
