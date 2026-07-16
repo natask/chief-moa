@@ -75,6 +75,23 @@ private func durabilityJournal(_ name: String) throws -> AtomicFileMacProgramJou
     #expect(try journal.terminalReceipt(executionID: envelope.executionID)?.hasValidDigest == true)
 }
 
+@Test func boundedRunnerProgressIsPersistedAsLifecycleEvidence() throws {
+    let journal = try durabilityJournal("moa-progress")
+    let envelope = contractEnvelope()
+    _ = try journal.claim(envelope, claimantDeviceID: "mac-contract",
+        clientInstanceID: "client-a", at: contractNow)
+    try journal.markStarted(executionID: envelope.executionID, at: contractNow)
+    try journal.recordProgress(executionID: envelope.executionID,
+        message: "Processed local items.", completed: 1, total: 2,
+        at: contractNow.addingTimeInterval(0.001))
+    let events = try journal.events(executionID: envelope.executionID)
+    #expect(events.map(\.kind) == ["accepted", "started", "progress"])
+    if case .progress(let message, let completed, let total) = events.last?.payload {
+        #expect(message == "Processed local items.")
+        #expect(completed == 1); #expect(total == 2)
+    } else { Issue.record("expected progress payload") }
+}
+
 @Test func approvalResolutionIsBoundAndCannotBeLateOrReused() throws {
     let journal = try durabilityJournal("moa-approval-binding")
     let envelope = contractEnvelope()

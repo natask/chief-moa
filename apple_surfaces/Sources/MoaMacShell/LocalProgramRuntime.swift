@@ -391,7 +391,13 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
             let outcome = try MacProgramProcessRunner.run(executableURL: executableURL,
                 source: envelope.program.source, wallMS: envelope.limits.wallMS,
                 handle: handle, resultBytes: envelope.limits.resultBytes,
-                logBytes: envelope.limits.logBytes, call: createdBridge.call)
+                logBytes: envelope.limits.logBytes, progress: { [journal, now] message, completed, total in
+                    do {
+                        try journal.recordProgress(executionID: envelope.executionID,
+                            message: message, completed: completed, total: total, at: now())
+                        return true
+                    } catch { return false }
+                }, call: createdBridge.call)
             if let failure = createdBridge.failure { throw failure }
             if try journal.isStopRequested(executionID: envelope.executionID) {
                 throw LocalProgramError.stopped
