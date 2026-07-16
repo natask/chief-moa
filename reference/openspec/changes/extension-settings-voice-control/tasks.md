@@ -17,6 +17,9 @@
       return grounded entries and never mutate state.
   - [x] 1.6a Typed side-panel list, exact get, semantic search, and recommendation
         use the merged catalog. Spoken projection and browser compare remain pending.
+  - [x] 1.6b Finalized browser voice list, exact get, semantic search, and
+        recommendation requests use the same merged query contract as the typed
+        side-panel path. Browser compare remains pending.
 - [ ] 1.7 Browser: render query results as selectable setting rows in the existing
       command/workspace UI and deep-link into the focused Options control only
       for deep configuration or permission remediation. Typed and voice paths
@@ -24,6 +27,10 @@
   - [x] 1.7a Render the typed side-panel projection as selectable/searchable
         rows and expose only the microphone permission remediation deep link.
         The matching voice projection remains pending.
+  - [x] 1.7b Render finalized spoken results with the same ids/current values in
+        the side panel or on-page overlay where voice is active. All renders the
+        complete registered browser + gateway set in a bounded scrolling region;
+        semantic search remains capped separately.
 
 ## 2. Change Settings By Talking To The Agent
 
@@ -33,7 +40,7 @@
 - [x] 2.4 Route Chrome Live voice profile-control utterances through the same
       settings/profile path so voice and language changes apply on the next
       Live turn instead of staying as provider-only chat.
-- [ ] 2.5 Broker writes by catalog owner and reject unknown keys. Gateway fields
+- [x] 2.5 Broker writes by catalog owner and reject unknown keys. Gateway fields
       use the gateway profile API; extension-local fields apply only after local
       packaged-code validation; an unknown key creates no storage or profile
       change.

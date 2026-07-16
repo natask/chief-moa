@@ -762,7 +762,7 @@ if (
   !/looksLikePageContextQuestion/.test(backgroundSource) ||
   !/looksLikePageContextQuestion\(instruction\)[\s\S]{0,140}runBrowserAgentTurn/.test(backgroundSource) ||
   !/function isPageContextTranscript/.test(contentVoicePolicySource) ||
-  !/isProfileControlTranscript\(text\) \|\| isPageContextTranscript\(text\)/.test(contentVoicePolicySource)
+  !/isProfileControlTranscript\(text\)[\s\S]{0,100}isPageContextTranscript\(text\)/.test(contentVoicePolicySource)
 ) {
   throw new Error("typed and final spoken page/current-page questions must route to the shared browser-agent orchestrator");
 }

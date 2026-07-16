@@ -5,6 +5,8 @@
 // offscreen document, never here (extension pages cannot render the
 // getUserMedia permission prompt).
 
+import { parseSettingsQueryIntent } from "./browser-settings-registry.js";
+
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
 const talkBtn = document.getElementById("talk");
@@ -56,6 +58,11 @@ for (const button of agentModeButtons) {
 chrome.storage.local.get({ [BROWSER_AGENT_ROLE_KEY]: "delegate" }).then((stored) => {
   setAgentRole(stored[BROWSER_AGENT_ROLE_KEY], { persist: false });
 }).catch(() => setAgentRole("delegate", { persist: false }));
+chrome.storage.onChanged?.addListener((changes, area) => {
+  if (area === "local" && changes[BROWSER_AGENT_ROLE_KEY]) {
+    setAgentRole(changes[BROWSER_AGENT_ROLE_KEY].newValue, { persist: false });
+  }
+});
 
 function setStatus(text, state = "idle") {
   statusEl.textContent = text;
@@ -233,12 +240,30 @@ async function runSettingsQuery(operation = "search") {
     cmd: "settingsQuery",
     operation,
     query,
-    limit: 20,
+    limit: operation === "list" ? 100 : 20,
     microphonePermission: await microphonePermissionState(),
   });
   renderSettingsResults(payload);
   setStatus(payload?.gateway_error ? "Browser settings shown; gateway catalog is unavailable." : "Settings ready.");
   return payload;
+}
+
+async function projectSpokenSettingsQuery(state, transcript) {
+  if (state?.settingsQueryRendered) return null;
+  const intent = parseSettingsQueryIntent(transcript);
+  if (!intent) return null;
+  state.settingsQueryRendered = true;
+  if (settingsSearch && intent.query) settingsSearch.value = intent.query;
+  const payload = await request({
+    cmd: "settingsQuery",
+    ...intent,
+    limit: intent.operation === "list" ? 100 : 20,
+    microphonePermission: await microphonePermissionState(),
+  });
+  const visual = payload?.setting ? { ...payload, settings: [payload.setting] } : payload;
+  renderSettingsResults(visual);
+  setStatus(payload?.gateway_error ? "Browser settings shown; gateway catalog is unavailable." : "Spoken settings results ready.");
+  return visual;
 }
 
 settingsForm?.addEventListener("submit", (event) => {
@@ -494,6 +519,9 @@ function handleVoiceEvent(payload) {
     if (!text) return;
     state.transcript = text;
     updateCard(state, { you: text });
+    if (msg.type === "transcript_final") {
+      projectSpokenSettingsQuery(state, text).catch((error) => setStatus(String(error?.message || error), "error"));
+    }
     return;
   }
   if (msg.type === "assistant_text") {
@@ -761,6 +789,7 @@ export {
   setAgentRole,
   setStatus,
   runSettingsQuery,
+  projectSpokenSettingsQuery,
   selectSetting,
   settingMetadata,
   startTurn,

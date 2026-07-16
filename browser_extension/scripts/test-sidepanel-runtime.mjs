@@ -235,6 +235,7 @@ await new Promise((resolve) => setImmediate(resolve));
 const settingsResults = document.getElementById("settingsResults");
 assert.equal(settingsResults.hidden, false);
 assert.equal(settingsResults.children[0].dataset.settingId, "browser.microphone_permission");
+const typedMicrophoneId = settingsResults.children[0].dataset.settingId;
 assert.equal(settingsResults.children[0].children[1].textContent, "Current: denied");
 await settingsResults.children[0].emit("click");
 await new Promise((resolve) => setImmediate(resolve));
@@ -258,6 +259,10 @@ await new Promise((resolve) => setImmediate(resolve));
 assert.equal(settingsDetail.children.length, 2);
 assert.match(settingsDetail.children[1].textContent, /configured \(value redacted\)/);
 assert.doesNotMatch(JSON.stringify(posted), /must-never-appear/);
+const spokenProjection = await panel.projectSpokenSettingsQuery({}, "Find settings about microphone access");
+assert.equal(spokenProjection.settings[0].id, typedMicrophoneId);
+assert.equal(settingsResults.children[0].dataset.settingId, typedMicrophoneId);
+assert.equal(posted.at(-1).operation, "search");
 await document.emit("keydown", { key: "k", metaKey: true });
 assert.equal(document.activeElement, document.getElementById("settingsSearch"));
 

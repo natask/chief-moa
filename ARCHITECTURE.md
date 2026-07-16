@@ -725,7 +725,7 @@ includes them or the owner object. The browser voice path must not use browser
 Web Speech APIs in production, and the extension must not hold raw
 Gemini/OpenAI/Anthropic provider credentials.
 
-The side panel also projects a read-only settings discovery catalog. It merges
+The side panel and on-page overlay project one settings discovery catalog. They merge
 the gateway-owned `/v1/agent/settings` projection with a packaged allowlist of
 existing browser-local controls; the allowlist does not create storage keys or
 new preferences. Every row carries a stable id, owner, effective current and
@@ -734,6 +734,18 @@ tokens expose configured state only. Chrome permissions and versioned background
 automation consent remain user-controlled: discovery may explain them, and the
 microphone row may explicitly deep-link to its focused Options walkthrough, but
 it cannot grant permission or consent silently.
+
+Typed Command-K discovery and finalized spoken settings questions use the same
+merged query and row projection, including stable result ids and effective
+values. A complete list is bounded to 100 registered entries and rendered in a
+scrolling result region; the 20-entry semantic-search bound does not truncate
+the All view. Packaged browser code brokers writes only for registered writable
+owners: gateway profile fields stay on the existing gateway profile path;
+gateway URL/token writes are locally validated and token receipts are redacted;
+LiveKit and browser-agent role changes apply locally; background automation
+requires explicit consent bound to the current consent version. Microphone
+permission remains status plus a user-action walkthrough, never an agent write.
+Unknown and non-writable ids fail before storage or profile mutation.
 
 Gateway-originated browser work uses the same ownership boundary. The gateway
 stores `/v1/browser/tasks` records and Live/tool agents may enqueue bounded
