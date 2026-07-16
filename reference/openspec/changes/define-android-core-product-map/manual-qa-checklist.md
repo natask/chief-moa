@@ -39,6 +39,14 @@ screenshots in `scratch/mobile-ui-enhance/screens/` and
   fades again.
 - With the keyboard up, tap the app underneath: confirm the keyboard hides
   (window focus moved) and a following outside tap parks the family.
+- With the panel (or transcript) open, press Start at a new spot: confirm the
+  open surface moves with the lion and the composer draft/transcript rows
+  survive the move.
+- On an API 26-29 device (or emulator): keyboard up, press Back, then tap
+  outside — confirm the family parks (the pre-30 dismissal signals work).
+- On API 26-29 only: dismissing via the keyboard's own hide button is not
+  observable; confirm the family simply stays bright (never wrongly fades or
+  hides the keyboard) until the next tap/focus signal.
 
 ## Overlay Voice
 
