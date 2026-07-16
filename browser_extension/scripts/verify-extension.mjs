@@ -146,7 +146,9 @@ if (
   mainContentScript.js.indexOf("content-note-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-ui-controller-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-ui-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-note-controller-runtime\.js", "content-ui-controller-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("voice-capture-gesture.js") < 0 ||
+  mainContentScript.js.indexOf("voice-capture-gesture.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-note-controller-runtime\.js", "content-ui-controller-runtime\.js", "voice-capture-gesture\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("content support runtimes must load before content.js in declared and dynamic injection paths");
 }
