@@ -13,6 +13,7 @@ const requiredFiles = [
   "extension/browser-agent-role-runtime.js",
   "extension/browser-media-runtime.js",
   "extension/browser-context-adapter.js",
+  "extension/browser-settings-registry.js",
   "extension/browser-task-intent.js",
   "extension/browser-turn-protocol.js",
   "extension/browser-context-adapter.js",
@@ -90,6 +91,7 @@ const mediaConfirmHtmlSource = readFileSync("extension/media-confirm.html", "utf
 const mediaConfirmSource = readFileSync("extension/media-confirm.js", "utf8");
 const mediaConfirmationRuntimeSource = readFileSync("extension/media-confirmation-runtime.js", "utf8");
 const toolReceiptRuntimeSource = readFileSync("extension/tool-receipt-runtime.js", "utf8");
+const browserSettingsRegistrySource = readFileSync("extension/browser-settings-registry.js", "utf8");
 const browserAgentLoopPolicySource = readFileSync("extension/browser-agent-loop-policy.js", "utf8");
 const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
@@ -105,6 +107,7 @@ const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.j
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
 const optionsRecoverySource = readFileSync("extension/options-recovery.js", "utf8");
+const sidepanelHtmlSource = readFileSync("extension/sidepanel.html", "utf8");
 const coverageSource = readFileSync("scripts/coverage-extension.mjs", "utf8");
 const extensionSmokeSource = readFileSync("scripts/smoke-extension.mjs", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "userScripts"];
@@ -129,6 +132,20 @@ if (
 
 if (manifest.manifest_version !== 3) {
   throw new Error("manifest_version must be 3");
+}
+if (
+  !/browser\.gateway_url/.test(browserSettingsRegistrySource) ||
+  !/browser\.gateway_token/.test(browserSettingsRegistrySource) ||
+  !/browser\.livekit_voice/.test(browserSettingsRegistrySource) ||
+  !/browser\.background_automation/.test(browserSettingsRegistrySource) ||
+  !/browser\.microphone_permission/.test(browserSettingsRegistrySource) ||
+  !/configured \(value redacted\)/.test(browserSettingsRegistrySource) ||
+  !/msg\.cmd === "settingsQuery"/.test(backgroundSource) ||
+  !/id="settingsSearch"/.test(sidepanelHtmlSource) ||
+  !/<script type="module" src="sidepanel\.js"><\/script>/.test(sidepanelHtmlSource) ||
+  !/setting-deep-link/.test(sidepanelSource)
+) {
+  throw new Error("browser settings discovery must remain catalog-grounded, redacted, searchable, and permission-deep-linked");
 }
 
 // No hardcoded version pin here: the release workflow already refuses

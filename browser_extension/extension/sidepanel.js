@@ -11,6 +11,12 @@ const talkBtn = document.getElementById("talk");
 const form = document.getElementById("form");
 const textInput = document.getElementById("text");
 const sendBtn = document.getElementById("sendBtn");
+const settingsForm = document.getElementById("settingsForm");
+const settingsSearch = document.getElementById("settingsSearch");
+const settingsRecommend = document.getElementById("settingsRecommend");
+const settingsAll = document.getElementById("settingsAll");
+const settingsResults = document.getElementById("settingsResults");
+const settingsDetail = document.getElementById("settingsDetail");
 
 const TURN_WATCHDOG_MS = 90000;
 
@@ -25,6 +31,8 @@ const playbackSources = new Set();
 
 // One turn at a time. `turn` is null when idle.
 let turn = null;
+let selectedSettingId = "";
+let renderedSettingButtons = [];
 function roleForInstruction(text) {
   const value = String(text || "").trim().toLowerCase();
   if (/^(explain|describe|tell me (?:about|how|why))\b/.test(value)) return "explain";
@@ -88,6 +96,151 @@ function onPortMessage(msg) {
   }
   if (msg.cmd === "voiceSessionEvent") handleVoiceEvent(msg);
 }
+
+async function microphonePermissionState() {
+  if (!globalThis.navigator?.permissions?.query) return "unknown";
+  try {
+    const result = await globalThis.navigator.permissions.query({ name: "microphone" });
+    return ["granted", "denied", "prompt"].includes(result?.state) ? result.state : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function formatSettingValue(value) {
+  if (value === null || value === undefined || value === "") return "Not set";
+  if (Array.isArray(value)) return value.join(", ") || "None";
+  if (typeof value === "object") return "Configured";
+  return String(value);
+}
+
+function settingMetadata(setting) {
+  const constraints = Array.isArray(setting?.constraints) && setting.constraints.length
+    ? setting.constraints.join(" ")
+    : "No additional constraints published.";
+  return [
+    `Owner: ${setting?.owner || "unknown"}.`,
+    `Current: ${formatSettingValue(setting?.current)}.`,
+    `Default: ${formatSettingValue(setting?.default)}.`,
+    `Takes effect: ${setting?.takes_effect || "unspecified"}.`,
+    `Redaction: ${setting?.redaction || "none"}.`,
+    `Constraints: ${constraints}`,
+  ].join(" ");
+}
+
+function renderSettingDetail(setting) {
+  if (!settingsDetail || !setting) return;
+  selectedSettingId = setting.id;
+  for (const button of renderedSettingButtons) {
+    button.setAttribute("aria-selected", String(button.dataset.settingId === selectedSettingId));
+  }
+  const title = document.createElement("strong");
+  title.textContent = setting.title || setting.id;
+  const metadata = document.createElement("div");
+  metadata.textContent = settingMetadata(setting);
+  settingsDetail.replaceChildren(title, metadata);
+  if (setting.deep_link?.target === "microphone_permission") {
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "setting-deep-link";
+    action.textContent = setting.deep_link.label || "Open microphone setup";
+    action.addEventListener("click", () => {
+      action.disabled = true;
+      request({ cmd: "openOptions", target: setting.deep_link.target })
+        .then((result) => {
+          if (!result?.ok) action.disabled = false;
+        })
+        .catch(() => {
+          action.disabled = false;
+        });
+    });
+    settingsDetail.appendChild(action);
+  }
+  settingsDetail.hidden = false;
+}
+
+async function selectSetting(setting) {
+  const response = await request({
+    cmd: "settingsQuery",
+    operation: "get",
+    id: setting.id,
+    microphonePermission: await microphonePermissionState(),
+  });
+  renderSettingDetail(response?.ok && response.setting ? response.setting : setting);
+}
+
+function renderSettingsResults(payload) {
+  if (!settingsResults) return;
+  settingsResults.replaceChildren();
+  renderedSettingButtons = [];
+  const settings = Array.isArray(payload?.settings) ? payload.settings : [];
+  if (!settings.length) {
+    const empty = document.createElement("div");
+    empty.className = "settings-empty";
+    empty.textContent = payload?.error ? `Settings unavailable: ${payload.error}` : "No registered settings matched.";
+    settingsResults.appendChild(empty);
+  }
+  for (const setting of settings) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "setting-row";
+    row.dataset.settingId = setting.id;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", "false");
+    const title = document.createElement("span");
+    title.className = "setting-row-title";
+    title.textContent = setting.title || setting.id;
+    const current = document.createElement("span");
+    current.className = "setting-row-current";
+    current.textContent = `Current: ${formatSettingValue(setting.current)}`;
+    const description = document.createElement("span");
+    description.className = "setting-row-description";
+    description.textContent = setting.description || "Registered setting.";
+    row.append(title, current, description);
+    row.addEventListener("click", () => selectSetting(setting).catch((error) => setStatus(String(error?.message || error), "error")));
+    renderedSettingButtons.push(row);
+    settingsResults.appendChild(row);
+  }
+  settingsResults.hidden = false;
+  if (settingsDetail) settingsDetail.hidden = true;
+}
+
+async function runSettingsQuery(operation = "search") {
+  const query = String(settingsSearch?.value || "").trim();
+  if ((operation === "search" || operation === "recommend") && !query) {
+    setStatus("Type what you want to find in settings.", "error");
+    settingsSearch?.focus();
+    return null;
+  }
+  setStatus(operation === "list" ? "Listing registered settings…" : "Searching registered settings…");
+  const payload = await request({
+    cmd: "settingsQuery",
+    operation,
+    query,
+    limit: 20,
+    microphonePermission: await microphonePermissionState(),
+  });
+  renderSettingsResults(payload);
+  setStatus(payload?.gateway_error ? "Browser settings shown; gateway catalog is unavailable." : "Settings ready.");
+  return payload;
+}
+
+settingsForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  runSettingsQuery("search").catch((error) => setStatus(String(error?.message || error), "error"));
+});
+settingsRecommend?.addEventListener("click", () => {
+  runSettingsQuery("recommend").catch((error) => setStatus(String(error?.message || error), "error"));
+});
+settingsAll?.addEventListener("click", () => {
+  runSettingsQuery("list").catch((error) => setStatus(String(error?.message || error), "error"));
+});
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && String(event.key || "").toLowerCase() === "k") {
+    event.preventDefault();
+    settingsSearch?.focus();
+  }
+});
 
 // ---- Conversation log -------------------------------------------------------
 

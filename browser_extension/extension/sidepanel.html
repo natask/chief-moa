@@ -162,6 +162,21 @@
       }
       .delegation-confirm-actions button { background: var(--text); color: #111; }
       .delegation-confirm-actions button.secondary { background: transparent; color: var(--muted); }
+      .settings-discovery { border-bottom: 1px solid var(--border); padding: 10px 14px; }
+      .settings-discovery form { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) auto auto; }
+      #settingsSearch { background: #17191e; border: 1px solid var(--border); border-radius: 9px; color: var(--text); font: inherit; min-width: 0; padding: 8px 9px; }
+      .settings-search-action { background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); cursor: pointer; font: inherit; padding: 7px 8px; }
+      .settings-results { display: grid; gap: 6px; margin-top: 8px; max-height: 250px; overflow: auto; }
+      .settings-results[hidden], .setting-detail[hidden] { display: none; }
+      .setting-row { background: #17191e; border: 1px solid var(--border); border-radius: 9px; color: var(--text); cursor: pointer; display: grid; gap: 3px; padding: 9px; text-align: left; width: 100%; }
+      .setting-row[aria-selected="true"] { border-color: var(--accent); }
+      .setting-row-title { font-size: 13px; font-weight: 650; }
+      .setting-row-current { color: var(--accent); font-size: 12px; }
+      .setting-row-description { color: var(--muted); font-size: 11px; line-height: 1.4; }
+      .setting-detail { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: 8px; padding: 9px; }
+      .setting-detail strong { color: var(--text); }
+      .setting-deep-link { background: #2563eb; border: 0; border-radius: 8px; color: #fff; cursor: pointer; display: block; font: inherit; font-weight: 650; margin-top: 8px; padding: 8px 10px; }
+      .settings-empty { color: var(--muted); font-size: 12px; padding: 6px 0; }
       footer {
         border-top: 1px solid var(--border);
         display: flex;
@@ -235,6 +250,16 @@
       <div class="spacer"></div>
       <button id="floatBtn" type="button" title="Pop A.G. out into an always-on-top floating window">Float</button>
     </header>
+    <section class="settings-discovery" aria-labelledby="settingsDiscoveryLabel">
+      <span class="mode-label" id="settingsDiscoveryLabel">Find settings</span>
+      <form id="settingsForm">
+        <input id="settingsSearch" type="search" placeholder="voice, privacy, shorter replies…" autocomplete="off" />
+        <button class="settings-search-action" id="settingsRecommend" type="button">Recommend</button>
+        <button class="settings-search-action" id="settingsAll" type="button">All</button>
+      </form>
+      <div class="settings-results" id="settingsResults" role="listbox" aria-label="Matching settings" hidden></div>
+      <div class="setting-detail" id="settingsDetail" hidden></div>
+    </section>
     <main id="log">
       <p class="hint">
         This panel is A.G.'s own surface. It works on every page, including
@@ -250,6 +275,6 @@
         <button id="sendBtn" type="submit">Send</button>
       </form>
     </footer>
-    <script src="sidepanel.js"></script>
+    <script type="module" src="sidepanel.js"></script>
   </body>
 </html>
