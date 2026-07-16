@@ -201,6 +201,16 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject surfaceExecutionEvent(String requestId, JSONObject body) throws Exception { return postToolSubresource(requestId, "events", body); }
+    JSONObject surfaceToolReceipt(String requestId, JSONObject body) throws Exception { return postToolSubresource(requestId, "tool-receipts", body); }
+
+    private JSONObject postToolSubresource(String requestId, String suffix, JSONObject body) throws Exception {
+        String id = safe(requestId).replaceAll("[^a-zA-Z0-9_-]", "");
+        if (id.isEmpty()) throw new IllegalArgumentException("tool request id is required");
+        String responseText = postJson(apiEndpoint("/v1/tool/requests/" + id + "/" + suffix), body.toString(), 15000);
+        return new JSONObject(responseText);
+    }
+
     void downloadLatestAndroidUpdate(File destination) throws Exception {
         downloadFile(apiEndpoint("/v1/android/updates/latest.apk"), destination, 120000);
     }
