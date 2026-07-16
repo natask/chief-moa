@@ -14,10 +14,6 @@ const requiredFiles = [
   "extension/config.js",
   "extension/content.js",
   "extension/document-context.js",
-  "extension/proactive-helper.js",
-  "extension/proactive-confirm.html",
-  "extension/proactive-confirm.css",
-  "extension/proactive-confirm.js",
   "extension/tweaks.js",
   "extension/offscreen.html",
   "extension/offscreen.js",
@@ -41,9 +37,6 @@ const requiredFiles = [
   "docs/task-split.md",
   "docs/validation.md",
   "fixtures/demo.html",
-  "fixtures/proactive.html",
-  "fixtures/proactive-hostile.html",
-  "fixtures/proactive-sensitive.html",
   "LICENSE",
   "scripts/smoke-extension.mjs",
   "scripts/dev-extension.mjs",
@@ -56,8 +49,6 @@ const requiredFiles = [
   "scripts/smoke-live-voice-main.mjs",
   "scripts/smoke-ui-spec.mjs",
   "scripts/smoke-unified-browser-agent.mjs",
-  "scripts/smoke-proactive.mjs",
-  "scripts/test-proactive-helper.mjs",
   "scripts/test-voice-sampler-lifecycle.mjs",
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-browser-context-adapter.mjs",
@@ -85,10 +76,6 @@ const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const documentContextSource = readFileSync("extension/document-context.js", "utf8");
-const proactiveHelperSource = readFileSync("extension/proactive-helper.js", "utf8");
-const proactiveConfirmHtmlSource = readFileSync("extension/proactive-confirm.html", "utf8");
-const proactiveConfirmCssSource = readFileSync("extension/proactive-confirm.css", "utf8");
-const proactiveConfirmSource = readFileSync("extension/proactive-confirm.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
 const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
@@ -124,17 +111,15 @@ if (manifest.manifest_version !== 3) {
 // Pick the next version with scripts/release/next-extension-version.sh.
 
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
-if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js") || mainContentScript.js.indexOf("steering-ui.js") < 0 || mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js")) {
-  throw new Error("proactive-helper.js and steering-ui.js must load before content.js");
-}
-if (mainContentScript.js.indexOf("document-context.js") < 0 || mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js")) {
-  throw new Error("document-context.js must load before content.js");
-}
-if (!/executeScript\(\{ target: \{ tabId \}, files: \["ui-spec-runtime\.js", "proactive-helper\.js", "steering-ui\.js", "document-context\.js", "content\.js"\] \}\)/.test(backgroundSource)) {
-  throw new Error("dynamic content injection must load document-context.js before content.js");
-}
-if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
-  throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
+if (
+  !mainContentScript ||
+  mainContentScript.js.indexOf("steering-ui.js") < 0 ||
+  mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js") ||
+  mainContentScript.js.indexOf("document-context.js") < 0 ||
+  mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "document-context\.js", "content\.js"\]/.test(backgroundSource)
+) {
+  throw new Error("steering-ui.js and document-context.js must load before content.js");
 }
 if (
   packageJson.scripts?.["test:unit"] !== "node --test scripts/test-*.mjs" ||
@@ -155,66 +140,12 @@ if (
 }
 
 if (
-  !/MAX_COUNT = 100/.test(proactiveHelperSource) ||
-  !/function sanitizeSignals/.test(proactiveHelperSource) ||
-  !/function classifyStructuralPage/.test(proactiveHelperSource) ||
-  !/function detectSensitivePage/.test(proactiveHelperSource) ||
-  !/function buildAcceptedPrompt/.test(proactiveHelperSource)
-) {
-  throw new Error("proactive helper must expose bounded classification, suppression, and prompt primitives");
-}
-
-if (
   /seedGatewayConfig\s*\(/.test(backgroundSource) ||
   !/BACKGROUND_AUTOMATION_CONSENT_VERSION = 1/.test(backgroundSource) ||
   !/return false;\s*\n\s*}\s*\n}\s*\n\s*async function pollBrowserTasks/.test(backgroundSource) ||
-  !/if \(!\(await isBackgroundAutomationEnabled\(\)\)\) return;[\s\S]{0,180}\/v1\/tool\/requests\/claim/.test(backgroundSource) ||
-  !/source: "proactive_accept_v1"/.test(backgroundSource) ||
-  !/\/v1\/proactive\/turns/.test(backgroundSource) ||
-  !/redirect: "error"/.test(backgroundSource) ||
-  /proactive_context:/.test(backgroundSource) ||
-  !/function proactiveResponseViolation/.test(backgroundSource) ||
-  !/"proactive_text_only_action_protocol_violation"/.test(backgroundSource) ||
-  !/PROACTIVE_REFUSAL_RECEIPT_LIMIT = 20/.test(backgroundSource)
+  !/if \(!\(await isBackgroundAutomationEnabled\(\)\)\) return;[\s\S]{0,180}\/v1\/tool\/requests\/claim/.test(backgroundSource)
 ) {
-  throw new Error("background privacy migration, automation gate, or text-only acceptance/refusal contract is missing");
-}
-
-const proactiveDecisionSource = backgroundSource.slice(
-  backgroundSource.indexOf("async function decideProactiveConfirmation"),
-  backgroundSource.indexOf("function proactiveProposalScan"),
-);
-if (
-  !/proactiveConfirmationOpen/.test(contentSource) ||
-  !/proactiveConfirmationDetails/.test(backgroundSource) ||
-  !/proactiveConfirmationDecision/.test(backgroundSource) ||
-  !/proactiveConfirmationSender/.test(backgroundSource) ||
-  !/sender\?\.id !== chrome\.runtime\.id/.test(backgroundSource) ||
-  !/url\.pathname === "\/proactive-confirm\.html"/.test(backgroundSource) ||
-  !/chrome\.windows\.create/.test(backgroundSource) ||
-  !/\/v1\/proactive\/turns/.test(proactiveDecisionSource) ||
-  /\/v1\/voice\/turns/.test(proactiveDecisionSource) ||
-  /cmd:\s*"proactiveAccept"/.test(contentSource) ||
-  !/if \(!event\.isTrusted\) return;/.test(proactiveConfirmSource) ||
-  !/EXTENSION-OWNED CONFIRMATION/.test(proactiveConfirmHtmlSource) ||
-  !/id="request-url"/.test(proactiveConfirmHtmlSource) ||
-  !/id="request-digest"/.test(proactiveConfirmHtmlSource) ||
-  !/id="request-exclusions"/.test(proactiveConfirmHtmlSource) ||
-  !/id="request-persistence"/.test(proactiveConfirmHtmlSource) ||
-  !/min-width:\s*320px/.test(proactiveConfirmCssSource)
-) {
-  throw new Error("proactive acceptance must cross an extension-owned, trusted-click confirmation boundary with an exact text-only route");
-}
-
-if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "steering-ui\.js", "document-context\.js", "content\.js"\]/.test(backgroundSource) ||
-  !/id="proactiveHelp"/.test(contentSource) ||
-  !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
-  !/cmd: "proactiveSignal"/.test(contentSource) ||
-  !/dataset\.ageeProactive = "accept"/.test(contentSource) ||
-  /safeRuntimeSendMessage\(\{ cmd: "(?:selfExtensionRuntime|uiSpec|activeCompanionPet)"/.test(contentSource)
-) {
-  throw new Error("content proactive hooks, dynamic injection, or cache-only passive startup boundary is missing");
+  throw new Error("background privacy migration or automation gate is missing");
 }
 
 for (const permission of requiredPermissions) {
@@ -1074,8 +1005,6 @@ for (const file of [
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content.js",
-  "extension/proactive-helper.js",
-  "extension/proactive-confirm.js",
   "extension/offscreen.js",
   "extension/offscreen-audio-worklet.js",
   "extension/livekit-voice.js",
@@ -1098,12 +1027,10 @@ for (const file of [
   "scripts/smoke-live-voice-main.mjs",
   "scripts/smoke-ui-spec.mjs",
   "scripts/smoke-unified-browser-agent.mjs",
-  "scripts/smoke-proactive.mjs",
   "scripts/smoke-cdp.mjs",
   "scripts/smoke-integration.mjs",
   "scripts/smoke-history.mjs",
   "scripts/test-voice-sampler-lifecycle.mjs",
-  "scripts/test-proactive-helper.mjs",
   "scripts/test-cue-dismiss.mjs",
   "scripts/test-extension-production-sources.mjs",
   "scripts/test-runtime-intent-modules.mjs",
@@ -1117,10 +1044,6 @@ for (const file of [
 }
 
 execFileSync(process.execPath, ["--test", "scripts/test-voice-sampler-lifecycle.mjs"], { stdio: "inherit" });
-execFileSync(process.execPath, ["scripts/test-proactive-helper.mjs"], { stdio: "inherit" });
-// Pure-function tests for the persistent cue-card cascade dismiss and
-// language chip formatter (extracted straight out of extension/content.js —
-// see the file for why it can't be an ordinary ESM import).
 execFileSync(process.execPath, ["scripts/test-cue-dismiss.mjs"], { stdio: "inherit" });
 execFileSync(process.execPath, ["scripts/test-browser-context-adapter.mjs"], { stdio: "inherit" });
 

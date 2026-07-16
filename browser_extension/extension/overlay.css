@@ -90,27 +90,6 @@
   transition: transform 0.2s ease;
 }
 
-#agee-proactive-indicator {
-  position: absolute;
-  right: -0.55em;
-  bottom: -0.1em;
-  display: inline-flex;
-  align-items: center;
-  min-width: max-content;
-  padding: 0.16em 0.42em;
-  border: 1px solid rgba(112, 224, 166, 0.55);
-  border-radius: 999px;
-  background: rgba(8, 35, 24, 0.96);
-  color: #8af0b9;
-  font-size: 0.34em;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  pointer-events: none;
-}
-#agee-proactive-indicator[hidden] {
-  display: none;
-}
 /* The lion breathes: a single combined transform (scale + bob) so the
    animation stays compositor-only. */
 #agee-launcher .agee-bird {
@@ -509,67 +488,6 @@
 #agee-root.agee-voicing #agee-voice-state {
   display: none;
 }
-.agee-proactive-card {
-  display: grid;
-  gap: 8px;
-  margin: 12px 14px 0;
-  padding: 13px 14px;
-  border: 1px solid rgba(112, 224, 166, 0.25);
-  border-radius: 14px;
-  background: rgba(22, 67, 44, 0.18);
-  color: var(--agee-ink);
-  font-size: 12px;
-  line-height: 1.45;
-}
-.agee-proactive-card[hidden] {
-  display: none;
-}
-.agee-proactive-badge {
-  color: #8eeeb9;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.09em;
-}
-.agee-proactive-title {
-  font-size: 14px;
-}
-.agee-proactive-privacy {
-  color: #98e9bc;
-}
-.agee-proactive-disclosure {
-  display: grid;
-  gap: 5px;
-  padding: 9px 10px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.22);
-  color: #c5c5cb;
-  overflow-wrap: anywhere;
-}
-.agee-proactive-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-.agee-proactive-actions button {
-  appearance: none;
-  padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.07);
-  color: #ececf0;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 650;
-}
-.agee-proactive-actions button[data-agee-proactive="accept"] {
-  border-color: rgba(112, 224, 166, 0.48);
-  background: rgba(42, 132, 83, 0.34);
-  color: #b9f7d4;
-}
-.agee-proactive-actions button:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
 /* Status lights are gone: no orb, no glowing dots anywhere in the surface. */
 #agee-orb {
   display: none;
@@ -590,7 +508,7 @@
 /* ---- Composer: pill bar + ghost icon buttons ------------------------------ */
 #agee-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 82px 54px 34px 34px 34px;
+  grid-template-columns: minmax(0, 1fr) 34px 34px 34px;
   align-items: start;
   gap: 9px;
   min-height: 54px;
@@ -600,33 +518,6 @@
 /* The composer status dot is gone; run state reads from the cue-card text. */
 #agee-dot {
   display: none;
-}
-#proactiveHelp {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  width: 54px;
-  min-width: 54px;
-  max-width: 100%;
-  height: 34px;
-  padding: 0 10px;
-  border: 1px solid rgba(112, 224, 166, 0.28);
-  border-radius: 999px;
-  background: rgba(34, 86, 59, 0.22);
-  color: #91e7b8;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0.03em;
-}
-#proactiveHelp:hover,
-#proactiveHelp.active {
-  border-color: rgba(112, 224, 166, 0.7);
-  background: rgba(38, 120, 74, 0.32);
-  color: #b2f5cf;
 }
 #agee-input {
   width: 100%;
@@ -1537,16 +1428,9 @@ button.agee-ui-list-row:hover {
 }
 @media (max-width: 380px) {
   #agee-bar {
-    grid-template-columns: minmax(0, 1fr) 64px 44px 32px 32px 32px;
+    grid-template-columns: minmax(0, 1fr) 32px 32px 32px;
     gap: 7px;
     padding: 9px 9px 9px 12px;
-  }
-  #proactiveHelp {
-    width: 44px;
-    min-width: 44px;
-    height: 32px;
-    padding: 0 5px;
-    font-size: 10px;
   }
   #agee-voice,
   #agee-record,

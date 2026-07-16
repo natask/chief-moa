@@ -62,3 +62,26 @@
       isolated preview environment.
 - [x] 4.6 Bump the manifest patch version and create a package artifact without
       reloading the user's active extension.
+
+## 5. Remove the context-free proactive product
+
+- [x] 5.1 Record the product decision: structural-count suggestions are not
+      useful enough to justify a permanent **Local** control.
+- [ ] 5.2 Remove the Local control, structural sampler, proactive card,
+      confirmation page, messages, state, and browser proactive smoke fixtures.
+- [ ] 5.3 Retire `POST /v1/proactive/turns`, its packaged prompt validator, and
+      its focused gateway smoke while preserving privacy migration and default-
+      off background-connectivity behavior.
+- [ ] 5.4 Verify ordinary explicitly invoked browser turns still collect only
+      the context required by their selected flow and remain proposal-only for
+      actions.
+- [ ] 5.5 Bump/package/verify the extension and promote only when the browser
+      reload safety gate passes.
+
+## 6. Future context-sharing exploration (not committed implementation)
+
+- [ ] 6.1 Specify explicit per-context controls, including a no-screenshot path.
+- [ ] 6.2 Specify local extraction, optional summarization/redaction, local-copy
+      retention, exact outbound preview, and user editing before approval.
+- [ ] 6.3 Validate with users that approved richer context improves model output
+      without obscuring what is collected, retained, or sent.

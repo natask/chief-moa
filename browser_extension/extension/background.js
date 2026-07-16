@@ -66,34 +66,6 @@ const PRIVACY_NOTICE_KEY = "ageePrivacyNoticePending";
 const BACKGROUND_AUTOMATION_KEY = "ageeBackgroundAutomationEnabled";
 const BACKGROUND_AUTOMATION_CONSENT_KEY = "ageeBackgroundAutomationConsentVersion";
 const BACKGROUND_AUTOMATION_CONSENT_VERSION = 1;
-const PROACTIVE_GRANT_TTL_MS = 10 * 60 * 1000;
-const PROACTIVE_CONFIRMATION_TTL_MS = 2 * 60 * 1000;
-const PROACTIVE_REQUEST_TIMEOUT_MS = 30 * 1000;
-const PROACTIVE_RESPONSE_MAX_BYTES = 64 * 1024;
-const PROACTIVE_CONFIRMATION_ALARM = "agee-proactive-confirmation-expiry";
-const PROACTIVE_REFUSAL_RECEIPTS_KEY = "ageeProactiveRefusalReceipts";
-const PROACTIVE_REFUSAL_RECEIPT_LIMIT = 20;
-const PROACTIVE_SIGNAL_KEYS = Object.freeze([
-  "article_count",
-  "heading_count",
-  "paragraph_count",
-  "link_count",
-  "table_count",
-  "list_count",
-  "task_count",
-  "form_count",
-  "editable_count",
-  "button_count",
-]);
-const PROACTIVE_PROMPTS = Object.freeze({
-  form: "Help me make a checklist for reviewing this form's structure.",
-  table: "Help me plan an analysis for a table.",
-  tasks: "Help me organize a task surface.",
-  document: "Help me plan a concise document summary.",
-});
-const proactiveGrants = new Map();
-const proactiveConfirmations = new Map();
-let proactiveReceiptWrite = Promise.resolve();
 let privacyMigrationInFlight = null;
 const BROWSER_AGENT_PROGRESS_TEXT = {
   collecting_page_context: "collecting page context",
@@ -1047,9 +1019,7 @@ async function readCdpPageState(target) {
 
 if (chrome?.alarms?.onAlarm) {
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === PROACTIVE_CONFIRMATION_ALARM) {
-      expireProactiveConfirmations();
-    } else if (alarm.name === "agee-browser-task-poll") {
+    if (alarm.name === "agee-browser-task-poll") {
       pollBrowserTasks().catch(() => {});
       pollBrowserToolRequests().catch(() => {});
       pollBrowserAgentTasks().catch(() => {});
@@ -1089,14 +1059,9 @@ async function initializePrivacyState() {
       },
       ...(scrubbedOwner ? { [ACTIVE_BROWSER_AGENT_OWNER_KEY]: scrubbedOwner } : {}),
     });
-    for (const confirmation of [...proactiveConfirmations.values()]) {
-      removeProactiveConfirmation(confirmation, "privacy_migration", { closeWindow: true, notify: true });
-    }
-    proactiveGrants.clear();
     if (chrome?.alarms) {
       await Promise.allSettled([
         chrome.alarms.clear("agee-browser-task-poll"),
-        chrome.alarms.clear(PROACTIVE_CONFIRMATION_ALARM),
         chrome.alarms.clear(SELF_EXTENSION_RUNTIME_ALARM),
         chrome.alarms.clear(UI_SPEC_ALARM),
       ]);
@@ -1551,7 +1516,6 @@ if (chrome?.storage?.onChanged) {
     // When the user points the extension at a different gateway (or pastes a new
     // token), re-adopt that gateway's canonical shared session id.
     if (changes.ageeGatewayUrl || changes.ageeGatewayToken) {
-      revokeAllProactiveGrants("destination_changed");
       adoptSharedGatewaySession("gateway config changed").catch(() => {});
     }
     if (changes[BACKGROUND_AUTOMATION_KEY] || changes[BACKGROUND_AUTOMATION_CONSENT_KEY]) {
@@ -2153,7 +2117,7 @@ async function ensureContent(tabId) {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "proactive-helper.js", "steering-ui.js", "document-context.js", "content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "steering-ui.js", "document-context.js", "content.js"] });
   }
 }
 
@@ -2264,7 +2228,6 @@ function handleOffscreenVoiceError(id, error) {
 
 function claimActiveAgentTab(tabId, reason = "another page became active", patch = {}) {
   if (tabId == null) return;
-  revokeProactiveGrant(tabId, "agent_started");
   const revokedTabs = new Map();
 
   for (const [cueId, task] of [...tasks]) {
@@ -4058,737 +4021,7 @@ async function captureAmbientFrame() {
   }
 }
 
-// ---- Local, tab-scoped proactive suggestions -----------------------------
-// Grants and structural signals are memory-only. Nothing in this section
-// writes page-derived state to chrome.storage or contacts a gateway until the
-// user accepts the fully disclosed text-only turn.
-function proactiveDocumentId(sender) {
-  return typeof sender?.documentId === "string" ? sender.documentId : "";
-}
-
-function proactiveFrameId(sender) {
-  return Number.isInteger(sender?.frameId) ? sender.frameId : -1;
-}
-
-function proactiveSendOptions(grant) {
-  return { documentId: grant.document_id, frameId: grant.frame_id };
-}
-
-function proactiveGrantForSender(sender, grantId) {
-  const tabId = sender?.tab?.id;
-  if (tabId == null) return { error: "missing_tab" };
-  const grant = proactiveGrants.get(tabId);
-  if (!grant || grant.grant_id !== String(grantId || "")) return { error: "grant_missing" };
-  if (
-    !grant.document_id
-    || grant.document_id !== proactiveDocumentId(sender)
-    || grant.frame_id !== proactiveFrameId(sender)
-  ) {
-    revokeProactiveGrant(tabId, "document_mismatch");
-    return { error: "document_mismatch" };
-  }
-  if (Date.now() >= grant.expires_at) {
-    revokeProactiveGrant(tabId, "expired");
-    return { error: "expired" };
-  }
-  return { tabId, grant };
-}
-
-function sanitizeProactiveSignals(input) {
-  const source = input && typeof input === "object" ? input : {};
-  const output = { schema_version: 1 };
-  for (const key of PROACTIVE_SIGNAL_KEYS) {
-    const value = Number(source[key]);
-    output[key] = Number.isFinite(value) && value > 0 ? Math.min(100, Math.floor(value)) : 0;
-  }
-  return output;
-}
-
-async function proactiveDestination() {
-  const cfg = await getConfig();
-  const gatewayUrl = String(cfg.gatewayUrl || "").replace(/\/+$/, "");
-  if (!gatewayUrl) throw new Error("missing_destination");
-  const parsed = new URL(gatewayUrl);
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-    || parsed.username
-    || parsed.password
-    || (parsed.pathname && parsed.pathname !== "/")
-    || parsed.search
-    || parsed.hash
-  ) throw new Error("invalid_destination");
-  const origin = parsed.origin;
-  return {
-    cfg: { ...cfg, gatewayUrl: origin },
-    origin,
-    requestUrl: `${origin}/v1/proactive/turns`,
-  };
-}
-
-async function digestProactiveValue(value) {
-  const bytes = new TextEncoder().encode(String(value || ""));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-function proactiveRequestBody(kind) {
-  const transcript = PROACTIVE_PROMPTS[String(kind || "")];
-  if (!transcript) return null;
-  return {
-    source: "proactive_accept_v1",
-    transcript,
-    modality: "text",
-    client: {
-      platform: "browser",
-      source: "agee-extension",
-      input: "text",
-    },
-  };
-}
-
-async function proactiveBackgroundConnectivity() {
-  await initializePrivacyState();
-  if (!chrome?.storage?.local) return "disabled";
-  const stored = await chrome.storage.local.get({
-    [BACKGROUND_AUTOMATION_KEY]: false,
-    [BACKGROUND_AUTOMATION_CONSENT_KEY]: 0,
-  });
-  return stored[BACKGROUND_AUTOMATION_KEY] === true
-    && Number(stored[BACKGROUND_AUTOMATION_CONSENT_KEY]) === BACKGROUND_AUTOMATION_CONSENT_VERSION
-    ? "enabled"
-    : "disabled";
-}
-
-function proactiveConfirmationForGrant(grant) {
-  for (const confirmation of proactiveConfirmations.values()) {
-    if (confirmation.grant === grant) return confirmation;
-  }
-  return null;
-}
-
-function scheduleProactiveConfirmationAlarm() {
-  if (!chrome?.alarms) return;
-  const expiries = [...proactiveConfirmations.values()]
-    .filter((confirmation) => confirmation.state === "pending")
-    .map((confirmation) => confirmation.expires_at);
-  if (expiries.length === 0) {
-    chrome.alarms.clear(PROACTIVE_CONFIRMATION_ALARM).catch(() => {});
-    return;
-  }
-  try {
-    chrome.alarms.create(PROACTIVE_CONFIRMATION_ALARM, { when: Math.min(...expiries) });
-  } catch {}
-}
-
-function expireProactiveConfirmations() {
-  const now = Date.now();
-  for (const confirmation of [...proactiveConfirmations.values()]) {
-    if (confirmation.state !== "pending" || now < confirmation.expires_at) continue;
-    if (proactiveGrants.get(confirmation.tab_id) === confirmation.grant) {
-      revokeProactiveGrant(confirmation.tab_id, "confirmation_expired");
-    } else {
-      removeProactiveConfirmation(confirmation, "confirmation_expired", { closeWindow: true, notify: true });
-    }
-  }
-  scheduleProactiveConfirmationAlarm();
-}
-
-function removeProactiveConfirmation(confirmation, reason, { closeWindow = false, notify = false } = {}) {
-  if (!confirmation) return;
-  if (proactiveConfirmations.get(confirmation.token) === confirmation) {
-    proactiveConfirmations.delete(confirmation.token);
-  }
-  if (confirmation.expiry_timer) clearTimeout(confirmation.expiry_timer);
-  confirmation.expiry_timer = null;
-  confirmation.state = reason || "closed";
-  if (closeWindow && Number.isInteger(confirmation.window_id)) {
-    chrome.windows.remove(confirmation.window_id).catch(() => {});
-  }
-  if (notify) {
-    send(confirmation.tab_id, {
-      cmd: "proactiveConfirmationResult",
-      cueId: confirmation.cue_id,
-      grantId: confirmation.grant.grant_id,
-      ok: false,
-      reason: reason || "confirmation_closed",
-    });
-  }
-  scheduleProactiveConfirmationAlarm();
-}
-
-function revokeProactiveGrant(tabId, reason = "revoked", notify = true) {
-  const grant = proactiveGrants.get(tabId);
-  if (!grant) return false;
-  proactiveGrants.delete(tabId);
-  const confirmation = proactiveConfirmationForGrant(grant);
-  if (confirmation) {
-    removeProactiveConfirmation(confirmation, reason, {
-      closeWindow: reason !== "confirmation_window_closed",
-      notify: true,
-    });
-  }
-  if (notify) send(tabId, { cmd: "proactiveGrantRevoked", grantId: grant.grant_id, reason });
-  return true;
-}
-
-function revokeAllProactiveGrants(reason = "revoked") {
-  for (const tabId of [...proactiveGrants.keys()]) revokeProactiveGrant(tabId, reason);
-}
-
-// Narrow, count-only runtime QA hook. It cannot reveal grant ids, documents,
-// destinations, or page-derived data.
-globalThis.AgeeProactivePrivacy = Object.freeze({
-  activeGrantCount: () => proactiveGrants.size,
-  pendingConfirmationCount: () => proactiveConfirmations.size,
-});
-
-async function startProactiveGrant(sender) {
-  const tabId = sender?.tab?.id;
-  const documentId = proactiveDocumentId(sender);
-  const frameId = proactiveFrameId(sender);
-  if (tabId == null || !documentId || frameId !== 0) return { ok: false, reason: "document_id_unavailable" };
-  if (sender.tab?.incognito) return { ok: false, suppressed: true, reason: "incognito" };
-  let protocol = "";
-  try { protocol = new URL(String(sender.tab?.url || "")).protocol; } catch {}
-  if (protocol !== "http:" && protocol !== "https:") {
-    return { ok: false, suppressed: true, reason: "unsupported_protocol" };
-  }
-  revokeProactiveGrant(tabId, "replaced", false);
-  const now = Date.now();
-  const grant = {
-    schema_version: 1,
-    tab_id: tabId,
-    document_id: documentId,
-    frame_id: frameId,
-    grant_id: `pg_${crypto.randomUUID()}`,
-    issued_at: now,
-    expires_at: now + PROACTIVE_GRANT_TTL_MS,
-    state: "initializing",
-    destination_digest: "",
-    background_connectivity: "disabled",
-  };
-  proactiveGrants.set(tabId, grant);
-  let destination;
-  try {
-    destination = await proactiveDestination();
-    const [destinationDigest, backgroundConnectivity, sensitivity] = await Promise.all([
-      digestProactiveValue(destination.requestUrl),
-      proactiveBackgroundConnectivity(),
-      ask(
-        tabId,
-        { cmd: "proactiveSensitivityCheck" },
-        proactiveSendOptions(grant),
-      ).catch(() => ({ suppressed: true, reason: "document_unavailable" })),
-    ]);
-    if (proactiveGrants.get(tabId) !== grant || grant.state !== "initializing") {
-      return { ok: false, reason: "revoked" };
-    }
-    if (sensitivity?.suppressed !== false) {
-      proactiveGrants.delete(tabId);
-      return {
-        ok: false,
-        suppressed: true,
-        reason: String(sensitivity?.reason || "sensitive_page"),
-      };
-    }
-    grant.destination_digest = destinationDigest;
-    grant.background_connectivity = backgroundConnectivity;
-    grant.state = "granted";
-  } catch (error) {
-    if (proactiveGrants.get(tabId) === grant) proactiveGrants.delete(tabId);
-    throw error;
-  }
-  return {
-    ok: true,
-    grantId: grant.grant_id,
-    state: grant.state,
-    expiresAt: grant.expires_at,
-    destinationOrigin: destination.origin,
-    backgroundConnectivity: grant.background_connectivity,
-  };
-}
-
-async function noteProactiveSignal(sender, msg) {
-  const result = proactiveGrantForSender(sender, msg.grantId);
-  if (result.error) return { ok: false, reason: result.error };
-  if (result.grant.state !== "granted" && result.grant.state !== "card_visible") {
-    return { ok: false, reason: "invalid_state" };
-  }
-  // Validate and discard. Content owns the one local classification/card;
-  // background retains no page-derived signal or suggestion.
-  sanitizeProactiveSignals(msg.signals);
-  result.grant.state = "card_visible";
-  const destination = await proactiveDestination();
-  const destinationDigest = await digestProactiveValue(destination.requestUrl);
-  if (proactiveGrants.get(result.tabId) !== result.grant || result.grant.state !== "card_visible") {
-    return { ok: false, reason: "revoked" };
-  }
-  if (destinationDigest !== result.grant.destination_digest) {
-    revokeProactiveGrant(result.tabId, "destination_changed");
-    return { ok: false, reason: "destination_changed" };
-  }
-  return {
-    ok: true,
-    state: result.grant.state,
-    expiresAt: result.grant.expires_at,
-    destinationOrigin: destination.origin,
-    backgroundConnectivity: result.grant.background_connectivity,
-  };
-}
-
-async function proactiveGrantStatus(sender, msg) {
-  const result = proactiveGrantForSender(sender, msg.grantId);
-  if (result.error) return { ok: false, state: "off", reason: result.error };
-  return { ok: true, state: result.grant.state, expiresAt: result.grant.expires_at };
-}
-
-function proactiveConfirmationClientStatus(sender, msg) {
-  const tabId = sender?.tab?.id;
-  const documentId = proactiveDocumentId(sender);
-  const frameId = proactiveFrameId(sender);
-  const cueId = String(msg.cueId || "");
-  if (tabId == null || !documentId || frameId !== 0 || !cueId) {
-    return { ok: false, state: "off", reason: "confirmation_missing" };
-  }
-  let confirmation = null;
-  for (const candidate of proactiveConfirmations.values()) {
-    if (
-      candidate.tab_id === tabId
-      && candidate.document_id === documentId
-      && candidate.frame_id === frameId
-      && candidate.cue_id === cueId
-      && (candidate.state === "pending" || candidate.state === "consuming")
-    ) {
-      confirmation = candidate;
-      break;
-    }
-  }
-  if (!confirmation) return { ok: false, state: "off", reason: "confirmation_missing" };
-  if (confirmation.state === "pending" && Date.now() >= confirmation.expires_at) {
-    revokeProactiveGrant(tabId, "confirmation_expired");
-    return { ok: false, state: "off", reason: "confirmation_expired" };
-  }
-  return { ok: true, state: confirmation.state, expiresAt: confirmation.expires_at };
-}
-
-async function openProactiveConfirmation(sender, msg) {
-  const result = proactiveGrantForSender(sender, msg.grantId);
-  if (result.error) return { ok: false, reason: result.error };
-  const kind = String(msg.kind || "");
-  const body = proactiveRequestBody(kind);
-  if (!body || result.grant.state !== "card_visible") return { ok: false, reason: "invalid_card" };
-
-  // Bind the re-check to the exact top-frame document that received the grant.
-  const sensitivity = await ask(
-    result.tabId,
-    { cmd: "proactiveSensitivityCheck" },
-    proactiveSendOptions(result.grant),
-  ).catch(() => ({ suppressed: true }));
-  if (sensitivity?.suppressed !== false) {
-    revokeProactiveGrant(result.tabId, "sensitive_before_accept");
-    return { ok: false, suppressed: true, reason: String(sensitivity?.reason || "sensitive_before_accept") };
-  }
-
-  const destination = await proactiveDestination();
-  const [destinationDigest, bodyDigest, authorizationDigest, backgroundConnectivity] = await Promise.all([
-    digestProactiveValue(destination.requestUrl),
-    digestProactiveValue(JSON.stringify(body)),
-    digestProactiveValue(destination.cfg.gatewayToken ? `Bearer ${destination.cfg.gatewayToken}` : ""),
-    proactiveBackgroundConnectivity(),
-  ]);
-  const current = proactiveGrants.get(result.tabId);
-  if (current !== result.grant || result.grant.state !== "card_visible") {
-    return { ok: false, reason: "revoked" };
-  }
-  if (destinationDigest !== result.grant.destination_digest) {
-    revokeProactiveGrant(result.tabId, "destination_changed");
-    return { ok: false, reason: "destination_changed" };
-  }
-
-  // This is the only state transition initiated from the page. It opens an
-  // extension-owned boundary; it does not authorize or send the request.
-  const token = `pc_${crypto.randomUUID()}`;
-  const confirmation = {
-    token,
-    state: "pending",
-    grant: result.grant,
-    tab_id: result.tabId,
-    document_id: result.grant.document_id,
-    frame_id: result.grant.frame_id,
-    kind,
-    cue_id: String(msg.cueId || ""),
-    body,
-    body_digest: bodyDigest,
-    destination_digest: destinationDigest,
-    destination_origin: destination.origin,
-    request_url: destination.requestUrl,
-    authorization_present: Boolean(destination.cfg.gatewayToken),
-    authorization_digest: authorizationDigest,
-    background_connectivity: backgroundConnectivity,
-    connectivity_observed_at: new Date().toISOString(),
-    expires_at: Math.min(result.grant.expires_at, Date.now() + PROACTIVE_CONFIRMATION_TTL_MS),
-    window_id: null,
-    expiry_timer: null,
-  };
-  result.grant.state = "confirmation_pending";
-  proactiveConfirmations.set(token, confirmation);
-  confirmation.expiry_timer = setTimeout(() => {
-    if (proactiveConfirmations.get(token) === confirmation && confirmation.state === "pending") {
-      revokeProactiveGrant(result.tabId, "confirmation_expired");
-    }
-  }, Math.max(0, confirmation.expires_at - Date.now()));
-  scheduleProactiveConfirmationAlarm();
-
-  let popup;
-  try {
-    popup = await chrome.windows.create({
-      url: chrome.runtime.getURL(`proactive-confirm.html#${token}`),
-      type: "popup",
-      focused: true,
-      width: 560,
-      height: 720,
-    });
-  } catch (error) {
-    if (proactiveConfirmations.get(token) === confirmation) {
-      removeProactiveConfirmation(confirmation, "confirmation_window_failed");
-      result.grant.state = "card_visible";
-    }
-    return { ok: false, reason: `confirmation_window_failed:${String(error?.message || error)}` };
-  }
-  if (!Number.isInteger(popup?.id)) {
-    if (proactiveConfirmations.get(token) === confirmation) {
-      removeProactiveConfirmation(confirmation, "confirmation_window_identity_unavailable");
-      result.grant.state = "card_visible";
-    }
-    return { ok: false, reason: "confirmation_window_identity_unavailable" };
-  }
-  confirmation.window_id = popup.id;
-  if (
-    proactiveConfirmations.get(token) !== confirmation
-    || proactiveGrants.get(result.tabId) !== result.grant
-  ) {
-    chrome.windows.remove(popup.id).catch(() => {});
-    return { ok: false, reason: "revoked" };
-  }
-  try {
-    await chrome.windows.get(popup.id);
-  } catch {
-    if (proactiveConfirmations.get(token) === confirmation) {
-      revokeProactiveGrant(result.tabId, "confirmation_window_closed");
-    }
-    return { ok: false, reason: "confirmation_window_closed" };
-  }
-  if (
-    proactiveConfirmations.get(token) !== confirmation
-    || proactiveGrants.get(result.tabId) !== result.grant
-  ) return { ok: false, reason: "revoked" };
-  return {
-    ok: true,
-    state: "confirmation_pending",
-  };
-}
-
-function proactiveConfirmationSender(sender, token) {
-  if (sender?.id !== chrome.runtime.id || typeof sender?.url !== "string") return false;
-  try {
-    const url = new URL(sender.url);
-    return url.protocol === "chrome-extension:"
-      && url.hostname === chrome.runtime.id
-      && url.pathname === "/proactive-confirm.html"
-      && url.hash === `#${String(token || "")}`;
-  } catch {
-    return false;
-  }
-}
-
-function proactiveConfirmationDetails(sender, msg) {
-  const token = String(msg.token || "");
-  if (!proactiveConfirmationSender(sender, token)) return { ok: false, reason: "untrusted_confirmation_surface" };
-  const confirmation = proactiveConfirmations.get(token);
-  if (!confirmation || confirmation.state !== "pending") return { ok: false, reason: "confirmation_missing" };
-  if (Date.now() >= confirmation.expires_at) {
-    revokeProactiveGrant(confirmation.tab_id, "confirmation_expired");
-    return { ok: false, reason: "confirmation_expired" };
-  }
-  return {
-    ok: true,
-    expiresAt: confirmation.expires_at,
-    request: {
-      url: confirmation.request_url,
-      method: "POST",
-      redirect: "error",
-      headers: {
-        content_type: "application/json",
-        authorization: confirmation.authorization_present ? "configured bearer token (value hidden)" : "none",
-      },
-      body: confirmation.body,
-      bodyDigest: confirmation.body_digest,
-    },
-    backgroundConnectivity: confirmation.background_connectivity,
-    connectivityObservedAt: confirmation.connectivity_observed_at,
-    persistence: "Chief Moa does not add this proactive request or response to conversation, task, workflow, broker, or agent-run storage. The configured model provider still processes the packaged prompt under its own data policy.",
-    exclusions: "No screenshot, page body, URL, title, form value, cookie, history, selection, element, structural count, action, task, workflow, agent-run instruction, broker event, context pack, evidence, session id, or conversation id is included.",
-  };
-}
-
-async function decideProactiveConfirmation(sender, msg) {
-  const token = String(msg.token || "");
-  if (!proactiveConfirmationSender(sender, token)) return { ok: false, reason: "untrusted_confirmation_surface" };
-  const confirmation = proactiveConfirmations.get(token);
-  if (!confirmation || confirmation.state !== "pending") return { ok: false, reason: "confirmation_missing" };
-  if (msg.decision !== "allow") {
-    removeProactiveConfirmation(confirmation, "cancelled", { notify: true });
-    if (proactiveGrants.get(confirmation.tab_id) === confirmation.grant) {
-      proactiveGrants.delete(confirmation.tab_id);
-    }
-    return { ok: true, state: "cancelled" };
-  }
-  if (Date.now() >= confirmation.expires_at) {
-    revokeProactiveGrant(confirmation.tab_id, "confirmation_expired");
-    return { ok: false, reason: "confirmation_expired" };
-  }
-
-  const sensitivity = await ask(
-    confirmation.tab_id,
-    { cmd: "proactiveSensitivityCheck" },
-    { documentId: confirmation.document_id, frameId: confirmation.frame_id },
-  ).catch(() => ({ suppressed: true }));
-  if (sensitivity?.suppressed !== false) {
-    revokeProactiveGrant(confirmation.tab_id, "sensitive_before_accept");
-    return { ok: false, reason: String(sensitivity?.reason || "sensitive_before_accept") };
-  }
-
-  const destination = await proactiveDestination();
-  const [destinationDigest, bodyDigest, authorizationDigest] = await Promise.all([
-    digestProactiveValue(destination.requestUrl),
-    digestProactiveValue(JSON.stringify(confirmation.body)),
-    digestProactiveValue(destination.cfg.gatewayToken ? `Bearer ${destination.cfg.gatewayToken}` : ""),
-  ]);
-  const currentGrant = proactiveGrants.get(confirmation.tab_id);
-  const currentConfirmation = proactiveConfirmations.get(token);
-  if (
-    currentGrant !== confirmation.grant
-    || currentConfirmation !== confirmation
-    || confirmation.state !== "pending"
-    || confirmation.grant.state !== "confirmation_pending"
-  ) return { ok: false, reason: "revoked" };
-  if (
-    destinationDigest !== confirmation.destination_digest
-    || bodyDigest !== confirmation.body_digest
-    || authorizationDigest !== confirmation.authorization_digest
-    || destination.requestUrl !== confirmation.request_url
-  ) {
-    revokeProactiveGrant(confirmation.tab_id, "disclosure_changed");
-    return { ok: false, reason: "disclosure_changed" };
-  }
-
-  // No await occurs between this final identity/state check and consumption.
-  // Concurrent decisions therefore cannot issue a second request.
-  confirmation.state = "consuming";
-  confirmation.grant.state = "consuming";
-  if (confirmation.expiry_timer) clearTimeout(confirmation.expiry_timer);
-  confirmation.expiry_timer = null;
-  scheduleProactiveConfirmationAlarm();
-  proactiveGrants.delete(confirmation.tab_id);
-
-  let data;
-  const requestController = new AbortController();
-  const requestTimeout = setTimeout(() => requestController.abort("proactive_request_timeout"), PROACTIVE_REQUEST_TIMEOUT_MS);
-  try {
-    data = await callGateway(destination.cfg, "/v1/proactive/turns", {
-      redirect: "error",
-      body: confirmation.body,
-      signal: requestController.signal,
-      maxResponseBytes: PROACTIVE_RESPONSE_MAX_BYTES,
-    });
-  } catch (error) {
-    const reason = String(error?.message || error);
-    removeProactiveConfirmation(confirmation, "request_failed");
-    send(confirmation.tab_id, {
-      cmd: "proactiveConfirmationResult",
-      cueId: confirmation.cue_id,
-      grantId: confirmation.grant.grant_id,
-      ok: false,
-      reason,
-    });
-    return { ok: false, reason };
-  } finally {
-    clearTimeout(requestTimeout);
-  }
-
-  const responseViolation = proactiveResponseViolation(data);
-  let refusalReceipt;
-  try {
-    refusalReceipt = await recordProactiveRefusalReceipt(data, responseViolation);
-  } catch (error) {
-    const reason = `The gateway response violated the proactive text-only protocol, and its local refusal receipt could not be stored: ${String(error?.message || error)}`;
-    removeProactiveConfirmation(confirmation, "protocol_receipt_failed");
-    send(confirmation.tab_id, {
-      cmd: "proactiveConfirmationResult",
-      cueId: confirmation.cue_id,
-      grantId: confirmation.grant.grant_id,
-      ok: false,
-      reason,
-    });
-    return { ok: false, reason };
-  }
-  if (refusalReceipt) {
-    const reason = "The gateway returned prohibited action/proposal data. It was ignored and recorded as a local protocol violation.";
-    removeProactiveConfirmation(confirmation, "protocol_violation");
-    send(confirmation.tab_id, {
-      cmd: "proactiveConfirmationResult",
-      cueId: confirmation.cue_id,
-      grantId: confirmation.grant.grant_id,
-      ok: false,
-      reason,
-    });
-    return { ok: false, reason, refusalReceipt };
-  }
-  const summary = String(data?.display || data?.text || data?.speak || "Done.").trim().slice(0, 4000);
-  removeProactiveConfirmation(confirmation, "completed");
-  send(confirmation.tab_id, {
-    cmd: "proactiveConfirmationResult",
-    cueId: confirmation.cue_id,
-    grantId: confirmation.grant.grant_id,
-    ok: true,
-    summary,
-  });
-  return { ok: true, state: "sent", summary };
-}
-
-function proactiveProposalScan(data) {
-  const actionKeys = new Set(["action", "actions", "proposal", "proposals"]);
-  const seen = new Set();
-  let count = 0;
-  let visitedObjects = 0;
-  let inspectedProperties = 0;
-  let truncated = false;
-  const scan = (value, depth = 0) => {
-    if (value == null || typeof value !== "object" || count >= 20) return;
-    if (depth > 6 || visitedObjects >= 200) {
-      truncated = true;
-      return;
-    }
-    if (seen.has(value)) return;
-    seen.add(value);
-    visitedObjects += 1;
-    for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
-      inspectedProperties += 1;
-      if (inspectedProperties > 200) {
-        truncated = true;
-        return;
-      }
-      const child = value[key];
-      if (actionKeys.has(String(key).toLowerCase())) {
-        count += Array.isArray(child) ? Math.min(20 - count, child.length) : 1;
-        if (count >= 20) return;
-        continue;
-      }
-      scan(child, depth + 1);
-      if (count >= 20) return;
-    }
-  };
-  scan(data);
-  return { count: Math.min(20, count), truncated };
-}
-
-function proactiveResponseViolation(data) {
-  if (!data || typeof data !== "object" || Array.isArray(data)) return "invalid_response_shape";
-  const expectedKeys = new Set(["actions", "classification", "display", "persisted", "source", "text"]);
-  let keyCount = 0;
-  for (const key in data) {
-    if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
-    keyCount += 1;
-    if (!expectedKeys.has(key) || keyCount > expectedKeys.size) return "invalid_response_shape";
-  }
-  if (keyCount !== expectedKeys.size) return "invalid_response_shape";
-  if (
-    data.source !== "proactive_accept_v1"
-    || data.classification !== "proactive_text_only"
-    || data.persisted !== false
-    || !Array.isArray(data.actions)
-    || data.actions.length !== 0
-    || typeof data.display !== "string"
-    || typeof data.text !== "string"
-    || !data.text.trim()
-    || data.display !== data.text
-    || data.text.length > 4000
-  ) return "invalid_response_contract";
-  return "";
-}
-
-async function recordProactiveRefusalReceipt(data, forcedReason = "") {
-  const scan = proactiveProposalScan(data);
-  const reason = scan.count || scan.truncated
-    ? "proactive_text_only_action_protocol_violation"
-    : String(forcedReason || "");
-  if (!reason) return null;
-  if (!chrome?.storage?.local) throw new Error("local_receipt_storage_unavailable");
-  const write = proactiveReceiptWrite.then(async () => {
-    const stored = await chrome.storage.local.get({ [PROACTIVE_REFUSAL_RECEIPTS_KEY]: [] });
-    const existing = Array.isArray(stored[PROACTIVE_REFUSAL_RECEIPTS_KEY])
-      ? stored[PROACTIVE_REFUSAL_RECEIPTS_KEY]
-      : [];
-    const receipt = {
-      schema_version: 1,
-      receipt_id: `prr_${crypto.randomUUID()}`,
-      source: "proactive_accept_v1",
-      reason,
-      proposal_count: scan.count,
-      scan_truncated: scan.truncated,
-      created_at: new Date().toISOString(),
-    };
-    await chrome.storage.local.set({
-      [PROACTIVE_REFUSAL_RECEIPTS_KEY]: [...existing.slice(-(PROACTIVE_REFUSAL_RECEIPT_LIMIT - 1)), receipt],
-    });
-    return receipt;
-  });
-  proactiveReceiptWrite = write.catch(() => {});
-  return write;
-}
-
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.cmd === "proactiveConfirmationDetails") {
-    sendResponse(proactiveConfirmationDetails(sender, msg));
-    return false;
-  }
-  if (msg.cmd === "proactiveConfirmationDecision") {
-    decideProactiveConfirmation(sender, msg)
-      .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, reason: String(error?.message || error) }));
-    return true;
-  }
-  if (msg.cmd === "proactiveGrantStart" && sender.tab) {
-    startProactiveGrant(sender)
-      .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, reason: String(error?.message || error) }));
-    return true;
-  }
-  if (msg.cmd === "proactiveGrantStop" && sender.tab) {
-    const result = proactiveGrantForSender(sender, msg.grantId);
-    if (!result.error) revokeProactiveGrant(result.tabId, String(msg.reason || "manual_stop"), false);
-    sendResponse({ ok: !result.error, state: "off", reason: result.error || String(msg.reason || "manual_stop") });
-    return true;
-  }
-  if (msg.cmd === "proactiveGrantStatus" && sender.tab) {
-    proactiveGrantStatus(sender, msg).then(sendResponse).catch(() => sendResponse({ ok: false, state: "off" }));
-    return true;
-  }
-  if (msg.cmd === "proactiveConfirmationStatus" && sender.tab) {
-    sendResponse(proactiveConfirmationClientStatus(sender, msg));
-    return false;
-  }
-  if (msg.cmd === "proactiveSignal" && sender.tab) {
-    noteProactiveSignal(sender, msg).then(sendResponse).catch((error) => sendResponse({ ok: false, reason: String(error?.message || error) }));
-    return true;
-  }
-  if (msg.cmd === "proactiveConfirmationOpen" && sender.tab) {
-    openProactiveConfirmation(sender, msg)
-      .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, reason: String(error?.message || error) }));
-    return true;
-  }
   if (msg.cmd === "offscreenVoiceAudio") {
     // Record-scoped capture ids buffer locally for /v1/audio-notes; everything
     // else is live voice audio for the gateway socket.
@@ -4810,7 +4043,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.cmd === "recordSessionStart" && sender.tab) {
-    revokeProactiveGrant(sender.tab.id, "another_workflow_started");
     startRecordSession(sender.tab.id)
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
@@ -4823,7 +4055,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.cmd === "videoSessionStart" && sender.tab) {
-    revokeProactiveGrant(sender.tab.id, "another_workflow_started");
     startVideoNoteSession(sender.tab.id)
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
@@ -4857,7 +4088,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     const tabId = sender.tab.id;
-    revokeProactiveGrant(tabId, "another_workflow_started");
     claimActiveAgentTab(tabId, "another page voice session started", {
       cue_id: msg.cueId || null,
       status: "listening",
@@ -4961,7 +4191,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "run" && sender.tab) {
     const tabId = sender.tab.id;
-    revokeProactiveGrant(tabId, "another_workflow_started");
     const cueId = nextCueId(msg.cueId);
     claimActiveAgentTab(tabId, "another page agent turn started", {
       cue_id: cueId,
@@ -4979,7 +4208,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "branch" && sender.tab) {
     // Router intent: launch a disposable task agent in its OWN background tab.
     const overlayTabId = sender.tab.id;
-    revokeProactiveGrant(overlayTabId, "another_workflow_started");
     const cueId = nextCueId(msg.cueId);
     claimActiveAgentTab(overlayTabId, "another page agent turn started", {
       cue_id: cueId,
@@ -4993,7 +4221,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // BRANCH-TO-TWO: one trigger, N concurrent disposable task agents, each its
     // own background tab + own cue + own gateway router activation.
     const overlayTabId = sender.tab.id;
-    revokeProactiveGrant(overlayTabId, "another_workflow_started");
     const controllersByCue = new Map();
     const branches = msg.branches.map((b) => {
       const cueId = nextCueId(b.cueId);
@@ -5010,7 +4237,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "describe" && sender.tab) {
     const tabId = sender.tab.id;
-    revokeProactiveGrant(tabId, "another_workflow_started");
     const cueId = nextCueId(msg.cueId);
     claimActiveAgentTab(tabId, "another page agent turn started", {
       cue_id: cueId,
@@ -5022,7 +4248,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "cancel" && sender.tab) {
     const tabId = sender.tab.id;
-    revokeProactiveGrant(tabId, "manual_stop", false);
     if (msg.cueId && tasks.has(msg.cueId)) {
       tasks.get(msg.cueId).controller.abort();
       tasks.delete(msg.cueId);
@@ -5034,7 +4259,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.cmd === "ambientStart" && sender.tab) {
     const tabId = sender.tab.id;
-    revokeProactiveGrant(tabId, "another_workflow_started");
     claimActiveAgentTab(tabId, "another page ambient session started", {
       status: "ambient",
     });
@@ -5078,7 +4302,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Stop the ambient loop if its tab goes away, so it never posts against a dead tab.
 chrome.tabs.onRemoved.addListener((tabId) => {
-  revokeProactiveGrant(tabId, "tab_closed", false);
   cancelVoiceSampler(tabId, "tab closed");
   if (ambient && ambient.tabId === tabId) stopAmbientCapture();
   if (activeAgentTabId === tabId) {
@@ -5089,28 +4312,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   closeTabRecordSessions(tabId);
   if (videoNoteSession && videoNoteSession.tabId === tabId) {
     discardVideoNoteSession("tab closed");
-  }
-});
-
-chrome.windows.onRemoved.addListener((windowId) => {
-  for (const confirmation of proactiveConfirmations.values()) {
-    if (confirmation.window_id !== windowId) continue;
-    if (confirmation.state === "consuming") {
-      confirmation.window_id = null;
-      break;
-    }
-    if (proactiveGrants.get(confirmation.tab_id) === confirmation.grant) {
-      revokeProactiveGrant(confirmation.tab_id, "confirmation_window_closed");
-    } else {
-      removeProactiveConfirmation(confirmation, "confirmation_window_closed", { notify: true });
-    }
-    break;
-  }
-});
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "loading" || typeof changeInfo.url === "string") {
-    revokeProactiveGrant(tabId, "navigation");
   }
 });
 
@@ -5355,7 +4556,6 @@ async function handlePanelRequest(msg) {
     if (activeRecordSession()) {
       return { ok: false, error: "An audio note recording is in progress. Stop recording before starting voice." };
     }
-    revokeAllProactiveGrants("another_workflow_started");
     claimActiveAgentTab(PANEL_TAB_ID, "panel voice session started", {
       cue_id: msg.cueId || null,
       status: "listening",
