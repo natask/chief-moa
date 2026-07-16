@@ -14,23 +14,34 @@ private final class CommandPanel: NSPanel {
     static let shared = CommandPanelController()
     private let model = CommandModel()
     private var panel: CommandPanel?
+    private var previousApplication: NSRunningApplication?
+    private(set) var shortcutLabel = "Control-Space"
+
+    func setShortcutLabel(_ value: String) { shortcutLabel = value }
 
     func toggle() { panel?.isVisible == true ? hide() : show() }
 
     func show() {
         let panel = panel ?? makePanel()
         position(panel)
+        let current = NSRunningApplication.current
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        if frontmost?.processIdentifier != current.processIdentifier { previousApplication = frontmost }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
     }
 
-    func hide() { panel?.orderOut(nil) }
+    func hide() {
+        panel?.orderOut(nil)
+        previousApplication?.activate(options: [])
+        previousApplication = nil
+    }
 
     private func makePanel() -> CommandPanel {
-        let view = CommandPaletteView(model: model) { [weak self] in self?.hide() }
+        let view = CommandPaletteView(model: model, shortcutLabel: shortcutLabel) { [weak self] in self?.hide() }
         let hosting = NSHostingView(rootView: view)
         let panel = CommandPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -70,18 +81,30 @@ private final class CommandPanel: NSPanel {
 
     private func registerHotKey() {
         var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, carbonEvent, _ in
+        let handlerStatus = InstallEventHandler(GetApplicationEventTarget(), { _, carbonEvent, _ in
             guard let carbonEvent else { return noErr }
             var identifier = EventHotKeyID()
             let status = GetEventParameter(carbonEvent, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
                                            MemoryLayout<EventHotKeyID>.size, nil, &identifier)
-            guard status == noErr, identifier.id == 1 else { return status }
+            guard status == noErr, identifier.signature == OSType(0x4D4F4143), identifier.id == 1 else { return status }
             Task { @MainActor in CommandPanelController.shared.toggle() }
             return noErr
         }, 1, &event, nil, &handler)
+        guard handlerStatus == noErr else {
+            CommandPanelController.shared.setShortcutLabel("Use the menu bar")
+            return
+        }
         let signature = OSType(0x4D4F4143) // MOAC
         let identifier = EventHotKeyID(signature: signature, id: 1)
-        RegisterEventHotKey(UInt32(kVK_Space), UInt32(controlKey), identifier, GetApplicationEventTarget(), 0, &hotKey)
+        let primary = RegisterEventHotKey(UInt32(kVK_Space), UInt32(controlKey), identifier, GetApplicationEventTarget(), 0, &hotKey)
+        if primary == noErr { return }
+        hotKey = nil
+        let fallback = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), identifier, GetApplicationEventTarget(), 0, &hotKey)
+        if fallback == noErr {
+            CommandPanelController.shared.setShortcutLabel("Option-Space")
+        } else {
+            CommandPanelController.shared.setShortcutLabel("Use the menu bar")
+        }
     }
 }
 

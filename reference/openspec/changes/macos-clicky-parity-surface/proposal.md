@@ -32,4 +32,3 @@ The first artifact is a private QA application. It proves the daily typed
 companion loop against a configured self-hosted or hosted gateway. Voice,
 session-event streaming, semantic actions, signed universal distribution, and
 conversational self-host provisioning remain separately reviewable stages.
-
