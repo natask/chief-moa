@@ -10,8 +10,12 @@
       A.G. side panel.
 - [x] 1.4 Add deterministic policy tests and include the new runtime in source
       classification and verification.
-- [ ] 1.5 Run complete extension verify/smoke, bump the release version,
-      package, and verify the loaded extension reload independently.
+- [x] 1.5 Run complete extension verify/smoke, strict OpenSpec validation, bump
+      the release version to `0.1.48`, and package `A.G.-0.1.48.zip`.
+- [ ] 1.6 Reload the user's unpacked extension and verify the loaded version
+      independently. Blocked on 2026-07-15 because the isolated agent could not
+      prove a reload would avoid interrupting active browser work; packaging is
+      not claimed as a reload or active deployment.
 
 Acceptance: with Browser memory off, visits produce no card. After the user
 turns it on, an eligible visible page produces one local bounded card; revisiting
