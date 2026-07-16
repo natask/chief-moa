@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { PROFILE_FIELDS } = require("../lib/agent-profile");
+const { MANAGED_PROFILE_FIELDS, PROFILE_FIELDS } = require("../lib/agent-profile");
 const { createProfileSettingsCatalog, publicValue, secretLike } = require("../lib/profile-settings-catalog");
 const { createProfileSettingsReader, readAgentSettingsTool, readAgentSettingsGeminiDeclaration, requestedOperation } = require("../lib/profile-settings-reader");
 
@@ -51,6 +51,7 @@ test("catalog exposes current/default state, constraints, and managed fields", (
   assert.equal(catalog.get("active_companion_id").managed, true);
   assert.equal(catalog.get("active_companion_id").owner, "companion_runtime");
   assert.equal(catalog.get("active_companion_id").takes_effect, "when_companion_is_applied");
+  assert.ok(MANAGED_PROFILE_FIELDS.every((field) => catalog.get(field).writable === false));
   assert.equal(catalog.get("voice").owner, "agent_profile");
   assert.equal(catalog.get("voice").takes_effect, "next_turn");
   assert.equal(catalog.get("system_prompt").sensitivity, "private");

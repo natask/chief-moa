@@ -1,6 +1,6 @@
 "use strict";
 
-const { PROFILE_FIELDS } = require("./agent-profile");
+const { MANAGED_PROFILE_FIELDS, PROFILE_FIELDS } = require("./agent-profile");
 
 const DEFINITIONS = Object.freeze({
   system_prompt: define("System prompt", "behavior", "Standing instructions that shape the agent's behavior.", ["instructions", "behavior", "persona"], "Change this when you want durable behavioral instructions."),
@@ -91,7 +91,7 @@ function createProfileSettingsCatalog({ agentProfile, optionsPayload = () => ({}
 
   function nonWritableFields(patch) {
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) return [];
-    return Object.keys(patch).filter((id) => DEFINITIONS[id]?.writable === false).sort();
+    return Object.keys(patch).filter((id) => MANAGED_PROFILE_FIELDS.includes(id)).sort();
   }
 
   function profileContext(options) {

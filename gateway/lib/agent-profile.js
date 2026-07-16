@@ -53,6 +53,12 @@ const PROFILE_FIELDS = [
   "active_companion_source",
   "active_companion_version",
 ];
+const MANAGED_PROFILE_FIELDS = Object.freeze([
+  "active_companion_id",
+  "active_companion_name",
+  "active_companion_source",
+  "active_companion_version",
+]);
 
 // Canonicalize a requested voice to its proper-case core-voice name, including
 // approved tone aliases such as feminine/masculine. Null means "reject".
@@ -119,19 +125,21 @@ function createAgentProfileStore(options) {
     return effective();
   }
 
-  // Return to the env default by appending a new version.
+  // Return writable settings to env defaults while preserving fields owned by
+  // companion runtime authority, appending the result as one atomic version.
   function reset(metadata = {}) {
     const deviceId = normalizeDeviceId(metadata.deviceId || metadata.device_id);
     if (metadata.scope === "device" && deviceId) {
       return resetDevice(deviceId, metadata);
     }
     const before = currentVersionRecord();
-    if (!profilesEqual(before.profile, defaults)) {
-      appendVersion(defaults, {
+    const target = preserveManagedProfile(before.profile, defaults);
+    if (!profilesEqual(before.profile, target)) {
+      appendVersion(target, {
         source: metadata.source || "api",
         reason: metadata.reason || "reset",
         parent_version: before.version,
-        changed: changedFields(before.profile, defaults),
+        changed: changedFields(before.profile, target),
       });
     }
     return effective();
@@ -143,12 +151,13 @@ function createAgentProfileStore(options) {
       throw new Error(`profile version not found: ${version}`);
     }
     const before = currentVersionRecord();
-    appendVersion(target.profile, {
+    const targetProfile = preserveManagedProfile(before.profile, target.profile);
+    appendVersion(targetProfile, {
       source: metadata.source || "api",
       reason: metadata.reason || "rollback",
       parent_version: before.version,
       rollback_from_version: target.version,
-      changed: changedFields(before.profile, target.profile),
+      changed: changedFields(before.profile, targetProfile),
     });
     return effective();
   }
@@ -168,15 +177,16 @@ function createAgentProfileStore(options) {
     if (!previous) {
       return { ok: false, reason: "no_previous", scope: "global", profile: effective(), from_version: before.version, to_version: before.version };
     }
-    if (profilesEqual(before.profile, previous.profile)) {
+    const targetProfile = preserveManagedProfile(before.profile, previous.profile);
+    if (profilesEqual(before.profile, targetProfile)) {
       return { ok: false, reason: "already_at_previous", scope: "global", profile: effective(), from_version: before.version, to_version: previous.version };
     }
-    const entry = appendVersion(previous.profile, {
+    const entry = appendVersion(targetProfile, {
       source: metadata.source || "api",
       reason: metadata.reason || "revert_last",
       parent_version: before.version,
       rollback_from_version: previous.version,
-      changed: changedFields(before.profile, previous.profile),
+      changed: changedFields(before.profile, targetProfile),
     });
     return {
       ok: true,
@@ -213,7 +223,8 @@ function createAgentProfileStore(options) {
     // The patch to restore is the one before the current device version (or the
     // empty patch when only one device version exists, i.e. back to the global
     // effective profile for this device).
-    const priorPatch = versions.length >= 2 ? { ...(versions[versions.length - 2].patch || {}) } : {};
+    const priorPatch = preserveManagedPatch(beforePatch,
+      versions.length >= 2 ? { ...(versions[versions.length - 2].patch || {}) } : {});
     if (patchesEqual(beforePatch, priorPatch)) {
       return { ok: false, reason: "already_at_previous", scope: "device", device_id: id, profile: effective({ deviceId: id }) };
     }
@@ -303,15 +314,16 @@ function createAgentProfileStore(options) {
 
   function resetDevice(deviceId, metadata) {
     const beforePatch = currentDevicePatch(deviceId);
-    if (Object.keys(beforePatch).length === 0) {
+    const targetPatch = preserveManagedPatch(beforePatch, {});
+    if (patchesEqual(beforePatch, targetPatch)) {
       return effective({ deviceId });
     }
     const entry = ensureDeviceEntry(deviceId);
-    appendDeviceVersion(deviceId, {}, {
+    appendDeviceVersion(deviceId, targetPatch, {
       source: metadata.source || "api",
       reason: metadata.reason || "device_reset",
       parent_version: entry.current_version || "",
-      changed: changedPatchFields(beforePatch, {}),
+      changed: changedPatchFields(beforePatch, targetPatch),
     });
     return effective({ deviceId });
   }
@@ -564,6 +576,21 @@ function mergeProfile(base, patch) {
 
 function mergePatch(base, patch) {
   return { ...pickProfileFields(base), ...pickProfileFields(patch) };
+}
+
+function preserveManagedProfile(current, target) {
+  const preserved = { ...(target || {}) };
+  for (const field of MANAGED_PROFILE_FIELDS) preserved[field] = current?.[field];
+  return preserved;
+}
+
+function preserveManagedPatch(current, target) {
+  const preserved = { ...(target || {}) };
+  for (const field of MANAGED_PROFILE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(current || {}, field)) preserved[field] = current[field];
+    else delete preserved[field];
+  }
+  return preserved;
 }
 
 // Coerce and keep only known fields with usable values. Unknown keys, empty
@@ -989,6 +1016,7 @@ function publicVersionRecord(entry) {
 
 module.exports = {
   createAgentProfileStore,
+  MANAGED_PROFILE_FIELDS,
   PROFILE_FIELDS,
   CORE_VOICES,
   normalizeVoice,
