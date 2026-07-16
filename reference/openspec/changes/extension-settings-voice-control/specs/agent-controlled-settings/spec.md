@@ -22,23 +22,24 @@ than only answering conversationally.
 - **AND** the next Live voice turn uses the updated identity, voice, or language profile
 
 ### Requirement: Agent-readable settings catalog
-Every canonical gateway runtime-profile setting SHALL have one stable catalog
-entry containing its key, owning scope, current effective value, default,
-description, allowed values or constraints, and mutability. The user SHALL be
-able to ask the gateway voice agent to list, get, search, and recommend those
-settings. Search MAY use semantic ranking, but every result SHALL be grounded in
-a catalog entry and identify the effective value.
+The merged browser/gateway settings catalog SHALL contain one stable entry for
+every canonical gateway runtime-profile setting and every registered
+browser-local setting. Each entry contains its key, owning scope, current
+effective value, default, description, allowed values or constraints, and
+mutability. The user SHALL be able to ask through typed or finalized browser
+voice input to list, get, search, and recommend the merged settings. Search MAY
+use semantic ranking, but every result SHALL be grounded in a catalog entry and
+identify the effective value.
 
-This initial catalog SHALL NOT claim to enumerate Android preferences or
-browser extension-local controls. Those surfaces remain owned by their local
-clients until a separately implemented merged projection registers them.
+This merged browser/gateway catalog SHALL NOT claim to enumerate Android
+preferences. Android settings remain owned by the Android client.
 
 Secrets such as the gateway session token SHALL be represented only by bounded
 redacted state and SHALL NOT be returned as catalog values.
 
 #### Scenario: User asks for all settings
-- **WHEN** the user asks the gateway voice agent what runtime-profile settings are available
-- **THEN** the agent returns a bounded, categorized list of registered gateway-owned settings
+- **WHEN** the user asks through typed or finalized browser voice input what settings are available
+- **THEN** the extension returns the complete bounded set of registered browser-local settings and reachable gateway-owned settings
 - **AND** each returned setting identifies its current effective value or a redacted configured/unconfigured state
 
 #### Scenario: User searches by desired outcome
@@ -50,10 +51,10 @@ redacted state and SHALL NOT be returned as catalog values.
 - **WHEN** the user asks for settings related to a concept such as voice, language, or privacy
 - **THEN** the agent returns catalog-grounded matches even when the wording does not exactly match a setting label
 
-#### Scenario: Local client settings are not overclaimed
-- **WHEN** a gateway catalog query is made before browser-local or Android settings are registered
-- **THEN** the result identifies itself as the gateway runtime-profile catalog
-- **AND** it does not claim completeness for browser-local controls or Android preferences
+#### Scenario: Android settings are not overclaimed
+- **WHEN** the merged browser/gateway catalog is listed or searched
+- **THEN** it identifies browser-local and gateway-owned settings by owner
+- **AND** it does not claim completeness for Android preferences
 
 ### Requirement: Settings mutation cannot invent configuration
 The agent SHALL mutate only registered, writable settings through the owning
@@ -68,9 +69,13 @@ remain separate from changing an existing setting.
 
 #### Scenario: Registered extension-local setting is changed
 - **WHEN** the user changes a registered extension-local setting
-- **THEN** the gateway or agent returns a typed proposal
-- **AND** packaged extension code validates and applies the change locally
-- **AND** the extension displays the resulting effective state
+- **THEN** the extension routes the request to the browser-local settings owner
+- **AND** packaged extension code validates writability, value, and any required approval before applying it
+- **AND** the extension returns a bounded receipt containing the resulting effective or redacted state
+
+#### Scenario: Protected local setting fails closed
+- **WHEN** a request tries to write microphone permission or enable background automation without its required user action or versioned approval
+- **THEN** the extension rejects the write without changing stored state
 
 #### Scenario: Unknown setting is rejected
 - **WHEN** a request names no registered setting and cannot be grounded to one
