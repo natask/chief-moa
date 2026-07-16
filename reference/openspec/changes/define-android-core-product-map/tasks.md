@@ -74,6 +74,9 @@
       turn, keep Chirp STT provider-auto with a best-effort
       Geʽez/Amharic/English prompt, and use `gez` -> `am-ET` only for TTS
       compatibility.
+- [x] 7.9 Retain the two explicitly authorized real-speech Hindi-substitution
+      recordings as pseudonymous, byte-exact deterministic regression fixtures,
+      and add a separately gated paid Chirp STT-only replay command.
 
 ## 8. Verification Harness
 

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "corpus_id": "chirp-language-regressions-v1",
+  "consent": {
+    "explicit_user_authorization": true,
+    "authorized_use": "Commit these exact recordings as automated speech-transcription regression fixtures.",
+    "privacy_class": "real_user_speech",
+    "durability_notice": "Git history and clones may retain audio after deletion; revocation requires repository-history and clone handling, not only removing the current file."
+  },
+  "audio_format": {
+    "encoding": "PCM16LE",
+    "sample_rate_hz": 16000,
+    "channels": 1,
+    "frame_bytes": 2
+  },
+  "prompt_policy": {
+    "version": "chirp-geez-amharic-english-v1",
+    "sha256_utf8": "01fd7278ea7a8fd95d6b06dc34d86a1f63b3013585b1458da40da039adcad554",
+    "provider_language_codes": ["auto"],
+    "semantic_languages": ["gez", "am-ET", "en-US"],
+    "constraint": "best_effort"
+  },
+  "ground_truth": "Exact wording is not established linguistic ground truth. Accepted transcripts below are provider observations that satisfy the current script policy, not user-verified references for WER.",
+  "fixtures": [
+    {
+      "id": "geez-hindi-001",
+      "file": "geez-hindi-001.pcm",
+      "recorded_at": "2026-07-14T03:55:15Z",
+      "surface": "browser_extension",
+      "bytes": 45140,
+      "sha256": "59d330669c03078444c20e48a23dc2bfbda57285bb8b2303218b63b8d9bc79c7",
+      "duration_ms": 1410.625,
+      "known_bad_transcripts": ["यह गज में दो।"],
+      "accepted_prompted_replay_observations": ["ይሄ ገጽ ምንድነው?"]
+    },
+    {
+      "id": "geez-hindi-002",
+      "file": "geez-hindi-002.pcm",
+      "recorded_at": "2026-07-16T06:57:52.967Z",
+      "surface": "android_overlay",
+      "bytes": 439680,
+      "sha256": "7aa4137d4a535b110a48ffc6657d6b55b0e7ea93f6a53c33d985a3e69ce56d92",
+      "duration_ms": 13740,
+      "known_bad_transcripts": ["वायरस सभा አንቺ አንቲ እንስት አኮ በእሲት የእቲ"],
+      "accepted_prompted_replay_observations": ["እግዚአብሔር ሰባ አንቺ አንቲ እንስት አኮ ብእሲት የእቲ"]
+    }
+  ]
+}

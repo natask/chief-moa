@@ -27,6 +27,7 @@ const {
   serviceAccountAccessToken,
 } = require("./google-auth");
 const {
+  buildBatchRecognitionRequest,
   buildStreamingRecognitionConfig,
   evaluateSttTranscript,
   extractSpeechTranscript,
@@ -1984,24 +1985,16 @@ class CascadedVoiceProvider {
     const response = await fetchWithTimeout(this.endpoint(), {
       method: "POST",
       headers: sttHeaders,
-      body: JSON.stringify({
-        config: {
-          // Explicit decoding describes the raw PCM container. Recognition is
-          // provider `auto`; the prompt is a best-effort semantic boundary.
-          explicitDecodingConfig: {
-            encoding: "LINEAR16",
-            sampleRateHertz: sampleRate,
-            audioChannelCount: channels,
-          },
-          languageCodes: sttLanguageCodes,
-          model: this.model,
-          features: {
-            enableAutomaticPunctuation: true,
-            customPromptConfig: { customPrompt },
-          },
-        },
-        content: Buffer.isBuffer(audio) ? audio.toString("base64") : Buffer.from(audio).toString("base64"),
-      }),
+      // Explicit decoding describes the raw PCM container. Recognition is
+      // provider `auto`; the prompt is a best-effort semantic boundary.
+      body: JSON.stringify(buildBatchRecognitionRequest({
+        audio,
+        sampleRate,
+        channels,
+        codes: sttLanguageCodes,
+        model: this.model,
+        customPrompt,
+      })),
     }, this.timeoutMs);
 
     if (!response.ok) {

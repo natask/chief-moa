@@ -115,6 +115,28 @@ function buildStreamingRecognitionConfig(options) {
   };
 }
 
+function buildBatchRecognitionRequest(options) {
+  const features = { enableAutomaticPunctuation: true };
+  if (options.customPrompt) {
+    features.customPromptConfig = { customPrompt: options.customPrompt };
+  }
+  return {
+    config: {
+      explicitDecodingConfig: {
+        encoding: "LINEAR16",
+        sampleRateHertz: options.sampleRate,
+        audioChannelCount: options.channels,
+      },
+      languageCodes: options.codes,
+      model: options.model,
+      features,
+    },
+    content: Buffer.isBuffer(options.audio)
+      ? options.audio.toString("base64")
+      : Buffer.from(options.audio).toString("base64"),
+  };
+}
+
 async function notifyTranscriptRejected(hooks, evidence) {
   if (!evidence || !hooks || typeof hooks.onTranscriptRejected !== "function") return;
   try {
@@ -125,6 +147,7 @@ async function notifyTranscriptRejected(hooks, evidence) {
 }
 
 module.exports = {
+  buildBatchRecognitionRequest,
   buildStreamingRecognitionConfig,
   evaluateSttTranscript,
   extractSpeechTranscript,

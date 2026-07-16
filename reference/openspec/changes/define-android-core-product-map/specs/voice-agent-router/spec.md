@@ -101,6 +101,22 @@ audio voice sessions.
 - **AND** health and turn records distinguish provider-auto recognition from
   semantic profile input languages and label the prompt boundary best-effort
 
+#### Scenario: Retained real speech guards the Hindi-substitution regression
+- **GIVEN** the user explicitly authorizes specific retained recordings for
+  automated regression testing
+- **WHEN** the default gateway test suite runs
+- **THEN** it verifies the pseudonymously named PCM fixtures byte-for-byte,
+  including hashes, framing, duration, prompt policy, and provider-auto request
+  composition without a provider call
+- **AND** it rejects their observed Hindi/Devanagari substitutions while
+  accepting the recorded Ethiopic provider observations under script policy
+- **AND** it does not claim those provider observations are exact linguistic
+  ground truth
+- **WHEN** an operator separately enables the paid live fixture evaluation
+- **THEN** it sends only those recordings through production Chirp STT
+  composition/auth and invokes no reasoning or synthesis provider
+- **AND** reports only non-content fixture metadata without transcript text
+
 ### Requirement: Gateway Tool Catalog Boundary
 The gateway SHALL expose third-party and local integrations through typed tool
 sources rather than direct model-executed commands.

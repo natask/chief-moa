@@ -567,6 +567,16 @@ delivery: a leading `[style: ...]` line becomes the synthesis style prompt
 `[short pause]` stay in the spoken text (`input.text`), while the displayed
 and stored transcript is stripped clean of both.
 
+Two explicitly user-authorized, pseudonymously named real-speech PCM recordings
+are retained under `gateway/test/fixtures/voice/chirp-language-regressions` as
+regression evidence for the observed Hindi/Devanagari substitution. The default
+suite verifies their exact bytes, hashes, framing, duration, fixed provider-auto
+request/prompt identity, and script-policy outcomes without network access.
+`npm run eval:voice:chirp-language-regressions -- live` is a paid STT-only
+replay and additionally requires `VOICE_EVAL_LIVE=1`; it uses production Chirp
+request composition/auth but invokes no LLM or TTS. Accepted replay text is a
+provider observation, not user-verified linguistic ground truth or a WER oracle.
+
 The semantic input set is read from the agent profile per turn (mirroring how
 the reply language already works), so a spoken or typed language change applies
 without a gateway restart and remains visible on the canonical turn. Provider
