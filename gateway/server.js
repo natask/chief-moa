@@ -8057,6 +8057,14 @@ function applyAgentProfilePatch(call, args, patch, sourceLabel = "agent-tool", o
       supported_fields: agentProfile.fields(),
     };
   }
+  const nonWritableFields = profileSettingsCatalog.nonWritableFields(patch);
+  if (nonWritableFields.length > 0) {
+    return {
+      ok: false,
+      error: "non_writable_profile_fields",
+      non_writable_fields: nonWritableFields,
+    };
+  }
   const requestedScope = String(args.scope || args.profile_scope || "global").toLowerCase() === "device" ? "device" : "global";
   const deviceId = normalizeDeviceId(args.device_id || call.device_id || "");
   if (requestedScope === "device" && !deviceId) {
@@ -9974,7 +9982,7 @@ function cascadedExecuteCapabilities(call) {
       run: () => ({ ok: true, profile: agentProfile.effective(profileOptions) }),
     },
     read_agent_settings: {
-      description: "List, get, search, or recommend only canonical existing gateway settings. Args: { operation?: \"list\"|\"get\"|\"search\"|\"recommend\", id?: string, query?: string, scope?: \"global\"|\"device\", limit?: number }.",
+      description: "List, get, search, recommend, or compare only canonical existing gateway settings. Args: { operation?: \"list\"|\"get\"|\"search\"|\"recommend\"|\"compare\", id?: string, query?: string, scope?: \"global\"|\"device\", limit?: number }.",
       run: (args) => liveToolReadAgentSettings(call, args || {}),
     },
     profile_options: {

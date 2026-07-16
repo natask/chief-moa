@@ -28,13 +28,17 @@ const DEFINITIONS = Object.freeze({
   tts_provider: define("Speech synthesis provider", "provider", "Gateway provider used to synthesize speech.", ["tts", "text to speech", "speech provider"], "Change this only when another speech-synthesis provider is configured.", "text"),
   tool_policy: define("Tool policy", "authority", "Policy limiting how the agent may use tools.", ["tools", "actions", "proposal only", "permissions"], "Review this when you want to understand tool-use limits.", "text"),
   autonomy_level: define("Autonomy level", "authority", "Policy controlling when actions require confirmation.", ["approval", "confirm actions", "automatic actions"], "Review this when you want to understand action confirmation behavior.", "text"),
-  memory_policy: define("Memory policy", "memory", "Policy controlling durable recall and memory writes.", ["remember", "forget", "recall", "personalization"], "Change this when you want different durable-memory behavior.", "text"),
+  memory_policy: define("Memory policy", "memory", "Policy controlling durable recall and memory writes.", ["remember", "forget", "recall", "personalization", "privacy", "data privacy", "data retention"], "Change this when you want different durable-memory behavior.", "text"),
   recovery_mode: define("Recovery mode", "reliability", "Gateway recovery behavior for failed or interrupted work.", ["retry", "failure", "resume"], "Review this when diagnosing how interrupted work recovers.", "text"),
-  active_companion_id: define("Active companion id", "companion", "Stable identifier of the active companion profile.", ["companion", "persona id"], "Read this to identify the active companion.", "text", { managed: true }),
-  active_companion_name: define("Active companion name", "companion", "Display name of the active companion profile.", ["companion", "persona name"], "Read this to see which companion is active.", "text", { managed: true }),
-  active_companion_source: define("Active companion source", "companion", "Origin of the active companion profile.", ["companion origin", "persona source"], "Read this to understand where the active companion came from.", "text", { managed: true }),
-  active_companion_version: define("Active companion version", "companion", "Version of the active companion profile.", ["companion revision", "persona version"], "Read this when checking companion provenance or rollback.", "text", { managed: true }),
+  active_companion_id: define("Active companion id", "companion", "Stable identifier of the active companion profile.", ["companion", "persona id"], "Read this to identify the active companion.", "text", managedCompanion()),
+  active_companion_name: define("Active companion name", "companion", "Display name of the active companion profile.", ["companion", "persona name"], "Read this to see which companion is active.", "text", managedCompanion()),
+  active_companion_source: define("Active companion source", "companion", "Origin of the active companion profile.", ["companion origin", "persona source"], "Read this to understand where the active companion came from.", "text", managedCompanion()),
+  active_companion_version: define("Active companion version", "companion", "Version of the active companion profile.", ["companion revision", "persona version"], "Read this when checking companion provenance or rollback.", "text", managedCompanion()),
 });
+
+function managedCompanion() {
+  return { managed: true, writable: false, owner: "companion_runtime", takes_effect: "when_companion_is_applied" };
+}
 
 function define(title, category, description, aliases, recommendation, type = "text", constraints = {}) {
   return Object.freeze({ title, category, description, aliases: Object.freeze(aliases), recommendation, type, ...constraints });
@@ -65,7 +69,7 @@ function createProfileSettingsCatalog({ agentProfile, optionsPayload = () => ({}
   function search(query, options = {}) {
     const normalized = normalizeQuery(query);
     if (!normalized) return list(options);
-    const terms = normalized.split(" ").filter(Boolean);
+    const terms = meaningfulTerms(normalized);
     return list(options)
       .map((setting) => ({ setting, score: scoreSetting(setting, normalized, terms) }))
       .filter(({ score }) => score > 0)
@@ -79,6 +83,15 @@ function createProfileSettingsCatalog({ agentProfile, optionsPayload = () => ({}
       ...setting,
       recommendation: DEFINITIONS[setting.id].recommendation,
     }));
+  }
+
+  function compare(options = {}) {
+    return list(options).filter((setting) => setting.overridden);
+  }
+
+  function nonWritableFields(patch) {
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) return [];
+    return Object.keys(patch).filter((id) => DEFINITIONS[id]?.writable === false).sort();
   }
 
   function profileContext(options) {
@@ -112,8 +125,10 @@ function createProfileSettingsCatalog({ agentProfile, optionsPayload = () => ({}
       ...(definition.minimum !== undefined ? { minimum: definition.minimum } : {}),
       ...(definition.maximum !== undefined ? { maximum: definition.maximum } : {}),
       readable: true,
-      writable: true,
+      writable: definition.writable !== false,
       managed: definition.managed === true,
+      owner: definition.owner || "agent_profile",
+      takes_effect: definition.takes_effect || "next_turn",
       scope: context.scope,
       profile_version: context.version,
       sensitivity,
@@ -124,7 +139,7 @@ function createProfileSettingsCatalog({ agentProfile, optionsPayload = () => ({}
     };
   }
 
-  return { list, get, search, recommend };
+  return { list, get, search, recommend, compare, nonWritableFields };
 }
 
 function catalogValues(id, definition, payload, catalogField) {
@@ -137,6 +152,7 @@ function catalogValues(id, definition, payload, catalogField) {
 }
 
 function scoreSetting(setting, normalized, terms) {
+  if (terms.length === 0) return 0;
   const id = setting.id.replace(/_/g, " ");
   const title = normalizeQuery(setting.title);
   const aliases = setting.aliases.map(normalizeQuery);
@@ -181,6 +197,12 @@ function normalizeId(value) {
 
 function normalizeQuery(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+const SEARCH_STOP_WORDS = new Set(["a", "all", "and", "are", "for", "i", "me", "my", "of", "related", "setting", "settings", "that", "the", "to", "want", "what", "which", "with"]);
+
+function meaningfulTerms(normalized) {
+  return normalized.split(" ").filter((term) => term && !SEARCH_STOP_WORDS.has(term));
 }
 
 function boundedLimit(value) {

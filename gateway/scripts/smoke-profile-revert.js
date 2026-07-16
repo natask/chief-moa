@@ -61,6 +61,7 @@ async function main() {
 
     await step("live tool: response_modality settable + validated", () => assertLiveModalityTool(wsUrl, fakeLive));
     await step("live tool: canonical settings list + recommend", () => assertLiveSettingsRead(wsUrl, fakeLive));
+    await step("http profile: managed companion identity rejects atomically", () => assertManagedWriteAuthority(baseUrl));
     await step("live tool: revert previous + reset", () => assertLiveRevertTool(baseUrl, wsUrl, fakeLive));
     await step("live tool: propose_page_tweak accept + reject", () => assertLivePageTweakTool(wsUrl, fakeLive));
     await step("http turn: modality + undo + reset", () => assertHttpRevert(baseUrl));
@@ -154,6 +155,9 @@ async function assertSetupTools(dataDir) {
   for (const name of ["read_agent_settings", "update_agent_profile", "revert_agent_profile", "propose_page_tweak"]) {
     assert.ok(toolNames.includes(name), `Gemini Live setup must expose ${name}, got ${JSON.stringify(toolNames)}`);
   }
+  const instruction = setup.systemInstruction?.parts?.map((part) => part.text || "").join("\n") || "";
+  assert.match(instruction, /MUST call read_agent_settings for requests to list, inspect, compare, search, or recommend settings/);
+  assert.match(instruction, /After that read returns, speak a grounded answer from its result/);
 }
 
 // Drive a full live turn that ends with the fake provider emitting one tool call,
@@ -217,14 +221,39 @@ async function assertLiveSettingsRead(wsUrl, fakeLive) {
   assert.equal(listed.ok, true);
   assert.equal(listed.count, 31);
   assert.ok(listed.settings.every((setting) => setting.id && setting.readable === true));
+  assert.ok(listed.settings.every((setting) => setting.owner && setting.takes_effect));
+  const companion = listed.settings.find((setting) => setting.id === "active_companion_id");
+  assert.equal(companion.writable, false);
+  assert.equal(companion.owner, "companion_runtime");
   const recommended = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", {
     operation: "recommend",
     query: "I want concise spoken answers",
     limit: 3,
   });
   assert.equal(recommended.settings[0].id, "voice_max_chars");
+  const privacy = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", {
+    operation: "search",
+    query: "settings related to privacy",
+  });
+  assert.deepEqual(privacy.settings.map((setting) => setting.id), ["memory_policy"]);
+  const compared = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", { operation: "compare" });
+  assert.equal(compared.type, "agent_settings_comparison");
+  assert.ok(compared.settings.every((setting) => setting.overridden === true));
   const unknown = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", { operation: "get", id: "imaginary_setting" });
   assert.equal(unknown.error, "unknown_setting");
+}
+
+async function assertManagedWriteAuthority(baseUrl) {
+  const before = await getJson(`${baseUrl}/v1/agent/profile`);
+  const rejected = await putJson(`${baseUrl}/v1/agent/profile`, {
+    profile: { voice_max_chars: 17, active_companion_id: "forged-companion" },
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.json.error, "non_writable_profile_fields");
+  assert.deepEqual(rejected.json.non_writable_fields, ["active_companion_id"]);
+  const after = await getJson(`${baseUrl}/v1/agent/profile`);
+  assert.equal(after.profile.voice_max_chars, before.profile.voice_max_chars);
+  assert.equal(after.profile.active_companion_id, before.profile.active_companion_id);
 }
 
 async function assertLiveRevertTool(baseUrl, wsUrl, fakeLive) {
@@ -461,6 +490,15 @@ async function postJson(url, body, options = {}) {
   });
   const json = await response.json();
   return { status: response.status, json };
+}
+
+async function putJson(url, body, options = {}) {
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: { ...(options.auth === false ? {} : authHeaders()), "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, json: await response.json() };
 }
 
 function authHeaders() {
