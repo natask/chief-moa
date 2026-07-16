@@ -14,6 +14,7 @@ const requiredFiles = [
   "extension/config.js",
   "extension/content.js",
   "extension/proactive-helper.js",
+  "extension/selective-browser-memory.js",
   "extension/proactive-confirm.html",
   "extension/proactive-confirm.css",
   "extension/proactive-confirm.js",

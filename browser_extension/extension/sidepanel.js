@@ -13,6 +13,9 @@ const textInput = document.getElementById("text");
 const sendBtn = document.getElementById("sendBtn");
 const agentModeSelector = document.getElementById("agentModeSelector");
 const agentModeButtons = [...document.querySelectorAll("[data-agent-mode-option]")];
+const memoryToggle = document.getElementById("memoryToggle");
+const memoryClear = document.getElementById("memoryClear");
+const memoryList = document.getElementById("memoryList");
 
 const TURN_WATCHDOG_MS = 90000;
 const BROWSER_AGENT_ROLE_KEY = "ageeBrowserAgentRole";
@@ -103,7 +106,66 @@ function onPortMessage(msg) {
     return;
   }
   if (msg.cmd === "voiceSessionEvent") handleVoiceEvent(msg);
+  if (msg.cmd === "selectiveBrowserMemoryChanged") renderBrowserMemory(true, msg.entries);
 }
+
+function renderBrowserMemory(enabled, entries) {
+  memoryToggle.setAttribute("aria-pressed", String(enabled));
+  memoryToggle.textContent = enabled ? "On" : "Off";
+  memoryList.replaceChildren();
+  const safeEntries = Array.isArray(entries) ? entries.slice(0, 20) : [];
+  if (!safeEntries.length) {
+    const empty = document.createElement("p");
+    empty.className = "memory-empty";
+    empty.textContent = enabled ? "Watching normal browser pages. Nothing useful retained yet." : "Memory is off.";
+    memoryList.append(empty);
+    return;
+  }
+  for (const entry of safeEntries) {
+    const card = document.createElement("article");
+    card.className = "memory-card";
+    const title = document.createElement("p");
+    title.className = "memory-card-title";
+    title.textContent = entry.heading || entry.title || entry.site || "Remembered page";
+    const meta = document.createElement("p");
+    meta.className = "memory-card-meta";
+    const seen = new Date(Number(entry.last_seen_at)).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+    meta.textContent = `${entry.site || "site"} · ${entry.page_kind || "page"} · ${seen}${entry.visit_count > 1 ? ` · ${entry.visit_count} visits` : ""}`;
+    card.append(title, meta);
+    memoryList.append(card);
+  }
+}
+
+async function refreshBrowserMemory() {
+  const result = await request({ cmd: "selectiveBrowserMemoryStatus" });
+  if (!result?.ok) throw new Error(result?.error || "Could not read browser memory.");
+  renderBrowserMemory(result.enabled, result.entries);
+}
+
+memoryToggle.addEventListener("click", async () => {
+  const enabled = memoryToggle.getAttribute("aria-pressed") !== "true";
+  memoryToggle.disabled = true;
+  try {
+    const result = await request({ cmd: "selectiveBrowserMemorySetEnabled", enabled });
+    renderBrowserMemory(result.enabled, result.entries);
+  } catch (error) {
+    setStatus(String(error?.message || error), "error");
+  } finally {
+    memoryToggle.disabled = false;
+  }
+});
+
+memoryClear.addEventListener("click", async () => {
+  memoryClear.disabled = true;
+  try {
+    const result = await request({ cmd: "selectiveBrowserMemoryClear" });
+    renderBrowserMemory(result.enabled, result.entries);
+  } catch (error) {
+    setStatus(String(error?.message || error), "error");
+  } finally {
+    memoryClear.disabled = false;
+  }
+});
 
 // ---- Conversation log -------------------------------------------------------
 
@@ -555,4 +617,5 @@ form.addEventListener("submit", async (e) => {
 });
 
 ensurePort();
+refreshBrowserMemory().catch((error) => setStatus(String(error?.message || error), "error"));
 setStatus("Ready.");

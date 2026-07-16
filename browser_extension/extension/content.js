@@ -573,6 +573,30 @@
     return helper.sanitizeSignals(signals) || null;
   }
 
+  // A browser-memory card is intentionally much smaller than a page snapshot:
+  // it reads only page identity metadata, one primary heading, and the
+  // publisher-authored description. It never reads body prose, selections, or
+  // control values, and the background strips query/hash before persistence.
+  function collectSelectiveBrowserMemorySnapshot() {
+    const sensitivity = proactiveSensitivity();
+    if (sensitivity.suppressed) return { suppressed: true, reason: sensitivity.reason };
+    if (document.visibilityState !== "visible") return { suppressed: true, reason: "page_not_visible" };
+    const text = (value, limit) => String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
+    let description = "";
+    try {
+      description = document.querySelector('meta[name="description" i]')?.getAttribute("content") || "";
+    } catch {}
+    const card = proactiveHelper()?.classifyStructuralPage(collectProactiveSignals());
+    return {
+      schema_version: 1,
+      url: location.href,
+      title: text(document.title, 180),
+      heading: text(document.querySelector("h1")?.textContent, 280),
+      summary: text(description, 500),
+      page_kind: card?.kind || "page",
+    };
+  }
+
   function clearProactiveResumeListeners() {
     if (!proactiveResumeHandler) return;
     document.removeEventListener("visibilitychange", proactiveResumeHandler, true);
@@ -4512,6 +4536,9 @@
         return true;
       case "proactiveSensitivityCheck":
         reply(proactiveSensitivity());
+        return true;
+      case "selectiveBrowserMemorySnapshot":
+        reply(collectSelectiveBrowserMemorySnapshot());
         return true;
       case "proactiveGrantRevoked":
         if (!proactiveGrant || !msg.grantId || proactiveGrant.grantId === msg.grantId) {

@@ -19,6 +19,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/proactive-confirm.js",
   "extension/proactive-helper.js",
   "extension/settings-intent.js",
+  "extension/selective-browser-memory.js",
   "extension/sidepanel.js",
   "extension/stop-intent.js",
   "extension/tweaks.js",

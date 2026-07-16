@@ -262,6 +262,13 @@ async function main() {
     // Fresh installs intentionally have no implicit hosted gateway. This smoke
     // explicitly configures a fake origin before exercising intercepted voice
     // transport; no real request is expected to succeed at this hostname.
+    const defaultMemory = await evaluate(workerCdp, `chrome.storage.local.get({
+      ageeSelectiveBrowserMemoryEnabled: false,
+      ageeSelectiveBrowserMemoryEntries: []
+    })`);
+    if (defaultMemory.ageeSelectiveBrowserMemoryEnabled || defaultMemory.ageeSelectiveBrowserMemoryEntries.length) {
+      throw new Error(`selective browser memory was not default-off: ${JSON.stringify(defaultMemory)}`);
+    }
     await evaluate(workerCdp, `chrome.storage.local.set({
       ageeGatewayUrl: "http://agee-smoke.local",
       ageeGatewayToken: "",
@@ -1028,6 +1035,31 @@ async function main() {
       throw new Error(`cross-tab browser agent ownership smoke failed: ${JSON.stringify(ownershipResult)}`);
     }
 
+    // Selective browser memory is default-off. Turn it on in the throwaway
+    // profile, reload the active query-bearing fixture, and prove the real
+    // background -> content -> bounded local-store path strips the query and
+    // retains only the semantic card fields.
+    await evaluate(workerCdp, `chrome.storage.local.set({
+      ageeSelectiveBrowserMemoryEnabled: true,
+      ageeSelectiveBrowserMemoryEntries: []
+    })`);
+    await evaluate(workerCdp, `chrome.tabs.update(${ownershipResult.tabB}, { active: true })`);
+    await evaluate(workerCdp, `chrome.tabs.reload(${ownershipResult.tabB})`);
+    const memoryEntry = await waitForEval(workerCdp, `(async () => {
+      const stored = await chrome.storage.local.get("ageeSelectiveBrowserMemoryEntries");
+      return stored.ageeSelectiveBrowserMemoryEntries?.[0] || null;
+    })()`);
+    if (
+      memoryEntry.url !== demoUrl ||
+      memoryEntry.title !== "Agee Demo Page" ||
+      memoryEntry.heading !== "Agee Demo Page" ||
+      memoryEntry.page_kind !== "form" ||
+      "body" in memoryEntry ||
+      "screenshot" in memoryEntry
+    ) {
+      throw new Error(`selective browser memory stored an unexpected card: ${JSON.stringify(memoryEntry)}`);
+    }
+
     const screenshot = await pageCdp.send("Page.captureScreenshot", { format: "jpeg", quality: 40 });
     if (!screenshot?.data) throw new Error("page screenshot capture failed");
     const screenshotPath = join(artifactsDir, "demo.jpg");
@@ -1044,6 +1076,7 @@ async function main() {
         `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
         `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +
+        `selective memory retained one query-free semantic card, ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );
     console.log(`screenshot: ${screenshotPath}`);

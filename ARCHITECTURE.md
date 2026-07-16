@@ -33,6 +33,16 @@ Browser extension
   subscriptions, and it is not the deployment target for user-specific
   customizations.
 
+  An explicitly enabled selective-memory layer may retain a small inspectable
+  local card for an active visible HTTP(S) page: query-free URL, hostname,
+  title, first primary heading, publisher meta description, structural kind,
+  and visit timestamps/count. The background policy bounds, deduplicates,
+  expires, and caps this extension-profile store. Recognized sensitive pages
+  are suppressed first. This layer does not retain pixels, recordings, page
+  bodies, selections, form values, credentials, or cross-application content,
+  and it does not send or attach cards to gateway/model turns without a future
+  explicit synchronization contract.
+
 Native desktop surfaces
   Own: platform UI, Accessibility/UI Automation permission, product observation
   grants, local redaction, outbound preview, native action validation and

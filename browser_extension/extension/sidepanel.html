@@ -156,6 +156,16 @@
       #agentModeSelector { display: grid; gap: 4px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
       #agentModeSelector button { background: transparent; color: var(--muted); font-size: 11px; min-width: 0; padding-inline: 4px; }
       #agentModeSelector button[aria-pressed="true"] { background: var(--text); color: #111; font-weight: 650; }
+      .memory-section { border-bottom: 1px solid var(--border); padding: 10px 14px; }
+      .memory-row { align-items: center; display: flex; gap: 8px; }
+      .memory-copy { color: var(--muted); flex: 1; font-size: 11px; line-height: 1.4; }
+      .memory-actions { display: flex; gap: 6px; }
+      .memory-actions button { background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); cursor: pointer; font: inherit; font-size: 11px; padding: 6px 8px; }
+      #memoryToggle[aria-pressed="true"] { background: #233226; border-color: var(--speaking); color: var(--speaking); }
+      #memoryList { display: grid; gap: 7px; margin-top: 9px; max-height: 170px; overflow-y: auto; }
+      .memory-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+      .memory-card-title { font-size: 12px; line-height: 1.35; margin: 0; }
+      .memory-card-meta, .memory-empty { color: var(--muted); font-size: 10px; line-height: 1.4; margin: 3px 0 0; }
       footer {
         border-top: 1px solid var(--border);
         display: flex;
@@ -237,6 +247,19 @@
         <button id="agentModeCollaborate" data-agent-mode-option="collaborate" type="button" aria-pressed="false">Collaborate</button>
         <button id="agentModeExplain" data-agent-mode-option="explain" type="button" aria-pressed="false">Explain</button>
       </div>
+    </section>
+    <section class="memory-section" aria-labelledby="memoryLabel">
+      <div class="memory-row">
+        <div class="memory-copy">
+          <strong id="memoryLabel">Browser memory</strong><br />
+          Local semantic cards only. No screenshots, page body, forms, or gateway upload.
+        </div>
+        <div class="memory-actions">
+          <button id="memoryClear" type="button">Erase</button>
+          <button id="memoryToggle" type="button" aria-pressed="false">Off</button>
+        </div>
+      </div>
+      <div id="memoryList"><p class="memory-empty">Memory is off.</p></div>
     </section>
     <main id="log">
       <p class="hint">

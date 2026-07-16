@@ -32,6 +32,12 @@ import {
   browserTurnSummary,
   normalizeBrowserSnapshot,
 } from "./browser-turn-protocol.js";
+import {
+  BROWSER_MEMORY_ENABLED_KEY,
+  BROWSER_MEMORY_ENTRIES_KEY,
+  mergeMemoryEntries,
+  normalizeMemoryCandidate,
+} from "./selective-browser-memory.js";
 
 chrome.runtime.onInstalled.addListener(async () => {
   await initializePrivacyState();
@@ -94,6 +100,7 @@ const PROACTIVE_PROMPTS = Object.freeze({
 const proactiveGrants = new Map();
 const proactiveConfirmations = new Map();
 let proactiveReceiptWrite = Promise.resolve();
+let browserMemoryWrite = Promise.resolve();
 let privacyMigrationInFlight = null;
 const BROWSER_AGENT_PROGRESS_TEXT = {
   collecting_page_context: "collecting page context",
@@ -136,6 +143,52 @@ let creatingOffscreenVoiceDocument = null;
 // refuse while this is non-zero, or a delayed voice start would steal the
 // single offscreen capture slot from an in-flight audio note.
 let voiceStartPending = 0;
+
+async function browserMemoryStatus() {
+  const stored = await chrome.storage.local.get({
+    [BROWSER_MEMORY_ENABLED_KEY]: false,
+    [BROWSER_MEMORY_ENTRIES_KEY]: [],
+  });
+  const original = Array.isArray(stored[BROWSER_MEMORY_ENTRIES_KEY]) ? stored[BROWSER_MEMORY_ENTRIES_KEY] : [];
+  const entries = mergeMemoryEntries(original, null);
+  if (JSON.stringify(entries) !== JSON.stringify(original)) {
+    await chrome.storage.local.set({ [BROWSER_MEMORY_ENTRIES_KEY]: entries });
+  }
+  return { enabled: stored[BROWSER_MEMORY_ENABLED_KEY] === true, entries };
+}
+
+async function captureSelectiveBrowserMemory(tab) {
+  if (!tab?.id || !tab.active || !isInjectableOverlayUrl(tab.url)) {
+    return { stored: false, reason: "ineligible_tab" };
+  }
+  const [focusedTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (focusedTab?.id !== tab.id) return { stored: false, reason: "page_not_visible" };
+  const enabled = (await chrome.storage.local.get({ [BROWSER_MEMORY_ENABLED_KEY]: false }))[BROWSER_MEMORY_ENABLED_KEY] === true;
+  if (!enabled) return { stored: false, reason: "disabled" };
+  await ensureContent(tab.id);
+  const raw = await ask(tab.id, { cmd: "selectiveBrowserMemorySnapshot" }).catch(() => null);
+  const candidate = normalizeMemoryCandidate(raw);
+  if (!candidate) return { stored: false, reason: String(raw?.reason || "no_useful_page_facts") };
+  const write = browserMemoryWrite.then(async () => {
+    const stored = await chrome.storage.local.get({ [BROWSER_MEMORY_ENTRIES_KEY]: [] });
+    const entries = mergeMemoryEntries(stored[BROWSER_MEMORY_ENTRIES_KEY], candidate);
+    await chrome.storage.local.set({ [BROWSER_MEMORY_ENTRIES_KEY]: entries });
+    sendToPanel({ cmd: "selectiveBrowserMemoryChanged", entries });
+    return { stored: true, entries };
+  });
+  browserMemoryWrite = write.catch(() => {});
+  return write;
+}
+
+async function setSelectiveBrowserMemoryEnabled(enabled) {
+  const next = enabled === true;
+  await chrome.storage.local.set({ [BROWSER_MEMORY_ENABLED_KEY]: next });
+  if (next) {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    await captureSelectiveBrowserMemory(tab).catch(() => {});
+  }
+  return browserMemoryStatus();
+}
 
 async function getConfig() {
   return getEffectiveGatewayConfig();
@@ -5142,6 +5195,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "loading" || typeof changeInfo.url === "string") {
     revokeProactiveGrant(tabId, "navigation");
   }
+  if (changeInfo.status === "complete") {
+    chrome.tabs.get(tabId).then((tab) => captureSelectiveBrowserMemory(tab)).catch(() => {});
+  }
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId).then((tab) => captureSelectiveBrowserMemory(tab)).catch(() => {});
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -5347,6 +5407,17 @@ function closePanelSessions(reason) {
 }
 
 async function handlePanelRequest(msg) {
+  if (msg.cmd === "selectiveBrowserMemoryStatus") {
+    return { ok: true, ...(await browserMemoryStatus()) };
+  }
+  if (msg.cmd === "selectiveBrowserMemorySetEnabled") {
+    return { ok: true, ...(await setSelectiveBrowserMemoryEnabled(msg.enabled)) };
+  }
+  if (msg.cmd === "selectiveBrowserMemoryClear") {
+    await chrome.storage.local.set({ [BROWSER_MEMORY_ENTRIES_KEY]: [] });
+    sendToPanel({ cmd: "selectiveBrowserMemoryChanged", entries: [] });
+    return { ok: true, ...(await browserMemoryStatus()) };
+  }
   if (msg.cmd === "browserRoleTurn") {
     const role = normalizeBrowserAgentRole(msg.role);
     if (!role) return { ok: false, error: "Choose Delegate, Help, Collaborate, or Explain." };
