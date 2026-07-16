@@ -94,6 +94,55 @@ storage never move to the gateway. Every side effect still becomes a bound
 proposal that the owning gateway/device policy revalidates, approves, executes,
 and receipts.
 
+## Surface-local program execution boundary
+
+For delegated client work, the remote unit is one bounded program rather than
+one gateway/model round trip per primitive action. A surface advertises a
+versioned runtime profile and exact capability catalog; the gateway routes an
+inert `surface.execution.proposed` envelope to that exact device; the owning
+client revalidates and durably accepts it; then local calls branch, observe, and
+compose inside the client. Only bounded lifecycle events and receipts return to
+the gateway. Cross-surface work remains a new proposal to the other owner and
+never inherits the current program's approval.
+
+Runtime language follows the safest maintained scripting host on each surface:
+
+- Browser `browser.javascript.v1` runs extension-local JavaScript against
+  packaged tab/DOM/keyboard/screenshot/CDP adapters. Orchestration source does
+  not run as privileged service-worker code; page evaluation and persistent
+  userscripts are separately advertised and bound to tab, frame, origin,
+  document epoch, execution world, and site grant.
+- Android `android.webview-js.v1` runs JavaScript in a dedicated non-visible,
+  state-isolated WebView and bridges narrowly into Java/Kotlin. Cross-app
+  observation and control are Accessibility-first; every node action binds and
+  revalidates package, window, observation generation, and node fingerprint.
+- macOS `macos.javascriptcore-ax.v1` runs a fresh JavaScriptCore realm over a
+  narrow Swift/public-AX bridge. JXA, AppleScript, and bounded shell are
+  separate opt-in profiles with separate targets, allowlists, grants, limits,
+  approvals, and receipts; enabling one grants nothing to another.
+- Gateway `gateway.quickjs.v1` remains for gateway-owned APIs, storage, routing,
+  connectors, and run functions. It does not proxy browser DOM, Android
+  Accessibility, or macOS AX primitives as its inner execution loop.
+
+Programs receive immutable local tools and budgets, never ambient credentials,
+browser session material, raw platform object graphs, unrestricted filesystem,
+network, reflection, Keychain, shell, or extension globals. Reads may run in
+parallel; writes serialize by resource. Externally visible or irreversible
+effects are never speculative or duplicated and still stop at local approval
+and idempotency boundaries. A checkpoint is evidence, not rollback, unless a
+specific adapter supplies and verifies a real restore operation.
+
+Every attempted host call and program termination has a bounded local receipt,
+including rejection, stale state, timeout, stop, interruption, and indeterminate
+outcomes. Receipts bind program/catalog/state digests but omit raw pages,
+screenshots, Accessibility/AX trees, form values, logs, environment, and
+credentials. Automated QA uses only disposable browser profiles and fixture
+origins, fixture Android apps/emulators, dedicated macOS accounts/VMs, isolated
+server state, and separate artifact roots. New executable modules must each
+exceed 90% line and branch coverage; aggregate coverage cannot hide a weak
+runtime module. Build, package, install, smoke, and active promotion remain
+distinct evidence states.
+
 ## Cross-surface release boundary
 
 Release selection is a shared planning contract over immutable artifact
