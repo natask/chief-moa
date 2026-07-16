@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function loadWorker() {
   const messages = [];
-  delete globalThis.onmessage;
-  globalThis.postMessage = (message) => messages.push(message);
-  await import(`../extension/program-sandbox-worker.js?test=${Math.random()}`);
-  globalThis.AgeeProgramWorkerRuntime();
-  return { messages, deliver: (data) => globalThis.onmessage({ data }) };
+  const filename = new URL("../extension/program-sandbox-worker.js", import.meta.url);
+  const context = { TextEncoder, postMessage: (message) => messages.push(message) };
+  runInNewContext(`${readFileSync(filename, "utf8")}\nAgeeProgramWorkerRuntime();`, context, { filename: filename.pathname });
+  return { messages, deliver: (data) => context.onmessage({ data }) };
 }
 
 test("program worker exposes immutable tools and executes parallel branching", async () => {
@@ -18,7 +19,7 @@ test("program worker exposes immutable tools and executes parallel branching", a
   worker.deliver({ type: "program_start", source: `
     const frozen = Object.isFrozen(tools) && Object.isFrozen(tools.browser.page);
     const [page, tab] = await Promise.all([tools.browser.page.snapshot({}), tools.browser.tab.get({})]);
-    return {frozen,page,tab};`, result_bytes: 4096, memory_bytes: null, log_bytes: 100 });
+    return {frozen,ambient_post_message:typeof globalThis.postMessage,global_console_locked:Object.getOwnPropertyDescriptor(globalThis,"console").writable===false,page,tab};`, result_bytes: 4096, memory_bytes: null, log_bytes: 100 });
   await tick();
   const calls = worker.messages.filter((message) => message.type === "tool_call");
   assert.deepEqual(calls.map((message) => message.capability_id), ["browser.page.snapshot", "browser.tab.get"]);
@@ -26,7 +27,7 @@ test("program worker exposes immutable tools and executes parallel branching", a
   worker.deliver({ type: "tool_result", call_id: calls[1].call_id, ok: true, result: "tab" });
   worker.deliver({ type: "tool_result", call_id: 999, ok: true, result: null });
   await tick();
-  assert.deepEqual(worker.messages.at(-1), { type: "program_result", ok: true, result: { frozen: true, page: "page", tab: "tab" } });
+  assert.equal(JSON.stringify(worker.messages.at(-1)), JSON.stringify({ type: "program_result", ok: true, result: { frozen: true, ambient_post_message: "undefined", global_console_locked: true, page: "page", tab: "tab" } }));
   worker.deliver({ type: "program_start", source: "return 2", result_bytes: 10, memory_bytes: null, log_bytes: 0 });
 });
 
