@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
@@ -15,6 +16,7 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
 import android.util.Log;
+import android.view.ActionMode;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -56,28 +58,12 @@ public final class OverlayService extends Service {
     private static final int ORB_EDGE_MARGIN_DP = 16;
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
-    // A text-only reply (the gateway returned text but no spoken audio) is held on
-    // screen noticeably longer than a spoken one, since the eye is the only way to
-    // receive it. Paired with a small "(not spoken)" marker so it does not read as
-    // a broken or blank turn. No local TTS is used (hosted-audio-only policy).
     private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
     private static final String NOT_SPOKEN_SUFFIX = "\n\n(not spoken)";
-    // Inactivity watchdog for a committed streaming turn. It is armed on commit
-    // and RESET by every streaming event (partial/final transcript, assistant
-    // text, assistant audio start + each audio frame, turn_progress keepalives).
-    // If no event arrives for this long while a turn is in flight, the turn is
-    // torn down with a visible + spoken timeout notice so the user is never left
-    // in unexplained silence. Cleared on turn_done.
-    //
-    // 30s is the no-keepalive fallback: the gateway's reasoning budget is ~45s,
-    // but it now emits turn_progress every ~5s during the reasoning and TTS legs,
-    // so a healthy long answer re-arms well within 30s. An old gateway (no
-    // keepalive) still gets a generous 30s before a false timeout.
     private static final long STREAMING_TURN_WATCHDOG_MS = 30000;
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
     private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
-    // Record mode: raw PCM16 mono at 16 kHz, capped at ~5 minutes per note.
     private static final int AUDIO_NOTE_BYTES_PER_SECOND =
             MoaAudioCaptureController.SAMPLE_RATE_HZ * 2 * MoaAudioCaptureController.CHANNEL_COUNT;
     private static final int AUDIO_NOTE_MAX_BYTES = AUDIO_NOTE_BYTES_PER_SECOND * 300;
@@ -94,10 +80,6 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams transcriptParams;
     private View orbRemoveTarget;
     private boolean orbRemoveTargetActive;
-    // Two surfaces hang off the orb. TAP opens the chat panel: a polished card
-    // with bubbles + composer, the place to read the conversation and type.
-    // DOUBLE-CLICK-AND-HOLD opens the voice surface: a compact native transcript
-    // card showing live user words and the assistant response as separate rows.
     private View panelView;
     private LinearLayout messageColumn;
     private ScrollView messageScroll;
@@ -108,16 +90,17 @@ public final class OverlayService extends Service {
     private ScrollView voiceTranscriptScroll;
     private TextView voiceMetaLine;
     private TextView voiceLanguageLine;
+    private boolean transcriptSelectionActive;
     private TextView voiceCancelControl;
     private TextView voiceSendControl;
     private WindowManager.LayoutParams voiceCancelControlParams;
     private WindowManager.LayoutParams voiceSendControlParams;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
-    // Persistent, stacked transcript. Each turn appends a fresh user + assistant
-    // row; older rows stay until the user swipes them away. The scalar mirrors
-    // below track only the current turn's rows so the large body of streaming
-    // logic that reads voiceUserTranscript / voiceAssistantTranscript keeps
-    // working unchanged.
+    private AlertDialog toolConfirmationDialog;
+    private final MoaToolRequestGate toolRequestGate = new MoaToolRequestGate();
+    private MoaToolReceiptOutbox toolReceiptOutbox;
+    private MoaToolReceiptOutbox.Reservation activeToolReservation;
+    private String activeToolName = "";
     private static final int MAX_VOICE_TRANSCRIPT_ENTRIES = 20;
     private final MoaVoiceTranscriptLog voiceLog =
             new MoaVoiceTranscriptLog(MAX_VOICE_TRANSCRIPT_ENTRIES);
@@ -126,15 +109,11 @@ public final class OverlayService extends Service {
     private boolean voiceUserTranscriptFinal;
     private boolean animateNextAssistantRow;
     private boolean currentStreamingAssistantRecorded;
-    // Live language status for the session header. Speak updates when a turn_done
-    // carries reply_language; both fall back to the cached agent profile.
     private String sessionSpeakLanguage = "";
     private String sessionHearLanguages = "";
     private Runnable pendingAutoDismiss;
     private Runnable pendingContinuousVoiceRestart;
     private Runnable pendingStreamingTurnWatchdog;
-    // Shape of the current streaming turn, kept so a pre-commit failure can
-    // silently restart the same kind of turn exactly once.
     private boolean streamingTurnAutoCommit;
     private boolean streamingTurnContinuous;
     private boolean streamingTurnRetried;
@@ -157,47 +136,24 @@ public final class OverlayService extends Service {
     private boolean nextStreamingTurnFollowsActiveRun;
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
-    // Set when a voice-first tap starts the loop, cleared once the first turn
-    // captures speech or re-arms. While true, a first turn that ends as an empty
-    // no_speech turn disarms quietly instead of surfacing "I didn't catch that".
     private boolean suppressFirstTapTurnEmptyCue;
     private boolean pushToTalkVoiceTurn;
-    // Record mode: while enabled, double-click-and-hold captures a raw audio
-    // note locally and uploads it on release. Never a voice turn.
     private boolean recordModeEnabled;
     private boolean audioNoteActive;
     private MoaAudioCaptureController audioNoteCapture;
     private ByteArrayOutputStream audioNoteBuffer;
-    // One shared warm microphone. The gesture warms it at the second-tap press so
-    // the head of an utterance is buffered before the ~120ms hold confirms, then
-    // hands it to whichever capture path the hold resolves to (streaming voice or
-    // a record-mode note). Also pre-warmed during the continuous re-arm gap so a
-    // hands-free turn does not pay a fresh AudioRecord cold-start. Null when idle.
     private MoaAudioCaptureController warmMic;
     private TextView recordModePill;
-    // Context/thread controls (client-affordances lane). "New thread" arms a
-    // one-shot so the NEXT sent turn (chat or voice) starts a fresh thread;
-    // incognito is a persistent mode where every turn is answered but never
-    // persisted by the gateway. Both are explicit client overrides that always
-    // win over the model's own context choice.
     private final MoaContextControlState contextControls = new MoaContextControlState();
     private TextView newThreadPill;
     private TextView incognitoPill;
     private LinearLayout contextControlsRow;
-    // The active streaming voice session runs on an inc- branch fixed at session
-    // start via /v1/threads/switch; its turns are never persisted, so the reply
-    // is marked "(not saved)".
     private boolean streamingTurnIncognito;
-    // Guards the async /v1/threads/switch that resolves a branch before a
-    // streaming voice session can open for an incognito / new-thread turn.
     private int streamingSwitchToken;
     private boolean streamingBranchSwitchPending;
     private boolean streamingCommitPendingOpen;
     private boolean pendingContinuousVoiceRestartAfterAudio;
     private boolean streamingAssistantAudioPlaying;
-    // Whether any assistant audio frame actually played during the current
-    // streaming turn. Drives the local TTS fallback when the gateway produced
-    // text but never spoke it (for example am-ET replies with no hosted voice).
     private boolean currentStreamingTurnAudioReceived;
     private boolean deviceClientLoopRunning;
     private boolean deviceClientPollInFlight;
@@ -219,6 +175,7 @@ public final class OverlayService extends Service {
         running = true;
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         actionBroker = new MoaActionBroker(this);
+        toolReceiptOutbox = new MoaToolReceiptOutbox(this);
         voiceController = new MoaVoiceController(this, new MoaVoiceController.Callback() {
             @Override
             public void onVoiceStateChanged() {
@@ -227,8 +184,6 @@ public final class OverlayService extends Service {
 
             @Override
             public void onShowPanelRequested() {
-                // Voice never pops the chat panel. The panel is only for the
-                // tap-to-type path. Voice shows the live transcript surface.
                 showTranscriptOverlay("");
                 setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
             }
@@ -274,8 +229,6 @@ public final class OverlayService extends Service {
         });
         loadSettings();
         refreshVoiceProfile();
-        // No sessions: never restore a prior conversation. Clear any history left
-        // by an older build so the orb always starts fresh.
         MoaPrefs.setHistoryJson(this, "");
         promoteToForeground();
         MoaUpdateNotifier.checkAsync(this, gatewayUrl, gatewayToken);
@@ -284,9 +237,6 @@ public final class OverlayService extends Service {
         adoptSharedSessionId();
     }
 
-    // Join the gateway's canonical shared session so every surface (phone,
-    // browser) writes into one conversation. Best-effort and off the main
-    // thread: an offline or older gateway leaves the local id untouched.
     private void adoptSharedSessionId() {
         if (gatewayUrl.isEmpty()) {
             return;
@@ -306,8 +256,6 @@ public final class OverlayService extends Service {
                     }
                 });
             } catch (Exception ignored) {
-                // Offline or a gateway without the shared-session route: keep the
-                // existing local conversation id.
             }
         }, "moa-shared-session").start();
     }
@@ -341,7 +289,13 @@ public final class OverlayService extends Service {
 
     @Override
     public void onDestroy() {
+        String pendingToolRequest = toolRequestGate.active();
+        if (!pendingToolRequest.isEmpty()) finishClaimedToolRequest(pendingToolRequest,
+                new ToolRequestExecution(false, "Overlay stopped before the local action completed.", null));
         running = false;
+        MoaAccessibilityService.cancelActiveYoutubeOperation();
+        if (toolConfirmationDialog != null) toolConfirmationDialog.dismiss();
+        toolConfirmationDialog = null;
         cancelAudioNoteCapture();
         discardWarmMic();
         cancelStreamingTurnWatchdog();
@@ -519,8 +473,6 @@ public final class OverlayService extends Service {
         }, "moa-voice-profile").start();
     }
 
-    // No sessions: live turns stay in memory only for the panel's current view.
-    // They are never persisted, so a restart begins with a clean orb.
     private void addMessage(boolean assistant, String text) {
         if (text == null || text.trim().isEmpty()) {
             return;
@@ -633,6 +585,57 @@ public final class OverlayService extends Service {
         updateVoiceDraftControlPositions();
     }
 
+    private void attachSurfaceHeaderDrag(View header) {
+        int touchSlop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+        header.setOnTouchListener(new View.OnTouchListener() {
+            private float downX;
+            private float downY;
+            private int startX;
+            private int startY;
+            private boolean dragging;
+
+            @Override
+            public boolean onTouch(View view, android.view.MotionEvent event) {
+                if (orbView == null || orbParams == null) return false;
+                switch (event.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        downX = event.getRawX();
+                        downY = event.getRawY();
+                        startX = orbParams.x;
+                        startY = orbParams.y;
+                        dragging = false;
+                        return true;
+                    case android.view.MotionEvent.ACTION_MOVE:
+                        int dx = Math.round(event.getRawX() - downX);
+                        int dy = Math.round(event.getRawY() - downY);
+                        if (!dragging && (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop)) {
+                            dragging = true;
+                            hideKeyboard();
+                        }
+                        if (!dragging) return true;
+                        int size = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
+                        int margin = dp(ORB_EDGE_MARGIN_DP);
+                        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+                        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+                        orbParams.x = Math.max(margin, Math.min(startX + dx, screenWidth - size - margin));
+                        orbParams.y = Math.max(margin, Math.min(startY + dy, screenHeight - size - margin));
+                        try {
+                            windowManager.updateViewLayout(orbView, orbParams);
+                            updateAnchoredSurfacePositions();
+                        } catch (IllegalArgumentException ignored) {
+                            return false;
+                        }
+                        return true;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        return dragging;
+                    default:
+                        return false;
+                }
+            }
+        });
+    }
+
     private void showOrbRemoveTarget() {
         if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
             return;
@@ -726,18 +729,11 @@ public final class OverlayService extends Service {
                 width,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 overlayType(),
-                // NOT_TOUCH_MODAL lets touches outside the panel reach the app
-                // underneath; WATCH_OUTSIDE_TOUCH delivers those outside touches
-                // to us as ACTION_OUTSIDE so the first tap off the panel closes
-                // the overlay UI back to just the orb.
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 android.graphics.PixelFormat.TRANSLUCENT
         );
-        // The surface follows the orb and flips above/below it when one side
-        // cannot fit. The IME does not resize overlay windows, so positioning is
-        // kept independent from keyboard animation.
         panelParams.gravity = Gravity.TOP | Gravity.START;
         panelParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
 
@@ -791,8 +787,6 @@ public final class OverlayService extends Service {
         panelView = null;
         panelParams = null;
         panelOpen = false;
-        // Drop references so stale async callbacks (render, status) never write
-        // into a detached panel.
         messageColumn = null;
         messageScroll = null;
         composer = null;
@@ -830,9 +824,6 @@ public final class OverlayService extends Service {
         }
     }
 
-    // The voice surface is a compact transcript, not a transport log. It shows
-    // what the user said and what Moa is saying, while connection/commit state
-    // is rendered only as subtle surface state.
     private void showTranscriptOverlay(String value) {
         if (!Settings.canDrawOverlays(this)) {
             return;
@@ -852,7 +843,7 @@ public final class OverlayService extends Service {
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(MoaDrawables.roundedGradient(0xF4101D18, 0xF40A1410, dp(24), 0x33F4D35E, dp(1)));
+        card.setBackground(MoaDrawables.roundedGradient(MoaColors.RAISED, MoaColors.PANEL_BG, dp(24), MoaColors.PANEL_BORDER, dp(1)));
         card.setElevation(dp(26));
         card.setPadding(dp(16), dp(14), dp(16), dp(16));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -926,11 +917,17 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
+        TextView hide = pill("Hide", 0x16FF453A, 0xFFFFAAA4);
+        hide.setContentDescription("Hide the A.G. orb");
+        hide.setOnClickListener(v -> stopSelf());
+        header.addView(hide);
+        TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
+        close.setContentDescription("Cancel voice and close transcript");
+        close.setOnClickListener(v -> dismissOverlayUi());
+        header.addView(close);
+        attachSurfaceHeaderDrag(header);
         container.addView(header);
 
-        // A dedicated line that ALWAYS shows the current hear (STT) / speak
-        // (reply) languages, even while an agent run is active, so the language
-        // segment is never replaced by run status.
         voiceLanguageLine = text("", MoaColors.MUTED, 11, false);
         voiceLanguageLine.setLetterSpacing(0.02f);
         voiceLanguageLine.setPadding(dp(2), 0, dp(2), dp(8));
@@ -1026,9 +1023,6 @@ public final class OverlayService extends Service {
         int gap = dp(8);
         int margin = dp(12);
 
-        // Keep the entire X — orb — Send chord reachable. The orb only moves
-        // inward when a reviewable draft is active, and remains freely draggable
-        // within that safe horizontal lane.
         int minOrbX = margin + controlSize + gap;
         int maxOrbX = Math.max(minOrbX, screenWidth - margin - controlSize - gap - orbSize);
         int safeOrbX = Math.max(minOrbX, Math.min(orbParams.x, maxOrbX));
@@ -1138,8 +1132,6 @@ public final class OverlayService extends Service {
         if (value.isEmpty()) {
             return;
         }
-        // Animate a freshly-appended assistant row; a suffix/edit on the same
-        // row (e.g. "(not spoken)") updates in place without re-animating.
         if (voiceLog.currentAssistantText().isEmpty()) {
             animateNextAssistantRow = true;
         }
@@ -1152,8 +1144,6 @@ public final class OverlayService extends Service {
         renderVoiceTranscriptRows();
     }
 
-    // Rebuild every persistent row from the log. Older rows stay on screen until
-    // swiped away; the newest assistant row optionally fades in.
     private void renderVoiceTranscriptRows() {
         if (voiceTranscriptColumn == null) {
             return;
@@ -1184,15 +1174,15 @@ public final class OverlayService extends Service {
         scrollVoiceTranscriptToBottom();
     }
 
-    // Horizontal swipe on a row dismisses that row and every older row (all the
-    // rows stacked above it). A vertical drag is left to the CappedScrollView.
     private void attachSwipeDismiss(final View row, final MoaVoiceTranscriptLog.Entry entry) {
         final int touchSlop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
-        row.setOnTouchListener(new View.OnTouchListener() {
+        final long longPressMs = android.view.ViewConfiguration.getLongPressTimeout();
+        View.OnTouchListener listener = new View.OnTouchListener() {
             private float downX;
             private float downY;
             private boolean decided;
             private boolean swiping;
+            private long downTime;
 
             @Override
             public boolean onTouch(View v, android.view.MotionEvent event) {
@@ -1202,33 +1192,34 @@ public final class OverlayService extends Service {
                         downY = event.getRawY();
                         decided = false;
                         swiping = false;
-                        // Claim the gesture stream; a vertical drag is still handed
-                        // back to the scroll parent (it intercepts on its own).
-                        return true;
+                        downTime = event.getEventTime();
+                        return v == row;
                     case android.view.MotionEvent.ACTION_MOVE: {
                         float dx = event.getRawX() - downX;
                         float dy = event.getRawY() - downY;
                         if (!decided) {
-                            if (Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy) * 1.4f) {
+                            MoaTranscriptSwipePolicy.Decision decision = MoaTranscriptSwipePolicy.decide(
+                                    dx, dy, touchSlop, event.getEventTime() - downTime,
+                                    longPressMs, transcriptSelectionActive);
+                            if (decision == MoaTranscriptSwipePolicy.Decision.SWIPE) {
                                 decided = true;
                                 swiping = true;
-                                android.view.ViewParent parent = v.getParent();
+                                android.view.ViewParent parent = row.getParent();
                                 if (parent != null) {
                                     parent.requestDisallowInterceptTouchEvent(true);
                                 }
-                            } else if (Math.abs(dy) > touchSlop) {
-                                // Vertical: release to the scroll container.
+                            } else if (decision == MoaTranscriptSwipePolicy.Decision.RELEASE) {
                                 decided = true;
                                 swiping = false;
                             }
                         }
                         if (swiping) {
-                            v.setTranslationX(dx);
-                            float frac = Math.min(1f, Math.abs(dx) / Math.max(1, v.getWidth()));
-                            v.setAlpha(1f - 0.72f * frac);
+                            row.setTranslationX(dx);
+                            float frac = Math.min(1f, Math.abs(dx) / Math.max(1, row.getWidth()));
+                            row.setAlpha(1f - 0.72f * frac);
                             return true;
                         }
-                        return true;
+                        return v == row;
                     }
                     case android.view.MotionEvent.ACTION_UP:
                     case android.view.MotionEvent.ACTION_CANCEL: {
@@ -1236,12 +1227,12 @@ public final class OverlayService extends Service {
                             return false;
                         }
                         float dx = event.getRawX() - downX;
-                        float width = Math.max(1, v.getWidth());
-                        boolean dismiss = Math.abs(dx) > width * 0.33f || Math.abs(dx) > dp(120);
+                        float width = Math.max(1, row.getWidth());
+                        boolean dismiss = MoaTranscriptSwipePolicy.shouldDismiss(dx, width, dp(120));
                         if (dismiss && event.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
-                            animateSwipeOutThenCascade(v, entry, dx >= 0);
+                            animateSwipeOutThenCascade(row, entry, dx >= 0);
                         } else {
-                            v.animate().translationX(0f).alpha(1f).setDuration(150).start();
+                            row.animate().translationX(0f).alpha(1f).setDuration(150).start();
                         }
                         return true;
                     }
@@ -1249,7 +1240,21 @@ public final class OverlayService extends Service {
                         return false;
                 }
             }
-        });
+        };
+        row.setOnTouchListener(listener);
+        View selectable = findSelectableText(row);
+        if (selectable != null) selectable.setOnTouchListener(listener);
+    }
+
+    private View findSelectableText(View view) {
+        if (view instanceof TextView && ((TextView) view).isTextSelectable()) return view;
+        if (!(view instanceof ViewGroup)) return null;
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View found = findSelectableText(group.getChildAt(i));
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private void animateSwipeOutThenCascade(final View row, final MoaVoiceTranscriptLog.Entry entry, boolean toRight) {
@@ -1266,7 +1271,6 @@ public final class OverlayService extends Service {
 
     private void dismissCascadeFromEntry(MoaVoiceTranscriptLog.Entry entry) {
         voiceLog.dismissCascadeFrom(entry);
-        // Keep the current-turn scalar mirrors honest after a cascade.
         voiceUserTranscript = voiceLog.currentUserText();
         voiceAssistantTranscript = voiceLog.currentAssistantText();
         if (voiceLog.isEmpty()) {
@@ -1298,6 +1302,16 @@ public final class OverlayService extends Service {
 
         String bodyText = text.isEmpty() ? "..." : text;
         TextView body = text(bodyText, MoaColors.PAPER, assistant ? 15 : 16, false);
+        body.setTextIsSelectable(true);
+        body.setCustomSelectionActionModeCallback(new ActionMode.Callback() {
+            @Override public boolean onCreateActionMode(ActionMode mode, android.view.Menu menu) {
+                transcriptSelectionActive = true;
+                return true;
+            }
+            @Override public boolean onPrepareActionMode(ActionMode mode, android.view.Menu menu) { return false; }
+            @Override public boolean onActionItemClicked(ActionMode mode, android.view.MenuItem item) { return false; }
+            @Override public void onDestroyActionMode(ActionMode mode) { transcriptSelectionActive = false; }
+        });
         body.setLineSpacing(dp(4), 1f);
         body.setMaxWidth(Math.min(getResources().getDisplayMetrics().widthPixels - dp(92), dp(430)));
         body.setAlpha(text.isEmpty() ? 0.48f : finalText ? 1f : 0.82f);
@@ -1323,9 +1337,6 @@ public final class OverlayService extends Service {
         voiceRuntimeState = state == null ? VoiceRuntimeState.READY : state;
         updateVoiceHeaderState();
         updateVoiceDraftControls();
-        // Single choke point for the orb's response state so the lion visibly
-        // reflects thinking / responding / error without touching other call
-        // sites. The watchdog + error paths become visible here for free.
         if (orbView != null) {
             orbView.setResponseState(orbResponseStateFor(voiceRuntimeState));
         }
@@ -1349,9 +1360,6 @@ public final class OverlayService extends Service {
     private void updateVoiceHeaderState() {
         String runStatus = agentRunStatusText();
         if (voiceMetaLine != null) {
-            // When a run is active, show BOTH the run status and the live voice
-            // state; otherwise show the voice state and companion name. The
-            // language is on its own always-visible line, never dropped here.
             String status = "Ready".equals(runStatus)
                     ? voiceStateWord() + " · " + MoaPrefs.companionName(this)
                     : runStatus + " · " + voiceStateWord();
@@ -1363,8 +1371,6 @@ public final class OverlayService extends Service {
         }
     }
 
-    // Always-visible "Hears <in> / Speaks <out>" line. Speak reflects the last
-    // turn_done reply_language when seen; both fall back to the agent profile.
     private String sessionLanguageStatus() {
         String hear = sessionHearLanguages.isEmpty()
                 ? MoaPrefs.inputLanguagesShort(this)
@@ -1457,10 +1463,6 @@ public final class OverlayService extends Service {
         if (transcriptView == null) {
             return;
         }
-        // The transcript log survives a window teardown so the messages persist
-        // across barge-in / controller churn and reappear when voice reopens.
-        // Only an explicit user dismissal (dismissOverlayUi / collapse / swipe
-        // to empty / onDestroy) clears the log.
         final View dying = transcriptView;
         transcriptView = null;
         transcriptParams = null;
@@ -1468,6 +1470,7 @@ public final class OverlayService extends Service {
         voiceTranscriptScroll = null;
         voiceMetaLine = null;
         voiceLanguageLine = null;
+        transcriptSelectionActive = false;
         dying.animate()
                 .alpha(0f)
                 .translationY(dp(12))
@@ -1477,9 +1480,6 @@ public final class OverlayService extends Service {
                 .start();
     }
 
-    // The voice card is a persistent transcript now: it is no longer torn down by
-    // a reading-time timer. cancelAutoDismiss stays as a defensive no-op guard in
-    // case any stray legacy dismissal was ever posted.
     private void cancelAutoDismiss() {
         if (pendingAutoDismiss != null) {
             mainHandler.removeCallbacks(pendingAutoDismiss);
@@ -1497,20 +1497,12 @@ public final class OverlayService extends Service {
         if (continuousVoiceLoop) {
             scheduleContinuousVoiceRestart(streamingVoiceGeneration);
         }
-        // Non-continuous: the reply STAYS on the card so it can be read. It is
-        // only removed by an explicit dismissal or a swipe, never by a timer.
     }
 
     private void scheduleContinuousVoiceRestart(int generation) {
-        // Re-arming for a later turn: the first tap-started turn is over, so the
-        // quiet-disarm suppression no longer applies.
         suppressFirstTapTurnEmptyCue = false;
         cancelAutoDismiss();
         cancelContinuousVoiceRestart();
-        // Warm the mic through the re-arm gap so the next hands-free turn opens on
-        // an already-hot AudioRecord instead of paying a fresh cold-start. The
-        // silence-VAD path drops the pre-roll on go-live, so this only removes
-        // latency and never feeds stale gap audio into voice-activity detection.
         beginWarmMic();
         pendingContinuousVoiceRestart = () -> {
             pendingContinuousVoiceRestart = null;
@@ -1532,9 +1524,7 @@ public final class OverlayService extends Service {
 
     private View createPanel() {
         FrameLayout shell = new FrameLayout(this);
-        // Rounded dark card: a soft top-to-bottom gradient plus a hairline border
-        // and real elevation so it reads as a raised surface, not a flat box.
-        shell.setBackground(MoaDrawables.roundedGradient(0xF20D1A15, MoaColors.PANEL_BG, dp(26), MoaColors.PANEL_BORDER, dp(1)));
+        shell.setBackground(MoaDrawables.roundedGradient(MoaColors.RAISED, MoaColors.PANEL_BG, dp(26), MoaColors.PANEL_BORDER, dp(1)));
         shell.setElevation(dp(28));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             shell.setOutlineSpotShadowColor(0xFF000000);
@@ -1617,13 +1607,10 @@ public final class OverlayService extends Service {
         close.setContentDescription("Close chat");
         close.setOnClickListener(v -> dismissOverlayUi());
         header.addView(close);
+        attachSurfaceHeaderDrag(header);
         return header;
     }
 
-    // Compact thread controls under the header. "New thread" arms a one-shot
-    // fresh-thread state for the next turn; "Incognito" toggles a persistent
-    // no-persistence mode. The row itself tints while incognito is on so the
-    // state reads at a glance without opening the full app.
     private View createContextControlsRow() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1652,14 +1639,11 @@ public final class OverlayService extends Service {
         return row;
     }
 
-    // Arm/disarm the one-shot new-thread state. Re-tapping disarms it; it is also
-    // consumed automatically once a turn rides on it.
     private void toggleNewThreadArmed() {
         contextControls.toggleNewThread();
         refreshContextControls();
     }
 
-    // Toggle the persistent incognito mode on/off.
     private void toggleIncognito() {
         contextControls.toggleIncognito();
         refreshContextControls();
@@ -1712,7 +1696,7 @@ public final class OverlayService extends Service {
 
         composer = new EditText(this);
         composer.setHint("Message A.G.");
-        composer.setHintTextColor(0x66B8C9C2);
+        composer.setHintTextColor(MoaColors.MUTED);
         composer.setTextColor(MoaColors.PAPER);
         composer.setTextSize(15);
         composer.setMinLines(1);
@@ -1739,8 +1723,6 @@ public final class OverlayService extends Service {
         return row;
     }
 
-    // The empty-panel hint mirrors whichever gesture contract is active so the
-    // legend never contradicts the orb.
     private String orbGestureHint() {
         if (MoaPrefs.voiceFirstGestures(this)) {
             return recordModeEnabled
@@ -1777,9 +1759,6 @@ public final class OverlayService extends Service {
         }
     }
 
-    // Real chat bubbles. Assistant left, dark raised fill, hairline border, the
-    // bottom-left corner tucked. User right, teal-violet tint, bottom-right
-    // corner tucked. A small muted sender label sits above each.
     private View messageBubble(ChatMessage message) {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
@@ -2245,7 +2224,7 @@ public final class OverlayService extends Service {
     }
 
     private void pollDeviceClientOnce() {
-        if (deviceClientPollInFlight) {
+        if (deviceClientPollInFlight || !toolRequestGate.active().isEmpty()) {
             return;
         }
         loadSettings();
@@ -2268,6 +2247,15 @@ public final class OverlayService extends Service {
         new Thread(() -> {
             try {
                 MoaGatewayClient client = new MoaGatewayClient(url, token);
+                MoaToolReceiptOutbox.Snapshot receipts = toolReceiptOutbox.snapshot();
+                if (!receipts.healthy || !receipts.uncertainReservations.isEmpty()) return;
+                for (MoaToolReceiptOutbox.PendingReceipt pending : receipts.pending) {
+                    JSONObject response = client.toolRequestReceipt(pending.requestId, pending.body());
+                    MoaToolReceiptOutbox.Acknowledgement acknowledgement =
+                            MoaToolReceiptOutbox.gatewayAcknowledgement(pending, response);
+                    if (toolReceiptOutbox.acknowledge(pending, acknowledgement)
+                            != MoaToolReceiptOutbox.AckResult.REMOVED) return;
+                }
                 client.deviceHeartbeat(heartbeat);
                 JSONObject claimed = client.claimToolRequest(claim);
                 JSONObject request = claimed.optJSONObject("request");
@@ -2297,10 +2285,10 @@ public final class OverlayService extends Service {
         metadata.put("overlay_running", true);
         metadata.put("context_descriptor", actionBroker.activeAppDescriptor());
         metadata.put("execution_adapters", actionBroker.executionAdapters());
+        metadata.put("media_session", actionBroker.mediaSessionDescriptor());
         body.put("metadata", metadata);
         return body;
     }
-
     private JSONObject deviceClientClaimBody() throws JSONException {
         JSONObject body = new JSONObject();
         body.put("device_id", androidDeviceId());
@@ -2309,64 +2297,128 @@ public final class OverlayService extends Service {
         return body;
     }
 
-    // Keep this list in sync with MoaActionBroker.createCapabilityManifest(),
-    // which is the authority that actually executes and receipts each tool.
-    // audio.speak is overlay-local (not in the broker manifest); every other
-    // entry here must match the broker's risk/approval for the same tool name.
     private JSONArray androidLocalToolManifest() throws JSONException {
-        JSONArray manifest = new JSONArray();
-        putToolManifestItem(manifest, "app.launch", "navigation", "implicit_user_command");
-        putToolManifestItem(manifest, "app.list", "read_only", "none");
-        putToolManifestItem(manifest, "system.back", "navigation", "implicit_user_command");
-        putToolManifestItem(manifest, "system.home", "navigation", "implicit_user_command");
-        putToolManifestItem(manifest, "screen.summary", "read_only", "none");
-        putToolManifestItem(manifest, "screen.tap_text", "navigation", "implicit_user_command", "expected_package");
-        putToolManifestItem(manifest, "audio.speak", "local_output", "implicit_user_command");
-        putToolManifestItem(manifest, "email.compose", "external_side_effect", "target_app_confirmation");
-        putToolManifestItem(manifest, "sms.compose", "external_side_effect", "target_app_confirmation");
-        putToolManifestItem(manifest, "url.open", "navigation", "implicit_user_command");
-        putToolManifestItem(manifest, "phone.dial", "external_side_effect", "target_app_confirmation");
-        putToolManifestItem(manifest, "contact.open", "navigation", "implicit_user_command");
-        return manifest;
+        return actionBroker.localToolManifest().put(new JSONObject()
+                .put("tool", "audio.speak").put("risk", "local_output")
+                .put("approval", "implicit_user_command"));
     }
-
-    private void putToolManifestItem(JSONArray manifest, String tool, String risk, String approval) throws JSONException {
-        putToolManifestItem(manifest, tool, risk, approval, "");
-    }
-
-    private void putToolManifestItem(JSONArray manifest, String tool, String risk, String approval, String requiredInput) throws JSONException {
-        JSONObject item = new JSONObject();
-        item.put("tool", tool);
-        item.put("risk", risk);
-        item.put("approval", approval);
-        if (!safe(requiredInput).isEmpty()) {
-            item.put("required_input", new JSONArray().put(requiredInput));
-        }
-        manifest.put(item);
-    }
-
     private void executeClaimedToolRequest(JSONObject request) {
         String requestId = safe(request.optString("id", ""));
-        String tool = safe(request.optString("tool", ""));
-        JSONObject input = request.optJSONObject("input");
-        if (input == null) {
-            input = new JSONObject();
+        String claimId = safe(request.optString("claim_id", ""));
+        if (!running || !toolRequestGate.start(requestId)) return;
+        MoaToolReceiptOutbox.Reservation reservation = toolReceiptOutbox.reserve(
+                requestId, claimId, androidDeviceId());
+        if (!reservation.mayExecute()) {
+            toolRequestGate.finish(requestId);
+            return;
         }
+        activeToolReservation = reservation;
+        activeToolName = safe(request.optString("tool", ""));
+        String tool = safe(request.optString("tool", ""));
+        JSONObject supplied = request.optJSONObject("input");
+        final JSONObject input = supplied == null ? new JSONObject() : supplied;
         ToolRequestExecution execution;
         if ("audio.speak".equals(tool)) {
             execution = executeAudioSpeakRequest(input);
         } else {
-            MoaActionBroker.ToolExecutionResult result = actionBroker.executeToolRequest(tool, input);
+            MoaActionBroker.ToolExecutionResult result = actionBroker.executeToolRequest(
+                    requestId, tool, input, completed -> mainHandler.post(() -> handleAsyncToolResult(requestId, tool, input, completed)));
+            if (result.requiresConfirmation) {
+                showToolConfirmation(requestId, tool, input, result.reply);
+                return;
+            }
+            if (result.pending) return;
             execution = new ToolRequestExecution(result.success, result.reply, result.receipt);
         }
 
+        finishClaimedToolRequest(requestId, execution);
+    }
+    private void handleAsyncToolResult(String requestId, String tool, JSONObject input,
+            MoaActionBroker.ToolExecutionResult result) {
+        if (!running) return;
+        if (result.requiresConfirmation) {
+            showToolConfirmation(requestId, tool, input, result.reply);
+            return;
+        }
+        if (!result.pending) finishClaimedToolRequest(requestId,
+                new ToolRequestExecution(result.success, result.reply, result.receipt));
+    }
+    private void finishClaimedToolRequest(String requestId, ToolRequestExecution execution) {
+        MoaToolReceiptOutbox.Reservation reservation = activeToolReservation;
+        if (reservation == null || !requestId.equals(reservation.requestId)) return;
+        String tool = activeToolName;
+        MoaToolReceiptOutbox.Completion completion = toolReceiptOutbox.complete(
+                reservation, tool, execution.success, execution.summary, execution.receipt);
+        if (!completion.readyToSend()) {
+            addMessage(true, "Local action finished, but its durable receipt is blocked; device actions are paused.");
+            return;
+        }
+        activeToolReservation = null;
+        activeToolName = "";
+        if (!toolRequestGate.finish(requestId)) return;
         String message = execution.success
                 ? "Cross-device request completed: " + execution.summary
                 : "Cross-device request failed: " + execution.summary;
         addMessage(true, message);
         if (!requestId.isEmpty()) {
-            postToolRequestReceipt(requestId, execution);
+            postToolRequestReceipt(completion.pending);
         }
+    }
+    private void showToolConfirmation(String requestId, String tool, JSONObject input, String message) {
+        if (toolConfirmationDialog != null) {
+            finishToolConfirmation(requestId, tool, input, false);
+            return;
+        }
+        final boolean[] decision = {false, false};
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Confirm media change").setMessage(message)
+                .setOnCancelListener(ignored -> completeToolDialogDecision(
+                        decision, requestId, tool, input, false))
+                .setNegativeButton("Cancel", (ignored, which) -> completeToolDialogDecision(
+                        decision, requestId, tool, input, false))
+                .setPositiveButton("Allow", null).create();
+        toolConfirmationDialog = dialog;
+        dialog.setOnDismissListener(ignored -> {
+            if (toolConfirmationDialog == dialog) toolConfirmationDialog = null;
+            if (!running || !decision[0]) {
+                finishToolConfirmation(requestId, tool, input, false);
+            } else if (decision[1]) {
+                finishApprovedWhenTargetVisible(requestId, tool, input, 5);
+            }
+        });
+        if (dialog.getWindow() != null) dialog.getWindow().setType(overlayType());
+        dialog.show();
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(ignored -> {
+            if (!decision[0]) { decision[0] = true; decision[1] = true; dialog.dismiss(); }
+        });
+    }
+    private void finishApprovedWhenTargetVisible(
+            String requestId, String tool, JSONObject input, int attempts) {
+        String target = MoaAccessibilityService.freshActivePackage();
+        if (running && !target.isEmpty() && !getPackageName().equals(target)) {
+            finishToolConfirmation(requestId, tool, input, true);
+        } else if (running && attempts > 0) {
+            mainHandler.postDelayed(() -> finishApprovedWhenTargetVisible(
+                    requestId, tool, input, attempts - 1), 80L);
+        } else {
+            finishToolConfirmation(requestId, tool, input, false);
+        }
+    }
+    private void completeToolDialogDecision(boolean[] decision, String requestId,
+            String tool, JSONObject input, boolean approved) {
+        if (decision[0]) return;
+        decision[0] = true;
+        decision[1] = approved;
+        if (!approved) finishToolConfirmation(requestId, tool, input, false);
+    }
+    private void finishToolConfirmation(String requestId, String tool, JSONObject input, boolean approved) {
+        MoaActionBroker.ToolExecutionResult result = actionBroker.resolveToolConfirmation(
+                requestId, tool, input, approved,
+                completed -> mainHandler.post(() -> finishClaimedToolRequest(requestId,
+                        new ToolRequestExecution(completed.success, completed.reply, completed.receipt))));
+        if (result.pending) return;
+        finishClaimedToolRequest(requestId,
+                new ToolRequestExecution(result.success, result.reply, result.receipt));
     }
 
     private ToolRequestExecution executeAudioSpeakRequest(JSONObject input) {
@@ -2376,50 +2428,26 @@ public final class OverlayService extends Service {
             return new ToolRequestExecution(false, "Speech text is required.", receipt);
         }
         boolean spoken = voiceController != null && voiceController.speak(text);
-        // On-device TextToSpeech is disabled by policy (hosted TTS only), so this
-        // path returns false by design. Report that plainly instead of implying a
-        // broken/unavailable engine.
         String summary = spoken
                 ? "Spoke requested text."
                 : "On-device speech is disabled by policy; replies speak through hosted audio only.";
         JSONObject receipt = MoaActionReceiptStore.record(
-                this,
-                "audio.speak",
-                "local_output",
-                "implicit_user_command",
-                "device_speaker",
-                spoken,
-                summary
-        );
+                this, "audio.speak", "local_output", "implicit_user_command",
+                "device_speaker", spoken, summary);
         return new ToolRequestExecution(spoken, summary, receipt);
     }
 
-    private void postToolRequestReceipt(String requestId, ToolRequestExecution execution) {
-        JSONObject body = new JSONObject();
-        try {
-            body.put("device_id", androidDeviceId());
-            body.put("ok", execution.success);
-            body.put("summary", execution.summary);
-            if (!execution.success) {
-                body.put("error", execution.summary);
-            }
-            JSONObject result = new JSONObject();
-            result.put("reply", execution.summary);
-            body.put("result", result);
-            if (execution.receipt != null) {
-                body.put("local_receipt", execution.receipt);
-            }
-        } catch (JSONException error) {
-            return;
-        }
-
+    private void postToolRequestReceipt(MoaToolReceiptOutbox.PendingReceipt pending) {
         final String url = gatewayUrl;
         final String token = gatewayToken;
         new Thread(() -> {
             try {
-                new MoaGatewayClient(url, token).toolRequestReceipt(requestId, body);
+                JSONObject response = new MoaGatewayClient(url, token)
+                        .toolRequestReceipt(pending.requestId, pending.body());
+                toolReceiptOutbox.acknowledge(pending,
+                        MoaToolReceiptOutbox.gatewayAcknowledgement(pending, response));
             } catch (Exception ignored) {
-                // The local action already happened and was recorded locally.
+                // The exact terminal envelope remains durable for the next poll.
             }
         }, "moa-tool-receipt").start();
     }
@@ -2530,15 +2558,10 @@ public final class OverlayService extends Service {
         return value.substring(0, MAX_AGENT_PROMPT_CHARS);
     }
 
-    // TAP the orb = chat menu. Voice is reserved for double-click-and-hold, so
-    // a normal click never commits, stops, or starts a spoken turn. (Flag-off
-    // contract; the voice-first flag routes a tap to handleOrbStartTalkLoop.)
     private void handleOrbSingleTap() {
         showPanel();
     }
 
-    // Whether a reviewable hands-free voice draft is running. A tap while active
-    // is deliberately inert; the visible X / + controls own cancel and send.
     private boolean isContinuousLoopActive() {
         return continuousVoiceLoop
                 || pendingContinuousVoiceRestart != null
@@ -3703,12 +3726,6 @@ public final class OverlayService extends Service {
         addMessage(true, voiceAssistantTranscript);
     }
 
-    // Local TTS fallback for the streaming path. When a completed turn produced
-    // assistant text but the gateway did not speak it (tts_spoke false or no
-    // assistant audio ever played), speak it with the on-device engine, mirroring
-    // the HTTP path's speak gate (quiet mode + idle engine). Returns true when
-    // local speech started, so the caller lets onSpokenReplyFinished drive the
-    // ready/restart flow.
     private boolean maybeSpeakStreamingFallback(boolean ttsSpoke, String replyLanguage) {
         if (currentStreamingTurnRouted) {
             return false;
@@ -3797,9 +3814,6 @@ public final class OverlayService extends Service {
         // is now removed only by an explicit dismissal or a swipe.
     }
 
-    // Append a small "(not spoken)" marker to the visible assistant reply. The
-    // stored chat message was already recorded before this runs, so only the
-    // overlay row shows the marker; history stays clean.
     private void markCurrentReplyNotSpoken() {
         String text = safe(voiceAssistantTranscript);
         if (text.isEmpty() || text.endsWith(NOT_SPOKEN_SUFFIX)) {
@@ -3808,9 +3822,6 @@ public final class OverlayService extends Service {
         updateVoiceAssistantTranscript(text + NOT_SPOKEN_SUFFIX);
     }
 
-    // Append the "(not saved)" marker to the streaming reply of an incognito
-    // voice session (its inc- branch is never persisted). The stored chat message
-    // was already recorded before this runs, so only the overlay row shows it.
     private void markCurrentReplyNotSaved() {
         String marked = MoaContextControlState.appendNotSaved(voiceAssistantTranscript);
         if (!marked.equals(safe(voiceAssistantTranscript))) {
@@ -3830,11 +3841,6 @@ public final class OverlayService extends Service {
         return streamingVoiceController != null && streamingVoiceController.isActive();
     }
 
-    // Warm the shared mic on the second-tap press so the ~500ms pre-roll captures
-    // the head of the utterance before the hold confirms. Only when a gateway-
-    // backed capture path could consume it: the local SpeechRecognizer fallback
-    // does not use our AudioRecord, so warming there would light the mic
-    // indicator for nothing. Idempotent: a no-op while already warm.
     private void beginWarmMic() {
         if (!streamingVoiceAvailable()) {
             return;
@@ -3847,9 +3853,6 @@ public final class OverlayService extends Service {
         }
     }
 
-    // The gesture resolved to a drag or an early release before the hold
-    // confirmed: stop the warm mic and drop its pre-roll so the indicator turns
-    // off and nothing is captured. Safe to call when no mic is warm.
     private void discardWarmMic() {
         if (warmMic != null) {
             warmMic.stop();
@@ -3857,9 +3860,6 @@ public final class OverlayService extends Service {
         }
     }
 
-    // Hand the already-running warm mic to the capture path the hold resolved to.
-    // Ownership transfers to the caller (session or audio note), which stops it.
-    // Returns null when nothing was warmed, in which case the caller cold-starts.
     private MoaAudioCaptureController adoptWarmMic() {
         MoaAudioCaptureController mic = warmMic;
         warmMic = null;

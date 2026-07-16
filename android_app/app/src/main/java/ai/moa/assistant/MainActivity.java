@@ -41,6 +41,7 @@ import java.net.URL;
 import java.security.MessageDigest;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.TreeSet;
 
 public final class MainActivity extends Activity {
     static final String EXTRA_GATEWAY_URL = "ai.moa.assistant.extra.GATEWAY_URL";
@@ -59,6 +60,7 @@ public final class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private TextView overlayStatus;
     private TextView accessibilityStatus;
+    private TextView mediaStatus;
     private TextView micStatus;
     private TextView gatewayStatus;
     private TextView updateStatus;
@@ -71,6 +73,7 @@ public final class MainActivity extends Activity {
     private TextView orbScaleValue;
     private Button overlayButton;
     private Button accessibilityButton;
+    private Button mediaAccessButton;
     private Button appInfoButton;
     private Button micButton;
     private Button contactsButton;
@@ -80,6 +83,7 @@ public final class MainActivity extends Activity {
     private Button rollbackButton;
     private EditText gatewayUrlInput;
     private EditText gatewayTokenInput;
+    private EditText preferredYoutubeInput;
     private CheckBox spokenRepliesInput;
     private JSONObject pendingUpdate;
     private MoaUpdatePolicy.RollbackOption pendingRollback;
@@ -217,6 +221,7 @@ public final class MainActivity extends Activity {
 
         overlayStatus = accessRow(card, "Screen overlay", "Checking...");
         accessibilityStatus = accessRow(card, "Screen access", "Checking...");
+        mediaStatus = accessRow(card, "Media control", "Checking...");
         micStatus = accessRow(card, "Microphone", "Checking...");
         gatewayStatus = accessRow(card, "Model gateway", "Checking...");
         updateStatus = accessRow(card, "App update", "Checking...");
@@ -258,6 +263,12 @@ public final class MainActivity extends Activity {
 
         gatewayTokenInput = textInput("Gateway token (optional)", MoaPrefs.gatewayToken(this), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         card.addView(gatewayTokenInput);
+
+        preferredYoutubeInput = textInput(
+                "Preferred YouTube package",
+                MoaPrefs.preferredYoutubePackage(this),
+                InputType.TYPE_CLASS_TEXT);
+        card.addView(preferredYoutubeInput);
 
         spokenRepliesInput = new CheckBox(this);
         spokenRepliesInput.setText("Play spoken replies");
@@ -307,6 +318,11 @@ public final class MainActivity extends Activity {
         accessibilityButton = primaryButton("Enable screen access");
         accessibilityButton.setOnClickListener(v -> openAccessibilitySettings());
         card.addView(accessibilityButton);
+
+        mediaAccessButton = primaryButton("Enable media control");
+        mediaAccessButton.setOnClickListener(v -> startActivity(
+                MoaMediaNotificationListenerService.accessSettingsIntent()));
+        card.addView(mediaAccessButton);
 
         appInfoButton = secondaryButton("Open A.G. app info");
         appInfoButton.setOnClickListener(v -> openAppInfoSettings());
@@ -488,6 +504,7 @@ public final class MainActivity extends Activity {
     private void updatePermissionState() {
         boolean overlayGranted = Settings.canDrawOverlays(this);
         boolean accessibilityGranted = MoaAccessibilityService.isEnabled(this);
+        boolean mediaGranted = MoaMediaNotificationListenerService.isAccessEnabled(this);
         boolean micGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
         boolean contactsGranted = checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED;
 
@@ -499,6 +516,11 @@ public final class MainActivity extends Activity {
         if (accessibilityStatus != null) {
             accessibilityStatus.setText(accessibilityGranted ? "Ready" : "Needs Screen access");
             accessibilityStatus.setTextColor(accessibilityGranted ? MoaColors.OK : MoaColors.WARN);
+        }
+
+        if (mediaStatus != null) {
+            mediaStatus.setText(mediaGranted ? "Ready" : "Needs Notification access");
+            mediaStatus.setTextColor(mediaGranted ? MoaColors.OK : MoaColors.WARN);
         }
 
         if (micStatus != null) {
@@ -540,6 +562,10 @@ public final class MainActivity extends Activity {
 
         if (accessibilityButton != null) {
             accessibilityButton.setVisibility(accessibilityGranted ? View.GONE : View.VISIBLE);
+        }
+
+        if (mediaAccessButton != null) {
+            mediaAccessButton.setVisibility(mediaGranted ? View.GONE : View.VISIBLE);
         }
 
         if (appInfoButton != null) {
@@ -643,7 +669,25 @@ public final class MainActivity extends Activity {
         if (spokenRepliesInput != null) {
             MoaPrefs.setSpokenRepliesEnabled(this, spokenRepliesInput.isChecked());
         }
+        if (preferredYoutubeInput != null) {
+            MoaPrefs.setPreferredYoutubePackage(this, preferredYoutubeInput.getText().toString());
+            preferredYoutubeInput.setText(MoaPrefs.preferredYoutubePackage(this));
+            capturePreferredYoutubeFixture();
+        }
         updatePermissionState();
+    }
+
+    private void capturePreferredYoutubeFixture() {
+        String packageName = MoaPrefs.preferredYoutubePackage(this);
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(packageName, signatureFlags());
+            long versionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? info.getLongVersionCode() : info.versionCode;
+            String signer = String.join(",", new TreeSet<>(signatureDigests(info)));
+            MoaPrefs.saveYoutubePackageFixture(this, packageName, versionCode, signer);
+        } catch (Exception unavailable) {
+            MoaPrefs.clearYoutubePackageFixture(this);
+        }
     }
 
     private String settingsSummaryText() {
