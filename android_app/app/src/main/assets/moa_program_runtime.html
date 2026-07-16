@@ -11,6 +11,7 @@
     (() => {
       const hostPostMessage = self.postMessage.bind(self);
       const NativeBlob = self.Blob;
+      const nativeBlobSize = Object.getOwnPropertyDescriptor(NativeBlob.prototype, "size").get;
       const pending = new Map();
       let bridgeToken = null;
       let nextCall = 1;
@@ -20,7 +21,7 @@
       let started = false;
       const unavailable = () => Promise.reject(new Error("ambient_io_disabled"));
       const denyGlobal = name => Object.defineProperty(self, name, { value: undefined, writable: false, configurable: false });
-      const byteSize = value => new NativeBlob([value]).size;
+      const byteSize = value => nativeBlobSize.call(new NativeBlob([value]));
       const recordLog = values => {
         let added = 1;
         for (const value of values) {

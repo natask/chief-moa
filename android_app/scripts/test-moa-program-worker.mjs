@@ -50,6 +50,7 @@ assert.deepEqual(invalidInputs.map(message => message.type), ["terminal"], "inva
 
 const flooded = await execute(`
 async function main() {
+  Object.defineProperty(Blob.prototype, "size", { configurable: true, get: () => 0 });
   try { console.log("sensitive-log-value"); } catch (_) {}
   try { console.error("more"); } catch (_) {}
   return "must-not-complete";

@@ -169,8 +169,7 @@ final class MoaSurfaceProgramCoordinator {
     }
 
     private void start(MoaSurfaceProgramContract.Proposal proposal) {
-        markActive(proposal.executionId);
-        runMarked(proposal);
+        if (markActive(proposal.executionId)) runMarked(proposal);
     }
 
     private void runMarked(MoaSurfaceProgramContract.Proposal proposal) {

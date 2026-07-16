@@ -194,12 +194,13 @@ final class MoaSurfaceProgramStore {
                 receipts.put(receipt); events.put(MoaSurfaceProgramEvents.toolFinished(proposal, clientId, events.length() + 1, capability, callId, receipt, System.currentTimeMillis()));
                 previous = receipt.getString("receipt_sha256");
             }
-            entry.put("tool_receipts", receipts).put("events", events).put("pending_attempts", new JSONArray()).put("pending_effects", new JSONArray());
-            if (!commit(entriesWithReplacement(entry))) return null;
+            JSONObject terminal = MoaSurfaceProgramReceipts.terminal(proposal, clientId, "indeterminate", receipts,
+                    durableStartedAt(entry, proposal.issuedAtMs), System.currentTimeMillis(), null, "indeterminate");
+            events.put(MoaSurfaceProgramEvents.terminal(proposal, clientId, events.length() + 1, terminal, System.currentTimeMillis()));
+            entry.put("tool_receipts", receipts).put("events", events).put("pending_attempts", new JSONArray())
+                    .put("pending_effects", new JSONArray()).put("status", "indeterminate").put("terminal", terminal);
+            return commit(entriesWithReplacement(entry)) ? terminal : null;
         } catch (Exception error) { return null; }
-        JSONObject terminal = MoaSurfaceProgramReceipts.terminal(proposal, clientId, "indeterminate", receipts,
-                durableStartedAt(entry, proposal.issuedAtMs), System.currentTimeMillis(), null, "indeterminate");
-        return recordTerminal(proposal, clientId, terminal) ? terminal : null;
     }
 
     synchronized boolean bindRequest(String executionId, String idempotencyKey, String requestId) {
