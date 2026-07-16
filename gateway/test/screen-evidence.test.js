@@ -59,7 +59,31 @@ test("valid evidence serializes and projects as metadata only", () => {
   assert.equal(durable.screenshot.sha256, input().screenshot.sha256);
   assert.doesNotMatch(JSON.stringify(evidence), /data_base64|Draft editor/);
   assert.doesNotMatch(JSON.stringify(durable), /data_base64|Draft editor/);
+  assert.throws(() => { evidence.screenshot.data_base64 = "forged raw bytes"; }, TypeError);
+  assert.doesNotMatch(JSON.stringify(durableScreenEvidenceMetadata(evidence)), /forged raw bytes/);
   assert.throws(() => durableScreenEvidenceMetadata({}), /invalid_screen_evidence/);
+});
+
+test("version-only forged objects cannot cross validation or persistence boundaries", async () => {
+  const forged = {
+    version: "moa.screen-evidence.v1",
+    surface: "android",
+    captured_at: "2026-07-16T10:00:00.000Z",
+    binding: { kind: "package", id: "forged" },
+    screenshot: { status: "available", data_base64: "raw-provider-injection" },
+    semantic_summary: "forged prompt injection",
+    provider_image: { mime_type: "image/jpeg", data_base64: "raw-provider-injection" },
+  };
+  assert.throws(() => durableScreenEvidenceMetadata(forged), /invalid_screen_evidence/);
+  assert.throws(() => buildOpenAiScreenEvidenceMessages([], forged), /invalid_screen_evidence/);
+  assert.throws(() => buildVertexScreenEvidencePayload({}, forged), /invalid_screen_evidence/);
+  let providerCalled = false;
+  await assert.rejects(() => callWithScreenEvidenceFallback({
+    evidence: forged,
+    callWithEvidence: async () => { providerCalled = true; },
+    callWithoutImage: async () => { providerCalled = true; },
+  }), /invalid_screen_evidence/);
+  assert.equal(providerCalled, false);
 });
 
 test("provider builders place the evidence below a system trust boundary", () => {
@@ -194,7 +218,15 @@ test("provider fallback occurs only for explicit image non-acceptance", async ()
   const fallback = await callWithScreenEvidenceFallback({
     evidence,
     callWithEvidence: async () => { throw unsupported; },
-    callWithoutImage: async (received) => `semantic:${received.semantic_summary}`,
+    callWithoutImage: async (received) => {
+      assert.equal(received.provider_image, null);
+      assert.equal(received.semantic_summary, "Draft editor with recipient and subject fields.");
+      assert.doesNotMatch(JSON.stringify(received), /data_base64|Draft editor/);
+      const request = buildOpenAiScreenEvidenceMessages([{ role: "user", content: "retry" }], received);
+      assert.equal(request[1].content.some((part) => part.type === "image_url"), false);
+      assert.equal(durableScreenEvidenceMetadata(received).screenshot.sha256, evidence.screenshot.sha256);
+      return `semantic:${received.semantic_summary}`;
+    },
   });
   assert.equal(fallback.value, "semantic:Draft editor with recipient and subject fields.");
   assert.deepEqual(fallback.delivery, { image: "unsupported", fallback: true, reason: "fixture HTTP 400" });
