@@ -13,7 +13,10 @@ import org.robolectric.annotation.Config;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 
@@ -102,6 +105,22 @@ public final class MoaSurfaceProgramCoordinatorTest {
         MoaSurfaceProgramCoordinator coordinator = coordinator(command -> {}, 16);
         coordinator.execute("request_1", valid());
         coordinator.execute("request_1", valid());
+        assertEquals(1, runtime.starts);
+    }
+
+    @Test public void replayBetweenDurablePendingAndOriginalStartHasSingleRuntimeWinner() throws Exception {
+        BlockingFirstExecutor executor = new BlockingFirstExecutor();
+        MoaSurfaceProgramCoordinator coordinator = coordinator(executor, 16);
+        Thread original = new Thread(() -> coordinator.execute("request_1", validUnchecked()));
+        original.start();
+        assertTrue(executor.firstScheduled.await(5, TimeUnit.SECONDS));
+
+        coordinator.execute("request_1", valid());
+        assertEquals(1, runtime.starts);
+
+        executor.releaseFirst.countDown();
+        original.join(5_000);
+        assertFalse(original.isAlive());
         assertEquals(1, runtime.starts);
     }
 
@@ -228,6 +247,11 @@ public final class MoaSurfaceProgramCoordinatorTest {
                 "1".repeat(64), false, NOW));
         persistence.failNext();
         assertNull(store.recoverIndeterminate(proposal, "client"));
+        JSONObject retained = store.existing(proposal.executionId, proposal.idempotencyKey);
+        assertTrue(store.hasPendingAttempt(retained));
+        assertNull(retained.optJSONObject("terminal"));
+        persistence.allowWrites();
+        assertNotNull(store.recoverIndeterminate(proposal, "client"));
 
         persistence = new ControlledPersistence();
         store = new MoaSurfaceProgramStore(persistence);
@@ -235,7 +259,11 @@ public final class MoaSurfaceProgramCoordinatorTest {
         assertTrue(store.beginTool(proposal, "client", "call_1", MoaScriptExecutionCatalog.OBSERVE,
                 "1".repeat(64), false, NOW));
         persistence.failAfterSuccessfulWrites(1);
-        assertNull(store.recoverIndeterminate(proposal, "client"));
+        assertNotNull(store.recoverIndeterminate(proposal, "client"));
+        JSONObject recovered = store.existing(proposal.executionId, proposal.idempotencyKey);
+        assertFalse(store.hasPendingAttempt(recovered));
+        assertEquals("indeterminate", recovered.getString("status"));
+        assertNotNull(recovered.getJSONObject("terminal"));
     }
 
     private MoaSurfaceProgramCoordinator coordinator(Executor executor, int batch) {
@@ -291,7 +319,23 @@ public final class MoaSurfaceProgramCoordinatorTest {
         void allowWrites() { successfulWritesBeforeFailure = Integer.MAX_VALUE; }
     }
 
+    private static final class BlockingFirstExecutor implements Executor {
+        final CountDownLatch firstScheduled = new CountDownLatch(1);
+        final CountDownLatch releaseFirst = new CountDownLatch(1);
+        final AtomicInteger submissions = new AtomicInteger();
+        public void execute(Runnable command) {
+            if (submissions.incrementAndGet() != 1) return;
+            firstScheduled.countDown();
+            try { assertTrue(releaseFirst.await(5, TimeUnit.SECONDS)); }
+            catch (InterruptedException error) { Thread.currentThread().interrupt(); fail("Interrupted while staging coordinator race"); }
+        }
+    }
+
     private static JSONObject valid() throws Exception { return MoaSurfaceProgramContractTest.valid(); }
+    private static JSONObject validUnchecked() {
+        try { return valid(); }
+        catch (Exception error) { throw new AssertionError(error); }
+    }
     private static MoaSurfaceProgramContract.Proposal proposal(JSONObject input) {
         return MoaSurfaceProgramContract.parse(input, "android_fixture", NOW);
     }
