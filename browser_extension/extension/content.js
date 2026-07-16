@@ -2894,7 +2894,7 @@
     }
     if (msg.type === "error") {
       if (msg.recoverable === false || msg.code === "microphone_capture_failed") {
-        finishLiveVoiceError(state, msg.message || "Live voice microphone capture failed.");
+        finishLiveVoiceError(state, msg.message || "Live voice microphone capture failed.", msg.recovery);
         return;
       }
       // A turn that dies mid-generation ("failed to complete turn: ...") is not a
@@ -3329,9 +3329,32 @@
     }, delayMs + 120);
   }
 
-  function finishLiveVoiceError(state, message) {
+  function attachMicrophoneRecovery(cueId, recovery) {
+    if (recovery?.target !== "microphone_permission") return;
+    const entry = cues.get(cueId);
+    if (!entry?.statusEl || entry.recoveryButton) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "agee-cue-recovery";
+    button.textContent = recovery.action_label || "Take me to microphone setup";
+    button.addEventListener("click", () => {
+      button.disabled = true;
+      safeRuntimeSendMessage({ cmd: "openOptions", target: recovery.target })
+        .then((result) => {
+          if (!result?.ok) button.disabled = false;
+        })
+        .catch(() => {
+          button.disabled = false;
+        });
+    });
+    entry.statusEl.appendChild(button);
+    entry.recoveryButton = button;
+  }
+
+  function finishLiveVoiceError(state, message, recovery = null) {
     if (!isLiveVoiceStateActive(state)) return;
     const shown = showCueError(state.cueId, message);
+    attachMicrophoneRecovery(state.cueId, recovery);
     if (liveVoice === state) {
       stopLiveVoiceTurn("error");
     } else {

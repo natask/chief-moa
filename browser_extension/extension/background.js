@@ -17,6 +17,11 @@ import { browserLocalToolManifest } from "./browser-automation-contract.js";
 import { createBrowserAutomationRuntime } from "./browser-automation-runtime.js";
 import { createBrowserCommandRuntime } from "./browser-command-runtime.js";
 import {
+  MICROPHONE_RECOVERY_TARGET,
+  OPTIONS_RECOVERY_STORAGE_KEY,
+  createOptionsRecovery,
+} from "./options-recovery.js";
+import {
   AGENT_LOOP_MAX_SUMMARY,
   buildAgentLoopObservationPayload,
   clampAgentLoopMaxSteps,
@@ -2202,6 +2207,14 @@ function extensionMicCaptureMessage(error, code = error?.code) {
   return `A.G. could not start microphone capture. Check that a microphone is connected and available, then try again.${suffix}`;
 }
 
+async function openOptionsForTarget(target) {
+  const recovery = createOptionsRecovery(target);
+  if (recovery) {
+    await chrome.storage.local.set({ [OPTIONS_RECOVERY_STORAGE_KEY]: recovery });
+  }
+  await chrome.runtime.openOptionsPage?.();
+}
+
 async function startOffscreenVoiceCapture(id) {
   const response = await sendToOffscreenReceiver(
     (message) => chrome.runtime.sendMessage(message),
@@ -2238,6 +2251,10 @@ function handleOffscreenVoiceError(id, error, code = error?.code) {
       code: "microphone_capture_failed",
       recoverable: false,
       message,
+      recovery: {
+        target: MICROPHONE_RECOVERY_TARGET,
+        action_label: "Take me to microphone setup",
+      },
     },
   });
   closeVoiceSession(id, "microphone capture failed");
@@ -4170,8 +4187,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.cmd === "openOptions") {
-    chrome.runtime.openOptionsPage?.().catch(() => {});
-    sendResponse({ ok: true });
+    openOptionsForTarget(msg.target)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
   if (msg.cmd === "activeCompanionPet") {
@@ -4509,6 +4527,10 @@ function closePanelSessions(reason) {
 }
 
 async function handlePanelRequest(msg) {
+  if (msg.cmd === "openOptions") {
+    await openOptionsForTarget(msg.target);
+    return { ok: true };
+  }
   if (msg.cmd === "browserRoleTurn") {
     const role = normalizeBrowserAgentRole(msg.role);
     if (!role) return { ok: false, error: "Choose Delegate, Help, Collaborate, or Explain." };

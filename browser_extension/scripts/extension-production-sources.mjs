@@ -22,6 +22,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/offscreen-voice-bridge.js",
   "extension/offscreen.js",
   "extension/options.js",
+  "extension/options-recovery.js",
   "extension/settings-intent.js",
   "extension/sidepanel.js",
   "extension/steering-ui.js",

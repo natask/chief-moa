@@ -163,6 +163,11 @@ text-to-speech as the production voice path.
 - **THEN** the overlay renders a visible microphone permission error
 - **AND** the error tells the user to grant microphone access to the Aggie
   extension from Options or Chrome extension settings
+- **AND** the active extension surface shows an explicit "Take me to microphone
+  setup" action before navigation
+- **AND** Options opens only after that user action, consumes a typed microphone
+  recovery target, reports permission state, and focuses the existing Grant
+  microphone control
 - **AND** the failure is treated as non-recoverable for that voice turn instead
   of silently respawning Live voice
 

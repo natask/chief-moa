@@ -1199,6 +1199,22 @@ button.agee-ui-list-row:hover {
 .agee-cue-error .agee-cue-status {
   color: #ff8278;
 }
+.agee-cue-recovery {
+  display: block;
+  margin-top: 10px;
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.agee-cue-recovery:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
 /* Dismiss control: removes this card and every older one above it. Hidden
    entirely while the card is running (in-flight cards are not dismissable),
    and revealed on hover for a mouse; a touch/narrow viewport shows it always
