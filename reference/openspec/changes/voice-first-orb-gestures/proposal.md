@@ -19,10 +19,9 @@ review-before-send v4 contract:
   the one affirmative Send action on the right. A later orb or mascot tap never
   commits the draft; disposition stays visible and reversible beside the mark,
   independent of any transcript card above or below it.
-- Double-click, quick: start a fresh voice thread. If the first click armed
-  the current thread or deferred a send, that loop is cancelled first; the new
-  turn rides the existing one-shot `context_action:"new"` path so it keeps
-  standing facts but does not include the current thread's replies.
+- Double-click, quick: start a distinct fresh-branch voice session without
+  clearing or replacing the prior visible message. The next resolved single
+  click ends capture and commits that double-click-started utterance once.
 - Triple-click, quick: opens the chat/text surface (demoted, still reachable).
   If the double-click started a fresh loop milliseconds earlier, that loop is
   cancelled first so chat never leaves a hot mic.
@@ -32,11 +31,10 @@ review-before-send v4 contract:
   hold confirms cancels the capture and escapes into a drag (hold-then-move
   muscle memory).
 - Fourth click and beyond: nothing.
-- Drag repositions the orb and its open card together. The card docks wholly
-  above the orb when it fits and otherwise flips wholly below it.
-- Dragging the orb into the bottom removal target and releasing hides the orb
-  and stops the overlay service. The chat header and foreground notification
-  expose a second explicit Hide action.
+- Drag repositions the orb and reserves the band above it for the open card;
+  content never crosses the orb/grab line.
+- Dragging into the native bottom close target stops the service and removes
+  every overlay-owned window. Header and notification Hide remain fallbacks.
 
 The v1 trial mapping (single tap = interrupt, double = talk toggle, triple =
 chat), v2 mapping (single tap = talk toggle, double = chat), and v3
@@ -84,45 +82,6 @@ it. This is distinct from sending a turn to Moa:
   active voice draft is preferred for exploration because double/triple/fourth
   click meanings are already crowded and poorly discoverable.
 
-## Proposed Review-Before-Send Revision (2026-07-14, Pending Alignment)
-
-The next product revision makes the cheapest gesture consistent and visibly
-reversible on Android and in the browser:
-
-- A single click starts a voice draft and immediately exposes two controls:
-  `X` to cancel/discard and one affirmative `Send` control to commit. The
-  affirmative control may use a send arrow or a check/yes treatment, but it is
-  one semantic action rather than separate Yes and Send actions.
-- A single click never silently commits a draft. The user can keep speaking,
-  cancel, or explicitly send from the visible controls.
-- A still press-and-hold remains push-to-talk; release commits immediately.
-  This preserves the fast eyes-free path on both surfaces while the click path
-  favors review and correction.
-- Android and browser use the same visible draft states and meanings. Layout
-  may adapt to each surface, but `X` always discards and `Send` always commits.
-- Multi-click mappings are not changed by this revision until their collision
-  with the new single-click review state is designed and tested. In particular,
-  double, triple, and fourth clicks must not accidentally send a pending draft.
-
-This revision supersedes the current single-click start/send toggle if accepted.
-It does not authorize implementation yet.
-
-### Separate Follow-Up: Clean Voice Into The Current Text Field
-
-The user also wants a composing feature: speak rough text, have Moa clean it
-up, and place the result into the text field currently in use without sending
-it. This is distinct from sending a turn to Moa:
-
-- The destination surface owns detection of the currently focused editable
-  field and the local insertion action.
-- The gateway may return a cleaned-text proposal, but it cannot type into the
-  field directly. Android accessibility or the browser extension revalidates
-  focus, previews when appropriate, performs the insertion, and receipts it.
-- Insertion never implies submit, send, click, or form completion.
-- The invocation gesture remains unresolved. A directional swipe from the
-  active voice draft is preferred for exploration because double/triple/fourth
-  click meanings are already crowded and poorly discoverable.
-
 Flags:
 
 - Browser: `ageeVoiceFirstGesturesEnabled` in `chrome.storage.local`, checkbox
@@ -147,11 +106,10 @@ Flags:
 
 - Browser extension: `cd browser_extension && npm run verify && npm run smoke`.
 - Android: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`.
-- Android manual QA with the flag on: single click starts a draft with visible
-  `X` and `↑`; only `↑` sends; `X` discards; a later orb tap does not send;
-  double-click starts a new voice thread; triple-click opens chat; hold-to-talk
-  release commits; open cards remain wholly above or below the moved orb; and
-  dragging onto Remove hides the orb. Flag off restores the legacy gestures.
+- Android manual QA with the flag on: single click starts a draft with native
+  Cancel and Send controls; double-click preserves prior rows and starts a fresh
+  branch; its next single click commits once; the card remains above the moved
+  orb; and dropping on Close removes every overlay window.
 - Browser manual QA with the flag on: one mascot click starts a draft with
   `X` and `↑` beside the mascot; another mascot click does not send; `X`
   discards; `↑` commits once; and hold-release remains push-to-talk.

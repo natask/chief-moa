@@ -16,12 +16,15 @@ import android.provider.Settings;
 import android.text.InputType;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -93,6 +96,7 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams panelParams;
     private WindowManager.LayoutParams transcriptParams;
     private View orbRemoveTarget;
+    private ImageView orbRemoveTargetIcon;
     private boolean orbRemoveTargetActive;
     // Two surfaces hang off the orb. TAP opens the chat panel: a polished card
     // with bubbles + composer, the place to read the conversation and type.
@@ -108,8 +112,8 @@ public final class OverlayService extends Service {
     private ScrollView voiceTranscriptScroll;
     private TextView voiceMetaLine;
     private TextView voiceLanguageLine;
-    private TextView voiceCancelControl;
-    private TextView voiceSendControl;
+    private ImageButton voiceCancelControl;
+    private ImageButton voiceSendControl;
     private WindowManager.LayoutParams voiceCancelControlParams;
     private WindowManager.LayoutParams voiceSendControlParams;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
@@ -573,6 +577,7 @@ public final class OverlayService extends Service {
                 this::handleOrbStartTalkLoop,
                 this::handleOrbStartFreshTalkLoop,
                 this::handleOrbCancelTalkLoop,
+                this::sendVoiceDraft,
                 this::showPanel,
                 this::handleOrbPushToTalkCancel,
                 this::showOrbRemoveTarget,
@@ -594,30 +599,30 @@ public final class OverlayService extends Service {
         if (surface == null || params == null || orbParams == null) {
             return;
         }
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int screenWidth = getResources().getDisplayMetrics().widthPixels,
+                screenHeight = getResources().getDisplayMetrics().heightPixels;
         int margin = dp(10);
         int gap = dp(12);
         int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
         int surfaceWidth = params.width > 0 ? params.width : Math.min(screenWidth - margin * 2, dp(380));
-        int measuredHeight = surface.getMeasuredHeight();
-        if (measuredHeight <= 0) {
-            measuredHeight = surface == panelView ? dp(430) : dp(180);
-        }
-
-        int orbCenterX = orbParams.x + orbSize / 2;
-        int minX = surfaceWidth + margin * 2 <= screenWidth ? margin : 0;
+        surface.measure(View.MeasureSpec.makeMeasureSpec(surfaceWidth, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int naturalHeight = Math.max(1, surface.getMeasuredHeight()),
+                maxHeight = Math.max(1, screenHeight - margin * 2 - orbSize - gap);
+        int measuredHeight = Math.min(naturalHeight, maxHeight);
+        int orbCenterX = orbParams.x + orbSize / 2,
+                minX = surfaceWidth + margin * 2 <= screenWidth ? margin : 0;
         int maxX = Math.max(minX, screenWidth - surfaceWidth - minX);
         params.x = Math.max(minX, Math.min(orbCenterX - surfaceWidth / 2, maxX));
-
-        int aboveY = orbParams.y - measuredHeight - gap;
-        int belowY = orbParams.y + orbSize + gap;
-        int aboveSpace = orbParams.y - gap - margin;
-        int belowSpace = screenHeight - belowY - margin;
-        boolean placeAbove = measuredHeight <= aboveSpace || aboveSpace >= belowSpace;
-        params.y = placeAbove ? aboveY : belowY;
-        params.y = Math.max(margin, Math.min(params.y, screenHeight - measuredHeight - margin));
-
+        int minimumOrbY = margin + measuredHeight + gap,
+                maximumOrbY = screenHeight - margin - orbSize;
+        int safeOrbY = Math.min(maximumOrbY, Math.max(orbParams.y, minimumOrbY));
+        if (safeOrbY != orbParams.y) {
+            orbParams.y = safeOrbY;
+            if (orbView != null) windowManager.updateViewLayout(orbView, orbParams);
+        }
+        params.y = orbParams.y - gap - measuredHeight;
+        params.height = naturalHeight > maxHeight ? maxHeight : WindowManager.LayoutParams.WRAP_CONTENT;
         if (surface.getParent() != null) {
             try {
                 windowManager.updateViewLayout(surface, params);
@@ -637,12 +642,18 @@ public final class OverlayService extends Service {
         if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
             return;
         }
-        TextView target = text("Remove orb", MoaColors.PAPER, 14, true);
-        target.setGravity(Gravity.CENTER);
-        target.setBackground(MoaDrawables.rounded(0xF01B1C20, dp(28), MoaColors.PANEL_BORDER, dp(1)));
+        FrameLayout target = new FrameLayout(this);
+        target.setContentDescription("Drag here to remove A.G.");
+        target.setBackground(MoaDrawables.circle(MoaColors.REMOVE_BG, MoaColors.PANEL_BORDER, dp(1)));
+        target.setElevation(dp(18));
+        orbRemoveTargetIcon = new ImageView(this);
+        orbRemoveTargetIcon.setImageResource(R.drawable.ic_moa_close);
+        orbRemoveTargetIcon.setPadding(dp(18), dp(18), dp(18), dp(18));
+        target.addView(orbRemoveTargetIcon, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                dp(150),
-                dp(58),
+                dp(72),
+                dp(72),
                 overlayType(),
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -650,7 +661,7 @@ public final class OverlayService extends Service {
                 android.graphics.PixelFormat.TRANSLUCENT
         );
         params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(34);
+        params.y = dp(28);
         windowManager.addView(target, params);
         orbRemoveTarget = target;
         target.setAlpha(0f);
@@ -661,40 +672,46 @@ public final class OverlayService extends Service {
 
     private void updateOrbDragSurfaces() {
         updateAnchoredSurfacePositions();
-        if (!(orbRemoveTarget instanceof TextView) || orbParams == null) {
+        if (orbRemoveTarget == null || orbParams == null) {
             return;
         }
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int screenWidth = getResources().getDisplayMetrics().widthPixels,
+                screenHeight = getResources().getDisplayMetrics().heightPixels;
         int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
-        int centerX = orbParams.x + orbSize / 2;
-        int centerY = orbParams.y + orbSize / 2;
-        boolean active = centerY >= screenHeight - dp(170)
-                && Math.abs(centerX - screenWidth / 2) <= dp(135);
+        int centerX = orbParams.x + orbSize / 2, centerY = orbParams.y + orbSize / 2;
+        boolean active = centerY >= screenHeight - dp(172)
+                && Math.abs(centerX - screenWidth / 2) <= dp(112);
         if (active == orbRemoveTargetActive) {
             return;
         }
         orbRemoveTargetActive = active;
-        TextView target = (TextView) orbRemoveTarget;
-        target.setText(active ? "Release to remove" : "Remove orb");
-        target.setTextColor(active ? MoaColors.PAPER : MoaColors.MUTED);
-        target.setBackground(MoaDrawables.rounded(
-                active ? 0xF0B3261E : 0xF01B1C20,
-                dp(28),
-                active ? 0x80FF8A80 : MoaColors.PANEL_BORDER,
+        orbRemoveTarget.setBackground(MoaDrawables.circle(
+                active ? MoaColors.REMOVE_ACTIVE_BG : MoaColors.REMOVE_BG,
+                active ? 0x99FFFFFF : MoaColors.PANEL_BORDER,
                 dp(1)
         ));
-        target.animate().scaleX(active ? 1.08f : 1f).scaleY(active ? 1.08f : 1f).setDuration(100).start();
+        if (orbRemoveTargetIcon != null) {
+            orbRemoveTargetIcon.setColorFilter(active ? 0xFFFFFFFF : MoaColors.PAPER);
+        }
+        if (active && orbView != null) orbView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        orbRemoveTarget.animate().scaleX(active ? 1.16f : 1f).scaleY(active ? 1.16f : 1f).setDuration(100).start();
     }
 
     private void finishOrbDrag(Boolean completedDrop) {
         boolean remove = Boolean.TRUE.equals(completedDrop) && orbRemoveTargetActive;
         removeOrbRemoveTarget();
         if (remove) {
-            mainHandler.post(this::stopSelf);
+            if (orbView != null) orbView.performHapticFeedback(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.LONG_PRESS);
+            mainHandler.post(() -> {
+                View panel = panelView, transcript = transcriptView;
+                View cancel = voiceCancelControl, send = voiceSendControl;
+                dismissOverlayUi(); removeVoiceDraftControls(); removeOrb();
+                detachView(panel); detachView(transcript); detachView(cancel); detachView(send);
+                stopSelf();
+            });
         }
     }
-
     private void removeOrbRemoveTarget() {
         orbRemoveTargetActive = false;
         if (orbRemoveTarget == null) {
@@ -702,6 +719,7 @@ public final class OverlayService extends Service {
         }
         View target = orbRemoveTarget;
         orbRemoveTarget = null;
+        orbRemoveTargetIcon = null;
         detachView(target);
     }
 
@@ -719,7 +737,7 @@ public final class OverlayService extends Service {
         }
 
         loadSettings();
-
+        removeTranscriptOverlay();
         panelView = createPanel();
         int width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(20), dp(380));
         panelParams = new WindowManager.LayoutParams(
@@ -941,26 +959,6 @@ public final class OverlayService extends Service {
         return container;
     }
 
-    private TextView voiceDraftControl(String glyph, String description, boolean affirmative) {
-        TextView control = new TextView(this);
-        control.setText(glyph);
-        control.setContentDescription(description);
-        control.setTextSize(affirmative ? 25 : 24);
-        control.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        control.setGravity(Gravity.CENTER);
-        control.setTextColor(affirmative ? MoaColors.INK : MoaColors.PAPER);
-        control.setBackground(MoaDrawables.circlePressable(
-                affirmative ? MoaColors.GOLD : 0x24FFFFFF,
-                affirmative ? MoaColors.AMBER : 0x3AFFFFFF,
-                affirmative ? 0x33FFFFFF : MoaColors.PANEL_BORDER,
-                dp(1)
-        ));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(42), dp(42));
-        params.rightMargin = dp(10);
-        control.setLayoutParams(params);
-        return control;
-    }
-
     private boolean reviewableVoiceDraftActive() {
         return MoaPrefs.voiceFirstGestures(this)
                 && continuousVoiceLoop
@@ -984,15 +982,19 @@ public final class OverlayService extends Service {
         if (!Settings.canDrawOverlays(this) || orbView == null) {
             return;
         }
-        int size = dp(44);
+        int size = dp(48);
         if (voiceCancelControl == null) {
-            voiceCancelControl = voiceDraftControl("×", "Cancel voice draft", false);
+            voiceCancelControl = new ImageButton(this);
+            voiceCancelControl.setContentDescription("Cancel voice draft"); voiceCancelControl.setImageResource(R.drawable.ic_moa_close);
+            voiceCancelControl.setBackgroundResource(R.drawable.bg_moa_control); voiceCancelControl.setPadding(dp(13), dp(13), dp(13), dp(13));
             voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
             voiceCancelControlParams = draftControlWindowParams(size);
             windowManager.addView(voiceCancelControl, voiceCancelControlParams);
         }
         if (voiceSendControl == null) {
-            voiceSendControl = voiceDraftControl("↑", "Send voice draft", true);
+            voiceSendControl = new ImageButton(this);
+            voiceSendControl.setContentDescription("Send voice draft"); voiceSendControl.setImageResource(R.drawable.ic_moa_send);
+            voiceSendControl.setBackgroundResource(R.drawable.bg_moa_send); voiceSendControl.setPadding(dp(13), dp(13), dp(13), dp(13));
             voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
             voiceSendControlParams = draftControlWindowParams(size);
             windowManager.addView(voiceSendControl, voiceSendControlParams);
@@ -1182,6 +1184,7 @@ public final class OverlayService extends Service {
         updateVoiceHeaderState();
         updateVoiceDraftControls();
         scrollVoiceTranscriptToBottom();
+        if (transcriptView != null) transcriptView.post(this::updateAnchoredSurfacePositions);
     }
 
     // Horizontal swipe on a row dismisses that row and every older row (all the
@@ -1613,8 +1616,10 @@ public final class OverlayService extends Service {
         hide.setOnClickListener(v -> stopSelf());
         header.addView(hide);
 
-        TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
-        close.setContentDescription("Close chat");
+        ImageButton close = new ImageButton(this);
+        close.setContentDescription("Close chat"); close.setImageResource(R.drawable.ic_moa_close); close.setBackgroundResource(R.drawable.bg_moa_control);
+        close.setPadding(dp(13), dp(13), dp(13), dp(13));
+        close.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         close.setOnClickListener(v -> dismissOverlayUi());
         header.addView(close);
         return header;
@@ -1723,15 +1728,10 @@ public final class OverlayService extends Service {
         composer.setPadding(dp(12), dp(9), dp(8), dp(9));
         row.addView(composer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        // Round gold send button. 46dp target, gold brand accent.
-        TextView send = new TextView(this);
-        send.setText("↑");
-        send.setTextColor(MoaColors.INK);
-        send.setTextSize(20);
-        send.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        send.setGravity(Gravity.CENTER);
-        send.setBackground(MoaDrawables.circle(MoaColors.GOLD, 0x33FFFFFF, dp(1)));
-        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(46), dp(46));
+        ImageButton send = new ImageButton(this);
+        send.setContentDescription("Send message"); send.setImageResource(R.drawable.ic_moa_send); send.setBackgroundResource(R.drawable.bg_moa_send);
+        send.setPadding(dp(13), dp(13), dp(13), dp(13));
+        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(48), dp(48));
         sendParams.leftMargin = dp(4);
         send.setLayoutParams(sendParams);
         send.setOnClickListener(v -> sendComposer(false));
@@ -1769,6 +1769,7 @@ public final class OverlayService extends Service {
             messageColumn.addView(messageBubble(message));
         }
         if (messageScroll != null) {
+            messageScroll.post(this::updateAnchoredSurfacePositions);
             mainHandler.postDelayed(() -> {
                 if (messageScroll != null) {
                     messageScroll.fullScroll(View.FOCUS_DOWN);
@@ -1776,7 +1777,6 @@ public final class OverlayService extends Service {
             }, 40);
         }
     }
-
     // Real chat bubbles. Assistant left, dark raised fill, hairline border, the
     // bottom-left corner tucked. User right, teal-violet tint, bottom-right
     // corner tucked. A small muted sender label sits above each.

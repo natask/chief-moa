@@ -46,6 +46,7 @@ The gateway SHALL store each accepted voice turn as a durable event associated w
 - **THEN** the gateway creates a distinct session or branch identifier
 - **AND** stores both streams as durable events without requiring an immediate
   conversation merge
+- **AND** Android does not reuse or replace the prior turn's visible identity
 
 #### Scenario: Code-mode agent needs current context
 - **WHEN** an agent run needs the latest mobile context

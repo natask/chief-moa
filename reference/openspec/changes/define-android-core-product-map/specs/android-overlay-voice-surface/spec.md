@@ -91,7 +91,17 @@ The Android app SHALL show current speech text while the user is speaking.
 - **WHEN** the assistant response starts for a submitted voice turn
 - **THEN** the visible user transcript fades out
 - **AND** the assistant response appears in the same compact voice surface
-- **AND** previous voice-turn messages are not shown in that surface
+- **AND** prior visible message rows remain available when a fresh branch starts
+
+### Requirement: Native Dark Overlay Controls
+The Android overlay SHALL use native icon controls with platform pressed
+feedback, accessibility labels, 48dp touch targets, and crisp dark styling for
+Cancel, Send, chat close, and the drag-removal target.
+
+#### Scenario: Draft and close actions are shown
+- **WHEN** Android shows a reviewable draft or chat surface
+- **THEN** Cancel, Send, and close use labeled native icon controls
+- **AND** each interactive control has platform pressed feedback
 
 ### Requirement: Reviewable Tap Voice Draft
 When voice-first gestures are enabled, the Android overlay SHALL treat a tap
@@ -127,20 +137,21 @@ place that card predictably relative to the orb.
 - **WHEN** the chat or transcript card opens and has enough room above the orb
 - **THEN** the entire card is placed above the orb with a visible gap
 
-#### Scenario: Surface must flip below
+#### Scenario: Surface is too tall for the current position
 - **WHEN** the card cannot fit above the orb
-- **THEN** the entire card is placed below the orb and clamped to the display
+- **THEN** Android moves the orb interaction band down and bounds the card
+- **AND** the card remains wholly above the orb with a visible gap
 
 #### Scenario: Orb moves with an open surface
 - **WHEN** the user drags the orb while a card is open
-- **THEN** the card follows and recomputes its above-or-below placement
+- **THEN** the card follows and remains wholly above the orb interaction band
 
 ### Requirement: User-Removable Overlay
 The Android overlay SHALL provide discoverable local ways to remove the orb.
 
 #### Scenario: Drag to remove
 - **WHEN** the user drags the orb into the visible removal target and releases
-- **THEN** Android stops the overlay service and removes the orb and open card
+- **THEN** Android stops the overlay service and removes every overlay window
 
 #### Scenario: Explicit hide fallback
 - **WHEN** the user taps Hide in the chat header or overlay notification

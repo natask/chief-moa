@@ -36,6 +36,20 @@
 - Before it completes, start a separate normal voice question.
 - Confirm the gateway stores the new turn separately and the app remains usable.
 - Start another branch/session from voice and confirm existing run status is still visible.
+- Leave a completed message visible, then double-click the orb.
+- Confirm a distinct fresh branch starts and the prior message remains unchanged.
+- Single-click once and confirm the new capture submits exactly once without
+  starting another draft.
+
+## Native Overlay Layout And Dismissal
+
+- Start a draft and confirm Cancel, Send, and chat close use crisp dark native
+  icon controls with pressed feedback and accessibility labels.
+- Grow the transcript/message card and drag the orb around the display.
+- Confirm the card remains wholly above the orb interaction band with a gap.
+- Drag the orb onto the bottom close target and release.
+- Confirm capture/playback stops and the orb, cards, composer, controls, and
+  close target all disappear.
 
 ## Wake Restart
 

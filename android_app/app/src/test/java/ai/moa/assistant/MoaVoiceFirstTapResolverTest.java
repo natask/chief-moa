@@ -30,7 +30,7 @@ public final class MoaVoiceFirstTapResolverTest {
     }
 
     @Test
-    public void doubleTapStartsFreshVoiceThreadWhenIdle() {
+    public void doubleTapStartsFreshVoiceThreadWithoutDiscardingFirstDraft() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
 
         assertEquals(
@@ -38,25 +38,62 @@ public final class MoaVoiceFirstTapResolverTest {
                 resolver.tapUp(false)
         );
         assertEquals(
-                Arrays.asList(
-                        MoaVoiceFirstTapResolver.Action.CANCEL_TALK_LOOP,
-                        MoaVoiceFirstTapResolver.Action.START_FRESH_TALK
-                ),
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.START_FRESH_TALK),
                 resolver.tapUp(true)
         );
         assertEquals(Collections.emptyList(), resolver.resolve());
     }
 
     @Test
-    public void doubleTapWhileListeningSupersedesDraftWithFreshThread() {
+    public void doubleTapWhileListeningStartsFreshThreadWithoutDiscardingDraft() {
         MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
 
         assertEquals(Collections.emptyList(), resolver.tapUp(true));
         assertEquals(
-                Arrays.asList(
-                        MoaVoiceFirstTapResolver.Action.CANCEL_TALK_LOOP,
-                        MoaVoiceFirstTapResolver.Action.START_FRESH_TALK
-                ),
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.START_FRESH_TALK),
+                resolver.tapUp(true)
+        );
+        assertEquals(Collections.emptyList(), resolver.resolve());
+    }
+
+    @Test
+    public void nextResolvedSingleTapCommitsDoubleStartedFreshThread() {
+        MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+
+        resolver.tapUp(false);
+        resolver.tapUp(true);
+        resolver.resolve();
+
+        assertEquals(Collections.emptyList(), resolver.tapUp(true));
+        assertEquals(
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.COMMIT_TALK_LOOP),
+                resolver.resolve()
+        );
+        assertFalse(resolver.hasOpenChord());
+    }
+
+    @Test
+    public void ordinaryActiveDraftSingleTapRemainsInertForVisibleReviewControls() {
+        MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+
+        resolver.tapUp(false);
+        resolver.resolve();
+
+        assertEquals(Collections.emptyList(), resolver.tapUp(true));
+        assertEquals(Collections.emptyList(), resolver.resolve());
+    }
+
+    @Test
+    public void rapidSecondTapDoesNotCommitDoubleStartedFreshThread() {
+        MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+
+        resolver.tapUp(false);
+        resolver.tapUp(true);
+        resolver.resolve();
+
+        assertEquals(Collections.emptyList(), resolver.tapUp(true));
+        assertEquals(
+                Collections.singletonList(MoaVoiceFirstTapResolver.Action.START_FRESH_TALK),
                 resolver.tapUp(true)
         );
         assertEquals(Collections.emptyList(), resolver.resolve());

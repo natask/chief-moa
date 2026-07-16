@@ -18,9 +18,13 @@ for chat and double-click-and-hold for voice.
 #### Scenario: Double tap starts a fresh voice thread
 - **WHEN** the voice-first Android flag is enabled and the user double-taps the
   orb
-- **THEN** Android cancels any just-started or pending current-thread voice loop
-- **AND** Android starts the next voice turn with the explicit fresh-thread
-  client context action
+- **THEN** Android starts the next voice turn with a distinct fresh branch
+- **AND** preserves the prior visible message instead of clearing or replacing it
+
+#### Scenario: Single tap ends the double-started session
+- **WHEN** a double-tap-started voice session is capturing and the user single-taps
+- **THEN** Android stops capture and commits the buffered utterance exactly once
+- **AND** does not start another ordinary draft
 
 #### Scenario: Triple tap opens chat without leaving a hot mic
 - **WHEN** the voice-first Android flag is enabled and the user triple-taps the
@@ -33,6 +37,20 @@ for chat and double-click-and-hold for voice.
 - **WHEN** the voice-first Android flag is disabled
 - **THEN** a single tap opens chat
 - **AND** double-click-and-hold remains the voice capture gesture
+
+### Requirement: Android native dark overlay interaction
+Android SHALL render Cancel, Send, chat close, and drag-removal actions as
+native controls with pressed feedback, accessibility labels, and crisp dark
+surfaces. Message content SHALL remain wholly above the orb interaction band.
+
+#### Scenario: Drag removal clears the overlay
+- **WHEN** the user releases the orb over the bottom close target
+- **THEN** Android stops active capture and playback
+- **AND** removes the orb, cards, composer, draft controls, and close target
+
+#### Scenario: Growing content preserves the interaction band
+- **WHEN** transcript or message content grows or the orb moves
+- **THEN** Android lays out the complete card above the orb with a visible gap
 
 ### Requirement: Browser voice-first drafts match Android disposition controls
 The browser extension SHALL, when `ageeVoiceFirstGesturesEnabled` is enabled,

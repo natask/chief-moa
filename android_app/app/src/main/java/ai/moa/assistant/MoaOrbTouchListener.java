@@ -80,6 +80,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final Runnable onStartTalkLoop;
     private final Runnable onStartFreshTalkLoop;
     private final Runnable onCancelTalkLoop;
+    private final Runnable onCommitTalkLoop;
     private final Runnable onOpenChat;
     private final Runnable onPressToTalkCancel;
     private final Runnable onOrbDragStart;
@@ -129,6 +130,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             Runnable onStartTalkLoop,
             Runnable onStartFreshTalkLoop,
             Runnable onCancelTalkLoop,
+            Runnable onCommitTalkLoop,
             Runnable onOpenChat,
             Runnable onPressToTalkCancel,
             Runnable onOrbDragStart,
@@ -151,6 +153,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.onStartTalkLoop = onStartTalkLoop;
         this.onStartFreshTalkLoop = onStartFreshTalkLoop;
         this.onCancelTalkLoop = onCancelTalkLoop;
+        this.onCommitTalkLoop = onCommitTalkLoop;
         this.onOpenChat = onOpenChat;
         this.onPressToTalkCancel = onPressToTalkCancel;
         this.onOrbDragStart = onOrbDragStart;
@@ -418,6 +421,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     break;
                 case CANCEL_TALK_LOOP:
                     onCancelTalkLoop.run();
+                    break;
+                case COMMIT_TALK_LOOP:
+                    onCommitTalkLoop.run();
                     break;
                 case OPEN_CHAT:
                     onOpenChat.run();

@@ -120,3 +120,14 @@ Release note: commit `5106d52` produced Android artifact
 Stable Android publication remains blocked because the protected publish job is
 not configured to run, and the Chrome Web Store upload gate was skipped; the
 local unpacked-extension reload signal completed without a client acknowledgement.
+
+## 12. Native Android Overlay Interaction Polish
+
+- [x] 12.1 Replace glyph-only Cancel, Send, chat-close, and removal actions with
+      native Android icon controls, dark styling, pressed feedback, and labels.
+- [x] 12.2 Keep transcript and message surfaces wholly above the orb band while
+      content grows or the orb moves.
+- [x] 12.3 Make drag-to-dismiss stop overlay activity and detach every window.
+- [x] 12.4 Make double-click start a fresh branch without clearing prior rows.
+- [x] 12.5 Make the next resolved single click commit only that fresh capture.
+- [ ] 12.6 Complete real-phone overlay QA and publish the verified OTA artifact.

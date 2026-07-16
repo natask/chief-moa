@@ -297,16 +297,16 @@ gateway voice turn without stopping already queued assistant audio.
 An experimental voice-first gesture mode (off by default; browser flag
 `ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
 the primary surface toward voice. Android uses the reviewable v4 contract:
-Single click starts a draft with visible `X — orb — ↑` controls (discard and the
-single Send action); later orb taps never commit it. Those controls are separate
-overlay windows beside the orb, so the transcript card above or below the orb is
-never the disposition authority. Double-click cancels the current draft
-and starts a fresh voice thread that does not use the current thread's replies,
-and triple-click cancels voice and opens the demoted chat surface. A still
+Single click starts a draft with native Cancel — orb — Send controls; ordinary
+draft taps remain inert. A quick double-click starts a fresh branch without
+clearing prior visible rows, and its next resolved single click commits that
+fresh capture once. Those controls are separate overlay windows beside the orb,
+so the transcript card is never the disposition authority. Triple-click
+cancels voice and opens the demoted chat surface. A still
 first-press hold is push-to-talk (release commits; a large move after the hold
 confirms cancels capture and escapes into a drag). The one open chat/transcript
-card follows the orb and flips wholly above or below it. Dragging into the
-bottom removal target, or choosing Hide in the chat header/foreground
+card follows the orb and stays wholly above its interaction band. Dragging into
+the native bottom close target, or choosing Hide in the chat header/foreground
 notification, stops the overlay service and removes all overlay windows. The
 flag off keeps Android's legacy gesture contract. The browser flag uses the
 same `X — mascot — ↑` draft controls and explicit-send rule; its flag-off mapping
