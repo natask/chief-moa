@@ -91,6 +91,7 @@ const focusedThresholds = new Map([
   ["extension/browser-agent-loop-policy.js", 90],
   ["extension/browser-turn-protocol.js", 90],
   ["extension/options.js", 90],
+  ["extension/tweaks.js", 90],
 ]);
 const focusedResults = [];
 for (const [relative, minimum] of focusedThresholds) {
