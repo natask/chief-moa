@@ -231,6 +231,13 @@
       tests plus the end-to-end device-hub smoke. Enforce a focused 90%
       line/branch/function gate, verified at 100% lines, 98.86% branches, and
       100% functions. Reduce `server.js` to 14,179 lines.
+- [x] 2.43 Extract browser task/turn, account connection, Android OTA,
+      presentation, supervisor, session-read, thread-switch, broker research,
+      media-note, voice-control, and health HTTP routing into twelve bounded
+      injected-dependency modules. Preserve newer context-only browser evidence,
+      transactional OTA lock reporting, media bookmarks, awaited media/audio
+      streams, and blob-store health while adding focused 90% line/branch/
+      function gates. Reduce `server.js` to 12,595 lines.
 
 ## 3. Other Oversized Surfaces
 
