@@ -14,7 +14,12 @@ let package = Package(
         .target(name: "AggieAppleSurface", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .target(name: "MoaMacCore", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .target(name: "AggieSurfaceUI", dependencies: ["AggieAppleSurface"], swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
-        .target(name: "MoaMacShell", dependencies: ["MoaMacCore"], swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
+        .target(
+            name: "MoaMacShell",
+            dependencies: ["MoaMacCore"],
+            swiftSettings: [.enableUpcomingFeature("StrictConcurrency")],
+            linkerSettings: [.linkedFramework("JavaScriptCore")]
+        ),
         .target(name: "MoaMacUI", dependencies: ["MoaMacCore", "MoaMacShell"], swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .executableTarget(name: "AggieSurfaceApp", dependencies: ["AggieSurfaceUI"], swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .executableTarget(name: "MoaMac", dependencies: ["MoaMacUI"], swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
