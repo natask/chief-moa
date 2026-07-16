@@ -83,6 +83,13 @@ public final class MoaAccessibilityService extends AccessibilityService {
         return activeService != null;
     }
 
+    static void captureScreenshot(
+            MoaScreenshotPolicy.Request request,
+            MoaScreenshotCaptureAdapter.Callback callback
+    ) {
+        new MoaScreenshotCaptureAdapter(activeService).capture(request, callback);
+    }
+
     static String currentScreenSummary() {
         return latestScreenSummary();
     }
