@@ -1,10 +1,18 @@
 import { DEFAULT_GATEWAY_URL, gatewayUrlDiagnostic, getEffectiveGatewayConfig, normalizeGatewayUrl } from "./config.js";
 import { parseSettingsIntent, PROFILE_FIELDS } from "./settings-intent.js";
+import {
+  MICROPHONE_RECOVERY_TARGET,
+  OPTIONS_RECOVERY_STORAGE_KEY,
+  normalizeOptionsRecovery,
+} from "./options-recovery.js";
 
 const gatewayUrlEl = document.getElementById("gatewayUrl");
 const gatewayTokenEl = document.getElementById("gatewayToken");
 const statusEl = document.getElementById("status");
 const micStatusEl = document.getElementById("micStatus");
+const micRecoveryBannerEl = document.getElementById("micRecoveryBanner");
+const micRecoveryStatusEl = document.getElementById("micRecoveryStatus");
+const grantMicEl = document.getElementById("grantMic");
 
 // Runtime agent profile surface.
 const profileStateEl = document.getElementById("profileState");
@@ -259,7 +267,40 @@ async function microphonePermissionState() {
   }
 }
 
-document.getElementById("grantMic").addEventListener("click", async () => {
+function renderMicrophoneRecoveryState(state) {
+  if (!micRecoveryStatusEl) return;
+  if (state === "granted") {
+    micRecoveryStatusEl.textContent = "Microphone access is already allowed. Return to your page and start voice again.";
+    return;
+  }
+  if (state === "denied") {
+    micRecoveryStatusEl.textContent = "Chrome has blocked microphone access. Open this extension’s Site settings, set Microphone to Allow, then return here.";
+    return;
+  }
+  micRecoveryStatusEl.textContent = "Microphone access is not granted yet. Click Grant microphone to continue.";
+}
+
+async function activateMicrophoneRecovery(value) {
+  const recovery = normalizeOptionsRecovery(value);
+  if (!recovery || recovery.target !== MICROPHONE_RECOVERY_TARGET) return null;
+  await chrome.storage.local.remove(OPTIONS_RECOVERY_STORAGE_KEY);
+  if (micRecoveryBannerEl) micRecoveryBannerEl.hidden = false;
+  const state = await microphonePermissionState();
+  renderMicrophoneRecoveryState(state);
+  grantMicEl?.classList.add("mic-recovery-focus");
+  grantMicEl?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  grantMicEl?.focus?.({ preventScroll: true });
+  return recovery;
+}
+
+async function initializeMicrophoneRecovery() {
+  const stored = await chrome.storage.local.get(OPTIONS_RECOVERY_STORAGE_KEY);
+  return activateMicrophoneRecovery(stored[OPTIONS_RECOVERY_STORAGE_KEY]);
+}
+
+initializeMicrophoneRecovery().catch(() => {});
+
+grantMicEl.addEventListener("click", async () => {
   flashMic("Requesting…");
   let stream = null;
   try {
@@ -272,8 +313,10 @@ document.getElementById("grantMic").addEventListener("click", async () => {
       },
     });
     flashMic("Microphone granted to A.G. ✓");
+    renderMicrophoneRecoveryState("granted");
   } catch (err) {
     flashMic(`Microphone blocked: ${String(err.message || err)}`, false);
+    renderMicrophoneRecoveryState(await microphonePermissionState());
   } finally {
     for (const track of stream?.getTracks?.() || []) {
       try {
@@ -292,6 +335,7 @@ document.getElementById("checkMic").addEventListener("click", async () => {
   } else {
     flashMic("Microphone not granted yet.");
   }
+  renderMicrophoneRecoveryState(state);
 });
 
 // ---- Runtime agent profile -------------------------------------------------
@@ -838,7 +882,11 @@ changeBoxEl.addEventListener("keydown", (event) => {
 // agent through the on-page overlay), background.js updates the cached profile.
 // Re-render so this open surface stays in sync without a manual reload.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes[PROFILE_CACHE_KEY]) return;
+  if (area !== "local") return;
+  if (changes[OPTIONS_RECOVERY_STORAGE_KEY]?.newValue) {
+    activateMicrophoneRecovery(changes[OPTIONS_RECOVERY_STORAGE_KEY].newValue).catch(() => {});
+  }
+  if (!changes[PROFILE_CACHE_KEY]) return;
   const next = changes[PROFILE_CACHE_KEY].newValue;
   if (next && next.profile) {
     renderProfile(next);
@@ -858,6 +906,7 @@ function escapeHtml(value) {
 
 export {
   PROFILE_FIELDS,
+  activateMicrophoneRecovery,
   applyProfilePatch,
   applySelectedCompanion,
   applyTalk,
@@ -867,11 +916,13 @@ export {
   gatewayHeaders,
   getStableDeviceId,
   languageLabel,
+  initializeMicrophoneRecovery,
   languagePickerConfigs,
   loadCompanions,
   loadProfile,
   loadProfileOptions,
   microphonePermissionState,
+  renderMicrophoneRecoveryState,
   networkFailureMessage,
   parseJsonOrNull,
   patchFromForm,

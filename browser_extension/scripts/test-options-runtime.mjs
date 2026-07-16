@@ -19,6 +19,7 @@ class FakeElement {
     this.listeners = new Map();
     this.classList = new FakeClassList();
     this.attributes = {};
+    this.hidden = false;
   }
   get textContent() { return this._textContent; }
   set textContent(value) { this._textContent = String(value); this.children = []; }
@@ -29,6 +30,8 @@ class FakeElement {
   }
   append(...children) { this.children.push(...children); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  scrollIntoView(options) { this.scrolledIntoView = options; }
+  focus(options) { this.focused = options; }
   async emit(type, event = {}) {
     const supplied = {
       key: "",
@@ -52,6 +55,7 @@ const ids = [
   "backgroundAutomation", "backgroundAutomationStatus", "save", "testGateway",
   "grantMic", "checkMic", "saveProfile", "refreshProfile", "searchCompanions",
   "createCompanion", "previewCompanion", "applyCompanion", "resetProfile", "applyChange",
+  "micRecoveryBanner", "micRecoveryStatus",
 ];
 const elements = new Map(ids.map((id) => [id, new FakeElement(id)]));
 const document = {
@@ -66,6 +70,11 @@ const stored = {
   ageeLivekitVoiceEnabled: true,
   ageeBackgroundAutomationEnabled: true,
   ageeBackgroundAutomationConsentVersion: 1,
+  ageeOptionsRecoveryTarget: {
+    version: 1,
+    target: "microphone_permission",
+    requested_at: "2026-07-16T00:00:00.000Z",
+  },
 };
 const storageWrites = [];
 let storageListener = null;
@@ -79,6 +88,7 @@ const chrome = {
         return Object.fromEntries(Object.keys(keys || {}).map((key) => [key, key in stored ? stored[key] : keys[key]]));
       },
       async set(values) { Object.assign(stored, values); storageWrites.push(values); },
+      async remove(key) { delete stored[key]; },
     },
     onChanged: { addListener(listener) { storageListener = listener; } },
   },
@@ -119,7 +129,24 @@ await new Promise((resolve) => setImmediate(resolve));
 assert.equal(elements.get("gatewayUrl").value, "");
 assert.equal(elements.get("livekitVoice").checked, true);
 assert.equal(elements.get("backgroundAutomation").checked, true);
+assert.equal(elements.get("micRecoveryBanner").hidden, false);
+assert.match(elements.get("micRecoveryStatus").textContent, /not granted yet/);
+assert.equal(elements.get("grantMic").classList.contains("mic-recovery-focus"), true);
+assert.deepEqual(elements.get("grantMic").scrolledIntoView, { behavior: "smooth", block: "center" });
+assert.deepEqual(elements.get("grantMic").focused, { preventScroll: true });
+assert.equal(stored.ageeOptionsRecoveryTarget, undefined);
 assert.ok(storageListener);
+elements.get("micRecoveryBanner").hidden = true;
+permissionState = "denied";
+storageListener({
+  ageeOptionsRecoveryTarget: {
+    newValue: { version: 1, target: "microphone_permission", requested_at: "later" },
+  },
+}, "local");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(elements.get("micRecoveryBanner").hidden, false);
+assert.match(elements.get("micRecoveryStatus").textContent, /blocked/);
+permissionState = "prompt";
 
 assert.deepEqual(options.gatewayHeaders("token", true), {
   "content-type": "application/json", authorization: "Bearer token",
@@ -232,6 +259,7 @@ await elements.get("checkMic").emit("click");
 assert.match(elements.get("micStatus").textContent, /not granted/);
 await elements.get("grantMic").emit("click");
 assert.equal(stoppedTracks, 1);
+assert.match(elements.get("micRecoveryStatus").textContent, /already allowed/);
 mediaFailure = new Error("permission denied");
 await elements.get("grantMic").emit("click");
 assert.match(elements.get("micStatus").textContent, /permission denied/);

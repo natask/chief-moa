@@ -258,9 +258,33 @@ function finishTurn(state) {
   setStatus("Ready.");
 }
 
-function failTurn(state, message) {
+function renderMicrophoneRecovery(state, message, recovery) {
+  if (!state?.ui || recovery?.target !== "microphone_permission") return false;
+  const copy = document.createElement("div");
+  copy.textContent = message;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "microphone-recovery-action";
+  button.textContent = recovery.action_label || "Take me to microphone setup";
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    request({ cmd: "openOptions", target: recovery.target })
+      .then((result) => {
+        if (!result?.ok) button.disabled = false;
+      })
+      .catch(() => {
+        button.disabled = false;
+      });
+  });
+  state.ui.ag.replaceChildren(copy, button);
+  state.ui.ag.className = "ag error microphone-recovery";
+  return true;
+}
+
+function failTurn(state, message, recovery = null) {
   if (state.done) return;
   updateCard(state, { error: message });
+  renderMicrophoneRecovery(state, message, recovery);
   setStatus(message, "error");
   state.done = true;
   clearTimeout(state.watchdog);
@@ -351,7 +375,7 @@ function handleVoiceEvent(payload) {
   }
   if (msg.type === "error") {
     if (msg.recoverable === false || msg.code === "microphone_capture_failed") {
-      failTurn(state, String(msg.message || "Voice capture failed."));
+      failTurn(state, String(msg.message || "Voice capture failed."), msg.recovery);
       return;
     }
     recoverTurn(state, String(msg.message || "The live connection dropped."));
@@ -576,6 +600,7 @@ export {
   playAssistantPcm,
   primeAudio,
   recoverTurn,
+  renderMicrophoneRecovery,
   request,
   restoreFromFloat,
   setAgentRole,

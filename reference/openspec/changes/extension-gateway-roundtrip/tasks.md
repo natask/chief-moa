@@ -36,6 +36,11 @@
       gateway `session_ready`, then flush it in order before any pending
       `commit_turn` so the first spoken audio is not dropped. Verified by
       `npm run verify` and `npm run smoke`.
+- [x] 1.18 Keep microphone recovery on the active extension surface until the
+      user chooses "Take me to microphone setup"; then open Options with a
+      typed one-shot recovery target that shows permission state and focuses
+      the existing user-operated Grant microphone control. No setting or
+      automatic permission action is added. Verified by `npm run verify`.
 
 ## 2. Unified Browser-Agent Turn Path
 
