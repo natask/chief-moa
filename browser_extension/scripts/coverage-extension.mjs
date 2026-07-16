@@ -100,6 +100,7 @@ const focusedThresholds = new Map([
   ["extension/ui-spec-runtime.js", 90],
   ["extension/offscreen-livekit.js", 90],
   ["extension/offscreen.js", 90],
+  ["extension/sidepanel.js", 90],
 ]);
 const focusedResults = [];
 for (const [relative, minimum] of focusedThresholds) {

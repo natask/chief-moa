@@ -564,3 +564,31 @@ form.addEventListener("submit", async (e) => {
 
 ensurePort();
 setStatus("Ready.");
+
+export {
+  addTurnCard,
+  armWatchdog,
+  attachHoldKeyHandlers,
+  base64ToBuffer,
+  beginHold,
+  closeTurnSession,
+  commitHold,
+  confirmDelegation,
+  ensurePort,
+  failTurn,
+  finishTurn,
+  floatOut,
+  handleVoiceEvent,
+  newTurnState,
+  onPortMessage,
+  playAssistantPcm,
+  primeAudio,
+  recoverTurn,
+  request,
+  restoreFromFloat,
+  setAgentRole,
+  setStatus,
+  startTurn,
+  stopPlayback,
+  updateCard,
+};
