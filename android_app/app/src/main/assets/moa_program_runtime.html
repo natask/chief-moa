@@ -7,6 +7,9 @@
   let worker = null;
   const workerSource = `
     "use strict";
+    const hostPostMessage = postMessage.bind(self);
+    Object.defineProperty(self, "postMessage", { value: undefined, writable: false, configurable: false });
+    Object.defineProperty(self, "importScripts", { value: undefined, writable: false, configurable: false });
     const pending = new Map();
     let nextCall = 1;
     const unavailable = () => Promise.reject(new Error("ambient_io_disabled"));
@@ -15,6 +18,8 @@
     self.WebSocket = undefined;
     self.EventSource = undefined;
     self.indexedDB = undefined;
+    const isAuthorityDenial = message => message.code === "approval_required" ||
+      message.code === "policy_denied" || message.code === "capability_not_allowed";
     const deepFreeze = value => {
       if (value && typeof value === "object" && !Object.isFrozen(value)) {
         Object.freeze(value);
@@ -31,7 +36,7 @@
         cursor[path[path.length - 1]] = (input = {}) => new Promise((resolve, reject) => {
           const call_id = "call_" + nextCall++;
           pending.set(call_id, { resolve, reject });
-          postMessage({ type: "call", call_id, capability_id: capability, input });
+          hostPostMessage({ type: "call", call_id, capability_id: capability, input });
         });
       }
       return deepFreeze(root);
@@ -43,6 +48,10 @@
         if (!request) return;
         pending.delete(message.call_id);
         if (message.ok) request.resolve(message.data ?? null);
+        else if (isAuthorityDenial(message)) {
+          pending.clear();
+          hostPostMessage({ type: "terminal", ok: false, code: "policy_denied" });
+        }
         else request.reject(Object.assign(new Error(message.error || "tool_failed"), { code: message.code || "tool_failed", status: message.status || "failed" }));
         return;
       }
@@ -51,9 +60,9 @@
         const tools = buildTools(message.allowed_capability_ids);
         const invoke = new Function("tools", '"use strict";\\n' + message.source + '\\nif (typeof main !== "function") throw new Error("main_not_defined");\\nreturn main(tools);');
         const result = await invoke(tools);
-        postMessage({ type: "terminal", ok: true, result: result === undefined ? null : result });
+        hostPostMessage({ type: "terminal", ok: true, result: result === undefined ? null : result });
       } catch (error) {
-        postMessage({ type: "terminal", ok: false, error: String(error && error.message || error).slice(0, 1000), code: String(error && error.code || "program_failed").slice(0, 120) });
+        hostPostMessage({ type: "terminal", ok: false, code: "runtime_failed" });
       }
     };
   `;
@@ -65,7 +74,7 @@
       if (message.type === "call") AndroidBridge.call(JSON.stringify(message));
       else if (message.type === "terminal") AndroidBridge.finish(JSON.stringify(message));
     };
-    worker.onerror = event => AndroidBridge.finish(JSON.stringify({ type: "terminal", ok: false, code: "worker_error", error: String(event.message || "worker_error") }));
+    worker.onerror = () => AndroidBridge.finish(JSON.stringify({ type: "terminal", ok: false, code: "runtime_failed" }));
     worker.postMessage({ type: "start", ...config });
   };
   window.__moaResolve = response => { if (worker) worker.postMessage(response); };
