@@ -117,6 +117,19 @@
   let devReloadVersion = null;
   const voicePolicy = window.AgeeContentVoicePolicyRuntime;
   const companionPolicy = window.AgeeContentCompanionPolicyRuntime;
+  const {
+    base64ToBuffer,
+    canCallExtensionApi,
+    isExtensionContextInvalidated,
+    markExtensionContextInvalidated,
+    safeRuntimeSendMessage,
+    safeStorageLocalGet,
+    safeStorageLocalSet,
+  } = window.AgeeContentExtensionApiRuntime.createContentExtensionApiRuntime({
+    getChrome: () => (typeof chrome === "undefined" ? undefined : chrome),
+    decodeBase64: (value) => atob(value),
+    ByteArray: Uint8Array,
+  });
   const COMPANION_PET_COLORS = {
     graphite: ["#555a62", "#262a30"],
     green: ["#208553", "#0f5534"],
@@ -149,78 +162,6 @@
   ];
   let avatarBehaviorRuntime = null;
   let activeCompanionPet = null;
-  let extensionContextInvalidated = false;
-
-  function markExtensionContextInvalidated(error) {
-    const message = String(error?.message || error || "");
-    if (!/extension context invalidated|context invalidated/i.test(message)) return false;
-    extensionContextInvalidated = true;
-    return true;
-  }
-
-  function canCallExtensionApi() {
-    if (extensionContextInvalidated) return false;
-    try {
-      if (typeof chrome === "undefined") {
-        extensionContextInvalidated = true;
-        return false;
-      }
-      if (!chrome?.runtime?.id) {
-        extensionContextInvalidated = true;
-        return false;
-      }
-      return true;
-    } catch (error) {
-      markExtensionContextInvalidated(error);
-      return false;
-    }
-  }
-
-  function safeRuntimeSendMessage(message) {
-    if (!canCallExtensionApi() || !chrome?.runtime?.sendMessage) return Promise.resolve(null);
-    try {
-      return Promise.resolve(chrome.runtime.sendMessage(message)).catch((error) => {
-        if (markExtensionContextInvalidated(error)) return null;
-        throw error;
-      });
-    } catch (error) {
-      if (markExtensionContextInvalidated(error)) return Promise.resolve(null);
-      return Promise.reject(error);
-    }
-  }
-
-  function safeStorageLocalGet(defaults) {
-    if (!canCallExtensionApi() || !chrome?.storage?.local?.get) return Promise.resolve(defaults);
-    try {
-      return Promise.resolve(chrome.storage.local.get(defaults)).catch((error) => {
-        if (markExtensionContextInvalidated(error)) return defaults;
-        throw error;
-      });
-    } catch (error) {
-      if (markExtensionContextInvalidated(error)) return Promise.resolve(defaults);
-      return Promise.reject(error);
-    }
-  }
-
-  function safeStorageLocalSet(items) {
-    if (!canCallExtensionApi() || !chrome?.storage?.local?.set) return Promise.resolve(null);
-    try {
-      return Promise.resolve(chrome.storage.local.set(items)).catch((error) => {
-        if (markExtensionContextInvalidated(error)) return null;
-        throw error;
-      });
-    } catch (error) {
-      if (markExtensionContextInvalidated(error)) return Promise.resolve(null);
-      return Promise.reject(error);
-    }
-  }
-
-  function base64ToBuffer(value) {
-    const binary = atob(String(value || ""));
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-    return bytes.buffer;
-  }
 
   // The voice path is icon-first. It uses state for launcher glow/audio routing,
   // not for a visible chat transcript:
@@ -1768,7 +1709,7 @@
     const cueId = state.cueId;
     updateCue(cueId, "changing this page…", "running");
     safeRuntimeSendMessage({ cmd: "tweakApplyRecord", record }).then((res) => {
-      if (!res && extensionContextInvalidated) return;
+      if (!res && isExtensionContextInvalidated()) return;
       if (!res?.ok) {
         const message = res?.error || "That page change was not a bounded tweak I can apply.";
         state.assistantText = message;
@@ -2236,7 +2177,7 @@
       contextAction: context.action,
       threadLabel: context.label,
     }).then(() => {
-      if (extensionContextInvalidated) removeCueCard(cueId);
+      if (isExtensionContextInvalidated()) removeCueCard(cueId);
     }).catch((error) => {
       showCueError(cueId, error?.message || error, { react: false });
     });
@@ -2247,7 +2188,7 @@
     openTextSurface({ fresh: false });
     createCue(cueId, "Describe this page", { presentation: "card" });
     safeRuntimeSendMessage({ cmd: "describe", cueId }).then(() => {
-      if (extensionContextInvalidated) removeCueCard(cueId);
+      if (isExtensionContextInvalidated()) removeCueCard(cueId);
     }).catch((error) => {
       showCueError(cueId, error?.message || error, { react: false });
     });
@@ -2380,7 +2321,7 @@
         contextAction: context.action,
         threadLabel: context.label,
       });
-      if (extensionContextInvalidated) {
+      if (isExtensionContextInvalidated()) {
         stopLiveVoiceState(state, "context invalidated");
         setVoiceState(false);
         if (agentState !== "idle") setAgentState("idle");
@@ -2635,7 +2576,7 @@
         voiceSessionId: state.voiceSessionId,
         message: { type: "commit_turn", turn_id: state.turnId },
       }).then((res) => {
-        if (!res && extensionContextInvalidated) return;
+        if (!res && isExtensionContextInvalidated()) return;
         if (!res?.ok) finishLiveVoiceError(state, res?.error || "Live voice connection was not open.");
       }).catch((error) => finishLiveVoiceError(state, String(error?.message || error)));
     } else {
@@ -2670,7 +2611,7 @@
       contextAction: state.contextControls.action,
       threadLabel: state.contextControls.label,
     }).then(() => {
-      if (extensionContextInvalidated) removeCueCard(state.cueId);
+      if (isExtensionContextInvalidated()) removeCueCard(state.cueId);
     }).catch((error) => {
       showCueError(state.cueId, error?.message || error);
       if (agentState === "thinking") setAgentState("idle");
@@ -3098,7 +3039,7 @@
     recordPending = true;
     safeRuntimeSendMessage({ cmd: "recordSessionStart" }).then((res) => {
       recordPending = false;
-      if (!res && extensionContextInvalidated) return;
+      if (!res && isExtensionContextInvalidated()) return;
       if (!res?.ok) {
         const cueId = newCueId();
         materializeCue(cueId, "Audio note", "");
@@ -3123,7 +3064,7 @@
     materializeCue(cueId, "Audio note", "storing...");
     safeRuntimeSendMessage({ cmd: "recordSessionStop" }).then((res) => {
       recordPending = false;
-      if (!res && extensionContextInvalidated) return;
+      if (!res && isExtensionContextInvalidated()) return;
       if (res?.stored) {
         const durationMs = Number(res.note?.duration_ms ?? res.durationMs) ||
           (startedAt ? Date.now() - startedAt : 0);
@@ -3187,7 +3128,7 @@
     videoNotePending = true;
     safeRuntimeSendMessage({ cmd: "videoSessionStart" }).then((res) => {
       videoNotePending = false;
-      if (!res && extensionContextInvalidated) return;
+      if (!res && isExtensionContextInvalidated()) return;
       if (!res?.ok) {
         const cueId = newCueId();
         materializeCue(cueId, "Video note", "");
@@ -3210,7 +3151,7 @@
     materializeCue(cueId, "Video note", "storing...");
     safeRuntimeSendMessage({ cmd: "videoSessionStop", cueId }).then((res) => {
       videoNotePending = false;
-      if (!res && extensionContextInvalidated) return;
+      if (!res && isExtensionContextInvalidated()) return;
       if (res?.stored) {
         // The reply arrives on this same cue as progress/done messages.
         updateCue(cueId, "video stored — sending to A.G. ...", "running");

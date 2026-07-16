@@ -2114,7 +2114,11 @@ async function ensureContent(tabId) {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
+<<<<<<< HEAD
     await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "steering-ui.js", "browser-command-transcript-runtime.js", "document-context.js", "page-observation-runtime.js", "content-voice-policy-runtime.js", "content-companion-policy-runtime.js", "content.js"] });
+=======
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "proactive-helper.js", "page-observation-runtime.js", "content-voice-policy-runtime.js", "content-companion-policy-runtime.js", "content-extension-api-runtime.js", "content.js"] });
+>>>>>>> 302a7a22 (refactor(extension): extract content API safety runtime)
   }
 }
 

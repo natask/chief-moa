@@ -13,7 +13,11 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 test("every packaged JavaScript file has exactly one production coverage classification", () => {
   const classification = validateProductionSourceClassification(root);
   assert.deepEqual(classification.runtime, [...RUNTIME_SOURCE_FILES]);
+<<<<<<< HEAD
   assert.equal(RUNTIME_SOURCE_FILES.length, 40);
+=======
+  assert.equal(RUNTIME_SOURCE_FILES.length, 29);
+>>>>>>> 302a7a22 (refactor(extension): extract content API safety runtime)
   assert.deepEqual(EXCLUDED_SOURCE_FILES, {
     "extension/dev.js": "operational_tooling",
     "extension/vendor/livekit-client.esm.js": "generated_vendor",

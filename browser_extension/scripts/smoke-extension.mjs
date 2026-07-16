@@ -141,6 +141,7 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
 
 function assertVoicePlaybackStopContract() {
   const source = readFileSync(join(extensionPath, "content.js"), "utf8");
+  const extensionApi = readFileSync(join(extensionPath, "content-extension-api-runtime.js"), "utf8");
   const background = readFileSync(join(extensionPath, "background.js"), "utf8");
   const offscreen = readFileSync(join(extensionPath, "offscreen.js"), "utf8");
   const offscreenWorklet = readFileSync(join(extensionPath, "offscreen-audio-worklet.js"), "utf8");
@@ -182,8 +183,13 @@ function assertVoicePlaybackStopContract() {
   if (!/liveVoiceBySessionId\.get\(msg\.voiceSessionId\)/.test(source)) {
     throw new Error("voice-session events must route to their owning state, not only the newest liveVoice");
   }
-  if (!/function safeRuntimeSendMessage/.test(source) || !/function safeStorageLocalGet/.test(source) || !/function safeStorageLocalSet/.test(source)) {
-    throw new Error("content.js must guard runtime and storage calls against stale extension contexts");
+  if (
+    !/function safeRuntimeSendMessage/.test(extensionApi) ||
+    !/function safeStorageLocalGet/.test(extensionApi) ||
+    !/function safeStorageLocalSet/.test(extensionApi) ||
+    !/AgeeContentExtensionApiRuntime\.createContentExtensionApiRuntime\(\{/.test(source)
+  ) {
+    throw new Error("content.js must delegate runtime and storage calls to the stale-context safety runtime");
   }
   if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(source)) {
     throw new Error("voice button click must open the input surface and prime audio before starting live voice");
