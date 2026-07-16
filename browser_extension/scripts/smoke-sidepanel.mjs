@@ -173,6 +173,31 @@ async function main() {
       });
       return true;
     })()`);
+    await evaluate(workerCdp, `(() => {
+      globalThis.__ageeConnectingSocketSmoke = { constructed: 0, closedWhileConnecting: 0 };
+      class ConnectingSmokeWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+        constructor() {
+          this.readyState = ConnectingSmokeWebSocket.CONNECTING;
+          this.binaryType = "arraybuffer";
+          globalThis.__ageeConnectingSocketSmoke.constructed += 1;
+        }
+        send() { throw new Error("CONNECTING smoke socket cannot send"); }
+        close() {
+          if (this.readyState === ConnectingSmokeWebSocket.CLOSED) return;
+          if (this.readyState === ConnectingSmokeWebSocket.CONNECTING) {
+            globalThis.__ageeConnectingSocketSmoke.closedWhileConnecting += 1;
+          }
+          this.readyState = ConnectingSmokeWebSocket.CLOSED;
+          setTimeout(() => this.onclose?.({}), 0);
+        }
+      }
+      globalThis.WebSocket = ConnectingSmokeWebSocket;
+      return true;
+    })()`);
 
     const panelUrl = `chrome-extension://${extensionId}/sidepanel.html`;
     const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
@@ -232,7 +257,9 @@ async function main() {
     await evaluate(offscreenCdp, `(() => {
       Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
         configurable: true,
-        value: async () => { throw new DOMException("Permission denied by recovery smoke", "NotAllowedError"); },
+        value: () => new Promise((_, reject) => setTimeout(() => {
+          reject(new DOMException("Permission denied by delayed recovery smoke", "NotAllowedError"));
+        }, 250)),
       });
       return true;
     })()`);
@@ -264,12 +291,15 @@ async function main() {
     const optionsBeforeRecoveryAction = (await targets(devToolsPort)).filter(
       (target) => target.type === "page" && String(target.url || "").startsWith(`chrome-extension://${extensionId}/options.html`),
     );
+    const connectingSocketRace = await evaluate(workerCdp, "globalThis.__ageeConnectingSocketSmoke");
     if (
       optionsBeforeRecoveryAction.length !== 0 ||
+      connectingSocketRace?.constructed < 1 ||
+      connectingSocketRace?.closedWhileConnecting < 1 ||
       voiceRecovery.action !== "Take me to microphone setup" ||
       !voiceRecovery.reply.includes("microphone")
     ) {
-      throw new Error(`initial microphone denial did not stay visible before navigation: ${JSON.stringify({ voiceRecovery, optionsBeforeRecoveryAction })}`);
+      throw new Error(`delayed microphone denial did not survive the CONNECTING socket race: ${JSON.stringify({ voiceRecovery, optionsBeforeRecoveryAction, connectingSocketRace })}`);
     }
     await evaluate(pageCdp, 'document.querySelector(".turn:last-child .microphone-recovery-action")?.click()');
     const optionsTarget = await waitForTarget(
@@ -442,7 +472,7 @@ async function main() {
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
         "typed/spoken settings identities matched, All exposed every local control, brokered writes failed closed/redacted, microphone walkthrough opened, " +
-        "initial microphone denial stayed visible until its explicit recovery action opened the focused walkthrough, " +
+        "delayed microphone denial survived a CONNECTING socket close and stayed visible until its explicit recovery action opened the focused walkthrough, " +
         "the page overlay preserved the same structured start-denial action without auto-navigation, " +
         "settings search selected the grounded microphone row, " +
         "role selector persisted Collaborate, Delegate confirmation cancelled safely, chrome.sidePanel.open available.",

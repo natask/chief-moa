@@ -26,7 +26,7 @@ import {
   readBrowserSettings,
   validateBrowserSettingWrite,
 } from "./browser-settings-registry.js";
-import { createVoiceStartError, voiceStartFailure } from "./voice-start-failure.js";
+import { createVoiceStartError, preOpenVoiceStartError, voiceStartFailure } from "./voice-start-failure.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   buildAgentLoopObservationPayload,
@@ -2563,7 +2563,8 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       } catch {}
       if (!settled) {
         settled = true;
-        reject(new Error(voiceSocket ? formatVoiceSocketNetworkError(cfg, ticket, message) : message));
+        const fallbackMessage = voiceSocket ? formatVoiceSocketNetworkError(cfg, ticket, message) : message;
+        reject(preOpenVoiceStartError(session, fallbackMessage));
       }
     };
 
