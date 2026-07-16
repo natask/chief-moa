@@ -112,10 +112,12 @@ Runtime language follows the safest maintained scripting host on each surface:
   not run as privileged service-worker code; page evaluation and persistent
   userscripts are separately advertised and bound to tab, frame, origin,
   document epoch, execution world, and site grant.
-- Android `android.webview-js.v1` runs JavaScript in a dedicated non-visible,
-  state-isolated WebView and bridges narrowly into Java/Kotlin. Cross-app
-  observation and control are Accessibility-first; every node action binds and
-  revalidates package, window, observation generation, and node fingerprint.
+- Android `android.webview-js.v1` runs JavaScript in a non-exported isolated
+  `:moa_program_runtime` process with a dedicated non-visible WebView. A bounded
+  Messenger protocol reaches a main-process Accessibility broker; the runtime
+  receives no Accessibility object, gateway credential, browsing state,
+  filesystem, or network authority. The main process can revoke the bridge and
+  terminate the realm without waiting for generated JavaScript.
 - macOS `macos.javascriptcore-ax.v1` runs a fresh JavaScriptCore realm over a
   narrow Swift/public-AX bridge. JXA, AppleScript, and bounded shell are
   separate opt-in profiles with separate targets, allowlists, grants, limits,
@@ -142,6 +144,16 @@ server state, and separate artifact roots. New executable modules must each
 exceed 90% line and branch coverage; aggregate coverage cannot hide a weak
 runtime module. Build, package, install, smoke, and active promotion remain
 distinct evidence states.
+
+Android's initial catalog advertises only Accessibility `observe`, `find`,
+`click`, `scroll`, `back`, and `home`; text entry remains absent until a local
+confirmation flow exists, and there is no coordinate fallback. Every call
+revalidates the proposal's package, window, generation, fingerprint, and state
+digest. The client honestly advertises `memory_bytes: null` and
+`parallel_calls: 1`. Acceptance, pending attempts, receipts, and lifecycle
+events are committed before release to a durable acknowledged outbox; crash
+recovery classifies unfinished effects as `indeterminate` instead of repeating
+them.
 
 ## Cross-surface release boundary
 

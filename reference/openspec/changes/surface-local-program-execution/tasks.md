@@ -46,12 +46,21 @@
 
 ## Android runtime
 
+Candidate implementation status (not release evidence): the Android lane has a
+non-exported isolated `:moa_program_runtime` WebView service, a main-process
+Accessibility broker/watchdog, the six-capability catalog without text entry,
+JCS-bound contracts, closed lifecycle/receipt constructors, and a durable
+receipt-first acknowledged outbox. Acceptance remains gated on the independent
+clean-candidate verification below.
+
 - [ ] Add `android.webview-js.v1` in a dedicated non-visible WebView with a
-  fresh realm, no user browsing state/network/file access, and a narrow
-  asynchronous Java/Kotlin message bridge.
+  fresh independently terminable isolated-process realm, no user browsing
+  state/network/file access, and a narrow asynchronous bridge to the
+  main-process Java host.
 - [ ] Expose Android Accessibility-first observation and semantic action host
-  functions over existing local policy/approval/receipt primitives; retain
-  intents only for safe platform handoffs.
+  functions over exact state bindings and durable local policy/receipt
+  primitives. Do not advertise text entry or capabilities whose local approval
+  flow is not implemented.
 - [ ] Prove multi-call branching, stale package/window/node rejection, no
   coordinate fallback, interruption, and receipt durability against an
   isolated fixture APK/emulator or explicitly dedicated device.

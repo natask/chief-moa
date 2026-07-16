@@ -29,7 +29,7 @@ and cannot inherit the current program's approval.
 | Surface/profile | Program host | Local bridge | Deliberately absent |
 | --- | --- | --- | --- |
 | Browser `browser.javascript.v1` | Extension-owned sandboxed JavaScript worker/runtime | Packaged tab, DOM, keyboard, screenshot, CDP, anchor, and userscript adapters | Raw `chrome.*`, provider keys, extension storage, service-worker globals |
-| Android `android.webview-js.v1` | Dedicated non-visible WebView worker with a fresh execution realm | Java/Kotlin broker over `AccessibilityService`, safe intents, app state, and optional screenshot | Reflection, arbitrary bridge object graphs, raw filesystem/network, provider keys |
+| Android `android.webview-js.v1` | Non-exported isolated-process service with a dedicated non-visible WebView and fresh execution realm | Main-process Java broker over `AccessibilityService` | Reflection, arbitrary bridge object graphs, raw filesystem/network, provider keys, app WebView state |
 | macOS `macos.javascriptcore-ax.v1` | Per-program `JSContext`/JavaScriptCore realm | Swift bridge over public `AXUIElement`/`AXObserver`, scoped app state, and separately granted focused-window capture | Keychain, arbitrary Objective-C/Swift access, Apple Events, shell, provider keys |
 | macOS `macos.jxa.v1` | Bound `osascript` JXA subprocess | Explicit Apple Events target/suite allowlist | Ambient AX, shell, Keychain, unrestricted target set |
 | macOS `macos.applescript.v1` | Bound `osascript` AppleScript subprocess | Explicit Apple Events target/suite allowlist | Ambient AX, shell, Keychain, unrestricted target set |
@@ -45,13 +45,28 @@ click/fill/snapshot helpers and CDP remain efficient adapters behind the same
 local runtime.
 
 Android uses JavaScript because a WebView already supplies a maintained V8 host;
-there is no transpiler. The runtime WebView has no user navigation, browsing
-history, cookies, autofill, file access, or arbitrary network load. A narrow
-message transport marshals calls to a Java/Kotlin broker. The broker performs
-Accessibility operations on the required Android thread and resolves the
-program promise with a bounded result. Cross-app observation and control are
-Accessibility-first; intents are used for app launch, URLs, and safe platform
-handoffs, not as a replacement for screen-state validation.
+there is no transpiler. The runtime WebView lives in the non-exported isolated
+`:moa_program_runtime` service and has no user navigation, browsing history,
+cookies, autofill, file/content access, storage, or arbitrary network load. A
+closed bounded Messenger protocol carries calls to the main app process; the
+runtime process never receives an Accessibility service object or gateway
+credential. The main process owns the watchdog, durable store, local policy,
+and Accessibility adapter and can revoke and terminate the realm without
+depending on the generated-code event loop.
+
+The initial Android snapshot advertises the sorted Accessibility capabilities
+`back`, `click`, `find`, `home`, `observe`, and `scroll`. Text entry is absent
+until explicit local confirmation exists. It uses the exact nine-field
+descriptor schema and JCS snapshot digest, advertises `memory_bytes: null` and
+`parallel_calls: 1`, and has no coordinate fallback. Reads use `none` approval;
+navigation and click use `implicit_user_command`, with click classified as
+`external_side_effect`. Unimplemented interactive approval fails closed.
+
+Acceptance, pending attempts, lifecycle events, and receipts are committed in
+the main process. The durable outbox delivers each tool receipt before its
+`tool_finished` event and the terminal receipt before `terminal`, persisting
+acknowledgements for retry. Recovery turns an unfinished attempt into
+`indeterminate` and never repeats the effect.
 
 The default macOS profile uses JavaScriptCore because it embeds directly in the
 native client and can receive a narrow Swift bridge. JXA and AppleScript use

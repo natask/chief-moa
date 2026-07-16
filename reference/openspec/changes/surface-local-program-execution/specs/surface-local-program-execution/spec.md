@@ -94,6 +94,9 @@ and receipts. Gateway QuickJS SHALL expose only gateway-owned capabilities.
 
 - **WHEN** Android accepts a proposal for `android.webview-js.v1`
 - **THEN** it executes JavaScript directly in a fresh dedicated WebView realm
+  inside a non-exported isolated process
+- **AND** the main process can revoke and terminate that realm without waiting
+  for the generated JavaScript event loop
 - **AND** does not transpile the program to Java or expose Java reflection,
   arbitrary network, user WebView state, or unrestricted bridge objects
 
@@ -125,6 +128,20 @@ but SHALL NOT substitute for current-screen validation.
 - **WHEN** the foreground package or bound window changes after observation
 - **THEN** Android rejects the attempted action as `stale_state`
 - **AND** performs no tap or synthetic-coordinate fallback
+
+#### Scenario: Android has no interactive program approval resolver
+
+- **WHEN** a proposal or effect requires an interactive approval flow Android
+  has not implemented
+- **THEN** Android rejects it without performing the effect
+- **AND** does not advertise text entry until explicit confirmation exists
+
+#### Scenario: Android advertises honest initial limits
+
+- **WHEN** Android advertises `android.webview-js.v1`
+- **THEN** it reports `memory_bytes: null` and `parallel_calls: 1`
+- **AND** its catalog contains only the sorted Accessibility `back`, `click`,
+  `find`, `home`, `observe`, and `scroll` capability IDs
 
 ### Requirement: Browser orchestration and page execution remain distinct
 

@@ -47,8 +47,10 @@ scripting profile it can safely host.
 - Use browser JavaScript for local orchestration, with packaged browser helpers,
   CDP, and the separately authorized userscript/page-evaluation lane behind the
   local bridge.
-- Use a dedicated Android WebView worker as the JavaScript host and Android
-  Accessibility as the primary cross-app observation/action adapter.
+- Use a non-exported isolated Android WebView service as the JavaScript host and
+  keep Android Accessibility authority in a main-process broker. The initial
+  candidate advertises only `observe`, `find`, `click`, `scroll`, `back`, and
+  `home`; text entry remains absent until explicit local confirmation exists.
 - Use bridged JavaScriptCore as the default macOS program host over public AX
   operations. Advertise JXA/AppleScript and bounded shell as separate,
   independently installed and approved profiles rather than ambient powers of
@@ -58,6 +60,10 @@ scripting profile it can safely host.
   control runtime.
 - Keep approval, current-state validation, stop controls, permissions, and
   canonical local receipts on the owning surface.
+- On Android, persist acceptance, pending attempts, receipts, and lifecycle
+  events before outbox delivery; send receipt prerequisites before their linked
+  completion events and recover unfinished attempts as `indeterminate` rather
+  than repeating them.
 - Require an independently terminable worker/process or engine interrupt for
   every advertised program host; finite limits are advertised only when locally
   enforced, and unavailable per-realm memory accounting is declared `null`.
