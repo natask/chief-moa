@@ -12275,7 +12275,14 @@ async function handleAndroidOtaRollback(request, response) {
   try {
     result = androidOta.rollbackToPreviousRelease(ANDROID_OTA_DIR);
   } catch (error) {
-    sendJson(response, 500, { error: cleanError(error) });
+    if (error && error.code === "OTA_STORE_BUSY") {
+      sendJson(response, 409, {
+        error: "android OTA store busy",
+        reason: "publication_in_progress",
+      });
+    } else {
+      sendJson(response, 500, { error: cleanError(error) });
+    }
     return;
   }
   if (!result.ok) {
