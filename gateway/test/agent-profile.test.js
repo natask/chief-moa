@@ -65,6 +65,10 @@ test("exported identity, device, voice, and prompt normalization fail closed", (
   assert.equal(withRequiredVoiceStyle("Speak tersely and honor the requested form of address."), "Speak tersely and honor the requested form of address.");
   assert.match(withRequiredVoiceStyle("", "fallback"), /^fallback/);
   assert.match(safeSystemPromptForProvider({}, ""), /^You are A\.G\./);
+  assert.match(
+    safeSystemPromptForProvider({ system_prompt: `${normalized}\n\nTrusted turn overlay.` }),
+    /Voice style requirement[\s\S]*Trusted turn overlay\.$/,
+  );
   for (const prompt of [
     "Be terse and honor the requested title.",
     "Be terse and honor the roleplay style.",

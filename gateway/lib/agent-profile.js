@@ -901,7 +901,8 @@ function withRequiredVoiceStyle(prompt, fallback = "") {
     const requiredRuleIndex = value.indexOf(REQUIRED_VOICE_STYLE_RULE);
     if (requiredRuleIndex >= 0) {
       const prefix = value.slice(0, requiredRuleIndex).trim();
-      return prefix ? [prefix, REQUIRED_VOICE_STYLE_RULE].join("\n\n") : REQUIRED_VOICE_STYLE_RULE;
+      const suffix = value.slice(requiredRuleIndex + REQUIRED_VOICE_STYLE_RULE.length).trim();
+      return [prefix, REQUIRED_VOICE_STYLE_RULE, suffix].filter(Boolean).join("\n\n");
     }
     return value;
   }
