@@ -9,6 +9,7 @@ globalThis.AgeeProgramWorkerRuntime = function AgeeProgramWorkerRuntime() {
   let inFlightBytes = 0;
   const pending = new Map();
   const encoder = new TextEncoder();
+  const emit = globalThis.postMessage.bind(globalThis);
 
   function boundedJson(value, limit, errorCode) {
     let json;
@@ -27,7 +28,7 @@ globalThis.AgeeProgramWorkerRuntime = function AgeeProgramWorkerRuntime() {
       inFlightBytes += bytes;
       const callId = nextCall++;
       pending.set(callId, { resolve, reject, bytes });
-      postMessage({ type: "tool_call", call_id: callId, capability_id: capabilityId, args: encoded.value });
+      emit({ type: "tool_call", call_id: callId, capability_id: capabilityId, args: encoded.value });
     });
   }
 
@@ -60,6 +61,8 @@ globalThis.AgeeProgramWorkerRuntime = function AgeeProgramWorkerRuntime() {
     warn: (...args) => recordLog(args), error: (...args) => recordLog(args),
     debug: (...args) => recordLog(args),
   });
+  Object.defineProperty(globalThis, "console", { value: boundedConsole, writable: false, configurable: false });
+  Object.defineProperty(globalThis, "postMessage", { value: undefined, writable: false, configurable: false });
 
   globalThis.onmessage = (event) => {
     const message = event.data || {};
@@ -77,7 +80,7 @@ globalThis.AgeeProgramWorkerRuntime = function AgeeProgramWorkerRuntime() {
     resultBytes = Number(message.result_bytes);
     logBytes = Number(message.log_bytes);
     if (!Number.isSafeInteger(resultBytes) || resultBytes < 1 || message.memory_bytes !== null || !Number.isSafeInteger(logBytes) || logBytes < 0) {
-      postMessage({ type: "program_result", ok: false, error: "program_resource_limits_invalid" });
+      emit({ type: "program_result", ok: false, error: "program_resource_limits_invalid" });
       return;
     }
     try {
@@ -85,13 +88,13 @@ globalThis.AgeeProgramWorkerRuntime = function AgeeProgramWorkerRuntime() {
       const execute = new AsyncFunction("tools", "console", `"use strict";\n${message.source}\n//# sourceURL=aggie-surface-program.js`);
       Promise.resolve(execute(toolsNamespace(), boundedConsole)).then(
         (result) => {
-          try { postMessage({ type: "program_result", ok: true, result: boundedJson(result, resultBytes, "program_result_too_large").value }); }
-          catch (error) { postMessage({ type: "program_result", ok: false, error: String(error?.message || error) }); }
+          try { emit({ type: "program_result", ok: true, result: boundedJson(result, resultBytes, "program_result_too_large").value }); }
+          catch (error) { emit({ type: "program_result", ok: false, error: String(error?.message || error) }); }
         },
-        (error) => postMessage({ type: "program_result", ok: false, error: String(error?.message || error).slice(0, 2000) }),
+        (error) => emit({ type: "program_result", ok: false, error: String(error?.message || error).slice(0, 2000) }),
       );
     } catch (error) {
-      postMessage({ type: "program_result", ok: false, error: String(error?.message || error).slice(0, 2000) });
+      emit({ type: "program_result", ok: false, error: String(error?.message || error).slice(0, 2000) });
     }
   };
 };
