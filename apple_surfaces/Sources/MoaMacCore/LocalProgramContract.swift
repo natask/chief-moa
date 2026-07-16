@@ -15,8 +15,39 @@ public enum LocalProgramError: Error, Equatable, Sendable {
     case toolBudgetExceeded, invalidInput, staleObservation, staleTarget
     case unknownHandle, unsupportedAction, approvalRequired, capabilityDenied
     case unsafeProgram, replayed
-    case stopped, indeterminate
+    case stopped, indeterminate, receiptFailed
     case executionFailed(String)
+}
+
+public enum MacProtocolTimestamp {
+    private static func formatter(milliseconds: Bool) -> DateFormatter {
+        let value = DateFormatter()
+        value.calendar = Calendar(identifier: .gregorian)
+        value.locale = Locale(identifier: "en_US_POSIX")
+        value.timeZone = TimeZone(secondsFromGMT: 0)
+        value.dateFormat = milliseconds ? "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'" : "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        return value
+    }
+
+    public static func string(_ date: Date) -> String { formatter(milliseconds: true).string(from: date) }
+    public static func parse(_ value: String) -> Date? {
+        if value.utf8.count == 24, let parsed = formatter(milliseconds: true).date(from: value), string(parsed) == value {
+            return parsed
+        }
+        let seconds = formatter(milliseconds: false)
+        if value.utf8.count == 20, let parsed = seconds.date(from: value), seconds.string(from: parsed) == value {
+            return parsed
+        }
+        return nil
+    }
+    public static let encodingStrategy: JSONEncoder.DateEncodingStrategy = .custom { date, encoder in
+        var value = encoder.singleValueContainer(); try value.encode(string(date))
+    }
+    public static let decodingStrategy: JSONDecoder.DateDecodingStrategy = .custom { decoder in
+        let value = try decoder.singleValueContainer().decode(String.self)
+        guard let date = parse(value) else { throw LocalProgramError.invalidEnvelope }
+        return date
+    }
 }
 
 public struct MacProgramTarget: Codable, Equatable, Sendable {
@@ -247,6 +278,7 @@ public struct MacLocalProgramEnvelope: Codable, Equatable, Sendable {
     public let approvalPolicy: ApprovalPolicy
     public let idempotencyKey: String
     public let issuedAt: Date, expiresAt: Date
+    public private(set) var receivedCanonicalSHA256: String? = nil
 
     public init(version: Int = 1, type: String = "surface.execution.proposed", executionID: String,
                 sessionID: String, turnID: String, target: MacProgramTarget,
@@ -269,7 +301,7 @@ public struct MacLocalProgramEnvelope: Codable, Equatable, Sendable {
     public static func sourceDigest(_ source: String) -> String { MacLocalProgramDigest.data(Data(source.utf8)) }
 
     public static func decodeStrict(_ data: Data) throws -> Self {
-        guard let canonical = try? MacCanonicalJSON.parse(data), case .object = canonical
+        guard let canonical = try? MacCanonicalJSON.parse(data), case .object(let canonicalRoot) = canonical
         else { throw LocalProgramError.invalidEnvelope }
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw LocalProgramError.invalidEnvelope }
         try require(root, ["version", "type", "execution_id", "session_id", "turn_id", "target", "runtime", "program", "catalog", "bindings", "limits", "approval_policy", "idempotency_key", "issued_at", "expires_at"])
@@ -280,8 +312,28 @@ public struct MacLocalProgramEnvelope: Codable, Equatable, Sendable {
         try object(root, "bindings", ["kind", "local_grant_id", "bundle_id", "pid", "process_generation", "signing_identity", "window_id", "ax_snapshot_id", "state_sha256"])
         try object(root, "limits", ["source_bytes", "wall_ms", "memory_bytes", "tool_calls", "parallel_calls", "result_bytes", "log_bytes"])
         try object(root, "approval_policy", ["program", "always_ask"])
-        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-        do { return try decoder.decode(Self.self, from: data) } catch { throw LocalProgramError.invalidEnvelope }
+        guard let issued = canonicalRoot["issued_at"]?.stringValue,
+              let expires = canonicalRoot["expires_at"]?.stringValue,
+              MacProtocolTimestamp.parse(issued) != nil, MacProtocolTimestamp.parse(expires) != nil
+        else { throw LocalProgramError.invalidEnvelope }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = MacProtocolTimestamp.decodingStrategy
+        do {
+            var decoded = try decoder.decode(Self.self, from: data)
+            decoded.receivedCanonicalSHA256 = MacLocalProgramDigest.data(canonical.canonicalData)
+            return decoded
+        } catch { throw LocalProgramError.invalidEnvelope }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.version == rhs.version && lhs.type == rhs.type && lhs.executionID == rhs.executionID &&
+        lhs.sessionID == rhs.sessionID && lhs.turnID == rhs.turnID && lhs.target == rhs.target &&
+        lhs.runtime == rhs.runtime && lhs.program == rhs.program && lhs.catalog == rhs.catalog &&
+        lhs.bindings == rhs.bindings && lhs.limits == rhs.limits && lhs.approvalPolicy == rhs.approvalPolicy &&
+        lhs.idempotencyKey == rhs.idempotencyKey && lhs.issuedAt == rhs.issuedAt && lhs.expiresAt == rhs.expiresAt
+    }
+
+    public var proposalSHA256: String {
+        receivedCanonicalSHA256 ?? MacLocalProgramDigest.canonical(self)
     }
 
     public func validate(advertisement: MacLocalProgramAdvertisement, now: Date) throws {
@@ -639,7 +691,7 @@ public enum MacLocalProgramDigest {
     }
     public static func canonical<T: Encodable>(_ value: T) -> String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = MacProtocolTimestamp.encodingStrategy
         let encoded = try! encoder.encode(value)
         return data(try! MacCanonicalJSON.parse(encoded).canonicalData)
     }

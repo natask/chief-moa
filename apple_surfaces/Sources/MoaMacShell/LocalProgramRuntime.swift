@@ -72,13 +72,9 @@ final class MacProgramBridge: @unchecked Sendable {
             }
             let calledAt = startedAt
             calls += 1
-            guard let data = inputJSON.data(using: .utf8), data.count <= 8 * 1024 else {
-                throw LocalProgramError.invalidInput
-            }
-            let canonical = try MacCanonicalJSON.parse(data)
-            guard case .object(let input) = canonical else { throw LocalProgramError.invalidInput }
-            try Self.validateInput(capabilityID: capabilityID, input: input)
-            inputDigest = MacLocalProgramDigest.data(canonical.canonicalData)
+            let data = Data(inputJSON.utf8)
+            let parsed = try? MacCanonicalJSON.parse(data)
+            inputDigest = MacLocalProgramDigest.data(parsed?.canonicalData ?? data)
             let callID = "call_\(executionID)_\(calls)"
             toolCallID = callID
             let effectClass = MacLocalProgramAdvertisement.descriptors.first {
@@ -88,6 +84,9 @@ final class MacProgramBridge: @unchecked Sendable {
                 pending: .init(toolCallID: callID, capabilityID: capabilityID,
                     inputSHA256: inputDigest!, preStateSHA256: preStateSHA256,
                     effectClass: effectClass, sequence: calls, startedAt: calledAt))
+            guard data.count <= 8 * 1024, let canonical = parsed,
+                  case .object(let input) = canonical else { throw LocalProgramError.invalidInput }
+            try Self.validateInput(capabilityID: capabilityID, input: input)
             guard calledAt < deadline else { throw LocalProgramError.expired }
             guard calls <= maximumCalls else { throw LocalProgramError.toolBudgetExceeded }
             guard allowed.contains(capabilityID) else { throw LocalProgramError.capabilityDenied }
@@ -101,13 +100,14 @@ final class MacProgramBridge: @unchecked Sendable {
                     effectClass: effectClass, capabilityID: capabilityID,
                     executionID: executionID, expiresAt: expiresAt) ??
                     .init(approvalID: approvalID, status: "denied")
-                guard decision.approvalID == approvalID,
-                      ["approved", "denied", "expired", "cancelled"].contains(decision.status) else {
-                    throw LocalProgramError.approvalRequired
-                }
+                let resolvedAt = now()
+                let validDecision = decision.approvalID == approvalID &&
+                    ["approved", "denied", "expired", "cancelled"].contains(decision.status)
+                let resolution = !validDecision ? "cancelled" :
+                    (decision.status == "approved" && resolvedAt >= expiresAt ? "expired" : decision.status)
                 try journal.resolveApproval(executionID: executionID, approvalID: approvalID,
-                    status: decision.status, at: now())
-                guard decision.status == "approved", now() < expiresAt else {
+                    status: resolution, at: resolvedAt)
+                guard resolution == "approved" else {
                     throw LocalProgramError.approvalRequired
                 }
                 consumedApprovalID = approvalID
@@ -148,8 +148,7 @@ final class MacProgramBridge: @unchecked Sendable {
                         summary: "local_capability_outcome_indeterminate", resourceID: nil,
                         postStateSHA256: nil, approvalID: consumedApprovalID,
                         startedAt: startedAt, finishedAt: now())
-                    try journal.finishTool(executionID: executionID, receipt: uncertain, at: now())
-                    receipts.append(uncertain); failure = .indeterminate
+                    try commit(uncertain, at: now()); failure = .indeterminate
                     return Self.errorJSON(.indeterminate)
                 }
                 let normalized = receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
@@ -159,8 +158,7 @@ final class MacProgramBridge: @unchecked Sendable {
                     postStateSHA256: outcome.postStateSHA256,
                     approvalID: consumedApprovalID,
                     startedAt: startedAt, finishedAt: now())
-                try journal.finishTool(executionID: executionID, receipt: normalized, at: now())
-                receipts.append(normalized)
+                try commit(normalized, at: now())
                 if let postState = normalized.postStateSHA256 { preStateSHA256 = postState }
                 return try Self.json(normalized)
             }
@@ -172,22 +170,23 @@ final class MacProgramBridge: @unchecked Sendable {
                 inputSHA256: inputDigest!, status: "succeeded", summary: "bounded_local_read_completed",
                 resourceID: nil, postStateSHA256: nil,
                 startedAt: startedAt, finishedAt: now())
-            try journal.finishTool(executionID: executionID, receipt: receipt, at: now())
-            receipts.append(receipt)
+            try commit(receipt, at: now())
             return output
         }
         catch let error as LocalProgramError {
             failure = error
+            if error == .receiptFailed { return Self.errorJSON(error) }
             let receipt = self.receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
                 toolCallID: toolCallID ?? "call_\(executionID)_rejected_\(calls + 1)",
                 capabilityID: capabilityID, attempt: 1,
                 inputSHA256: inputDigest ?? MacLocalProgramDigest.data(Data()),
                 status: Self.receiptStatus(error), summary: "local_capability_did_not_complete",
                 resourceID: nil, postStateSHA256: nil,
+                approvalID: consumedApprovalID,
                 startedAt: startedAt, finishedAt: now())
             if toolCallID != nil, inputDigest != nil {
-                try? journal.finishTool(executionID: executionID, receipt: receipt, at: now())
-                receipts.append(receipt)
+                do { try commit(receipt, at: now()) }
+                catch { failure = .receiptFailed; return Self.errorJSON(.receiptFailed) }
             }
             return Self.errorJSON(error)
         } catch {
@@ -199,13 +198,20 @@ final class MacProgramBridge: @unchecked Sendable {
                 inputSHA256: inputDigest ?? MacLocalProgramDigest.data(Data()),
                 status: "failed", summary: "local_capability_did_not_complete",
                 resourceID: nil, postStateSHA256: nil,
+                approvalID: consumedApprovalID,
                 startedAt: startedAt, finishedAt: now())
             if toolCallID != nil, inputDigest != nil {
-                try? journal.finishTool(executionID: executionID, receipt: receipt, at: now())
-                receipts.append(receipt)
+                do { try commit(receipt, at: now()) }
+                catch { failure = .receiptFailed; return Self.errorJSON(.receiptFailed) }
             }
             return Self.errorJSON(wrapped)
         }
+    }
+
+    private func commit(_ receipt: MacLocalActionReceipt, at: Date) throws {
+        do { try journal.finishTool(executionID: executionID, receipt: receipt, at: at) }
+        catch { throw LocalProgramError.receiptFailed }
+        receipts.append(receipt)
     }
 
     private static func validateInput(capabilityID: String,
@@ -252,6 +258,7 @@ final class MacProgramBridge: @unchecked Sendable {
         case .expired: "timed_out"
         case .stopped: "stopped"
         case .indeterminate: "indeterminate"
+        case .receiptFailed: "failed"
         case .capabilityDenied, .approvalRequired, .unsupportedAction, .invalidInput: "rejected"
         default: "failed"
         }
@@ -267,7 +274,8 @@ final class MacProgramBridge: @unchecked Sendable {
     private static func errorJSON(_ error: LocalProgramError) -> String {
         let message: String
         switch error {
-        case .executionFailed(let detail): message = detail
+        case .executionFailed: message = "local operation failed"
+        case .receiptFailed: message = "receipt_failed"
         default: message = String(describing: error)
         }
         let data = try! JSONSerialization.data(withJSONObject: ["ok": false, "error": message], options: [.sortedKeys])
@@ -323,6 +331,9 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
         runnersLock.withLock { runners[executionID] }?.stop()
     }
     public func lifecycleEvents(executionID: String) throws -> [MacProgramLifecycleEvent] { try journal.events(executionID: executionID) }
+    public func toolReceipts(executionID: String) throws -> [MacLocalActionReceipt] {
+        try journal.toolReceipts(executionID: executionID)
+    }
     public func terminalReceipt(executionID: String) throws -> MacProgramTerminalReceipt? {
         try journal.terminalReceipt(executionID: executionID)
     }
@@ -332,11 +343,14 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
         var bridge: MacProgramBridge?
         var executionStartedAt: Date?
         var accepted = false
+        var terminalCommitAttempted = false
+        var preacceptCommitAttempted = false
         do {
             let startedAt = now()
             try envelope.validate(advertisement: localAdvertisement, now: startedAt)
             guard approvedProgramSHA256 == envelope.program.sha256,
                   envelope.approvalPolicy.program != "approval_required" else {
+                preacceptCommitAttempted = true
                 return try journal.reject(envelope, claimantDeviceID: deviceID,
                     clientInstanceID: clientInstanceID, at: startedAt)
             }
@@ -376,7 +390,8 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
             }
             let outcome = try MacProgramProcessRunner.run(executableURL: executableURL,
                 source: envelope.program.source, wallMS: envelope.limits.wallMS,
-                handle: handle, call: createdBridge.call)
+                handle: handle, resultBytes: envelope.limits.resultBytes,
+                logBytes: envelope.limits.logBytes, call: createdBridge.call)
             if let failure = createdBridge.failure { throw failure }
             if try journal.isStopRequested(executionID: envelope.executionID) {
                 throw LocalProgramError.stopped
@@ -389,6 +404,7 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
             }
             let completed = result(envelope, status: "completed", resultJSON: output,
                 error: nil, bridge: createdBridge, startedAt: executionStartedAt)
+            terminalCommitAttempted = true
             try journal.finish(executionID: envelope.executionID, result: completed, at: now())
             return completed
         } catch {
@@ -401,7 +417,32 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
             }
             let failed = result(envelope, status: status, resultJSON: nil,
                 error: Self.safeError(error), bridge: bridge, startedAt: executionStartedAt)
-            if accepted { try? journal.finish(executionID: envelope.executionID, result: failed, at: now()) }
+            if !accepted {
+                guard !preacceptCommitAttempted else {
+                    return result(envelope, status: "failed", resultJSON: nil,
+                        error: "receipt_failed", bridge: bridge, startedAt: executionStartedAt)
+                }
+                preacceptCommitAttempted = true
+                do {
+                    return try journal.reject(envelope, claimantDeviceID: deviceID,
+                        clientInstanceID: clientInstanceID, reason: Self.safeError(error), at: now())
+                } catch LocalProgramError.replayed {
+                    return result(envelope, status: "failed", resultJSON: nil,
+                        error: "replayed", bridge: bridge, startedAt: executionStartedAt)
+                } catch {
+                    return result(envelope, status: "failed", resultJSON: nil,
+                        error: "receipt_failed", bridge: bridge, startedAt: executionStartedAt)
+                }
+            }
+            guard !terminalCommitAttempted else {
+                return result(envelope, status: "failed", resultJSON: nil,
+                    error: "receipt_failed", bridge: bridge, startedAt: executionStartedAt)
+            }
+            do { try journal.finish(executionID: envelope.executionID, result: failed, at: now()) }
+            catch {
+                return result(envelope, status: "failed", resultJSON: nil,
+                    error: "receipt_failed", bridge: bridge, startedAt: executionStartedAt)
+            }
             return failed
         }
     }
@@ -434,6 +475,8 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
 
     private static func safeError(_ error: Error) -> String {
         switch error {
+        case LocalProgramError.executionFailed: return "local program failed"
+        case LocalProgramError.receiptFailed: return "receipt_failed"
         case let local as LocalProgramError: return String(describing: local)
         default: return "local program failed"
         }
