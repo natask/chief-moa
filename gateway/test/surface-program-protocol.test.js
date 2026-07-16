@@ -285,6 +285,13 @@ test("catalog snapshots are exact sorted descriptors and advertisements recomput
     issued_at: new Date(NOW - 1000).toISOString(), expires_at: new Date(NOW + 60000).toISOString(),
   });
   assert.equal(p.sanitizeExecutionRuntime(exact, { nowMs: NOW, catalogSnapshot: snapshot }).limits.memory_bytes, null);
+  const mixedManifest = [
+    { tool: "browser.tab.open", description: "Legacy tab tool." },
+    ...capabilities.map((item) => ({ tool: item.capability_id, ...item })),
+    { tool: "browser.agent.task", description: "Legacy agent tool." },
+  ];
+  assert.equal(p.sanitizeExecutionRuntime(exact, { nowMs: NOW, capabilities: mixedManifest }).catalog.sha256, exact.catalog.sha256);
+  assert.equal(p.sanitizeExecutionRuntime(exact, { nowMs: NOW, capabilities: mixedManifest.filter((item) => item.tool !== "browser.observe") }), null);
   assert.equal(p.sanitizeExecutionRuntime({ ...exact, catalog: { ...exact.catalog, sha256: hex("f") } }, { nowMs: NOW, catalogSnapshot: snapshot }), null);
   assert.throws(() => p.validateCapabilitySnapshot({ version: 7, capabilities: capabilities.slice().reverse() }), { code: "invalid_capability_ids" });
   assert.throws(() => p.validateCapabilitySnapshot({ version: 7, capabilities: [{ ...capabilities[0], restore_capability_id: "missing" }] }), { code: "invalid_restore_capability_id" });

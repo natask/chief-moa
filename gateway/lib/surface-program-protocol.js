@@ -263,13 +263,17 @@ function sanitizeExecutionRuntime(value, options = {}) {
     const nowMs = options.nowMs ?? Date.now();
     if (issued.millis > nowMs + MAX_CLOCK_SKEW_MS) throw new SurfaceProgramValidationError("future_runtime_advertisement");
     if (expires.millis <= issued.millis || expires.millis - issued.millis > MAX_EXPIRY_MS) throw new SurfaceProgramValidationError("invalid_runtime_expiry");
+    const advertisedIds = Array.isArray(advertisement.catalog?.capability_ids) ? advertisement.catalog.capability_ids : [];
+    const selectedCapabilities = options.capabilities
+      ? options.capabilities.filter((item) => advertisedIds.includes(item?.capability_id || item?.tool))
+      : undefined;
     const normalized = {
       version: 1,
       type: advertisement.type,
       advertisement_id: requiredText(advertisement.advertisement_id, "advertisement_id", 160),
       target: validateTarget(advertisement.target),
       runtime: validateRuntime(advertisement.runtime),
-      catalog: validateAdvertisedCatalog(advertisement.catalog, options.catalogSnapshot || (options.capabilities ? capabilitySnapshotFromManifest(advertisement.catalog?.version, options.capabilities) : undefined)),
+      catalog: validateAdvertisedCatalog(advertisement.catalog, options.catalogSnapshot || (selectedCapabilities ? capabilitySnapshotFromManifest(advertisement.catalog?.version, selectedCapabilities) : undefined)),
       limits: validateLimits(advertisement.limits),
       issued_at: issued.text,
       expires_at: expires.text,

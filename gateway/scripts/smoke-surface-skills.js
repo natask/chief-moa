@@ -112,7 +112,11 @@ async function assertSurfaceProgram(baseUrl, call) {
     device_id: "browser_surface_smoke",
     client_instance_id: "browser_surface_smoke_instance",
     surface_type: "browser_extension",
-    local_tool_manifest: capabilities,
+    local_tool_manifest: [
+      { tool: "browser.tab.open", description: "Legacy tab tool." },
+      ...capabilities,
+      { tool: "browser.agent.task", description: "Legacy agent tool." },
+    ],
     execution_runtimes: [advertisement],
   });
   assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
