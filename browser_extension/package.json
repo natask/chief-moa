@@ -24,8 +24,6 @@
     "smoke:sidepanel": "node scripts/smoke-sidepanel.mjs",
     "smoke:unified-browser-agent": "node scripts/smoke-unified-browser-agent.mjs",
     "smoke:agent-loop": "node scripts/smoke-agent-loop.mjs",
-    "smoke:proactive": "node scripts/smoke-proactive.mjs",
-    "test:proactive": "node scripts/test-proactive-helper.mjs",
     "test:browser-context": "node scripts/test-browser-context-adapter.mjs",
     "test:unit": "node --test scripts/test-*.mjs",
     "test:coverage": "node scripts/coverage-extension.mjs",

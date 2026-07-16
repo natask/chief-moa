@@ -27,9 +27,6 @@
     panel,
     input,
     agentModeSelect,
-    proactiveButton,
-    proactiveCardEl,
-    proactiveIndicator,
     voiceButton,
     recordButton,
     stopButton,
@@ -138,49 +135,6 @@
     onModeCue: showContextModeCue,
   });
   const {
-    collectProactiveSignals,
-    proactiveHelper,
-    proactiveSensitivity,
-  } = window.AgeeContentProactiveObservationRuntime.createContentProactiveObservationRuntime({
-    document,
-    location,
-    NodeFilter,
-    getHelper: () => globalThis.AgeeProactiveHelper || null,
-    getOverlayRoot: () => root,
-  });
-  const {
-    acceptProactiveCard,
-    clearAllProactiveConfirmationCues,
-    clearProactiveConfirmationCue,
-    hasPendingProactiveConfirmation,
-    hasProactiveGrant,
-    shouldHandleProactiveRevocation,
-    startProactiveGrant,
-    stopProactiveGrant,
-  } = window.AgeeContentProactiveControllerRuntime.createContentProactiveControllerRuntime({
-    document,
-    window,
-    sendMessage: safeRuntimeSendMessage,
-    proactiveHelper,
-    proactiveSensitivity,
-    collectProactiveSignals,
-    setIndicator: setProactiveIndicator,
-    renderNotice: renderProactiveNotice,
-    renderCard: renderProactiveCard,
-    hideCard: hideProactiveCard,
-    newCueId,
-    createCue,
-    updateCue,
-    showCueError,
-    setTimeout: (...args) => setTimeout(...args),
-    clearTimeout: (...args) => clearTimeout(...args),
-    setInterval: (...args) => setInterval(...args),
-    clearInterval: (...args) => clearInterval(...args),
-    now: () => Date.now(),
-    visibleDwellMs: 1200,
-    confirmationTimeoutMs: 2 * 60 * 1000 + 35 * 1000,
-  });
-  const {
     isVideoNoteActive,
     stopVideoNoteMode,
     toggleRecordMode,
@@ -261,7 +215,6 @@
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
-        <span id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true" hidden>LOCAL · TAB</span>
         <span class="agee-pet-mark" aria-hidden="true">
           <span class="agee-pet-shadow"></span>
           <img class="agee-pet-image" alt="" draggable="false" />
@@ -284,7 +237,6 @@
           <span id="agee-orb"></span>
           <span id="agee-transcript" aria-live="polite"></span>
         </div>
-        <section id="agee-proactive-card" class="agee-proactive-card" aria-live="polite" hidden></section>
         <div id="agee-ui-surface" aria-live="polite"></div>
         <div id="agee-lang-chip" class="agee-lang-chip" hidden aria-live="polite"></div>
         <div id="agee-log" aria-hidden="true"></div>
@@ -297,7 +249,6 @@
             <option value="collaborate">Collaborate</option>
             <option value="explain">Explain</option>
           </select>
-          <button id="proactiveHelp" type="button" data-agee-proactive="grant" data-agee-tip="Local suggestions for this tab" aria-label="Local suggestions for this tab">Local</button>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
           <button id="agee-stop" type="button" data-agee-tip="Halt the running task" aria-label="Stop current task">Stop</button>
@@ -311,9 +262,6 @@
     panel = root.querySelector("#agee-panel");
     input = root.querySelector("#agee-input");
     agentModeSelect = root.querySelector("#agee-mode-select");
-    proactiveButton = root.querySelector("#proactiveHelp");
-    proactiveCardEl = root.querySelector("#agee-proactive-card");
-    proactiveIndicator = root.querySelector("#agee-proactive-indicator");
     voiceButton = root.querySelector("#agee-voice");
     recordButton = root.querySelector("#agee-record");
     stopButton = root.querySelector("#agee-stop");
@@ -386,14 +334,6 @@
       setSurfacePhase("editing");
     });
 
-    proactiveButton.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!e.isTrusted) return;
-      if (hasProactiveGrant()) stopProactiveGrant("manual_stop");
-      else startProactiveGrant();
-    });
-
     voiceButton.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -418,107 +358,11 @@
       e.preventDefault();
       e.stopPropagation();
       safeRuntimeSendMessage({ cmd: "cancel" });
-      stopProactiveGrant("manual_stop");
       stopAllLiveVoiceTurns("cancel");
       stopSpeaking();
     });
 
     // Explicit voice playback primes audio from the voice path itself.
-  }
-
-  // ---- Privacy-first local suggestions ---------------------------------
-  function setProactiveIndicator(active) {
-    if (proactiveIndicator) proactiveIndicator.hidden = !active;
-    if (proactiveButton) {
-      proactiveButton.classList.toggle("active", active);
-      proactiveButton.setAttribute("data-agee-proactive", active ? "stop" : "grant");
-      proactiveButton.setAttribute("aria-label", active ? "Stop local suggestions for this tab" : "Local suggestions for this tab");
-      setTooltip(proactiveButton, active ? "Stop local suggestions for this tab" : "Local suggestions for this tab");
-    }
-    root?.classList.toggle("agee-proactive-local", active);
-  }
-
-  function hideProactiveCard() {
-    if (!proactiveCardEl) return;
-    proactiveCardEl.hidden = true;
-    proactiveCardEl.replaceChildren();
-  }
-
-  function renderProactiveNotice(title, body) {
-    if (!proactiveCardEl) return;
-    openTextSurface({ fresh: false });
-    proactiveCardEl.replaceChildren();
-    const heading = document.createElement("strong");
-    heading.className = "agee-proactive-title";
-    heading.textContent = title;
-    const copy = document.createElement("p");
-    copy.textContent = body;
-    proactiveCardEl.append(heading, copy);
-    proactiveCardEl.hidden = false;
-  }
-
-  function renderProactiveCard(card) {
-    if (!proactiveCardEl || !hasProactiveGrant()) return;
-    const prompt = proactiveHelper()?.buildAcceptedPrompt(card) || "";
-    proactiveCardEl.replaceChildren();
-    proactiveCardEl.dataset.kind = card.kind;
-
-    const badge = document.createElement("div");
-    badge.className = "agee-proactive-badge";
-    badge.textContent = "LOCAL · CURRENT TAB";
-    const title = document.createElement("strong");
-    title.className = "agee-proactive-title";
-    title.textContent = card.title;
-    const suggestion = document.createElement("p");
-    suggestion.textContent = card.suggestion;
-    const privacy = document.createElement("p");
-    privacy.className = "agee-proactive-privacy";
-    privacy.textContent = "Nothing from this local observation has been sent.";
-    const disclosure = document.createElement("div");
-    disclosure.className = "agee-proactive-disclosure";
-    const authority = document.createElement("p");
-    authority.textContent = "Preview only — not authorization. Final canonical request details and the Allow control appear in an extension-owned window.";
-    const destination = document.createElement("p");
-    destination.textContent = "The exact gateway URL and POST path are shown only in the extension-owned confirmation.";
-    const persistence = document.createElement("p");
-    persistence.textContent = "The extension-owned window is authoritative for request and retention details.";
-    const fields = document.createElement("p");
-    fields.textContent = `Sent fields: source=proactive_accept_v1; transcript=“${prompt}”; modality=text; client={platform:browser, source:agee-extension, input:text}.`;
-    const exclusions = document.createElement("p");
-    exclusions.textContent = "Not sent: screenshot, page body, full URL, title, form values, cookies, history, selected text, elements, or actions.";
-    const connectivity = document.createElement("p");
-    connectivity.textContent = "Other explicit A.G. workflows connect separately. Their current background-connectivity state is shown only in the extension-owned confirmation.";
-    disclosure.append(authority, destination, persistence, fields, exclusions, connectivity);
-
-    const actions = document.createElement("div");
-    actions.className = "agee-proactive-actions";
-    const accept = document.createElement("button");
-    accept.type = "button";
-    accept.dataset.ageeProactive = "accept";
-    accept.textContent = "Review before sending";
-    accept.addEventListener("click", (event) => {
-      if (!event.isTrusted) return;
-      acceptProactiveCard(card, accept);
-    });
-    const dismiss = document.createElement("button");
-    dismiss.type = "button";
-    dismiss.dataset.ageeProactive = "dismiss";
-    dismiss.textContent = "Dismiss";
-    dismiss.addEventListener("click", (event) => {
-      if (!event.isTrusted) return;
-      stopProactiveGrant("dismiss");
-    });
-    const stop = document.createElement("button");
-    stop.type = "button";
-    stop.dataset.ageeProactive = "stop";
-    stop.textContent = "Stop local observation";
-    stop.addEventListener("click", (event) => {
-      if (!event.isTrusted) return;
-      stopProactiveGrant("manual_stop");
-    });
-    actions.append(accept, dismiss, stop);
-    proactiveCardEl.append(badge, title, suggestion, privacy, disclosure, actions);
-    proactiveCardEl.hidden = false;
   }
 
   // ---- Custom tooltips --------------------------------------------------
@@ -528,7 +372,7 @@
   // the live data-agee-tip text so state-driven labels stay in sync.
   function setupOverlayTooltips() {
     if (!tipEl) return;
-    for (const target of [launcher, draftCancelButton, draftSendButton, proactiveButton, voiceButton, recordButton, stopButton]) {
+    for (const target of [launcher, draftCancelButton, draftSendButton, voiceButton, recordButton, stopButton]) {
       if (!target) continue;
       target.addEventListener("mouseenter", () => armTooltip(target));
       target.addEventListener("mouseleave", hideTooltip);
@@ -3479,27 +3323,6 @@
       case "confirm":
         askInlineConfirm(msg.text || "Allow A.G. to continue?").then((ok) => reply({ ok }));
         return true;
-      case "proactiveSensitivityCheck":
-        reply(proactiveSensitivity());
-        return true;
-      case "proactiveGrantRevoked":
-        if (shouldHandleProactiveRevocation(msg.grantId)) {
-          stopProactiveGrant(msg.reason || "revoked", { notify: false, showNotice: false });
-        }
-        reply({ ok: true, state: "off" });
-        return true;
-      case "proactiveConfirmationResult": {
-        const cueId = String(msg.cueId || "");
-        if (!hasPendingProactiveConfirmation(cueId)) {
-          reply({ ok: false, reason: "unknown_confirmation" });
-          return true;
-        }
-        clearProactiveConfirmationCue(cueId);
-        if (msg.ok) updateCue(cueId, msg.summary || "Done.", "done");
-        else showCueError(cueId, msg.reason || "The suggestion was not sent.");
-        reply({ ok: true });
-        return true;
-      }
       case "progress":
         updateCue(msg.cueId, msg.text, "running");
         return false;
@@ -3573,11 +3396,5 @@
   });
 
   build();
-  window.addEventListener("pagehide", () => {
-    stopProactiveGrant("pagehide");
-    clearAllProactiveConfirmationCues();
-  }, { capture: true });
-  window.addEventListener("popstate", () => stopProactiveGrant("history_navigation"), { capture: true });
-  window.addEventListener("hashchange", () => stopProactiveGrant("hash_navigation"), { capture: true });
   startDevReloadWatcher().catch(() => {});
 })();

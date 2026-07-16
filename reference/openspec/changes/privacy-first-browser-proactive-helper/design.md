@@ -1,5 +1,44 @@
 # Design
 
+## Current decision
+
+The browser structural proactive-helper flow described below is retired. It is
+kept in this file as implementation history, not current product direction.
+Bounded structural counts protected page content, but they also discarded the
+semantics required for a useful model response. A generic prompt inferred from
+counts is not a meaningful substitute for user-approved page context.
+
+Current behavior has no **Local** suggestion control, structural sampler,
+proactive card, extension-owned proactive confirmation, packaged proactive
+prompt, or `/v1/proactive/turns` request. The privacy-schema migration,
+default-off background automation, and heartbeat redaction remain active
+because they protect independent browser connectivity paths.
+
+## Replacement direction (not implemented)
+
+```text
+explicit user request
+  -> choose context types and scope (for example page text yes, screenshot no)
+  -> local extraction and optional summarization/redaction
+  -> preserve a local version when requested
+  -> show the exact outbound context and destination
+  -> user approves, edits, or cancels
+  -> send useful approved context through the normal browser-turn path
+```
+
+Controls should describe concrete context types—page text, selection, form
+fields, accessibility structure, screenshot—not an ambiguous locality mode.
+Local transformation can reduce secrets or volume without pretending a generic
+structural label is enough context. The preview must distinguish the local
+source, local preserved/transformed representation, and exact outbound payload.
+
+Privacy is an informed-boundary property: explicit collection scope, visible
+transformation and retention, exact outbound preview, destination disclosure,
+and revocable consent. It is not a requirement to minimize context regardless
+of usefulness.
+
+## Retired design record
+
 ## Data-flow boundary
 
 ```text

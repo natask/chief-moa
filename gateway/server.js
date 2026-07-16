@@ -123,18 +123,6 @@ const {
 const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
 const { createBrowserAgentLoopStore, buildAgentToolDefs } = require("./lib/browser-agent-loop");
 const {
-  PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
-  PROACTIVE_TURN_MAX_BODY_BYTES,
-  ProactiveTurnValidationError,
-  buildProactiveOpenAiPayload,
-  buildProactiveVertexPayload,
-  proactiveOpenAiText,
-  proactiveFallbackReply,
-  proactiveTurnResponse,
-  proactiveVertexText,
-  validateProactiveTurnBody,
-} = require("./lib/proactive-turn");
-const {
   MACOS_PROACTIVE_MAX_BODY_BYTES,
   MACOS_PROACTIVE_MAX_RESPONSE_BYTES,
   MacosProactiveValidationError,
@@ -963,19 +951,9 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/v1/proactive/turns") {
-      response.setHeader("cache-control", "no-store");
-      if (!authorizedProactiveTurn(request)) {
-        sendJson(response, 401, { error: "missing or invalid gateway token" });
-        return;
-      }
-      await handleProactiveTurn(request, response);
-      return;
-    }
-
     if (request.method === "POST" && url.pathname === "/v1/proactive/macos") {
       response.setHeader("cache-control", "no-store");
-      if (!authorizedProactiveTurn(request)) {
+      if (!authorizedProactiveRequest(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });
         return;
       }
@@ -1178,93 +1156,6 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-// A deliberately separate intake path for the browser's accepted proactive
-// helper card. This route has no session id and never enters chat/voice
-// routing, tool loops, brokers, task stores, agent runs, or turn persistence.
-// The request validator returns only one of four packaged prompt strings; the
-// model/fallback call therefore receives no page-derived context.
-async function handleProactiveTurn(request, response) {
-  const contentType = String(request.headers["content-type"] || "").toLowerCase();
-  if (!/^application\/json(?:\s*;|$)/.test(contentType)) {
-    request.resume();
-    sendJson(response, 415, { error: "proactive request rejected", code: "content_type_required" });
-    return;
-  }
-
-  let body;
-  try {
-    body = await readProactiveJsonBody(request);
-    body = validateProactiveTurnBody(body);
-  } catch (error) {
-    if (error instanceof ProactiveTurnValidationError) {
-      sendJson(response, error.statusCode, {
-        error: "proactive request rejected",
-        code: error.code,
-      });
-      return;
-    }
-    throw error;
-  }
-
-  const text = await callProactiveModelOrFallback(body.transcript);
-  sendJson(response, 200, proactiveTurnResponse(text));
-}
-
-async function callProactiveModelOrFallback(transcript) {
-  const provider = resolveReasoningProvider({ reasoning_provider: MODEL_PROVIDER });
-  if (!providerConfiguredFor(provider)) return proactiveFallbackReply(transcript);
-  if (provider === "vertex") return callProactiveVertexModel(transcript);
-  return callProactiveOpenAiModel(transcript);
-}
-
-async function callProactiveOpenAiModel(transcript) {
-  const result = await fetchBoundedResponseText(
-    `${MODEL_BASE_URL}/chat/completions`,
-    {
-      method: "POST",
-      headers: modelHeaders(),
-      body: JSON.stringify(buildProactiveOpenAiPayload(transcript, MODEL_ID)),
-    },
-    {
-      timeoutMs: proactiveProviderTimeoutMs(),
-      maxBytes: PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
-      label: "proactive OpenAI-compatible provider",
-    },
-  );
-  if (!result.response.ok) {
-    throw new Error(`proactive model HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
-  }
-  return proactiveOpenAiText(parseProactiveProviderJson(result.text, "OpenAI-compatible"));
-}
-
-async function callProactiveVertexModel(transcript) {
-  const accessToken = await vertexAccessToken();
-  const headers = {
-    authorization: `Bearer ${accessToken}`,
-    "content-type": "application/json",
-  };
-  if (process.env.VERTEX_PRIORITY !== "0") {
-    headers["x-vertex-ai-llm-shared-request-type"] = "priority";
-  }
-  const result = await fetchBoundedResponseText(
-    vertexEndpoint({ model: MODEL_ID }),
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify(buildProactiveVertexPayload(transcript, vertexSafetySettings())),
-    },
-    {
-      timeoutMs: proactiveProviderTimeoutMs(),
-      maxBytes: PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
-      label: "proactive Vertex provider",
-    },
-  );
-  if (!result.response.ok) {
-    throw new Error(`proactive vertex HTTP ${result.response.status}: ${truncate(result.text, 400)}`);
-  }
-  return proactiveVertexText(parseProactiveProviderJson(result.text, "Vertex"));
 }
 
 function parseProactiveProviderJson(text, provider) {
@@ -11013,46 +10904,6 @@ function readJsonBody(request) {
   });
 }
 
-function readProactiveJsonBody(request) {
-  const declaredLength = Number(request.headers["content-length"] || 0);
-  if (Number.isFinite(declaredLength) && declaredLength > PROACTIVE_TURN_MAX_BODY_BYTES) {
-    request.resume();
-    return Promise.reject(new ProactiveTurnValidationError("body_too_large", 413));
-  }
-
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    let tooLarge = false;
-    const chunks = [];
-    request.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > PROACTIVE_TURN_MAX_BODY_BYTES) {
-        tooLarge = true;
-        chunks.length = 0;
-        return;
-      }
-      if (!tooLarge) chunks.push(chunk);
-    });
-    request.on("end", () => {
-      if (tooLarge) {
-        reject(new ProactiveTurnValidationError("body_too_large", 413));
-        return;
-      }
-      const raw = Buffer.concat(chunks).toString("utf8");
-      if (!raw.trim()) {
-        reject(new ProactiveTurnValidationError("invalid_json", 400));
-        return;
-      }
-      try {
-        resolve(JSON.parse(raw));
-      } catch {
-        reject(new ProactiveTurnValidationError("invalid_json", 400));
-      }
-    });
-    request.on("error", reject);
-  });
-}
-
 function readBoundedJsonBody(request, maxBytes, ErrorType) {
   const declaredLength = Number(request.headers["content-length"] || 0);
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
@@ -12435,10 +12286,10 @@ function authorizedWorkHistory(request) {
     || scopedTokenMatches(request, MOA_PRODUCTION_PROMOTER_TOKEN);
 }
 
-// Unlike legacy local-mode routes, proactive turns can create provider cost
-// from a browser origin. They are always closed unless an exact bearer token is
-// configured and presented, including on loopback/local gateways.
-function authorizedProactiveTurn(request) {
+// Unlike legacy local-mode routes, proactive requests can create provider cost.
+// They are always closed unless an exact bearer token is configured and
+// presented, including on loopback/local gateways.
+function authorizedProactiveRequest(request) {
   return Boolean(MOA_GATEWAY_TOKEN)
     && request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
 }
