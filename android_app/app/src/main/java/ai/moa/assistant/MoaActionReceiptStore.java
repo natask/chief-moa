@@ -21,6 +21,44 @@ final class MoaActionReceiptStore {
     }
 
     static JSONObject record(Context context, String tool, String risk, String approval, String target, boolean success, String result) {
+        return record(context, tool, risk, approval, target, success, result, null);
+    }
+
+    static JSONObject recordDraftInsertion(Context context, MoaDraftInsertionPolicy.Receipt draft) {
+        JSONObject details = new JSONObject();
+        try {
+            details.put("proposal_id", safe(draft == null ? "" : draft.proposalId));
+            details.put("target_package", safe(draft == null ? "" : draft.targetPackage));
+            details.put("target_fingerprint", safe(draft == null ? "" : draft.targetFingerprint));
+            details.put("proposed_text_sha256", safe(draft == null ? "" : draft.proposedTextSha256));
+            details.put("effect", draft == null ? "" : draft.effectPath.name().toLowerCase(Locale.ROOT));
+            details.put("status", draft == null ? "refused" : draft.status.name().toLowerCase(Locale.ROOT));
+            details.put("reason", draft == null ? "invalid_proposal" : draft.reason.name().toLowerCase(Locale.ROOT));
+        } catch (JSONException ignored) {
+        }
+        boolean success = draft != null && draft.succeeded();
+        return record(
+                context,
+                "screen.insert_text",
+                "communication_draft",
+                "explicit_local_approval",
+                draft == null ? "" : draft.targetPackage,
+                success,
+                draft == null ? "Insertion refused" : MoaDraftInsertionPolicy.reasonMessage(draft.reason),
+                details
+        );
+    }
+
+    private static JSONObject record(
+            Context context,
+            String tool,
+            String risk,
+            String approval,
+            String target,
+            boolean success,
+            String result,
+            JSONObject details
+    ) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String previousHash = prefs.getString(KEY_LAST_HASH, "");
         JSONObject receipt = new JSONObject();
@@ -31,6 +69,9 @@ final class MoaActionReceiptStore {
             receipt.put("target", safe(target));
             receipt.put("success", success);
             receipt.put("result", safe(result));
+            if (details != null) {
+                receipt.put("details", new JSONObject(details.toString()));
+            }
             receipt.put("timestamp_ms", System.currentTimeMillis());
             receipt.put("previous_hash", previousHash);
             receipt.put("hash", hash(receipt.toString()));

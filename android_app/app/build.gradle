@@ -182,6 +182,13 @@ def screenEvidenceEnvelopeClasses = files(
         )
 )
 
+def draftInsertionPolicyClasses = files(
+        fileTree(
+                dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
+                includes: ['**/MoaDraftInsertionPolicy*.class']
+        )
+)
+
 tasks.register('reportImePolicyCoverage', JacocoReport) {
     group = 'verification'
     description = 'Reports focused coverage for the pure IME safety and session policy.'
@@ -262,10 +269,51 @@ tasks.register('verifyScreenEvidenceEnvelopeCoverage', JacocoCoverageVerificatio
     }
 }
 
+tasks.register('reportDraftInsertionPolicyCoverage', JacocoReport) {
+    group = 'verification'
+    description = 'Reports focused coverage for approval-gated draft insertion policy.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(draftInsertionPolicyClasses)
+    sourceDirectories.from(debugProductionSources)
+
+    reports {
+        xml.required = true
+        html.required = true
+        xml.outputLocation = layout.buildDirectory.file('reports/jacoco/draftInsertionPolicy/xml/report.xml')
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco/draftInsertionPolicy/html')
+    }
+}
+
+tasks.register('verifyDraftInsertionPolicyCoverage', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Requires >=90% line, branch, and method coverage for draft insertion policy.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(draftInsertionPolicyClasses)
+    sourceDirectories.from(debugProductionSources)
+
+    violationRules {
+        rule {
+            element = 'BUNDLE'
+            ['LINE', 'BRANCH', 'METHOD'].each { counterName ->
+                limit {
+                    counter = counterName
+                    value = 'COVEREDRATIO'
+                    minimum = new BigDecimal('0.90')
+                }
+            }
+        }
+    }
+}
+
 tasks.named('check') {
     dependsOn tasks.named('verifyDebugUnitTestCoverage')
     dependsOn tasks.named('verifyImePolicyCoverage')
     dependsOn tasks.named('verifyScreenEvidenceEnvelopeCoverage')
+    dependsOn tasks.named('verifyDraftInsertionPolicyCoverage')
 }
 
 dependencies {

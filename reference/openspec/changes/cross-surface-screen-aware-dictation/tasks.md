@@ -82,6 +82,12 @@ reserved for a later integration ticket.
   candidate; insert/click/send are distinct locally approved effects and stale
   state produces a refusal receipt.
 - Verification: 100% trust-invariant cases, Android tests/build, phone QA.
+- Candidate status: the local IME insertion authority is implemented and binds
+  exact visible text to package/fingerprint, explicit Insert approval, final
+  target revalidation, one consumed `commitText`, and a local receipt. Send is
+  independently refused and no Accessibility typing/click/submit was added.
+  Gateway proposal ingress and physical-phone ordinary/password/stale QA remain
+  not measured, so this ticket stays open.
 
 ## 6. macOS typed command integration and QA install
 

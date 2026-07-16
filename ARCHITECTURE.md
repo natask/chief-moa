@@ -711,6 +711,14 @@ Password, private, missing, and unsupported editors fail closed before
 recording, display, or insertion. An explicit hold invokes Android
 `SpeechRecognizer`; partial/final literal text remains editor-generation-bound
 and `Insert` is a separate exact `commitText(text, 1)` operation with no submit.
+The visible candidate also becomes a local `screen.insert_text` proposal bound
+to the editor package and a semantic `EditorInfo` fingerprint. Pressing the
+dedicated Insert control creates one proposal-digest-bound local approval; the
+IME reads the package and fingerprint again immediately before one
+`commitText`, consumes the approval even if the editor refuses the effect, and
+writes a local receipt containing only target metadata and the proposed-text
+digest. `send` remains a distinct unsupported action. This path adds no
+Accessibility `ACTION_SET_TEXT`, click, editor action, or submit capability.
 This MVP neither calls a model nor claims durable audio: SpeechRecognizer does
 not expose the replayable raw audio required by the gateway capture-block
 contract. `MoaGatewayClient` exposes that future boundary only for a real,
@@ -1440,6 +1448,9 @@ queues.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaEditorSensitivityPolicy.java`
   and `MoaEditorSessionBinding.java`: pure fail-closed IME privacy and freshness
   policy with a focused 90-percent coverage gate.
+- `android_app/app/src/main/java/ai/moa/assistant/MoaDraftInsertionPolicy.java`:
+  pure package/fingerprint-bound draft proposal, explicit approval, one-shot IME
+  effect, and receipt policy with a focused 90-percent coverage gate.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaScreenEvidenceEnvelope.java`:
   gateway-compatible ephemeral Android screenshot serialization and visible
   fallback copy, with a focused 90-percent coverage gate.

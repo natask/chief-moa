@@ -19,12 +19,16 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.util.UUID;
+
 /**
  * Opt-in literal dictation IME. Android SpeechRecognizer supplies a transcript candidate;
  * this service never receives durable audio and never calls a model, tool, submit action, or TTS.
  */
 public final class MoaInputMethodService extends InputMethodService {
     private final MoaEditorSessionBinding binding = new MoaEditorSessionBinding();
+    private final MoaDraftInsertionPolicy.Controller draftInsertionController =
+            new MoaDraftInsertionPolicy.Controller();
     private MoaEditorSessionBinding.SessionToken editorSession;
     private MoaEditorSessionBinding.SessionToken recognitionSession;
     private SpeechRecognizer speechRecognizer;
@@ -232,25 +236,47 @@ public final class MoaInputMethodService extends InputMethodService {
     }
 
     private void commitCandidate() {
-        MoaEditorSensitivityPolicy.EditorIdentity currentEditor =
+        MoaEditorSensitivityPolicy.EditorIdentity reviewedEditor =
                 MoaEditorSensitivityPolicy.EditorIdentity.from(getCurrentInputEditorInfo());
         MoaEditorSessionBinding.CommitDecision decision =
-                binding.authorizeCommit(editorSession, currentEditor);
+                binding.authorizeCommit(editorSession, reviewedEditor);
         if (!decision.allowed) {
             renderState(rejectionMessage(decision.rejection));
             return;
         }
+
+        long proposalTimeMs = System.currentTimeMillis();
+        MoaDraftInsertionPolicy.EditableTarget reviewedTarget =
+                MoaDraftInsertionPolicy.EditableTarget.fromEditor(reviewedEditor, proposalTimeMs);
+        MoaDraftInsertionPolicy.Proposal proposal = MoaDraftInsertionPolicy.Proposal.insert(
+                "ime-draft-" + UUID.randomUUID(),
+                decision.exactText,
+                reviewedTarget,
+                proposalTimeMs
+        );
+        // The user has reviewed the literal/derived candidate shown by this IME and pressed the
+        // dedicated Insert control. This approval is local, proposal-bound, and cannot approve Send.
+        MoaDraftInsertionPolicy.Approval approval =
+                MoaDraftInsertionPolicy.Approval.explicitLocal(proposal, proposalTimeMs);
         InputConnection connection = getCurrentInputConnection();
-        if (connection == null) {
-            renderState("Editor connection unavailable");
-            return;
-        }
-        boolean committed = connection.commitText(decision.exactText, 1);
-        if (committed) {
+        long executionTimeMs = System.currentTimeMillis();
+        MoaEditorSensitivityPolicy.EditorIdentity finalEditor =
+                MoaEditorSensitivityPolicy.EditorIdentity.from(getCurrentInputEditorInfo());
+        MoaDraftInsertionPolicy.EditableTarget finalTarget =
+                MoaDraftInsertionPolicy.EditableTarget.fromEditor(finalEditor, executionTimeMs);
+        MoaDraftInsertionPolicy.Receipt receipt = draftInsertionController.execute(
+                proposal,
+                approval,
+                finalTarget,
+                executionTimeMs,
+                exactText -> connection != null && connection.commitText(exactText, 1)
+        );
+        MoaActionReceiptStore.recordDraftInsertion(this, receipt);
+        if (receipt.succeeded()) {
             binding.clearCandidate();
-            renderState("Inserted exactly; nothing was submitted");
+            renderState(MoaDraftInsertionPolicy.reasonMessage(receipt.reason));
         } else {
-            renderState("Editor refused insertion");
+            renderState(MoaDraftInsertionPolicy.reasonMessage(receipt.reason));
         }
     }
 

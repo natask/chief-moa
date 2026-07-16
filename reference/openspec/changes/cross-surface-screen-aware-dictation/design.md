@@ -30,6 +30,14 @@ secure/settable state, and a freshness fingerprint, previews exact text, and
 records pending/terminal receipts before and after mutation. Focus or app change
 requires reconfirmation and causes no mutation.
 
+The Android local proposal seam binds exact text to the expected package and a
+semantic `EditorInfo` fingerprint. The user reviews that exact text in the IME
+and the dedicated Insert press creates the only approval. Android re-reads the
+target immediately before one `InputConnection.commitText`, consumes the
+approval before invoking the editor, and records target metadata plus a text
+digest. It does not add `ACTION_SET_TEXT`; send remains a separately unsupported
+action and no click, editor action, or submit is implied by insertion.
+
 ## Staging
 
 Gateway screen evidence, capture lifecycle, and delivery intent are separate
