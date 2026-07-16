@@ -67,6 +67,30 @@ The full Android app SHALL let the user configure gateway URL, gateway token, tr
 - **THEN** the gateway persists the change as a hard runtime profile setting
 - **AND** the setting applies on later turns without restarting the gateway
 
+#### Scenario: Bare language switch remains active
+- **WHEN** the user says "switch to", "speak", "answer in", or otherwise names a
+  reply language without explicitly limiting the request to one response
+- **THEN** the agent changes the durable reply-language profile through its
+  profile tool
+- **AND** continues the current response in the new language
+- **AND** later turns stay in that language until the user changes it again
+
+#### Scenario: Explicit one-response language override
+- **WHEN** the user explicitly says a language applies only to this response,
+  just once, or should switch back afterward
+- **THEN** the agent uses a non-persisted turn-language tool result
+- **AND** the current response and its TTS language use the requested language
+- **AND** the next turn uses the prior durable language without another profile write
+
+#### Scenario: Geʽez compatibility language
+- **WHEN** the user names Geʽez, Ge'ez, Giz, `gez`, `ግዕዝ`, or `ግእዝ`
+- **THEN** the gateway stores the semantic language as `gez`
+- **AND** reports that provider speech support is a compatibility fallback
+- **AND** Chirp recognition remains provider `auto` with the shared
+  Geʽez/Amharic/English verbatim transcription prompt
+- **AND** hosted synthesis uses the `am-ET` provider tag while the reasoning
+  model is instructed to produce Geʽez
+
 #### Scenario: User scopes a profile setting
 - **WHEN** the user asks to save a voice or language setting for this device
 - **THEN** the gateway stores a device-scoped override for the current device id

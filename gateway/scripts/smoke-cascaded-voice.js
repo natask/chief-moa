@@ -109,11 +109,12 @@ async function profileDerivedSttLanguages(tempDir) {
     },
   });
 
-  assert.deepEqual(provider.status().language_codes, ["am-ET"], "profile input_languages must override env for Chirp STT");
+  assert.deepEqual(provider.status().language_codes, ["auto"], "Chirp STT must remain provider-auto");
+  assert.deepEqual(provider.status().input_languages, ["am-ET"], "semantic profile input language remains visible");
   const events = [];
   await provider.processTurn(makeTurn(tempDir, "profile-am"), recordingHooks(events));
   const sttCall = calls.find((c) => c.kind === "stt");
-  assert.deepEqual(sttCall.body.config.languageCodes, ["am-ET"], "recognize request must be restricted to profile input language");
+  assert.deepEqual(sttCall.body.config.languageCodes, ["auto"], "recognize request must remain provider-auto");
 
   const turnScopedCalls = [];
   stubFetch({ sttTranscript: "hello", calls: turnScopedCalls });
@@ -134,7 +135,8 @@ async function profileDerivedSttLanguages(tempDir) {
       }),
     },
   });
-  assert.deepEqual(turnScopedProvider.status().language_codes, ["en-US"], "global status stays based on the global profile");
+  assert.deepEqual(turnScopedProvider.status().language_codes, ["auto"], "global provider status remains auto");
+  assert.deepEqual(turnScopedProvider.status().input_languages, ["en-US"], "global semantic status stays based on the global profile");
   await turnScopedProvider.processTurn(makeTurn(tempDir, "profile-turn-am", {
     effectiveProfile: {
       input_languages: "am-ET,en-US",
@@ -146,15 +148,13 @@ async function profileDerivedSttLanguages(tempDir) {
   const turnScopedSttCall = turnScopedCalls.find((c) => c.kind === "stt");
   assert.deepEqual(
     turnScopedSttCall.body.config.languageCodes,
-    ["am-ET", "en-US"],
-    "recognize request must prefer the per-turn effective profile over the global profile",
+    ["auto"],
+    "per-turn semantic state must not change provider-auto recognition",
   );
 }
 
-// Explicit switching ("right now I want to speak X"): the recognizer is
-// constrained to EXACTLY the stored understood set, and input_language_primary
-// reorders it so the chosen language leads. Same two-language set, different
-// leading code, driven only by the profile.
+// Explicit switching updates semantic state while provider recognition remains
+// automatic.
 async function sttPrimaryFollowsProfilePrimary(tempDir) {
   const makeProvider = (inputPrimary) => createVoiceProvider({
     env: {
@@ -176,18 +176,18 @@ async function sttPrimaryFollowsProfilePrimary(tempDir) {
 
   const englishLead = makeProvider("en-US");
   assert.deepEqual(
-    englishLead.status().language_codes,
+    englishLead.status().input_languages,
     ["en-US", "am-ET"],
-    "with en-US primary, the constrained set must lead with en-US",
+    "with en-US primary, semantic input state must lead with en-US",
   );
 
   // "right now I want to speak Amharic": the model set input_language_primary to
   // am-ET (already in the set); the recognizer now leads with am-ET, same set.
   const amharicLead = makeProvider("am-ET");
   assert.deepEqual(
-    amharicLead.status().language_codes,
+    amharicLead.status().input_languages,
     ["am-ET", "en-US"],
-    "with am-ET primary, the same constrained set must lead with am-ET",
+    "with am-ET primary, semantic input state must lead with am-ET",
   );
 
   const calls = [];
@@ -197,8 +197,8 @@ async function sttPrimaryFollowsProfilePrimary(tempDir) {
   const sttCall = calls.find((c) => c.kind === "stt");
   assert.deepEqual(
     sttCall.body.config.languageCodes,
-    ["am-ET", "en-US"],
-    "recognize request must lead with the profile's understood primary",
+    ["auto"],
+    "recognize request must remain provider-auto after a semantic primary change",
   );
 }
 
@@ -387,7 +387,7 @@ async function enUsCascade(tempDir) {
   assert.ok(calls.some((c) => c.kind === "tts"), "Cloud TTS synthesize must be called for en-US");
   // STT leg still restricts to the two configured languages + chirp_3.
   const sttCall = calls.find((c) => c.kind === "stt");
-  assert.deepEqual(sttCall.body.config.languageCodes, ["en-US", "am-ET"]);
+  assert.deepEqual(sttCall.body.config.languageCodes, ["auto"]);
   assert.equal(sttCall.body.config.model, "chirp_3");
   assert.ok(sttCall.body.config.explicitDecodingConfig, "STT must use explicit decoding, not auto");
 }

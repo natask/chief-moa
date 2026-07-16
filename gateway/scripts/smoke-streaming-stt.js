@@ -166,6 +166,44 @@ async function testV2BidiMethodSelection() {
   console.log("  B Speech v2 generated bidi method selection: ok");
 }
 
+async function testDisallowedScriptFailsClosed() {
+  resetVoiceStreamingBreakerForTests();
+  const opened = [];
+  const partials = [];
+  const provider = createVoiceProvider({
+    env: chirpProviderEnv(),
+    streamingSttClientFactory: () => ({
+      _streamingRecognize: () => {
+        const stream = new FakeGrpcStream();
+        opened.push(stream);
+        return stream;
+      },
+      streamingRecognize: () => { throw new Error("generated bidi method expected"); },
+    }),
+  });
+  const turn = {
+    turnId: "reject-devanagari",
+    audioBytes: 3200,
+    format: { sample_rate: 16000, channels: 1 },
+    effectiveProfile: { input_languages: "gez,am-ET,en-US", input_language_primary: "gez" },
+  };
+  turn.sttStream = provider.createStreamingSttSession(turn, {
+    onTranscriptPartial: (text) => partials.push(text),
+  });
+  assert.ok(turn.sttStream, "streaming session opens under provider auto");
+  opened[0].emitData([{ alternatives: [{ transcript: "वायरस सभा አንቺ..." }], isFinal: false, languageCode: "am-ET" }]);
+  opened[0].emitData([{ alternatives: [{ transcript: "वायरस सभा አንቺ..." }], isFinal: true, languageCode: "am-ET" }]);
+  await tick();
+  assert.deepEqual(partials, [], "a disallowed partial must never be broadcast");
+  const result = await provider.runSttStage(turn);
+  assert.equal(result.text, "", "a disallowed streaming final must fail closed");
+  assert.equal(result.languageRejected, true);
+  assert.equal(result.rejection.candidate_text, "वायरस सभा አንቺ...");
+  assert.deepEqual(result.rejection.disallowed_scripts, ["Devanagari"]);
+  assert.equal(result.rejection.provider_language_code, "am-ET");
+  console.log("  C disallowed script fail-closed: ok");
+}
+
 async function testBatchFallbackOnStreamingError() {
   resetVoiceStreamingBreakerForTests();
   const previousFetch = global.fetch;
@@ -401,6 +439,7 @@ function sentEvents(ws) {
 async function main() {
   await testRotationAndPartials();
   await testV2BidiMethodSelection();
+  await testDisallowedScriptFailsClosed();
   await testBatchFallbackOnStreamingError();
   await testWindowedBatchSplit();
   await testSessionServerTee();

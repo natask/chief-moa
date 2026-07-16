@@ -20,6 +20,8 @@ const {
   languageOptionsPayload,
   normalizeLanguageList,
   mentionsSupportedLanguage,
+  providerRecognitionLanguageCode,
+  providerSynthesisLanguageCode,
 } = require("../lib/profile-options");
 
 main();
@@ -29,6 +31,7 @@ function main() {
   assertRejectsUnknownLanguage();
   assertRejectsMixedValidAndInvalidWhole();
   assertAcceptsAllowed();
+  assertGeezCompatibilityLanguage();
   assertProfileSurvivesRejectedPatch();
   console.log(JSON.stringify({
     ok: true,
@@ -37,6 +40,7 @@ function main() {
       "a code outside the catalog (zz-ZZ) is rejected and the prior language survives",
       "a mixed valid+invalid list (zz-ZZ,am-ET) is rejected whole, not partially applied",
       "any allowed pair (en-US,am-ET and es-ES,fr-FR) is accepted for reply and input languages",
+      "Geʽez aliases normalize to gez and the catalog exposes am-ET only as its TTS compatibility tag",
       "the profile still validates after a rejected patch (no setting change breaks the app)",
     ],
   }, null, 2));
@@ -58,6 +62,7 @@ function assertCatalogIsBroadened() {
   const byCode = new Map(languages.map((language) => [language.code, language.label]));
   assert.equal(byCode.get("en-US"), "English", "en-US must be labeled English");
   assert.equal(byCode.get("am-ET"), "Amharic", "am-ET must be labeled Amharic");
+  assert.equal(byCode.get("gez"), "Geʽez", "gez must be labeled Geʽez");
   for (const code of ["es-ES", "fr-FR", "ja-JP", "ar-XA", "cmn-Hans-CN"]) {
     assert.ok(byCode.has(code), `catalog must expose ${code}`);
   }
@@ -69,6 +74,24 @@ function assertCatalogIsBroadened() {
   // The routing membership test recognizes catalog languages but not nonsense.
   assert.ok(mentionsSupportedLanguage("please answer in Amharic"), "membership test must see a supported language");
   assert.ok(!mentionsSupportedLanguage("please download the file"), "membership test must not false-positive on ordinary speech");
+}
+
+function assertGeezCompatibilityLanguage() {
+  const geez = languageOptionsPayload().find((language) => language.code === "gez");
+  assert.ok(geez, "catalog must expose Geʽez");
+  assert.equal(geez.support_level, "compatibility", "Geʽez must not claim native Chirp support");
+  assert.equal(geez.recognition_code, "gez", "semantic Geʽez must not be mapped to an STT provider locale");
+  assert.equal(geez.synthesis_code, "am-ET", "Geʽez TTS must use the Ethiopic am-ET provider tag");
+  assert.equal(providerRecognitionLanguageCode("gez"), "gez");
+  assert.equal(providerSynthesisLanguageCode("gez"), "am-ET");
+  for (const alias of ["Ge'ez", "Giz", "ግዕዝ", "gez"]) {
+    assert.deepEqual(normalizeLanguageList(alias).codes, ["gez"], `${alias} must normalize to gez`);
+  }
+  withStore((store) => {
+    store.patch({ language: "Giz", input_languages: "Ge'ez" }, { source: "smoke", scope: "global" });
+    assert.equal(store.effective().language, "gez", "Geʽez reply preference must persist semantically");
+    assert.equal(store.effective().input_languages, "gez", "Geʽez input preference must persist semantically");
+  });
 }
 
 function assertRejectsUnknownLanguage() {

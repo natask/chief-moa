@@ -20,6 +20,7 @@ const {
   parseProfileRevertIntent,
   parsePersonaIntent,
   classifyVoiceTurn,
+  looksLikeLanguageControl,
 } = require("../lib/voice-intent");
 const {
   normalizeLanguageListValue,
@@ -31,6 +32,19 @@ const {
 // normalizeSpeech: lowercase, strip punctuation, collapse whitespace.
 assert.strictEqual(normalizeSpeech("  Stop, please! "), "stop please");
 assert.strictEqual(normalizeSpeech(null), "");
+
+// Every observed Geʽez storage phrasing must enter the language-control guard.
+// The cascaded provider uses this guard to defer streaming TTS until the model's
+// language tool call resolves, preventing an old-language audio chunk.
+for (const text of [
+  "store as geez",
+  "stotre as geez",
+  "store the language as geez",
+  "it should be Geʽez",
+  "is it not the language? It should be Geʽez",
+]) {
+  assert.ok(looksLikeLanguageControl(text), `language-control TTS guard must match: ${text}`);
+}
 
 // isStopLike: exact control phrases only, punctuation-insensitive.
 for (const t of ["stop", "Stop.", "shut up", "never mind", "nevermind", "cancel"]) {

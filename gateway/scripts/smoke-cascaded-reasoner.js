@@ -161,9 +161,12 @@ main().catch((error) => {
 });
 
 async function main() {
+  modelLanguageContractUsesProviderAuto();
   await historyReachesTheModel();
   await modalityHintIsInjected();
   await modelToolCallUpdatesProfile();
+  await persistentLanguageSwitchIsImmediate();
+  await temporaryLanguageOverrideDoesNotPersist();
   await garbageIdentityWriteIsModelRoutedNotApplied();
   await genuineRenameWritesThroughModelTool();
   await shutUpIsModelInterpretedSilence();
@@ -186,6 +189,8 @@ async function main() {
       "a prior voice turn's transcript reaches the cascaded reasoning model messages",
       "the reasoner injects a modality/TTS delivery hint (modality, availability, previous error)",
       "a model update_agent_profile tool call patches the profile through the sanitizer and the confirmation is spoken",
+      "a bare Geʽez switch persists via the model tool, answers in Geʽez on the same turn, and records as chat rather than deterministic profile control",
+      "an explicitly one-response language request uses a non-persisted turn override and automatically returns to the prior language",
       "a STT-garbage identity-write transcript is rerouted to the model as chat (not profile_control) and writes nothing when the model does not call the settings tool",
       "a genuine spoken rename is rerouted to the model as chat and the model's update_agent_profile tool call persists the new assistant name",
       "a model launch_agent_run tool call starts a run in this session's work state, and the transcript gate blocks launches the user never asked for",
@@ -203,6 +208,14 @@ async function main() {
       "model-selected new/incognito cascaded answers are standing-only and stream only after preflight",
     ],
   }, null, 2));
+}
+
+function modelLanguageContractUsesProviderAuto() {
+  const source = fs.readFileSync(path.join(GATEWAY_DIR, "server.js"), "utf8");
+  assert.doesNotMatch(source, /recognition is constrained to exactly this set/i);
+  assert.doesNotMatch(source, /STT recognizer is constrained to exactly this set/i);
+  assert.doesNotMatch(source, /at most two/i);
+  assert.match(source, /set_languages:[\s\S]{0,1800}provider auto plus one fixed best-effort prompt/i);
 }
 
 async function modelSelectedColdScopesAreCaptured() {
@@ -470,6 +483,91 @@ async function modelToolCallUpdatesProfile() {
     pendingToolCall = null;
     // Restore the default voice so the run leaves no residue.
     await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  }
+}
+
+async function persistentLanguageSwitchIsImmediate() {
+  const variants = [
+    "store as geez",
+    "stotre as geez",
+    "store the language as geez",
+    "it should be Geʽez",
+    "is it not the language? It should be Geʽez",
+  ];
+  try {
+    for (const [index, transcript] of variants.entries()) {
+      pendingToolCall = {
+        name: "update_agent_profile",
+        arguments: { profile: { language: "Giz", input_languages: "Ge'ez" }, reason: "user requested Geʽez" },
+      };
+      pendingReply = "እሺይ፣ ከአሁን በግዕዝ እመልሳለሁ።";
+      fetchCalls.length = 0;
+      const turnId = `reasoner-geez-persistent-${index}`;
+      const reasoning = await runCascadedVoiceReasoning({
+        transcript,
+        session_id: SESSION_ID,
+        branch_id: "default",
+        turn_id: turnId,
+        tts_provider_id: "gemini-tts",
+        tts_available: true,
+      });
+      assert.equal(reasoning.classification, "chat", "cascaded language control must stay in the model tool loop");
+      assert.equal(reasoning.language, "gez", "the same response must carry the newly persisted Geʽez language");
+      assert.equal(agentProfile.effective().language, "gez", "the bare language switch must persist");
+      assert.equal(agentProfile.effective().input_languages, "gez", "the Geʽez heard language must persist semantically");
+      assert.equal(reasoning.speak, pendingReply, "the current turn must answer in the new language");
+      const first = fetchCalls.find((call) => call.kind === "openai");
+      assert.match(JSON.stringify(first?.body?.messages || []), /bare request.*DURABLE/i, "the model must receive durable-by-default semantics");
+      assert.match(JSON.stringify(first?.body?.messages || []), /semantic understood-language profile.*not a hard provider recognition allowlist/i);
+      const profileTool = first?.body?.tools?.find((tool) => tool.function?.name === "update_agent_profile");
+      assert.match(String(profileTool?.function?.description || ""), /provider `?auto`?.*fixed best-effort prompt/i);
+      assert.match(String(profileTool?.function?.description || ""), /only for TTS compatibility, never STT/i);
+      const record = await recordStreamingVoiceTurn({
+        session_id: SESSION_ID,
+        conversation_id: SESSION_ID,
+        branch_id: "default",
+        turn_id: turnId,
+        source: "voice-cascaded",
+        transcript,
+        assistant_text: reasoning.display,
+        reply_language: reasoning.language,
+        classification: reasoning.classification,
+      });
+      assert.equal(record.classification, "chat", "the canonical record must not reapply a deterministic language patch");
+      await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+    }
+  } finally {
+    pendingToolCall = null;
+    pendingReply = null;
+    await requestJson("POST", "/v1/agent/profile/reset", { source: "cascaded-reasoner-smoke" });
+  }
+}
+
+async function temporaryLanguageOverrideDoesNotPersist() {
+  const before = agentProfile.effective().language;
+  pendingToolCall = { name: "respond_once_in_language", arguments: { language: "Amharic" } };
+  pendingReply = "ይህ መልስ ብቻ በአማርኛ ነው።";
+  fetchCalls.length = 0;
+  try {
+    const reasoning = await runCascadedVoiceReasoning({
+      transcript: "answer this response only in Amharic, then switch back",
+      session_id: SESSION_ID,
+      branch_id: "default",
+      turn_id: "reasoner-language-once",
+      tts_provider_id: "gemini-tts",
+      tts_available: true,
+    });
+    assert.equal(reasoning.language, "am-ET", "the one-turn response must carry its temporary TTS language");
+    assert.equal(reasoning.speak, pendingReply, "the one-turn response must use the requested language");
+    assert.equal(agentProfile.effective().language, before, "the durable language must remain unchanged");
+    const toolResult = fetchCalls
+      .filter((call) => call.kind === "openai")
+      .flatMap((call) => call.body.messages || [])
+      .find((message) => message.role === "tool");
+    assert.match(String(toolResult?.content || ""), /"persisted":false/, "the tool result must explicitly report a non-persisted override");
+  } finally {
+    pendingToolCall = null;
+    pendingReply = null;
   }
 }
 

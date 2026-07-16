@@ -694,6 +694,13 @@ class VoiceSessionConnection {
           text: value,
         });
       },
+      onTranscriptRejected: async (evidence) => {
+        if (turnSuperseded()) return;
+        providerEvents.transcript = "";
+        providerEvents.transcriptFinalSent = false;
+        turn.transcriptLanguageRejected = true;
+        await this.recordProviderEvent(turn, providerEvents, "stt_candidate_rejected", evidence || {});
+      },
       onAssistantText: async (text) => {
         if (turnSuperseded()) return;
         const value = String(text || "").trim();
@@ -950,7 +957,9 @@ class VoiceSessionConnection {
     // holds what was actually heard, never a fabricated fallback.
     const rawResultTranscript = String(providerResult?.transcript || "").trim();
     const resultTranscript = rawResultTranscript === "Voice captured." ? "" : rawResultTranscript;
-    const streamedTranscript = String(providerEvents.transcript || "").trim();
+    const transcriptRejected = providerResult?.transcript_language_rejected === true
+      || turn.transcriptLanguageRejected === true;
+    const streamedTranscript = transcriptRejected ? "" : String(providerEvents.transcript || "").trim();
     const transcript = resultTranscript || streamedTranscript;
     const assistantText = String(providerResult?.assistant_text || providerEvents.assistantText || "").trim();
     const assistantAudioFormat = providerResult?.audio_format || ASSISTANT_AUDIO_FORMAT;
@@ -963,8 +972,9 @@ class VoiceSessionConnection {
       || providerEvents.assistantAudioStarted
       || turn.assistantAudioBytes > 0;
     if (!transcript && !hasAssistantOutput) {
+      const noSpeechReason = transcriptRejected ? "stt_language_policy_rejected" : "stt_empty";
       await this.recordProviderEvent(turn, providerEvents, "turn_no_speech", {
-        reason: "stt_empty",
+        reason: noSpeechReason,
         audio_bytes: turn.audioBytes,
         transcript_language_rejected: providerResult?.transcript_language_rejected === true,
       });
@@ -981,7 +991,7 @@ class VoiceSessionConnection {
         branch_id: turn.branchId,
         turn_id: turn.turnId,
         status: "no_speech",
-        reason: "stt_empty",
+        reason: noSpeechReason,
         reply_language: turnReplyLanguage(turn, providerResult, null),
         input_languages: turnInputLanguages(turn),
       });
@@ -1108,7 +1118,7 @@ class VoiceSessionConnection {
       transcription_only: providerResult?.transcription_only === true,
       ...(typeof doneTtsSpoke === "boolean" ? { tts_spoke: doneTtsSpoke } : {}),
       // Language visibility: ALWAYS report the reply (spoken) language and the
-      // restricted input (heard) languages so a client overlay can render a live
+      // semantic input (heard) languages so a client overlay can render a live
       // "hears X / speaks Y" indicator. reply_language falls back to the turn's
       // effective profile when the provider result omits it.
       reply_language: turnReplyLanguage(turn, providerResult, canonicalRecord),
@@ -1239,9 +1249,9 @@ class VoiceSessionConnection {
         ...(spokenProgress ? { spoken_progress: spokenProgress } : {}),
         stage_timings: sanitizeStageTimings(providerEvents.stageTimings),
         transcript_language_rejected: turn.transcriptLanguageRejected === true,
-        // Input languages the STT leg restricted to, so an interrupted turn's
+        // Semantic input languages selected for the turn, so its
         // stored PCM still carries its language for later audio analysis.
-        input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
+        input_languages: turnInputLanguages(turn),
         provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
       });
     } catch (error) {
@@ -1315,10 +1325,10 @@ class VoiceSessionConnection {
         ...(providerResult?.tts_language_mismatch ? { tts_language_mismatch: true } : {}),
         stage_timings: sanitizeStageTimings(turn.providerEvents?.stageTimings),
         transcript_language_rejected: providerResult?.transcript_language_rejected === true || turn.transcriptLanguageRejected === true,
-        // The restricted INPUT languages the STT leg recognized, captured at
+        // The semantic INPUT languages selected for the turn, captured at
         // session start. Recorded on the canonical turn so a later audio-analysis
         // agent can fetch the stored PCM and know both input and output languages.
-        input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
+        input_languages: turnInputLanguages(turn),
         provider_events: Array.isArray(turn.providerEvents?.events) ? turn.providerEvents.events : [],
       });
     } catch (error) {
@@ -1610,17 +1620,17 @@ class VoiceSessionConnection {
   }
 }
 
-// The restricted INPUT (STT) language codes for a turn, captured at session
+// The semantic INPUT language codes for a turn, captured at session
 // start. Always an array so clients can render a live "hears X" indicator.
 function turnInputLanguages(turn) {
-  const codes = turn?.providerStatus?.language_codes;
+  const codes = turn?.providerStatus?.input_languages || turn?.providerStatus?.language_codes;
   return Array.isArray(codes) ? codes.filter(Boolean).map((code) => String(code)) : [];
 }
 
 // The reply (OUTPUT) language for a turn, so turn_done and the profile-control
 // confirmation TTS always carry a language code even when the provider result
 // omits it: provider result -> canonical record -> the turn's effective profile
-// reply language -> the first restricted STT input language. This keeps the
+// reply language -> the first semantic STT input language. This keeps the
 // spoken text's language and its TTS language tag from ever diverging, and lets
 // clients show "speaks Y" every turn.
 function turnReplyLanguage(turn, providerResult, canonicalRecord) {
