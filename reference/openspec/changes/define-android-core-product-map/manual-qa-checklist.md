@@ -25,6 +25,20 @@ screenshots in `scratch/mobile-ui-enhance/screens/` and
   the family.
 - Capture screenshots of: black panel, black transcript, faded family, restored
   family; store them under `scratch/mobile-ui-enhance/screens/`.
+- Press Start assistant circle: confirm the lion appears centered under the
+  finger's release point, not at the default right-edge slot.
+- Press Start near a screen corner: confirm the lion clamps fully on screen.
+- With the overlay already running, press Start again: confirm the existing
+  lion moves under the finger without the service restarting or surfaces
+  closing.
+- Activate Start via TalkBack or a keyboard: confirm the lion appears centered
+  on the Start button itself.
+- Open the chat panel, focus the composer, type on the keyboard: confirm
+  keystrokes never fade the family and never hide the keyboard.
+- Dismiss the keyboard (back/IME down), then tap outside: confirm the family
+  fades again.
+- With the keyboard up, tap the app underneath: confirm the keyboard hides
+  (window focus moved) and a following outside tap parks the family.
 
 ## Overlay Voice
 

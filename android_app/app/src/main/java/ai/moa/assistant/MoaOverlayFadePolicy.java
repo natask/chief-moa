@@ -50,11 +50,30 @@ final class MoaOverlayFadePolicy {
     }
 
     private boolean faded;
+    private boolean fadeHold;
     private long lastFamilyTouchAtMs = Long.MIN_VALUE;
     private long pendingOutsideAtMs = Long.MIN_VALUE;
 
     boolean isFaded() {
         return faded;
+    }
+
+    // Keyboard guard. While the chat composer is engaged (focused with the IME
+    // up or imminently up), outside reports must not park the family: taps on
+    // the keyboard are conversation, not disengagement, and cross-window
+    // dispatch cannot tell an IME tap from an app tap once coordinates are
+    // zeroed. Engaging the hold also voids any in-flight fade confirm. The
+    // hold never touches the faded flag itself: an already-parked family still
+    // wakes only through a family touch or an explicit restore.
+    void setFadeHold(boolean held) {
+        fadeHold = held;
+        if (held) {
+            pendingOutsideAtMs = Long.MIN_VALUE;
+        }
+    }
+
+    boolean isFadeHeld() {
+        return fadeHold;
     }
 
     // One gate per overlay window. The consumed-gesture flag is per window
@@ -64,10 +83,11 @@ final class MoaOverlayFadePolicy {
     }
 
     // An outside report arrived. True when the caller should schedule a
-    // confirmFade(eventTimeMs) after OUTSIDE_CONFIRM_MS; false when a family
-    // window already claimed this gesture (same or older event time).
+    // confirmFade(eventTimeMs) after OUTSIDE_CONFIRM_MS; false when the
+    // keyboard hold is engaged or a family window already claimed this gesture
+    // (same or older event time).
     boolean shouldScheduleFadeConfirm(long eventTimeMs) {
-        if (eventTimeMs <= lastFamilyTouchAtMs) {
+        if (fadeHold || eventTimeMs <= lastFamilyTouchAtMs) {
             return false;
         }
         pendingOutsideAtMs = eventTimeMs;

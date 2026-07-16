@@ -46,6 +46,10 @@ public final class OverlayService extends Service {
 
     static final String ACTION_ASSIST_BUTTON = "ai.moa.assistant.action.ASSIST_BUTTON";
     static final String ACTION_COLLAPSE_SURFACES = "ai.moa.assistant.action.COLLAPSE_SURFACES";
+    // Raw screen coordinates (px) of where the lion should center: the Start
+    // control's activating touch, or its button center for touchless starts.
+    static final String EXTRA_ORB_CENTER_X = "ai.moa.assistant.extra.ORB_CENTER_X";
+    static final String EXTRA_ORB_CENTER_Y = "ai.moa.assistant.extra.ORB_CENTER_Y";
     static final String ACTION_HIDE_OVERLAY = "ai.moa.assistant.action.HIDE_OVERLAY";
     static final String EXTRA_START_VOICE = "ai.moa.assistant.extra.START_VOICE";
 
@@ -94,6 +98,11 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams transcriptParams;
     private View orbRemoveTarget;
     private boolean orbRemoveTargetActive;
+    // Center requested by the latest Start press, consumed by showOrb() or by
+    // an in-place reposition when the lion is already up.
+    private float requestedOrbCenterX;
+    private float requestedOrbCenterY;
+    private boolean requestedOrbCenterPending;
     // Outside-tap fade for the lion + chat/transcript family. Decisions live in
     // the policy; this service only animates alpha and schedules the confirm.
     private final MoaOverlayFadePolicy fadePolicy = new MoaOverlayFadePolicy();
@@ -329,8 +338,20 @@ public final class OverlayService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        boolean hasRequestedCenter = intent != null
+                && intent.hasExtra(EXTRA_ORB_CENTER_X)
+                && intent.hasExtra(EXTRA_ORB_CENTER_Y);
+        if (hasRequestedCenter) {
+            requestedOrbCenterX = intent.getFloatExtra(EXTRA_ORB_CENTER_X, 0f);
+            requestedOrbCenterY = intent.getFloatExtra(EXTRA_ORB_CENTER_Y, 0f);
+            requestedOrbCenterPending = true;
+        }
         if (orbView == null) {
             showOrb();
+        } else if (hasRequestedCenter) {
+            // Start pressed while the lion is already up: move it under the
+            // finger instead of ignoring the press.
+            repositionOrbToRequestedCenter();
         }
         if (ACTION_COLLAPSE_SURFACES.equals(intent != null ? intent.getAction() : null)) {
             collapseInteractiveSurfaces();
@@ -562,6 +583,12 @@ public final class OverlayService extends Service {
         orbParams.gravity = Gravity.TOP | Gravity.START;
         orbParams.x = getResources().getDisplayMetrics().widthPixels - size - dp(ORB_EDGE_MARGIN_DP);
         orbParams.y = dp(164);
+        if (requestedOrbCenterPending) {
+            // Start carried a touch/button center: the lion appears exactly
+            // there instead of at the default edge slot.
+            requestedOrbCenterPending = false;
+            applyOrbCenter(requestedOrbCenterX, requestedOrbCenterY, size);
+        }
         MoaOrbTouchListener orbGestures = new MoaOrbTouchListener(
                 this,
                 windowManager,
@@ -593,6 +620,27 @@ public final class OverlayService extends Service {
                 handleFamilyTouch(orbFadeGate, event) || orbGestures.onTouch(view, event));
 
         windowManager.addView(orbView, orbParams);
+    }
+
+    // Sets orbParams so the lion is centered on the given raw screen point,
+    // clamped to the same safe display bounds the drag gesture uses (fully on
+    // screen, ORB_EDGE_MARGIN_DP from every edge).
+    private void applyOrbCenter(float centerX, float centerY, int size) {
+        int margin = dp(ORB_EDGE_MARGIN_DP);
+        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+        orbParams.x = MoaOrbPlacement.topLeftForCenter(centerX, size, margin, metrics.widthPixels - margin);
+        orbParams.y = MoaOrbPlacement.topLeftForCenter(centerY, size, margin, metrics.heightPixels - margin);
+    }
+
+    private void repositionOrbToRequestedCenter() {
+        if (!requestedOrbCenterPending || orbView == null || orbParams == null) {
+            return;
+        }
+        requestedOrbCenterPending = false;
+        applyOrbCenter(requestedOrbCenterX, requestedOrbCenterY, orbParams.width);
+        windowManager.updateViewLayout(orbView, orbParams);
+        // Pressing Start is engagement: a parked family wakes at the new spot.
+        restoreFamilyOpacity();
     }
 
     private void removeOrb() {
@@ -803,6 +851,8 @@ public final class OverlayService extends Service {
         messageColumn = null;
         messageScroll = null;
         composer = null;
+        // No composer, no keyboard hold: ordinary outside taps fade again.
+        fadePolicy.setFadeHold(false);
         runStatusView = null;
         recordModePill = null;
         newThreadPill = null;
@@ -894,14 +944,13 @@ public final class OverlayService extends Service {
     }
 
     private void applyFamilyFade(boolean faded) {
+        // Never touches the keyboard: the fade-hold guard keeps outside
+        // reports from parking the family while the composer is engaged, so a
+        // fade can only land with the IME already down.
         float alpha = faded ? MoaOverlayFadePolicy.FADED_ALPHA : 1f;
         fadeFamilyWindow(orbView, alpha);
         fadeFamilyWindow(panelView, alpha);
         fadeFamilyWindow(transcriptView, alpha);
-        if (faded) {
-            // Attention moved to the app underneath; the draft text survives.
-            hideKeyboard();
-        }
     }
 
     private void fadeFamilyWindow(View view, float alpha) {
@@ -1541,6 +1590,16 @@ public final class OverlayService extends Service {
                 outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(26));
             }
         });
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Live IME signal: when the user dismisses the keyboard (back/IME
+            // down) while the composer keeps view focus, release the keyboard
+            // hold so ordinary outside taps fade the family again; when the
+            // IME comes back up, re-engage it.
+            shell.setOnApplyWindowInsetsListener((view, insets) -> {
+                fadePolicy.setFadeHold(insets.isVisible(android.view.WindowInsets.Type.ime()));
+                return view.onApplyWindowInsets(insets);
+            });
+        }
 
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -1705,6 +1764,11 @@ public final class OverlayService extends Service {
         row.setLayoutParams(rowParams);
 
         composer = new EditText(this);
+        // Keyboard guard: typing is engagement, so while the composer is
+        // focused (IME up or imminently up) outside reports must not park the
+        // family or hide the keyboard. The insets listener on the panel shell
+        // releases the hold when the user dismisses the IME while focus stays.
+        composer.setOnFocusChangeListener((v, hasFocus) -> fadePolicy.setFadeHold(hasFocus));
         composer.setHint("Message A.G.");
         composer.setHintTextColor(0x66F4F4F6);
         composer.setTextColor(MoaColors.PAPER);

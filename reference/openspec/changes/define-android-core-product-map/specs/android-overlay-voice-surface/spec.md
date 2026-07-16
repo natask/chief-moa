@@ -169,6 +169,39 @@ fade the whole family in place instead of closing any surface.
 - **THEN** the existing close behavior applies unchanged; only the outside tap
   is remapped from close to fade
 
+#### Scenario: Keyboard interaction does not park the family
+- **WHEN** the chat composer is focused and the keyboard/IME is up or being
+  summoned
+- **THEN** keyboard/IME interactions and other outside reports do not fade the
+  family
+- **AND** the fade behavior never hides the keyboard
+- **AND** once the keyboard is dismissed or the composer loses focus, ordinary
+  outside app taps fade the family again
+
+### Requirement: Start Placement Under The Finger
+The Android app SHALL center the lion orb on the raw screen point of the
+ACTION_UP touch that activated the Start assistant circle control, clamped only
+to safe display bounds.
+
+#### Scenario: Touch start places the lion under the finger
+- **WHEN** the user activates Start assistant circle by touch
+- **THEN** the lion appears centered on the touch's raw ACTION_UP screen
+  coordinates
+- **AND** the position is clamped only so the orb stays fully within safe
+  display bounds, with no other snapping
+
+#### Scenario: Touchless start falls back to the button center
+- **WHEN** Start assistant circle is activated without a touch point
+  (accessibility service, keyboard, or programmatic click)
+- **THEN** the lion appears centered on the Start control's own on-screen
+  center, clamped the same way
+
+#### Scenario: Start while running repositions the lion
+- **WHEN** Start assistant circle is pressed while the overlay service is
+  already running
+- **THEN** the existing lion moves to the newly requested center without
+  restarting the service or closing any attached surface
+
 ### Requirement: Native Black Overlay Surfaces
 The Android overlay SHALL render its chat panel, voice transcript card, and
 full-app surfaces as opaque true-black native surfaces.
