@@ -33,6 +33,16 @@ android {
         buildConfig true
     }
 
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            jacoco {
+                includeNoLocationClasses = true
+                excludes = ['jdk.internal.*']
+            }
+        }
+    }
+
     defaultConfig {
         applicationId 'ai.moa.assistant'
         minSdk 26
@@ -159,6 +169,48 @@ tasks.register('verifyDebugUnitTestCoverage', JacocoCoverageVerification) {
     }
 }
 
+// The surface-local program authority is security-sensitive and intentionally
+// gated independently so unrelated Android classes cannot dilute its evidence.
+def surfaceProgramCoverageClasses = files(fileTree(
+        dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
+        includes: [
+                '**/MoaProgramJson.class',
+                '**/MoaScriptExecutionCatalog.class',
+                '**/MoaSurfaceProgramContract.class',
+                '**/MoaSurfaceProgramReceipts.class',
+                '**/MoaAndroidProgramHost.class',
+                '**/MoaSurfaceProgramStore.class',
+                '**/MoaWebViewProgramRuntime.class'
+        ]
+))
+
+tasks.register('reportSurfaceProgramCoverage', JacocoReport) {
+    group = 'verification'
+    description = 'Reports focused JVM coverage for the Android local-program contract modules.'
+    dependsOn tasks.named('testDebugUnitTest')
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(surfaceProgramCoverageClasses)
+    sourceDirectories.from(debugProductionSources)
+    reports { xml.required = true; html.required = true; csv.required = false }
+}
+
+tasks.register('verifySurfaceProgramCoverage', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Requires every focused Android local-program class to exceed 91% line/branch/method coverage.'
+    dependsOn tasks.named('testDebugUnitTest')
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(surfaceProgramCoverageClasses)
+    sourceDirectories.from(debugProductionSources)
+    violationRules {
+        rule {
+            element = 'CLASS'
+            ['LINE', 'BRANCH', 'METHOD'].each { kind ->
+                limit { counter = kind; value = 'COVEREDRATIO'; minimum = new BigDecimal('0.91') }
+            }
+        }
+    }
+}
+
 tasks.named('check') {
     dependsOn tasks.named('verifyDebugUnitTestCoverage')
 }
@@ -167,4 +219,5 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
 }

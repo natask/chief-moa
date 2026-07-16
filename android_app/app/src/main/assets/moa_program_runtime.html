@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:; connect-src 'none'; img-src 'none'; media-src 'none'; frame-src 'none';">
+<script>
+(() => {
+  "use strict";
+  let worker = null;
+  const workerSource = `
+    "use strict";
+    const pending = new Map();
+    let nextCall = 1;
+    const unavailable = () => Promise.reject(new Error("ambient_io_disabled"));
+    self.fetch = unavailable;
+    self.XMLHttpRequest = undefined;
+    self.WebSocket = undefined;
+    self.EventSource = undefined;
+    self.indexedDB = undefined;
+    const deepFreeze = value => {
+      if (value && typeof value === "object" && !Object.isFrozen(value)) {
+        Object.freeze(value);
+        Object.values(value).forEach(deepFreeze);
+      }
+      return value;
+    };
+    function buildTools(ids) {
+      const root = Object.create(null);
+      for (const capability of ids) {
+        const path = capability.split(".");
+        let cursor = root;
+        for (let i = 0; i < path.length - 1; i++) cursor = cursor[path[i]] ||= Object.create(null);
+        cursor[path[path.length - 1]] = (input = {}) => new Promise((resolve, reject) => {
+          const call_id = "call_" + nextCall++;
+          pending.set(call_id, { resolve, reject });
+          postMessage({ type: "call", call_id, capability_id: capability, input });
+        });
+      }
+      return deepFreeze(root);
+    }
+    onmessage = async event => {
+      const message = event.data || {};
+      if (message.type === "response") {
+        const request = pending.get(message.call_id);
+        if (!request) return;
+        pending.delete(message.call_id);
+        if (message.ok) request.resolve(message.data ?? null);
+        else request.reject(Object.assign(new Error(message.error || "tool_failed"), { code: message.code || "tool_failed", status: message.status || "failed" }));
+        return;
+      }
+      if (message.type !== "start") return;
+      try {
+        const tools = buildTools(message.allowed_capability_ids);
+        const invoke = new Function("tools", '"use strict";\\n' + message.source + '\\nif (typeof main !== "function") throw new Error("main_not_defined");\\nreturn main(tools);');
+        const result = await invoke(tools);
+        postMessage({ type: "terminal", ok: true, result: result === undefined ? null : result });
+      } catch (error) {
+        postMessage({ type: "terminal", ok: false, error: String(error && error.message || error).slice(0, 1000), code: String(error && error.code || "program_failed").slice(0, 120) });
+      }
+    };
+  `;
+  window.__moaStart = config => {
+    if (worker) worker.terminate();
+    worker = new Worker(URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" })));
+    worker.onmessage = event => {
+      const message = event.data || {};
+      if (message.type === "call") AndroidBridge.call(JSON.stringify(message));
+      else if (message.type === "terminal") AndroidBridge.finish(JSON.stringify(message));
+    };
+    worker.onerror = event => AndroidBridge.finish(JSON.stringify({ type: "terminal", ok: false, code: "worker_error", error: String(event.message || "worker_error") }));
+    worker.postMessage({ type: "start", ...config });
+  };
+  window.__moaResolve = response => { if (worker) worker.postMessage(response); };
+  window.__moaStop = () => { if (worker) { worker.terminate(); worker = null; } };
+  AndroidBridge.ready();
+})();
+</script>

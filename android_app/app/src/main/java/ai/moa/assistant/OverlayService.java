@@ -87,6 +87,8 @@ public final class OverlayService extends Service {
     private final List<ChatMessage> messages = new ArrayList<>();
 
     private MoaActionBroker actionBroker;
+    private MoaWebViewProgramRuntime surfaceProgramRuntime;
+    private MoaSurfaceProgramStore surfaceProgramStore;
     private WindowManager windowManager;
     private OrbView orbView;
     private WindowManager.LayoutParams orbParams;
@@ -219,6 +221,8 @@ public final class OverlayService extends Service {
         running = true;
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         actionBroker = new MoaActionBroker(this);
+        surfaceProgramStore = new MoaSurfaceProgramStore(this);
+        surfaceProgramRuntime = new MoaWebViewProgramRuntime(this, new MoaAndroidProgramHost(), surfaceProgramStore);
         voiceController = new MoaVoiceController(this, new MoaVoiceController.Callback() {
             @Override
             public void onVoiceStateChanged() {
@@ -366,6 +370,10 @@ public final class OverlayService extends Service {
             voiceSamplePlayer = null;
         }
         deviceClientLoopRunning = false;
+        if (surfaceProgramRuntime != null) {
+            surfaceProgramRuntime.stop("overlay_stopped");
+            surfaceProgramRuntime = null;
+        }
         super.onDestroy();
     }
 
@@ -2289,6 +2297,7 @@ public final class OverlayService extends Service {
         body.put("session_id", conversationId);
         body.put("status", "online");
         body.put("local_tool_manifest", androidLocalToolManifest());
+        body.put("execution_runtimes", new JSONArray().put(MoaScriptExecutionCatalog.advertisement(androidDeviceId(), System.currentTimeMillis())));
 
         JSONObject metadata = new JSONObject();
         metadata.put("source", "android-overlay");
@@ -2297,6 +2306,8 @@ public final class OverlayService extends Service {
         metadata.put("overlay_running", true);
         metadata.put("context_descriptor", actionBroker.activeAppDescriptor());
         metadata.put("execution_adapters", actionBroker.executionAdapters());
+        JSONObject programBinding = MoaAccessibilityService.currentProgramBinding();
+        if (programBinding != null) metadata.put("surface_program_binding", programBinding);
         body.put("metadata", metadata);
         return body;
     }
@@ -2353,7 +2364,10 @@ public final class OverlayService extends Service {
             input = new JSONObject();
         }
         ToolRequestExecution execution;
-        if ("audio.speak".equals(tool)) {
+        if ("surface.program.execute".equals(tool)) {
+            executeClaimedSurfaceProgram(requestId, input);
+            return;
+        } else if ("audio.speak".equals(tool)) {
             execution = executeAudioSpeakRequest(input);
         } else {
             MoaActionBroker.ToolExecutionResult result = actionBroker.executeToolRequest(tool, input);
@@ -2367,6 +2381,44 @@ public final class OverlayService extends Service {
         if (!requestId.isEmpty()) {
             postToolRequestReceipt(requestId, execution);
         }
+    }
+
+    private void executeClaimedSurfaceProgram(String requestId, JSONObject input) {
+        final MoaSurfaceProgramContract.Proposal proposal;
+        try {
+            proposal = MoaSurfaceProgramContract.parse(input, androidDeviceId(), System.currentTimeMillis());
+        } catch (MoaSurfaceProgramContract.Rejected rejected) {
+            postToolRequestReceipt(requestId, new ToolRequestExecution(false, rejected.code, null));
+            return;
+        }
+        if ("approval_required".equals(proposal.programApproval)) {
+            postToolRequestReceipt(requestId, new ToolRequestExecution(false, "approval_required", null));
+            return;
+        }
+        JSONObject replay = surfaceProgramStore.existing(proposal.executionId, proposal.idempotencyKey);
+        if (replay != null) {
+            JSONObject terminal = replay.optJSONObject("terminal");
+            postToolRequestReceipt(requestId, new ToolRequestExecution(terminal != null && "completed".equals(terminal.optString("status")),
+                    terminal == null ? "surface_program_replay_pending" : terminal.optJSONObject("result").optString("summary", "Recorded program outcome."), terminal));
+            return;
+        }
+        if (!MoaAccessibilityService.programBindingMatches(proposal)) {
+            postToolRequestReceipt(requestId, new ToolRequestExecution(false, "stale_state", null));
+            return;
+        }
+        if (!surfaceProgramStore.recordPending(proposal)) {
+            postToolRequestReceipt(requestId, new ToolRequestExecution(false, "durable_pending_failed", null));
+            return;
+        }
+        surfaceProgramRuntime.execute(proposal, androidDeviceId() + ":overlay", (terminal, toolReceipts) -> {
+            boolean stored = surfaceProgramStore.recordTerminal(proposal, terminal);
+            boolean completed = "completed".equals(terminal.optString("status"));
+            JSONObject result = terminal.optJSONObject("result");
+            String summary = stored
+                    ? (result == null ? "Android local program ended." : result.optString("summary", completed ? "Android local program completed." : "Android local program failed."))
+                    : "Program ended, but its terminal receipt could not be persisted locally.";
+            postToolRequestReceipt(requestId, new ToolRequestExecution(completed, summary, terminal));
+        });
     }
 
     private ToolRequestExecution executeAudioSpeakRequest(JSONObject input) {
