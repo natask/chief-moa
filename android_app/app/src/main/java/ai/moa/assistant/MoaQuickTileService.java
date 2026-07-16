@@ -1,5 +1,6 @@
 package ai.moa.assistant;
 
+import android.annotation.SuppressLint;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
@@ -54,6 +55,7 @@ public final class MoaQuickTileService extends TileService {
         tile.updateTile();
     }
 
+    @SuppressLint("StartActivityAndCollapseDeprecated")
     @SuppressWarnings("deprecation")
     private void openMainActivity() {
         Intent intent = new Intent(this, MainActivity.class);
