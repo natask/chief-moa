@@ -120,3 +120,19 @@ Release note: commit `5106d52` produced Android artifact
 Stable Android publication remains blocked because the protected publish job is
 not configured to run, and the Chrome Web Store upload gate was skipped; the
 local unpacked-extension reload signal completed without a client acknowledgement.
+
+## 12. Surface-Local Android Program Fixture QA
+
+- [x] 12.1 Add a debug-only, synthetic Accessibility fixture with deterministic
+      click, scroll, password-redaction, and semantic-structure-drift states.
+- [x] 12.2 Add instrumentation source for the isolated
+      `MoaProgramRuntimeService` Messenger/WebView worker covering a blocked
+      generated worker, client-main-loop watchdog replacement, successor
+      recovery, and stale nonce/generation START/STOP/RESPONSE rejection.
+- [x] 12.3 Add instrumentation source that exercises Accessibility observation,
+      password redaction, click, scroll, and stale-state rejection only against
+      the synthetic fixture.
+- [ ] 12.4 Compile `assembleDebugAndroidTest` and run the two fixture tests on a
+      wiped, dedicated emulator with Moa Accessibility enabled. The source-only
+      candidate is not runtime evidence; see
+      [surface-program-android-fixture-evidence.md](surface-program-android-fixture-evidence.md).

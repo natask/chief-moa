@@ -12,6 +12,7 @@ import java.util.LinkedHashSet;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -145,6 +146,12 @@ public final class MoaSurfaceProgramContractTest {
         assertEquals(a.toString(), MoaProgramJson.copy(a).toString());
         try { MoaProgramJson.canonical(Double.NaN); fail(); } catch (IllegalArgumentException expected) { assertEquals("invalid_jcs_number", expected.getMessage()); }
         try { MoaProgramJson.canonical(9_007_199_254_740_992L); fail(); } catch (IllegalArgumentException expected) { assertEquals("invalid_jcs_number", expected.getMessage()); }
+        for (String invalid : new String[]{"\uD800", "\uDC00", "ok\uD800x"}) {
+            try { MoaProgramJson.canonical(invalid); fail(); }
+            catch (IllegalArgumentException expected) { assertEquals("invalid_jcs_unicode", expected.getMessage()); }
+        }
+        try { MoaProgramJson.canonical(new JSONObject().put("\uD800", true)); fail(); }
+        catch (IllegalArgumentException expected) { assertEquals("invalid_jcs_unicode", expected.getMessage()); }
         assertEquals("{\"a\":1,\"z\":2}", MoaProgramJson.canonical(new JSONObject().put("z", 2).put("a", 1)));
         JSONObject vector = new JSONObject().put("a/b", "slash").put("arr", new JSONArray().put(JSONObject.NULL).put(true).put(false).put(0).put(42))
                 .put("ctl", "\u000f").put("n", 9_007_199_254_740_991L).put("€", "euro").put("😀", "astral");
@@ -173,11 +180,20 @@ public final class MoaSurfaceProgramContractTest {
         assertEquals(MoaScriptExecutionCatalog.sha256(), MoaProgramJson.sha256(MoaProgramJson.canonical(descriptor)));
         assertEquals(6, descriptor.getJSONArray("capabilities").length());
         assertFalse(descriptor.toString().contains(MoaScriptExecutionCatalog.SET_TEXT));
+        JSONObject scroll = null;
+        for (int i = 0; i < descriptor.getJSONArray("capabilities").length(); i++) {
+            JSONObject capability = descriptor.getJSONArray("capabilities").getJSONObject(i);
+            if (MoaScriptExecutionCatalog.SCROLL.equals(capability.getString("capability_id"))) scroll = capability;
+        }
+        assertNotNull(scroll);
+        assertTrue(scroll.getJSONObject("input_schema").getJSONArray("required").toString().contains("direction"));
         JSONObject advertisement = MoaScriptExecutionCatalog.advertisement("android_fixture", NOW);
         assertEquals("surface.runtime.advertised", advertisement.getString("type"));
         assertEquals("main", advertisement.getJSONObject("runtime").getString("entrypoint"));
         assertEquals("android_fixture", advertisement.getJSONObject("target").getString("device_id"));
         assertEquals(6, advertisement.getJSONObject("catalog").getJSONArray("capability_ids").length());
+        assertTrue(advertisement.getString("issued_at").endsWith(".000Z"));
+        assertTrue(advertisement.getString("expires_at").endsWith(".000Z"));
     }
 
     @Test public void receiptsBindDigestsChainAndOmitRawData() throws Exception {
@@ -212,7 +228,8 @@ public final class MoaSurfaceProgramContractTest {
         assertTrue(html.contains("AndroidBridge.call"));
         assertFalse(html.contains("chrome."));
         assertFalse(html.contains("addJavascriptInterface"));
-        assertTrue(html.contains("Object.defineProperty(self, \"postMessage\""));
+        assertTrue(html.contains("denyGlobal(\"postMessage\")"));
+        assertTrue(html.contains("bridge_token"));
         assertTrue(html.contains("isAuthorityDenial"));
         assertTrue(html.contains("code: \"policy_denied\""));
         assertFalse(html.contains("event.message"));

@@ -5,80 +5,123 @@
 (() => {
   "use strict";
   let worker = null;
+  let workerToken = null;
   const workerSource = `
     "use strict";
-    const hostPostMessage = postMessage.bind(self);
-    Object.defineProperty(self, "postMessage", { value: undefined, writable: false, configurable: false });
-    Object.defineProperty(self, "importScripts", { value: undefined, writable: false, configurable: false });
-    const pending = new Map();
-    let nextCall = 1;
-    const unavailable = () => Promise.reject(new Error("ambient_io_disabled"));
-    self.fetch = unavailable;
-    self.XMLHttpRequest = undefined;
-    self.WebSocket = undefined;
-    self.EventSource = undefined;
-    self.indexedDB = undefined;
-    const isAuthorityDenial = message => message.code === "approval_required" ||
-      message.code === "policy_denied" || message.code === "capability_not_allowed";
-    const deepFreeze = value => {
-      if (value && typeof value === "object" && !Object.isFrozen(value)) {
-        Object.freeze(value);
-        Object.values(value).forEach(deepFreeze);
-      }
-      return value;
-    };
-    function buildTools(ids) {
-      const root = Object.create(null);
-      for (const capability of ids) {
-        const path = capability.split(".");
-        let cursor = root;
-        for (let i = 0; i < path.length - 1; i++) cursor = cursor[path[i]] ||= Object.create(null);
-        cursor[path[path.length - 1]] = (input = {}) => new Promise((resolve, reject) => {
-          const call_id = "call_" + nextCall++;
-          pending.set(call_id, { resolve, reject });
-          hostPostMessage({ type: "call", call_id, capability_id: capability, input });
-        });
-      }
-      return deepFreeze(root);
-    }
-    onmessage = async event => {
-      const message = event.data || {};
-      if (message.type === "response") {
-        const request = pending.get(message.call_id);
-        if (!request) return;
-        pending.delete(message.call_id);
-        if (message.ok) request.resolve(message.data ?? null);
-        else if (isAuthorityDenial(message)) {
-          pending.clear();
-          hostPostMessage({ type: "terminal", ok: false, code: "policy_denied" });
+    (() => {
+      const hostPostMessage = self.postMessage.bind(self);
+      const NativeBlob = self.Blob;
+      const pending = new Map();
+      let bridgeToken = null;
+      let nextCall = 1;
+      let logBytes = 0;
+      let logLimit = 0;
+      let logExceeded = false;
+      let started = false;
+      const unavailable = () => Promise.reject(new Error("ambient_io_disabled"));
+      const denyGlobal = name => Object.defineProperty(self, name, { value: undefined, writable: false, configurable: false });
+      const byteSize = value => new NativeBlob([value]).size;
+      const recordLog = values => {
+        let added = 1;
+        for (const value of values) {
+          const text = typeof value === "string" ? value : value === null ? "null" :
+            (typeof value === "number" || typeof value === "boolean" || typeof value === "undefined") ? String(value) : "[object]";
+          added += byteSize(text) + 1;
         }
-        else request.reject(Object.assign(new Error(message.error || "tool_failed"), { code: message.code || "tool_failed", status: message.status || "failed" }));
-        return;
+        if (logBytes + added > logLimit) {
+          logExceeded = true;
+          throw new Error("log_limit_exceeded");
+        }
+        logBytes += added;
+      };
+      const safeConsole = Object.freeze({
+        log: (...values) => recordLog(values), info: (...values) => recordLog(values),
+        warn: (...values) => recordLog(values), error: (...values) => recordLog(values),
+        debug: (...values) => recordLog(values)
+      });
+      Object.defineProperty(self, "console", { value: safeConsole, writable: false, configurable: false });
+      denyGlobal("postMessage");
+      denyGlobal("importScripts");
+      Object.defineProperty(self, "fetch", { value: unavailable, writable: false, configurable: false });
+      for (const name of ["XMLHttpRequest", "WebSocket", "EventSource", "indexedDB"]) denyGlobal(name);
+      const emit = message => hostPostMessage({ ...message, bridge_token: bridgeToken });
+      const isAuthorityDenial = message => message.code === "approval_required" ||
+        message.code === "policy_denied" || message.code === "capability_not_allowed";
+      const deepFreeze = value => {
+        if (value && typeof value === "object" && !Object.isFrozen(value)) {
+          Object.freeze(value);
+          Object.values(value).forEach(deepFreeze);
+        }
+        return value;
+      };
+      function buildTools(ids) {
+        const root = Object.create(null);
+        for (const capability of ids) {
+          const path = capability.split(".");
+          let cursor = root;
+          for (let i = 0; i < path.length - 1; i++) cursor = cursor[path[i]] ||= Object.create(null);
+          cursor[path[path.length - 1]] = (input = {}) => {
+            if (input === null || typeof input !== "object" || Array.isArray(input)) {
+              return Promise.reject(new Error("invalid_input"));
+            }
+            return new Promise((resolve, reject) => {
+              const call_id = "call_" + nextCall++;
+              pending.set(call_id, { resolve, reject });
+              emit({ type: "call", call_id, capability_id: capability, input });
+            });
+          };
+        }
+        return deepFreeze(root);
       }
-      if (message.type !== "start") return;
-      try {
-        const tools = buildTools(message.allowed_capability_ids);
-        const invoke = new Function("tools", '"use strict";\\n' + message.source + '\\nif (typeof main !== "function") throw new Error("main_not_defined");\\nreturn main(tools);');
-        const result = await invoke(tools);
-        hostPostMessage({ type: "terminal", ok: true, result: result === undefined ? null : result });
-      } catch (error) {
-        hostPostMessage({ type: "terminal", ok: false, code: "runtime_failed" });
-      }
-    };
+      const receive = async event => {
+        const message = event.data || {};
+        if (message.type === "response") {
+          const request = pending.get(message.call_id);
+          if (!request) return;
+          pending.delete(message.call_id);
+          if (message.ok) request.resolve(message.data ?? null);
+          else if (isAuthorityDenial(message)) {
+            pending.clear();
+            emit({ type: "terminal", ok: false, code: "policy_denied" });
+          } else request.reject(Object.assign(new Error("tool_failed"), { code: message.code || "tool_failed", status: message.status || "failed" }));
+          return;
+        }
+        if (message.type !== "start" || started) return;
+        started = true;
+        bridgeToken = message.bridge_token;
+        logLimit = Number.isSafeInteger(message.log_bytes) && message.log_bytes >= 0 ? message.log_bytes : 0;
+        try {
+          const tools = buildTools(message.allowed_capability_ids);
+          const invoke = new Function("tools", '"use strict";\\n' + message.source + '\\nif (typeof main !== "function") throw new Error("main_not_defined");\\nreturn main(tools);');
+          const result = await invoke(tools);
+          emit(logExceeded ? { type: "terminal", ok: false, code: "limit_exceeded" } :
+            { type: "terminal", ok: true, result: result === undefined ? null : result });
+        } catch (error) {
+          emit({ type: "terminal", ok: false, code: logExceeded ? "limit_exceeded" : "runtime_failed" });
+        }
+      };
+      self.addEventListener("message", receive);
+      for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) denyGlobal(name);
+    })();
   `;
   window.__moaStart = config => {
     if (worker) worker.terminate();
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    workerToken = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
     worker = new Worker(URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" })));
     worker.onmessage = event => {
       const message = event.data || {};
-      if (message.type === "call") AndroidBridge.call(JSON.stringify(message));
-      else if (message.type === "terminal") AndroidBridge.finish(JSON.stringify(message));
+      if (message.bridge_token !== workerToken) return;
+      const { bridge_token, ...closed } = message;
+      if (message.type === "call") AndroidBridge.call(JSON.stringify(closed));
+      else if (message.type === "terminal") AndroidBridge.finish(JSON.stringify(closed));
     };
     worker.onerror = () => AndroidBridge.finish(JSON.stringify({ type: "terminal", ok: false, code: "runtime_failed" }));
-    worker.postMessage({ type: "start", ...config });
+    worker.postMessage({ type: "start", ...config, bridge_token: workerToken });
   };
   window.__moaResolve = response => { if (worker) worker.postMessage(response); };
-  window.__moaStop = () => { if (worker) { worker.terminate(); worker = null; } };
+  window.__moaStop = () => { if (worker) { worker.terminate(); worker = null; workerToken = null; } };
   AndroidBridge.ready();
 })();
 </script>

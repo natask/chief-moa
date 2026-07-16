@@ -74,7 +74,12 @@ final class MoaAccessibilityProgramAdapter {
                     .put("nodes", nodes);
             String digest = MoaProgramJson.sha256(MoaProgramJson.canonical(body));
             body.put("observation_digest", digest);
-            latestObservation = new ProgramObservation(body, records, now + OBSERVATION_TTL_MS);
+            latestObservation = new ProgramObservation(
+                    body,
+                    records,
+                    structuralFingerprint(records),
+                    now + OBSERVATION_TTL_MS
+            );
             return MoaProgramJson.copy(body);
         } catch (JSONException error) {
             return null;
@@ -110,16 +115,15 @@ final class MoaAccessibilityProgramAdapter {
             String capabilityId,
             JSONObject input
     ) {
+        if (MoaScriptExecutionCatalog.BACK.equals(capabilityId)) {
+            return performGlobalEffect(proposal, AccessibilityService.GLOBAL_ACTION_BACK);
+        }
+        if (MoaScriptExecutionCatalog.HOME.equals(capabilityId)) {
+            return performGlobalEffect(proposal, AccessibilityService.GLOBAL_ACTION_HOME);
+        }
         AccessibilityNodeInfo root = validatedRoot(proposal);
         if (root == null) {
             return ProgramActionResult.stale("The bound Android Accessibility state changed.");
-        }
-        MoaAccessibilityService service = activeService;
-        if (MoaScriptExecutionCatalog.BACK.equals(capabilityId)) {
-            return actionWithPostState(service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK));
-        }
-        if (MoaScriptExecutionCatalog.HOME.equals(capabilityId)) {
-            return actionWithPostState(service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME));
         }
         ProgramObservation observation = latestObservation;
         String observationId = input.optString("observation_id", "");
@@ -138,6 +142,7 @@ final class MoaAccessibilityProgramAdapter {
         }
         boolean success;
         if (MoaScriptExecutionCatalog.CLICK.equals(capabilityId)) {
+            if (!liveStructureMatches(root, observation)) return staleStructure();
             success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
         } else if (MoaScriptExecutionCatalog.SET_TEXT.equals(capabilityId)) {
             String value = input.optString("text", null);
@@ -149,12 +154,14 @@ final class MoaAccessibilityProgramAdapter {
             }
             Bundle arguments = new Bundle();
             arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
+            if (!liveStructureMatches(root, observation)) return staleStructure();
             success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
         } else if (MoaScriptExecutionCatalog.SCROLL.equals(capabilityId)) {
             String direction = input.optString("direction", "forward");
             int action = "backward".equals(direction)
                     ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
                     : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD;
+            if (!liveStructureMatches(root, observation)) return staleStructure();
             success = node.performAction(action);
         } else {
             return ProgramActionResult.rejected("unsupported_capability", "Unsupported Accessibility capability.");
@@ -206,7 +213,8 @@ final class MoaAccessibilityProgramAdapter {
                 && observation.body.optLong("accessibility_service_generation") == SERVICE_GENERATION.get()
                 && root != null && root.getPackageName() != null
                 && proposal.expectedPackage.equals(root.getPackageName().toString())
-                && proposal.windowId.equals(String.valueOf(root.getWindowId()));
+                && proposal.windowId.equals(String.valueOf(root.getWindowId()))
+                && liveStructureMatches(root, observation);
         return matches ? root : null;
     }
 
@@ -226,6 +234,22 @@ final class MoaAccessibilityProgramAdapter {
         // Android only confirms that the action request was accepted. A later Accessibility
         // event is required before a changed UI tree can be treated as post-state evidence.
         return ProgramActionResult.indeterminate();
+    }
+
+    private static ProgramActionResult performGlobalEffect(
+            MoaSurfaceProgramContract.Proposal proposal,
+            int action
+    ) {
+        // validatedRoot recomputes the complete bounded live structure. Keep the
+        // platform effect immediately adjacent so no cached tree authorizes it.
+        AccessibilityNodeInfo root = validatedRoot(proposal);
+        MoaAccessibilityService service = activeService;
+        if (root == null) return staleStructure();
+        return actionWithPostState(service.performGlobalAction(action));
+    }
+
+    private static ProgramActionResult staleStructure() {
+        return ProgramActionResult.stale("The bound Android Accessibility structure changed.");
     }
 
     private static AccessibilityNodeInfo activeRoot(MoaAccessibilityService service) {
@@ -298,6 +322,30 @@ final class MoaAccessibilityProgramAdapter {
         return current;
     }
 
+    private static boolean liveStructureMatches(
+            AccessibilityNodeInfo root,
+            ProgramObservation observation
+    ) {
+        List<ProgramNode> liveNodes = new ArrayList<>();
+        try {
+            // Handles and the public observation body are intentionally discarded.
+            // ProgramNode contains only the stable path and semantic fingerprint used here.
+            collectNodes(root, new ArrayList<>(), new JSONArray(), liveNodes, 0);
+            return observation.structuralFingerprint.equals(structuralFingerprint(liveNodes));
+        } catch (JSONException error) {
+            return false;
+        }
+    }
+
+    private static String structuralFingerprint(List<ProgramNode> records) {
+        StringBuilder material = new StringBuilder();
+        for (ProgramNode record : records) {
+            for (Integer index : record.path) material.append(index).append('/');
+            material.append(':').append(record.fingerprint).append('\n');
+        }
+        return MoaProgramJson.sha256(material.toString());
+    }
+
     private static String nodeFingerprint(AccessibilityNodeInfo node) {
         Rect bounds = new Rect();
         node.getBoundsInScreen(bounds);
@@ -310,6 +358,7 @@ final class MoaAccessibilityProgramAdapter {
                 + node.isScrollable() + "\n"
                 + node.isPassword() + "\n"
                 + node.isEnabled() + "\n"
+                + node.isFocused() + "\n"
                 + node.getChildCount();
         return MoaProgramJson.sha256(source);
     }
@@ -335,11 +384,18 @@ final class MoaAccessibilityProgramAdapter {
     private static final class ProgramObservation {
         final JSONObject body;
         final List<ProgramNode> nodes;
+        final String structuralFingerprint;
         final long expiresAtMs;
 
-        ProgramObservation(JSONObject body, List<ProgramNode> nodes, long expiresAtMs) {
+        ProgramObservation(
+                JSONObject body,
+                List<ProgramNode> nodes,
+                String structuralFingerprint,
+                long expiresAtMs
+        ) {
             this.body = body;
             this.nodes = nodes;
+            this.structuralFingerprint = structuralFingerprint;
             this.expiresAtMs = expiresAtMs;
         }
 

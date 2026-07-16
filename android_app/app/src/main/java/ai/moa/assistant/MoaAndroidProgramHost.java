@@ -8,7 +8,7 @@ final class MoaAndroidProgramHost {
         boolean bindingMatches(MoaSurfaceProgramContract.Proposal proposal);
         JSONObject observe(MoaSurfaceProgramContract.Proposal proposal);
         JSONObject find(MoaSurfaceProgramContract.Proposal proposal, JSONObject input);
-        MoaAccessibilityService.ProgramActionResult act(MoaSurfaceProgramContract.Proposal proposal, String capabilityId, JSONObject input);
+        MoaAccessibilityProgramAdapter.ProgramActionResult act(MoaSurfaceProgramContract.Proposal proposal, String capabilityId, JSONObject input);
     }
     private final AccessibilityAdapter accessibility;
 
@@ -35,15 +35,15 @@ final class MoaAndroidProgramHost {
             JSONObject result = accessibility.find(proposal, input);
             return result == null ? HostResult.stale("The requested observation is stale.") : HostResult.success("Matched Accessibility nodes.", result);
         }
-        MoaAccessibilityService.ProgramActionResult action = accessibility.act(proposal, capabilityId, input);
+        MoaAccessibilityProgramAdapter.ProgramActionResult action = accessibility.act(proposal, capabilityId, input);
         return new HostResult(action.success, action.status, action.code, action.summary, action.data, action.postStateSha256);
     }
 
     private static final class PlatformAccessibilityAdapter implements AccessibilityAdapter {
-        public boolean bindingMatches(MoaSurfaceProgramContract.Proposal proposal) { return MoaAccessibilityService.programBindingMatches(proposal); }
-        public JSONObject observe(MoaSurfaceProgramContract.Proposal proposal) { return MoaAccessibilityService.boundProgramObservation(proposal); }
-        public JSONObject find(MoaSurfaceProgramContract.Proposal proposal, JSONObject input) { return MoaAccessibilityService.programBindingMatches(proposal) ? MoaAccessibilityService.findProgramNodes(input) : null; }
-        public MoaAccessibilityService.ProgramActionResult act(MoaSurfaceProgramContract.Proposal proposal, String capabilityId, JSONObject input) { return MoaAccessibilityService.executeProgramAction(proposal, capabilityId, input); }
+        public boolean bindingMatches(MoaSurfaceProgramContract.Proposal proposal) { return MoaAccessibilityProgramAdapter.bindingMatches(proposal); }
+        public JSONObject observe(MoaSurfaceProgramContract.Proposal proposal) { return MoaAccessibilityProgramAdapter.boundObservation(proposal); }
+        public JSONObject find(MoaSurfaceProgramContract.Proposal proposal, JSONObject input) { return MoaAccessibilityProgramAdapter.bindingMatches(proposal) ? MoaAccessibilityProgramAdapter.find(input) : null; }
+        public MoaAccessibilityProgramAdapter.ProgramActionResult act(MoaSurfaceProgramContract.Proposal proposal, String capabilityId, JSONObject input) { return MoaAccessibilityProgramAdapter.execute(proposal, capabilityId, input); }
     }
 
     private static boolean validInput(String capability, JSONObject input) {

@@ -51,6 +51,7 @@ android {
         versionName envOrDefault('MOA_ANDROID_VERSION_NAME', '0.1.0')
         buildConfigField 'String', 'GIT_SHA', "\"${envOrDefault('MOA_ANDROID_GIT_SHA', gitSha())}\""
         buildConfigField 'String', 'DEFAULT_GATEWAY_URL', "\"${envOrDefault('MOA_DEFAULT_GATEWAY_URL', 'https://api.agee.app')}\""
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
     signingConfigs {
@@ -171,26 +172,47 @@ tasks.register('verifyDebugUnitTestCoverage', JacocoCoverageVerification) {
 
 // The surface-local program authority is security-sensitive and intentionally
 // gated independently so unrelated Android classes cannot dilute its evidence.
+// Discover production modules by source name so another Moa*Program*.java cannot
+// silently omit that module (or any of its nested classes) from the gate.
+def surfaceProgramCoverageSources = fileTree(
+        dir: 'src/main/java',
+        includes: ['**/Moa*Program*.java', '**/MoaScriptExecutionCatalog.java']
+)
+def surfaceProgramCoverageClassIncludes = surfaceProgramCoverageSources.files.collect { source ->
+    "**/${source.name.substring(0, source.name.length() - '.java'.length())}*.class"
+}.sort()
+def surfaceProgramCoverageClassDirectory = layout.buildDirectory.dir(
+        'intermediates/javac/debug/compileDebugJavaWithJavac/classes'
+)
 def surfaceProgramCoverageClasses = files(fileTree(
-        dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
-        includes: [
-                '**/MoaProgramJson*.class',
-                '**/MoaScriptExecutionCatalog*.class',
-                '**/MoaSurfaceProgramContract*.class',
-                '**/MoaSurfaceProgramReceipts*.class',
-                '**/MoaSurfaceProgramEvents*.class',
-                '**/MoaAndroidProgramHost*.class',
-                '**/MoaAccessibilityProgramAdapter*.class',
-                '**/MoaSurfaceProgramStore*.class',
-                '**/MoaWebViewProgramRuntime*.class',
-                '**/MoaProgramRuntimeService*.class'
-        ]
+        dir: surfaceProgramCoverageClassDirectory,
+        includes: surfaceProgramCoverageClassIncludes
 ))
+
+tasks.register('verifySurfaceProgramCoverageScope') {
+    group = 'verification'
+    description = 'Proves every discovered Android local-program source has compiled coverage input, including nested classes.'
+    dependsOn tasks.named('compileDebugJavaWithJavac')
+    doLast {
+        def compiledClassNames = fileTree(
+                dir: surfaceProgramCoverageClassDirectory,
+                includes: surfaceProgramCoverageClassIncludes
+        ).files.collect { it.name } as Set
+        def missing = surfaceProgramCoverageSources.files.findAll { source ->
+            def base = source.name.substring(0, source.name.length() - '.java'.length())
+            !compiledClassNames.any { name -> name == "${base}.class" || name.startsWith("${base}\$") }
+        }
+        if (!missing.isEmpty()) {
+            throw new GradleException("Surface-program coverage scope is missing compiled modules: "
+                    + missing.collect { it.path }.sort().join(', '))
+        }
+    }
+}
 
 tasks.register('reportSurfaceProgramCoverage', JacocoReport) {
     group = 'verification'
     description = 'Reports focused JVM coverage for the Android local-program contract modules.'
-    dependsOn tasks.named('testDebugUnitTest')
+    dependsOn tasks.named('testDebugUnitTest'), tasks.named('verifySurfaceProgramCoverageScope')
     executionData.from(debugUnitTestCoverageData)
     classDirectories.from(surfaceProgramCoverageClasses)
     sourceDirectories.from(debugProductionSources)
@@ -200,7 +222,7 @@ tasks.register('reportSurfaceProgramCoverage', JacocoReport) {
 tasks.register('verifySurfaceProgramCoverage', JacocoCoverageVerification) {
     group = 'verification'
     description = 'Requires every focused Android local-program source module to exceed 90% line and branch coverage.'
-    dependsOn tasks.named('testDebugUnitTest')
+    dependsOn tasks.named('testDebugUnitTest'), tasks.named('verifySurfaceProgramCoverageScope')
     executionData.from(debugUnitTestCoverageData)
     classDirectories.from(surfaceProgramCoverageClasses)
     sourceDirectories.from(debugProductionSources)
@@ -214,8 +236,15 @@ tasks.register('verifySurfaceProgramCoverage', JacocoCoverageVerification) {
     }
 }
 
+tasks.register('verifyMoaProgramWorker', Exec) {
+    group = 'verification'
+    description = 'Runs adversarial JavaScript fixtures against the exact Android worker asset.'
+    workingDir rootProject.projectDir
+    commandLine 'node', 'scripts/test-moa-program-worker.mjs'
+}
+
 tasks.named('check') {
-    dependsOn tasks.named('verifyDebugUnitTestCoverage')
+    dependsOn tasks.named('verifyDebugUnitTestCoverage'), tasks.named('verifySurfaceProgramCoverage'), tasks.named('verifyMoaProgramWorker')
 }
 
 dependencies {
@@ -224,4 +253,6 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
     testImplementation 'org.robolectric:robolectric:4.14.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
 }
