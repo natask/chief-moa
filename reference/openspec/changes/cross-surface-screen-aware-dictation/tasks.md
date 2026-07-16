@@ -51,7 +51,9 @@ reserved for a later integration ticket.
   `android-screen-dictation-integration-evidence.md`; physical-phone stale,
   secure, and denial QA remains not measured, so this ticket stays open.
   Callback-time release regressions cover secure/password no-context fallback,
-  missing accessibility authority, stale state, and package mismatch.
+  missing accessibility authority, stale state, and package mismatch. The
+  integration-sequence test also proves a failed gate cannot be undone by a
+  later screenshot attachment step.
 
 ## 4. Android IME literal dictation
 

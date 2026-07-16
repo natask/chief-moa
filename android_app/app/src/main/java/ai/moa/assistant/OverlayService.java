@@ -1918,20 +1918,21 @@ public final class OverlayService extends Service {
         refreshScreenAskControl();
         try {
             JSONObject refreshedScreen = actionBroker.screenSnapshot();
-            boolean hasSemanticContext;
+            MoaScreenAwareAskFinalizer.Result result;
             if (capture != null) {
-                hasSemanticContext = MoaScreenContextReleasePolicy.applyCapturedContext(
+                result = MoaScreenAwareAskFinalizer.captured(
                         requestBody,
                         refreshedScreen,
                         capture
                 );
-                String semanticSummary = hasSemanticContext
-                        ? refreshedScreen.optString("summary", "")
-                        : "";
-                MoaScreenEvidenceEnvelope.attachToAsk(requestBody, capture, semanticSummary);
-                setScreenAskStatus("Screenshot attached once · model response remains a proposal");
+                setScreenAskStatus(result.screenshotAttached
+                        ? "Screenshot attached once · model response remains a proposal"
+                        : MoaScreenEvidenceEnvelope.visibleFallback(
+                                MoaScreenshotPolicy.DenialReason.STALE_OBSERVATION,
+                                false
+                        ));
             } else {
-                hasSemanticContext = MoaScreenContextReleasePolicy.applyDeniedContext(
+                result = MoaScreenAwareAskFinalizer.denied(
                         requestBody,
                         refreshedScreen,
                         expectedPackage,
@@ -1940,7 +1941,7 @@ public final class OverlayService extends Service {
                 );
                 setScreenAskStatus(MoaScreenEvidenceEnvelope.visibleFallback(
                         denial,
-                        hasSemanticContext
+                        result.semanticContextAttached
                 ));
             }
         } catch (Exception error) {

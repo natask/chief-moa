@@ -176,7 +176,8 @@ def screenEvidenceEnvelopeClasses = files(
                 includes: [
                         '**/MoaScreenEvidenceEnvelope*.class',
                         '**/MoaScreenContextCache*.class',
-                        '**/MoaScreenContextReleasePolicy*.class'
+                        '**/MoaScreenContextReleasePolicy*.class',
+                        '**/MoaScreenAwareAskFinalizer*.class'
                 ]
         )
 )
