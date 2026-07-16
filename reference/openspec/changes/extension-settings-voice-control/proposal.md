@@ -21,8 +21,8 @@ prompt and behavior) is one of the settings this surface reads and writes.
 - Give the agent a queryable catalog of canonical gateway runtime-profile
   settings so the user can list, explain, semantically search, compare, and ask
   for useful recommendations without already knowing exact setting labels.
-  Merging browser-local controls into that projection is a follow-up; this
-  browser change does not claim an Android settings registry.
+  The browser merges its six registered local controls into the
+  projection; this browser change does not claim an Android settings registry.
 - Project catalog results as selectable visual controls in the existing command
   or workspace surface. Options remains the deep configuration and Chrome
   permission-remediation surface rather than the only place settings can be
@@ -44,9 +44,24 @@ current/default values, constraints, redaction, and rejection of unknown
 settings. The same catalog is available through authenticated HTTP routes and
 the gateway voice agent's `read_agent_settings` tool.
 
-The current browser does not yet merge extension-local controls into that
-catalog, render catalog results in a Command-K-style surface, or broker generic
-extension-local writes. Android preferences remain Android-owned and are not
+The browser implements a registry for exactly six existing local controls:
+gateway URL, redacted gateway-token configured state, LiveKit voice transport,
+consent-gated background automation, microphone permission, and browser agent
+role. The side panel merges those entries with reachable gateway results and
+supports typed and finalized-spoken list, exact get, search, and recommendation.
+It renders selectable rows, preserves the same ids/current values across typed
+and spoken results, shows effective/default/constraint/redaction metadata,
+focuses settings search with Cmd/Ctrl+K, and deep-links only to the
+user-operated microphone permission walkthrough. `All` uses the complete
+bounded registered set while semantic queries remain separately capped.
+
+The owner broker applies registered writable browser settings locally and
+gateway settings through the gateway profile contract. It rejects unknown and
+non-writable ids, requires versioned approval for enabling background
+automation, and redacts token values and receipts. Browser-side compare and a
+single smoke that updates both one gateway-owned and one browser-local setting
+remain pending. The gateway's read tool already supports compare over gateway
+profile defaults. Android preferences remain Android-owned and are not
 enumerated or mutated by this browser/gateway slice.
 
 ## Capabilities

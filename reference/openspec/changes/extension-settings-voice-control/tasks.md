@@ -16,17 +16,18 @@
       recommendation queries to the catalog. Exact and paraphrased queries
       return grounded entries and never mutate state.
   - [x] 1.6a Typed side-panel list, exact get, semantic search, and recommendation
-        use the merged catalog. Spoken projection and browser compare remain pending.
+        use the merged catalog. Spoken parity is completed by 1.6b; browser
+        compare remains pending.
   - [x] 1.6b Finalized browser voice list, exact get, semantic search, and
         recommendation requests use the same merged query contract as the typed
         side-panel path. Browser compare remains pending.
-- [ ] 1.7 Browser: render query results as selectable setting rows in the existing
+- [x] 1.7 Browser: render query results as selectable setting rows in the existing
       command/workspace UI and deep-link into the focused Options control only
       for deep configuration or permission remediation. Typed and voice paths
       expose the same result identities and current values.
   - [x] 1.7a Render the typed side-panel projection as selectable/searchable
         rows and expose only the microphone permission remediation deep link.
-        The matching voice projection remains pending.
+        Matching voice projection is completed by 1.7b.
   - [x] 1.7b Render finalized spoken results with the same ids/current values in
         the side panel or on-page overlay where voice is active. All renders the
         complete registered browser + gateway set in a bounded scrolling region;
@@ -54,15 +55,17 @@
 - [x] 3.2 Manual: confirm a changed setting takes effect on the next turn with no restart.
       Automated via `npm run smoke:settings` (Leg 4): after "be terser" lowers `voice_max_chars` to 140,
       the next `POST /v1/voice/turns` returns a spoken reply capped to 140 chars — no gateway restart.
-- [ ] 3.3 Smoke list, search, recommendation, and current-value queries and prove
+- [x] 3.3 Smoke list, search, recommendation, and current-value queries and prove
       that every result is catalog-grounded and no query mutates state.
   - [x] 3.3a Gateway tests prove catalog completeness, list/get/search/recommend/
         compare, current/default projection, redaction, authority, unknown-setting
         rejection, HTTP handlers, and the live `read_agent_settings` tool.
   - [x] 3.3b Browser unit and real-Chrome smokes prove local list/get/search/
         recommendation, effective values, token redaction, consent gating, row
-        selection, and the microphone walkthrough. A gateway-backed browser merge
-        smoke and spoken result-identity parity remain pending.
+        selection, the complete bounded `All` projection, grounded microphone
+        search, typed/spoken result-identity parity, owner-brokered local write
+        rejection/redaction, and the microphone walkthrough. Gateway catalog
+        behavior is proved independently by 3.3a.
 - [ ] 3.4 Smoke one gateway-owned and one extension-local update and prove the
       owning surface refreshes to the effective value with an observable result.
 - [x] 3.5 Browser: keep microphone failure on the active overlay/side panel,
