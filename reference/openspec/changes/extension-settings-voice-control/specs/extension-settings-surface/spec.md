@@ -22,16 +22,18 @@ change made elsewhere is reflected.
 The extension SHALL project the merged registered settings catalog into a
 searchable, Command-K-style command or workspace surface usable with typed
 command and voice input. Results SHALL use bounded packaged UI showing the
-setting name, current value or redacted state, explanation, allowed choices, and
-an explicit change action. The full Options page SHALL remain the deep
+setting name, current value or redacted state, explanation, and allowed choices.
+An allowed deep link or change action SHALL be explicit rather than inferred
+from selecting a row. The full Options page SHALL remain the deep
 configuration and Chrome permission surface rather than the primary discovery
 path.
 
-The implemented browser slice covers the typed side-panel projection and
-Cmd/Ctrl+K focus. Spoken result projection, browser-side compare projection, and
-generic settings writes remain staged requirements. Neither the gateway catalog
-nor this browser projection SHALL be treated as evidence that an Android
-settings registry exists.
+The implemented browser slice covers typed and finalized-spoken projections with
+matching ids/current values, bounded complete `All`, grounded search and
+recommendation, selectable side-panel rows, Cmd/Ctrl+K focus, and owner-brokered
+writes. Browser-side compare remains staged. Neither the gateway catalog nor
+this browser projection SHALL be treated as evidence that an Android settings
+registry exists.
 
 #### Scenario: Typed search renders selectable settings
 - **WHEN** the user types a settings query in the command or workspace surface
