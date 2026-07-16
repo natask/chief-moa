@@ -13,6 +13,7 @@ function harness(overrides = {}) {
     sanitizeOptionalId: (value, fallback) => value ? `safe-${value}` : fallback,
     sessionContextPayload: (input) => input, listVoiceTurnsForSession: (id) => [{ transcript: id }],
     historyMessagesPayload: (input) => input, resolveContextTurnLimit: (value) => Number(value || 2),
+    sessionMessagesPayload: (input) => ({ projection: input }),
     listChatTurnRecordsForSession: (id) => [
       { turn_id: "one", ts: "old", response_text: "first" },
       { turn_id: "two", conversation_id: id, session_id: id, source: "chat", model: "m", profile_version: "p", created_at: "new" }, {},
@@ -28,7 +29,7 @@ test("router ignores unrelated traffic and protects every recognized read", asyn
   assert.equal(await harness().routeSessionReads(req("POST"), {}, url("/v1/sessions")), false);
   assert.equal(await harness().routeSessionReads(req(), {}, url("/other")), false);
   const handlers = harness({ authorized: () => false });
-  for (const path of ["/v1/conversations/c", "/v1/sessions", "/v1/sessions/default", "/v1/threads", "/v1/threads/active", "/v1/sessions/s/context", "/v1/sessions/s/turns", "/v1/history/messages", "/v1/sessions/s/chat-turns", "/v1/context/latest"]) {
+  for (const path of ["/v1/conversations/c", "/v1/sessions", "/v1/sessions/default", "/v1/threads", "/v1/threads/active", "/v1/sessions/s/context", "/v1/sessions/s/messages", "/v1/sessions/s/turns", "/v1/history/messages", "/v1/sessions/s/chat-turns", "/v1/context/latest"]) {
     const response = {}; assert.equal(await handlers.routeSessionReads(req(), response, url(path)), true); assert.equal(response.status, 401);
   }
 });
@@ -61,6 +62,10 @@ test("context, turns, and history normalize decoding, aliases, and flags", async
   assert.deepEqual(response.payload, { sessionId: "a b", branchId: "fork", allBranches: true, turnLimit: "4" });
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/sessions/s/context?all_branches=1")); assert.equal(response.payload.branchId, "default"); assert.equal(response.payload.allBranches, true);
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/sessions/a%20b/turns")); assert.equal(response.payload.session_id, "safe-a b"); assert.equal(response.payload.turns[0].transcript, "a b");
+  response = {}; await handlers.routeSessionReads(req(), response, url("/v1/sessions/a%20b/messages?branch_id=fork&limit=9"));
+  assert.deepEqual(response.payload, { projection: { sessionId: "a b", branchId: "fork", limit: "9" } });
+  response = {}; await handlers.routeSessionReads(req(), response, url("/v1/sessions/a%20b/messages"));
+  assert.deepEqual(response.payload, { projection: { sessionId: "a b", branchId: "", limit: null } });
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/history/messages?conversation_id=s&query=find&limit=3")); assert.deepEqual(response.payload, { sessionId: "s", q: "find", limit: 3 });
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/history/messages")); assert.deepEqual(response.payload, { sessionId: "", q: "", limit: 50 });
 });

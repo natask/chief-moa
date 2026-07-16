@@ -90,6 +90,7 @@
     "smoke:remote-mode": "node scripts/smoke-remote-mode.js",
     "smoke:router-loop": "node scripts/smoke-router-loop.js",
     "smoke:session-history": "node scripts/smoke-session-history.js",
+    "smoke:session-messages": "node scripts/smoke-session-messages.js",
     "smoke:message-broker": "node scripts/smoke-message-broker.js",
     "smoke:aggie-protocol": "node scripts/smoke-aggie-surface-protocol.js",
     "smoke:device-hub": "node scripts/smoke-device-hub.js",

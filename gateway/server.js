@@ -105,6 +105,7 @@ const { runResearch } = require("./lib/research-workflow");
 const { createPresentationHandlers } = require("./lib/presentation-handlers");
 const { createSupervisorHandlers } = require("./lib/supervisor-handlers");
 const { createSessionReadHandlers } = require("./lib/session-read-handlers");
+const { projectSessionMessages, SESSION_MESSAGE_MAX_LIMIT } = require("./lib/session-messages");
 const { createThreadSwitchHandlers } = require("./lib/thread-switch-handlers");
 const { createBrokerResearchHandlers } = require("./lib/broker-research-handlers");
 const { createMediaNoteHandlers } = require("./lib/media-note-handlers");
@@ -565,7 +566,7 @@ const { routeSessionReads } = createSessionReadHandlers({
   authorized, sendJson, sendConversation, sessionSummaryPayload, defaultSessionId,
   threadListPayload, threadStore, sanitizeOptionalId, sessionContextPayload,
   listVoiceTurnsForSession, historyMessagesPayload, resolveContextTurnLimit,
-  listChatTurnRecordsForSession, latestContextPayload,
+  listChatTurnRecordsForSession, sessionMessagesPayload, latestContextPayload,
 });
 const { routeThreadSwitch } = createThreadSwitchHandlers({
   authorized, sendJson, readJsonBody, sanitizeOptionalId, sanitizeOptionalBlankId,
@@ -9590,6 +9591,23 @@ function listVoiceTurnRecordsForSession(sessionId, branchId) {
   return records;
 }
 
+function listRawVoiceTurnRecordsForSession(sessionId) {
+  const dir = path.join(VOICE_TURNS_DIR, sanitizeOptionalId(sessionId, "default"));
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+    .slice(-SESSION_MESSAGE_MAX_LIMIT);
+}
+
 // The exact final transcript of the user's previous turn, for "what did you
 // hear" echo-back. Verbatim — the raw stored transcript, never paraphrased.
 // Skips the current turn and any synthetic "Voice captured." placeholder so the
@@ -9665,6 +9683,11 @@ function sessionContextPayload({ sessionId, branchId = "default", allBranches = 
 }
 
 function listChatTurnRecordsForSession(sessionId, branchId = "", limit = 50) {
+  return listRawChatTurnRecordsForSession(sessionId, branchId, limit)
+    .map(summarizeChatTurnRecord);
+}
+
+function listRawChatTurnRecordsForSession(sessionId, branchId = "", limit = 50) {
   const safeSessionId = sanitizeOptionalId(sessionId, "default");
   const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
   const dir = path.join(CHAT_TURNS_DIR, safeSessionId);
@@ -9687,9 +9710,29 @@ function listChatTurnRecordsForSession(sessionId, branchId = "", limit = 50) {
       if (!branchId) return true;
       return String(record.branch_id || "default") === branchId;
     })
-    .map(summarizeChatTurnRecord)
-    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    .sort((a, b) => String(a.ts || a.created_at || "").localeCompare(String(b.ts || b.created_at || "")))
     .slice(-safeLimit);
+}
+
+function sessionMessagesPayload({ sessionId, branchId = "", limit } = {}) {
+  const safeSessionId = sanitizeOptionalId(sessionId, "default");
+  const safeBranchId = branchId ? sanitizeOptionalId(branchId, "default") : "";
+  const browserRecords = browserTurnStore.listAllBrowserTurns()
+    .filter((record) => String(record.session_id || record.conversation_id || "") === safeSessionId)
+    .slice(0, SESSION_MESSAGE_MAX_LIMIT);
+  const brokerRecords = readBrokerEventRecords()
+    .filter((record) => String(record.session_id || record.conversation_id || "") === safeSessionId)
+    .sort((a, b) => String(a.created_at || a.updated_at || "").localeCompare(String(b.created_at || b.updated_at || "")))
+    .slice(-SESSION_MESSAGE_MAX_LIMIT);
+  return projectSessionMessages({
+    sessionId: safeSessionId,
+    branchId: safeBranchId,
+    limit,
+    voiceTurns: listRawVoiceTurnRecordsForSession(safeSessionId),
+    chatTurns: listRawChatTurnRecordsForSession(safeSessionId, "", SESSION_MESSAGE_MAX_LIMIT),
+    browserTurns: browserRecords,
+    brokerEvents: brokerRecords,
+  });
 }
 
 function readChatTurnLedger() {

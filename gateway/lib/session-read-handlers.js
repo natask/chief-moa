@@ -5,7 +5,7 @@ function createSessionReadHandlers(deps) {
     authorized, sendJson, sendConversation, sessionSummaryPayload, defaultSessionId,
     threadListPayload, threadStore, sanitizeOptionalId, sessionContextPayload,
     listVoiceTurnsForSession, historyMessagesPayload, resolveContextTurnLimit,
-    listChatTurnRecordsForSession, latestContextPayload,
+    listChatTurnRecordsForSession, sessionMessagesPayload, latestContextPayload,
   } = deps;
 
   async function routeSessionReads(request, response, url) {
@@ -17,11 +17,12 @@ function createSessionReadHandlers(deps) {
     const threads = path === "/v1/threads";
     const activeThread = path === "/v1/threads/active";
     const sessionContext = path.startsWith("/v1/sessions/") && path.endsWith("/context");
+    const sessionMessages = path.startsWith("/v1/sessions/") && path.endsWith("/messages");
     const voiceTurns = path.startsWith("/v1/sessions/") && path.endsWith("/turns") && !path.endsWith("/chat-turns");
     const history = path === "/v1/history/messages";
     const chatTurns = path.startsWith("/v1/sessions/") && path.endsWith("/chat-turns");
     const latestContext = path === "/v1/context/latest";
-    if (!(conversation || sessions || sessionDefault || threads || activeThread || sessionContext || voiceTurns || history || chatTurns || latestContext)) return false;
+    if (!(conversation || sessions || sessionDefault || threads || activeThread || sessionContext || sessionMessages || voiceTurns || history || chatTurns || latestContext)) return false;
     if (!authorized(request)) {
       sendJson(response, 401, { error: "missing or invalid gateway token" });
       return true;
@@ -45,6 +46,12 @@ function createSessionReadHandlers(deps) {
         branchId: url.searchParams.get("branch_id") || "default",
         allBranches: ["1", "true"].includes(url.searchParams.get("all_branches")),
         turnLimit: url.searchParams.get("turn_limit"),
+      }));
+    } else if (sessionMessages) {
+      sendJson(response, 200, sessionMessagesPayload({
+        sessionId: decodeSessionPath(path, "/messages"),
+        branchId: url.searchParams.get("branch_id") || "",
+        limit: url.searchParams.get("limit"),
       }));
     } else if (voiceTurns) {
       const sessionId = decodeSessionPath(path, "/turns");
