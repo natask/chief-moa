@@ -435,6 +435,13 @@
       branches, and 100% functions; reduce `content.js` to 3,890 lines and raise
       the exact whole-extension ratchet to 52.36% lines, 34.39% branches, and
       28.87% functions with 47 passing unit tests.
+- [x] 4.4q Extract proactive grant sampling, visibility resume, revocation, and
+      extension-owned confirmation tracking from `content.js` into a focused
+      controller while preserving the trusted-click confirmation boundary.
+      Verify it at 100% lines, 91.01% branches, and 100% functions; reduce
+      `content.js` to 3,721 lines and raise the exact whole-extension ratchet to
+      54.15% lines, 35.61% branches, and 30.50% functions with 48 passing unit
+      tests and a passing real headless-Chromium smoke.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
