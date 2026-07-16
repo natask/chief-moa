@@ -442,6 +442,14 @@
       `content.js` to 3,721 lines and raise the exact whole-extension ratchet to
       54.15% lines, 35.61% branches, and 30.50% functions with 48 passing unit
       tests and a passing real headless-Chromium smoke.
+- [x] 4.4r Extract audio/video note capture state, voice-conflict guards,
+      extension-context failure handling, upload receipts, and video auto-stop
+      coordination from `content.js` while keeping media capture and upload in
+      the background/offscreen authority boundary. Verify the focused runtime
+      at 100% lines, 93.05% branches, and 100% functions; reduce `content.js` to
+      3,583 lines and raise the exact whole-extension ratchet to 55.39% lines,
+      36.59% branches, and 31.68% functions with 49 passing unit tests and a
+      passing real headless-Chromium smoke.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
