@@ -586,7 +586,7 @@ export {
   recoverTurn,
   request,
   restoreFromFloat,
-  setAgentRole,
+  roleForInstruction,
   setStatus,
   startTurn,
   stopPlayback,

@@ -93,7 +93,6 @@ const focusedThresholds = new Map([
   ["extension/options.js", 90],
   ["extension/tweaks.js", 90],
   ["extension/livekit-voice.js", 90],
-  ["extension/proactive-confirm.js", 90],
   ["extension/offscreen-audio-worklet.js", 90],
   ["extension/voice-capture-gesture.js", 90],
   ["extension/voice-draft-protocol.js", 90],

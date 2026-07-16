@@ -88,15 +88,10 @@ class FakeDocument {
 }
 
 const document = new FakeDocument();
-for (const id of ["status", "log", "talk", "form", "text", "sendBtn", "agentModeSelector", "floatBtn"]) {
+for (const id of ["status", "log", "talk", "form", "text", "sendBtn", "floatBtn"]) {
   document.elements.set(id, new FakeElement(id, document));
 }
-for (const role of ["delegate", "help", "collaborate", "explain"]) {
-  const button = new FakeElement(`role-${role}`, document);
-  button.dataset.agentModeOption = role;
-  document.elements.set(button.id, button);
-}
-document.body.append(...["status", "agentModeSelector", "log", "talk", "form", "floatBtn"].map((id) => document.getElementById(id)));
+document.body.append(...["status", "log", "talk", "form", "floatBtn"].map((id) => document.getElementById(id)));
 
 const timers = new Map();
 let nextTimer = 1;
@@ -191,15 +186,10 @@ globalThis.clearTimeout = (id) => timers.delete(id);
 const panel = await import(`../extension/sidepanel.js?test=${Date.now()}`);
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(document.getElementById("status").textContent, "Ready.");
-assert.equal(document.getElementById("agentModeSelector").dataset.agentMode, "help");
-
-panel.setAgentRole("EXPLAIN");
-assert.deepEqual(storageWrites.at(-1), { ageeBrowserAgentRole: "explain" });
-panel.setAgentRole(null, { persist: false });
-panel.setAgentRole("invalid", { persist: false });
-assert.equal(document.getElementById("agentModeSelector").dataset.agentMode, "delegate");
-await document.getElementById("role-help").emit("click");
-assert.equal(document.getElementById("agentModeSelector").dataset.agentMode, "help");
+assert.equal(panel.roleForInstruction("Explain this page"), "explain");
+assert.equal(panel.roleForInstruction("Help me finish this"), "help");
+assert.equal(panel.roleForInstruction("Collaborate with me"), "collaborate");
+assert.equal(panel.roleForInstruction("Open Amazon"), "delegate");
 
 panel.setStatus("Working", "speaking");
 assert.equal(document.getElementById("status").dataset.state, "speaking");
@@ -411,7 +401,6 @@ await document.getElementById("floatBtn").emit("click");
 
 document.getElementById("text").value = " ";
 await document.getElementById("form").emit("submit");
-await document.getElementById("role-help").emit("click");
 document.getElementById("text").value = "Help me";
 await document.getElementById("form").emit("submit");
 await new Promise((resolve) => setImmediate(resolve));
@@ -423,18 +412,17 @@ await document.getElementById("form").emit("submit");
 panel.failTurn(active, "cleanup");
 
 responseOverrides.set("browserRoleTurn", { ok: false });
-document.getElementById("text").value = "Rejected role turn";
+document.getElementById("text").value = "Help me test a rejected role turn";
 await document.getElementById("form").emit("submit");
 await new Promise((resolve) => setImmediate(resolve));
 assert.match(document.getElementById("log").children.at(-1).children[1].textContent, /rejected/);
 responseOverrides.set("browserRoleTurn", { ok: true });
-document.getElementById("text").value = "Default summary";
+document.getElementById("text").value = "Explain the default summary";
 await document.getElementById("form").emit("submit");
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(document.getElementById("log").children.at(-1).children[1].textContent, "Done.");
 responseOverrides.delete("browserRoleTurn");
 
-await document.getElementById("role-delegate").emit("click");
 document.getElementById("text").value = "Delegate this";
 const submit = document.getElementById("form").emit("submit");
 await new Promise((resolve) => setImmediate(resolve));

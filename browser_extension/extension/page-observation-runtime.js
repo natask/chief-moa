@@ -6,6 +6,7 @@
   const SELECTOR =
     'a[href], button, input:not([type=hidden]), textarea, select, [role=button], [role=link], [role=tab], [role=menuitem], [contenteditable=""], [contenteditable=true], [onclick]';
   const DOCUMENT_TEXT_EXCLUDED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS"]);
+  const MAX_OBSERVATION_ANCHORS = 100;
   const RISKY_TEXT = /\b(delete|remove|submit|send|pay|purchase|buy|checkout|confirm|transfer|withdraw|archive|sign out|log out|logout)\b/i;
 
   function createPageObservationRuntime({ window: view, document: doc, documentContextPolicy, now, random } = {}) {
@@ -51,7 +52,7 @@
           text_source: "rendered_dom_inner_text",
           canvas_count: doc.querySelectorAll("canvas").length,
           frame_count: doc.querySelectorAll("iframe,frame").length,
-          virtualized_content_may_require_scroll: doc.documentElement.scrollHeight > view.innerHeight,
+          virtualized_content_may_require_scroll: (doc.documentElement?.scrollHeight || 0) > view.innerHeight,
         },
       };
     }
@@ -87,6 +88,7 @@
         const i = indexed.length;
         indexed.push(element);
         elements.push({ i, tag: element.tagName.toLowerCase(), type: element.getAttribute("type") || "", label: label(element) });
+        if (indexed.length >= MAX_OBSERVATION_ANCHORS) break;
       }
       const capturedAt = clock().toISOString();
       return {
@@ -111,5 +113,8 @@
     return Object.freeze({ snapshot, elementAt: (index) => indexed[index], label, needsConfirmation });
   }
 
-  global.AgeePageObservationRuntime = Object.freeze({ createPageObservationRuntime });
+  global.AgeePageObservationRuntime = Object.freeze({
+    createPageObservationRuntime,
+    maxObservationAnchors: MAX_OBSERVATION_ANCHORS,
+  });
 })(typeof globalThis !== "undefined" ? globalThis : this);
