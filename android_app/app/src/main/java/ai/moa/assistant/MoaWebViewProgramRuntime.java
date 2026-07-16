@@ -1,206 +1,175 @@
 package ai.moa.assistant;
 
-import android.annotation.SuppressLint;
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
-import android.webkit.JavascriptInterface;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
+import android.os.Message;
+import android.os.Messenger;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
 
-/** A fresh, non-visible, offline WebView+WebWorker realm for one Android program. */
+/** Main-process coordinator for one independently terminable dedicated-process WebView worker. */
 final class MoaWebViewProgramRuntime {
     interface Callback { void finished(JSONObject terminalReceipt, JSONArray toolReceipts); }
+    interface EngineListener { void call(String payload); void finish(String payload); }
+    interface Engine { void start(String source, JSONArray allowed, EngineListener listener); void respond(JSONObject payload); void stop(); }
 
-    private final Context context;
     private final Handler mainHandler;
     private final MoaAndroidProgramHost host;
     private final MoaSurfaceProgramStore store;
-    private WebView webView;
+    private final Engine engine;
     private Execution execution;
 
     MoaWebViewProgramRuntime(Context context, MoaAndroidProgramHost host, MoaSurfaceProgramStore store) {
-        this.context = context.getApplicationContext();
-        this.host = host;
-        this.store = store;
-        this.mainHandler = new Handler(Looper.getMainLooper());
+        this(host, store, new ServiceEngine(context.getApplicationContext()));
+    }
+    MoaWebViewProgramRuntime(MoaAndroidProgramHost host, MoaSurfaceProgramStore store, Engine engine) {
+        this.host = host; this.store = store; this.engine = engine; this.mainHandler = new Handler(Looper.getMainLooper());
     }
 
-    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
-    void execute(MoaSurfaceProgramContract.Proposal proposal, String clientInstanceId, Callback callback) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post(() -> execute(proposal, clientInstanceId, callback));
-            return;
-        }
-        stop("replaced");
-        Execution target = new Execution(proposal, clientInstanceId, callback);
+    void execute(MoaSurfaceProgramContract.Proposal proposal, String clientId, Callback callback) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { mainHandler.post(() -> execute(proposal, clientId, callback)); return; }
+        stop("user_stop");
+        Execution target = new Execution(proposal, clientId, callback);
         execution = target;
-        webView = new WebView(context);
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
-        settings.setBlockNetworkLoads(true);
-        settings.setDomStorageEnabled(false);
-        settings.setDatabaseEnabled(false);
-        settings.setGeolocationEnabled(false);
-        settings.setMediaPlaybackRequiresUserGesture(true);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setSaveFormData(false);
-        webView.clearCache(true);
-        webView.clearHistory();
-        webView.addJavascriptInterface(new Bridge(target), "AndroidBridge");
-        webView.setWebViewClient(new WebViewClient());
-        webView.loadDataWithBaseURL("about:blank", asset("moa_program_runtime.html"), "text/html", "UTF-8", null);
+        engine.start(proposal.source, new JSONArray(proposal.allowedCapabilityIds), new EngineListener() {
+            public void call(String payload) { mainHandler.post(() -> target.call(payload)); }
+            public void finish(String payload) { mainHandler.post(() -> target.workerFinished(payload)); }
+        });
         mainHandler.postDelayed(() -> timeout(target), proposal.limits.wallMs);
     }
 
     void stop(String reason) {
         Execution active = execution;
-        if (active != null && !active.terminal) active.finish(false, "stopped", "stopped", reason, null);
-        destroyWebView();
+        if (active != null && !active.terminal) active.finish("stopped", "surface_shutdown".equals(reason) || "overlay_stopped".equals(reason) ? "surface_shutdown" : "user_stop", null);
+        engine.stop();
+        execution = null;
     }
 
     private void timeout(Execution target) {
         if (target == null || execution != target || target.terminal) return;
-        target.finish(false, "timed_out", "timed_out", "Program exceeded its wall-clock limit.", null);
-        destroyWebView();
-    }
-
-    private void destroyWebView() {
-        if (webView != null) {
-            webView.evaluateJavascript("window.__moaStop && window.__moaStop()", null);
-            webView.removeJavascriptInterface("AndroidBridge");
-            webView.stopLoading();
-            webView.destroy();
-            webView = null;
-        }
+        engine.stop();
+        target.finish("timed_out", "timeout", null);
         execution = null;
-    }
-
-    private String asset(String name) {
-        try (InputStream input = context.getAssets().open(name); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[4096]; int count;
-            while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
-            return output.toString(StandardCharsets.UTF_8.name());
-        } catch (Exception error) { throw new IllegalStateException("Missing local runtime asset", error); }
-    }
-
-    private final class Bridge {
-        private final Execution target;
-        Bridge(Execution target) { this.target = target; }
-
-        @JavascriptInterface public void ready() {
-            mainHandler.post(() -> {
-                if (execution != target || target.terminal || webView == null) return;
-                JSONObject config = object("source", target.proposal.source,
-                        "allowed_capability_ids", new JSONArray(target.proposal.allowedCapabilityIds));
-                webView.evaluateJavascript("window.__moaStart(" + config + ")", null);
-            });
-        }
-
-        @JavascriptInterface public void call(String payload) {
-            mainHandler.post(() -> target.call(payload));
-        }
-
-        @JavascriptInterface public void finish(String payload) {
-            mainHandler.post(() -> {
-                if (execution != target || target.terminal) return;
-                try {
-                    JSONObject message = new JSONObject(payload);
-                    boolean ok = message.optBoolean("ok", false);
-                    Object result = message.opt("result");
-                    target.finish(ok, ok ? "completed" : "failed", message.optString("code", ok ? "" : "program_failed"),
-                            ok ? "Android local program completed." : message.optString("error", "Program failed."), result);
-                } catch (Exception error) {
-                    target.finish(false, "failed", "invalid_worker_result", "Worker returned an invalid result.", null);
-                }
-                destroyWebView();
-            });
-        }
     }
 
     private final class Execution {
         final MoaSurfaceProgramContract.Proposal proposal;
-        final String clientInstanceId;
+        final String clientId;
         final Callback callback;
         final JSONArray receipts = new JSONArray();
         final Set<String> callIds = new HashSet<>();
         final long startedAtMs = System.currentTimeMillis();
-        int calls, activeCalls;
+        int calls;
         boolean terminal;
         String previousReceiptDigest = "";
+        String lastStateDigest;
 
-        Execution(MoaSurfaceProgramContract.Proposal proposal, String clientInstanceId, Callback callback) {
-            this.proposal = proposal; this.clientInstanceId = clientInstanceId; this.callback = callback;
+        Execution(MoaSurfaceProgramContract.Proposal proposal, String clientId, Callback callback) {
+            this.proposal = proposal; this.clientId = clientId; this.callback = callback; this.lastStateDigest = proposal.observationDigest;
         }
 
         void call(String payload) {
-            if (terminal || execution != this || webView == null) return;
+            if (terminal || execution != this) return;
             long started = System.currentTimeMillis();
             JSONObject message;
-            try { message = new JSONObject(payload); } catch (Exception error) { finish(false, "failed", "invalid_tool_call", "Worker emitted invalid tool JSON.", null); return; }
+            try { message = new JSONObject(payload); } catch (Exception error) { finish("failed", "runtime_failed", null); return; }
             String callId = message.optString("call_id", "");
             String capabilityId = message.optString("capability_id", "");
             JSONObject input = message.optJSONObject("input");
             if (input == null) input = new JSONObject();
-            if (callId.isEmpty() || !callIds.add(callId) || ++calls > proposal.limits.toolCalls || ++activeCalls > proposal.limits.parallelCalls) {
-                activeCalls = Math.max(0, activeCalls - 1);
-                respond(callId, false, null, "budget_exceeded", "rejected", "Local tool budget exceeded.");
-                return;
-            }
+            if (callId.isEmpty() || !callIds.add(callId)) { finish("failed", "runtime_failed", null); return; }
+            if (++calls > proposal.limits.toolCalls) { finish("failed", "limit_exceeded", null); return; }
+            String inputDigest;
+            try { inputDigest = MoaProgramJson.sha256(MoaProgramJson.canonical(input)); }
+            catch (Exception error) { respond(callId, false, null, "invalid_input", "rejected", "Capability input was rejected."); return; }
+            boolean effectful = MoaScriptExecutionCatalog.isMutation(capabilityId);
+            if (!store.beginTool(proposal, clientId, callId, capabilityId, inputDigest, effectful, started)) { finish("failed", "receipt_failed", null); return; }
             MoaAndroidProgramHost.HostResult result = host.call(proposal, capabilityId, input);
-            activeCalls--;
-            String dataDigest = result.data == null ? "" : MoaProgramJson.sha256(MoaProgramJson.canonical(result.data));
-            JSONObject receipt = MoaSurfaceProgramReceipts.tool(proposal, clientInstanceId, callId, 1, capabilityId, input,
-                    result.status, result.summary, dataDigest, previousReceiptDigest, started, System.currentTimeMillis());
+            long finished = System.currentTimeMillis();
+            JSONObject receipt;
+            try { receipt = MoaSurfaceProgramReceipts.toolBound(proposal, clientId, callId, 1, capabilityId, input,
+                    result.status, previousReceiptDigest, lastStateDigest, result.postStateSha256, started, finished); }
+            catch (Exception error) { finish(effectful ? "indeterminate" : "failed", effectful ? "indeterminate" : "receipt_failed", null); return; }
+            if (!store.finishTool(proposal, clientId, callId, capabilityId, receipt, finished)) { finish(effectful ? "indeterminate" : "failed", effectful ? "indeterminate" : "receipt_failed", null); return; }
             previousReceiptDigest = receipt.optString("receipt_sha256", "");
+            if (result.postStateSha256 != null) lastStateDigest = result.postStateSha256;
             receipts.put(receipt);
-            if (!store.recordToolReceipt(proposal, receipt)) {
-                finish(false, "indeterminate", "durable_tool_receipt_failed", "Tool receipt could not be persisted before returning its result.", null);
-                destroyWebView();
+            if (result.isAuthorityDenial()) {
+                engine.stop();
+                finish("rejected", "policy_denied", null);
+                execution = null;
                 return;
             }
             respond(callId, result.ok, result.data, result.code, result.status, result.summary);
         }
 
-        void respond(String callId, boolean ok, JSONObject data, String code, String status, String summary) {
-            if (webView == null) return;
-            JSONObject response = object("type", "response", "call_id", callId, "ok", ok,
-                    "data", data == null ? JSONObject.NULL : data, "code", code, "status", status, "error", summary);
-            webView.evaluateJavascript("window.__moaResolve(" + response + ")", null);
+        void workerFinished(String payload) {
+            if (terminal || execution != this) return;
+            try {
+                JSONObject message = new JSONObject(payload);
+                boolean ok = message.optBoolean("ok", false);
+                String code = message.optString("code", "");
+                boolean policyDenied = !ok && "policy_denied".equals(code);
+                finish(ok ? "completed" : policyDenied ? "rejected" : "failed",
+                        ok ? null : policyDenied ? "policy_denied" : "runtime_failed", message.opt("result"));
+            } catch (Exception error) { finish("failed", "runtime_failed", null); }
+            engine.stop(); execution = null;
         }
 
-        void finish(boolean ok, String status, String code, String summary, Object rawResult) {
+        void respond(String callId, boolean ok, JSONObject data, String code, String status, String summary) {
+            try { engine.respond(new JSONObject().put("type", "response").put("call_id", callId).put("ok", ok)
+                    .put("data", data == null ? JSONObject.NULL : data).put("code", code).put("status", status)
+                    .put("error", ok ? JSONObject.NULL : safeToolError(status))); }
+            catch (Exception error) { finish("failed", "runtime_failed", null); }
+        }
+
+        void finish(String status, String code, Object rawResult) {
             if (terminal) return;
             terminal = true;
-            String canonicalResult;
-            try { canonicalResult = MoaProgramJson.canonical(rawResult); } catch (Exception error) { canonicalResult = "null"; ok = false; status = "failed"; code = "invalid_result"; summary = "Program returned an unsupported result."; }
-            if (canonicalResult.getBytes(StandardCharsets.UTF_8).length > proposal.limits.resultBytes) { ok = false; status = "failed"; code = "result_too_large"; summary = "Program result exceeded its byte limit."; canonicalResult = "null"; }
-            JSONObject terminalReceipt = MoaSurfaceProgramReceipts.terminal(proposal, clientInstanceId, status, summary,
-                    ok ? MoaProgramJson.sha256(canonicalResult) : "", ok ? "" : code, ok ? "" : summary,
-                    receipts, startedAtMs, System.currentTimeMillis());
-            callback.finished(terminalReceipt, receipts);
+            try {
+                String canonical = MoaProgramJson.canonical(rawResult);
+                if (canonical.getBytes(StandardCharsets.UTF_8).length > proposal.limits.resultBytes) { status = "failed"; code = "limit_exceeded"; }
+            } catch (Exception error) { status = "failed"; code = "runtime_failed"; }
+            JSONObject terminalReceipt = MoaSurfaceProgramReceipts.terminal(proposal, clientId, status, receipts,
+                    startedAtMs, System.currentTimeMillis(), lastStateDigest, code);
+            if (store.recordTerminal(proposal, clientId, terminalReceipt)) callback.finished(terminalReceipt, receipts);
         }
     }
 
-    private static JSONObject object(Object... pairs) {
-        JSONObject result = new JSONObject();
-        try {
-            for (int i = 0; i < pairs.length; i += 2) result.put(String.valueOf(pairs[i]), pairs[i + 1]);
-            return result;
-        } catch (Exception error) {
-            throw new IllegalStateException("Unable to encode local runtime message", error);
+    private static String safeToolError(String status) { return "stale_state".equals(status) ? "Bound state is stale." : "Local capability ended without success."; }
+
+    /** Messenger client; the WebView and renderer exist only in :moa_program_runtime. */
+    static final class ServiceEngine implements Engine, ServiceConnection, Handler.Callback {
+        private final Context context;
+        private final Messenger inbound;
+        private Messenger service;
+        private EngineListener listener;
+        private String source;
+        private JSONArray allowed;
+        private boolean bound;
+
+        ServiceEngine(Context context) { this.context = context; inbound = new Messenger(new Handler(Looper.getMainLooper(), this)); }
+        public void start(String source, JSONArray allowed, EngineListener listener) {
+            stop(); this.source = source; this.allowed = allowed; this.listener = listener;
+            bound = context.bindService(new Intent(context, MoaProgramRuntimeService.class), this, Context.BIND_AUTO_CREATE);
+            if (!bound) listener.finish("{\"type\":\"terminal\",\"ok\":false,\"code\":\"runtime_failed\"}");
         }
+        public void respond(JSONObject payload) { send(MoaProgramRuntimeService.RESPONSE, payload.toString()); }
+        public void stop() { send(MoaProgramRuntimeService.STOP, null); if (bound) { try { context.unbindService(this); } catch (Exception ignored) {} } bound = false; service = null; listener = null; }
+        public void onServiceConnected(ComponentName name, IBinder binder) { service = new Messenger(binder); Bundle data = new Bundle(); data.putString("source", source); data.putString("allowed_capability_ids", allowed.toString()); Message message = Message.obtain(null, MoaProgramRuntimeService.START); message.setData(data); message.replyTo = inbound; try { service.send(message); } catch (Exception error) { if (listener != null) listener.finish("{\"type\":\"terminal\",\"ok\":false,\"code\":\"runtime_failed\"}"); } }
+        public void onServiceDisconnected(ComponentName name) { service = null; if (listener != null) listener.finish("{\"type\":\"terminal\",\"ok\":false,\"code\":\"runtime_failed\"}"); }
+        public boolean handleMessage(Message message) { EngineListener target = listener; if (target == null) return true; String payload = message.getData().getString("payload", ""); if (message.what == MoaProgramRuntimeService.CALL) target.call(payload); else if (message.what == MoaProgramRuntimeService.FINISH) target.finish(payload); return true; }
+        private void send(int what, String payload) { if (service == null) return; Message message = Message.obtain(null, what); if (payload != null) { Bundle data = new Bundle(); data.putString("payload", payload); message.setData(data); } try { service.send(message); } catch (Exception ignored) {} }
     }
 }
