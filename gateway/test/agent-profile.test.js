@@ -7,6 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 const {
   createAgentProfileStore,
+  MANAGED_PROFILE_FIELDS,
   PROFILE_FIELDS,
   CORE_VOICES,
   normalizeVoice,
@@ -73,6 +74,41 @@ test("exported identity, device, voice, and prompt normalization fail closed", (
   ]) {
     assert.equal(withRequiredVoiceStyle(prompt), prompt);
   }
+});
+
+test("generic reset, rollback, and undo preserve companion-runtime identity atomically", (t) => {
+  const active = {
+    active_companion_id: "pet_one",
+    active_companion_name: "Buddy",
+    active_companion_source: "library",
+    active_companion_version: "v2",
+  };
+  for (const operation of ["reset", "rollback", "revert"]) {
+    const { store } = harness(t);
+    const baseline = store.currentVersion();
+    store.patch({ ...active, model: "companion-model" }, { source: "verified-companion-package" });
+    const beforeCount = store.versions().length;
+    if (operation === "reset") store.reset({ source: "api" });
+    if (operation === "rollback") store.rollback(baseline, { source: "api" });
+    if (operation === "revert") assert.equal(store.revertLast({ source: "voice" }).ok, true);
+    const after = store.effective();
+    for (const field of MANAGED_PROFILE_FIELDS) assert.equal(after[field], active[field], `${operation} changed ${field}`);
+    assert.equal(store.versions().length, beforeCount + 1, `${operation} must append one atomic version`);
+    assert.ok(store.versions({ limit: 1 })[0].changed.every((field) => !MANAGED_PROFILE_FIELDS.includes(field)));
+  }
+});
+
+test("device reset and undo preserve device companion-runtime identity", (t) => {
+  const { store } = harness(t);
+  const deviceId = "managed-device";
+  const active = { active_companion_id: "pet_device", active_companion_name: "Scout",
+    active_companion_source: "library", active_companion_version: "v3" };
+  store.patch({ ...active, model: "device-model" }, { source: "verified-companion-package", scope: "device", deviceId });
+  assert.equal(store.revertLast({ source: "voice", scope: "device", deviceId }).ok, true);
+  for (const field of MANAGED_PROFILE_FIELDS) assert.equal(store.effective({ deviceId })[field], active[field]);
+  store.patch({ model: "another-model" }, { scope: "device", deviceId });
+  store.reset({ source: "api", scope: "device", deviceId });
+  for (const field of MANAGED_PROFILE_FIELDS) assert.equal(store.effective({ deviceId })[field], active[field]);
 });
 
 test("fresh global profile exposes defaults and no-op reads without persistence", (t) => {
@@ -159,7 +195,8 @@ test("global patch accepts every profile field, versions changes, rolls back, re
   assert.equal(store.effective().model, "model-default");
   store.reset();
   assert.equal(store.effective().model, "model-default");
-  assert.equal(fs.existsSync(store.profilePath), false);
+  assert.equal(store.effective().active_companion_id, "pet_one");
+  assert.equal(fs.existsSync(store.profilePath), true);
   assert.equal(fs.existsSync(store.versionsPath), true);
 });
 
