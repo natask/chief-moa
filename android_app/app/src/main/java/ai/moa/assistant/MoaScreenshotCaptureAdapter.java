@@ -30,7 +30,7 @@ final class MoaScreenshotCaptureAdapter {
     void capture(MoaScreenshotPolicy.Request request, Callback callback) {
         long nowMs = System.currentTimeMillis();
         MoaScreenshotPolicy.Observation initial = currentObservation(nowMs);
-        MoaScreenshotPolicy.DenialReason denial = MoaScreenshotPolicy.authorize(request, initial, nowMs);
+        MoaScreenshotPolicy.DenialReason denial = MoaScreenshotPolicy.authorizeAndConsume(request, initial, nowMs);
         if (denial != MoaScreenshotPolicy.DenialReason.NONE) {
             callback.onDenied(denial);
             return;

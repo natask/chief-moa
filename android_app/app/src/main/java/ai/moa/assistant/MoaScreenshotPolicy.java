@@ -1,6 +1,7 @@
 package ai.moa.assistant;
 
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class MoaScreenshotPolicy {
     static final int MAX_WIDTH = 1280;
@@ -14,6 +15,7 @@ final class MoaScreenshotPolicy {
     enum DenialReason {
         NONE,
         CONSENT_REQUIRED,
+        CONSENT_ALREADY_USED,
         UNSUPPORTED_ANDROID_VERSION,
         ACCESSIBILITY_UNAVAILABLE,
         TARGET_REQUIRED,
@@ -26,14 +28,25 @@ final class MoaScreenshotPolicy {
     }
 
     static final class Request {
-        final boolean explicitConsent;
         final String expectedPackage;
         final long requestedAtMs;
+        private final AtomicBoolean consumed = new AtomicBoolean(false);
 
-        Request(boolean explicitConsent, String expectedPackage, long requestedAtMs) {
-            this.explicitConsent = explicitConsent;
+        private Request(String expectedPackage, long requestedAtMs) {
             this.expectedPackage = normalizePackage(expectedPackage);
             this.requestedAtMs = requestedAtMs;
+        }
+
+        static Request issueExplicitConsent(String expectedPackage, long requestedAtMs) {
+            return new Request(expectedPackage, requestedAtMs);
+        }
+
+        private boolean consume() {
+            return consumed.compareAndSet(false, true);
+        }
+
+        private boolean isConsumed() {
+            return consumed.get();
         }
     }
 
@@ -62,10 +75,24 @@ final class MoaScreenshotPolicy {
     private MoaScreenshotPolicy() {
     }
 
-    static DenialReason authorize(Request request, Observation observation, long nowMs) {
-        if (request == null || !request.explicitConsent) {
+    static DenialReason authorizeAndConsume(Request request, Observation observation, long nowMs) {
+        if (request == null) {
             return DenialReason.CONSENT_REQUIRED;
         }
+        if (!request.consume()) {
+            return DenialReason.CONSENT_ALREADY_USED;
+        }
+        return validateBoundaries(request, observation, nowMs);
+    }
+
+    static DenialReason revalidate(Request request, Observation observation, long nowMs) {
+        if (request == null || !request.isConsumed()) {
+            return DenialReason.CONSENT_REQUIRED;
+        }
+        return validateBoundaries(request, observation, nowMs);
+    }
+
+    private static DenialReason validateBoundaries(Request request, Observation observation, long nowMs) {
         if (request.expectedPackage.isEmpty()) {
             return DenialReason.TARGET_REQUIRED;
         }
@@ -85,10 +112,6 @@ final class MoaScreenshotPolicy {
             return DenialReason.STALE_OBSERVATION;
         }
         return DenialReason.NONE;
-    }
-
-    static DenialReason revalidate(Request request, Observation observation, long nowMs) {
-        return authorize(request, observation, nowMs);
     }
 
     static int[] boundedDimensions(int width, int height) {

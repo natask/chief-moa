@@ -2,6 +2,13 @@ package ai.moa.assistant;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -11,25 +18,80 @@ public final class MoaScreenshotPolicyTest {
     private static final long NOW = 10_000L;
 
     @Test
-    public void allowsExplicitFreshMatchingNonSecureCapture() {
+    public void allowsExplicitFreshMatchingNonSecureCaptureOnce() {
+        MoaScreenshotPolicy.Request request = request(" Com.Example.Mail ", NOW);
+
         assertEquals(MoaScreenshotPolicy.DenialReason.NONE, authorize(
-                request(true, " Com.Example.Mail ", NOW),
+                request,
+                observation(true, true, "com.example.mail", NOW, false),
+                NOW
+        ));
+        assertEquals(MoaScreenshotPolicy.DenialReason.CONSENT_ALREADY_USED, authorize(
+                request,
+                observation(true, true, "com.example.mail", NOW, false),
+                NOW
+        ));
+    }
+
+    @Test(timeout = 5_000L)
+    public void concurrentReplayAuthorizesExactlyOnce() throws Exception {
+        int workers = 24;
+        MoaScreenshotPolicy.Request request = request("com.example.mail", NOW);
+        MoaScreenshotPolicy.Observation observation = observation(
+                true, true, "com.example.mail", NOW, false);
+        ExecutorService executor = Executors.newFixedThreadPool(workers);
+        CountDownLatch ready = new CountDownLatch(workers);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<MoaScreenshotPolicy.DenialReason>> results = new ArrayList<>();
+        try {
+            for (int index = 0; index < workers; index++) {
+                results.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return authorize(request, observation, NOW);
+                }));
+            }
+            ready.await();
+            start.countDown();
+
+            int authorized = 0;
+            int replayDenied = 0;
+            for (Future<MoaScreenshotPolicy.DenialReason> result : results) {
+                MoaScreenshotPolicy.DenialReason reason = result.get();
+                if (reason == MoaScreenshotPolicy.DenialReason.NONE) {
+                    authorized++;
+                } else if (reason == MoaScreenshotPolicy.DenialReason.CONSENT_ALREADY_USED) {
+                    replayDenied++;
+                }
+            }
+            assertEquals(1, authorized);
+            assertEquals(workers - 1, replayDenied);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    public void deniedAttemptAlsoBurnsOneShotConsent() {
+        MoaScreenshotPolicy.Request request = request("com.example.mail", NOW);
+        assertEquals(MoaScreenshotPolicy.DenialReason.TARGET_MISMATCH, authorize(
+                request,
+                observation(true, true, "com.example.bank", NOW, false),
+                NOW
+        ));
+        assertEquals(MoaScreenshotPolicy.DenialReason.CONSENT_ALREADY_USED, authorize(
+                request,
                 observation(true, true, "com.example.mail", NOW, false),
                 NOW
         ));
     }
 
     @Test
-    public void requiresOneShotExplicitConsentAndTarget() {
-        assertEquals(MoaScreenshotPolicy.DenialReason.CONSENT_REQUIRED, authorize(
-                request(false, "com.example.mail", NOW),
-                observation(true, true, "com.example.mail", NOW, false),
-                NOW
-        ));
+    public void requiresIssuedConsentAndTarget() {
         assertEquals(MoaScreenshotPolicy.DenialReason.CONSENT_REQUIRED,
-                MoaScreenshotPolicy.authorize(null, null, NOW));
+                MoaScreenshotPolicy.authorizeAndConsume(null, null, NOW));
         assertEquals(MoaScreenshotPolicy.DenialReason.TARGET_REQUIRED, authorize(
-                request(true, "  ", NOW),
+                request("  ", NOW),
                 observation(true, true, "", NOW, false),
                 NOW
         ));
@@ -38,28 +100,23 @@ public final class MoaScreenshotPolicyTest {
     @Test
     public void deniesUnavailableAndUnsupportedPlatform() {
         assertEquals(MoaScreenshotPolicy.DenialReason.ACCESSIBILITY_UNAVAILABLE, authorize(
-                request(true, "com.example.mail", NOW),
+                request("com.example.mail", NOW),
                 observation(false, true, "com.example.mail", NOW, false),
                 NOW
         ));
         assertEquals(MoaScreenshotPolicy.DenialReason.ACCESSIBILITY_UNAVAILABLE,
-                MoaScreenshotPolicy.authorize(request(true, "com.example.mail", NOW), null, NOW));
+                authorize(request("com.example.mail", NOW), null, NOW));
         assertEquals(MoaScreenshotPolicy.DenialReason.UNSUPPORTED_ANDROID_VERSION, authorize(
-                request(true, "com.example.mail", NOW),
+                request("com.example.mail", NOW),
                 observation(true, false, "com.example.mail", NOW, false),
                 NOW
         ));
     }
 
     @Test
-    public void deniesMismatchedOrSecureTarget() {
-        assertEquals(MoaScreenshotPolicy.DenialReason.TARGET_MISMATCH, authorize(
-                request(true, "com.example.mail", NOW),
-                observation(true, true, "com.example.bank", NOW, false),
-                NOW
-        ));
+    public void deniesSecureTarget() {
         assertEquals(MoaScreenshotPolicy.DenialReason.SECURE_CONTENT, authorize(
-                request(true, "com.example.mail", NOW),
+                request("com.example.mail", NOW),
                 observation(true, true, "com.example.mail", NOW, true),
                 NOW
         ));
@@ -75,10 +132,26 @@ public final class MoaScreenshotPolicyTest {
     }
 
     @Test
-    public void revalidationUsesSameFailClosedRules() {
+    public void revalidationRequiresConsumedGrantThenPreservesBoundaryChecks() {
+        MoaScreenshotPolicy.Request unconsumed = request("com.example.mail", NOW);
+        assertEquals(MoaScreenshotPolicy.DenialReason.CONSENT_REQUIRED,
+                MoaScreenshotPolicy.revalidate(
+                        unconsumed,
+                        observation(true, true, "com.example.mail", NOW, false),
+                        NOW
+                ));
+        assertEquals(MoaScreenshotPolicy.DenialReason.CONSENT_REQUIRED,
+                MoaScreenshotPolicy.revalidate(null, null, NOW));
+
+        MoaScreenshotPolicy.Request consumed = request("com.example.mail", NOW);
+        assertEquals(MoaScreenshotPolicy.DenialReason.NONE, authorize(
+                consumed,
+                observation(true, true, "com.example.mail", NOW, false),
+                NOW
+        ));
         assertEquals(MoaScreenshotPolicy.DenialReason.TARGET_MISMATCH,
                 MoaScreenshotPolicy.revalidate(
-                        request(true, "com.example.mail", NOW),
+                        consumed,
                         observation(true, true, "com.example.chat", NOW, false),
                         NOW
                 ));
@@ -113,7 +186,7 @@ public final class MoaScreenshotPolicyTest {
 
     private static void assertStale(long observedAt, long requestedAt, long now) {
         assertEquals(MoaScreenshotPolicy.DenialReason.STALE_OBSERVATION, authorize(
-                request(true, "com.example.mail", requestedAt),
+                request("com.example.mail", requestedAt),
                 observation(true, true, "com.example.mail", observedAt, false),
                 now
         ));
@@ -124,11 +197,11 @@ public final class MoaScreenshotPolicyTest {
             MoaScreenshotPolicy.Observation observation,
             long now
     ) {
-        return MoaScreenshotPolicy.authorize(request, observation, now);
+        return MoaScreenshotPolicy.authorizeAndConsume(request, observation, now);
     }
 
-    private static MoaScreenshotPolicy.Request request(boolean consent, String packageName, long requestedAt) {
-        return new MoaScreenshotPolicy.Request(consent, packageName, requestedAt);
+    private static MoaScreenshotPolicy.Request request(String packageName, long requestedAt) {
+        return MoaScreenshotPolicy.Request.issueExplicitConsent(packageName, requestedAt);
     }
 
     private static MoaScreenshotPolicy.Observation observation(
