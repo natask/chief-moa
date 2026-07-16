@@ -1,1 +1,2 @@
+- Added a durable capture-block lifecycle over stored audio with retryable STT, immutable literal transcripts, revisions, and tombstones — agent: Codex/GPT-5 — f2c52a61
 - Exposed validated immutable gateway build identity in health and wired it into VPS image builds — agent: Codex/GPT-5 — fdb3c329df0046c1e92ce64755cc01ff8366f8c9
