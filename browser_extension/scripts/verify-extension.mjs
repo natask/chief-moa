@@ -206,7 +206,7 @@ if (
   /seedGatewayConfig\s*\(/.test(backgroundSource) ||
   !/BACKGROUND_AUTOMATION_CONSENT_VERSION = 1/.test(backgroundSource) ||
   !/return false;\s*\n\s*}\s*\n}\s*\n\s*async function pollBrowserTasks/.test(backgroundSource) ||
-  !/if \(!\(await isBackgroundAutomationEnabled\(\)\)\) return;[\s\S]{0,180}\/v1\/tool\/requests\/claim/.test(backgroundSource)
+  !/if \(!\(await isBackgroundAutomationEnabled\(\)\)\) return;[\s\S]{0,900}\/v1\/tool\/requests\/claim/.test(backgroundSource)
 ) {
   throw new Error("background privacy migration or automation gate is missing");
 }

@@ -36,6 +36,7 @@ import {
   CAPABILITIES as SURFACE_PROGRAM_CAPABILITIES,
   SURFACE_PROGRAM_TOOL,
   browserProgramRuntimeManifest,
+  capabilityDefinition as surfaceProgramCapabilityDefinition,
   sha256 as surfaceProgramSha256,
   validateSurfaceProgramEnvelope,
 } from "./surface-program-contract.js";
@@ -676,6 +677,10 @@ async function pollBrowserToolRequests() {
     if (!(await isBackgroundAutomationEnabled())) return;
     const cfg = await getConfig();
     if (!cfg.gatewayUrl) return;
+    const pendingRecords = await readSurfaceProgramRecords();
+    for (const [key, record] of Object.entries(pendingRecords)) {
+      if (Array.isArray(record?.outbox) && record.outbox.length) await flushSurfaceProgramOutbox(key, cfg);
+    }
     const deviceId = await getStableDeviceId();
     const claimed = await callGateway(cfg, "/v1/tool/requests/claim", {
       body: {
@@ -687,10 +692,8 @@ async function pollBrowserToolRequests() {
     });
     const request = claimed?.request;
     if (!request?.id) return;
-    const receipt = await executeBrowserToolRequest(request, deviceId);
-    await callGateway(cfg, `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, {
-      body: request.tool === SURFACE_PROGRAM_TOOL ? receipt : { device_id: deviceId, ...receipt },
-    });
+    const receipt = await executeBrowserToolRequest(request, deviceId, cfg);
+    if (request.tool !== SURFACE_PROGRAM_TOOL) await callGateway(cfg, `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, { body: { device_id: deviceId, ...receipt } });
   } catch {
     // Background polling stays quiet; claimed work reports through receipts.
   } finally {
@@ -708,25 +711,64 @@ async function writeSurfaceProgramRecord(key, record) {
   const update = surfaceProgramRecordWriteTail.then(async () => {
     const records = await readSurfaceProgramRecords();
     records[key] = record;
-    const ordered = Object.entries(records).sort((a, b) => String(b[1]?.updated_at || "").localeCompare(String(a[1]?.updated_at || ""))).slice(0, 100);
-    await chrome.storage.local.set({ [SURFACE_PROGRAM_RECORDS_KEY]: Object.fromEntries(ordered) });
+    await chrome.storage.local.set({ [SURFACE_PROGRAM_RECORDS_KEY]: records });
   });
   surfaceProgramRecordWriteTail = update.catch(() => {});
   return update;
 }
 
-async function appendSurfaceProgramToolReceipt(key, receipt) {
+async function appendSurfaceProgramToolReceipt(key, receipt, requestId = "") {
   const update = surfaceProgramRecordWriteTail.then(async () => {
     const records = await readSurfaceProgramRecords();
     const current = records[key];
     if (!current || current.status !== "pending") throw new Error("surface_program_pending_record_missing");
     const toolReceipts = Array.isArray(current.tool_receipts) ? current.tool_receipts : [];
-    records[key] = { ...current, tool_receipts: [...toolReceipts, receipt], updated_at: receipt.finished_at };
+    const outbox = Array.isArray(current.outbox) ? current.outbox : [];
+    records[key] = { ...current, tool_receipts: [...toolReceipts, receipt], outbox: requestId ? [...outbox, { id: receipt.receipt_id, path: `/v1/tool/requests/${encodeURIComponent(requestId)}/tool-receipts`, body: receipt }] : outbox, updated_at: receipt.finished_at };
     await chrome.storage.local.set({ [SURFACE_PROGRAM_RECORDS_KEY]: records });
   });
   surfaceProgramRecordWriteTail = update.catch(() => {});
   await update;
   return receipt;
+}
+
+async function appendSurfaceProgramEvent(key, envelope, deviceId, kind, payload, requestId = "") {
+  const update = surfaceProgramRecordWriteTail.then(async () => {
+    const records = await readSurfaceProgramRecords();
+    const current = records[key];
+    if (!current) throw new Error("surface_program_record_missing");
+    const events = Array.isArray(current.events) ? current.events : [];
+    const event = {
+      version: 1, type: "surface.execution.event", event_id: `event_${crypto.randomUUID()}`,
+      execution_id: envelope.execution_id, sequence: events.length + 1, kind, occurred_at: new Date().toISOString(),
+      claimant: { surface_type: "browser_extension", device_id: deviceId, client_instance_id: BROWSER_TASK_CLIENT_ID }, payload,
+    };
+    const outbox = Array.isArray(current.outbox) ? current.outbox : [];
+    records[key] = { ...current, events: [...events, event], outbox: requestId ? [...outbox, { id: event.event_id, path: `/v1/tool/requests/${encodeURIComponent(requestId)}/events`, body: event }] : outbox, updated_at: event.occurred_at };
+    await chrome.storage.local.set({ [SURFACE_PROGRAM_RECORDS_KEY]: records });
+    return event;
+  });
+  surfaceProgramRecordWriteTail = update.catch(() => {});
+  return update;
+}
+
+async function flushSurfaceProgramOutbox(key, cfg) {
+  if (!cfg) return false;
+  while (true) {
+    const current = (await readSurfaceProgramRecords())[key];
+    const item = Array.isArray(current?.outbox) ? current.outbox[0] : null;
+    if (!item) return true;
+    await callGateway(cfg, item.path, { body: item.body });
+    const remove = surfaceProgramRecordWriteTail.then(async () => {
+      const records = await readSurfaceProgramRecords();
+      const latest = records[key];
+      if (!latest) return;
+      records[key] = { ...latest, outbox: (latest.outbox || []).filter((entry) => entry.id !== item.id) };
+      await chrome.storage.local.set({ [SURFACE_PROGRAM_RECORDS_KEY]: records });
+    });
+    surfaceProgramRecordWriteTail = remove.catch(() => {});
+    await remove;
+  }
 }
 
 async function waitForSurfaceProgramCalls(broker, deadlineMs) {
@@ -759,13 +801,12 @@ async function surfaceProgramTerminalReceipt(envelope, deviceId, startedAt, stat
       first_receipt_sha256: attempts[0]?.receipt_sha256 || null,
       last_receipt_sha256: attempts.at(-1)?.receipt_sha256 || null,
     },
-    result: {
-      summary: status === "completed" ? "Surface program completed locally." : "Surface program did not complete.",
-      data_sha256: result === undefined ? null : await surfaceProgramSha256(result),
-      artifact_refs: [],
-    },
+    result: { summary: status === "completed" ? "Surface program completed locally." : "Surface program did not complete.", data_sha256: null, artifact_refs: [] },
     final_state_sha256: finalBinding?.state_sha256 || null,
-    error: { code: error ? status : null, message: error ? String(error).slice(0, 500) : null },
+    error: status === "completed" ? { code: null, message: null }
+      : status === "timed_out" ? { code: "timeout", message: "Surface program exceeded its local time limit." }
+        : status === "indeterminate" ? { code: "indeterminate", message: "A local effect outcome could not be proven." }
+          : { code: error === "result_too_large" ? "limit_exceeded" : "runtime_failed", message: error === "result_too_large" ? "Surface program exceeded a local result limit." : "Surface program failed in the local runtime." },
     previous_receipt_sha256: attempts.at(-1)?.receipt_sha256 || null,
   };
   receipt.receipt_sha256 = await surfaceProgramSha256(receipt);
@@ -791,7 +832,7 @@ async function surfaceProgramToolReceipt(envelope, deviceId, attempt) {
     started_at: attempt.started_at,
     finished_at: attempt.finished_at,
     status: attempt.status,
-    result: { summary: attempt.status === "succeeded" ? "Local capability completed." : "Local capability did not complete.", data_sha256: attempt.result_sha256 || null, resource_id: null },
+    result: { summary: attempt.status === "succeeded" ? "Local capability completed." : "Local capability did not complete.", data_sha256: null, resource_id: null },
     post_state_sha256: attempt.post_state_sha256,
     previous_receipt_sha256: attempt.previous_receipt_sha256,
   };
@@ -799,16 +840,45 @@ async function surfaceProgramToolReceipt(envelope, deviceId, attempt) {
   return receipt;
 }
 
-async function executeSurfaceProgramRequest(request, deviceId) {
+async function surfaceProgramRejectedReceipt(envelope, deviceId, code = "policy_denied") {
+  const receipt = {
+    version: 1, type: "surface.execution.receipt", receipt_id: `receipt_${crypto.randomUUID()}`,
+    execution_id: envelope.execution_id, session_id: envelope.session_id, turn_id: envelope.turn_id,
+    claimant: { surface_type: "browser_extension", device_id: deviceId, client_instance_id: BROWSER_TASK_CLIENT_ID },
+    runtime_id: envelope.runtime.runtime_id, program_sha256: envelope.program.sha256, catalog_sha256: envelope.catalog.sha256,
+    bindings_sha256: await surfaceProgramSha256(envelope.bindings), started_at: null, finished_at: new Date().toISOString(), status: "rejected",
+    tool_attempts: { count: 0, first_receipt_sha256: null, last_receipt_sha256: null },
+    result: { summary: "Surface program was rejected by local policy.", data_sha256: null, artifact_refs: [] },
+    final_state_sha256: null, error: { code, message: "Surface program was rejected by local policy." }, previous_receipt_sha256: null,
+  };
+  receipt.receipt_sha256 = await surfaceProgramSha256(receipt);
+  return receipt;
+}
+
+async function executeSurfaceProgramRequest(request, deviceId, cfg = null) {
   const runtime = await browserProgramRuntimeManifest(deviceId);
   const validated = await validateSurfaceProgramEnvelope(request.input, { expectedDeviceId: deviceId, runtime });
   const envelope = validated.envelope;
   const recordKey = `${envelope.execution_id}:${envelope.idempotency_key}`;
   const records = await readSurfaceProgramRecords();
   const existing = records[recordKey];
+  const reusedIdentity = Object.entries(records).find(([key, record]) => key !== recordKey && (record?.execution_id === envelope.execution_id || record?.idempotency_key === envelope.idempotency_key));
+  if (reusedIdentity) throw new Error("surface_program_replay_conflict");
   if (existing?.program_sha256 && existing.program_sha256 !== envelope.program.sha256) throw new Error("surface_program_replay_conflict");
-  if (existing?.terminal_receipt) return existing.terminal_receipt;
+  if (existing?.terminal_receipt) {
+    if (cfg) await callGateway(cfg, `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, { body: existing.terminal_receipt });
+    return existing.terminal_receipt;
+  }
   if (existing?.status === "pending") throw new Error("surface_program_interrupted_pending_effects");
+  const selectedEffects = new Set(envelope.catalog.allowed_capability_ids.map((id) => surfaceProgramCapabilityDefinition(id)?.effect_class));
+  if (envelope.approval_policy.program === "approval_required" || envelope.approval_policy.always_ask.some((effect) => selectedEffects.has(effect))) {
+    const terminal = await surfaceProgramRejectedReceipt(envelope, deviceId);
+    await writeSurfaceProgramRecord(recordKey, { status: "terminal", execution_id: envelope.execution_id, idempotency_key: envelope.idempotency_key, program_sha256: envelope.program.sha256, tool_receipts: [], events: [], outbox: [{ id: terminal.receipt_id, path: `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, body: terminal }], terminal_receipt: terminal, updated_at: terminal.finished_at });
+    await flushSurfaceProgramOutbox(recordKey, cfg);
+    await appendSurfaceProgramEvent(recordKey, envelope, deviceId, "terminal", { status: terminal.status, receipt_id: terminal.receipt_id, receipt_sha256: terminal.receipt_sha256 }, request.id);
+    await flushSurfaceProgramOutbox(recordKey, cfg);
+    return terminal;
+  }
 
   const adapter = createChromeSurfaceProgramAdapter();
   await adapter.currentBinding(envelope.bindings.tab_id).then((binding) => {
@@ -818,11 +888,17 @@ async function executeSurfaceProgramRequest(request, deviceId) {
   });
 
   const startedAt = new Date().toISOString();
-  await writeSurfaceProgramRecord(recordKey, { status: "pending", program_sha256: envelope.program.sha256, tool_receipts: [], updated_at: startedAt });
+  await writeSurfaceProgramRecord(recordKey, { status: "pending", execution_id: envelope.execution_id, idempotency_key: envelope.idempotency_key, program_sha256: envelope.program.sha256, tool_receipts: [], events: [], outbox: [], updated_at: startedAt });
+  await appendSurfaceProgramEvent(recordKey, envelope, deviceId, "accepted", { proposal_sha256: await surfaceProgramSha256(envelope) }, request.id);
+  await flushSurfaceProgramOutbox(recordKey, cfg);
+  await appendSurfaceProgramEvent(recordKey, envelope, deviceId, "started", {}, request.id);
+  await flushSurfaceProgramOutbox(recordKey, cfg);
   const broker = createSurfaceProgramBroker({
     envelope,
     adapter,
-    recordReceipt: async (attempt) => appendSurfaceProgramToolReceipt(recordKey, await surfaceProgramToolReceipt(envelope, deviceId, attempt)),
+    recordReceipt: async (attempt) => { const receipt = await appendSurfaceProgramToolReceipt(recordKey, await surfaceProgramToolReceipt(envelope, deviceId, attempt), request.id); await flushSurfaceProgramOutbox(recordKey, cfg); return receipt; },
+    recordStarted: async (attempt) => { await appendSurfaceProgramEvent(recordKey, envelope, deviceId, "tool_started", { capability_id: attempt.capability_id, tool_call_id: attempt.call_id, attempt: 1 }, request.id); await flushSurfaceProgramOutbox(recordKey, cfg); },
+    recordFinished: async (attempt) => { await appendSurfaceProgramEvent(recordKey, envelope, deviceId, "tool_finished", { capability_id: attempt.capability_id, tool_call_id: attempt.call_id, attempt: 1, status: attempt.status, receipt_id: attempt.receipt_id, receipt_sha256: attempt.receipt_sha256 }, request.id); await flushSurfaceProgramOutbox(recordKey, cfg); },
   });
   const runToken = crypto.randomUUID();
   const run = { broker, run_token: runToken, active: true, has_in_flight_write: false };
@@ -850,15 +926,18 @@ async function executeSurfaceProgramRequest(request, deviceId) {
   }
   const terminal = await surfaceProgramTerminalReceipt(envelope, deviceId, startedAt, status, sandboxResult?.result, error, broker, adapter);
   const persisted = (await readSurfaceProgramRecords())[recordKey];
-  await writeSurfaceProgramRecord(recordKey, { status: "terminal", program_sha256: envelope.program.sha256, tool_receipts: persisted?.tool_receipts || [], terminal_receipt: terminal, updated_at: terminal.finished_at });
+  await writeSurfaceProgramRecord(recordKey, { status: "terminal", execution_id: envelope.execution_id, idempotency_key: envelope.idempotency_key, program_sha256: envelope.program.sha256, tool_receipts: persisted?.tool_receipts || [], events: persisted?.events || [], outbox: [...(persisted?.outbox || []), { id: terminal.receipt_id, path: `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, body: terminal }], terminal_receipt: terminal, updated_at: terminal.finished_at });
+  await flushSurfaceProgramOutbox(recordKey, cfg);
+  await appendSurfaceProgramEvent(recordKey, envelope, deviceId, "terminal", { status: terminal.status, receipt_id: terminal.receipt_id, receipt_sha256: terminal.receipt_sha256 }, request.id);
+  await flushSurfaceProgramOutbox(recordKey, cfg);
   return terminal;
 }
 
-async function executeBrowserToolRequest(request, deviceId = "") {
+async function executeBrowserToolRequest(request, deviceId = "", cfg = null) {
   const tool = String(request?.tool || "");
   const input = request?.input && typeof request.input === "object" ? request.input : {};
   try {
-    if (tool === SURFACE_PROGRAM_TOOL) return await executeSurfaceProgramRequest(request, deviceId);
+    if (tool === SURFACE_PROGRAM_TOOL) return await executeSurfaceProgramRequest(request, deviceId, cfg);
     if (tool === "browser.tab.list") {
       const tabs = await chrome.tabs.query({ currentWindow: input.current_window !== false });
       return {
@@ -1342,16 +1421,16 @@ function browserLocalToolManifest() {
   return [
     { tool: SURFACE_PROGRAM_TOOL, risk: "mixed_browser_local", approval: "preauthorized_program" },
     ...SURFACE_PROGRAM_CAPABILITIES.map((capability) => ({
-      tool: capability.name,
+      tool: capability.capability_id,
       description: capability.description,
       input_schema: capability.input_schema,
       output_schema: capability.output_schema,
-      risk: capability.risk,
-      approval: capability.approval,
+      risk: capability.effect_class,
+      approval: capability.approval_class,
       effect_class: capability.effect_class,
       concurrency: capability.concurrency,
       idempotency: capability.idempotency,
-      restore: capability.restore,
+      restore_capability_id: capability.restore_capability_id,
     })),
     { tool: "browser.tab.list", risk: "read_only", approval: "none" },
     { tool: "browser.tab.open", risk: "navigation", approval: "implicit_user_command" },
@@ -4248,12 +4327,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: "surface_program_call_not_authorized" });
       return true;
     }
-    const capability = SURFACE_PROGRAM_CAPABILITIES.find((item) => item.name === msg.capability_id);
-    if (capability?.risk !== "read_only") run.has_in_flight_write = true;
+    const capability = SURFACE_PROGRAM_CAPABILITIES.find((item) => item.capability_id === msg.capability_id);
+    if (capability?.effect_class !== "read") run.has_in_flight_write = true;
     run.broker.call(String(msg.capability_id || ""), msg.args || {})
       .then((result) => sendResponse(run.active ? { ok: true, result } : { ok: false, error: "surface_program_stopped" }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }))
-      .finally(() => { if (capability?.risk !== "read_only") run.has_in_flight_write = false; });
+      .finally(() => { if (capability?.effect_class !== "read") run.has_in_flight_write = false; });
     return true;
   }
   if (msg.cmd === "offscreenVoiceAudio") {
