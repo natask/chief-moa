@@ -1098,6 +1098,25 @@ if (
 ) {
   throw new Error("mark gestures must defer collision-safe single/double/triple actions and support either stop gesture");
 }
+const toggleFreshThreadVoiceCaptureBody = sourceBetween(
+  contentSource,
+  /function toggleFreshThreadVoiceCapture\(/,
+  /function cancelActiveUncommittedVoiceCapture\(/,
+  "toggleFreshThreadVoiceCapture"
+);
+const cancelActiveUncommittedVoiceCaptureBody = sourceBetween(
+  contentSource,
+  /function cancelActiveUncommittedVoiceCapture\(/,
+  /function syncTalkModeUi\(/,
+  "cancelActiveUncommittedVoiceCapture"
+);
+if (
+  !/cancelActiveUncommittedVoiceCapture\(\)/.test(toggleFreshThreadVoiceCaptureBody) ||
+  !/stopLiveVoiceState\(state, "cancel"\)/.test(cancelActiveUncommittedVoiceCaptureBody) ||
+  /stopAllLiveVoiceTurns/.test(cancelActiveUncommittedVoiceCaptureBody)
+) {
+  throw new Error("fresh-thread transition must cancel only the active uncommitted capture and preserve older committed voice states");
+}
 const mainContentScripts = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"))?.js || [];
 if (
   mainContentScripts.indexOf("voice-capture-gesture.js") < 0 ||

@@ -764,15 +764,17 @@
       syncTalkModeUi();
       return "off";
     }
-    if (voiceFirstCaptureActive()) cancelTalkMode();
+    if (voiceFirstCaptureActive()) cancelActiveUncommittedVoiceCapture();
     return startVoiceFirstCapture("double", { freshThread: true });
   }
 
-  function cancelTalkMode() {
+  function cancelActiveUncommittedVoiceCapture() {
+    const state = liveVoice;
+    if (!state || state.committed === true) return false;
     conversationActive = false;
     voiceFirstCaptureOrigin = null;
-    stopAllLiveVoiceTurns("cancel");
-    syncTalkModeUi();
+    stopLiveVoiceState(state, "cancel");
+    return true;
   }
 
   function syncTalkModeUi() {
