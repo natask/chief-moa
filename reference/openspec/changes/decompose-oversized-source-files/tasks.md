@@ -422,6 +422,12 @@
       100% lines, 91.11% branches, and 100% functions; reduce `content.js` to
       4,005 lines and raise the exact whole-extension ratchet to 51.33% lines,
       33.03% branches, and 27.93% functions with 45 passing unit tests.
+- [x] 4.4o Extract `/incognito` and `/new` parsing plus persistent and one-shot
+      context-control state from `content.js`, preserving incognito precedence
+      without consuming a deferred new-thread arm. Verify the focused runtime
+      at 100% lines, 93.33% branches, and 100% functions; reduce `content.js`
+      to 3,954 lines and raise the exact whole-extension ratchet to 51.76%
+      lines, 33.42% branches, and 28.33% functions with 46 passing unit tests.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
