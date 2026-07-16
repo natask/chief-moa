@@ -949,17 +949,17 @@
       syncTalkModeUi();
       return "off";
     }
-    // A double-click supersedes a current-thread capture without sending it,
-    // then starts the new-thread capture. A second double-click sends that turn.
-    if (voiceFirstCaptureActive()) cancelTalkMode();
+    if (voiceFirstCaptureActive()) cancelActiveUncommittedVoiceCapture();
     return startVoiceFirstCapture("double", { freshThread: true });
   }
 
-  function cancelTalkMode() {
+  function cancelActiveUncommittedVoiceCapture() {
+    const state = liveVoice;
+    if (!state || state.committed === true) return false;
     conversationActive = false;
     voiceFirstCaptureOrigin = null;
-    stopAllLiveVoiceTurns("cancel");
-    syncTalkModeUi();
+    stopLiveVoiceState(state, "cancel");
+    return true;
   }
 
   function syncTalkModeUi() {

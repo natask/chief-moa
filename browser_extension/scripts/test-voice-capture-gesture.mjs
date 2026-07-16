@@ -1,14 +1,11 @@
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import vm from "node:vm";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
-const source = readFileSync(join(root, "extension", "voice-capture-gesture.js"), "utf8");
-const context = { globalThis: {} };
-vm.createContext(context);
-vm.runInContext(source, context, { filename: "voice-capture-gesture.js" });
-
-const gesture = context.globalThis.AgeeVoiceCaptureGesture;
+const previousGesture = globalThis.AgeeVoiceCaptureGesture;
+delete globalThis.AgeeVoiceCaptureGesture;
+await import(`../extension/voice-capture-gesture.js?test=${Date.now()}`);
+const gesture = globalThis.AgeeVoiceCaptureGesture;
 if (!gesture) {
   throw new Error("voice-capture-gesture.js did not install AgeeVoiceCaptureGesture");
 }
@@ -23,57 +20,40 @@ const tap1 = gesture.continueTapChain(null, { time: 100, x: 50, y: 50 });
 const tap2 = gesture.continueTapChain(tap1, { time: 250, x: 58, y: 53 });
 const tap3 = gesture.continueTapChain(tap2, { time: 420, x: 56, y: 51 });
 const tapReset = gesture.continueTapChain(tap3, { time: 900, x: 56, y: 51 });
+const tapFar = gesture.continueTapChain(tap1, { time: 110, x: 500, y: 500 });
+const tapBackwards = gesture.continueTapChain(tap1, { time: 90, x: 50, y: 50 });
+const tapCapped = gesture.continueTapChain({ count: 4, point: { time: 100, x: 0, y: 0 } }, { time: 101, x: 0, y: 0 });
+const tapDefaults = gesture.continueTapChain({ point: {} }, null, { tapWindowMs: 1, tapSlopPx: 1 });
 
 assertEqual(tap1.count, 1, "single tap count");
 assertEqual(tap2.count, 2, "double tap count");
 assertEqual(tap3.count, 3, "triple tap count");
 assertEqual(tapReset.count, 1, "tap window reset");
+assertEqual(tapFar.count, 1, "tap slop reset");
+assertEqual(tapBackwards.count, 1, "backwards time reset");
+assertEqual(tapCapped.count, 4, "tap count cap");
+assertEqual(tapDefaults.count, 1, "missing point defaults");
 
 assertEqual(gesture.resolveTapAction({ tapCount: 1, listening: false, conversationActive: false }), "toggle_voice", "single tap action");
 assertEqual(gesture.resolveTapAction({ tapCount: 1, listening: true, conversationActive: false }), "toggle_send", "single tap send");
 assertEqual(gesture.resolveTapAction({ tapCount: 2, listening: false, conversationActive: false }), "new_voice", "double tap action");
 assertEqual(gesture.resolveTapAction({ tapCount: 3, listening: false, conversationActive: false }), "open_text", "triple tap action");
+assertEqual(gesture.resolveTapAction({ tapCount: 4, listening: false, conversationActive: false }), "noop", "overflow tap action");
+assertEqual(gesture.resolveTapAction({ tapCount: 1, listening: false, conversationActive: true }), "toggle_send", "active conversation sends");
+assertEqual(gesture.resolveTapAction({ tapCount: 0, listening: false, conversationActive: false }), "toggle_voice", "missing count defaults");
 
-assertEqual(
-  gesture.resolveVoiceFirstTransition({ tapCount: 1, capturing: false }),
-  "start_current",
-  "single starts current-thread capture"
-);
-assertEqual(
-  gesture.resolveVoiceFirstTransition({ tapCount: 1, capturing: true, captureOrigin: "single" }),
-  "commit_current",
-  "single sends active current-thread capture"
-);
-assertEqual(
-  gesture.resolveVoiceFirstTransition({ tapCount: 1, capturing: true, captureOrigin: "double" }),
-  "noop",
-  "single cannot send a fresh-thread capture"
-);
-assertEqual(
-  gesture.resolveVoiceFirstTransition({ tapCount: 2, capturing: false }),
-  "start_new",
-  "double starts fresh-thread capture"
-);
-assertEqual(
-  gesture.resolveVoiceFirstTransition({ tapCount: 2, capturing: true, captureOrigin: "double" }),
-  "commit_new",
-  "second double sends its fresh-thread capture"
-);
-assertEqual(
-  gesture.resolveVoiceFirstTransition({ tapCount: 2, capturing: true, captureOrigin: "single" }),
-  "cancel_then_start_new",
-  "double cancels a single-started capture before starting fresh"
-);
-assertEqual(
-  gesture.resolveVoiceFirstTransition({ tapCount: 3, capturing: true, captureOrigin: "double" }),
-  "cancel_then_open_chat",
-  "triple opens chat without sending active capture"
-);
-assertEqual(
-  gesture.resolveVoiceFirstTransition({ tapCount: 4, capturing: true, captureOrigin: "single" }),
-  "noop",
-  "fourth click stays inert"
-);
+for (const [input, expected, label] of [
+  [{ tapCount: 1, capturing: false }, "start_current", "single starts current capture"],
+  [{ tapCount: 1, capturing: true, captureOrigin: "single" }, "commit_current", "single stops current capture"],
+  [{ tapCount: 1, capturing: true, captureOrigin: "double" }, "commit_new", "single stops fresh capture"],
+  [{ tapCount: 2, capturing: false }, "start_new", "double starts fresh capture"],
+  [{ tapCount: 2, capturing: true, captureOrigin: "double" }, "commit_new", "double stops fresh capture"],
+  [{ tapCount: 2, capturing: true, captureOrigin: "single" }, "cancel_then_start_new", "double switches to fresh capture"],
+  [{ tapCount: 3, capturing: true, captureOrigin: "double" }, "open_chat_preserve_capture", "triple preserves capture"],
+  [{ tapCount: 4, capturing: true, captureOrigin: "single" }, "noop", "fourth click is inert"],
+]) {
+  assertEqual(gesture.resolveVoiceFirstTransition(input), expected, label);
+}
 
 const mutableAdmission = { voiceFirstEnabled: true, draftControlsEnabled: true };
 const latchedAdmission = gesture.latchAdmission(mutableAdmission);
@@ -82,6 +62,7 @@ mutableAdmission.draftControlsEnabled = false;
 assertEqual(latchedAdmission.voiceFirstEnabled, true, "voice-first admission stays latched after feature change");
 assertEqual(latchedAdmission.draftControlsEnabled, true, "draft admission stays latched after capability change");
 assertEqual(Object.isFrozen(latchedAdmission), true, "latched admission is immutable");
+assertEqual(gesture.latchAdmission().voiceFirstEnabled, false, "missing admission defaults off");
 assertEqual(
   gesture.latchAdmission({ voiceFirstEnabled: false, draftControlsEnabled: true }).draftControlsEnabled,
   false,
@@ -168,5 +149,79 @@ assertEqual(
   "commit_turn",
   "unsupported draft controls fall back to commit"
 );
+
+assertEqual(gesture.resolveHoldDirection(null, null), "release", "missing hold points release");
+assertEqual(gesture.resolveHoldDirection({ x: 0, y: 0 }, { x: 100, y: 0 }), "release", "right drag is unbound");
+assertEqual(gesture.resolveHoldDirection({ x: 0, y: 0 }, { x: -100, y: 0 }), "left", "left drag resolves");
+assertEqual(gesture.resolveHoldDirection({ x: 0, y: 0 }, { x: 0, y: -100 }), "up", "up drag resolves");
+assertEqual(gesture.resolveHoldDirection({ x: 0, y: 0 }, { x: 0, y: 100 }), "down", "down drag resolves");
+assertEqual(
+  gesture.resolveHoldDirection({ x: 0, y: 0 }, { x: 5, y: 5 }, { directionalDeadzonePx: 4, directionalBias: 2 }),
+  "release",
+  "ambiguous custom threshold releases"
+);
+
+function extractFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`missing ${name} in content.js`);
+  const bodyStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+    if (depth === 0) return source.slice(start, index + 1);
+  }
+  throw new Error(`unbalanced ${name} in content.js`);
+}
+
+const contentSource = readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
+const overlapContext = vm.createContext({});
+vm.runInContext(`
+  const olderCommitted = { committed: true, assistantSpeechSuppressed: false };
+  const activeCapture = { committed: false, assistantSpeechSuppressed: false };
+  const liveVoiceStates = new Set([olderCommitted, activeCapture]);
+  let liveVoice = activeCapture;
+  let conversationActive = true;
+  let voiceFirstCaptureOrigin = "single";
+  const canceled = [];
+  const playbackStopped = [];
+  let speakingStopped = 0;
+  function stopLiveVoiceState(state, mode) {
+    canceled.push({ state, mode });
+    liveVoiceStates.delete(state);
+    if (liveVoice === state) liveVoice = null;
+  }
+  function stopLivePlayback(state) { playbackStopped.push(state); }
+  function stopSpeaking() { speakingStopped += 1; }
+  ${extractFunction(contentSource, "cancelActiveUncommittedVoiceCapture")}
+  ${extractFunction(contentSource, "parkPriorVoiceForSeparateCapture")}
+  const canceledActive = cancelActiveUncommittedVoiceCapture();
+  parkPriorVoiceForSeparateCapture();
+  globalThis.result = {
+    canceledActive,
+    olderStillTracked: liveVoiceStates.has(olderCommitted),
+    activeStillTracked: liveVoiceStates.has(activeCapture),
+    canceledCount: canceled.length,
+    canceledMode: canceled[0]?.mode || "",
+    canceledOlder: canceled.some((entry) => entry.state === olderCommitted),
+    olderSuppressed: olderCommitted.assistantSpeechSuppressed,
+    olderPlaybackStopped: playbackStopped.includes(olderCommitted),
+    speakingStopped,
+  };
+`, overlapContext);
+assert.deepEqual({ ...overlapContext.result }, {
+  canceledActive: true,
+  olderStillTracked: true,
+  activeStillTracked: false,
+  canceledCount: 1,
+  canceledMode: "cancel",
+  canceledOlder: false,
+  olderSuppressed: true,
+  olderPlaybackStopped: true,
+  speakingStopped: 1,
+});
+
+if (previousGesture === undefined) delete globalThis.AgeeVoiceCaptureGesture;
+else globalThis.AgeeVoiceCaptureGesture = previousGesture;
 
 console.log("voice-capture-gesture ok");

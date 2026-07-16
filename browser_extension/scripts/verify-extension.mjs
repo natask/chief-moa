@@ -1060,7 +1060,36 @@ if (
   !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
   !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}openTextSurface/.test(contentSource)
 ) {
-  throw new Error("voice-first gestures must defer collision-safe single/double/triple actions and preserve fresh-thread capture provenance");
+  throw new Error("mark gestures must defer collision-safe single/double/triple actions and support either stop gesture");
+}
+const toggleFreshThreadVoiceCaptureBody = sourceBetween(
+  contentSource,
+  /function toggleFreshThreadVoiceCapture\(/,
+  /function cancelActiveUncommittedVoiceCapture\(/,
+  "toggleFreshThreadVoiceCapture"
+);
+const cancelActiveUncommittedVoiceCaptureBody = sourceBetween(
+  contentSource,
+  /function cancelActiveUncommittedVoiceCapture\(/,
+  /function syncTalkModeUi\(/,
+  "cancelActiveUncommittedVoiceCapture"
+);
+if (
+  !/cancelActiveUncommittedVoiceCapture\(\)/.test(toggleFreshThreadVoiceCaptureBody) ||
+  !/stopLiveVoiceState\(state, "cancel"\)/.test(cancelActiveUncommittedVoiceCaptureBody) ||
+  /stopAllLiveVoiceTurns/.test(cancelActiveUncommittedVoiceCaptureBody)
+) {
+  throw new Error("fresh-thread transition must cancel only the active uncommitted capture and preserve older committed voice states");
+}
+const mainContentScripts = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"))?.js || [];
+if (
+  mainContentScripts.indexOf("voice-capture-gesture.js") < 0 ||
+  mainContentScripts.indexOf("voice-capture-gesture.js") > mainContentScripts.indexOf("content.js") ||
+  /ageeVoiceFirstGesturesEnabled|VOICE_FIRST_GESTURES_KEY/.test(contentSource) ||
+  /voiceFirstGestures|Voice-first orb gestures/.test(optionsHtmlSource + optionsSource) ||
+  /agee-draft-control/.test(contentSource + overlayCssSource)
+) {
+  throw new Error("canonical mark gestures must load before content.js and expose no optional setting or draft controls");
 }
 
 const launcherClickBody = sourceBetween(
