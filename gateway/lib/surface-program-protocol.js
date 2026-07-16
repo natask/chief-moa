@@ -44,7 +44,7 @@ function closedRecord(value, allowed, label) {
 
 function requiredText(value, label, max = 160) {
   const text = typeof value === "string" ? value.trim() : "";
-  if (!text || text.length > max) throw new SurfaceProgramValidationError(`invalid_${label}`);
+  if (!text || Buffer.byteLength(text, "utf8") > max || hasLoneSurrogate(text)) throw new SurfaceProgramValidationError(`invalid_${label}`);
   return text;
 }
 
@@ -67,8 +67,9 @@ function digest(value, label) {
 function timestamp(value, label) {
   const text = requiredText(value, label, 64);
   const millis = Date.parse(text);
-  if (!Number.isFinite(millis)) throw new SurfaceProgramValidationError(`invalid_${label}`);
-  return { text: new Date(millis).toISOString(), millis };
+  const canonical = Number.isFinite(millis) ? new Date(millis).toISOString() : "";
+  if (!canonical || text !== canonical) throw new SurfaceProgramValidationError(`invalid_${label}`);
+  return { text: canonical, millis };
 }
 
 function stringArray(value, label, maxItems, maxLength = 120) {
@@ -76,15 +77,58 @@ function stringArray(value, label, maxItems, maxLength = 120) {
   return value.map((item) => requiredText(item, label.replace(/s$/, ""), maxLength));
 }
 
+function requireSortedUnique(value, label) {
+  for (let index = 0; index < value.length; index += 1) {
+    if (index > 0 && value[index - 1] >= value[index]) throw new SurfaceProgramValidationError(`invalid_${label}`);
+  }
+  return value;
+}
+
 function integerArray(value, label, maxItems) {
   if (!Array.isArray(value) || value.length > maxItems) throw new SurfaceProgramValidationError(`invalid_${label}`);
   return value.map((item) => integer(item, label.replace(/s$/, "")));
 }
 
+function hasLoneSurrogate(value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return true;
+  }
+  return false;
+}
+
+function prevalidateCanonical(value, seen = new Set()) {
+  if (value === null || typeof value === "boolean") return;
+  if (typeof value === "string") {
+    if (hasLoneSurrogate(value)) throw new SurfaceProgramValidationError("invalid_unicode");
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) throw new SurfaceProgramValidationError("invalid_canonical_number");
+    return;
+  }
+  if (typeof value !== "object" || seen.has(value)) throw new SurfaceProgramValidationError("invalid_canonical_value");
+  seen.add(value);
+  const items = Array.isArray(value) ? value : Object.keys(value).map((key) => {
+    if (hasLoneSurrogate(key)) throw new SurfaceProgramValidationError("invalid_unicode");
+    return value[key];
+  });
+  for (const item of items) prevalidateCanonical(item, seen);
+  seen.delete(value);
+}
+
 function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-  return JSON.stringify(value);
+  prevalidateCanonical(value);
+  function encode(item) {
+    if (Array.isArray(item)) return `[${item.map(encode).join(",")}]`;
+    if (isRecord(item)) return `{${Object.keys(item).sort().map((key) => `${JSON.stringify(key)}:${encode(item[key])}`).join(",")}}`;
+    return JSON.stringify(item);
+  }
+  return encode(value);
 }
 
 function sha256(value) {
@@ -96,7 +140,7 @@ function validateLimits(value, maxima = {}) {
   const bounds = {
     source_bytes: Math.min(maxima.source_bytes ?? MAX_SOURCE_BYTES, MAX_SOURCE_BYTES),
     wall_ms: Math.min(maxima.wall_ms ?? MAX_TIMEOUT_MS, MAX_TIMEOUT_MS),
-    memory_bytes: Math.min(maxima.memory_bytes ?? MAX_MEMORY_BYTES, MAX_MEMORY_BYTES),
+    memory_bytes: maxima.memory_bytes === null ? null : Math.min(maxima.memory_bytes ?? MAX_MEMORY_BYTES, MAX_MEMORY_BYTES),
     tool_calls: Math.min(maxima.tool_calls ?? MAX_TOOL_CALLS, MAX_TOOL_CALLS),
     parallel_calls: Math.min(maxima.parallel_calls ?? 16, 16),
     result_bytes: Math.min(maxima.result_bytes ?? MAX_RESULT_BYTES, MAX_RESULT_BYTES),
@@ -105,7 +149,8 @@ function validateLimits(value, maxima = {}) {
   return Object.freeze({
     source_bytes: integer(limits.source_bytes, "source_bytes", 1, bounds.source_bytes),
     wall_ms: integer(limits.wall_ms, "wall_ms", 100, bounds.wall_ms),
-    memory_bytes: integer(limits.memory_bytes, "memory_bytes", 1024 * 1024, bounds.memory_bytes),
+    memory_bytes: limits.memory_bytes === null ? null
+      : integer(limits.memory_bytes, "memory_bytes", 1, bounds.memory_bytes ?? MAX_MEMORY_BYTES),
     tool_calls: integer(limits.tool_calls, "tool_calls", 1, bounds.tool_calls),
     parallel_calls: integer(limits.parallel_calls, "parallel_calls", 1, bounds.parallel_calls),
     result_bytes: integer(limits.result_bytes, "result_bytes", 1024, bounds.result_bytes),
@@ -143,13 +188,70 @@ function validateRuntimeTargetBindings(runtime, target, bindings) {
   }
 }
 
-function validateAdvertisedCatalog(value) {
+const CAPABILITY_DESCRIPTOR_FIELDS = Object.freeze(["capability_id", "description", "input_schema", "output_schema", "effect_class", "approval_class", "idempotency", "concurrency", "restore_capability_id"]);
+
+function validateCapabilitySnapshot(value) {
+  const snapshot = closedRecord(value, ["version", "capabilities"], "capability_snapshot");
+  const capabilities = Array.isArray(snapshot.capabilities) ? snapshot.capabilities : null;
+  if (!capabilities || capabilities.length > MAX_CATALOG_TOOLS) throw new SurfaceProgramValidationError("invalid_capabilities");
+  const normalized = capabilities.map((raw) => {
+    const item = closedRecord(raw, CAPABILITY_DESCRIPTOR_FIELDS, "capability_descriptor");
+    const descriptor = {
+      capability_id: requiredText(item.capability_id, "capability_id", 120),
+      description: requiredText(item.description, "description", 500),
+      input_schema: closedRecord(item.input_schema, Object.keys(item.input_schema || {}), "input_schema"),
+      output_schema: closedRecord(item.output_schema, Object.keys(item.output_schema || {}), "output_schema"),
+      effect_class: requiredText(item.effect_class, "effect_class", 80),
+      approval_class: requiredText(item.approval_class, "approval_class", 80),
+      idempotency: requiredText(item.idempotency, "idempotency", 80),
+      concurrency: requiredText(item.concurrency, "concurrency", 80),
+      restore_capability_id: item.restore_capability_id === null ? null : requiredText(item.restore_capability_id, "restore_capability_id", 120),
+    };
+    if (!/^[a-z][a-z0-9_.:-]{0,119}$/.test(descriptor.capability_id)
+      || !EFFECT_CLASSES.includes(descriptor.effect_class)
+      || !["none", "implicit_user_command", "explicit_preview", "explicit_confirm"].includes(descriptor.approval_class)
+      || !["read_only", "idempotent", "non_idempotent"].includes(descriptor.idempotency)
+      || !["parallel_read", "serialized_resource", "exclusive_runtime"].includes(descriptor.concurrency)) throw new SurfaceProgramValidationError("invalid_capability_descriptor");
+    prevalidateCanonical(descriptor.input_schema); prevalidateCanonical(descriptor.output_schema);
+    return Object.freeze(descriptor);
+  });
+  const ids = normalized.map((item) => item.capability_id);
+  requireSortedUnique(ids, "capability_ids");
+  if (normalized.some((item) => item.restore_capability_id !== null && !ids.includes(item.restore_capability_id))) throw new SurfaceProgramValidationError("invalid_restore_capability_id");
+  return Object.freeze({ version: integer(snapshot.version, "catalog_version", 1), capabilities: Object.freeze(normalized) });
+}
+
+function capabilitySnapshotFromManifest(version, manifest) {
+  if (!Array.isArray(manifest)) throw new SurfaceProgramValidationError("invalid_capability_manifest");
+  return validateCapabilitySnapshot({
+    version,
+    capabilities: manifest.map((item) => ({
+      capability_id: item.capability_id || item.tool,
+      description: item.description,
+      input_schema: item.input_schema,
+      output_schema: item.output_schema,
+      effect_class: item.effect_class,
+      approval_class: item.approval_class,
+      idempotency: item.idempotency,
+      concurrency: item.concurrency,
+      restore_capability_id: item.restore_capability_id,
+    })).sort((a, b) => String(a.capability_id).localeCompare(String(b.capability_id))),
+  });
+}
+
+function validateAdvertisedCatalog(value, snapshotValue) {
   const catalog = closedRecord(value, ["version", "sha256", "capability_ids"], "catalog");
   const capabilityIds = stringArray(catalog.capability_ids, "capability_ids", MAX_CATALOG_TOOLS);
-  if (new Set(capabilityIds).size !== capabilityIds.length || capabilityIds.some((id) => !/^[a-z][a-z0-9_.:-]{0,119}$/.test(id))) {
+  if (capabilityIds.some((id) => !/^[a-z][a-z0-9_.:-]{0,119}$/.test(id))) {
     throw new SurfaceProgramValidationError("invalid_capability_ids");
   }
-  return Object.freeze({ version: integer(catalog.version, "catalog_version", 1), sha256: digest(catalog.sha256, "catalog_sha256"), capability_ids: Object.freeze(capabilityIds) });
+  requireSortedUnique(capabilityIds, "capability_ids");
+  const normalized = { version: integer(catalog.version, "catalog_version", 1), sha256: digest(catalog.sha256, "catalog_sha256"), capability_ids: Object.freeze(capabilityIds) };
+  if (snapshotValue !== undefined) {
+    const snapshot = validateCapabilitySnapshot(snapshotValue);
+    if (snapshot.version !== normalized.version || canonicalJson(snapshot.capabilities.map((item) => item.capability_id)) !== canonicalJson(capabilityIds) || sha256(snapshot) !== normalized.sha256) throw new SurfaceProgramValidationError("catalog_digest_mismatch");
+  }
+  return Object.freeze(normalized);
 }
 
 function sanitizeExecutionRuntime(value, options = {}) {
@@ -167,11 +269,14 @@ function sanitizeExecutionRuntime(value, options = {}) {
       advertisement_id: requiredText(advertisement.advertisement_id, "advertisement_id", 160),
       target: validateTarget(advertisement.target),
       runtime: validateRuntime(advertisement.runtime),
-      catalog: validateAdvertisedCatalog(advertisement.catalog),
+      catalog: validateAdvertisedCatalog(advertisement.catalog, options.catalogSnapshot || (options.capabilities ? capabilitySnapshotFromManifest(advertisement.catalog?.version, options.capabilities) : undefined)),
       limits: validateLimits(advertisement.limits),
       issued_at: issued.text,
       expires_at: expires.text,
     };
+    const profile = RUNTIME_PROFILES[normalized.runtime.runtime_id];
+    if (!profile.surfaces.includes(normalized.target.surface_type)) throw new SurfaceProgramValidationError("runtime_target_mismatch");
+    if (normalized.target.surface_type === "gateway" && options.gatewayOwned !== true) throw new SurfaceProgramValidationError("gateway_runtime_not_client_advertisable");
     if (options.device_id && normalized.target.device_id !== options.device_id) throw new SurfaceProgramValidationError("advertisement_target_mismatch");
     if (options.surface_type && normalized.target.surface_type !== options.surface_type) throw new SurfaceProgramValidationError("advertisement_surface_mismatch");
     return Object.freeze(normalized);
@@ -238,20 +343,23 @@ function validateBindings(value, allowedCapabilityIds = []) {
   const textFields = fields.filter((field) => !["kind", "tab_id", "window_id", "frame_id", "page_epoch", "observation_generation", "pid", "allowed_frames", "allowed_worlds", "suite_allowlist", "command_allowlist"].includes(field) && !field.endsWith("sha256"));
   for (const field of textFields) if (input[field] != null) output[field] = requiredText(input[field], field, field === "origin" ? 2000 : 240);
   for (const field of fields.filter((field) => field.endsWith("sha256") || field === "observation_digest")) if (input[field] != null) output[field] = digest(input[field], field);
-  for (const field of ["tab_id", "frame_id", "page_epoch", "observation_generation", "pid"]) if (fields.includes(field) && input[field] != null) output[field] = integer(input[field], field);
-  if (fields.includes("window_id") && input.window_id != null) output.window_id = kind === "browser_document" ? integer(input.window_id, "window_id") : requiredText(input.window_id, "window_id", 240);
+  for (const field of ["tab_id", "page_epoch", "observation_generation", "pid"]) if (fields.includes(field) && input[field] != null) output[field] = integer(input[field], field, 1);
+  if (fields.includes("frame_id") && input.frame_id != null) output.frame_id = integer(input.frame_id, "frame_id", 0);
+  if (fields.includes("window_id") && input.window_id != null) output.window_id = kind === "browser_document" ? integer(input.window_id, "window_id", 1) : requiredText(input.window_id, "window_id", 240);
   if (input.allowed_frames != null) output.allowed_frames = integerArray(input.allowed_frames, "allowed_frames", 64);
   if (input.allowed_worlds != null) output.allowed_worlds = stringArray(input.allowed_worlds, "allowed_worlds", 8, 40);
   if (input.suite_allowlist != null) output.suite_allowlist = stringArray(input.suite_allowlist, "suite_allowlist", 32);
   if (input.command_allowlist != null) output.command_allowlist = stringArray(input.command_allowlist, "command_allowlist", 64);
   for (const field of ["allowed_frames", "allowed_worlds", "suite_allowlist", "command_allowlist"]) {
     if (input[field] != null && output[field].length === 0) throw new SurfaceProgramValidationError(`empty_${field}`);
+    if (input[field] != null) requireSortedUnique(output[field], field);
   }
   if (output.allowed_worlds?.some((world) => !["MAIN", "ISOLATED"].includes(world))) throw new SurfaceProgramValidationError("invalid_allowed_worlds");
   if (kind === "browser_document") {
     let origin;
     try { origin = new URL(output.origin); } catch { throw new SurfaceProgramValidationError("invalid_origin"); }
     if (!/^https?:$/.test(origin.protocol) || origin.username || origin.password || origin.origin !== output.origin) throw new SurfaceProgramValidationError("invalid_origin");
+    if (output.allowed_frames && !output.allowed_frames.includes(output.frame_id)) throw new SurfaceProgramValidationError("allowed_frames_missing_bound_frame");
   }
   return Object.freeze(output);
 }
@@ -265,14 +373,16 @@ function createSurfaceProgramEnvelope(input, selected, options = {}) {
   const nowMs = options.nowMs ?? Date.now();
   const expiryMs = integer(input.expires_in_ms ?? 60_000, "expires_in_ms", MIN_EXPIRY_MS, Math.min(MAX_EXPIRY_MS, Date.parse(selected.advertisement.expires_at) - nowMs));
   const allowed = input.allowed_capability_ids == null ? selected.advertisement.catalog.capability_ids : stringArray(input.allowed_capability_ids, "allowed_capability_ids", MAX_CATALOG_TOOLS);
-  if (new Set(allowed).size !== allowed.length || allowed.some((id) => !selected.advertisement.catalog.capability_ids.includes(id))) throw new SurfaceProgramValidationError("capability_escalation");
+  requireSortedUnique(allowed, "allowed_capability_ids");
+  if (allowed.some((id) => !selected.advertisement.catalog.capability_ids.includes(id))) throw new SurfaceProgramValidationError("capability_escalation");
   const requestedLimits = { ...selected.advertisement.limits, ...(input.limits || {}), source_bytes: sourceBytes };
   const approvalInput = closedRecord(input.approval_policy || { program: "local_policy", always_ask: [] }, ["program", "always_ask"], "approval_policy");
   const bindings = validateBindings(input.bindings, allowed);
   validateRuntimeTargetBindings(selected.advertisement.runtime, selected.advertisement.target, bindings);
   const approvalProgram = requiredText(approvalInput.program, "approval_program", 80);
   const alwaysAsk = stringArray(approvalInput.always_ask, "always_ask", 32, 80);
-  if (!APPROVAL_PROGRAMS.includes(approvalProgram) || alwaysAsk.some((effect) => !EFFECT_CLASSES.includes(effect)) || new Set(alwaysAsk).size !== alwaysAsk.length) throw new SurfaceProgramValidationError("invalid_approval_policy");
+  if (!APPROVAL_PROGRAMS.includes(approvalProgram) || alwaysAsk.some((effect) => !EFFECT_CLASSES.includes(effect))) throw new SurfaceProgramValidationError("invalid_approval_policy");
+  requireSortedUnique(alwaysAsk, "always_ask");
   const envelope = {
     version: 1,
     type: "surface.execution.proposed",
@@ -302,25 +412,32 @@ function validateSurfaceProgramEnvelope(value, options = {}) {
   const catalog = closedRecord(envelope.catalog, ["version", "sha256", "allowed_capability_ids"], "catalog");
   integer(catalog.version, "catalog_version", 1); digest(catalog.sha256, "catalog_sha256");
   const allowed = stringArray(catalog.allowed_capability_ids, "allowed_capability_ids", MAX_CATALOG_TOOLS);
-  if (new Set(allowed).size !== allowed.length || allowed.some((id) => !/^[a-z][a-z0-9_.:-]{0,119}$/.test(id))) throw new SurfaceProgramValidationError("invalid_allowed_capability_ids");
+  if (allowed.some((id) => !/^[a-z][a-z0-9_.:-]{0,119}$/.test(id))) throw new SurfaceProgramValidationError("invalid_allowed_capability_ids");
+  requireSortedUnique(allowed, "allowed_capability_ids");
   const bindings = validateBindings(envelope.bindings, allowed);
   validateRuntimeTargetBindings(runtime, target, bindings);
   const limits = validateLimits(envelope.limits);
   const approval = closedRecord(envelope.approval_policy, ["program", "always_ask"], "approval_policy");
   const approvalProgram = requiredText(approval.program, "approval_program", 80);
   const alwaysAsk = stringArray(approval.always_ask, "always_ask", 32, 80);
-  if (!APPROVAL_PROGRAMS.includes(approvalProgram) || alwaysAsk.some((effect) => !EFFECT_CLASSES.includes(effect)) || new Set(alwaysAsk).size !== alwaysAsk.length) throw new SurfaceProgramValidationError("invalid_approval_policy");
+  if (!APPROVAL_PROGRAMS.includes(approvalProgram) || alwaysAsk.some((effect) => !EFFECT_CLASSES.includes(effect))) throw new SurfaceProgramValidationError("invalid_approval_policy");
+  requireSortedUnique(alwaysAsk, "always_ask");
   requiredText(envelope.idempotency_key, "idempotency_key", 200);
-  if (typeof program.source !== "string" || !program.source.trim() || Buffer.byteLength(program.source, "utf8") !== limits.source_bytes || digest(program.sha256, "program_sha256") !== sha256(program.source)) throw new SurfaceProgramValidationError("program_hash_mismatch");
+  if (typeof program.source !== "string" || !program.source.trim() || Buffer.byteLength(program.source, "utf8") > limits.source_bytes || digest(program.sha256, "program_sha256") !== sha256(program.source)) throw new SurfaceProgramValidationError("program_hash_mismatch");
   const issued = timestamp(envelope.issued_at, "issued_at"); const expires = timestamp(envelope.expires_at, "expires_at");
+  if (issued.millis > (options.nowMs ?? Date.now()) + MAX_CLOCK_SKEW_MS) throw new SurfaceProgramValidationError("future_proposal");
   if (expires.millis <= issued.millis || expires.millis - issued.millis > MAX_EXPIRY_MS) throw new SurfaceProgramValidationError("invalid_expiry");
   if (!options.allowExpired && (options.nowMs ?? Date.now()) >= expires.millis) throw new SurfaceProgramValidationError("expired");
   if (options.target_device_id && target.device_id !== options.target_device_id) throw new SurfaceProgramValidationError("target_mismatch");
   if (options.advertisement) {
     const advertised = options.advertisement;
+    const limitEscalated = Object.keys(limits).some((key) => key === "memory_bytes"
+      ? (advertised.limits[key] === null ? limits[key] !== null : limits[key] !== null && limits[key] > advertised.limits[key])
+      : limits[key] > advertised.limits[key]);
     if (canonicalJson(target) !== canonicalJson(advertised.target) || canonicalJson(runtime) !== canonicalJson(advertised.runtime)
       || catalog.version !== advertised.catalog.version || catalog.sha256 !== advertised.catalog.sha256
-      || allowed.some((id) => !advertised.catalog.capability_ids.includes(id))) throw new SurfaceProgramValidationError("runtime_catalog_mismatch");
+      || expires.millis > Date.parse(advertised.expires_at)
+      || limitEscalated || allowed.some((id) => !advertised.catalog.capability_ids.includes(id))) throw new SurfaceProgramValidationError("runtime_catalog_mismatch");
   }
   return envelope;
 }
@@ -329,11 +446,12 @@ function surfaceProgramReceiptBindings(envelope) {
   return Object.freeze({ program_sha256: envelope.program.sha256, catalog_sha256: envelope.catalog.sha256, bindings_sha256: sha256(envelope.bindings) });
 }
 
-const SENSITIVE_TEXT = /(?:\bBearer\s+[A-Za-z0-9._~-]+|\b(?:sk|AIza|ya29)[-._A-Za-z0-9]{8,}|password\s*[:=]|cookie\s*[:=]|authorization\s*[:=]|-----BEGIN [A-Z ]+PRIVATE KEY-----)/i;
+const SENSITIVE_TEXT = /(?:\bBearer\s+|\b(?:sk|AIza|ya29)[-._A-Za-z0-9]{8,}|password|cookie|authorization|private.?key|access.?token|refresh.?token|session|clipboard|stdout|stderr|environment|<[^>]+>|https?:\/\/|data:)/i;
+const SAFE_SUMMARY = /^[A-Za-z0-9][A-Za-z0-9 _.,:;()\/-]*$/;
 
 function safeSummary(value, label, max = 1000) {
   const text = value == null ? "" : String(value).trim();
-  if (text.length > max || SENSITIVE_TEXT.test(text)) throw new SurfaceProgramValidationError(`sensitive_or_invalid_${label}`);
+  if (!text || Buffer.byteLength(text, "utf8") > max || hasLoneSurrogate(text) || !SAFE_SUMMARY.test(text) || SENSITIVE_TEXT.test(text)) throw new SurfaceProgramValidationError(`sensitive_or_invalid_${label}`);
   return text;
 }
 
@@ -376,7 +494,8 @@ function validateSurfaceExecutionEvent(envelope, value, claim, options = {}) {
   if (!fields) throw new SurfaceProgramValidationError("invalid_event_kind");
   const payload = closedRecord(event.payload, fields, "event_payload");
   const occurred = timestamp(event.occurred_at, "occurred_at");
-  if (occurred.millis > (options.nowMs ?? Date.now()) + MAX_CLOCK_SKEW_MS) throw new SurfaceProgramValidationError("future_event");
+  const issued = timestamp(envelope.issued_at, "issued_at");
+  if (occurred.millis > (options.nowMs ?? Date.now()) + MAX_CLOCK_SKEW_MS || occurred.millis < issued.millis - MAX_CLOCK_SKEW_MS) throw new SurfaceProgramValidationError("event_timestamp_out_of_bounds");
   integer(event.sequence, "event_sequence", 1);
   requiredText(event.event_id, "event_id", 160);
   const claimant = validateClaimant(event.claimant, envelope, claim);
@@ -393,14 +512,16 @@ function validateSurfaceExecutionEvent(envelope, value, claim, options = {}) {
     requiredText(payload.approval_id, "approval_id", 160);
     if (!EFFECT_CLASSES.includes(payload.effect_class)) throw new SurfaceProgramValidationError("invalid_effect_class");
     if (!envelope.catalog.allowed_capability_ids.includes(requiredText(payload.capability_id, "capability_id", 120))) throw new SurfaceProgramValidationError("capability_escalation");
-    requiredText(payload.tool_call_id, "tool_call_id", 160); integer(payload.attempt, "attempt", 1); timestamp(payload.expires_at, "approval_expires_at");
+    requiredText(payload.tool_call_id, "tool_call_id", 160); integer(payload.attempt, "attempt", 1);
+    const approvalExpiry = timestamp(payload.expires_at, "approval_expires_at");
+    if (approvalExpiry.millis <= occurred.millis || approvalExpiry.millis > Date.parse(envelope.expires_at)) throw new SurfaceProgramValidationError("invalid_approval_expiry");
   }
   if (kind === "approval_resolved") {
     requiredText(payload.approval_id, "approval_id", 160);
     if (!["approved", "denied", "expired", "cancelled"].includes(payload.status)) throw new SurfaceProgramValidationError("invalid_approval_status");
   }
   if (kind === "progress") {
-    safeSummary(payload.message, "progress", 500); integer(payload.completed, "completed"); integer(payload.total, "total");
+    safeSummary(payload.message, "progress", 240); integer(payload.completed, "completed"); integer(payload.total, "total");
     if (payload.completed > payload.total) throw new SurfaceProgramValidationError("invalid_progress");
   }
   if (kind === "stopping" && !["user_stop", "timeout", "policy_revoked", "surface_shutdown"].includes(payload.reason)) throw new SurfaceProgramValidationError("invalid_stopping_reason");
@@ -427,17 +548,21 @@ function validateSurfaceProgramToolReceipt(envelope, value, claim, options = {})
   const previous = options.previousToolReceipt || null;
   const expectedPrevious = previous ? previous.receipt_sha256 : null;
   if (receipt.previous_receipt_sha256 !== expectedPrevious) throw new SurfaceProgramValidationError("tool_receipt_chain_mismatch");
-  const expectedPreState = previous?.post_state_sha256 || envelope.bindings.state_sha256;
+  const priorReceipts = options.toolReceipts || (previous ? [previous] : []);
+  const mostRecentState = priorReceipts.slice().reverse().find((item) => item.post_state_sha256)?.post_state_sha256;
+  const expectedPreState = mostRecentState || envelope.bindings.state_sha256;
   if (receipt.pre_state_sha256 !== expectedPreState) throw new SurfaceProgramValidationError("pre_state_sha256_mismatch");
-  nullableText(receipt.approval_id, "approval_id", 160);
+  const approvalId = nullableText(receipt.approval_id, "approval_id", 160);
+  if (approvalId !== null && !options.approvalIds?.includes(approvalId)) throw new SurfaceProgramValidationError("approval_id_mismatch");
   const started = timestamp(receipt.started_at, "started_at"); const finished = timestamp(receipt.finished_at, "finished_at");
   if (finished.millis < started.millis) throw new SurfaceProgramValidationError("invalid_receipt_timestamps");
   if (!["succeeded", "failed", "rejected", "stale_state", "timed_out", "stopped", "indeterminate"].includes(receipt.status)) throw new SurfaceProgramValidationError("invalid_tool_status");
   const result = closedRecord(receipt.result, ["summary", "data_sha256", "resource_id"], "tool_result");
-  safeSummary(result.summary, "tool_result", 1000);
+  safeSummary(result.summary, "tool_result", 240);
   if (result.data_sha256 != null) digest(result.data_sha256, "data_sha256");
-  nullableText(result.resource_id, "resource_id", 240);
+  if (result.resource_id !== null && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(requiredText(result.resource_id, "resource_id", 160))) throw new SurfaceProgramValidationError("invalid_resource_id");
   if (receipt.post_state_sha256 != null) digest(receipt.post_state_sha256, "post_state_sha256");
+  if (receipt.status === "succeeded" && options.effectClass && options.effectClass !== "read" && receipt.post_state_sha256 === null) throw new SurfaceProgramValidationError("missing_mutation_post_state");
   const claimedDigest = digest(receipt.receipt_sha256, "receipt_sha256");
   if (claimedDigest !== receiptDigest(receipt)) throw new SurfaceProgramValidationError("receipt_sha256_mismatch");
   return Object.freeze({ ...receipt, claimant, started_at: started.text, finished_at: finished.text, result: Object.freeze({ ...result }) });
@@ -457,6 +582,7 @@ function validateSurfaceProgramTerminalReceipt(envelope, value, claim, options =
   const started = receipt.started_at == null ? null : timestamp(receipt.started_at, "started_at");
   const finished = timestamp(receipt.finished_at, "finished_at");
   if (started && finished.millis < started.millis) throw new SurfaceProgramValidationError("invalid_receipt_timestamps");
+  if (started === null && receipt.status !== "rejected") throw new SurfaceProgramValidationError("invalid_started_at_for_status");
   const attempts = closedRecord(receipt.tool_attempts, ["count", "first_receipt_sha256", "last_receipt_sha256"], "tool_attempts");
   integer(attempts.count, "tool_attempt_count", 0, envelope.limits.tool_calls);
   for (const field of ["first_receipt_sha256", "last_receipt_sha256"]) if (attempts[field] != null) digest(attempts[field], field);
@@ -466,12 +592,21 @@ function validateSurfaceProgramTerminalReceipt(envelope, value, claim, options =
   const lastDigest = toolReceipts[toolReceipts.length - 1]?.receipt_sha256 || null;
   if (attempts.first_receipt_sha256 !== firstDigest || attempts.last_receipt_sha256 !== lastDigest) throw new SurfaceProgramValidationError("tool_attempt_chain_mismatch");
   const result = closedRecord(receipt.result, ["summary", "data_sha256", "artifact_refs"], "terminal_result");
-  const summary = safeSummary(result.summary, "terminal_result", Math.min(2000, envelope.limits.result_bytes));
+  const summary = safeSummary(result.summary, "terminal_result", 240);
   if (result.data_sha256 != null) digest(result.data_sha256, "data_sha256");
   const artifactRefs = stringArray(result.artifact_refs, "artifact_refs", 32, 129);
   if (artifactRefs.some((ref) => !/^artifact_[A-Za-z0-9_-]{1,120}$/.test(ref))) throw new SurfaceProgramValidationError("invalid_artifact_refs");
+  requireSortedUnique(artifactRefs, "artifact_refs");
   const error = closedRecord(receipt.error, ["code", "message"], "terminal_error");
-  nullableText(error.code, "error_code", 120); if (error.message != null) safeSummary(error.message, "error_message", 1000);
+  const errorCode = nullableText(error.code, "error_code", 120);
+  const errorMessage = error.message === null ? null : safeSummary(error.message, "error_message", 240);
+  const errorCodes = {
+    rejected: ["proposal_rejected", "policy_denied", "stale_state", "unsupported_profile"],
+    failed: ["runtime_failed", "tool_failed", "receipt_failed", "limit_exceeded"],
+    timed_out: ["timeout"], stopped: ["user_stop", "policy_revoked", "surface_shutdown"],
+    interrupted: ["runtime_interrupted", "surface_shutdown"], indeterminate: ["indeterminate"], completed: [],
+  };
+  if (receipt.status === "completed" ? (errorCode !== null || errorMessage !== null) : (errorCode === null || errorMessage === null || !errorCodes[receipt.status].includes(errorCode))) throw new SurfaceProgramValidationError("invalid_terminal_error");
   if (receipt.final_state_sha256 != null) digest(receipt.final_state_sha256, "final_state_sha256");
   const expectedTerminalPrevious = toolReceipts[toolReceipts.length - 1]?.receipt_sha256 || null;
   if (receipt.previous_receipt_sha256 !== expectedTerminalPrevious) throw new SurfaceProgramValidationError("terminal_receipt_chain_mismatch");
@@ -486,5 +621,5 @@ module.exports = {
   sanitizeExecutionRuntime, sanitizeExecutionRuntimes, selectSurfaceRuntime,
   createSurfaceProgramEnvelope, validateSurfaceProgramEnvelope, surfaceProgramReceiptBindings,
   receiptDigest, validateSurfaceExecutionEvent, validateSurfaceProgramToolReceipt,
-  validateSurfaceProgramTerminalReceipt,
+  validateSurfaceProgramTerminalReceipt, validateCapabilitySnapshot, capabilitySnapshotFromManifest,
 };

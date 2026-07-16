@@ -7221,12 +7221,14 @@ async function recordBrowserTaskProductEvent(task, stage, receipt = null) {
 
 async function recordToolRequestProductEvent(requestRecord, stage, receipt = null) {
   const eventType = stage === "receipt" ? "tool.request.receipt" : `tool.request.${stage}`;
-  const receiptKey = receipt?.id ? `:${receipt.id}` : "";
+  const semanticId = receipt?.id || receipt?.event_id || receipt?.receipt_id || "";
+  const receiptKey = semanticId ? `:${semanticId}` : "";
+  const semanticRecord = receipt?.event_id || receipt?.receipt_id ? receipt : null;
   await recordProductEvent({
     event_type: eventType,
     stream_id: requestRecord.session_id ? productSessionStreamId(requestRecord.session_id) : `tool-request:${requestRecord.id}`,
     idempotency_key: `tool-request:${requestRecord.id}:${stage}${receiptKey}`,
-    occurred_at: receipt?.ts || requestRecord.updated_at || requestRecord.created_at,
+    occurred_at: receipt?.ts || receipt?.occurred_at || receipt?.finished_at || requestRecord.updated_at || requestRecord.created_at,
     actor: {
       kind: stage === "queued" ? "gateway" : "device",
       id: receipt?.device_id || requestRecord.claimed_by || requestRecord.source_device_id || requestRecord.source || "device",
@@ -7234,7 +7236,7 @@ async function recordToolRequestProductEvent(requestRecord, stage, receipt = nul
     correlation_id: requestRecord.id,
     payload: {
       request: summarizeToolRequest(requestRecord, { includeInput: stage === "queued" }),
-      receipt: receipt ? {
+      receipt: semanticRecord || (receipt ? {
         id: receipt.id,
         ts: receipt.ts,
         ok: receipt.ok,
@@ -7243,7 +7245,7 @@ async function recordToolRequestProductEvent(requestRecord, stage, receipt = nul
         error: receipt.error,
         result: receipt.result,
         local_receipt: receipt.local_receipt,
-      } : null,
+      } : null),
     },
   });
 }
@@ -11019,6 +11021,7 @@ function createBrowserTask(body) {
     created_at: now,
     updated_at: now,
     finished_at: "",
+    state_revision: 0,
   };
   writeBrowserTask(task);
   return task;
@@ -11106,6 +11109,9 @@ function upsertDeviceClient(body) {
   const clients = readDeviceClientsMap();
   const previous = clients[deviceId] || {};
   const surfaceType = sanitizeSurfaceType(body.surface_type || body.surfaceType || previous.surface_type || "unknown");
+  const localToolManifest = sanitizeLocalToolManifest(
+    body.local_tool_manifest || body.localToolManifest || body.tool_manifest || body.capabilities || previous.local_tool_manifest || [],
+  );
   const device = {
     id: deviceId,
     device_id: deviceId,
@@ -11114,12 +11120,10 @@ function upsertDeviceClient(body) {
     session_id: body.session_id ? sanitizeOptionalId(body.session_id, previous.session_id || "default") : previous.session_id || "",
     status: sanitizeDeviceStatus(body.status || "online"),
     online: body.online !== false,
-    local_tool_manifest: sanitizeLocalToolManifest(
-      body.local_tool_manifest || body.localToolManifest || body.tool_manifest || body.capabilities || previous.local_tool_manifest || [],
-    ),
+    local_tool_manifest: localToolManifest,
     execution_runtimes: sanitizeExecutionRuntimes(
       body.execution_runtimes || body.executionRuntimes || previous.execution_runtimes || [],
-      { device_id: deviceId, surface_type: surfaceType },
+      { device_id: deviceId, surface_type: surfaceType, capabilities: localToolManifest },
     ),
     metadata: sanitizeToolJson(body.metadata || body.client || {}),
     last_heartbeat_at: now,
@@ -11171,6 +11175,7 @@ function summarizeDeviceClient(device) {
     execution_runtimes: sanitizeExecutionRuntimes(device.execution_runtimes || [], {
       device_id: device.device_id || device.id,
       surface_type: device.surface_type,
+      capabilities: sanitizeLocalToolManifest(device.local_tool_manifest || []),
     }),
     metadata: sanitizeToolJson(device.metadata || {}),
     first_seen_at: device.first_seen_at || "",
@@ -11221,10 +11226,11 @@ function sanitizeLocalToolManifestItem(item) {
     return tool ? { tool, risk: "unknown", approval: "unknown" } : null;
   }
   if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-  const tool = sanitizeToolName(item.tool || item.name || item.id || "");
+  const tool = sanitizeToolName(item.capability_id || item.tool || item.name || item.id || "");
   if (!tool) return null;
   return {
     tool,
+    capability_id: tool,
     risk: String(item.risk || "unknown").slice(0, 80),
     approval: String(item.approval || item.approval_mode || "unknown").slice(0, 80),
     description: item.description ? truncate(String(item.description), 240) : undefined,
@@ -11238,6 +11244,10 @@ function sanitizeLocalToolManifestItem(item) {
     idempotency: item.idempotency ? truncate(String(item.idempotency), 80) : undefined,
     concurrency: item.concurrency ? truncate(String(item.concurrency), 80) : undefined,
     restore_capability: item.restore_capability === true ? true : undefined,
+    approval_class: item.approval_class ? truncate(String(item.approval_class), 80) : undefined,
+    restore_capability_id: Object.hasOwn(item, "restore_capability_id")
+      ? (item.restore_capability_id === null ? null : sanitizeToolName(item.restore_capability_id))
+      : undefined,
   };
 }
 
@@ -11321,6 +11331,7 @@ function deviceSupportsTool(device, tool) {
   if (safeTool === PROGRAM_TOOL) return sanitizeExecutionRuntimes(device.execution_runtimes || [], {
     device_id: device.device_id || device.id,
     surface_type: device.surface_type,
+    capabilities: sanitizeLocalToolManifest(device.local_tool_manifest || []),
   }).some((advertisement) => Date.parse(advertisement.expires_at) > Date.now());
   return sanitizeLocalToolManifest(device.local_tool_manifest || [])
     .some((item) => item.tool === safeTool);
@@ -11365,6 +11376,7 @@ function isToolRequestClaimableByDevice(requestRecord, device, nowMs) {
       runtime = sanitizeExecutionRuntimes(device.execution_runtimes || [], {
         device_id: device.device_id || device.id,
         surface_type: device.surface_type,
+        capabilities: sanitizeLocalToolManifest(device.local_tool_manifest || []),
       }).find((candidate) => {
         try {
           validateSurfaceProgramEnvelope(envelope, { nowMs, target_device_id: device.device_id || device.id, advertisement: candidate });
@@ -11466,13 +11478,21 @@ function readToolRequest(id) {
 function writeToolRequest(requestRecord) {
   const filePath = toolRequestPath(requestRecord.id);
   const tmpPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(requestRecord, null, 2));
+  const handle = fs.openSync(tmpPath, "w");
+  try {
+    fs.writeFileSync(handle, JSON.stringify(requestRecord, null, 2));
+    fs.fsyncSync(handle);
+  } finally { fs.closeSync(handle); }
   fs.renameSync(tmpPath, filePath);
+  const directory = fs.openSync(TOOL_REQUESTS_DIR, "r");
+  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
 }
 
-function updateToolRequest(id, patch) {
+function updateToolRequest(id, patch, expectedRevision = null) {
   const requestRecord = readToolRequest(id);
-  const next = { ...requestRecord, ...patch };
+  const revision = Number(requestRecord.state_revision || 0);
+  if (expectedRevision !== null && revision !== expectedRevision) throw new Error("tool request changed concurrently");
+  const next = { ...requestRecord, ...patch, state_revision: revision + 1 };
   writeToolRequest(next);
   return next;
 }
