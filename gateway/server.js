@@ -33,6 +33,8 @@ const { createPetCollectionHandlers } = require("./lib/pet-collection-handlers")
 const { createPetCoreHandlers } = require("./lib/pet-core-handlers");
 const { createPetSharingHandlers } = require("./lib/pet-sharing-handlers");
 const { createProfileHandlers } = require("./lib/profile-handlers");
+const { createProfileSettingsCatalog } = require("./lib/profile-settings-catalog");
+const { createProfileSettingsReader, readAgentSettingsTool } = require("./lib/profile-settings-reader");
 const { createAgentRunHandlers } = require("./lib/agent-run-handlers");
 const { createAgentRunLaunchHandlers } = require("./lib/agent-run-launch-handlers");
 const { createRouterActivationHandlers } = require("./lib/router-activation-handlers");
@@ -391,6 +393,11 @@ const agentProfile = createAgentProfileStore({
 });
 const voiceModes = createVoiceModeStore({ dataDir: DATA_DIR });
 const voiceModeHandlers = createVoiceModeHandlers({ store: voiceModes, authorized, readJsonBody, sendJson });
+const profileSettingsCatalog = createProfileSettingsCatalog({
+  agentProfile,
+  optionsPayload: gatewayProfileOptionsPayload,
+});
+const readAgentSettings = createProfileSettingsReader(profileSettingsCatalog);
 const companionCatalog = createCompanionCatalogStore({
   dataDir: DATA_DIR,
   voiceBinding: companionVoiceBindingOptions(),
@@ -450,6 +457,7 @@ const { routeProfiles } = createProfileHandlers({
   profileOptionsFromUrl, profileOptionsFromBody, requireDeviceScope,
   agentProfilePayload, readProfileHistory, recordProfileHistory,
   rejectedLanguageFields, supportedLanguagesSentence, profileApplicationSemantics,
+  settingsCatalog: profileSettingsCatalog,
 });
 const { routeAgentRunReads } = createAgentRunHandlers({
   authorizedAgent, agentAuthError, sendJson, sanitizeId,
@@ -7606,6 +7614,19 @@ function liveToolProfilePatch(args) {
   return patch;
 }
 
+const PROFILE_TOOL_ENVELOPE_FIELDS = new Set(["scope", "profile_scope", "device_id", "reason"]);
+
+function unknownLiveToolProfileFields(args) {
+  const wrapped = args?.profile && typeof args.profile === "object" && !Array.isArray(args.profile);
+  const input = wrapped ? args.profile : args;
+  const supported = new Set(agentProfile.fields());
+  return Object.keys(input || {}).filter((field) => !supported.has(field) && (wrapped || !PROFILE_TOOL_ENVELOPE_FIELDS.has(field))).sort();
+}
+
+function liveToolReadAgentSettings(call, args) {
+  return readAgentSettings(args || {}, { deviceId: normalizeDeviceId(call?.device_id || "") });
+}
+
 // Language control is model-owned: the model reasons about which languages are
 // understood (the STT constrained set) and replied in, and changes them by tool
 // call — there is no deterministic transcript matcher for language anymore. So
@@ -7676,6 +7697,9 @@ async function handleLiveVoiceToolCall(call) {
       type: "profile_options",
       ...gatewayProfileOptionsPayload(),
     };
+  }
+  if (name === "read_agent_settings") {
+    return liveToolReadAgentSettings(call, args);
   }
   if (name === "start_voice_sampler") {
     return liveToolStartVoiceSampler(args);
@@ -7956,7 +7980,16 @@ function liveToolUpdateAgentProfile(call, args) {
 // through the SAME sanitizer (agentProfile.patch drops empty/invalid values, so
 // no tool call can blank a field) and record the same history and rejection
 // semantics. Callers own whether a transcript gate runs before this.
-function applyAgentProfilePatch(call, args, patch, sourceLabel = "agent-tool") {
+function applyAgentProfilePatch(call, args, patch, sourceLabel = "agent-tool", options = {}) {
+  const unknownFields = options.validateInputFields === false ? [] : unknownLiveToolProfileFields(args);
+  if (unknownFields.length > 0) {
+    return {
+      ok: false,
+      error: "unknown_profile_fields",
+      unknown_fields: unknownFields,
+      supported_fields: agentProfile.fields(),
+    };
+  }
   const requestedScope = String(args.scope || args.profile_scope || "global").toLowerCase() === "device" ? "device" : "global";
   const deviceId = normalizeDeviceId(args.device_id || call.device_id || "");
   if (requestedScope === "device" && !deviceId) {
@@ -9864,6 +9897,10 @@ function cascadedExecuteCapabilities(call) {
       description: "Read the effective agent profile: identity (assistant_name, user_name, user_nickname, user_address), languages, voice, modality, model.",
       run: () => ({ ok: true, profile: agentProfile.effective(profileOptions) }),
     },
+    read_agent_settings: {
+      description: "List, get, search, or recommend only canonical existing gateway settings. Args: { operation?: \"list\"|\"get\"|\"search\"|\"recommend\", id?: string, query?: string, scope?: \"global\"|\"device\", limit?: number }.",
+      run: (args) => liveToolReadAgentSettings(call, args || {}),
+    },
     profile_options: {
       description: "Catalog of valid voices, languages, and models. Read before setting voice/language/model.",
       run: () => ({ ok: true, type: "profile_options", ...gatewayProfileOptionsPayload() }),
@@ -9889,7 +9926,7 @@ function cascadedExecuteCapabilities(call) {
         if (Object.keys(patch).length === 0) {
           return { ok: false, error: "no languages provided; set understand and/or reply", supported: supportedLanguagesSentence() };
         }
-        return applyAgentProfilePatch(call, args || {}, patch, "voice-execute-languages");
+        return applyAgentProfilePatch(call, args || {}, patch, "voice-execute-languages", { validateInputFields: false });
       },
     },
     agents_launch: {
@@ -10068,6 +10105,7 @@ function cascadedAgentRunTools(call) {
 
 function cascadedVoiceProfileTools(call) {
   return [
+    readAgentSettingsTool((args) => liveToolReadAgentSettings(call, args || {})),
     {
       name: "update_agent_profile",
       description: "Change your own durable settings when the user asks to. `language` is the comma-separated BCP-47 codes YOU reply in; `input_languages` is the SET of codes the USER speaks or wants you to hear, listen for, understand, transcribe, or detect. These codes shape the automatic STT transcription prompt (at most two); they do not reject other detected languages. Valid codes are any in the supported catalog (get_profile_options; e.g. en-US, am-ET, es-ES, fr-FR, ar-XA, ja-JP) — an unsupported code is dropped and the prior value kept. To switch which understood language the prompt emphasizes first (\"right now I want to speak X\"), set `input_language_primary` to a code already in `input_languages`. Set both fields in one call when the user asks you to listen in one language set and respond, speak, or reply in another. Reply language and understood languages are separate settings. Set `response_modality` to \"text\", \"speech\", or \"auto\". Set `voice` to a valid voice id (use get_profile_options; masculine maps to Charon, feminine to Aoede). Set `speaking_rate` (0.5–2.0; 1.0 = normal speed) when asked to speak faster or slower, and `voice_tone` (a few words like \"warm, upbeat\"; \"neutral\" clears it) when asked for a different voice mood. Set `model` or `reasoning_provider` to swap the reasoning model. Use scope=\"device\" only when the user says this device/phone; otherwise \"global\". Do not set response_modality=\"text\" for goodbye/stop/hush requests. Confirm briefly in the new setting language only.",

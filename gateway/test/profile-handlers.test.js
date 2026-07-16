@@ -10,6 +10,7 @@ function makeHarness(overrides = {}) {
   const calls = [];
   const agentProfile = {
     effective: () => ({ ...value }), currentVersion: () => version,
+    fields: () => ["model", "language"], defaults: () => ({ model: "default", language: "en-US" }),
     patch: (patch, meta) => { calls.push(["patch", patch, meta]); value = { ...value, ...patch }; version += 1; },
     reset: (meta) => { calls.push(["reset", meta]); value = { model: "default" }; version += 1; },
     rollback: (target, meta) => { calls.push(["rollback", target, meta]); value = { model: "rolled" }; version += 1; },
@@ -30,6 +31,12 @@ function makeHarness(overrides = {}) {
     rejectedLanguageFields: (patch) => patch.language === "xx" ? ["language"] : [],
     supportedLanguagesSentence: () => "English or Amharic",
     profileApplicationSemantics: () => ({ applies: "next_turn" }),
+    settingsCatalog: {
+      list: () => [{ id: "model" }, { id: "language" }],
+      get: (id) => id === "model" ? { id: "model" } : null,
+      search: (query) => query === "reasoning" ? [{ id: "model" }] : [],
+      recommend: (query) => query === "speak" ? [{ id: "language", recommendation: "Use language." }] : [],
+    },
     ...overrides, agentProfile,
   };
   return { ...createProfileHandlers(deps), calls };
@@ -76,6 +83,37 @@ test("put reports rejected languages and enforces device scope", async () => {
   assert.equal((await route(denied, "PUT", "/v1/agent/profile", { scope: "device" })).response.denied, true);
 });
 
+test("put rejects unknown fields atomically instead of silently inventing settings", async () => {
+  for (const body of [
+    { imaginary: true },
+    { profile: { model: "new", imaginary: true } },
+    { profile_overrides: { made_up: "value" } },
+  ]) {
+    const harness = makeHarness();
+    const result = await route(harness, "PUT", "/v1/agent/profile", body);
+    assert.equal(result.response.status, 400);
+    assert.equal(result.response.payload.error, "unknown_profile_fields");
+    assert.equal(harness.calls.some(([name]) => name === "patch"), false);
+  }
+  const metadata = await route(makeHarness(), "PUT", "/v1/agent/profile", { model: "new", source: "voice", scope: "global" });
+  assert.equal(metadata.response.status, 200);
+});
+
+test("settings catalog routes list, get, search, and recommend canonical settings", async () => {
+  const harness = makeHarness();
+  const listed = await route(harness, "GET", "/v1/agent/settings");
+  assert.equal(listed.response.payload.count, 2);
+  const found = await route(harness, "GET", "/v1/agent/settings", null, "?q=reasoning");
+  assert.deepEqual(found.response.payload.settings, [{ id: "model" }]);
+  const exact = await route(harness, "GET", "/v1/agent/settings/model");
+  assert.equal(exact.response.payload.id, "model");
+  const missing = await route(harness, "GET", "/v1/agent/settings/imaginary");
+  assert.equal(missing.response.status, 404);
+  assert.equal(missing.response.payload.error, "unknown_setting");
+  const recommendations = await route(harness, "GET", "/v1/agent/settings/recommend", null, "?q=speak");
+  assert.equal(recommendations.response.payload.settings[0].id, "language");
+});
+
 test("reset records before and after versions with source defaults", async () => {
   for (const body of [{ source: "settings" }, {}]) {
     const harness = makeHarness();
@@ -104,6 +142,7 @@ test("all profile routes authorize and unrelated combinations fall through", asy
   const denied = makeHarness({ authorizedAgent: () => false });
   for (const [method, path] of [["GET", "/v1/agent/profile"], ["PUT", "/v1/agent/profile"],
     ["GET", "/v1/agent/profile/history"], ["GET", "/v1/agent/profile/versions"],
+    ["GET", "/v1/agent/settings"], ["GET", "/v1/agent/settings/model"],
     ["POST", "/v1/agent/profile/reset"], ["POST", "/v1/agent/profile/rollback"]]) {
     const result = await route(denied, method, path, {}); assert.equal(result.handled, true); assert.equal(result.response.status, 401);
   }

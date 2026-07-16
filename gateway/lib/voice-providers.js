@@ -1,5 +1,4 @@
 "use strict";
-
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -18,7 +17,7 @@ const {
   googleCredentialFile,
   serviceAccountAccessToken,
 } = require("./google-auth");
-
+const { readAgentSettingsGeminiDeclaration } = require("./profile-settings-reader");
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
   sample_rate: 16000,
@@ -2748,6 +2747,7 @@ class GeminiLiveVoiceProvider {
               properties: {},
             },
           },
+          readAgentSettingsGeminiDeclaration(),
           {
             name: "start_voice_sampler",
             description: "Return an ordered voice-sampler plan when the user asks to sample, test, preview, hear, go through, or say something in every supported voice. Do not persist a voice change for this. Each sample must be played as its own Live session because Gemini Live voice selection is session-level.",

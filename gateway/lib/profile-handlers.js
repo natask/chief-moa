@@ -5,6 +5,7 @@ function createProfileHandlers({
   profileOptionsFromUrl, profileOptionsFromBody, requireDeviceScope,
   agentProfilePayload, readProfileHistory, recordProfileHistory,
   rejectedLanguageFields, supportedLanguagesSentence, profileApplicationSemantics,
+  settingsCatalog,
 }) {
   function authorize(request, response) {
     if (authorizedAgent(request)) return true;
@@ -15,6 +16,15 @@ function createProfileHandlers({
   async function putProfile(request, response) {
     const body = await readJsonBody(request);
     const patch = body && typeof body === "object" ? (body.profile || body.profile_overrides || body) : {};
+    const unknownFields = unknownProfileFields(body, patch, agentProfile.fields());
+    if (unknownFields.length > 0) {
+      sendJson(response, 400, {
+        error: "unknown_profile_fields",
+        unknown_fields: unknownFields,
+        supported_fields: agentProfile.fields(),
+      });
+      return;
+    }
     const profileOptions = profileOptionsFromBody(body, "global");
     if (!requireDeviceScope(response, profileOptions)) return;
     const before = agentProfile.effective(profileOptions);
@@ -66,6 +76,26 @@ function createProfileHandlers({
 
   async function routeProfiles(request, response, url) {
     const pathname = url.pathname;
+    if (request.method === "GET" && (pathname === "/v1/agent/settings" || pathname.startsWith("/v1/agent/settings/"))) {
+      if (!authorize(request, response)) return true;
+      const options = profileOptionsFromUrl(url);
+      const query = url.searchParams.get("q") || url.searchParams.get("query") || "";
+      const limit = Number(url.searchParams.get("limit") || 20);
+      if (pathname === "/v1/agent/settings") {
+        const settings = query ? settingsCatalog.search(query, { ...options, limit }) : settingsCatalog.list(options);
+        sendJson(response, 200, { version: "profile-settings/v1", query, count: settings.length, settings });
+        return true;
+      }
+      if (pathname === "/v1/agent/settings/recommend") {
+        const settings = settingsCatalog.recommend(query, { ...options, limit });
+        sendJson(response, 200, { version: "profile-settings/v1", query, count: settings.length, settings });
+        return true;
+      }
+      const id = decodeURIComponent(pathname.slice("/v1/agent/settings/".length));
+      const setting = settingsCatalog.get(id, options);
+      sendJson(response, setting ? 200 : 404, setting || { error: "unknown_setting", setting_id: id });
+      return true;
+    }
     if (pathname === "/v1/agent/profile" && request.method === "GET") {
       if (authorize(request, response)) sendJson(response, 200, agentProfilePayload({}, profileOptionsFromUrl(url)));
       return true;
@@ -99,4 +129,15 @@ function createProfileHandlers({
   return { routeProfiles, putProfile, resetProfile, rollbackProfile };
 }
 
-module.exports = { createProfileHandlers };
+const PROFILE_ENVELOPE_FIELDS = new Set(["profile", "profile_overrides", "scope", "profile_scope", "device_id", "deviceId", "source", "reason"]);
+
+function unknownProfileFields(body, patch, supportedFields) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return [];
+  const wrapped = body && typeof body === "object" && (body.profile === patch || body.profile_overrides === patch);
+  const allowed = new Set(supportedFields || []);
+  return Object.keys(patch)
+    .filter((field) => !allowed.has(field) && (wrapped || !PROFILE_ENVELOPE_FIELDS.has(field)))
+    .sort();
+}
+
+module.exports = { createProfileHandlers, unknownProfileFields };
