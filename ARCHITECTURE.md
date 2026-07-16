@@ -421,6 +421,14 @@ transcript, which the gateway always requests from the Live provider
 (`inputAudioTranscription`), so the exact-transcript guarantee holds on every
 Live model.
 
+The voice WebSocket validates an explicit `session_start.delivery_intent`
+before it creates turn context or provider sessions. `literal_text` is an
+STT-only turn: it emits transcript events and an exact `literal_candidate`, but
+does not attach screen/memory context or invoke a reasoning model, tools, TTS,
+or canonical agent-run hooks. Omitting the field retains the legacy
+`assistant_response` behavior, and intent is scoped to one turn rather than the
+socket or a reconnect.
+
 Native-audio Live models are audio-only for output: they reject any text-output
 request and close the socket with 1007 "Text output is not supported for native
 audio output model." The gateway therefore omits `outputAudioTranscription` for

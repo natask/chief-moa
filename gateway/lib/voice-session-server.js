@@ -13,6 +13,9 @@ const {
 } = require("./voice-providers");
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
 const { canonicalVoice } = require("./profile-options");
+const literalDelivery = require("./voice-literal-delivery");
+const { DELIVERY_INTENTS, completeLiteralTurn, literalSttHooks, resolveSessionDeliveryIntent, transcribeLiteralTurn } = literalDelivery;
+const { abortSttStream, closeAudioStream, commitLiveSession, commitLiveTextSession } = require("./voice-session-streams");
 
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
@@ -293,6 +296,12 @@ class VoiceSessionConnection {
   }
 
   async handleSessionStart(event) {
+    const intent = resolveSessionDeliveryIntent(event);
+    if (intent.error) {
+      this.sendError(intent.error.message, intent.error.code);
+      return;
+    }
+    const { deliveryIntent } = intent;
     if (this.responding) {
       await this.closeCurrentTurn("interrupted");
       this.responding = false;
@@ -325,6 +334,7 @@ class VoiceSessionConnection {
       effectiveProfile,
       persona,
       providerStatus,
+      deliveryIntent,
       deviceId,
       source: String(event.source || "android-overlay").slice(0, 120),
       format,
@@ -362,8 +372,8 @@ class VoiceSessionConnection {
       transportSummary: {},
       syntheticText: "",
     };
-    turn.contextPrompt = this.contextPromptForTurn(turn);
-    turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
+    turn.contextPrompt = deliveryIntent === DELIVERY_INTENTS.ASSISTANT_RESPONSE ? this.contextPromptForTurn(turn) : "";
+    turn.contextSummary = deliveryIntent === DELIVERY_INTENTS.ASSISTANT_RESPONSE ? contextSummaryForTurn(turn, this.contextProvider) : {};
 
     turn.audioStream = fs.createWriteStream(turn.pcmPath, { flags: "w" });
     turn.audioStream.on("error", (error) => {
@@ -373,7 +383,7 @@ class VoiceSessionConnection {
     });
 
     this.turn = turn;
-    if (typeof this.voiceProvider.createLiveTurnSession === "function") {
+    if (deliveryIntent === DELIVERY_INTENTS.ASSISTANT_RESPONSE && typeof this.voiceProvider.createLiveTurnSession === "function") {
       turn.providerEvents = this.createProviderEvents(turn);
       try {
         turn.liveSession = this.voiceProvider.createLiveTurnSession(turn, this.providerHooks(turn, turn.providerEvents));
@@ -404,9 +414,10 @@ class VoiceSessionConnection {
     if (typeof this.voiceProvider.createStreamingSttSession === "function") {
       turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
       try {
+        const sttHooks = literalSttHooks(deliveryIntent, this.providerHooks(turn, turn.providerEvents));
         turn.sttStream = this.voiceProvider.createStreamingSttSession(
           turn,
-          this.providerHooks(turn, turn.providerEvents),
+          sttHooks,
         );
         if (turn.liveSession && turn.sttStream) {
           turn.sttStreamRole = "transcript_sidecar";
@@ -424,12 +435,13 @@ class VoiceSessionConnection {
       branch_id: branchId,
       turn_id: turnId,
       playback_policy: playbackPolicy,
+      delivery_intent: deliveryIntent,
     });
     turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     await this.recordProviderEvent(turn, turn.providerEvents, "profile_applied", {
       application: "turn_start",
     });
-    await this.recordProviderEvent(turn, turn.providerEvents, "context_attached", turn.contextSummary);
+    if (deliveryIntent === DELIVERY_INTENTS.ASSISTANT_RESPONSE) await this.recordProviderEvent(turn, turn.providerEvents, "context_attached", turn.contextSummary);
     await this.sendEvent({
       type: "profile_applied",
       session_id: sessionId,
@@ -486,6 +498,16 @@ class VoiceSessionConnection {
       turn.transportSummary = transportSummaryForTurn(turn, "audio");
       await this.recordProviderEvent(turn, providerEvents, "capture_committed", turn.captureSummary);
       await this.recordProviderEvent(turn, providerEvents, "transport_committed", turn.transportSummary);
+      if (turn.deliveryIntent === DELIVERY_INTENTS.LITERAL_TEXT) {
+        await closeAudioStream(turn);
+        const result = await transcribeLiteralTurn(this.voiceProvider, turn, turnInputLanguages(turn));
+        if (this.turn !== turn || turn.completing) return;
+        turn.completing = true;
+        await completeLiteralTurn(this, turn, providerEvents, result, {
+          writeTurnMetadata, nowIso, turnInputLanguages,
+        });
+        return;
+      }
       if (turn.liveSession) {
         // Live/native path: the provider streams through the session-start hooks
         // and never calls onTurnProgress, so the session server keepalives from
@@ -551,6 +573,18 @@ class VoiceSessionConnection {
       turn.transportSummary = transportSummaryForTurn(turn, "text");
       await this.recordProviderEvent(turn, providerEvents, "capture_committed", turn.captureSummary);
       await this.recordProviderEvent(turn, providerEvents, "transport_committed", turn.transportSummary);
+      if (turn.deliveryIntent === DELIVERY_INTENTS.LITERAL_TEXT) {
+        await closeAudioStream(turn);
+        turn.completing = true;
+        await completeLiteralTurn(this, turn, providerEvents, {
+          text,
+          transcript_source: "text",
+          transcript_provider: "client",
+        }, {
+          writeTurnMetadata, nowIso, turnInputLanguages,
+        });
+        return;
+      }
       if (turn.liveSession) {
         this.startTurnProgress(turn, "reasoning");
       }
@@ -1187,6 +1221,9 @@ class VoiceSessionConnection {
     if (!turn || turn.recordedCanonical || !this.onTurnCompleted) {
       return;
     }
+    if (turn.deliveryIntent === DELIVERY_INTENTS.LITERAL_TEXT) {
+      return;
+    }
     if (turn.status === "completed") {
       return;
     }
@@ -1599,13 +1636,14 @@ class VoiceSessionConnection {
     await sendWs(this.ws, JSON.stringify(payload));
   }
 
-  sendError(message) {
+  sendError(message, code = "") {
     if (this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
     this.ws.send(JSON.stringify({
       type: "error",
       message,
+      ...(code ? { code } : {}),
     }));
   }
 }
@@ -1764,46 +1802,6 @@ function effectiveProfileForSession(profile, event) {
   return next;
 }
 
-// Tear down the streaming STT recognizer without finalizing (cancel/close/
-// interrupt paths). The commit path finalizes via runSttStage instead; here the
-// turn is terminal, so we just destroy the gRPC stream. Best-effort, never
-// throws — a streaming fault must never take the session down.
-function abortSttStream(turn) {
-  if (!turn || !turn.sttStream) {
-    return;
-  }
-  const stream = turn.sttStream;
-  turn.sttStream = null;
-  try {
-    stream.abort?.();
-  } catch {
-    // best effort
-  }
-}
-
-async function closeAudioStream(turn) {
-  if (!turn.audioStream) {
-    return;
-  }
-
-  const stream = turn.audioStream;
-  turn.audioStream = null;
-  await new Promise((resolve, reject) => {
-    stream.once("error", reject);
-    stream.end(resolve);
-  });
-}
-
-async function commitLiveSession(turn) {
-  turn.liveSession.commit();
-  return turn.liveSession.done;
-}
-
-async function commitLiveTextSession(turn, text) {
-  turn.liveSession.sendText(text);
-  return turn.liveSession.done;
-}
-
 async function writeAssistantAudio(turn, chunk) {
   const value = toBuffer(chunk);
   if (value.length === 0) {
@@ -1863,6 +1861,7 @@ function writeTurnMetadata(turn, patch) {
     profile_version: turn.profileVersion || previous.profile_version || "",
     provider: turn.providerStatus?.provider || previous.provider || "",
     provider_ids: turn.providerStatus?.selected_providers || previous.provider_ids || {},
+    delivery_intent: turn.deliveryIntent || previous.delivery_intent || DELIVERY_INTENTS.ASSISTANT_RESPONSE,
     source: turn.source,
     input_format: turn.format,
     playback_policy: turn.playbackPolicy || previous.playback_policy || {},
