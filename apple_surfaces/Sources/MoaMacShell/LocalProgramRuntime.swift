@@ -2,6 +2,17 @@
 import Foundation
 import MoaMacCore
 
+public struct MacProgramApprovalDecision: Sendable {
+    public let approvalID: String
+    public let status: String
+    public init(approvalID: String, status: String) { self.approvalID = approvalID; self.status = status }
+}
+
+public protocol MacProgramApprovalAuthorizing: Sendable {
+    func resolve(approvalID: String, effectClass: String, capabilityID: String,
+                 executionID: String, expiresAt: Date) -> MacProgramApprovalDecision
+}
+
 /// Parent-side semantic capability broker. The JavaScript helper has no direct
 /// AppKit, Accessibility, filesystem, network, Apple Events, JXA, or shell bridge.
 final class MacProgramBridge: @unchecked Sendable {
@@ -10,13 +21,17 @@ final class MacProgramBridge: @unchecked Sendable {
     private let allowed: Set<String>
     private let maximumCalls: Int
     private let deadline: Date
-    private let preStateSHA256: String
+    private var preStateSHA256: String
     private let journal: any MacProgramJournaling
     private let claimant: MacReceiptClaimant
     private let programSHA256: String
     private let catalogSHA256: String
     private let bindingsSHA256: String
     private let now: @Sendable () -> Date
+    private let isRevoked: @Sendable () -> Bool
+    private let bindings: MacLocalProgramEnvelope.Bindings?
+    private let alwaysAsk: Set<String>
+    private let approvalAuthorizer: (any MacProgramApprovalAuthorizing)?
     private(set) var calls = 0
     private(set) var receipts: [MacLocalActionReceipt] = []
     private(set) var failure: LocalProgramError?
@@ -27,6 +42,9 @@ final class MacProgramBridge: @unchecked Sendable {
          journal: any MacProgramJournaling,
          claimant: MacReceiptClaimant, programSHA256: String,
          catalogSHA256: String, bindingsSHA256: String,
+         bindings: MacLocalProgramEnvelope.Bindings? = nil,
+         alwaysAsk: Set<String> = [], approvalAuthorizer: (any MacProgramApprovalAuthorizing)? = nil,
+         isRevoked: @escaping @Sendable () -> Bool = { false },
          now: @escaping @Sendable () -> Date) {
         self.authority = authority
         self.executionID = executionID
@@ -37,82 +55,121 @@ final class MacProgramBridge: @unchecked Sendable {
         self.journal = journal
         self.claimant = claimant; self.programSHA256 = programSHA256
         self.catalogSHA256 = catalogSHA256; self.bindingsSHA256 = bindingsSHA256
+        self.bindings = bindings; self.alwaysAsk = alwaysAsk; self.approvalAuthorizer = approvalAuthorizer
+        self.isRevoked = isRevoked
         self.now = now
     }
 
     func call(_ capabilityID: String, _ inputJSON: String) -> String {
         let startedAt = now()
-        let inputDigest = MacLocalProgramDigest.data(Data(inputJSON.utf8))
+        var inputDigest: String?
         var toolCallID: String?
+        var consumedApprovalID: String?
         do {
             if let failure { throw failure }
             guard try !journal.isStopRequested(executionID: executionID) else {
                 throw LocalProgramError.stopped
             }
             let calledAt = startedAt
-            guard calledAt < deadline else { throw LocalProgramError.expired }
             calls += 1
-            guard calls <= maximumCalls else { throw LocalProgramError.toolBudgetExceeded }
-            let callID = "call_\(executionID)_\(calls)"
-            toolCallID = callID
-            try journal.beginTool(executionID: executionID,
-                pending: .init(toolCallID: callID, capabilityID: capabilityID,
-                    inputSHA256: inputDigest, preStateSHA256: preStateSHA256,
-                    sequence: calls, startedAt: calledAt))
-            guard allowed.contains(capabilityID) else { throw LocalProgramError.capabilityDenied }
             guard let data = inputJSON.data(using: .utf8), data.count <= 8 * 1024 else {
                 throw LocalProgramError.invalidInput
             }
-            let decoded: Any
-            do { decoded = try JSONSerialization.jsonObject(with: data) }
-            catch { throw LocalProgramError.invalidInput }
-            guard let input = decoded as? [String: Any] else { throw LocalProgramError.invalidInput }
+            let canonical = try MacCanonicalJSON.parse(data)
+            guard case .object(let input) = canonical else { throw LocalProgramError.invalidInput }
+            try Self.validateInput(capabilityID: capabilityID, input: input)
+            inputDigest = MacLocalProgramDigest.data(canonical.canonicalData)
+            let callID = "call_\(executionID)_\(calls)"
+            toolCallID = callID
+            let effectClass = MacLocalProgramAdvertisement.descriptors.first {
+                $0.capabilityID == capabilityID
+            }?.effectClass ?? "external_side_effect"
+            try journal.beginTool(executionID: executionID,
+                pending: .init(toolCallID: callID, capabilityID: capabilityID,
+                    inputSHA256: inputDigest!, preStateSHA256: preStateSHA256,
+                    effectClass: effectClass, sequence: calls, startedAt: calledAt))
+            guard calledAt < deadline else { throw LocalProgramError.expired }
+            guard calls <= maximumCalls else { throw LocalProgramError.toolBudgetExceeded }
+            guard allowed.contains(capabilityID) else { throw LocalProgramError.capabilityDenied }
+            if alwaysAsk.contains(effectClass) || effectClass != "read" {
+                let approvalID = "approval_\(UUID().uuidString.lowercased())"
+                let expiresAt = min(deadline, calledAt.addingTimeInterval(60))
+                try journal.requireApproval(executionID: executionID, approvalID: approvalID,
+                    effectClass: effectClass, capabilityID: capabilityID, toolCallID: callID,
+                    expiresAt: expiresAt, at: calledAt)
+                let decision = approvalAuthorizer?.resolve(approvalID: approvalID,
+                    effectClass: effectClass, capabilityID: capabilityID,
+                    executionID: executionID, expiresAt: expiresAt) ??
+                    .init(approvalID: approvalID, status: "denied")
+                guard decision.approvalID == approvalID,
+                      ["approved", "denied", "expired", "cancelled"].contains(decision.status) else {
+                    throw LocalProgramError.approvalRequired
+                }
+                try journal.resolveApproval(executionID: executionID, approvalID: approvalID,
+                    status: decision.status, at: now())
+                guard decision.status == "approved", now() < expiresAt else {
+                    throw LocalProgramError.approvalRequired
+                }
+                consumedApprovalID = approvalID
+            }
+            if let bindings { try authority.validate(bindings: bindings, now: now()) }
 
             let output: String
             switch capabilityID {
             case "macos.accessibility.observe":
-                guard input.isEmpty else { throw LocalProgramError.invalidInput }
                 output = try Self.json(authority.observe(now: calledAt))
             case "macos.accessibility.find":
-                guard Set(input.keys).isSubset(of: ["role", "label"]),
-                      input.values.allSatisfy({ $0 is String })
-                else { throw LocalProgramError.invalidInput }
                 let observation = try authority.observe(now: calledAt)
-                let role = input["role"] as? String
-                let label = input["label"] as? String
+                let role = input["role"]?.stringValue
+                let label = input["label"]?.stringValue
                 output = try Self.json(observation.nodes.filter {
                     (role == nil || $0.role == role) && (label == nil || $0.label == label)
                 })
             case "macos.app.current":
-                guard input.isEmpty else { throw LocalProgramError.invalidInput }
                 let observation = try authority.observe(now: calledAt)
                 output = try Self.json(CurrentApplication(name: observation.applicationName,
                     bundleID: observation.binding.bundleID, pid: observation.binding.pid))
             case "macos.window.current":
-                guard input.isEmpty else { throw LocalProgramError.invalidInput }
                 let observation = try authority.observe(now: calledAt)
                 output = try Self.json(CurrentWindow(title: observation.windowTitle,
                     windowID: observation.binding.windowID,
                     observationID: observation.binding.observationID))
             default:
-                let request = try JSONDecoder().decode(MacAXActionRequest.self, from: data)
+                let request = try JSONDecoder().decode(MacAXActionRequest.self, from: canonical.canonicalData)
                 let expected = "macos.accessibility.\(request.action)"
                 guard capabilityID == expected else { throw LocalProgramError.invalidInput }
                 let outcome = try authority.perform(request, executionID: executionID,
                     sequence: calls, now: calledAt)
+                let stopRequested = try journal.isStopRequested(executionID: executionID)
+                if (effectClass != "read" && outcome.postStateSHA256 == nil) || isRevoked() || stopRequested {
+                    let uncertain = receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
+                        toolCallID: callID, capabilityID: capabilityID, attempt: 1,
+                        inputSHA256: inputDigest!, status: "indeterminate",
+                        summary: "local_capability_outcome_indeterminate", resourceID: nil,
+                        postStateSHA256: nil, approvalID: consumedApprovalID,
+                        startedAt: startedAt, finishedAt: now())
+                    try journal.finishTool(executionID: executionID, receipt: uncertain, at: now())
+                    receipts.append(uncertain); failure = .indeterminate
+                    return Self.errorJSON(.indeterminate)
+                }
                 let normalized = receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
                     toolCallID: callID, capabilityID: capabilityID, attempt: 1,
-                    inputSHA256: inputDigest, status: "succeeded",
+                    inputSHA256: inputDigest!, status: "succeeded",
                     summary: "semantic_ax_action_executed", resourceID: outcome.resourceID,
                     postStateSHA256: outcome.postStateSHA256,
+                    approvalID: consumedApprovalID,
                     startedAt: startedAt, finishedAt: now())
                 try journal.finishTool(executionID: executionID, receipt: normalized, at: now())
                 receipts.append(normalized)
+                if let postState = normalized.postStateSHA256 { preStateSHA256 = postState }
                 return try Self.json(normalized)
+            }
+            guard !isRevoked(), try !journal.isStopRequested(executionID: executionID) else {
+                throw LocalProgramError.stopped
             }
             let receipt = self.receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
                 toolCallID: callID, capabilityID: capabilityID, attempt: 1,
-                inputSHA256: inputDigest, status: "succeeded", summary: "bounded_local_read_completed",
+                inputSHA256: inputDigest!, status: "succeeded", summary: "bounded_local_read_completed",
                 resourceID: nil, postStateSHA256: nil,
                 startedAt: startedAt, finishedAt: now())
             try journal.finishTool(executionID: executionID, receipt: receipt, at: now())
@@ -123,37 +180,66 @@ final class MacProgramBridge: @unchecked Sendable {
             failure = error
             let receipt = self.receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
                 toolCallID: toolCallID ?? "call_\(executionID)_rejected_\(calls + 1)",
-                capabilityID: capabilityID, attempt: 1, inputSHA256: inputDigest,
+                capabilityID: capabilityID, attempt: 1,
+                inputSHA256: inputDigest ?? MacLocalProgramDigest.data(Data()),
                 status: Self.receiptStatus(error), summary: "local_capability_did_not_complete",
                 resourceID: nil, postStateSHA256: nil,
                 startedAt: startedAt, finishedAt: now())
-            if toolCallID != nil { try? journal.finishTool(executionID: executionID, receipt: receipt, at: now()) }
-            receipts.append(receipt)
+            if toolCallID != nil, inputDigest != nil {
+                try? journal.finishTool(executionID: executionID, receipt: receipt, at: now())
+                receipts.append(receipt)
+            }
             return Self.errorJSON(error)
         } catch {
             let wrapped = LocalProgramError.executionFailed("host operation failed")
             failure = wrapped
             let receipt = self.receipt(receiptID: "tool_receipt_\(UUID().uuidString.lowercased())",
                 toolCallID: toolCallID ?? "call_\(executionID)_failed_\(calls + 1)",
-                capabilityID: capabilityID, attempt: 1, inputSHA256: inputDigest,
+                capabilityID: capabilityID, attempt: 1,
+                inputSHA256: inputDigest ?? MacLocalProgramDigest.data(Data()),
                 status: "failed", summary: "local_capability_did_not_complete",
                 resourceID: nil, postStateSHA256: nil,
                 startedAt: startedAt, finishedAt: now())
-            if toolCallID != nil { try? journal.finishTool(executionID: executionID, receipt: receipt, at: now()) }
-            receipts.append(receipt)
+            if toolCallID != nil, inputDigest != nil {
+                try? journal.finishTool(executionID: executionID, receipt: receipt, at: now())
+                receipts.append(receipt)
+            }
             return Self.errorJSON(wrapped)
+        }
+    }
+
+    private static func validateInput(capabilityID: String,
+                                      input: [String: MacCanonicalJSON]) throws {
+        let keys = Set(input.keys)
+        let allStrings = input.values.allSatisfy { $0.stringValue != nil }
+        switch capabilityID {
+        case "macos.accessibility.observe", "macos.app.current", "macos.window.current":
+            guard keys.isEmpty else { throw LocalProgramError.invalidInput }
+        case "macos.accessibility.find":
+            guard keys.isSubset(of: ["role", "label"]), allStrings else {
+                throw LocalProgramError.invalidInput
+            }
+        default:
+            let required: Set<String> = ["action", "handle", "observation_id"]
+            let allowed = capabilityID == "macos.accessibility.set_value" ?
+                required.union(["value"]) : required
+            guard keys == allowed, allStrings,
+                  input["action"]?.stringValue == capabilityID.split(separator: ".").last.map(String.init)
+            else { throw LocalProgramError.invalidInput }
         }
     }
 
     private func receipt(receiptID: String, toolCallID: String, capabilityID: String, attempt: Int,
                          inputSHA256: String, status: String, summary: String,
                          resourceID: String?, postStateSHA256: String?,
+                         approvalID: String? = nil,
                          startedAt: Date, finishedAt: Date) -> MacLocalActionReceipt {
         MacLocalActionReceipt.make(receiptID: receiptID, executionID: executionID,
             claimant: claimant, toolCallID: toolCallID, attempt: attempt,
             capabilityID: capabilityID, programSHA256: programSHA256,
             catalogSHA256: catalogSHA256, bindingsSHA256: bindingsSHA256,
             inputSHA256: inputSHA256, preStateSHA256: preStateSHA256,
+            approvalID: approvalID,
             startedAt: startedAt, finishedAt: finishedAt, status: status,
             result: .init(summary: summary, resourceID: resourceID),
             postStateSHA256: postStateSHA256,
@@ -165,6 +251,7 @@ final class MacProgramBridge: @unchecked Sendable {
         case .staleObservation, .staleTarget, .unknownHandle: "stale_state"
         case .expired: "timed_out"
         case .stopped: "stopped"
+        case .indeterminate: "indeterminate"
         case .capabilityDenied, .approvalRequired, .unsupportedAction, .invalidInput: "rejected"
         default: "failed"
         }
@@ -207,23 +294,26 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
     private let localAdvertisement: MacLocalProgramAdvertisement
     private let journal: any MacProgramJournaling
     private let clientInstanceID: String
+    private let approvalAuthorizer: (any MacProgramApprovalAuthorizing)?
     private let runnerURL: URL?
     private let runnersLock = NSLock()
     private var runners: [String: MacProgramRunnerHandle] = [:]
 
     public init(deviceID: String, authority: any MacAccessibilityProgramAuthority,
                 clientInstanceID: String, journal: any MacProgramJournaling,
+                approvalAuthorizer: (any MacProgramApprovalAuthorizing)? = nil,
                 runnerURL: URL? = nil,
                 now: @escaping @Sendable () -> Date = Date.init) {
         self.deviceID = deviceID
         self.authority = authority
         self.now = now
         self.clientInstanceID = clientInstanceID
+        self.approvalAuthorizer = approvalAuthorizer
         self.journal = journal
         self.runnerURL = runnerURL
         let issuedAt = now()
         self.localAdvertisement = .init(deviceID: deviceID, issuedAt: issuedAt,
-            expiresAt: issuedAt.addingTimeInterval(24 * 60 * 60))
+            expiresAt: issuedAt.addingTimeInterval(5 * 60))
     }
 
     public var advertisement: MacLocalProgramAdvertisement { localAdvertisement }
@@ -245,8 +335,10 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
         do {
             let startedAt = now()
             try envelope.validate(advertisement: localAdvertisement, now: startedAt)
-            guard approvedProgramSHA256 == envelope.program.sha256 else {
-                throw LocalProgramError.approvalRequired
+            guard approvedProgramSHA256 == envelope.program.sha256,
+                  envelope.approvalPolicy.program != "approval_required" else {
+                return try journal.reject(envelope, claimantDeviceID: deviceID,
+                    clientInstanceID: clientInstanceID, at: startedAt)
             }
             try authority.validate(bindings: envelope.bindings, now: startedAt)
             switch try journal.claim(envelope, claimantDeviceID: deviceID,
@@ -258,6 +350,9 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
             }
             try journal.markStarted(executionID: envelope.executionID, at: startedAt)
             executionStartedAt = startedAt
+            let handle = MacProgramRunnerHandle()
+            runnersLock.withLock { runners[envelope.executionID] = handle }
+            defer { _ = runnersLock.withLock { runners.removeValue(forKey: envelope.executionID) } }
             let createdBridge = MacProgramBridge(authority: authority,
                 executionID: envelope.executionID,
                 allowed: Set(envelope.catalog.allowedCapabilityIDs),
@@ -270,14 +365,15 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
                 programSHA256: envelope.program.sha256,
                 catalogSHA256: envelope.catalog.sha256,
                 bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings),
+                bindings: envelope.bindings,
+                alwaysAsk: Set(envelope.approvalPolicy.alwaysAsk),
+                approvalAuthorizer: approvalAuthorizer,
+                isRevoked: { !handle.isActive },
                 now: now)
             bridge = createdBridge
             guard let executableURL = runnerURL ?? Self.defaultRunnerURL() else {
                 throw LocalProgramError.executionFailed("program runner unavailable")
             }
-            let handle = MacProgramRunnerHandle()
-            runnersLock.withLock { runners[envelope.executionID] = handle }
-            defer { _ = runnersLock.withLock { runners.removeValue(forKey: envelope.executionID) } }
             let outcome = try MacProgramProcessRunner.run(executableURL: executableURL,
                 source: envelope.program.source, wallMS: envelope.limits.wallMS,
                 handle: handle, call: createdBridge.call)
@@ -296,7 +392,13 @@ public final class JavaScriptCoreMacProgramRuntime: @unchecked Sendable {
             try journal.finish(executionID: envelope.executionID, result: completed, at: now())
             return completed
         } catch {
-            let status = (error as? LocalProgramError) == .stopped ? "stopped" : "failed"
+            let status: String
+            switch error as? LocalProgramError {
+            case .stopped: status = "stopped"
+            case .expired: status = "timed_out"
+            case .indeterminate: status = "indeterminate"
+            default: status = "failed"
+            }
             let failed = result(envelope, status: status, resultJSON: nil,
                 error: Self.safeError(error), bridge: bridge, startedAt: executionStartedAt)
             if accepted { try? journal.finish(executionID: envelope.executionID, result: failed, at: now()) }

@@ -20,6 +20,8 @@ public final class SystemMacAccessibilityAuthority: MacAccessibilityProgramAutho
     private let grantID: String
     private var handles: [String: Handle] = [:]
     private var current: MacAXProgramObservation?
+    private var boundWindow: AXUIElement?
+    private var acceptedBindings: MacLocalProgramEnvelope.Bindings?
 
     public init(process: ProcessIdentity, applicationName: String, grantID: String) {
         self.process = process
@@ -33,23 +35,41 @@ public final class SystemMacAccessibilityAuthority: MacAccessibilityProgramAutho
                   bindings.pid == process.pid, bindings.processGeneration == Self.generation(process),
                   bindings.signingIdentity == process.signingIdentity else { throw LocalProgramError.staleTarget }
             try validateProcess()
+            if let acceptedBindings {
+                guard acceptedBindings == bindings,
+                      current?.binding.windowID == bindings.windowID else {
+                    throw LocalProgramError.staleObservation
+                }
+                return
+            }
             guard let current,
                   current.binding.windowID == bindings.windowID,
                   current.binding.observationID == bindings.axSnapshotID,
-                  Self.digest(current) == bindings.stateSHA256,
+                  MacLocalProgramDigest.axState(current) == bindings.stateSHA256,
                   now < current.binding.expiresAt else { throw LocalProgramError.staleObservation }
+            acceptedBindings = bindings
         }
     }
 
     public func observe(now: Date) throws -> MacAXProgramObservation {
         try lock.withLock {
             try validateProcess()
-            let app = AXUIElementCreateApplication(process.pid)
-            var rawWindow: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &rawWindow) == .success,
-                  let rawWindow else { throw LocalProgramError.staleTarget }
-            let window = unsafeDowncast(rawWindow, to: AXUIElement.self)
+            let window: AXUIElement
+            if let boundWindow { window = boundWindow }
+            else {
+                let app = AXUIElementCreateApplication(process.pid)
+                var rawWindow: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &rawWindow) == .success,
+                      let rawWindow else { throw LocalProgramError.staleTarget }
+                window = unsafeDowncast(rawWindow, to: AXUIElement.self)
+            }
+            return try capture(window: window, now: now)
+        }
+    }
+
+    private func capture(window: AXUIElement, now: Date) throws -> MacAXProgramObservation {
             let windowID = Self.number(window, "AXWindowNumber").map(String.init) ?? "unknown"
+            if let current, current.binding.windowID != windowID { throw LocalProgramError.staleTarget }
             let observationID = UUID().uuidString
             let expiresAt = now.addingTimeInterval(LocalProgramLimits.maxHandleLifetime)
             var captured: [MacAXProgramNode] = []
@@ -63,8 +83,8 @@ public final class SystemMacAccessibilityAuthority: MacAccessibilityProgramAutho
                 windowTitle: ObservationBounds.text(Self.string(window, kAXTitleAttribute) ?? "Untitled"), nodes: captured)
             handles = nextHandles
             current = observation
+            boundWindow = window
             return observation
-        }
     }
 
     public func perform(_ request: MacAXActionRequest, executionID: String,
@@ -94,8 +114,12 @@ public final class SystemMacAccessibilityAuthority: MacAccessibilityProgramAutho
             handles.removeAll(keepingCapacity: false)
             self.current = nil
             let digestInput = "\(process.bundleID)|\(process.pid)|\(Self.generation(process))|\(current.binding.windowID)|\(request.observationID)|\(request.handle)|\(request.action)"
-            return MacAXActionOutcome(postStateSHA256: nil,
-                resourceID: "ax_\(Self.digest(Data(digestInput.utf8)).prefix(24))")
+            let resource = "ax_\(Self.digest(Data(digestInput.utf8)).prefix(24))"
+            guard let boundWindow, let post = try? capture(window: boundWindow, now: now) else {
+                return MacAXActionOutcome(postStateSHA256: nil, resourceID: resource)
+            }
+            return MacAXActionOutcome(postStateSHA256: MacLocalProgramDigest.axState(post),
+                resourceID: resource)
         }
     }
 

@@ -13,6 +13,7 @@ final class MacProgramRunnerHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var active = true
     private var process: Process?
+    private var admittedCalls = 0
 
     func attach(_ process: Process) {
         lock.withLock {
@@ -21,11 +22,19 @@ final class MacProgramRunnerHandle: @unchecked Sendable {
         }
     }
 
-    func withActive<T>(_ body: () -> T) -> T? {
-        lock.lock(); defer { lock.unlock() }
-        guard active else { return nil }
-        return body()
+    func admitCall() -> Bool {
+        lock.withLock {
+            guard active else { return false }
+            admittedCalls += 1
+            return true
+        }
     }
+
+    func completeCall() { lock.withLock { admittedCalls = max(0, admittedCalls - 1) } }
+
+    var isActive: Bool { lock.withLock { active } }
+
+    var hasInFlightCall: Bool { lock.withLock { admittedCalls > 0 } }
 
     func stop() {
         lock.withLock {
@@ -142,13 +151,16 @@ enum MacProgramProcessRunner {
             if kind == "call", let id = object["id"] as? Int,
                let capability = object["capability_id"] as? String,
                let inputJSON = object["input_json"] as? String {
-                guard let response = handle.withActive({ call(capability, inputJSON) }) else { return }
+                guard handle.admitCall() else { return }
+                let response = call(capability, inputJSON)
+                handle.completeCall()
+                guard handle.isActive else { return }
                 try? send(["kind": "call_result", "id": id, "output_json": response])
             } else if kind == "terminal" {
                 lock.withLock {
                     guard !finished else { return }
                     outputJSON = object["output_json"] as? String
-                    error = object["error"] as? String
+                    error = object["error"] == nil ? nil : "program runner failed"
                     finished = true; terminal.signal()
                 }
             }
