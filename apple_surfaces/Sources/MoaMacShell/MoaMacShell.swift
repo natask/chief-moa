@@ -26,7 +26,7 @@ enum ProcessInspector {
     }
 }
 
-private enum KeychainToken {
+enum KeychainToken {
     static let service = "app.agee.moa-mac.gateway", account = "bearer"
     static func load() -> String? {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
@@ -155,7 +155,11 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     private let grants = GrantStore(); private lazy var coordinator = SuggestionCoordinator(grants: grants)
     private var identity: ProcessIdentity?; private var observer: AXSession?; private var task: Task<Void, Never>?; private var generation: UInt64 = 0
     private let inspectIdentity: @MainActor (NSRunningApplication) -> ProcessIdentity?
-    public init() { inspectIdentity = ProcessInspector.identity; token = KeychainToken.load() ?? "" }
+    public init() {
+        inspectIdentity = ProcessInspector.identity
+        token = KeychainToken.load() ?? ""
+        origin = UserDefaults.standard.string(forKey: "moa.gateway.origin") ?? ""
+    }
     init(selectedIdentity: ProcessIdentity, appName: String) {
         inspectIdentity = { _ in selectedIdentity }
         token = KeychainToken.load() ?? ""
@@ -169,7 +173,18 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     }
     public func requestAccessibility() { _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary); status = "Accessibility permission requested; still not observing" }
     public func requestScreenRecording() { CGRequestScreenCaptureAccess(); status = "Screen Recording permission requested; still not capturing" }
-    public func saveToken() { do { guard !token.isEmpty else { throw MoaMacError.missingToken }; try KeychainToken.save(token); status = "Token saved in Keychain" } catch { status = "Token save failed" } }
+    public func saveToken() {
+        do {
+            guard !token.isEmpty else { throw MoaMacError.missingToken }
+            if !origin.isEmpty {
+                guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
+                _ = try GatewayOrigin.endpoint(origin: url, path: ["v1", "chat"])
+                UserDefaults.standard.set(origin, forKey: "moa.gateway.origin")
+            }
+            try KeychainToken.save(token)
+            status = "Gateway connection saved"
+        } catch { status = "Gateway connection save failed" }
+    }
     public func deleteToken() { KeychainToken.delete(); token = ""; status = "Token deleted from Keychain" }
     public func start() async {
         generation &+= 1; let requestedGeneration = generation; task?.cancel(); observer?.stop(); observer = nil
