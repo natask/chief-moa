@@ -2141,10 +2141,10 @@ class GeminiLiveVoiceProvider {
       agentRunControlInstruction(),
       profileLanguageInstruction(effectiveProfile),
       "If the user tells you to stop, shut up, be quiet, hush, or not to speak, stop talking immediately and say nothing — do not acknowledge it, just go silent.",
-      // Native-audio Live goes silent after any function call, so tool use must
-      // be rare and deliberate. Everything the agent knows about the user is
-      // already in the durable context above; answering questions needs no tool.
-      "Tool discipline: answer every question and request by speaking out loud, using the durable context already provided. Never call a tool just to answer or recall something. Call remember_user_fact ONLY when the user explicitly tells you to remember, save, or note something; call update_agent_profile ONLY when the user explicitly asks to change a setting, voice, or language. When in doubt, speak instead of calling a tool.",
+      // Native-audio Live tool calls add a response round trip, so use them
+      // deliberately. Durable user context answers ordinary recall questions;
+      // the grounded settings catalog remains authoritative for settings reads.
+      "Tool discipline: answer every question and request by speaking out loud, using the durable context already provided. Never call a tool just to answer or recall something, EXCEPT you MUST call read_agent_settings for requests to list, inspect, compare, search, or recommend settings. After that read returns, speak a grounded answer from its result; ask one concise follow-up only when a recommendation needs the user's preference. Never invent settings or claim a read-only lookup changed one. Call remember_user_fact ONLY when the user explicitly tells you to remember, save, or note something; call update_agent_profile ONLY when the user explicitly asks to change a writable setting, voice, or language. When in doubt, speak instead of calling any other tool.",
       modality === "text"
         ? "This is a live voice session on an audio-only provider. Speak the reply out loud; the client may also display the transcript as text."
         : "",
