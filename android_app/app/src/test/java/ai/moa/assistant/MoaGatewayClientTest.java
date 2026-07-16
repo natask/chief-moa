@@ -105,6 +105,31 @@ public final class MoaGatewayClientTest {
     }
 
     @Test
+    public void sessionMessagesUsesBoundedEncodedRouteAndToken() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+
+        JSONObject response = client.sessionMessages("shared session/one", 500);
+
+        assertEquals("msg_user_1", response.getJSONArray("messages").getJSONObject(0).getString("message_id"));
+        assertEquals("GET", requests.get(0).method);
+        assertEquals("/v1/sessions/shared%20session%2Fone/messages?limit=100", requests.get(0).target);
+        assertEquals("Bearer secret-token", requests.get(0).authorization);
+    }
+
+    @Test
+    public void sessionMessagesFallsBackToLegacyMixedHistoryRoute() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+
+        JSONObject response = client.sessionMessages("legacy session", 0);
+
+        assertEquals("legacy session", response.getString("session_id"));
+        assertEquals(2, requests.size());
+        assertEquals("/v1/sessions/legacy%20session/messages?limit=1", requests.get(0).target);
+        assertEquals("/v1/history/messages?session_id=legacy+session&limit=1", requests.get(1).target);
+        assertEquals("Bearer secret-token", requests.get(1).authorization);
+    }
+
+    @Test
     public void agentRunDetailSanitizesRunId() throws Exception {
         MoaGatewayClient client = new MoaGatewayClient(baseUrl, "");
 
@@ -227,6 +252,13 @@ public final class MoaGatewayClientTest {
             return new TestResponse(200, "{\"version_code\":42,\"version_name\":\"0.1.42\"}");
         } else if ("/v1/context/latest".equals(request.path)) {
             return new TestResponse(200, "{\"store\":{\"type\":\"json-files\"},\"recent_runs\":[{\"id\":\"run_789\"}],\"recent_turns\":[],\"sessions\":[]}");
+        } else if (request.path.startsWith("/v1/sessions/") && request.path.endsWith("/messages")) {
+            if (request.path.contains("legacy%20session")) {
+                return new TestResponse(404, "{\"error\":\"not found\"}");
+            }
+            return new TestResponse(200, "{\"session_id\":\"shared session/one\",\"messages\":[{\"message_id\":\"msg_user_1\",\"speaker\":\"user\",\"text\":\"hello\"}]}");
+        } else if ("/v1/history/messages".equals(request.path)) {
+            return new TestResponse(200, "{\"session_id\":\"legacy session\",\"messages\":[]}");
         } else if ("/v1/agent/profile".equals(request.path)) {
             return new TestResponse(200, "{\"profile\":{\"language\":\"am-ET\",\"language_primary\":\"am-ET\",\"input_languages\":\"am-ET,en-US\",\"input_language_primary\":\"am-ET\"}}");
         } else if ("/v1/media/bookmarks/bookmark_1".equals(request.path)) {

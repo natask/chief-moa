@@ -120,6 +120,33 @@ final class MoaGatewayClient {
         return response.optString("session_id", "").trim();
     }
 
+    /**
+     * Read the gateway-owned mixed message projection for one session. New
+     * gateways expose the session-scoped route; older deployed gateways expose
+     * the same retained evidence through the bounded history search route.
+     */
+    JSONObject sessionMessages(String sessionId, int limit) throws Exception {
+        String id = safe(sessionId);
+        if (id.isEmpty()) {
+            throw new IllegalArgumentException("session id is required");
+        }
+        int safeLimit = Math.max(1, Math.min(limit, 100));
+        String encodedId = pathEncode(id);
+        try {
+            String responseText = getText(apiEndpoint(
+                    "/v1/sessions/" + encodedId + "/messages?limit=" + safeLimit), 15000);
+            return new JSONObject(responseText);
+        } catch (GatewayHttpException error) {
+            if (!error.routeMayBeMissing()) {
+                throw error;
+            }
+        }
+
+        String responseText = getText(apiEndpoint(
+                "/v1/history/messages?session_id=" + urlEncode(id) + "&limit=" + safeLimit), 15000);
+        return new JSONObject(responseText);
+    }
+
     JSONObject agentRuns(int limit) throws Exception {
         int safeLimit = Math.max(1, Math.min(limit, 100));
         String responseText = getText(apiEndpoint("/v1/agent/runs?limit=" + safeLimit), 15000);
@@ -365,7 +392,7 @@ final class MoaGatewayClient {
         connection.disconnect();
 
         if (status < 200 || status >= 300) {
-            throw new IllegalStateException("HTTP " + status + " " + responseText);
+            throw new GatewayHttpException(status, responseText);
         }
         return responseText;
     }
@@ -639,6 +666,23 @@ final class MoaGatewayClient {
 
     private static String urlEncode(String value) throws Exception {
         return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8.name());
+    }
+
+    private static String pathEncode(String value) throws Exception {
+        return urlEncode(value).replace("+", "%20");
+    }
+
+    private static final class GatewayHttpException extends IllegalStateException {
+        final int status;
+
+        GatewayHttpException(int status, String responseText) {
+            super("HTTP " + status + " " + responseText);
+            this.status = status;
+        }
+
+        boolean routeMayBeMissing() {
+            return status == 404 || status == 405 || status == 501;
+        }
     }
 
     static final class GatewayTextResponse {
