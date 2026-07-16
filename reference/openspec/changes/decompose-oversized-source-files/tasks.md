@@ -410,6 +410,12 @@
       100% functions gate; reduce `content.js` to 4,155 lines and raise the
       exact whole-extension ratchet to 49.98% lines, 31.14% branches, and
       26.39% functions.
+- [x] 4.4m Extract companion-pet payload and safe image URL sanitization,
+      language-chip normalization, and avatar-behavior validation from
+      `content.js` into a focused runtime. Verify it at 100% lines, 94.44%
+      branches, and 100% functions; reduce `content.js` to 4,064 lines and
+      raise the exact whole-extension ratchet to 50.70% lines, 32.46%
+      branches, and 27.07% functions with 44 passing unit tests.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
