@@ -76,6 +76,7 @@ public final class OverlayService extends Service {
     private static final long STREAMING_TURN_WATCHDOG_MS = 30000;
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
     private static final long DEVICE_CLIENT_POLL_MS = 2500;
+    private static final int SURFACE_PROGRAM_SYNC_BATCH = 16;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
     // Record mode: raw PCM16 mono at 16 kHz, capped at ~5 minutes per note.
     private static final int AUDIO_NOTE_BYTES_PER_SECOND =
@@ -203,6 +204,7 @@ public final class OverlayService extends Service {
     private boolean currentStreamingTurnAudioReceived;
     private boolean deviceClientLoopRunning;
     private boolean deviceClientPollInFlight;
+    private final Object surfaceProgramSyncLock = new Object();
 
     private enum VoiceRuntimeState {
         READY,
@@ -371,7 +373,7 @@ public final class OverlayService extends Service {
         }
         deviceClientLoopRunning = false;
         if (surfaceProgramRuntime != null) {
-            surfaceProgramRuntime.stop("overlay_stopped");
+            surfaceProgramRuntime.stop("surface_shutdown");
             surfaceProgramRuntime = null;
         }
         super.onDestroy();
@@ -2232,6 +2234,8 @@ public final class OverlayService extends Service {
         return "android_" + safe;
     }
 
+    private String androidClientInstanceId() { return androidDeviceId() + "_overlay"; }
+
     private MoaGatewayClient gatewayClient() {
         return new MoaGatewayClient(gatewayUrl, gatewayToken);
     }
@@ -2278,6 +2282,7 @@ public final class OverlayService extends Service {
                 MoaGatewayClient client = new MoaGatewayClient(url, token);
                 client.deviceHeartbeat(heartbeat);
                 JSONObject claimed = client.claimToolRequest(claim);
+                syncPendingSurfaceProgramRecords(client);
                 JSONObject request = claimed.optJSONObject("request");
                 if (request != null && !request.optString("id", "").trim().isEmpty()) {
                     mainHandler.post(() -> executeClaimedToolRequest(request));
@@ -2293,11 +2298,12 @@ public final class OverlayService extends Service {
     private JSONObject deviceClientHeartbeatBody() throws JSONException {
         JSONObject body = new JSONObject();
         body.put("device_id", androidDeviceId());
+        body.put("client_instance_id", androidClientInstanceId());
         body.put("surface_type", "android");
         body.put("session_id", conversationId);
         body.put("status", "online");
         body.put("local_tool_manifest", androidLocalToolManifest());
-        body.put("execution_runtimes", new JSONArray().put(MoaScriptExecutionCatalog.advertisement(androidDeviceId(), System.currentTimeMillis())));
+        if (android.os.Build.VERSION.SDK_INT >= 29) body.put("execution_runtimes", new JSONArray().put(MoaScriptExecutionCatalog.advertisement(androidDeviceId(), System.currentTimeMillis())));
 
         JSONObject metadata = new JSONObject();
         metadata.put("source", "android-overlay");
@@ -2315,6 +2321,7 @@ public final class OverlayService extends Service {
     private JSONObject deviceClientClaimBody() throws JSONException {
         JSONObject body = new JSONObject();
         body.put("device_id", androidDeviceId());
+        body.put("client_instance_id", androidClientInstanceId());
         body.put("surface_type", "android");
         body.put("local_tool_manifest", androidLocalToolManifest());
         return body;
@@ -2338,6 +2345,8 @@ public final class OverlayService extends Service {
         putToolManifestItem(manifest, "url.open", "navigation", "implicit_user_command");
         putToolManifestItem(manifest, "phone.dial", "external_side_effect", "target_app_confirmation");
         putToolManifestItem(manifest, "contact.open", "navigation", "implicit_user_command");
+        JSONArray programCapabilities = MoaScriptExecutionCatalog.descriptor().getJSONArray("capabilities");
+        for (int i = 0; i < programCapabilities.length(); i++) manifest.put(MoaProgramJson.copy(programCapabilities.getJSONObject(i)));
         return manifest;
     }
 
@@ -2392,33 +2401,81 @@ public final class OverlayService extends Service {
             return;
         }
         if ("approval_required".equals(proposal.programApproval)) {
-            postToolRequestReceipt(requestId, new ToolRequestExecution(false, "approval_required", null));
+            JSONObject terminal = surfaceProgramStore.recordRejected(proposal, androidClientInstanceId(), requestId, "policy_denied");
+            syncSurfaceProgramRecord(requestId, surfaceProgramStore.existing(proposal.executionId, proposal.idempotencyKey));
             return;
         }
         JSONObject replay = surfaceProgramStore.existing(proposal.executionId, proposal.idempotencyKey);
         if (replay != null) {
+            if (!proposal.proposalSha256.equals(replay.optString("proposal_sha256"))) {
+                syncSurfaceProgramRecord(requestId, replay);
+                return;
+            }
+            if (!surfaceProgramStore.bindRequest(proposal.executionId, proposal.idempotencyKey, requestId)) return;
+            replay = surfaceProgramStore.existing(proposal.executionId, proposal.idempotencyKey);
             JSONObject terminal = replay.optJSONObject("terminal");
-            postToolRequestReceipt(requestId, new ToolRequestExecution(terminal != null && "completed".equals(terminal.optString("status")),
-                    terminal == null ? "surface_program_replay_pending" : terminal.optJSONObject("result").optString("summary", "Recorded program outcome."), terminal));
+            if (terminal == null) {
+                if (surfaceProgramStore.hasPendingAttempt(replay)) {
+                    surfaceProgramStore.recoverIndeterminate(proposal, androidClientInstanceId());
+                    syncSurfaceProgramRecord(requestId, surfaceProgramStore.existing(proposal.executionId, proposal.idempotencyKey));
+                } else syncSurfaceProgramRecord(requestId, replay);
+            } else syncSurfaceProgramRecord(requestId, replay);
             return;
         }
         if (!MoaAccessibilityService.programBindingMatches(proposal)) {
-            postToolRequestReceipt(requestId, new ToolRequestExecution(false, "stale_state", null));
+            JSONObject terminal = surfaceProgramStore.recordRejected(proposal, androidClientInstanceId(), requestId, "stale_state");
+            syncSurfaceProgramRecord(requestId, surfaceProgramStore.existing(proposal.executionId, proposal.idempotencyKey));
             return;
         }
-        if (!surfaceProgramStore.recordPending(proposal)) {
+        if (!surfaceProgramStore.recordPending(proposal, androidClientInstanceId(), requestId)) {
             postToolRequestReceipt(requestId, new ToolRequestExecution(false, "durable_pending_failed", null));
             return;
         }
-        surfaceProgramRuntime.execute(proposal, androidDeviceId() + ":overlay", (terminal, toolReceipts) -> {
-            boolean stored = surfaceProgramStore.recordTerminal(proposal, terminal);
+        surfaceProgramRuntime.execute(proposal, androidClientInstanceId(), (terminal, toolReceipts) -> {
             boolean completed = "completed".equals(terminal.optString("status"));
             JSONObject result = terminal.optJSONObject("result");
-            String summary = stored
-                    ? (result == null ? "Android local program ended." : result.optString("summary", completed ? "Android local program completed." : "Android local program failed."))
-                    : "Program ended, but its terminal receipt could not be persisted locally.";
-            postToolRequestReceipt(requestId, new ToolRequestExecution(completed, summary, terminal));
+            String summary = result == null ? "Android local program ended." : result.optString("summary", completed ? "Android local program completed." : "Android local program failed.");
+            syncSurfaceProgramRecord(requestId, surfaceProgramStore.existing(proposal.executionId, proposal.idempotencyKey));
         });
+    }
+
+    private void syncSurfaceProgramRecord(String requestId, JSONObject entry) {
+        if (entry == null) return;
+        if (!surfaceProgramStore.bindRequest(entry.optString("execution_id"), entry.optString("idempotency_key"), requestId)) return;
+        final String executionId = entry.optString("execution_id");
+        final String url = gatewayUrl, token = gatewayToken;
+        new Thread(() -> {
+            try {
+                MoaGatewayClient client = new MoaGatewayClient(url, token);
+                syncSurfaceProgramRecordNow(client, executionId, SURFACE_PROGRAM_SYNC_BATCH);
+            } catch (Exception ignored) { /* Durable outbox remains available for idempotent replay. */ }
+        }, "moa-surface-program-sync").start();
+    }
+
+    private void syncPendingSurfaceProgramRecords(MoaGatewayClient client) throws Exception {
+        JSONArray pending = surfaceProgramStore.pendingSyncEntries();
+        int remaining = SURFACE_PROGRAM_SYNC_BATCH;
+        for (int i = 0; i < pending.length() && remaining > 0; i++) {
+            remaining -= syncSurfaceProgramRecordNow(client, pending.getJSONObject(i).optString("execution_id"), remaining);
+        }
+    }
+
+    private int syncSurfaceProgramRecordNow(MoaGatewayClient client, String executionId, int limit) throws Exception {
+        synchronized (surfaceProgramSyncLock) {
+            int delivered = 0;
+            while (delivered < limit) {
+                JSONObject delivery = surfaceProgramStore.nextSyncDelivery(executionId);
+                if (delivery == null) return delivered;
+                String requestId = delivery.getString("request_id"), kind = delivery.getString("kind");
+                JSONObject payload = delivery.getJSONObject("payload");
+                if ("tool_receipt".equals(kind)) client.surfaceToolReceipt(requestId, payload);
+                else if ("terminal_receipt".equals(kind)) client.toolRequestReceipt(requestId, payload);
+                else client.surfaceExecutionEvent(requestId, payload);
+                delivered += 1;
+                if (!surfaceProgramStore.acknowledgeSyncDelivery(executionId, delivery.getString("delivery_id"))) return delivered;
+            }
+            return delivered;
+        }
     }
 
     private ToolRequestExecution executeAudioSpeakRequest(JSONObject input) {
