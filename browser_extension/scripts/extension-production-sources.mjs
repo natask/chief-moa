@@ -19,6 +19,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/livekit-voice.js",
   "extension/offscreen-audio-worklet.js",
   "extension/offscreen-livekit.js",
+  "extension/offscreen-voice-bridge.js",
   "extension/offscreen.js",
   "extension/options.js",
   "extension/settings-intent.js",

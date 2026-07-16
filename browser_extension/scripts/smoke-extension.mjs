@@ -286,6 +286,29 @@ async function main() {
       ageeGatewayUserSet: true
     })`);
 
+    const offscreenReady = await evaluate(workerCdp, `
+      (async () => {
+        const url = chrome.runtime.getURL("offscreen.html");
+        const contexts = await chrome.runtime.getContexts({
+          contextTypes: ["OFFSCREEN_DOCUMENT"],
+          documentUrls: [url],
+        });
+        if (!contexts.length) {
+          await chrome.offscreen.createDocument({
+            url: "offscreen.html",
+            reasons: ["USER_MEDIA"],
+            justification: "Verify the packaged offscreen voice receiver loads.",
+          });
+        }
+        const response = await chrome.runtime.sendMessage({ cmd: "offscreenVoiceReady" });
+        await chrome.offscreen.closeDocument();
+        return response;
+      })()
+    `);
+    if (offscreenReady?.ok !== true || offscreenReady?.context !== "offscreen") {
+      throw new Error(`packaged offscreen voice receiver did not become ready: ${JSON.stringify(offscreenReady)}`);
+    }
+
     const commands = await evaluate(workerCdp, "chrome.commands.getAll()");
     const textCommand = commands.find((command) => command.name === "toggle-agee");
     if (!textCommand) throw new Error(`text command was not registered: ${JSON.stringify(commands)}`);
@@ -307,6 +330,23 @@ async function main() {
       })()
     `);
     if (!ping?.tabId) throw new Error("real content script did not answer ping via the service worker");
+
+    const offscreenCaptureProbe = await evaluate(workerCdp, `
+      (async () => {
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId: ${ping.tabId} },
+          func: async () => {
+            const started = await chrome.runtime.sendMessage({ cmd: "recordSessionStart" });
+            if (started?.ok) await chrome.runtime.sendMessage({ cmd: "recordSessionStop" });
+            return started;
+          },
+        });
+        return result?.result || null;
+      })()
+    `);
+    if (!offscreenCaptureProbe || /receiving end does not exist/i.test(String(offscreenCaptureProbe.error || ""))) {
+      throw new Error(`offscreen capture receiver was unavailable: ${JSON.stringify(offscreenCaptureProbe)}`);
+    }
 
     const singleRootResult = await evaluate(workerCdp, `
       (async () => {

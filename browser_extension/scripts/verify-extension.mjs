@@ -21,6 +21,7 @@ const requiredFiles = [
   "extension/tweaks.js",
   "extension/offscreen.html",
   "extension/offscreen.js",
+  "extension/offscreen-voice-bridge.js",
   "extension/offscreen-audio-worklet.js",
   "extension/livekit-voice.js",
   "extension/voice-sampler.js",
@@ -85,6 +86,8 @@ const contentSource = readFileSync("extension/content.js", "utf8");
 const documentContextSource = readFileSync("extension/document-context.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
 const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
+const offscreenHtmlSource = readFileSync("extension/offscreen.html", "utf8");
+const offscreenVoiceBridgeSource = readFileSync("extension/offscreen-voice-bridge.js", "utf8");
 const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
@@ -258,6 +261,19 @@ if (!/navigator\.mediaDevices\.getUserMedia/.test(offscreenSource) || !/offscree
   throw new Error("offscreen.js must own microphone capture and forward PCM chunks to background.js");
 }
 
+if (!/<script\s+type="module"\s+src="offscreen\.js"><\/script>/.test(offscreenHtmlSource)) {
+  throw new Error("offscreen.html must load module-syntax offscreen.js as an ES module");
+}
+
+if (
+  !/offscreenVoiceReady/.test(offscreenSource) ||
+  !/waitForOffscreenReceiver/.test(offscreenVoiceBridgeSource) ||
+  !/sendToOffscreenReceiver/.test(backgroundSource) ||
+  /handleOffscreenVoiceError[\s\S]{0,500}chrome\.runtime\.openOptionsPage/.test(backgroundSource)
+) {
+  throw new Error("offscreen voice startup must wait for a receiver and must not auto-open Options on failure");
+}
+
 if (
   !/audioWorklet\.addModule/.test(offscreenSource) ||
   !/new\s+AudioWorkletNode/.test(offscreenSource) ||
@@ -368,10 +384,11 @@ if (
   !/microphone_capture_failed/.test(backgroundSource) ||
   !/recoverable:\s*false/.test(backgroundSource) ||
   !/chrome:\/\/extensions\/\?id=\$\{chrome\.runtime\.id\}/.test(backgroundSource) ||
+  !/microphone_permission_denied/.test(backgroundSource) ||
   !/chrome\.runtime\.openOptionsPage/.test(backgroundSource) ||
   !/msg\.recoverable === false \|\| msg\.code === "microphone_capture_failed"/.test(contentSource)
 ) {
-  throw new Error("extension offscreen microphone failures must be explicit, non-recoverable, and guide the user to grant extension microphone permission");
+  throw new Error("extension offscreen microphone failures must be explicit, non-recoverable, and keep an explicit Options permission path");
 }
 
 if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
