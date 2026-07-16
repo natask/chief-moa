@@ -63,14 +63,6 @@
     // The A.G. mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
-  let proactiveGrant = null,
-    proactiveSampleTimer = null,
-    proactiveExpiryTimer = null,
-    proactiveStatusTimer = null,
-    proactiveResumeHandler = null;
-  const pendingProactiveConfirmationCues = new Map();
-  const PROACTIVE_VISIBLE_DWELL_MS = 1200;
-  const PROACTIVE_CONFIRMATION_CLIENT_TIMEOUT_MS = 2 * 60 * 1000 + 35 * 1000;
   // Custom tooltip chip + viewport-resize batching for the overlay.
   let tipEl = null,
     tipTimer = null,
@@ -155,6 +147,38 @@
     NodeFilter,
     getHelper: () => globalThis.AgeeProactiveHelper || null,
     getOverlayRoot: () => root,
+  });
+  const {
+    acceptProactiveCard,
+    clearAllProactiveConfirmationCues,
+    clearProactiveConfirmationCue,
+    hasPendingProactiveConfirmation,
+    hasProactiveGrant,
+    shouldHandleProactiveRevocation,
+    startProactiveGrant,
+    stopProactiveGrant,
+  } = window.AgeeContentProactiveControllerRuntime.createContentProactiveControllerRuntime({
+    document,
+    window,
+    sendMessage: safeRuntimeSendMessage,
+    proactiveHelper,
+    proactiveSensitivity,
+    collectProactiveSignals,
+    setIndicator: setProactiveIndicator,
+    renderNotice: renderProactiveNotice,
+    renderCard: renderProactiveCard,
+    hideCard: hideProactiveCard,
+    newCueId,
+    createCue,
+    updateCue,
+    showCueError,
+    setTimeout: (...args) => setTimeout(...args),
+    clearTimeout: (...args) => clearTimeout(...args),
+    setInterval: (...args) => setInterval(...args),
+    clearInterval: (...args) => clearInterval(...args),
+    now: () => Date.now(),
+    visibleDwellMs: 1200,
+    confirmationTimeoutMs: 2 * 60 * 1000 + 35 * 1000,
   });
   const COMPANION_PET_COLORS = {
     graphite: ["#555a62", "#262a30"],
@@ -349,7 +373,7 @@
       e.preventDefault();
       e.stopPropagation();
       if (!e.isTrusted) return;
-      if (proactiveGrant) stopProactiveGrant("manual_stop");
+      if (hasProactiveGrant()) stopProactiveGrant("manual_stop");
       else startProactiveGrant();
     });
 
@@ -386,39 +410,6 @@
   }
 
   // ---- Privacy-first local suggestions ---------------------------------
-  function clearProactiveResumeListeners() {
-    if (!proactiveResumeHandler) return;
-    document.removeEventListener("visibilitychange", proactiveResumeHandler, true);
-    window.removeEventListener("focus", proactiveResumeHandler, true);
-    proactiveResumeHandler = null;
-  }
-
-  function armProactiveResume() {
-    clearProactiveResumeListeners();
-    if (!proactiveGrant) return;
-    proactiveResumeHandler = () => {
-      clearProactiveResumeListeners();
-      if (!proactiveGrant) return;
-      if (document.visibilityState === "visible" && document.hasFocus()) {
-        proactiveSampleTimer = setTimeout(sampleProactivePage, 0);
-      } else {
-        armProactiveResume();
-      }
-    };
-    document.addEventListener("visibilitychange", proactiveResumeHandler, { capture: true, once: true });
-    window.addEventListener("focus", proactiveResumeHandler, { capture: true, once: true });
-  }
-
-  function clearProactiveTimers() {
-    if (proactiveSampleTimer) clearTimeout(proactiveSampleTimer);
-    if (proactiveExpiryTimer) clearTimeout(proactiveExpiryTimer);
-    if (proactiveStatusTimer) clearInterval(proactiveStatusTimer);
-    proactiveSampleTimer = null;
-    proactiveExpiryTimer = null;
-    proactiveStatusTimer = null;
-    clearProactiveResumeListeners();
-  }
-
   function setProactiveIndicator(active) {
     if (proactiveIndicator) proactiveIndicator.hidden = !active;
     if (proactiveButton) {
@@ -450,7 +441,7 @@
   }
 
   function renderProactiveCard(card) {
-    if (!proactiveCardEl || !proactiveGrant) return;
+    if (!proactiveCardEl || !hasProactiveGrant()) return;
     const prompt = proactiveHelper()?.buildAcceptedPrompt(card) || "";
     proactiveCardEl.replaceChildren();
     proactiveCardEl.dataset.kind = card.kind;
@@ -511,166 +502,6 @@
     actions.append(accept, dismiss, stop);
     proactiveCardEl.append(badge, title, suggestion, privacy, disclosure, actions);
     proactiveCardEl.hidden = false;
-  }
-
-  async function startProactiveGrant() {
-    const sensitivity = proactiveSensitivity();
-    if (sensitivity.suppressed) {
-      setProactiveIndicator(false);
-      renderProactiveNotice("Local suggestions are off here", `This page is suppressed (${sensitivity.reason}). There is no override.`);
-      return;
-    }
-    const response = await safeRuntimeSendMessage({ cmd: "proactiveGrantStart" }).catch((error) => ({
-      ok: false,
-      reason: String(error?.message || error),
-    }));
-    if (!response?.ok) {
-      const reason = response?.suppressed ? `This page is suppressed (${response.reason}).` : `Could not start local suggestions (${response?.reason || "unavailable"}).`;
-      renderProactiveNotice("Local suggestions are off", reason);
-      return;
-    }
-    proactiveGrant = {
-      grantId: response.grantId,
-      expiresAt: Number(response.expiresAt),
-      card: null,
-    };
-    setProactiveIndicator(true);
-    renderProactiveNotice(
-      "Local suggestions are on",
-      "Watching only structural counts in this visible tab. Nothing from this local observation has been sent. Page text, values, URL, title, screenshots, and history stay out of the observation."
-    );
-    proactiveSampleTimer = setTimeout(sampleProactivePage, PROACTIVE_VISIBLE_DWELL_MS);
-    proactiveExpiryTimer = setTimeout(() => stopProactiveGrant("expired"), Math.max(0, proactiveGrant.expiresAt - Date.now()));
-    proactiveStatusTimer = setInterval(checkProactiveGrantStatus, 3000);
-  }
-
-  async function sampleProactivePage() {
-    proactiveSampleTimer = null;
-    if (!proactiveGrant) return;
-    if (document.visibilityState !== "visible" || !document.hasFocus()) {
-      armProactiveResume();
-      return;
-    }
-    const sensitivity = proactiveSensitivity();
-    if (sensitivity.suppressed) {
-      stopProactiveGrant("sensitive", { showNotice: false });
-      renderProactiveNotice("Local suggestions stopped", `This page became sensitive (${sensitivity.reason}).`);
-      return;
-    }
-    const signals = collectProactiveSignals();
-    const card = proactiveHelper()?.classifyStructuralPage(signals);
-    if (!signals || !card) {
-      stopProactiveGrant("no_suggestion", { showNotice: false });
-      renderProactiveNotice(
-        "Local observation stopped",
-        "No local suggestion matched this page. Nothing from this local observation was sent."
-      );
-      return;
-    }
-    const response = await safeRuntimeSendMessage({
-      cmd: "proactiveSignal",
-      grantId: proactiveGrant.grantId,
-      signals,
-    }).catch(() => null);
-    if (!response?.ok || !proactiveGrant) {
-      stopProactiveGrant(response?.reason || "revoked", { notify: false, showNotice: false });
-      return;
-    }
-    proactiveGrant.card = card;
-    renderProactiveCard(card);
-  }
-
-  async function checkProactiveGrantStatus() {
-    if (!proactiveGrant) return;
-    const response = await safeRuntimeSendMessage({
-      cmd: "proactiveGrantStatus",
-      grantId: proactiveGrant.grantId,
-    }).catch(() => null);
-    if (!response?.ok) stopProactiveGrant(response?.reason || "revoked", { notify: false, showNotice: false });
-  }
-
-  function stopProactiveGrant(reason = "manual_stop", options = {}) {
-    const grant = proactiveGrant;
-    proactiveGrant = null;
-    clearProactiveTimers();
-    setProactiveIndicator(false);
-    if (options.showNotice !== true) hideProactiveCard();
-    if (grant && options.notify !== false) {
-      safeRuntimeSendMessage({ cmd: "proactiveGrantStop", grantId: grant.grantId, reason }).catch(() => {});
-    }
-  }
-
-  async function acceptProactiveCard(card, button) {
-    if (!proactiveGrant || button.disabled) return;
-    const sensitivity = proactiveSensitivity();
-    if (sensitivity.suppressed) {
-      stopProactiveGrant("sensitive_before_accept");
-      renderProactiveNotice("Suggestion not sent", `This page is now suppressed (${sensitivity.reason}).`);
-      return;
-    }
-    button.disabled = true;
-    const grantId = proactiveGrant.grantId;
-    const cueId = newCueId();
-    createCue(cueId, card.title, { presentation: "card" });
-    updateCue(cueId, "Opening the extension-owned confirmation…", "running");
-    trackProactiveConfirmationCue(cueId);
-    const response = await safeRuntimeSendMessage({
-      cmd: "proactiveConfirmationOpen",
-      grantId,
-      kind: card.kind,
-      cueId,
-    }).catch((error) => ({ ok: false, reason: String(error?.message || error) }));
-    if (!response?.ok) {
-      clearProactiveConfirmationCue(cueId);
-      button.disabled = false;
-      showCueError(cueId, response?.reason || "Could not open the extension-owned confirmation.");
-      return;
-    }
-    clearProactiveTimers();
-    proactiveGrant = null;
-    setProactiveIndicator(false);
-    hideProactiveCard();
-    if (pendingProactiveConfirmationCues.has(cueId)) {
-      updateCue(cueId, "Review the extension-owned confirmation…", "running");
-    }
-  }
-
-  function clearProactiveConfirmationCue(cueId) {
-    const record = pendingProactiveConfirmationCues.get(cueId);
-    if (record?.statusTimer) clearInterval(record.statusTimer);
-    if (record?.expiryTimer) clearTimeout(record.expiryTimer);
-    pendingProactiveConfirmationCues.delete(cueId);
-  }
-
-  function clearAllProactiveConfirmationCues() {
-    for (const cueId of [...pendingProactiveConfirmationCues.keys()]) {
-      clearProactiveConfirmationCue(cueId);
-    }
-  }
-
-  function trackProactiveConfirmationCue(cueId) {
-    clearProactiveConfirmationCue(cueId);
-    const record = { statusTimer: null, expiryTimer: null, checking: false };
-    const check = async () => {
-      if (record.checking || !pendingProactiveConfirmationCues.has(cueId)) return;
-      record.checking = true;
-      try {
-        const response = await safeRuntimeSendMessage({ cmd: "proactiveConfirmationStatus", cueId }).catch(() => null);
-        if (!response?.ok && pendingProactiveConfirmationCues.has(cueId)) {
-          clearProactiveConfirmationCue(cueId);
-          showCueError(cueId, "The confirmation expired, closed, or was cleared when the extension restarted.");
-        }
-      } finally {
-        record.checking = false;
-      }
-    };
-    record.statusTimer = setInterval(check, 3000);
-    record.expiryTimer = setTimeout(() => {
-      if (!pendingProactiveConfirmationCues.has(cueId)) return;
-      clearProactiveConfirmationCue(cueId);
-      showCueError(cueId, "The confirmation expired without sending anything.");
-    }, PROACTIVE_CONFIRMATION_CLIENT_TIMEOUT_MS);
-    pendingProactiveConfirmationCues.set(cueId, record);
   }
 
   // ---- Custom tooltips --------------------------------------------------
@@ -3790,14 +3621,14 @@
         reply(proactiveSensitivity());
         return true;
       case "proactiveGrantRevoked":
-        if (!proactiveGrant || !msg.grantId || proactiveGrant.grantId === msg.grantId) {
+        if (shouldHandleProactiveRevocation(msg.grantId)) {
           stopProactiveGrant(msg.reason || "revoked", { notify: false, showNotice: false });
         }
         reply({ ok: true, state: "off" });
         return true;
       case "proactiveConfirmationResult": {
         const cueId = String(msg.cueId || "");
-        if (!pendingProactiveConfirmationCues.has(cueId)) {
+        if (!hasPendingProactiveConfirmation(cueId)) {
           reply({ ok: false, reason: "unknown_confirmation" });
           return true;
         }

@@ -15,6 +15,7 @@ const requiredFiles = [
   "extension/content-companion-policy-runtime.js",
   "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
+  "extension/content-proactive-controller-runtime.js",
   "extension/content-proactive-observation-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
@@ -91,6 +92,7 @@ const configSource = readFileSync("extension/config.js", "utf8");
 const contentCompanionPolicySource = readFileSync("extension/content-companion-policy-runtime.js", "utf8");
 const contentContextControlSource = readFileSync("extension/content-context-control-runtime.js", "utf8");
 const contentExtensionApiSource = readFileSync("extension/content-extension-api-runtime.js", "utf8");
+const contentProactiveControllerSource = readFileSync("extension/content-proactive-controller-runtime.js", "utf8");
 const contentProactiveObservationSource = readFileSync("extension/content-proactive-observation-runtime.js", "utf8");
 const contentVoicePolicySource = readFileSync("extension/content-voice-policy-runtime.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
@@ -150,7 +152,9 @@ if (
   mainContentScript.js.indexOf("content-context-control-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-proactive-observation-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-proactive-observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-proactive-observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("content-proactive-controller-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-proactive-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-proactive-observation-runtime\.js", "content-proactive-controller-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("content support runtimes must load before content.js in declared and dynamic injection paths");
 }
@@ -198,6 +202,17 @@ if (
   !/AgeeContentProactiveObservationRuntime\.createContentProactiveObservationRuntime\(\{[\s\S]{0,260}getOverlayRoot: \(\) => root/.test(contentSource)
 ) {
   throw new Error("privacy-first proactive page observation must stay bounded in the extracted content runtime");
+}
+if (
+  !/function createContentProactiveControllerRuntime/.test(contentProactiveControllerSource) ||
+  !/function startProactiveGrant/.test(contentProactiveControllerSource) ||
+  !/function sampleProactivePage/.test(contentProactiveControllerSource) ||
+  !/function trackProactiveConfirmationCue/.test(contentProactiveControllerSource) ||
+  !/proactiveConfirmationStatus/.test(contentProactiveControllerSource) ||
+  /function (?:startProactiveGrant|sampleProactivePage|checkProactiveGrantStatus|stopProactiveGrant|acceptProactiveCard|trackProactiveConfirmationCue)\(/.test(contentSource) ||
+  !/AgeeContentProactiveControllerRuntime\.createContentProactiveControllerRuntime\(\{[\s\S]{0,1000}confirmationTimeoutMs:/.test(contentSource)
+) {
+  throw new Error("proactive grant and confirmation lifecycle must stay behind the extracted content controller");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -251,7 +266,7 @@ const proactiveDecisionSource = backgroundSource.slice(
   backgroundSource.indexOf("function proactiveProposalScan"),
 );
 if (
-  !/proactiveConfirmationOpen/.test(contentSource) ||
+  !/proactiveConfirmationOpen/.test(contentProactiveControllerSource) ||
   !/proactiveConfirmationDetails/.test(backgroundSource) ||
   !/proactiveConfirmationDecision/.test(backgroundSource) ||
   !/proactiveConfirmationSender/.test(backgroundSource) ||
@@ -261,6 +276,7 @@ if (
   !/\/v1\/proactive\/turns/.test(proactiveDecisionSource) ||
   /\/v1\/voice\/turns/.test(proactiveDecisionSource) ||
   /cmd:\s*"proactiveAccept"/.test(contentSource) ||
+  /cmd:\s*"proactiveAccept"/.test(contentProactiveControllerSource) ||
   !/if \(!event\.isTrusted\) return;/.test(proactiveConfirmSource) ||
   !/EXTENSION-OWNED CONFIRMATION/.test(proactiveConfirmHtmlSource) ||
   !/id="request-url"/.test(proactiveConfirmHtmlSource) ||
@@ -273,10 +289,10 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-proactive-observation-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-proactive-observation-runtime\.js", "content-proactive-controller-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
-  !/cmd: "proactiveSignal"/.test(contentSource) ||
+  !/cmd: "proactiveSignal"/.test(contentProactiveControllerSource) ||
   !/dataset\.ageeProactive = "accept"/.test(contentSource) ||
   /safeRuntimeSendMessage\(\{ cmd: "(?:selfExtensionRuntime|uiSpec|activeCompanionPet)"/.test(contentSource)
 ) {
@@ -1147,6 +1163,7 @@ for (const file of [
   "extension/content-companion-policy-runtime.js",
   "extension/content-context-control-runtime.js",
   "extension/content-extension-api-runtime.js",
+  "extension/content-proactive-controller-runtime.js",
   "extension/content-proactive-observation-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
