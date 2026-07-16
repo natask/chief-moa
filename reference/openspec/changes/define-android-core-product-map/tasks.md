@@ -113,6 +113,18 @@
 - [x] 11.8 Give the browser voice-first mascot matching side controls and prevent
       a later mascot click from silently sending the draft.
 - [x] 11.9 Verify and package the browser extension parity slice.
+- [x] 11.10 Coalesce Android orb, active-card, and draft-control relayouts to
+      display frames while dragging; do no relayout before touch slop, keep the
+      card wholly above when it fits and otherwise below, and evaluate the
+      visible bottom remove target against the final release position.
+
+Observable acceptance check: with either chat or voice open, drag the orb rapidly
+across and down the display. The orb, the single open card, and any draft controls
+follow together without per-MotionEvent relayout churn; releasing outside the
+bottom target keeps the overlay, while releasing inside stops it.
+Verified 2026-07-16: Android JVM tests and `assembleDebug` passed; strict
+OpenSpec validation passed. Real-device frame pacing and drop-target feel remain
+the manual QA check.
 
 Release note: commit `5106d52` produced Android artifact
 `android-ota-5106d52d7fcc527ee05b0c2197c1b8b38124eb52-1` and browser artifact

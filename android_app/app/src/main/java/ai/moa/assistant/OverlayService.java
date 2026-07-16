@@ -92,12 +92,9 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams orbParams;
     private WindowManager.LayoutParams panelParams;
     private WindowManager.LayoutParams transcriptParams;
+    private MoaFrameCoalescer orbDragFrameCoalescer;
     private View orbRemoveTarget;
     private boolean orbRemoveTargetActive;
-    // Two surfaces hang off the orb. TAP opens the chat panel: a polished card
-    // with bubbles + composer, the place to read the conversation and type.
-    // DOUBLE-CLICK-AND-HOLD opens the voice surface: a compact native transcript
-    // card showing live user words and the assistant response as separate rows.
     private View panelView;
     private LinearLayout messageColumn;
     private ScrollView messageScroll;
@@ -350,6 +347,10 @@ public final class OverlayService extends Service {
         removeVoiceDraftControls();
         removePanel();
         removeOrbRemoveTarget();
+        if (orbDragFrameCoalescer != null) {
+            orbDragFrameCoalescer.cancel();
+            orbDragFrameCoalescer = null;
+        }
         removeOrb();
         agentRunPolling = false;
         cancelStreamingTurnWatchdog();
@@ -556,10 +557,10 @@ public final class OverlayService extends Service {
         orbParams.gravity = Gravity.TOP | Gravity.START;
         orbParams.x = getResources().getDisplayMetrics().widthPixels - size - dp(ORB_EDGE_MARGIN_DP);
         orbParams.y = dp(164);
+        orbDragFrameCoalescer = new MoaFrameCoalescer(
+                new MoaViewFrameScheduler(orbView), this::applyLatestOrbDragFrame);
         orbView.setOnTouchListener(new MoaOrbTouchListener(
                 this,
-                windowManager,
-                orbView,
                 orbParams,
                 size,
                 ORB_EDGE_MARGIN_DP,
@@ -597,40 +598,12 @@ public final class OverlayService extends Service {
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
         int margin = dp(10);
-        int gap = dp(12);
         int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
         int surfaceWidth = params.width > 0 ? params.width : Math.min(screenWidth - margin * 2, dp(380));
-        int measuredHeight = surface.getMeasuredHeight();
-        if (measuredHeight <= 0) {
-            measuredHeight = surface == panelView ? dp(430) : dp(180);
-        }
-
-        int orbCenterX = orbParams.x + orbSize / 2;
-        int minX = surfaceWidth + margin * 2 <= screenWidth ? margin : 0;
-        int maxX = Math.max(minX, screenWidth - surfaceWidth - minX);
-        params.x = Math.max(minX, Math.min(orbCenterX - surfaceWidth / 2, maxX));
-
-        int aboveY = orbParams.y - measuredHeight - gap;
-        int belowY = orbParams.y + orbSize + gap;
-        int aboveSpace = orbParams.y - gap - margin;
-        int belowSpace = screenHeight - belowY - margin;
-        boolean placeAbove = measuredHeight <= aboveSpace || aboveSpace >= belowSpace;
-        params.y = placeAbove ? aboveY : belowY;
-        params.y = Math.max(margin, Math.min(params.y, screenHeight - measuredHeight - margin));
-
-        if (surface.getParent() != null) {
-            try {
-                windowManager.updateViewLayout(surface, params);
-            } catch (IllegalArgumentException ignored) {
-                // The surface was removed between measurement and repositioning.
-            }
-        }
-    }
-
-    private void updateAnchoredSurfacePositions() {
-        positionSurfaceNearOrb(panelView, panelParams);
-        positionSurfaceNearOrb(transcriptView, transcriptParams);
-        updateVoiceDraftControlPositions();
+        MoaOverlayWindowLayout.positionAnchored(
+                windowManager, surface, params, screenWidth, screenHeight, margin, dp(12),
+                orbParams.x, orbParams.y, orbSize, surfaceWidth,
+                surface == panelView ? dp(430) : dp(180));
     }
 
     private void showOrbRemoveTarget() {
@@ -660,17 +633,42 @@ public final class OverlayService extends Service {
     }
 
     private void updateOrbDragSurfaces() {
-        updateAnchoredSurfacePositions();
+        if (orbDragFrameCoalescer != null) {
+            orbDragFrameCoalescer.request();
+        }
+    }
+
+    private void applyLatestOrbDragFrame() {
+        if (orbView == null || orbParams == null) {
+            return;
+        }
+        prepareVoiceDraftControlPositions();
+        MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
+        if (panelView != null) {
+            positionSurfaceNearOrb(panelView, panelParams);
+        } else if (transcriptView != null) {
+            positionSurfaceNearOrb(transcriptView, transcriptParams);
+        }
+        updatePreparedVoiceDraftControlLayouts();
+        updateOrbRemoveTargetState();
+    }
+
+    private void updateOrbRemoveTargetState() {
         if (!(orbRemoveTarget instanceof TextView) || orbParams == null) {
             return;
         }
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
         int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
-        int centerX = orbParams.x + orbSize / 2;
-        int centerY = orbParams.y + orbSize / 2;
-        boolean active = centerY >= screenHeight - dp(170)
-                && Math.abs(centerX - screenWidth / 2) <= dp(135);
+        boolean active = MoaOrbOverlayGeometry.isInRemoveTarget(
+                screenWidth,
+                screenHeight,
+                orbParams.x,
+                orbParams.y,
+                orbSize,
+                dp(170),
+                dp(135)
+        );
         if (active == orbRemoveTargetActive) {
             return;
         }
@@ -688,6 +686,9 @@ public final class OverlayService extends Service {
     }
 
     private void finishOrbDrag(Boolean completedDrop) {
+        if (orbDragFrameCoalescer != null) {
+            orbDragFrameCoalescer.flush();
+        }
         boolean remove = Boolean.TRUE.equals(completedDrop) && orbRemoveTargetActive;
         removeOrbRemoveTarget();
         if (remove) {
@@ -718,6 +719,7 @@ public final class OverlayService extends Service {
             return;
         }
 
+        removeTranscriptOverlay();
         loadSettings();
 
         panelView = createPanel();
@@ -1014,6 +1016,12 @@ public final class OverlayService extends Service {
     }
 
     private void updateVoiceDraftControlPositions() {
+        prepareVoiceDraftControlPositions();
+        MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
+        updatePreparedVoiceDraftControlLayouts();
+    }
+
+    private void prepareVoiceDraftControlPositions() {
         if (voiceCancelControl == null || voiceSendControl == null
                 || voiceCancelControlParams == null || voiceSendControlParams == null
                 || orbView == null || orbParams == null) {
@@ -1032,14 +1040,7 @@ public final class OverlayService extends Service {
         int minOrbX = margin + controlSize + gap;
         int maxOrbX = Math.max(minOrbX, screenWidth - margin - controlSize - gap - orbSize);
         int safeOrbX = Math.max(minOrbX, Math.min(orbParams.x, maxOrbX));
-        if (safeOrbX != orbParams.x) {
-            orbParams.x = safeOrbX;
-            try {
-                windowManager.updateViewLayout(orbView, orbParams);
-            } catch (IllegalArgumentException ignored) {
-                return;
-            }
-        }
+        orbParams.x = safeOrbX;
 
         int controlY = orbParams.y + (orbSize - controlSize) / 2;
         controlY = Math.max(margin, Math.min(controlY, screenHeight - controlSize - margin));
@@ -1047,12 +1048,11 @@ public final class OverlayService extends Service {
         voiceCancelControlParams.y = controlY;
         voiceSendControlParams.x = orbParams.x + orbSize + gap;
         voiceSendControlParams.y = controlY;
-        try {
-            windowManager.updateViewLayout(voiceCancelControl, voiceCancelControlParams);
-            windowManager.updateViewLayout(voiceSendControl, voiceSendControlParams);
-        } catch (IllegalArgumentException ignored) {
-            // A state transition removed the controls while they were moving.
-        }
+    }
+
+    private void updatePreparedVoiceDraftControlLayouts() {
+        MoaOverlayWindowLayout.update(windowManager, voiceCancelControl, voiceCancelControlParams);
+        MoaOverlayWindowLayout.update(windowManager, voiceSendControl, voiceSendControlParams);
     }
 
     private void removeVoiceDraftControls() {

@@ -52,8 +52,6 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private static final long DOUBLE_TAP_TIMEOUT_MS = ViewConfiguration.getDoubleTapTimeout();
 
     private final Context context;
-    private final WindowManager windowManager;
-    private final OrbView orbView;
     private final WindowManager.LayoutParams orbParams;
     // The live orb window size in pixels. It changes with the user's scale
     // pref, so it is stored as already-resolved pixels, not a dp base.
@@ -114,8 +112,6 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
 
     MoaOrbTouchListener(
             Context context,
-            WindowManager windowManager,
-            OrbView orbView,
             WindowManager.LayoutParams orbParams,
             int orbWindowPx,
             int edgeMarginDp,
@@ -136,8 +132,6 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             Consumer<Boolean> onOrbDragEnd
     ) {
         this.context = context;
-        this.windowManager = windowManager;
-        this.orbView = orbView;
         this.orbParams = orbParams;
         this.orbWindowPx = orbWindowPx;
         this.edgeMarginDp = edgeMarginDp;
@@ -227,10 +221,10 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                         onDoublePressAbort.run();
                     }
                 }
-                orbParams.x = clampOrbX(startX + dx);
-                orbParams.y = clampOrbY(startY + dy);
-                windowManager.updateViewLayout(orbView, orbParams);
-                onOrbDragMove.run();
+                if (moved) {
+                    moveOrbTo(event);
+                    onOrbDragMove.run();
+                }
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
@@ -250,7 +244,13 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     return true;
                 }
                 if (moved || action == MotionEvent.ACTION_CANCEL || event.getEventTime() - downTimeMs > SINGLE_TAP_MAX_MS) {
-                    if (moved) onOrbDragEnd.accept(action == MotionEvent.ACTION_UP);
+                    if (moved) {
+                        if (action == MotionEvent.ACTION_UP) {
+                            moveOrbTo(event);
+                            onOrbDragMove.run();
+                        }
+                        onOrbDragEnd.accept(action == MotionEvent.ACTION_UP);
+                    }
                     lastTapCandidate = false;
                     return true;
                 }
@@ -304,9 +304,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                         moved = true;
                         onOrbDragStart.run();
                         onPressToTalkCancel.run();
-                        orbParams.x = clampOrbX(startX + dx);
-                        orbParams.y = clampOrbY(startY + dy);
-                        windowManager.updateViewLayout(orbView, orbParams);
+                        moveOrbTo(event);
                         onOrbDragMove.run();
                     }
                     return true;
@@ -321,10 +319,10 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     onDoublePressAbort.run();
                     resetVoiceFirstTapChord();
                 }
-                orbParams.x = clampOrbX(startX + dx);
-                orbParams.y = clampOrbY(startY + dy);
-                windowManager.updateViewLayout(orbView, orbParams);
-                onOrbDragMove.run();
+                if (moved) {
+                    moveOrbTo(event);
+                    onOrbDragMove.run();
+                }
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
@@ -339,7 +337,13 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 // No hold consumed the warm mic, so drop it.
                 onDoublePressAbort.run();
                 if (action == MotionEvent.ACTION_CANCEL || moved) {
-                    if (moved) onOrbDragEnd.accept(action == MotionEvent.ACTION_UP);
+                    if (moved) {
+                        if (action == MotionEvent.ACTION_UP) {
+                            moveOrbTo(event);
+                            onOrbDragMove.run();
+                        }
+                        onOrbDragEnd.accept(action == MotionEvent.ACTION_UP);
+                    }
                     // A cancel or a drag is never a tap. A drag already reset the
                     // chord; the escape-hatch drag reset it when the hold confirmed.
                     return true;
@@ -493,6 +497,13 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         int margin = dp(edgeMarginDp);
         int max = context.getResources().getDisplayMetrics().widthPixels - orbWindowPx - margin;
         return Math.max(margin, Math.min(value, max));
+    }
+
+    private void moveOrbTo(MotionEvent event) {
+        int dx = Math.round(event.getRawX() - downX);
+        int dy = Math.round(event.getRawY() - downY);
+        orbParams.x = clampOrbX(startX + dx);
+        orbParams.y = clampOrbY(startY + dy);
     }
 
     private int clampOrbY(int value) {
