@@ -150,10 +150,15 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     @Published public var origin = ""
     @Published public var token = ""
     @Published public var screenshot = false
+    @Published public var surfacePrograms = false
     @Published public var paused = true
     @Published public var mode: ReleaseMode = .localOnly; @Published public var appName = "No app selected"; @Published public var suggestion = ""
     private let grants = GrantStore(); private lazy var coordinator = SuggestionCoordinator(grants: grants)
-    private var identity: ProcessIdentity?; private var observer: AXSession?; private var task: Task<Void, Never>?; private var generation: UInt64 = 0
+    private var identity: ProcessIdentity?; private var observer: AXSession?; private var task: Task<Void, Never>?
+    private var programClient: MacSurfaceProgramClient?; private var programTask: Task<Void, Never>?
+    private let programDeviceID = "mac_\(UUID().uuidString.lowercased())"
+    private let programClientInstanceID = "client_\(UUID().uuidString.lowercased())"
+    private var generation: UInt64 = 0
     private let inspectIdentity: @MainActor (NSRunningApplication) -> ProcessIdentity?
     public init() { inspectIdentity = ProcessInspector.identity; token = KeychainToken.load() ?? "" }
     init(selectedIdentity: ProcessIdentity, appName: String) {
@@ -188,12 +193,49 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
             await grants.start(grant)
             guard generation == requestedGeneration else { await grants.stop(); return }
             observer?.stop(); observer = AXSession(pid: identity.pid) { [weak self] in self?.refresh() }; try? observer?.start()
+            if surfacePrograms, let destination {
+                let transport = try URLSessionMacSurfaceProgramTransport(origin: destination,
+                    bearerToken: token)
+                let selectedProcess = identity, selectedName = appName
+                let client = MacSurfaceProgramClient(transport: transport, runtimeFactory: { grant in
+                    let directory = FileManager.default.urls(for: .applicationSupportDirectory,
+                        in: .userDomainMask).first!.appendingPathComponent("MoaMac", isDirectory: true)
+                    let journal = try AtomicFileMacProgramJournal(fileURL: directory
+                        .appendingPathComponent("surface-program-journal.json"))
+                    return JavaScriptCoreMacProgramRuntime(deviceID: grant.deviceID,
+                        authority: SystemMacAccessibilityAuthority(process: selectedProcess,
+                            applicationName: selectedName, grantID: grant.grantID),
+                        clientInstanceID: grant.clientInstanceID, journal: journal,
+                        approvalAuthorizer: MacAlertProgramApprover())
+                }, proposalAuthorizer: { envelope in
+                    envelope.approvalPolicy.program == "preauthorized" ? envelope.program.sha256 : nil
+                })
+                try await client.start(grant: .init(grantID: grant.id.uuidString.lowercased(),
+                    deviceID: programDeviceID, clientInstanceID: programClientInstanceID))
+                programClient = client
+                programTask = Task { [weak self, client] in
+                    while !Task.isCancelled {
+                        do { _ = try await client.receiveAndRunOne() }
+                        catch { await self?.stopProgramClient(client) ; return }
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                }
+            }
             paused = false; status = "Active for 15 minutes — \(appName), \(mode.rawValue)"; refresh()
         } catch { status = "Cannot start: invalid gateway origin or grant" }
     }
-    public func pause() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await grants.stop(); paused = true; status = "Paused and revoked — press Start again for a new grant" }
+    public func pause() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await revokeProgramClient(); await coordinator.cancel(); await grants.stop(); paused = true; status = "Paused and revoked — press Start again for a new grant" }
     public func resume() { status = "Pause revoked the grant — press Start again" }
-    public func stop() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await grants.stop(); paused = true; suggestion = ""; status = "Stopped — context purged" }
+    public func stop() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await revokeProgramClient(); await coordinator.cancel(); await grants.stop(); paused = true; suggestion = ""; status = "Stopped — context purged" }
+    private func revokeProgramClient() async {
+        programTask?.cancel(); programTask = nil
+        if let programClient { await programClient.stop() }
+        programClient = nil
+    }
+    private func stopProgramClient(_ client: MacSurfaceProgramClient) async {
+        await client.stop()
+        if programClient === client { programClient = nil; programTask = nil }
+    }
     private func refresh() {
         guard !paused, let identity, let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier == identity.pid, inspectIdentity(front) == identity else { Task { await stop() }; return }
         task?.cancel(); task = Task { [weak self] in
@@ -212,6 +254,20 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
                 suggestion = result.suggestion; status = "Active — suggestion ready (inert)"
             } catch is CancellationError { } catch { status = "Active — suggestion withheld: \(error)" }
         }
+    }
+}
+
+private struct MacAlertProgramApprover: MacProgramApprovalAuthorizing {
+    func resolve(approvalID: String, effectClass: String, capabilityID: String,
+                 executionID: String, expiresAt: Date) -> MacProgramApprovalDecision {
+        let approved = DispatchQueue.main.sync {
+            let alert = NSAlert()
+            alert.messageText = "Allow this Mac action?"
+            alert.informativeText = "Capability: \(capabilityID)\nEffect: \(effectClass)\nExecution: \(executionID)"
+            alert.addButton(withTitle: "Allow once"); alert.addButton(withTitle: "Deny")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+        return .init(approvalID: approvalID, status: approved && Date() < expiresAt ? "approved" : "denied")
     }
 }
 #endif

@@ -14,6 +14,8 @@ public struct StatusView: View {
         SecureField("Gateway bearer token", text: $model.token).textFieldStyle(.roundedBorder)
         HStack { Button("Save token in Keychain") { model.saveToken() }; Button("Delete token") { model.deleteToken() } }
         Toggle("Attach focused-window screenshot for this grant", isOn: $model.screenshot)
+        Toggle("Enable reviewed gateway surface programs for this grant",
+            isOn: $model.surfacePrograms)
         HStack { Button("Start 15 minutes") { Task { await model.start() } }; Button("Pause") { Task { await model.pause() } }; Button("Resume") { model.resume() }; Button("Stop") { Task { await model.stop() } } }
         if !model.suggestion.isEmpty { GroupBox("Suggestion (inert)") { Text(model.suggestion).textSelection(.enabled) } }
         Text("Permissions alone never start observation. Screenshot capture is optional and scoped to the selected app's focused window.").font(.caption)
