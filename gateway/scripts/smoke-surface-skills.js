@@ -28,6 +28,8 @@ const {
   surfaceClassicTools,
 } = require(path.join(GATEWAY_DIR, "lib", "surface-skills"));
 const {
+  receiptDigest,
+  sha256,
   surfaceProgramReceiptBindings,
 } = require(path.join(GATEWAY_DIR, "lib", "surface-program-protocol"));
 
@@ -117,29 +119,51 @@ async function assertSurfaceProgram(baseUrl, call) {
     bindings: {
       kind: "browser_document", tab_id: 99, window_id: 3, frame_id: 0,
       origin: "https://fixture.test", document_id: "fixture-document", page_epoch: 1,
-      observation_id: "fixture-observation", observation_digest: "b".repeat(64), state_sha256: "c".repeat(64),
-      allowed_frames: [0], allowed_worlds: ["ISOLATED"], site_grant_id: "fixture-grant",
+      observation_id: "fixture-observation", observation_sha256: "b".repeat(64), state_sha256: "c".repeat(64),
     },
     approval_policy: { program: "local_policy", always_ask: [] },
   });
   const request = await waitForPendingToolRequest(baseUrl, "surface.program.execute");
-  const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "browser_surface_smoke" });
+  const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "browser_surface_smoke", client_instance_id: "browser_surface_smoke_instance" });
   assert.equal(claim.status, 200, JSON.stringify(claim.json));
   const envelope = claim.json.request.input;
   assert.equal(envelope.program.source, source, "validated source must reach the fake client without truncation");
   assert.equal(envelope.bindings.tab_id, 99);
   assert.equal(claim.json.request.claimed_client_instance_id, "browser_surface_smoke_instance");
+  const claimant = { surface_type: "browser_extension", device_id: "browser_surface_smoke", client_instance_id: "browser_surface_smoke_instance" };
+  const postEvent = (sequence, kind, payload) => postJson(`${baseUrl}/v1/tool/requests/${request.id}/events`, {
+    version: 1, type: "surface.execution.event", event_id: `surface_smoke_event_${sequence}`,
+    execution_id: envelope.execution_id, sequence, kind, occurred_at: new Date().toISOString(), claimant, payload,
+  });
+  assert.equal((await postEvent(1, "accepted", { proposal_sha256: sha256(envelope) })).status, 202);
+  assert.equal((await postEvent(2, "started", {})).status, 202);
+  assert.equal((await postEvent(3, "tool_started", { capability_id: "browser.observe", tool_call_id: "surface_smoke_call", attempt: 1 })).status, 202);
+  const toolReceipt = {
+    version: 1, type: "surface.execution.tool_receipt", receipt_id: "surface_smoke_tool_receipt",
+    execution_id: envelope.execution_id, claimant, tool_call_id: "surface_smoke_call", attempt: 1,
+    capability_id: "browser.observe", ...surfaceProgramReceiptBindings(envelope), input_sha256: "1".repeat(64),
+    pre_state_sha256: envelope.bindings.state_sha256, approval_id: null, started_at: new Date().toISOString(),
+    finished_at: new Date().toISOString(), status: "succeeded",
+    result: { summary: "Observed fixture page.", data_sha256: null, resource_id: "fixture-page" },
+    post_state_sha256: "2".repeat(64), previous_receipt_sha256: null, receipt_sha256: "3".repeat(64),
+  };
+  toolReceipt.receipt_sha256 = receiptDigest(toolReceipt);
+  const toolPosted = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/tool-receipts`, toolReceipt);
+  assert.equal(toolPosted.status, 202, JSON.stringify(toolPosted.json));
+  assert.equal((await postEvent(4, "tool_finished", { capability_id: "browser.observe", tool_call_id: "surface_smoke_call", attempt: 1, status: "succeeded", receipt_id: toolReceipt.receipt_id, receipt_sha256: toolReceipt.receipt_sha256 })).status, 202);
   const terminal = {
     version: 1, type: "surface.execution.receipt", receipt_id: "surface_smoke_receipt",
     execution_id: envelope.execution_id, session_id: envelope.session_id, turn_id: envelope.turn_id,
     claimant: { surface_type: "browser_extension", device_id: "browser_surface_smoke", client_instance_id: "browser_surface_smoke_instance" },
     runtime_id: envelope.runtime.runtime_id, ...surfaceProgramReceiptBindings(envelope),
     started_at: new Date().toISOString(), finished_at: new Date().toISOString(), status: "completed",
-    tool_attempts: { count: 2, first_receipt_sha256: null, last_receipt_sha256: null },
+    tool_attempts: { count: 1, first_receipt_sha256: toolReceipt.receipt_sha256, last_receipt_sha256: toolReceipt.receipt_sha256 },
     result: { summary: "Fixture page observed and validated.", data_sha256: null, artifact_refs: [] },
-    final_state_sha256: "d".repeat(64), error: { code: null, message: null }, previous_receipt_sha256: null,
+    final_state_sha256: "d".repeat(64), error: { code: null, message: null }, previous_receipt_sha256: toolReceipt.receipt_sha256,
     receipt_sha256: "e".repeat(64),
   };
+  terminal.receipt_sha256 = receiptDigest(terminal);
+  assert.equal((await postEvent(5, "terminal", { status: "completed", receipt_id: terminal.receipt_id, receipt_sha256: terminal.receipt_sha256 })).status, 202);
   const posted = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, terminal);
   assert.equal(posted.status, 200, JSON.stringify(posted.json));
   const result = await programPromise;
