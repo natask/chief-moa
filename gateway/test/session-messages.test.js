@@ -108,8 +108,24 @@ test("keeps assistant output separate and reports private, branch, and invalid e
     { speaker: "assistant", text: "assistant response" },
   ]);
   assert.deepEqual(payload.completeness.excluded_records, {
-    other_session: 1, other_branch: 1, incognito: 1, invalid: 1,
+    other_session: 1, other_branch: 1, incognito: 1, invalid: 1, unreadable: 0,
   });
+});
+
+test("invalid bounds fail closed and unreadable records remain visible in completeness", () => {
+  for (const limit of ["not-a-number", 0, 201, 1.5, -1]) {
+    assert.throws(
+      () => projectSessionMessages({ sessionId: "shared", limit, chatTurns: [{ session_id: "shared", user_text: "private" }] }),
+      /invalid session message limit/,
+    );
+  }
+  const payload = projectSessionMessages({
+    sessionId: "shared",
+    voiceTurns: [{ __session_message_unreadable: true, session_id: "shared" }],
+    chatTurns: [{ __session_message_unreadable: true, session_id: "shared" }],
+  });
+  assert.equal(payload.messages.length, 0);
+  assert.equal(payload.completeness.excluded_records.unreadable, 2);
 });
 
 test("represents incomplete and bounded text honestly", () => {

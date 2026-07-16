@@ -14,7 +14,7 @@ function projectSessionMessages(input = {}) {
   const limit = boundedLimit(input.limit);
   const byKey = new Map();
   const counts = { voice: 0, chat: 0, browser: 0, broker: 0 };
-  const excluded = { other_session: 0, other_branch: 0, incognito: 0, invalid: 0 };
+  const excluded = { other_session: 0, other_branch: 0, incognito: 0, invalid: 0, unreadable: 0 };
 
   addRecords(input.voiceTurns, "voice", voiceCandidates);
   addRecords(input.chatTurns, "chat", chatCandidates);
@@ -50,6 +50,8 @@ function projectSessionMessages(input = {}) {
       const recordBranch = clean(record?.branch_id) || "default";
       if (!record || typeof record !== "object") {
         inputExcluded("invalid");
+      } else if (record.__session_message_unreadable === true) {
+        inputExcluded("unreadable");
       } else if (privateRecord(record)) {
         inputExcluded("incognito");
       } else if (recordSession !== sessionId) {
@@ -287,7 +289,12 @@ function countMessages(messages) {
 }
 
 function boundedLimit(value) {
-  return Math.max(1, Math.min(Number(value) || SESSION_MESSAGE_DEFAULT_LIMIT, SESSION_MESSAGE_MAX_LIMIT));
+  if (value == null || value === "") return SESSION_MESSAGE_DEFAULT_LIMIT;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > SESSION_MESSAGE_MAX_LIMIT) {
+    throw new RangeError("invalid session message limit");
+  }
+  return parsed;
 }
 
 function uniqueStrings(values) {

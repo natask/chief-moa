@@ -69,6 +69,18 @@ public final class MoaSessionHistoryTest {
         assertEquals("", turn.assistantText);
     }
 
+    @Test
+    public void gatewayMaximumTextRemainsExact() throws Exception {
+        String maximum = "x".repeat(32_768);
+        JSONObject payload = new JSONObject().put("messages", new JSONArray()
+                .put(canonical("msg_max", "turn_max", "user", maximum)));
+
+        MoaSessionHistory.Turn turn = MoaSessionHistory.from(payload, "shared-maximum").turns.get(0);
+
+        assertEquals(maximum, turn.userText);
+        assertFalse(turn.userText.endsWith("[display capped]"));
+    }
+
     private static JSONObject canonical(String messageId, String turnId, String speaker, String text) throws Exception {
         return new JSONObject()
                 .put("message_id", messageId)

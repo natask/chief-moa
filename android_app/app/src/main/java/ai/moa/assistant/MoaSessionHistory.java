@@ -15,7 +15,7 @@ import java.util.Set;
 final class MoaSessionHistory {
     static final int MAX_TURNS = 20;
     static final int MAX_MESSAGES = MAX_TURNS * 2;
-    static final int MAX_TEXT_CHARS = 32_000;
+    static final int MAX_TEXT_CHARS = 32_768;
 
     final String sessionId;
     final List<Turn> turns;

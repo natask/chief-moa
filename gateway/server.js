@@ -9592,7 +9592,8 @@ function listVoiceTurnRecordsForSession(sessionId, branchId) {
 }
 
 function listRawVoiceTurnRecordsForSession(sessionId) {
-  const dir = path.join(VOICE_TURNS_DIR, sanitizeOptionalId(sessionId, "default"));
+  const safeSessionId = sanitizeOptionalId(sessionId, "default");
+  const dir = path.join(VOICE_TURNS_DIR, safeSessionId);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
     .filter((name) => name.endsWith(".json"))
@@ -9600,10 +9601,9 @@ function listRawVoiceTurnRecordsForSession(sessionId) {
       try {
         return JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
       } catch {
-        return null;
+        return { __session_message_unreadable: true, session_id: safeSessionId };
       }
     })
-    .filter(Boolean)
     .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
     .slice(-SESSION_MESSAGE_MAX_LIMIT);
 }
@@ -9687,7 +9687,7 @@ function listChatTurnRecordsForSession(sessionId, branchId = "", limit = 50) {
     .map(summarizeChatTurnRecord);
 }
 
-function listRawChatTurnRecordsForSession(sessionId, branchId = "", limit = 50) {
+function listRawChatTurnRecordsForSession(sessionId, branchId = "", limit = 50, includeUnreadable = false) {
   const safeSessionId = sanitizeOptionalId(sessionId, "default");
   const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
   const dir = path.join(CHAT_TURNS_DIR, safeSessionId);
@@ -9698,7 +9698,9 @@ function listRawChatTurnRecordsForSession(sessionId, branchId = "", limit = 50) 
           try {
             return JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
           } catch {
-            return null;
+            return includeUnreadable
+              ? { __session_message_unreadable: true, session_id: safeSessionId }
+              : null;
           }
         })
         .filter(Boolean)
@@ -9729,7 +9731,7 @@ function sessionMessagesPayload({ sessionId, branchId = "", limit } = {}) {
     branchId: safeBranchId,
     limit,
     voiceTurns: listRawVoiceTurnRecordsForSession(safeSessionId),
-    chatTurns: listRawChatTurnRecordsForSession(safeSessionId, "", SESSION_MESSAGE_MAX_LIMIT),
+    chatTurns: listRawChatTurnRecordsForSession(safeSessionId, "", SESSION_MESSAGE_MAX_LIMIT, true),
     browserTurns: browserRecords,
     brokerEvents: brokerRecords,
   });

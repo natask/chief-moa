@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createSessionReadHandlers } = require("../lib/session-read-handlers");
+const { createSessionReadHandlers, parseSessionMessageLimit } = require("../lib/session-read-handlers");
 
 function harness(overrides = {}) {
   const threadStore = { getActive: (_s, surface) => ({ branch_id: surface ? "branch" : "default" }), getThread: (_s, id) => id === "branch" ? { kind: "fork", label: "Fork" } : null };
@@ -63,11 +63,24 @@ test("context, turns, and history normalize decoding, aliases, and flags", async
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/sessions/s/context?all_branches=1")); assert.equal(response.payload.branchId, "default"); assert.equal(response.payload.allBranches, true);
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/sessions/a%20b/turns")); assert.equal(response.payload.session_id, "safe-a b"); assert.equal(response.payload.turns[0].transcript, "a b");
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/sessions/a%20b/messages?branch_id=fork&limit=9"));
-  assert.deepEqual(response.payload, { projection: { sessionId: "a b", branchId: "fork", limit: "9" } });
+  assert.deepEqual(response.payload, { projection: { sessionId: "a b", branchId: "fork", limit: 9 } });
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/sessions/a%20b/messages"));
-  assert.deepEqual(response.payload, { projection: { sessionId: "a b", branchId: "", limit: null } });
+  assert.deepEqual(response.payload, { projection: { sessionId: "a b", branchId: "", limit: undefined } });
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/history/messages?conversation_id=s&query=find&limit=3")); assert.deepEqual(response.payload, { sessionId: "s", q: "find", limit: 3 });
   response = {}; await handlers.routeSessionReads(req(), response, url("/v1/history/messages")); assert.deepEqual(response.payload, { sessionId: "", q: "", limit: 50 });
+});
+
+test("session message limits fail closed before projection", async () => {
+  let projections = 0;
+  const handlers = harness({ sessionMessagesPayload: () => { projections += 1; return { messages: ["secret"] }; } });
+  for (const value of ["not-a-number", "0", "201", "1.5", "-1"]) {
+    const response = {};
+    await handlers.routeSessionReads(req(), response, url(`/v1/sessions/shared/messages?limit=${encodeURIComponent(value)}`));
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.payload, { error: "invalid session message limit" });
+  }
+  assert.equal(projections, 0);
+  assert.deepEqual(parseSessionMessageLimit("200"), { valid: true, value: 200 });
 });
 
 test("chat turns paginate without colliding with voice turns", async () => {

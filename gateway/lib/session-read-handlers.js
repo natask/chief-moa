@@ -48,10 +48,15 @@ function createSessionReadHandlers(deps) {
         turnLimit: url.searchParams.get("turn_limit"),
       }));
     } else if (sessionMessages) {
+      const parsedLimit = parseSessionMessageLimit(url.searchParams.get("limit"));
+      if (!parsedLimit.valid) {
+        sendJson(response, 400, { error: "invalid session message limit" });
+        return true;
+      }
       sendJson(response, 200, sessionMessagesPayload({
         sessionId: decodeSessionPath(path, "/messages"),
         branchId: url.searchParams.get("branch_id") || "",
-        limit: url.searchParams.get("limit"),
+        limit: parsedLimit.value,
       }));
     } else if (voiceTurns) {
       const sessionId = decodeSessionPath(path, "/turns");
@@ -114,4 +119,12 @@ function createSessionReadHandlers(deps) {
   return { routeSessionReads, sendActiveThread, sendChatTurns, decodeSessionPath };
 }
 
-module.exports = { createSessionReadHandlers };
+function parseSessionMessageLimit(value) {
+  if (value == null || value === "") return { valid: true, value: undefined };
+  if (!/^\d+$/.test(value)) return { valid: false };
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 200) return { valid: false };
+  return { valid: true, value: parsed };
+}
+
+module.exports = { createSessionReadHandlers, parseSessionMessageLimit };
