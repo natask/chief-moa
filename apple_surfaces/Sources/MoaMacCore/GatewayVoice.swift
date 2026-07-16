@@ -4,6 +4,27 @@ public enum GatewayVoiceError: Error, Equatable, Sendable {
     case invalidEvent
     case eventTooLarge
     case transcriptTooLarge
+    case emptyAudioFrame
+    case invalidAudioFrame
+    case audioFrameTooLarge
+}
+
+public struct GatewayVoiceAudioFrame: Equatable, Sendable {
+    // The gateway currently permits WebSocket payloads up to 2 MiB. Keep a
+    // client-owned limit far below that transport ceiling so a capture adapter
+    // cannot turn an unexpectedly large callback into one network frame.
+    public static let maximumBytes = 64 * 1024
+
+    public let data: Data
+
+    public init(_ data: Data) throws {
+        guard !data.isEmpty else { throw GatewayVoiceError.emptyAudioFrame }
+        guard data.count.isMultiple(of: MemoryLayout<Int16>.size) else {
+            throw GatewayVoiceError.invalidAudioFrame
+        }
+        guard data.count <= Self.maximumBytes else { throw GatewayVoiceError.audioFrameTooLarge }
+        self.data = data
+    }
 }
 
 public struct GatewayVoiceSessionStart: Sendable {
