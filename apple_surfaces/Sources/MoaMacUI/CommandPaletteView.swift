@@ -5,11 +5,13 @@ import SwiftUI
 public struct CommandPaletteView: View {
     @ObservedObject private var model: CommandModel
     private let dismiss: () -> Void
+    private let shortcutLabel: String
     @FocusState private var promptFocused: Bool
     @State private var editingConnection = false
 
-    public init(model: CommandModel, dismiss: @escaping () -> Void = {}) {
+    public init(model: CommandModel, shortcutLabel: String = "Control-Space", dismiss: @escaping () -> Void = {}) {
         self.model = model
+        self.shortcutLabel = shortcutLabel
         self.dismiss = dismiss
     }
 
@@ -44,7 +46,7 @@ public struct CommandPaletteView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
-                .frame(maxHeight: 180)
+                .frame(maxHeight: 100)
                 .padding(12)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
             }
@@ -65,12 +67,12 @@ public struct CommandPaletteView: View {
             .padding(12)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
 
-            Text("Control-Space to toggle · Return to send · no screen context attached")
+            Text("\(shortcutLabel) to toggle · Return to send · no screen context attached")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .padding(18)
-        .frame(width: 560)
+        .frame(width: 560, height: 420, alignment: .top)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.16)))
         .onAppear { promptFocused = true }
@@ -80,7 +82,7 @@ public struct CommandPaletteView: View {
     private var connectionEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Your Chief Moa gateway").font(.subheadline.weight(.semibold))
-            TextField("https://your-gateway.example", text: $model.origin)
+            TextField("Canonical HTTPS gateway origin", text: $model.origin)
                 .textFieldStyle(.roundedBorder)
             SecureField("Gateway bearer token", text: $model.token)
                 .textFieldStyle(.roundedBorder)

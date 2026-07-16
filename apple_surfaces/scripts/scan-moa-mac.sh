@@ -9,12 +9,18 @@ if [ ! -x "$binary" ]; then
   exit 2
 fi
 
-pattern='api\.agee\.app|api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|posthog|sentry|Sparkle\.framework|SPUStandardUpdaterController|SUFeedURL|SkyLight|SLSPost|SLPS'
-if rg -n -i "$pattern" Sources/MoaMac Sources/MoaMacCore Sources/MoaMacShell Sources/MoaMacUI Resources; then
+prohibited_pattern='posthog|sentry|Sparkle\.framework|SPUStandardUpdaterController|SUFeedURL|SkyLight|SLSPost|SLPS'
+destination_pattern='https?://[[:alnum:]]'
+credential_pattern='sk-(proj-)?[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|phc_[A-Za-z0-9_-]{16,}|gsk_[A-Za-z0-9_-]{16,}|xai-[A-Za-z0-9_-]{16,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.'
+if rg -n -i "$prohibited_pattern|$credential_pattern" Sources/MoaMac Sources/MoaMacCore Sources/MoaMacShell Sources/MoaMacUI Resources; then
   echo "Prohibited packaged destination, telemetry, updater, or private API reference found in MoaMac sources." >&2
   exit 1
 fi
-if strings "$binary" | rg -n -i "$pattern"; then
+if rg -n -i "$destination_pattern" Sources/MoaMac Sources/MoaMacCore Sources/MoaMacShell Sources/MoaMacUI; then
+  echo "Packaged network destination found in MoaMac sources." >&2
+  exit 1
+fi
+if strings "$binary" | rg -n -i "$prohibited_pattern|$destination_pattern|$credential_pattern"; then
   echo "Prohibited packaged destination, telemetry, updater, or private API reference found in MoaMac binary." >&2
   exit 1
 fi
