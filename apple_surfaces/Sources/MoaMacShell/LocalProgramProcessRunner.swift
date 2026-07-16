@@ -53,7 +53,7 @@ enum MacProgramProcessRunner {
         let input = Pipe(), output = Pipe(), errors = Pipe()
         process.executableURL = executableURL
         process.arguments = ["--stdio-v1"]
-        process.environment = ["LANG": "C", "LC_ALL": "C"]
+        process.environment = ["LANG": "C", "LC_ALL": "C", "LLVM_PROFILE_FILE": "/dev/null"]
         process.standardInput = input; process.standardOutput = output; process.standardError = errors
 
         let terminal = DispatchSemaphore(value: 0)
@@ -63,7 +63,6 @@ enum MacProgramProcessRunner {
             if data.isEmpty { state.finishEOF(); return }
             state.consume(data)
         }
-        process.terminationHandler = { _ in state.finishEOF() }
         try process.run()
         handle.attach(process)
         try state.send(["kind": "start", "source": source])
