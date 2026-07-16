@@ -401,18 +401,8 @@ async function main() {
     await evaluate(workerCdp, `chrome.tabs.sendMessage(${tabId}, { cmd: "open" })`);
     await waitForEval(pageCdp, `Boolean(document.querySelector("#agee-input"))`);
     const contentCtx = await resolveContentContext(pageCdp, isolatedContexts);
-    await evaluate(pageCdp, `
-      (() => {
-        const select = document.querySelector("#agee-mode-select");
-        if (!select) return false;
-        select.value = "explain";
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-        return select.value === "explain";
-      })()
-    `, { contextId: contentCtx });
-
     await evaluate(pageCdp, installProgressRecorderExpr(), { contextId: contentCtx });
-    await evaluate(pageCdp, submitTypedExpr("summarize this page"), { contextId: contentCtx });
+    await evaluate(pageCdp, submitTypedExpr("explain summarize this page"), { contextId: contentCtx });
     const typed = await waitForEval(pageCdp, latestResultExpr(), 20000, { contextId: contentCtx });
     if (typed.kind !== "done" || !typed.text.includes("Unified browser turn answer")) {
       throw new Error(`typed page-context turn did not render answer: ${JSON.stringify(typed)}`);
@@ -473,7 +463,7 @@ async function main() {
       throw new Error(`browser evidence payload is missing snapshot fields: ${JSON.stringify(firstEvidence)}`);
     }
     const firstTurn = turnCalls[0].body;
-    if (firstTurn.input?.text !== "summarize this page" || firstTurn.intent_hint !== "browser_page_question") {
+    if (firstTurn.input?.text !== "explain summarize this page" || firstTurn.role !== "explain" || firstTurn.intent_hint !== "browser_page_question") {
       throw new Error(`browser turn payload did not carry input/intent hint: ${JSON.stringify(firstTurn)}`);
     }
     if (firstEvidence.turn_id !== "turn-1" || firstEvidence.evidence_request_id !== "evreq-1") {

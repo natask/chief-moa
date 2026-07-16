@@ -130,6 +130,9 @@ if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 
 if (mainContentScript.js.indexOf("document-context.js") < 0 || mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js")) {
   throw new Error("document-context.js must load before content.js");
 }
+if (!/executeScript\(\{ target: \{ tabId \}, files: \["ui-spec-runtime\.js", "proactive-helper\.js", "steering-ui\.js", "document-context\.js", "content\.js"\] \}\)/.test(backgroundSource)) {
+  throw new Error("dynamic content injection must load document-context.js before content.js");
+}
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
 }
@@ -204,7 +207,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "steering-ui\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "steering-ui\.js", "document-context\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
