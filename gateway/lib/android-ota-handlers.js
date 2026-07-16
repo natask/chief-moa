@@ -69,7 +69,14 @@ function createAndroidOtaHandlers(deps) {
   async function handleRollback(request, response) {
     let result;
     try { result = androidOta.rollbackToPreviousRelease(otaDir); }
-    catch (error) { sendJson(response, 500, { error: cleanError(error) }); return; }
+    catch (error) {
+      if (error && error.code === "OTA_STORE_BUSY") {
+        sendJson(response, 409, { error: "android OTA store busy", reason: "publication_in_progress" });
+      } else {
+        sendJson(response, 500, { error: cleanError(error) });
+      }
+      return;
+    }
     if (!result.ok) {
       sendJson(response, result.reason === "no_current_release" ? 404 : 409, {
         error: "rollback unavailable", reason: result.reason, current_release_id: result.current_release_id || null,

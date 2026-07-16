@@ -32,6 +32,13 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "moa-ota-mod-"));
 }
 
+function createForeignLock(dir, owner = "publish-external-test") {
+  const lockDir = path.join(dir, ".publish-lock");
+  fs.mkdirSync(lockDir, { recursive: false });
+  fs.writeFileSync(path.join(lockDir, "owner"), `${owner}\n`);
+  return lockDir;
+}
+
 function publish(dir, { version_code, version_name, published_at, release_id, marker }) {
   const apk = makeApk(marker || version_code);
   return androidOta.publishRelease(dir, {
@@ -45,6 +52,38 @@ function publish(dir, { version_code, version_name, published_at, release_id, ma
       release_id,
     },
   });
+}
+
+function canonicalBytes(dir) {
+  const currentPath = path.join(dir, "current");
+  const stat = fs.lstatSync(currentPath);
+  return {
+    current: stat.isSymbolicLink()
+      ? `symlink:${fs.readlinkSync(currentPath)}`
+      : `file:${fs.readFileSync(currentPath).toString("hex")}`,
+    apk: fs.readFileSync(path.join(dir, "moa-assistant.apk")),
+    latest: fs.readFileSync(path.join(dir, "latest.json")),
+  };
+}
+
+function assertCanonicalBytesEqual(actual, expected) {
+  assert.equal(actual.current, expected.current);
+  assert.deepEqual(actual.apk, expected.apk);
+  assert.deepEqual(actual.latest, expected.latest);
+}
+
+function assertCanonicalParity(dir, releaseId) {
+  const release = path.join(dir, "releases", releaseId);
+  assert.deepEqual(
+    fs.readFileSync(path.join(dir, "moa-assistant.apk")),
+    fs.readFileSync(path.join(release, "moa-assistant.apk")),
+  );
+  const latest = JSON.parse(fs.readFileSync(path.join(dir, "latest.json"), "utf8"));
+  const meta = JSON.parse(fs.readFileSync(path.join(release, "release.json"), "utf8"));
+  assert.equal(latest.release_id, releaseId);
+  for (const key of ["app_id", "version_code", "version_name", "apk", "size_bytes", "sha256", "git_sha", "published_at", "min_sdk"]) {
+    assert.deepEqual(latest[key], meta[key]);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +164,7 @@ test("rollbackToPreviousRelease repoints current and refuses with no previous", 
     assert.equal(rolled.to_release_id, "ai.moa.assistant-10");
     assert.equal(androidOta.currentReleaseId(dir), "ai.moa.assistant-10");
     assert.equal(rolled.manifest.version_code, 10);
+    assertCanonicalParity(dir, "ai.moa.assistant-10");
 
     // Now on the oldest release: another rollback must refuse.
     const refused = androidOta.rollbackToPreviousRelease(dir);
@@ -132,6 +172,140 @@ test("rollbackToPreviousRelease repoints current and refuses with no previous", 
     assert.equal(refused.reason, "no_previous_release");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("publish rejects a differing immutable release-id collision without changing canonical state", () => {
+  const dir = tempDir();
+  try {
+    publish(dir, {
+      version_code: 40,
+      version_name: "0.1.40",
+      published_at: "2026-07-01T00:00:00Z",
+      release_id: "ai.moa.assistant-collision",
+      marker: "original",
+    });
+    const before = canonicalBytes(dir);
+    const immutableApk = fs.readFileSync(path.join(
+      dir, "releases", "ai.moa.assistant-collision", "moa-assistant.apk",
+    ));
+    assert.throws(
+      () => publish(dir, {
+        version_code: 40,
+        version_name: "0.1.40",
+        published_at: "2026-07-01T00:00:00Z",
+        release_id: "ai.moa.assistant-collision",
+        marker: "different",
+      }),
+      (error) => error && error.code === "OTA_RELEASE_COLLISION",
+    );
+    assert.deepEqual(
+      fs.readFileSync(path.join(dir, "releases", "ai.moa.assistant-collision", "moa-assistant.apk")),
+      immutableApk,
+    );
+    assertCanonicalBytesEqual(canonicalBytes(dir), before);
+    assert.equal(fs.existsSync(path.join(dir, ".publish-lock")), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("publish restores exact canonical state at every atomic rename boundary", { concurrency: false }, () => {
+  for (let failAt = 1; failAt <= 4; failAt += 1) {
+    const dir = tempDir();
+    try {
+      publish(dir, {
+        version_code: 50,
+        version_name: "0.1.50",
+        published_at: "2026-07-01T00:00:00Z",
+        marker: `prior-${failAt}`,
+      });
+      const before = canonicalBytes(dir);
+      const originalRename = fs.renameSync;
+      let observed = 0;
+      let injected = false;
+      fs.renameSync = function injectPublishRenameFailure(source, target) {
+        if (!injected && String(source).includes(".gateway-ota-publish-")) {
+          observed += 1;
+          if (observed === failAt) {
+            injected = true;
+            const error = new Error(`injected publish rename ${failAt}`);
+            error.code = "EIO";
+            throw error;
+          }
+        }
+        return originalRename.call(fs, source, target);
+      };
+      try {
+        assert.throws(
+          () => publish(dir, {
+            version_code: 51,
+            version_name: "0.1.51",
+            published_at: "2026-07-02T00:00:00Z",
+            marker: `candidate-${failAt}`,
+          }),
+          /injected publish rename/,
+        );
+      } finally {
+        fs.renameSync = originalRename;
+      }
+      assert.equal(injected, true);
+      assertCanonicalBytesEqual(canonicalBytes(dir), before);
+      assert.equal(fs.existsSync(path.join(dir, "releases", "ai.moa.assistant-51")), false);
+      assert.equal(fs.existsSync(path.join(dir, ".publish-lock")), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("rollback restores exact canonical state at every atomic rename boundary", { concurrency: false }, () => {
+  for (let failAt = 1; failAt <= 3; failAt += 1) {
+    const dir = tempDir();
+    try {
+      publish(dir, {
+        version_code: 60,
+        version_name: "0.1.60",
+        published_at: "2026-07-01T00:00:00Z",
+        marker: `rollback-prior-${failAt}`,
+      });
+      publish(dir, {
+        version_code: 61,
+        version_name: "0.1.61",
+        published_at: "2026-07-02T00:00:00Z",
+        marker: `rollback-current-${failAt}`,
+      });
+      const before = canonicalBytes(dir);
+      const originalRename = fs.renameSync;
+      let observed = 0;
+      let injected = false;
+      fs.renameSync = function injectRollbackRenameFailure(source, target) {
+        if (!injected && String(source).includes(".gateway-ota-rollback-")) {
+          observed += 1;
+          if (observed === failAt) {
+            injected = true;
+            const error = new Error(`injected rollback rename ${failAt}`);
+            error.code = "EIO";
+            throw error;
+          }
+        }
+        return originalRename.call(fs, source, target);
+      };
+      try {
+        assert.throws(
+          () => androidOta.rollbackToPreviousRelease(dir),
+          /injected rollback rename/,
+        );
+      } finally {
+        fs.renameSync = originalRename;
+      }
+      assert.equal(injected, true);
+      assertCanonicalBytesEqual(canonicalBytes(dir), before);
+      assert.equal(androidOta.currentReleaseId(dir), "ai.moa.assistant-61");
+      assert.equal(fs.existsSync(path.join(dir, ".publish-lock")), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -179,6 +353,63 @@ test("legacy single moa-assistant.apk migrates into the versioned layout on firs
     assert.equal(androidOta.currentReleaseId(dir), "ai.moa.assistant-7");
     const current = androidOta.readCurrentRelease(dir);
     assert.ok(fs.existsSync(current.apk_path));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("foreign publisher lock blocks read-triggered migration without touching legacy state", () => {
+  const dir = tempDir();
+  try {
+    const apk = makeApk("locked-legacy");
+    fs.writeFileSync(path.join(dir, "moa-assistant.apk"), apk);
+    fs.writeFileSync(path.join(dir, "latest.json"), `${JSON.stringify({
+      app_id: "ai.moa.assistant",
+      version_code: 8,
+      version_name: "0.1.8",
+      apk: "moa-assistant.apk",
+      size_bytes: apk.length,
+      sha256: crypto.createHash("sha256").update(apk).digest("hex"),
+      git_sha: "locked",
+      built_at: "2026-06-02T00:00:00Z",
+      min_sdk: 26,
+    })}\n`);
+    const lockDir = createForeignLock(dir);
+
+    assert.throws(
+      () => androidOta.buildLatestManifest(dir),
+      (error) => error && error.code === androidOta.STORE_BUSY_ERROR_CODE,
+    );
+    assert.equal(androidOta.currentReleaseId(dir), null);
+    assert.equal(fs.existsSync(path.join(dir, "releases")), false);
+    assert.equal(fs.readFileSync(path.join(lockDir, "owner"), "utf8"), "publish-external-test\n");
+
+    fs.rmSync(lockDir, { recursive: true });
+    assert.equal(androidOta.buildLatestManifest(dir).version_code, 8);
+    assert.equal(fs.existsSync(path.join(dir, ".publish-lock")), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("foreign publisher lock blocks rollback and publication without removing its owner", () => {
+  const dir = tempDir();
+  try {
+    publish(dir, { version_code: 10, version_name: "0.1.10", published_at: "2026-07-01T00:00:00Z" });
+    publish(dir, { version_code: 11, version_name: "0.1.11", published_at: "2026-07-02T00:00:00Z" });
+    const lockDir = createForeignLock(dir, "publish-in-flight");
+
+    assert.throws(
+      () => androidOta.rollbackToPreviousRelease(dir),
+      (error) => error && error.code === androidOta.STORE_BUSY_ERROR_CODE,
+    );
+    assert.throws(
+      () => publish(dir, { version_code: 12, version_name: "0.1.12", published_at: "2026-07-03T00:00:00Z" }),
+      (error) => error && error.code === androidOta.STORE_BUSY_ERROR_CODE,
+    );
+    assert.equal(androidOta.currentReleaseId(dir), "ai.moa.assistant-11");
+    assert.equal(fs.existsSync(path.join(dir, "releases", "ai.moa.assistant-12")), false);
+    assert.equal(fs.readFileSync(path.join(lockDir, "owner"), "utf8"), "publish-in-flight\n");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -260,6 +491,22 @@ test("POST rollback repoints current to the previous release", async () => {
   assert.equal(res.json.manifest.version_code, 10);
   assert.match(res.json.manifest.download_url, /^https?:\/\/[^/]+\/v1\/android\/updates\/latest\.apk$/);
   assert.equal(androidOta.currentReleaseId(HTTP_OTA_DIR), "ai.moa.assistant-10");
+});
+
+test("POST rollback refuses while an external OTA publication owns the store lock", async () => {
+  const lockDir = createForeignLock(HTTP_OTA_DIR, "publish-http-test");
+  try {
+    const res = await request("POST", "/v1/android/updates/rollback", { token: GATEWAY_TOKEN });
+    assert.equal(res.status, 409);
+    assert.deepEqual(res.json, {
+      error: "android OTA store busy",
+      reason: "publication_in_progress",
+    });
+    assert.equal(androidOta.currentReleaseId(HTTP_OTA_DIR), "ai.moa.assistant-11");
+    assert.equal(fs.readFileSync(path.join(lockDir, "owner"), "utf8"), "publish-http-test\n");
+  } finally {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+  }
 });
 
 test("POST rollback refuses with 409 when no previous release exists", async () => {

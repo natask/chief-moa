@@ -75,6 +75,10 @@ jobs:
           cd android_app
           ./gradlew testDebugUnitTest
 
+      - name: Verify OTA publication safety
+        shell: bash
+        run: bash android_app/deploy/ota/test-sync-vps.sh
+
       - name: Build credential-free OTA artifact
         shell: bash
         env:
@@ -210,8 +214,18 @@ jobs:
             echo "ANDROID_RELEASE_CERT_SHA256 must be a SHA-256 certificate digest." >&2
             exit 1
           fi
-          if [[ ! "$VPS_SSH_TARGET" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]]; then
+          if [[ ! "$VPS_SSH_TARGET" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
             echo "VPS_SSH_TARGET must be a plain user@host target." >&2
+            exit 1
+          fi
+          ssh_host="${VPS_SSH_TARGET#*@}"
+          if [ "${#ssh_host}" -gt 253 ] \
+            || [[ "$ssh_host" == *..* ]] \
+            || [[ "$ssh_host" == *.-* ]] \
+            || [[ "$ssh_host" == *-.* ]] \
+            || [[ "$ssh_host" == *. ]] \
+            || [[ "$ssh_host" == *- ]]; then
+            echo "VPS_SSH_TARGET must use normalized DNS labels." >&2
             exit 1
           fi
           if [[ ! "$VPS_ANDROID_OTA_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
@@ -303,7 +317,7 @@ jobs:
             exit 1
           }
 
-          node "$manifest" "$apk" <<'NODE'
+          node - "$manifest" "$apk" <<'NODE'
           const crypto = require("node:crypto");
           const fs = require("node:fs");
           const [manifestPath, apkPath] = process.argv.slice(2);
@@ -328,14 +342,18 @@ jobs:
       - name: Publish through the existing VPS sync path
         shell: bash
         env:
-          MOA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
-          MOA_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
-          MOA_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
           VPS_SSH_TARGET: ${{ secrets.VPS_SSH_TARGET }}
           VPS_ANDROID_OTA_DIR: ${{ secrets.VPS_ANDROID_OTA_DIR }}
         run: |
           set -euo pipefail
-          if ! MOA_VPS_SSH="$VPS_SSH_TARGET" \
+          if ! sha256sum --check --status <(printf '%s  %s\n' \
+            "$(cat "$RUNNER_TEMP/pre-publish-apk.sha256")" \
+            "$ANDROID_OTA_OUT_DIR/moa-assistant.apk"); then
+            echo "The APK changed after stable-signing verification; publication was not attempted." >&2
+            exit 1
+          fi
+          if ! MOA_OTA_SKIP_BUILD=1 \
+            MOA_VPS_SSH="$VPS_SSH_TARGET" \
             MOA_VPS_OTA_DIR="$VPS_ANDROID_OTA_DIR" \
             bash android_app/deploy/ota/sync-vps.sh >"$RUNNER_TEMP/android-ota-sync.log" 2>&1; then
             echo "Android OTA VPS sync failed; output withheld because it may contain target details." >&2
@@ -372,7 +390,7 @@ jobs:
             exit 1
           fi
 
-          node "$ANDROID_OTA_OUT_DIR/latest.json" \
+          node - "$ANDROID_OTA_OUT_DIR/latest.json" \
             "$ANDROID_OTA_OUT_DIR/moa-assistant.apk" \
             "$RUNNER_TEMP/published-latest.json" \
             "$RUNNER_TEMP/published.apk" <<'NODE'

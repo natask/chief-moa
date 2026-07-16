@@ -179,6 +179,16 @@ test("rollback maps failures and records a successful product event", async (t) 
   await state.handlers.handleRollback(request("POST"), response);
   assert.deepEqual(response, { status: 500, payload: { error: "disk locked" } });
 
+  const busy = Object.assign(new Error("foreign lock detail"), { code: "OTA_STORE_BUSY" });
+  state = harness({ androidOta: { rollbackToPreviousRelease: () => { throw busy; } } });
+  t.after(() => fs.rmSync(state.otaDir, { recursive: true, force: true }));
+  response = {};
+  await state.handlers.handleRollback(request("POST"), response);
+  assert.deepEqual(response, {
+    status: 409,
+    payload: { error: "android OTA store busy", reason: "publication_in_progress" },
+  });
+
   state = harness();
   t.after(() => fs.rmSync(state.otaDir, { recursive: true, force: true }));
   response = {};
