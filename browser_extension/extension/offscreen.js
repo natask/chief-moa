@@ -373,3 +373,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   return false;
 });
+
+export {
+  bytesToBase64,
+  discardVideoCapture,
+  pickVideoMimeType,
+  resampleToPcm16,
+  startCapture,
+  startVideoCapture,
+  stopAndUploadVideoCapture,
+  stopCapture,
+  stopVideoTracks,
+  waitForVideoRecorderStop,
+};
