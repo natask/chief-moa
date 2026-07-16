@@ -92,6 +92,21 @@ const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
 const { createAndroidOtaHandlers } = require("./lib/android-ota-handlers");
 const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
+const { createCaptureBlockStore } = require("./lib/capture-blocks");
+const { createCaptureBlockHandlers } = require("./lib/capture-block-handlers");
+const {
+  ScreenEvidenceValidationError,
+  buildOpenAiScreenEvidenceMessages,
+  buildVertexScreenEvidencePayload,
+  durableScreenEvidenceMetadata,
+  validateScreenEvidence,
+} = require("./lib/screen-evidence");
+const {
+  DELIVERY_INTENTS,
+  DeliveryIntentValidationError,
+  parseDeliveryIntent,
+  routeDeliveryRequest,
+} = require("./lib/delivery-intent");
 const { createVideoNoteHandlers, createVideoNotesStore, videoInlinePart } = require("./lib/video-notes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
@@ -352,6 +367,7 @@ const audioNotes = createAudioNotesStore({
   dataDir: DATA_DIR,
   maxTotalBytes: process.env.AUDIO_NOTES_MAX_TOTAL_BYTES,
 });
+const captureBlocks = createCaptureBlockStore({ dataDir: DATA_DIR });
 const audioNoteHandlers = createAudioNoteHandlers({
   store: audioNotes,
   maxBytes: AUDIO_NOTE_MAX_BODY_BYTES,
@@ -749,6 +765,46 @@ const voiceSessionServer = createVoiceSessionServer({
   // the Cloud TTS leg can speak the reply. Only used by the cascaded provider.
   reasoner: runCascadedVoiceReasoning,
 });
+let captureBlockSttProvider = null;
+const { route: routeCaptureBlocks } = createCaptureBlockHandlers({
+  store: captureBlocks,
+  audioNotes,
+  authorized,
+  sendJson,
+  readJsonBody,
+  createStt: async () => {
+    if (!captureBlockSttProvider) {
+      captureBlockSttProvider = createVoiceProvider({
+        env: process.env,
+        agentProfile,
+        reasoner: runCascadedVoiceReasoning,
+      });
+    }
+    if (typeof captureBlockSttProvider.runSttStage !== "function") {
+      const error = new Error("selected voice package does not expose a stored-audio STT stage");
+      error.code = "stt_unavailable";
+      throw error;
+    }
+    return {
+      id: voiceProviderNames(process.env).stt || "selected-stt",
+      transcribe: async ({ audioNote, languageCodes }) => {
+        const note = audioNotes.get(audioNote.id);
+        const pcmPath = audioNotes.audioPath(audioNote.id);
+        if (!note || !pcmPath) throw new Error("stored audio note not found");
+        if (note.audio?.encoding !== "pcm16") throw new Error("stored audio note must be PCM16 for the selected STT stage");
+        const format = pcmFormatFromContentType(note.content_type);
+        const result = await captureBlockSttProvider.runSttStage({ pcmPath, format }, languageCodes);
+        return {
+          text: result?.text,
+          language_evidence: {
+            code: result?.languageCode || result?.language_code || null,
+            restricted_to: languageCodes,
+          },
+        };
+      },
+    };
+  },
+});
 const { routeVoiceControls } = createVoiceControlHandlers({
   authorized, sendJson, handleVoiceRetranscribe, handleVoiceTurnsList,
   handleVoiceTurnGet, voiceDiagnosisPayload, sendVoiceAudio,
@@ -902,6 +958,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (await routeThreadSwitch(request, response, url)) {
+      return;
+    }
+
+    if (await routeCaptureBlocks(request, response, url)) {
       return;
     }
 
@@ -1158,6 +1218,17 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function pcmFormatFromContentType(contentType) {
+  const text = String(contentType || "");
+  const rate = Number(/(?:^|;)\s*rate=(\d+)/i.exec(text)?.[1] || 16000);
+  const channels = Number(/(?:^|;)\s*channels=(\d+)/i.exec(text)?.[1] || 1);
+  return {
+    sample_rate: Number.isSafeInteger(rate) && rate > 0 ? rate : 16000,
+    channels: Number.isSafeInteger(channels) && channels > 0 ? channels : 1,
+    sample_size_bits: 16,
+  };
+}
+
 function parseProactiveProviderJson(text, provider) {
   try {
     return JSON.parse(text);
@@ -1211,8 +1282,57 @@ async function handleMacosProactiveTurn(request, response) {
   sendJson(response, 200, macosProactiveResponse(text));
 }
 
+async function handleExplicitLiteralDelivery(body, response, transcript) {
+  if (!Object.prototype.hasOwnProperty.call(body || {}, "delivery_intent")) return false;
+  try {
+    const intent = parseDeliveryIntent(body);
+    if (intent !== DELIVERY_INTENTS.LITERAL_TEXT) return false;
+    const result = await routeDeliveryRequest({
+      delivery_intent: intent,
+      transcript,
+    }, new Proxy({}, {
+      get() {
+        throw new Error("literal delivery touched an assistant effect hook");
+      },
+    }));
+    sendJson(response, 200, {
+      delivery_intent: intent,
+      ...result,
+    });
+    return true;
+  } catch (error) {
+    if (!(error instanceof DeliveryIntentValidationError)) throw error;
+    sendJson(response, 400, { error: error.message, code: error.code });
+    return true;
+  }
+}
+
+function screenEvidenceForAssistantRequest(body, response) {
+  if (body?.screen_evidence == null) return null;
+  try {
+    return validateScreenEvidence(body.screen_evidence, {
+      now: Date.now(),
+      maxAgeMs: Number(process.env.SCREEN_EVIDENCE_MAX_AGE_MS || 60_000),
+    });
+  } catch (error) {
+    if (!(error instanceof ScreenEvidenceValidationError)) throw error;
+    sendJson(response, 400, { error: "screen evidence rejected", code: error.code });
+    return false;
+  }
+}
+
+function chatLiteralTranscript(body) {
+  if (typeof body?.transcript === "string") return body.transcript;
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  const user = [...messages].reverse().find((message) => message?.role === "user");
+  return typeof user?.content === "string" ? user.content : "";
+}
+
 async function handleChat(request, response) {
   const body = await readJsonBody(request);
+  if (await handleExplicitLiteralDelivery(body, response, chatLiteralTranscript(body))) return;
+  const screenEvidence = screenEvidenceForAssistantRequest(body, response);
+  if (screenEvidence === false) return;
   if (shouldDelegateToBrowserTurn(body)) {
     await handleBrowserTurnBody(response, body, { modality: "text", legacy: "chat" });
     return;
@@ -1303,7 +1423,7 @@ async function handleChat(request, response) {
       transcript: userText,
     };
     const chatToolDefs = cascadedVoiceProfileTools(chatToolCall);
-    const toolTurn = await callModelToolLoop(modelMessages, profile, chatToolDefs);
+    const toolTurn = await callModelToolLoop(modelMessages, profile, chatToolDefs, { screenEvidence });
     text = String(toolTurn.text || "");
   }
 
@@ -1320,6 +1440,7 @@ async function handleChat(request, response) {
     profile_version: profileVersion,
     updated_at: new Date().toISOString(),
     screen: summarizeScreen(body.screen),
+    screen_evidence: screenEvidence ? durableScreenEvidenceMetadata(screenEvidence) : null,
     messages: savedMessages,
   };
 
@@ -1340,6 +1461,7 @@ async function handleChat(request, response) {
       user_text: userText,
       request_messages: modelMessages,
       screen: saved.screen,
+      screen_evidence: saved.screen_evidence,
       response_text: text,
     };
     fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify(ledgerEntry) + "\n");
@@ -1367,6 +1489,7 @@ async function handleChat(request, response) {
       updated_at: saved.updated_at,
       user_text: userText,
       screen: saved.screen,
+      screen_evidence: saved.screen_evidence,
       request_messages: modelMessages,
       response_text: text,
       response: responsePayload,
@@ -3225,6 +3348,9 @@ async function reduceWorkNode(nodeId, body = {}) {
 
 async function handleVoiceTurn(request, response) {
   const body = await readJsonBody(request);
+  if (await handleExplicitLiteralDelivery(body, response, voiceTranscript(body))) return;
+  const screenEvidence = screenEvidenceForAssistantRequest(body, response);
+  if (screenEvidence === false) return;
   // A turn may attach a stored video note (video_note_id): the recording IS the
   // user's question — narration rides the video's audio track — so an empty
   // transcript is legitimate and the synthetic-transcript refusal does not
@@ -3336,6 +3462,7 @@ async function handleVoiceTurn(request, response) {
     transcript_source: videoNote ? "video_note" : normalizeTranscriptSource(body.transcript_source, transcript, "client_stt"),
     classification,
     screen,
+    screen_evidence: screenEvidence ? durableScreenEvidenceMetadata(screenEvidence) : null,
     created_at: startedAt,
     updated_at: startedAt,
     response: null,
@@ -3561,12 +3688,13 @@ async function handleVoiceTurn(request, response) {
       requestMessages = replaceLastUserMessage(modelMessages, videoPrompt);
       text = await callVertexModel(requestMessages, profile, {
         videoPart: videoInlinePart(videoNote, videoBytes),
+        screenEvidence,
         timeoutMs: VIDEO_TURN_TIMEOUT_MS,
         // Explaining a recording takes more room than a spoken chat reply.
         maxOutputTokens: Number(process.env.VIDEO_TURN_MAX_OUTPUT_TOKENS || 1024),
       });
     } else {
-      ({ text, action: pageTweakAction } = await chatTurnWithPageTweakTool(modelMessages, profile, source));
+      ({ text, action: pageTweakAction } = await chatTurnWithPageTweakTool(modelMessages, profile, source, screenEvidence));
     }
     const speak = capSpeakText(text, profile.voice_max_chars);
     const turnActions = pageTweakAction ? [pageTweakAction] : [];
@@ -3585,6 +3713,7 @@ async function handleVoiceTurn(request, response) {
         profile_version: profileVersion,
         updated_at: now,
         screen,
+        screen_evidence: baseRecord.screen_evidence,
         messages: savedMessages,
       }, null, 2));
       fs.appendFileSync(path.join(DATA_DIR, "turns.jsonl"), JSON.stringify({
@@ -3597,6 +3726,7 @@ async function handleVoiceTurn(request, response) {
         profile_version: profileVersion,
         request_messages: requestMessages,
         screen,
+        screen_evidence: baseRecord.screen_evidence,
         response_text: text,
         voice_turn_id: turnId,
         ...(videoNote ? { video_note_id: videoNote.id } : {}),
@@ -4484,7 +4614,7 @@ function providerConfiguredFor(provider) {
   return MODEL_API_KEY.length > 0 || !MODEL_BASE_URL.includes("api.openai.com");
 }
 
-async function callModel(messages, profile) {
+async function callModel(messages, profile, options = {}) {
   const effective = profile || agentProfile.effective();
   const provider = resolveReasoningProvider(effective);
   if (!providerConfiguredFor(provider)) {
@@ -4495,15 +4625,19 @@ async function callModel(messages, profile) {
   }
 
   if (provider === "vertex") {
-    return callVertexModel(messages, effective);
+    return callVertexModel(messages, effective, options);
   }
+
+  const outboundMessages = options.screenEvidence
+    ? buildOpenAiScreenEvidenceMessages([{ role: "system", content: profileSystemInstruction(effective) }].concat(messages), options.screenEvidence)
+    : [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
 
   const upstreamResponse = await fetchWithTimeout(`${MODEL_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: modelHeaders(),
     body: JSON.stringify({
       model: effective.model || MODEL_ID,
-      messages: [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages),
+      messages: outboundMessages,
       temperature: effective.temperature,
       stream: false,
     }),
@@ -4532,7 +4666,7 @@ async function callVertexModel(messages, profile, options = {}) {
   const effective = profile || agentProfile.effective();
   const accessToken = await vertexAccessToken();
   const { systemInstruction, contents } = vertexPayload(messages, effective, options);
-  const body = {
+  let body = {
     contents,
     generationConfig: {
       temperature: effective.temperature,
@@ -4553,6 +4687,9 @@ async function callVertexModel(messages, profile, options = {}) {
   }
   if (systemInstruction) {
     body.systemInstruction = { parts: [{ text: systemInstruction }] };
+  }
+  if (options.screenEvidence) {
+    body = buildVertexScreenEvidencePayload(body, options.screenEvidence);
   }
 
   const headers = {
@@ -4597,10 +4734,10 @@ async function callVertexModel(messages, profile, options = {}) {
   return text;
 }
 
-async function callModelOrFallback(messages, profile) {
+async function callModelOrFallback(messages, profile, options = {}) {
   const effective = profile || agentProfile.effective();
   if (providerConfiguredFor(resolveReasoningProvider(effective))) {
-    return callModel(messages, effective);
+    return callModel(messages, effective, options);
   }
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   return gatewayFallbackReply(lastUser?.content || "");
@@ -4642,13 +4779,16 @@ const PAGE_TWEAK_TOOL_SCHEMA = {
 // stands. Only the OpenAI-compatible provider path is offered the tool; other
 // providers (Vertex text) fall through to a plain chat reply. Never fails the
 // turn: any tool error degrades to text.
-async function chatTurnWithPageTweakTool(messages, profile, source) {
+async function chatTurnWithPageTweakTool(messages, profile, source, screenEvidence = null) {
   const wantsTool = isBrowserSourcedCall({ source });
   if (!wantsTool || MODEL_PROVIDER === "vertex" || !providerConfigured()) {
-    const text = await callModelOrFallback(messages, profile);
+    const text = await callModelOrFallback(messages, profile, { screenEvidence });
     return { text, action: null };
   }
   const effective = profile || agentProfile.effective();
+  const outboundMessages = screenEvidence
+    ? buildOpenAiScreenEvidenceMessages([{ role: "system", content: profileSystemInstruction(effective) }].concat(messages), screenEvidence)
+    : [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
   let json;
   try {
     const upstreamResponse = await fetch(`${MODEL_BASE_URL}/chat/completions`, {
@@ -4656,7 +4796,7 @@ async function chatTurnWithPageTweakTool(messages, profile, source) {
       headers: modelHeaders(),
       body: JSON.stringify({
         model: effective.model || MODEL_ID,
-        messages: [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages),
+        messages: outboundMessages,
         temperature: effective.temperature,
         tools: [PAGE_TWEAK_TOOL_SCHEMA],
         tool_choice: "auto",
@@ -4671,7 +4811,7 @@ async function chatTurnWithPageTweakTool(messages, profile, source) {
   } catch (error) {
     // Tool round failed to reach or parse the model; fall back to a plain reply
     // so a page-change request still gets an answer instead of an error turn.
-    const text = await callModelOrFallback(messages, profile);
+    const text = await callModelOrFallback(messages, profile, { screenEvidence });
     return { text, action: null, tool_error: cleanError(error) };
   }
 
@@ -4717,18 +4857,18 @@ async function callModelToolLoop(messages, profile, toolDefs, options = {}) {
   const maxRounds = Math.max(1, Math.min(Number(options.maxRounds || 2), 4));
   const provider = resolveReasoningProvider(effective);
   if (!Array.isArray(toolDefs) || toolDefs.length === 0 || !providerConfiguredFor(provider)) {
-    const text = await callModelOrFallback(messages, effective);
+    const text = await callModelOrFallback(messages, effective, { screenEvidence: options.screenEvidence });
     return { text, tool_results: [], rounds: 0 };
   }
   try {
     if (provider === "vertex") {
-      return await vertexToolLoop(messages, effective, toolDefs, maxRounds);
+      return await vertexToolLoop(messages, effective, toolDefs, maxRounds, options.screenEvidence);
     }
-    return await openAiToolLoop(messages, effective, toolDefs, maxRounds);
+    return await openAiToolLoop(messages, effective, toolDefs, maxRounds, options.screenEvidence);
   } catch (error) {
     // The tool round failed to reach or parse the model. Fall back to a plain
     // reply so the request still gets an answer instead of an error turn.
-    const text = await callModelOrFallback(messages, effective);
+    const text = await callModelOrFallback(messages, effective, { screenEvidence: options.screenEvidence });
     return { text, tool_results: [], rounds: 0, tool_error: cleanError(error) };
   }
 }
@@ -4851,7 +4991,7 @@ async function prepareContextDecision({ text, contextAction, profile }) {
   }
 }
 
-async function openAiToolLoop(messages, effective, toolDefs, maxRounds) {
+async function openAiToolLoop(messages, effective, toolDefs, maxRounds, screenEvidence = null) {
   const tools = toolDefs.map((tool) => ({
     type: "function",
     function: {
@@ -4860,7 +5000,8 @@ async function openAiToolLoop(messages, effective, toolDefs, maxRounds) {
       parameters: tool.parameters || { type: "object", properties: {} },
     },
   }));
-  const convo = [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
+  const baseConvo = [{ role: "system", content: profileSystemInstruction(effective) }].concat(messages);
+  const convo = screenEvidence ? buildOpenAiScreenEvidenceMessages(baseConvo, screenEvidence) : baseConvo;
   const toolResults = [];
   let lastText = "";
   for (let round = 0; round < maxRounds; round += 1) {
@@ -4907,16 +5048,22 @@ async function openAiToolLoop(messages, effective, toolDefs, maxRounds) {
     }
   }
   // Rounds exhausted while still calling tools: a plain reply gives closing text.
-  return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
+  return { text: lastText || (await callModelOrFallback(messages, effective, { screenEvidence })), tool_results: toolResults, rounds: maxRounds };
 }
 
-async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
+async function vertexToolLoop(messages, effective, toolDefs, maxRounds, screenEvidence = null) {
   const functionDeclarations = toolDefs.map((tool) => ({
     name: tool.name,
     description: tool.description || "",
     parameters: toVertexFunctionSchema(tool.parameters),
   }));
-  const { systemInstruction, contents } = vertexPayload(messages, effective);
+  const vertexBase = vertexPayload(messages, effective);
+  const basePayload = {
+    contents: vertexBase.contents,
+    systemInstruction: { parts: vertexBase.systemInstruction ? [{ text: vertexBase.systemInstruction }] : [] },
+  };
+  const evidencePayload = screenEvidence ? buildVertexScreenEvidencePayload(basePayload, screenEvidence) : basePayload;
+  const { systemInstruction, contents } = evidencePayload;
   const toolResults = [];
   let lastText = "";
   const accessToken = await vertexAccessToken();
@@ -4934,8 +5081,8 @@ async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
     if (safetySettings.length > 0) {
       body.safetySettings = safetySettings;
     }
-    if (systemInstruction) {
-      body.systemInstruction = { parts: [{ text: systemInstruction }] };
+    if (systemInstruction?.parts?.length) {
+      body.systemInstruction = systemInstruction;
     }
     const headers = {
       "authorization": `Bearer ${accessToken}`,
@@ -4981,7 +5128,7 @@ async function vertexToolLoop(messages, effective, toolDefs, maxRounds) {
     }
     contents.push({ role: "function", parts: responseParts });
   }
-  return { text: lastText || (await callModelOrFallback(messages, effective)), tool_results: toolResults, rounds: maxRounds };
+  return { text: lastText || (await callModelOrFallback(messages, effective, { screenEvidence })), tool_results: toolResults, rounds: maxRounds };
 }
 
 // Streaming twin of callModelToolLoop for cascaded voice turns. Same return

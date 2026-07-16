@@ -1465,6 +1465,17 @@ queues.
   JSON sidecars under `DATA_DIR/audio-notes/`), served by the
   `/v1/audio-notes` routes; deterministic smoke in
   `scripts/smoke-audio-notes.js` (`npm run smoke:audio-notes`).
+- `gateway/lib/capture-blocks.js`: immutable literal-transcript lifecycle over
+  stored audio notes, including idempotent create/retry, derived revisions, and
+  tombstones. Authenticated `/v1/capture-blocks*` routes enqueue only the
+  registry-selected STT stage; capture alone never invokes reasoning or tools.
+- `gateway/lib/screen-evidence.js`: surface-neutral validation and provider
+  attachment for explicitly granted JPEG/semantic evidence. Raw image bytes
+  exist only in the current provider request; chat and HTTP voice records keep
+  bounded binding/dimension/digest metadata.
+- `gateway/lib/delivery-intent.js`: explicit `literal_text` versus
+  `assistant_response` policy. Literal HTTP chat/voice delivery returns the
+  exact candidate before context, memory, model, TTS, tool, or dispatch logic.
 - `gateway/lib/browser-agent-loop.js`: background browser agent-loop task
   store (`DATA_DIR/browser-agent-tasks/`), create/claim/step/finish logic,
   the linked `agent_run` create, and the deterministic keyless step-planning

@@ -27,7 +27,7 @@ reserved for a later integration ticket.
 
 ## 2. Gateway multimodal screen evidence
 
-- [ ] 2.1 Generalize the existing browser-vision candidate into a bounded,
+- [x] 2.1 Generalize the existing browser-vision candidate into a bounded,
       surface-neutral screen-evidence validator and provider attachment.
 - Allowed paths: new gateway screen-evidence modules/tests/coverage script; no
   capture-block code and no deployment.
@@ -143,10 +143,10 @@ reserved for a later integration ticket.
 
 ## 12. Gateway contracts (three candidates)
 
-- [ ] 12.1 Screen evidence: implement ticket 2 without capture persistence.
-- [ ] 12.2 Capture block: store audio before async STT; expose idempotent
+- [x] 12.1 Screen evidence: implement ticket 2 without capture persistence.
+- [x] 12.2 Capture block: store audio before async STT; expose idempotent
       create/detail/retry/revision/tombstone; keep literal transcript immutable.
-- [ ] 12.3 Delivery intent: add explicit `literal_text` vs
+- [x] 12.3 Delivery intent: add explicit `literal_text` vs
       `assistant_response`; literal bypasses model, tools, memory, TTS, and
       agent dispatch and returns only a candidate.
 - Allowed paths: one new gateway module/test/coverage unit per sub-ticket;
