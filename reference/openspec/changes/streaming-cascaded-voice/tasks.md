@@ -1,32 +1,49 @@
 ## 1. Gateway streaming (lane: gateway-streaming)
 
-- [ ] 1.1 `lib/voice-chunker.js`: pure sentence/clause chunker (Latin +
+Boxes 1.1–1.9 and 1.13 shipped in the 3747dc00 commit family (2026-07-06,
+`feat(gateway): streaming reasoning + pipelined multi-frame TTS for cascaded
+voice`, plus 2617596d chunker and f19c863c provider seam) and were verified
+read-only against `origin/master` on 2026-07-16: symbols present
+(`createStreamingReplyPipeline` voice-providers.js:1231, wired :885;
+`callModelToolLoopStreaming` server.js:6231; pre-write turn re-check +
+`writeAssistantAudio` voice-session-server.js:612/:789/:1829; capability
+flags in voice-stages.js), smokes wired into `npm run check`
+(package.json `check:legacy` tail), and 3747dc00 is an ancestor of the live
+`vps-deploy` ref 85c1d1ba. The 1.4 helper shipped under the name
+`createStreamingReplyPipeline`, not `streamSynthesizedReply`. 1.11's
+verification command has not been re-executed by this docs pass — that box
+stays unchecked until it runs.
+
+- [x] 1.1 `lib/voice-chunker.js`: pure sentence/clause chunker (Latin +
       Ethiopic + Arabic + CJK boundaries, abbreviation/decimal/ellipsis
       guards, first-chunk-fastest policy, `[tag]` atomicity).
-- [ ] 1.2 Interruption guard: turn-identity + non-terminal-status check at
+- [x] 1.2 Interruption guard: turn-identity + non-terminal-status check at
       hook entry, re-check immediately before each socket write,
       `writeAssistantAudio` null/closed-latch guard. Lands in the same commit
       as 1.4.
-- [ ] 1.3 `callModelToolLoopStreaming` for the Vertex (`streamGenerateContent?
+- [x] 1.3 `callModelToolLoopStreaming` for the Vertex (`streamGenerateContent?
       alt=sse`) and OpenAI-compatible (`stream: true` SSE) reasoning paths,
       with tool-round text buffering/flush-at-end and a per-round
       non-streaming safety valve on transport/parse error.
-- [ ] 1.4 `streamSynthesizedReply` pipelined-TTS helper: bounded concurrency
+- [x] 1.4 `streamSynthesizedReply` pipelined-TTS helper (shipped as
+      `createStreamingReplyPipeline`): bounded concurrency
       (`VOICE_TTS_CONCURRENCY`, default 2), strictly ordered emission,
       mid-stream fault degrade to `tts_error` + text-only, abort on
       interruption via a shared `AbortController`.
-- [ ] 1.5 Gate hoisting: resolve `modality`/pinned TTS language before the LLM
+- [x] 1.5 Gate hoisting: resolve `modality`/pinned TTS language before the LLM
       stream starts so chunk 1 can synthesize.
-- [ ] 1.6 `lib/voice-stages.js` provider seam (`SttProvider`/`Reasoner`/
+- [x] 1.6 `lib/voice-stages.js` provider seam (`SttProvider`/`Reasoner`/
       `TtsProvider`, registry `create(options)` factories) and
       `streaming_tts`/`streaming_reasoning` capability flags on `/health`.
-- [ ] 1.7 `VOICE_STREAMING` per-turn flag read + in-process streaming circuit
+- [x] 1.7 `VOICE_STREAMING` per-turn flag read + in-process streaming circuit
       breaker (3-fault trip, `voice_streaming_tripped` log once).
-- [ ] 1.8 `VOICE_STREAM_MAX_CHARS` streaming cap, separate from the untouched
+- [x] 1.8 `VOICE_STREAM_MAX_CHARS` streaming cap, separate from the untouched
       `VOICE_TTS_MAX_CHARS`; tuning envs (`VOICE_CHUNK_MIN_CHARS`,
       `VOICE_CHUNK_MAX_CHARS`, `VOICE_CHUNK_FIRST_MAX_CHARS`,
-      `VOICE_CHUNK_FLUSH_MS`).
-- [ ] 1.9 `scripts/smoke-cascaded-voice.js` additions (multi-chunk ordering,
+      `VOICE_CHUNK_FLUSH_MS`). (The streaming cap now defaults to uncapped —
+      `VOICE_STREAM_MAX_CHARS_DEFAULT = Number.MAX_SAFE_INTEGER`, server.js:250
+      — set the env to restore a ceiling.)
+- [x] 1.9 `scripts/smoke-cascaded-voice.js` additions (multi-chunk ordering,
       mid-stream TTS failure, interruption, null-stream guard, circuit
       breaker, cap prefix property, kill switch, tool-round-only text,
       long-response ordered-segment fixture, first-audio latency budget,
@@ -43,9 +60,12 @@
       `tts_segments`, `tts_spoke`, `tts_error`, streaming trip state, and
       mid-stream fault phase labels into the provider-agnostic voice diagnosis
       records so "why did voice fail?" can be answered from self-hosted logs.
-- [ ] 1.13 Merge to master and push; `Deploy VPS gateway` + droplet
+- [x] 1.13 Merge to master and push; `Deploy VPS gateway` + droplet
       auto-update timer promote behind the unchanged backup/restore-check
-      gate.
+      gate. (Promotion factually happened for this lane: 3747dc00 is an
+      ancestor of live `vps-deploy` 85c1d1ba. The auto-update path itself has
+      since been frozen by 99e5bdd8's evidence requirement — tracked as
+      in-xqz, out of this change's scope.)
 
 ## 2. Android compatibility (lane: android-compat)
 
