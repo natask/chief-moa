@@ -105,7 +105,8 @@
 - [x] 11.2 Prevent single-, double-, triple-, and fourth-tap resolution from
       silently committing a draft; keep hold-release as the fast commit path.
 - [x] 11.3 Keep chat and voice cards mutually exclusive and dock the open card
-      wholly above or below the orb, including while the orb moves.
+      wholly above the orb, including while the orb moves, repositioning the
+      orb down when the measured card plus gap would not otherwise fit.
 - [x] 11.4 Add drag-to-remove plus explicit chat-header and notification Hide actions.
 - [x] 11.5 Verify Android unit tests, `assembleDebug`, and strict OpenSpec validation.
 - [ ] 11.6 Publish the committed Android OTA artifact and verify its update metadata.
@@ -115,8 +116,9 @@
 - [x] 11.9 Verify and package the browser extension parity slice.
 - [x] 11.10 Coalesce Android orb, active-card, and draft-control relayouts to
       display frames while dragging; do no relayout before touch slop, keep the
-      card wholly above when it fits and otherwise below, and evaluate the
-      visible bottom remove target against the final release position.
+      card always wholly above the orb (pushing the orb down when needed, never
+      flipping the card below), and evaluate the visible bottom remove target
+      against the final release position.
 
 Observable acceptance check: with either chat or voice open, drag the orb rapidly
 across and down the display. The orb, the single open card, and any draft controls

@@ -602,8 +602,27 @@ public final class OverlayService extends Service {
         int surfaceWidth = params.width > 0 ? params.width : Math.min(screenWidth - margin * 2, dp(380));
         MoaOverlayWindowLayout.positionAnchored(
                 windowManager, surface, params, screenWidth, screenHeight, margin, dp(12),
-                orbParams.x, orbParams.y, orbSize, surfaceWidth,
+                orbView, orbParams, orbSize, surfaceWidth,
                 surface == panelView ? dp(430) : dp(180));
+    }
+
+    // The card is always wholly above the orb, so a card that grows (streamed
+    // reply, appended transcript rows) must be re-anchored on every remeasure —
+    // otherwise a TOP-gravity window would expand downward over the orb.
+    private void keepSurfaceAnchoredOnRemeasure(View surface) {
+        surface.addOnLayoutChangeListener((v, left, top, right, bottom,
+                                           oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (bottom - top == oldBottom - oldTop) {
+                return;
+            }
+            mainHandler.post(() -> {
+                if (v == panelView) {
+                    positionSurfaceNearOrb(panelView, panelParams);
+                } else if (v == transcriptView) {
+                    positionSurfaceNearOrb(transcriptView, transcriptParams);
+                }
+            });
+        });
     }
 
     private void showOrbRemoveTarget() {
@@ -642,13 +661,16 @@ public final class OverlayService extends Service {
         if (orbView == null || orbParams == null) {
             return;
         }
-        prepareVoiceDraftControlPositions();
-        MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
+        // Anchor the open surface FIRST: the always-above rule may push the orb
+        // down, and the draft controls and orb window below must lay out from
+        // that settled position so the whole ensemble moves as one frame.
         if (panelView != null) {
             positionSurfaceNearOrb(panelView, panelParams);
         } else if (transcriptView != null) {
             positionSurfaceNearOrb(transcriptView, transcriptParams);
         }
+        prepareVoiceDraftControlPositions();
+        MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
         updatePreparedVoiceDraftControlLayouts();
         updateOrbRemoveTargetState();
     }
@@ -692,8 +714,42 @@ public final class OverlayService extends Service {
         boolean remove = Boolean.TRUE.equals(completedDrop) && orbRemoveTargetActive;
         removeOrbRemoveTarget();
         if (remove) {
-            mainHandler.post(this::stopSelf);
+            // Dropping on the removal target dismisses the WHOLE overlay as one
+            // gesture: every window is detached in this same call — no exit
+            // animations, no posted teardown — so the orb never vanishes while a
+            // card or control visibly lingers behind it.
+            removeAllOverlayWindowsNow();
+            stopSelf();
         }
+    }
+
+    private void removeAllOverlayWindowsNow() {
+        hideKeyboard();
+        View panel = panelView;
+        panelView = null;
+        panelParams = null;
+        panelOpen = false;
+        messageColumn = null;
+        messageScroll = null;
+        composer = null;
+        runStatusView = null;
+        recordModePill = null;
+        newThreadPill = null;
+        incognitoPill = null;
+        contextControlsRow = null;
+        detachView(panel);
+        cancelAutoDismiss();
+        View transcript = transcriptView;
+        transcriptView = null;
+        transcriptParams = null;
+        voiceTranscriptColumn = null;
+        voiceTranscriptScroll = null;
+        voiceMetaLine = null;
+        voiceLanguageLine = null;
+        detachView(transcript);
+        removeVoiceDraftControls();
+        removeOrbRemoveTarget();
+        removeOrb();
     }
 
     private void removeOrbRemoveTarget() {
@@ -737,9 +793,10 @@ public final class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 android.graphics.PixelFormat.TRANSLUCENT
         );
-        // The surface follows the orb and flips above/below it when one side
-        // cannot fit. The IME does not resize overlay windows, so positioning is
-        // kept independent from keyboard animation.
+        // The surface follows the orb and stays wholly above it; when there is
+        // not enough room the ORB is pushed down, never the card below. The IME
+        // does not resize overlay windows, so positioning is kept independent
+        // from keyboard animation.
         panelParams.gravity = Gravity.TOP | Gravity.START;
         panelParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
 
@@ -752,6 +809,7 @@ public final class OverlayService extends Service {
         });
 
         positionSurfaceNearOrb(panelView, panelParams);
+        keepSurfaceAnchoredOnRemeasure(panelView);
         windowManager.addView(panelView, panelParams);
         panelOpen = true;
         panelView.post(() -> positionSurfaceNearOrb(panelView, panelParams));
@@ -901,6 +959,7 @@ public final class OverlayService extends Service {
         );
         transcriptParams.gravity = Gravity.TOP | Gravity.START;
         positionSurfaceNearOrb(shell, transcriptParams);
+        keepSurfaceAnchoredOnRemeasure(shell);
         windowManager.addView(shell, transcriptParams);
         transcriptView = shell;
         shell.post(() -> positionSurfaceNearOrb(transcriptView, transcriptParams));
@@ -928,6 +987,13 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
+
+        // Discoverable whole-card dismiss, matching the chat panel's close pill.
+        // Swiping the rows away still works; this closes everything in one tap.
+        TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
+        close.setContentDescription("Close voice card");
+        close.setOnClickListener(v -> dismissOverlayUi());
+        header.addView(close);
         container.addView(header);
 
         // A dedicated line that ALWAYS shows the current hear (STT) / speak
