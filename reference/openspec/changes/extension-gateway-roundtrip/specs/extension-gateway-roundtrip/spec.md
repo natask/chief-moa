@@ -109,32 +109,36 @@ text-to-speech as the production voice path.
 - **AND** assistant audio rendered in the browser originates from the gateway
   streaming voice response
 
-#### Scenario: Browser voice auto-commits on silence
-- **WHEN** the user starts a browser voice turn and speaks
-- **THEN** the extension commits the turn after speech silence without requiring
-  a second click or hotkey press
-- **AND** conversation mode re-arms listening after the assistant reply unless
-  the user explicitly stops it
+#### Scenario: Browser mark single click explicitly toggles current capture
+- **WHEN** the user single clicks the idle browser Moa mark
+- **THEN** the extension starts a current-thread gateway voice session with
+  silence auto-commit disabled
+- **WHEN** the user single clicks the mark again
+- **THEN** the extension stops and commits that capture exactly once
 
-#### Scenario: Browser mark single click opens chat menu
-- **WHEN** the user single clicks the browser Moa mark
-- **THEN** the extension opens the chat menu for typed input
-- **AND** it does not start, stop, or submit a voice turn
+#### Scenario: Browser mark double click explicitly controls fresh capture
+- **WHEN** the user double clicks the idle browser Moa mark
+- **THEN** the extension starts a fresh-thread gateway voice session with
+  silence auto-commit disabled
+- **WHEN** the user then single clicks or double clicks the mark
+- **THEN** the extension stops and commits that fresh capture exactly once
 
-#### Scenario: Browser mark click-and-hold drags
-- **WHEN** the user presses the browser Moa mark, holds, and moves it
-- **THEN** the extension repositions the mark
-- **AND** it does not start voice capture or toggle the chat menu
+#### Scenario: Browser mark triple click opens text without cancelling work
+- **WHEN** the user triple clicks the browser Moa mark
+- **THEN** the extension opens the text surface
+- **AND** it does not cancel an active capture or unrelated provider generation
 
-#### Scenario: Browser mark double-click-and-hold push-to-talk commits on release
-- **WHEN** the user double-clicks and holds the browser Moa mark
-- **THEN** the extension starts a manual gateway voice session after the second
-  press is held
-- **AND** the browser background worker disables silence auto-commit for that
-  session
-- **AND** releasing the mark commits the current speech turn immediately
-- **AND** the manual turn does not re-arm the microphone after the assistant
-  reply
+#### Scenario: Browser mark hold and drag remain distinct
+- **WHEN** the user holds the still browser Moa mark and releases it
+- **THEN** the extension performs push-to-talk and commits on release
+- **WHEN** movement crosses the drag threshold
+- **THEN** the extension repositions the mark without submitting a voice turn
+
+#### Scenario: Silence does not commit canonical mark capture
+- **WHEN** a current-thread or fresh-thread capture started from the browser mark
+  observes speech silence
+- **THEN** the extension keeps the manual capture open until its explicit stop gesture
+- **AND** does not silently switch that capture into conversation auto-continuation
 
 #### Scenario: Spoken page questions use the browser-agent path
 - **WHEN** the user commits a browser voice transcript that asks about the
