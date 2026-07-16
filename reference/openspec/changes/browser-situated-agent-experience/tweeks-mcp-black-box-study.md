@@ -71,11 +71,11 @@ The existing A.G. design remains stricter where it matters:
 
 ## Follow-Up Gaps
 
-1. Route normal typed/voice model turns to this local facade instead of making
-   gateway tool requests a separate capability island.
-2. Add image evidence ingestion and a product-search planner that can combine
+1. Add image evidence ingestion and a product-search planner that can combine
    the image with a description before opening marketplace results.
+2. Expose the broader model-selected local facade to ordinary turns; explicit
+   typed/final-voice URL, Google, and Amazon commands now route locally, while
+   non-deterministic model-selected tools remain a separate capability island.
 3. Add semantic hover/scroll helpers and bounded console/network diagnostics.
 4. Add generated-script creation/update/import/export workflows over the
    existing first-party userscript artifact store.
-

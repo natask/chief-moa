@@ -100,5 +100,17 @@ for (const text of ["summarize this", "mention English", "sound like a robot", "
 assert.equal(policy.shouldRouteLiveTranscriptThroughGateway("summarize this page"), true);
 assert.equal(policy.shouldRouteLiveTranscriptThroughGateway("change voice"), true);
 assert.equal(policy.shouldRouteLiveTranscriptThroughGateway("hello"), false);
+for (const text of [
+  "find me an ergonomic red chair on Amazon",
+  "search Amazon for desk lamps",
+  "open a new tab that says mechanical keyboards",
+  "open example.com",
+]) {
+  assert.equal(policy.isBrowserCommandTranscript(text), true, text);
+  assert.equal(policy.shouldRouteLiveTranscriptThroughGateway(text), true, text);
+}
+for (const text of ["tell me about chairs", "find this button", "open your mind"]) {
+  assert.equal(policy.isBrowserCommandTranscript(text), false, text);
+}
 
 console.log("content voice policy runtime tests passed");

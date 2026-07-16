@@ -116,6 +116,16 @@
       /\b(?:what|where|which|who|why|how|can|does|is|are|should)\b/i.test(lower) || /\?$/.test(raw);
   }
 
+  function isBrowserCommandTranscript(text) {
+    const raw = String(text || "").trim();
+    if (!raw || raw.length > 500 || raw.includes("\n")) return false;
+    const lower = normalizeSpokenCommand(raw);
+    if (/^(?:search|google|look up)\b/.test(lower)) return true;
+    if (/^(?:find|look for|shop for)\b.*\bamazon(?: com)?\b/.test(lower)) return true;
+    if (/^open\s+(?:a\s+)?(?:new\s+)?tab\s+(?:that\s+says|for|searching\s+for)\b/.test(lower)) return true;
+    return /^(?:open|visit|go to|navigate to|load)\b/.test(lower) && /(?:https?\s|localhost|\b[a-z0-9-]+\s+(?:com|org|net|io)\b)/.test(lower);
+  }
+
   function parseAssistantSpeechOverlapIntent(text) {
     const lower = normalizeSpokenCommand(text);
     if (!lower) return null;
@@ -170,13 +180,14 @@
   }
 
   function shouldRouteLiveTranscriptThroughGateway(text) {
-    return isProfileControlTranscript(text) || isPageContextTranscript(text);
+    return isProfileControlTranscript(text) || isPageContextTranscript(text) || isBrowserCommandTranscript(text);
   }
 
   const root = global || globalThis;
   root.AgeeContentVoicePolicyRuntime = Object.freeze({
     computePlaybackProgress,
     finiteNumber,
+    isBrowserCommandTranscript,
     isPageContextTranscript,
     isProfileControlTranscript,
     mergeLiveVoiceTranscript,

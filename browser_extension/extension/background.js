@@ -5,7 +5,7 @@
 
 import { DEFAULT_GATEWAY_URL, gatewayUrlDiagnostic, getEffectiveGatewayConfig } from "./config.js";
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
-import { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
+import { parseBrowserTaskIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
 import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice.js";
 import { parseVoiceSamplerAction } from "./voice-sampler.js";
@@ -14,6 +14,7 @@ import { browserContextDescriptor, browserSessionExecutionAdapters } from "./bro
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
 import { browserLocalToolManifest } from "./browser-automation-contract.js";
 import { createBrowserAutomationRuntime } from "./browser-automation-runtime.js";
+import { createBrowserCommandRuntime } from "./browser-command-runtime.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   buildAgentLoopObservationPayload,
@@ -852,6 +853,7 @@ const browserAutomationRuntime = createBrowserAutomationRuntime({
   act: (tabId, request) => ask(tabId, { cmd: "act", ...request, background: false }),
   screenFromSnapshot: snapToScreen, maxScreenshotChars: MAX_BROWSER_EVIDENCE_SCREENSHOT_BASE64_CHARS,
 });
+const browserCommandRuntime = createBrowserCommandRuntime({ automation: browserAutomationRuntime, send, saveTaskState, throwIfAborted });
 
 async function executeGatewayBrowserTask(task) {
   let bgTabId = null;
@@ -3602,15 +3604,6 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
   const signal = controller.signal;
 
   try {
-    const cfg = await getConfig();
-
-    // Thin client: every turn is handled by the user's self-hosted gateway.
-    // There is no in-browser model path or provider key.
-    if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the A.G. toolbar icon → Options and set the Agent gateway URL." });
-      return;
-    }
-
     // First, see if the user is asking *about* their prompt history, then if
     // they are changing settings by talking to the agent ("be terser", "set
     // the system prompt to …"). Either is handled through the profile
@@ -3624,6 +3617,15 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
       // A spoken/typed stop also halts any autonomous background agent-loop.
       cancelAgentLoopCues();
       send(tabId, { cmd: "done", cueId, summary: "", text: "" });
+      return;
+    }
+    if (await browserCommandRuntime.execute(tabId, instruction, signal, cueId)) return;
+
+    const cfg = await getConfig();
+    // Thin client: every model-backed turn is handled by the user's gateway.
+    // Deterministic local browser commands above require no model/provider key.
+    if (!cfg.gatewayUrl) {
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the A.G. toolbar icon → Options and set the Agent gateway URL." });
       return;
     }
     if (await maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId)) {
@@ -3654,9 +3656,6 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
     const browserTask = parseBrowserTaskIntent(instruction);
     if (browserTask) {
       await runBranchTaskAgent(tabId, browserTask.instruction, browserTask.url, controller, cueId);
-      return;
-    }
-    if (await maybeOpenRequestedTab(tabId, instruction, signal, cueId)) {
       return;
     }
     if (looksLikePageContextQuestion(instruction)) {
@@ -3733,29 +3732,6 @@ function parseAndroidSpeakIntent(instruction) {
     if (text) return text.replace(/[.?!]\s*$/, "").slice(0, 500);
   }
   return "";
-}
-
-async function maybeOpenRequestedTab(tabId, instruction, signal, cueId) {
-  const intent = parseOpenTabIntent(instruction);
-  if (!intent) return false;
-  throwIfAborted(signal);
-  const url = new URL(intent.url);
-  if (!ALLOWED_NAVIGATION_PROTOCOLS.has(url.protocol)) {
-    send(tabId, { cmd: "error", cueId, text: `Blocked unsupported URL: ${intent.url}` });
-    return true;
-  }
-  const opened = await chrome.tabs.create({ url: url.href, active: true });
-  const summary = `Opened ${opened.url || url.href}.`;
-  send(tabId, { cmd: "done", cueId, summary });
-  await saveTaskState(cueId, {
-    status: "done",
-    instruction,
-    step: 1,
-    tabId,
-    lastResult: summary,
-    openedTabId: opened.id,
-  });
-  return true;
 }
 
 // ---- CDP task agent (router → disposable background-tab agent) -------------

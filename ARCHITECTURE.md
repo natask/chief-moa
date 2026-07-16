@@ -914,6 +914,16 @@ This facade is A.G. code running inside the A.G. extension; Tweeks MCP/native
 messaging is behavioral prior art only and is not a runtime adapter or
 dependency.
 
+Ordinary typed commands and finalized browser-voice transcripts pass through a
+small deterministic browser-command classifier before any model-backed turn.
+Explicit URL opens, Google searches, and Amazon description searches execute
+through the same first-party facade and produce the same local receipt. This
+path does not require a gateway or provider key and does not inherit Delegate's
+multi-step confirmation, because the explicit navigation itself is the bounded
+user command. Ambiguous page search, deictic image requests such as "find this
+product," and general research continue to the normal browser/gateway agent
+path rather than being guessed locally.
+
 ```text
 model tool call or user instruction
   -> gateway creates a browser agent-loop task (`browser_agent_task`) plus a

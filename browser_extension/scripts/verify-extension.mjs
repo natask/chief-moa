@@ -7,6 +7,7 @@ const requiredFiles = [
   "extension/background.js",
   "extension/browser-automation-contract.js",
   "extension/browser-automation-runtime.js",
+  "extension/browser-command-runtime.js",
   "extension/browser-agent-loop-policy.js",
   "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
@@ -1233,7 +1234,7 @@ execFileSync(process.execPath, ["scripts/test-cue-dismiss.mjs"], { stdio: "inher
 execFileSync(process.execPath, ["scripts/test-browser-context-adapter.mjs"], { stdio: "inherit" });
 
 const { parseSettingsIntent, looksLikeGatewayProfileControlIntent } = await import("../extension/settings-intent.js");
-const { parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } = await import("../extension/browser-task-intent.js");
+const { parseBrowserSearchIntent, parseBrowserTaskIntent, parseOpenTabIntent, looksLikePageContextQuestion } = await import("../extension/browser-task-intent.js");
 const {
   DEFAULT_GATEWAY_URL,
   effectiveGatewayUrl,
@@ -1405,6 +1406,9 @@ if (openTabIntent?.url !== "https://example.com/docs") {
 }
 if (parseOpenTabIntent("open https://example.com/docs and report the title") !== null) {
   throw new Error("open/report requests should stay on the browser task-agent path, not direct tab opening");
+}
+if (parseBrowserSearchIntent("find me an ergonomic red chair on Amazon")?.provider !== "amazon") {
+  throw new Error("ordinary product-search commands must route to the first-party Amazon facade");
 }
 if (parseBrowserTaskIntent(setupParagraph) !== null) {
   throw new Error("browser-task parser should not treat setup text as a browser task");

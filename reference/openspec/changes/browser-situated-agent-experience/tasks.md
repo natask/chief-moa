@@ -30,6 +30,17 @@ the gateway broker, receives a local receipt, observes a background Amazon
 search tab without focus theft, and removes the test tab. Unit tests prove
 semantic role/name/test-ID matching and bounded inputs.
 
+- [x] 0.6 Route ordinary typed commands and finalized browser-voice transcripts
+      for explicit URL opens, Google searches, and Amazon description searches
+      through the first-party local facade before model-backed role routing.
+
+Acceptance: a real-extension smoke types "find me an ergonomic red chair on
+Amazon" into the ordinary composer with a fake/unreachable gateway, observes an
+active Amazon result tab, renders the local receipt, then restores and cleans up
+the fixture tab. Voice-policy tests prove the same final transcript is diverted
+to the browser run path. Ambiguous current-page and image-deictic searches do
+not execute locally.
+
 Acceptance: the user's correction and unresolved surface choice are recorded
 durably rather than silently collapsed into an explanation-first roadmap.
 
