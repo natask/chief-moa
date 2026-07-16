@@ -13,6 +13,7 @@ const requiredFiles = [
   "extension/browser-context-adapter.js",
   "extension/config.js",
   "extension/content-companion-policy-runtime.js",
+  "extension/content-extension-api-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/page-observation-runtime.js",
@@ -86,6 +87,7 @@ const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentCompanionPolicySource = readFileSync("extension/content-companion-policy-runtime.js", "utf8");
+const contentExtensionApiSource = readFileSync("extension/content-extension-api-runtime.js", "utf8");
 const contentVoicePolicySource = readFileSync("extension/content-voice-policy-runtime.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const pageObservationRuntimeSource = readFileSync("extension/page-observation-runtime.js", "utf8");
@@ -138,9 +140,11 @@ if (
   mainContentScript.js.indexOf("content-voice-policy-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-companion-policy-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-companion-policy-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("content-extension-api-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-extension-api-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
-  throw new Error("page observation, voice policy, and companion policy runtimes must load before content.js in declared and dynamic injection paths");
+  throw new Error("page observation, voice policy, companion policy, and extension API runtimes must load before content.js in declared and dynamic injection paths");
 }
 if (
   !/AgeeContentCompanionPolicyRuntime/.test(contentCompanionPolicySource) ||
@@ -153,6 +157,19 @@ if (
   !/companionPolicy\.sanitizeAvatarBehaviorRuntime\(runtime\)/.test(contentSource)
 ) {
   throw new Error("companion, language, and avatar input policy must stay extracted and delegated from content.js");
+}
+if (
+  !/function createContentExtensionApiRuntime/.test(contentExtensionApiSource) ||
+  !/function markExtensionContextInvalidated/.test(contentExtensionApiSource) ||
+  !/function isExtensionContextInvalidated/.test(contentExtensionApiSource) ||
+  !/function safeRuntimeSendMessage/.test(contentExtensionApiSource) ||
+  !/function safeStorageLocalGet/.test(contentExtensionApiSource) ||
+  !/function safeStorageLocalSet/.test(contentExtensionApiSource) ||
+  /function (?:markExtensionContextInvalidated|isExtensionContextInvalidated|canCallExtensionApi|safeRuntimeSendMessage|safeStorageLocalGet|safeStorageLocalSet|base64ToBuffer)\(/.test(contentSource) ||
+  /\bextensionContextInvalidated\b/.test(contentSource) ||
+  !/AgeeContentExtensionApiRuntime\.createContentExtensionApiRuntime\(\{[\s\S]{0,240}getChrome:[\s\S]{0,160}decodeBase64:[\s\S]{0,120}ByteArray: Uint8Array/.test(contentSource)
+) {
+  throw new Error("content extension API calls must stay behind the extracted stale-context safety runtime");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -228,7 +245,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
@@ -1032,8 +1049,14 @@ if (/setInputText\(\s*""/.test(doneMessageCase) || /setInputText\(\s*""/.test(er
   throw new Error("browser replies and errors must render above the composer without clearing typed drafts");
 }
 
-if (!/function safeRuntimeSendMessage/.test(contentSource) || !/function safeStorageLocalGet/.test(contentSource) || !/function safeStorageLocalSet/.test(contentSource)) {
-  throw new Error("content.js must guard runtime and storage calls against stale extension contexts");
+if (
+  !/extension context invalidated\|context invalidated/i.test(contentExtensionApiSource) ||
+  !/function safeRuntimeSendMessage/.test(contentExtensionApiSource) ||
+  !/function safeStorageLocalGet/.test(contentExtensionApiSource) ||
+  !/function safeStorageLocalSet/.test(contentExtensionApiSource) ||
+  !/safeRuntimeSendMessage,[\s\S]{0,160}safeStorageLocalGet,[\s\S]{0,160}safeStorageLocalSet,[\s\S]{0,180}AgeeContentExtensionApiRuntime\.createContentExtensionApiRuntime\(\{/.test(contentSource)
+) {
+  throw new Error("content.js must delegate runtime and storage calls to the stale-context safety runtime");
 }
 
 if (
@@ -1094,6 +1117,7 @@ for (const file of [
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content-companion-policy-runtime.js",
+  "extension/content-extension-api-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/page-observation-runtime.js",

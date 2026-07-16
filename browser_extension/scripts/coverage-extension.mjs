@@ -104,6 +104,7 @@ const focusedThresholds = new Map([
   ["extension/page-observation-runtime.js", 90],
   ["extension/content-voice-policy-runtime.js", 90],
   ["extension/content-companion-policy-runtime.js", 90],
+  ["extension/content-extension-api-runtime.js", 90],
 ]);
 const focusedResults = [];
 for (const [relative, minimum] of focusedThresholds) {
