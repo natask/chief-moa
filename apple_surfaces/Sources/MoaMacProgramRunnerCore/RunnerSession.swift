@@ -93,7 +93,9 @@ public enum MacProgramRunnerSession {
         if host.error != nil {
             write(["kind": "terminal", "error": "runtime_failed"])
         } else {
-            let output = host.outputJSON ?? "null"
+            // MacRunnerHost signals the terminal semaphore only after storing either
+            // outputJSON or error, so the successful branch always has output.
+            let output = host.outputJSON!
             guard output.utf8.count <= resultBytes else {
                 write(["kind": "terminal", "error": "limit_exceeded"]); return 0
             }
