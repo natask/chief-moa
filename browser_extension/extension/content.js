@@ -4287,125 +4287,10 @@
   });
 
   // ---- Perception -------------------------------------------------------
-  const SELECTOR =
-    'a[href], button, input:not([type=hidden]), textarea, select, [role=button], [role=link], [role=tab], [role=menuitem], [contenteditable=""], [contenteditable=true], [onclick]';
-  const MAX_VISIBLE_TEXT_CHARS = 5200;
-  const MAX_VISIBLE_TEXT_PARTS = 140;
-  const TEXT_NODE_EXCLUDED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS"]);
-
-  function visible(el) {
-    const r = el.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) return false;
-    if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) return false;
-    const s = getComputedStyle(el);
-    return s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
-  }
-
-  function cleanVisibleText(text) {
-    return String(text || "").replace(/\s+/g, " ").trim();
-  }
-
-  function textNodeVisible(node) {
-    const parent = node?.parentElement;
-    if (!parent || parent.closest("#agee-root") || TEXT_NODE_EXCLUDED_TAGS.has(parent.tagName)) return false;
-    const text = cleanVisibleText(node.nodeValue);
-    if (text.length < 2) return false;
-    const s = getComputedStyle(parent);
-    if (s.visibility === "hidden" || s.display === "none" || s.opacity === "0") return false;
-    try {
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      const rects = Array.from(range.getClientRects());
-      if (typeof range.detach === "function") range.detach();
-      if (!rects.length) return visible(parent);
-      return rects.some((r) => r.width >= 1 && r.height >= 1 && r.bottom >= 0 && r.top <= innerHeight && r.right >= 0 && r.left <= innerWidth);
-    } catch {
-      return visible(parent);
-    }
-  }
-
-  function visiblePageText() {
-    if (!document.body) return "";
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        return textNodeVisible(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-      },
-    });
-    const parts = [];
-    const seen = new Set();
-    let chars = 0;
-    let node;
-    while ((node = walker.nextNode())) {
-      const text = cleanVisibleText(node.nodeValue);
-      if (!text || seen.has(text)) continue;
-      seen.add(text);
-      parts.push(text);
-      chars += text.length + 1;
-      if (parts.length >= MAX_VISIBLE_TEXT_PARTS || chars >= MAX_VISIBLE_TEXT_CHARS) break;
-    }
-    return parts.join("\n").slice(0, MAX_VISIBLE_TEXT_CHARS);
-  }
-
-  function label(el) {
-    if (!el) return "";
-    const text =
-      el.getAttribute("aria-label") ||
-      el.getAttribute("placeholder") ||
-      (el.value && el.type !== "password" ? el.value : "") ||
-      el.innerText ||
-      el.getAttribute("title") ||
-      el.getAttribute("name") ||
-      "";
-    return text.replace(/\s+/g, " ").trim().slice(0, 80);
-  }
-
-  function snapshotElementSummary(item) {
-    const type = item.type ? ` ${item.type}` : "";
-    const labelText = item.label ? ` ${item.label}` : "";
-    return `[${item.i}] <${item.tag}${type}>${labelText}`;
-  }
-
-  const RISKY_TEXT = /\b(delete|remove|submit|send|pay|purchase|buy|checkout|confirm|transfer|withdraw|archive|sign out|log out|logout)\b/i;
-
-  function needsConfirmation(el, req) {
-    if (req.action === "key" && (req.text || "Enter") === "Enter") {
-      const active = document.activeElement;
-      return !!active && active !== document.body;
-    }
-    if (!el) return false;
-    if (req.action === "type" && el.getAttribute("type") === "password") return true;
-    if (req.action !== "click") return false;
-    return RISKY_TEXT.test(label(el));
-  }
-
-  let indexed = [];
-  function snapshot() {
-    indexed = [];
-    const out = [];
-    document.querySelectorAll(SELECTOR).forEach((el) => {
-      if (el.closest("#agee-root")) return;
-      if (!visible(el)) return;
-      const i = indexed.length;
-      indexed.push(el);
-      out.push({ i, tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "", label: label(el) });
-    });
-    return {
-      url: location.href,
-      title: document.title,
-      pageText: visiblePageText(),
-      elements: out,
-      snapshotId: `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      viewport: {
-        width: innerWidth,
-        height: innerHeight,
-        deviceScaleFactor: devicePixelRatio || 1,
-        scrollX,
-        scrollY,
-      },
-      capturedAt: new Date().toISOString(),
-      elementSummaries: out.map(snapshotElementSummary),
-    };
-  }
+  const pageObservation = window.AgeePageObservationRuntime.createPageObservationRuntime({
+    window,
+    document,
+  });
 
   // ---- Action -----------------------------------------------------------
   function setNativeValue(el, value) {
@@ -4418,7 +4303,7 @@
   }
 
   async function act(req) {
-    const el = indexed[req.index];
+    const el = pageObservation.elementAt(req.index);
     if (["click", "type", "clear", "select"].includes(req.action) && !el) {
       return { result: `no element at index ${req.index}` };
     }
@@ -4428,7 +4313,7 @@
       // confirm in. Those actions already passed the background's own local
       // action validator (the trust boundary), so skip the inline confirm when
       // req.background is set. Foreground actions keep the inline confirm.
-      if (!req.background && needsConfirmation(el, req) && !(await askInlineConfirm(`Let A.G. ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
+      if (!req.background && pageObservation.needsConfirmation(el, req) && !(await askInlineConfirm(`Let A.G. ${req.action} "${pageObservation.label(el || document.activeElement) || "this element"}"?`))) {
         return { result: `user cancelled ${req.action}` };
       }
       switch (req.action) {
@@ -4502,7 +4387,7 @@
         reply({ ok: true });
         return true;
       case "snapshot":
-        reply(snapshot());
+        reply(pageObservation.snapshot());
         return true;
       case "act":
         act(msg).then(reply);

@@ -13,6 +13,7 @@ const requiredFiles = [
   "extension/browser-context-adapter.js",
   "extension/config.js",
   "extension/content.js",
+  "extension/page-observation-runtime.js",
   "extension/proactive-helper.js",
   "extension/proactive-confirm.html",
   "extension/proactive-confirm.css",
@@ -83,6 +84,7 @@ const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
+const pageObservationRuntimeSource = readFileSync("extension/page-observation-runtime.js", "utf8");
 const proactiveHelperSource = readFileSync("extension/proactive-helper.js", "utf8");
 const proactiveConfirmHtmlSource = readFileSync("extension/proactive-confirm.html", "utf8");
 const proactiveConfirmCssSource = readFileSync("extension/proactive-confirm.css", "utf8");
@@ -124,6 +126,13 @@ if (manifest.manifest_version !== 3) {
 const mainContentScript = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"));
 if (!mainContentScript || mainContentScript.js.indexOf("proactive-helper.js") < 0 || mainContentScript.js.indexOf("proactive-helper.js") > mainContentScript.js.indexOf("content.js")) {
   throw new Error("proactive-helper.js must load before content.js");
+}
+if (
+  mainContentScript.js.indexOf("page-observation-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("page-observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content\.js"\]/.test(backgroundSource)
+) {
+  throw new Error("page-observation-runtime.js must load before content.js in declared and dynamic injection paths");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -199,7 +208,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
@@ -495,7 +504,11 @@ if (
   throw new Error("browser agent role controls must route explicit overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
 }
 
-if (!/function visiblePageText/.test(contentSource) || !/pageText:\s*visiblePageText\(\)/.test(contentSource)) {
+if (
+  !/function visiblePageText/.test(pageObservationRuntimeSource) ||
+  !/pageText:\s*visiblePageText\(\)/.test(pageObservationRuntimeSource) ||
+  !/AgeePageObservationRuntime\.createPageObservationRuntime/.test(contentSource)
+) {
   throw new Error("content snapshot must include visible page text, not only actionable elements");
 }
 
@@ -696,10 +709,11 @@ if (
 }
 
 if (
-  !/snapshotId/.test(contentSource) ||
-  !/viewport:\s*\{/.test(contentSource) ||
-  !/capturedAt:\s*new Date\(\)\.toISOString\(\)/.test(contentSource) ||
-  !/elementSummaries:\s*out\.map/.test(contentSource)
+  !/snapshotId/.test(pageObservationRuntimeSource) ||
+  !/viewport:\s*\{/.test(pageObservationRuntimeSource) ||
+  !/capturedAt,/.test(pageObservationRuntimeSource) ||
+  !/elementSummaries:\s*elements\.map/.test(pageObservationRuntimeSource) ||
+  !/pageObservation\.snapshot\(\)/.test(contentSource)
 ) {
   throw new Error("content snapshot must include snapshotId, viewport, capturedAt, and element summaries without removing the existing shape");
 }
@@ -1059,6 +1073,7 @@ for (const file of [
   "extension/browser-task-intent.js",
   "extension/config.js",
   "extension/content.js",
+  "extension/page-observation-runtime.js",
   "extension/proactive-helper.js",
   "extension/proactive-confirm.js",
   "extension/offscreen.js",
