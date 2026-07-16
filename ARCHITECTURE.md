@@ -94,6 +94,50 @@ storage never move to the gateway. Every side effect still becomes a bound
 proposal that the owning gateway/device policy revalidates, approves, executes,
 and receipts.
 
+## Surface-local program execution boundary
+
+The gateway may deliver one closed `surface.execution.proposed` program to an
+exact advertised surface, but it does not proxy the program's primitive calls.
+Non-source protocol digests use RFC 8785 JCS bytes; program source uses its
+exact UTF-8 bytes. The immutable capability snapshot has the exact descriptor
+fields and sorted unique identifiers defined by the active OpenSpec. Lifecycle
+events and tool/terminal receipts use the same closed, sequenced contract.
+
+Android's `android.webview-js.v1` execution realm runs in the non-exported,
+isolated `:moa_program_runtime` service. The service owns only a fresh hidden
+WebView, a bounded message protocol, and the generated JavaScript realm. It has
+no Accessibility object, gateway credential, raw filesystem/network access, or
+application WebView state. The main app process owns the watchdog and can revoke
+the bridge and terminate the isolated renderer/process even when generated code
+blocks its own event loop.
+
+All Android host authority remains in the main process. The Accessibility
+adapter binds observations and node handles to the exact package, window,
+generation, fingerprint, and state digest, then revalidates that evidence before
+each operation. The advertised V1 catalog contains only `observe`, `find`,
+`click`, `scroll`, `back`, and `home`. Text entry is deliberately not advertised
+until Android has a local confirmation flow; there is no coordinate-tap
+fallback. Android advertises `memory_bytes: null` because WebView does not expose
+an independently enforceable per-realm memory budget, and `parallel_calls: 1`
+because the current broker serializes calls.
+
+Approval fails closed. Read operations need no additional confirmation;
+navigation and click require an implicit user-command envelope plus fresh state.
+An `approval_required` program is rejected before start, and current
+`local_policy` mutation calls return `approval_required`, because the program
+runtime does not yet have an interactive approval resolver. `click` remains an
+`external_side_effect`, so an `always_ask` policy for that class prevents it.
+
+The main process commits acceptance, pending attempts, redacted input digests,
+tool receipts, terminal receipts, and ordered events synchronously before the
+corresponding effect or completion is released. Its durable outbox sends each
+tool receipt before `tool_finished`, and the terminal receipt before `terminal`;
+acknowledged delivery position is committed so heartbeat/replay retry is
+idempotent. A crash with a durable pending attempt recovers as `indeterminate`
+instead of repeating an effect. This is an implementation boundary, not release
+evidence: clean coverage, build, isolated fixture QA, packaging, install, and
+promotion remain separate gates.
+
 ## Cross-surface release boundary
 
 Release selection is a shared planning contract over immutable artifact
