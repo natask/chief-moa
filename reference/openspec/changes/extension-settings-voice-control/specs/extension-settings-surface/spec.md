@@ -17,3 +17,26 @@ change made elsewhere is reflected.
 #### Scenario: External change reflected
 - **WHEN** the agent profile changes (e.g. via the agent) and the surface refreshes
 - **THEN** the displayed settings match the new effective profile
+
+### Requirement: Search-first visual settings projection
+The extension SHALL project the same registered settings catalog into a
+searchable, Command-K-style command or workspace surface usable with typed
+command and voice input. Results SHALL use bounded packaged UI showing the
+setting name, current value or redacted state, explanation, allowed choices, and
+an explicit change action. The full Options page SHALL remain the deep
+configuration and Chrome permission surface rather than the primary discovery
+path.
+
+#### Scenario: Typed search renders selectable settings
+- **WHEN** the user types a settings query in the command or workspace surface
+- **THEN** the extension shows selectable setting rows with current effective values and grounded descriptions
+
+#### Scenario: Voice and typed discovery share results
+- **WHEN** the user asks the same settings question by voice
+- **THEN** the extension projects the same catalog result identities and effective values as the typed path
+
+#### Scenario: Deep configuration focuses the selected control
+- **WHEN** a selected result requires the Options page or a Chrome permission gesture
+- **THEN** the extension opens the Options page focused on the relevant control
+- **AND** the agent explains the visible recovery step
+- **AND** the agent does not claim it can grant the Chrome permission itself

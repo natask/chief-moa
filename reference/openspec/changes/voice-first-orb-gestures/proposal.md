@@ -1,4 +1,4 @@
-# Voice-First Orb Gestures (Experimental)
+# Voice-First Orb Gestures
 
 ## Why
 
@@ -11,8 +11,10 @@ and gesture contract: `scratch/agent-loop/voice-first-orb-gestures-20260706.md`.
 
 ## What Changes
 
-Behind an experimental flag, off by default, the Android surface uses the
-review-before-send v4 contract:
+The browser surface uses the review-before-send contract as its canonical mark
+behavior. It is product behavior, not an optional user setting. Android retains
+its separately staged rollout while the platform implementation is completed.
+The shared gesture contract is:
 
 - Single click/tap: start a reviewable draft in the current voice thread. The
   overlay immediately shows `X — orb/mascot — ↑`, with discard on the left and
@@ -40,8 +42,9 @@ review-before-send v4 contract:
 
 The v1 trial mapping (single tap = interrupt, double = talk toggle, triple =
 chat), v2 mapping (single tap = talk toggle, double = chat), and v3
-single-tap start/send toggle are superseded on both Android and the browser
-voice-first path.
+single-tap start/send toggle are superseded. In the browser, no
+`ageeVoiceFirstGesturesEnabled` setting, checkbox, or alternate legacy click map
+is part of the product contract.
 
 ## Accepted Review-Before-Send Revision (2026-07-14)
 
@@ -84,64 +87,26 @@ it. This is distinct from sending a turn to Moa:
   active voice draft is preferred for exploration because double/triple/fourth
   click meanings are already crowded and poorly discoverable.
 
-## Proposed Review-Before-Send Revision (2026-07-14, Pending Alignment)
+## Rollout
 
-The next product revision makes the cheapest gesture consistent and visibly
-reversible on Android and in the browser:
-
-- A single click starts a voice draft and immediately exposes two controls:
-  `X` to cancel/discard and one affirmative `Send` control to commit. The
-  affirmative control may use a send arrow or a check/yes treatment, but it is
-  one semantic action rather than separate Yes and Send actions.
-- A single click never silently commits a draft. The user can keep speaking,
-  cancel, or explicitly send from the visible controls.
-- A still press-and-hold remains push-to-talk; release commits immediately.
-  This preserves the fast eyes-free path on both surfaces while the click path
-  favors review and correction.
-- Android and browser use the same visible draft states and meanings. Layout
-  may adapt to each surface, but `X` always discards and `Send` always commits.
-- Multi-click mappings are not changed by this revision until their collision
-  with the new single-click review state is designed and tested. In particular,
-  double, triple, and fourth clicks must not accidentally send a pending draft.
-
-This revision supersedes the current single-click start/send toggle if accepted.
-It does not authorize implementation yet.
-
-### Separate Follow-Up: Clean Voice Into The Current Text Field
-
-The user also wants a composing feature: speak rough text, have Moa clean it
-up, and place the result into the text field currently in use without sending
-it. This is distinct from sending a turn to Moa:
-
-- The destination surface owns detection of the currently focused editable
-  field and the local insertion action.
-- The gateway may return a cleaned-text proposal, but it cannot type into the
-  field directly. Android accessibility or the browser extension revalidates
-  focus, previews when appropriate, performs the insertion, and receipts it.
-- Insertion never implies submit, send, click, or form completion.
-- The invocation gesture remains unresolved. A directional swipe from the
-  active voice draft is preferred for exploration because double/triple/fourth
-  click meanings are already crowded and poorly discoverable.
-
-Flags:
-
-- Browser: `ageeVoiceFirstGesturesEnabled` in `chrome.storage.local`, checkbox
-  under Experimental in options.
-- Android: `MoaPrefs` boolean `voice_first_gestures`, toggle in the settings
-  app.
+- Browser: the review-before-send gesture map is canonical and has no
+  user-visible feature flag or setting.
+- Android: the existing staged rollout remains an Android-owned implementation
+  concern until its canonical flip is separately accepted and verified.
 
 ## Non-Goals
 
 - No chat removal yet; triple click keeps it reachable.
 - No change to the Cmd+./Cmd+, hotkeys (they already match the proposed shape).
 - No gateway, voice-session protocol, or provider changes.
-- No default-on flip; that decision follows the experiment.
+- No new setting or feature flag for the canonical browser interaction.
 
 ## Boundaries
 
 - Android and the browser extension own gesture detection and local UI state.
 - The gateway voice contract is reused untouched.
-- With the flag off, both surfaces keep the legacy contract byte-for-byte.
+- Browser behavior cannot fall back to a legacy click map because of a missing
+  preference, extension restart, or default storage value.
 
 ## Verification
 
@@ -152,6 +117,7 @@ Flags:
   double-click starts a new voice thread; triple-click opens chat; hold-to-talk
   release commits; open cards remain wholly above or below the moved orb; and
   dragging onto Remove hides the orb. Flag off restores the legacy gestures.
-- Browser manual QA with the flag on: one mascot click starts a draft with
+- Browser manual QA with default state and no prior storage: one mascot click starts a draft with
   `X` and `↑` beside the mascot; another mascot click does not send; `X`
-  discards; `↑` commits once; and hold-release remains push-to-talk.
+  discards; `↑` commits once; hold-release remains push-to-talk; and no Options
+  control exists for switching back to the legacy map.

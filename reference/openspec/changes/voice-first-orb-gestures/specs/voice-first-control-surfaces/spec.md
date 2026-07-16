@@ -35,12 +35,13 @@ for chat and double-click-and-hold for voice.
 - **AND** double-click-and-hold remains the voice capture gesture
 
 ### Requirement: Browser voice-first drafts match Android disposition controls
-The browser extension SHALL, when `ageeVoiceFirstGesturesEnabled` is enabled,
-start a reviewable voice draft whose cancel and Send controls flank the mascot
-and remain independent of the text/result panel.
+The browser extension SHALL use a reviewable voice draft as the canonical mark
+interaction. Its cancel and Send controls SHALL flank the mascot and remain
+independent of the text/result panel. This behavior SHALL NOT depend on a
+user-visible feature flag, setting, or previously stored preference.
 
 #### Scenario: Browser click starts a reviewable draft
-- **WHEN** the browser voice-first flag is enabled and the user clicks the idle mascot
+- **WHEN** the user clicks the idle browser mascot
 - **THEN** the browser starts a non-auto-committing voice draft
 - **AND** shows `X` to the mascot's left and `↑` to its right
 
@@ -54,3 +55,13 @@ and remain independent of the text/result panel.
 - **THEN** the browser cancels and discards the draft locally
 - **WHEN** the user instead clicks `↑`
 - **THEN** the browser commits that voice turn exactly once
+
+#### Scenario: Fresh install uses the canonical browser gesture
+- **WHEN** the extension starts with no prior voice-gesture storage value
+- **THEN** a mascot click starts the reviewable voice draft
+- **AND** the Options surface exposes no control for restoring the legacy click map
+
+#### Scenario: Multi-click cannot become an Options shortcut
+- **WHEN** the user performs the supported single or multi-click voice gestures
+- **THEN** the extension routes only the documented voice, fresh-thread, or text-surface intent
+- **AND** it does not open Options unless a surfaced permission recovery action requires it
