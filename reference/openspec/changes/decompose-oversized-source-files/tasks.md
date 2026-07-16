@@ -379,6 +379,12 @@
       93.93% branches, and 100% functions. Raise the exact whole-extension
       ratchet to 39.13% lines, 22.00% branches, and 18.79% functions while
       reducing conservative zero metadata to four files.
+- [x] 4.4h Execute extension-owned microphone and screen capture under focused
+      media, resampling, cleanup, cap, upload, failure, and message-routing
+      tests. Enforce a focused 90% gate, verified at 100% lines, 90.44%
+      branches, and 100% functions. Raise the exact whole-extension ratchet to
+      42.36% lines, 24.04% branches, and 20.24% functions with 37 passing unit
+      tests and reduce conservative zero metadata to three files.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
