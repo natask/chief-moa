@@ -1,3 +1,5 @@
+import { microphoneRecoveryFromStartFailure } from "./voice-start-failure.js";
+
 // A.G. side panel — the extension-owned agent surface. Runs as an extension
 // page so it renders on every tab (chrome:// pages included) and persists
 // across tab switches. All gateway traffic goes through the background service
@@ -562,7 +564,11 @@ async function startTurn(kind, options) {
       autoCommit: kind === "voice",
     });
     if (!res?.ok || !res.voiceSessionId) {
-      failTurn(state, String(res?.error || "Could not start the turn."));
+      failTurn(
+        state,
+        String(res?.error || "Could not start the turn."),
+        microphoneRecoveryFromStartFailure(res),
+      );
       return null;
     }
     state.voiceSessionId = res.voiceSessionId;

@@ -40,6 +40,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/voice-sampler-runtime.js",
   "extension/voice-sampler.js",
   "extension/youtube-media.js",
+  "extension/voice-start-failure.js",
 ]);
 
 const EXCLUDED_SOURCE_FILES = Object.freeze({
