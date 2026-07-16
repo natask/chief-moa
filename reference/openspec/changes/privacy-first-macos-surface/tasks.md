@@ -18,6 +18,9 @@
 - [x] 2.5 Add independently enabled focused-window ScreenCaptureKit capture with
       process revalidation, JPEG re-encoding, dimension/byte caps, and no
       whole-desktop or ungranted periodic capture.
+- [x] 2.6 Add literal final-transcript insertion bound before Moa takes focus,
+      with exact preview/confirmation, immediate AX revalidation, fsync-backed
+      pending/terminal receipts, and zero-mutation rejection fixtures.
 
 ## 3. Explicit release
 

@@ -25,6 +25,9 @@ authority rather than artificially removing the capability.
   exact byte-bound preview or trusted-server release.
 - Treat every gateway/model action as an inert proposal requiring a fresh local
   confirmation, target/state binding, and pending/terminal local receipt.
+- Add a narrower user-originated literal-transcription insertion path that binds
+  the prior focused editable target before Moa takes focus, previews the exact
+  final transcript, and revalidates immediately before one AXValue write.
 - Keep a portable semantic proposal/approval/receipt vocabulary while using
   platform-specific adapters on macOS, Windows, Android, browser, and iOS.
 

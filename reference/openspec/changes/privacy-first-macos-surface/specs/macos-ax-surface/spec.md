@@ -120,6 +120,32 @@ one-shot even while its snapshot and expiry remain current.
 - **WHEN** a consumed proposal id/nonce is submitted again
 - **THEN** it is rejected without AX mutation
 
+### Requirement: Literal transcription insertion remains locally state-bound
+The macOS surface SHALL treat final voice transcription as literal user text,
+not a model action. Before Moa takes focus it SHALL bind the prior application
+process generation/signing identity, focused window, focused editable AX
+element, secure/settable role state, current value digest, and selected range.
+It SHALL preview the exact final transcript and require a separate confirmation
+before insertion.
+
+#### Scenario: User confirms an unchanged editable target
+- **WHEN** the exact transcript is confirmed and every bound target/state field
+      still matches immediately before mutation
+- **THEN** Moa fsyncs a pending local receipt before one checked AXValue write
+- **AND** it writes a terminal local receipt afterward
+- **AND** it does not click, submit, synthesize a key, or steal focus
+
+#### Scenario: Target state is unsafe or changed
+- **WHEN** the target is secure, unsupported, non-settable, stale, in a replaced
+      process, in another window, or no longer the same focused AX element
+- **THEN** insertion is rejected with zero AX mutation
+
+#### Scenario: Insertion receipts are inspected
+- **WHEN** pending, terminal, or recovered-interrupted records are read
+- **THEN** they form a local hash-linked sequence
+- **AND** raw transcripts, field values, labels, AX trees, and screenshots are
+      absent
+
 ### Requirement: Local receipts precede optional sync
 The macOS surface SHALL atomically durably commit/fsync a bounded pending receipt
 before execution and a terminal receipt afterward, linked to the previous

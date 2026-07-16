@@ -60,6 +60,18 @@ public struct CommandPaletteView: View {
                     Text(model.voiceState.final.isEmpty ? model.voiceState.partial : model.voiceState.final)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
+                    if !model.voiceState.final.isEmpty {
+                        HStack {
+                            Spacer()
+                            Button("Insert at prior cursor") {
+                                Task { await model.insertTranscriptAtPriorCursor() }
+                            }
+                            .disabled(!model.hasInsertionTarget)
+                            .help(model.hasInsertionTarget
+                                  ? "Preview and confirm literal insertion into the field focused before Aggie opened"
+                                  : "Open Aggie while a non-secure editable field is focused")
+                        }
+                    }
                 }
                 .padding(12)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
@@ -102,7 +114,7 @@ public struct CommandPaletteView: View {
                 .font(.caption2)
                 .foregroundStyle(model.voiceState.phase == .denied || model.voiceState.phase == .failed ? .red : .secondary)
 
-            Text("\(shortcutLabel) to toggle · Return to send · hold the mic to transcribe · no screen context attached")
+            Text("\(shortcutLabel) to toggle · Return to send · hold the mic to transcribe · insertion always previews and confirms")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }

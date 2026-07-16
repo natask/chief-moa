@@ -73,10 +73,13 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var status = "Ready"
     @Published public private(set) var isSending = false
     @Published public private(set) var voiceState = VoiceTranscriptState()
+    @Published public private(set) var hasInsertionTarget = false
 
     private let store: any GatewayConnectionStore
     private let sender: any GatewayChatSending
     private let voiceController: any VoiceCaptureControlling
+    private let insertionCoordinator: TranscriptInsertionCoordinator
+    private let insertionApprover: any TranscriptInsertionApproving
     private let sessionID: String
     private var voiceGeneration: UInt64 = 0
     private var voiceReleaseRequested = false
@@ -85,24 +88,76 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         self.init(
             store: SystemGatewayConnectionStore(),
             sender: URLSessionGatewayChatSender(),
-            voiceController: VoiceCaptureController()
+            voiceController: VoiceCaptureController(),
+            insertionCoordinator: TranscriptInsertionCoordinator(
+                adapter: SystemTranscriptInsertionAXAdapter(),
+                journal: SystemTranscriptReceiptJournal.make()
+            ),
+            insertionApprover: SystemTranscriptInsertionApprover()
         )
     }
 
     public init(
         store: any GatewayConnectionStore,
         sender: any GatewayChatSending,
-        voiceController: (any VoiceCaptureControlling)? = nil
+        voiceController: (any VoiceCaptureControlling)? = nil,
+        insertionCoordinator: TranscriptInsertionCoordinator? = nil,
+        insertionApprover: (any TranscriptInsertionApproving)? = nil
     ) {
         self.store = store
         self.sender = sender
         self.voiceController = voiceController ?? VoiceCaptureController()
+        self.insertionCoordinator = insertionCoordinator ?? TranscriptInsertionCoordinator(
+            adapter: SystemTranscriptInsertionAXAdapter(),
+            journal: InMemoryTranscriptReceiptJournal()
+        )
+        self.insertionApprover = insertionApprover ?? SystemTranscriptInsertionApprover()
         origin = store.loadOrigin()
         token = store.loadToken()
         sessionID = store.loadSessionID()
     }
 
     public var isConfigured: Bool { !origin.isEmpty && !token.isEmpty }
+
+    /// Called by the panel controller before NSApp activation. The binding is
+    /// memory-only and is never inferred after Moa owns focus.
+    public func captureInsertionTargetBeforeFocus() {
+        hasInsertionTarget = insertionCoordinator.captureBeforeMoaTakesFocus()
+    }
+
+    public func insertTranscriptAtPriorCursor() async {
+        let transcript = voiceState.final
+        do {
+            _ = try await insertionCoordinator.insertLiteralTranscript(transcript, approver: insertionApprover)
+            hasInsertionTarget = false
+            status = "Transcript inserted — no click or submit performed"
+        } catch TranscriptInsertionError.denied {
+            status = "Insertion canceled — no text changed"
+        } catch TranscriptInsertionError.secureTarget {
+            hasInsertionTarget = false
+            status = "Secure fields cannot receive transcripts"
+        } catch TranscriptInsertionError.wrongApplication {
+            hasInsertionTarget = false
+            status = "Target app changed — no text inserted"
+        } catch TranscriptInsertionError.nonSettable {
+            hasInsertionTarget = false
+            status = "Target is no longer editable — no text inserted"
+        } catch TranscriptInsertionError.focusChanged {
+            hasInsertionTarget = false
+            status = "Focused field changed — no text inserted"
+        } catch TranscriptInsertionError.staleState {
+            hasInsertionTarget = false
+            status = "Target text changed — no text inserted"
+        } catch TranscriptInsertionError.journalFailure {
+            status = "Could not save the pending receipt — no text inserted"
+        } catch TranscriptInsertionError.terminalJournalFailure {
+            hasInsertionTarget = false
+            status = "Transcript inserted; pending receipt will recover on next launch"
+        } catch {
+            hasInsertionTarget = false
+            status = "Transcript was not inserted"
+        }
+    }
 
     @discardableResult public func saveConnection() -> Bool {
         do {
@@ -147,6 +202,8 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         reply = ""
         status = "Ready"
         voiceState.apply(.reset)
+        insertionCoordinator.clear()
+        hasInsertionTarget = false
     }
 
     public func startVoice() async {

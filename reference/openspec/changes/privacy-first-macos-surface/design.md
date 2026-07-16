@@ -91,6 +91,19 @@ before another request. There is no packaged destination or third-party route.
 
 ## Semantic action broker
 
+Literal voice transcription insertion is a separate user-originated local path,
+not a model action and not a shortcut around this broker. Before Moa activates
+its panel, it binds the prior application PID/process generation/signing
+identity, focused window, focused AX element, role/subrole, secure/settable
+state, value digest, and selected range. The exact gateway final transcript is
+kept literal and displayed in a separate confirmation preview. After acceptance,
+Moa fsyncs a hash-linked pending receipt, synchronously revalidates every bound
+field immediately before one `AXValue` set, and writes a terminal receipt. Any
+secure, non-settable, unsupported-role, stale, wrong-app, changed-window, or
+changed-focused-element condition rejects with no mutation. There is no click,
+focus steal, submit, key event, action fallback, raw transcript receipt, or model
+rewrite in this path.
+
 Initial operations are `press`, `confirm`, `cancel`, `increment`, `decrement`,
 `show_menu`, `pick`, and `set_value` only for a currently non-secure, settable
 element. Every model-originated action requires confirmation in v1 and binds the

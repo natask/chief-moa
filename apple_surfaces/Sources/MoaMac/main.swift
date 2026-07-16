@@ -26,7 +26,10 @@ private final class CommandPanel: NSPanel {
         position(panel)
         let current = NSRunningApplication.current
         let frontmost = NSWorkspace.shared.frontmostApplication
-        if frontmost?.processIdentifier != current.processIdentifier { previousApplication = frontmost }
+        if frontmost?.processIdentifier != current.processIdentifier {
+            previousApplication = frontmost
+            model.captureInsertionTargetBeforeFocus()
+        }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
     }

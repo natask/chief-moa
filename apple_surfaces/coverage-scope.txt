@@ -9,9 +9,11 @@ executable Sources/MoaMac/main.swift
 executable Sources/MoaMacCore/GatewayChat.swift
 executable Sources/MoaMacCore/GatewayVoice.swift
 executable Sources/MoaMacCore/MoaMacCore.swift
+executable Sources/MoaMacCore/TranscriptInsertion.swift
 executable Sources/MoaMacShell/GatewayChatShell.swift
 executable Sources/MoaMacShell/GatewayVoiceShell.swift
 executable Sources/MoaMacShell/MoaMacShell.swift
+executable Sources/MoaMacShell/TranscriptInsertionShell.swift
 ui Sources/AggieSurfaceUI/ApprovalSurfaceView.swift
 ui Sources/MoaMacUI/StatusView.swift
 ui Sources/MoaMacUI/CommandPaletteView.swift
@@ -19,6 +21,7 @@ test Tests/AggieAppleSurfaceTests/AggieAppleSurfaceTests.swift
 test Tests/AggieAppleSurfaceTests/MacSurfaceAdapterTests.swift
 test Tests/MoaMacCoreTests/MoaMacCoreTests.swift
 test Tests/MoaMacCoreTests/GatewayVoiceTests.swift
+test Tests/MoaMacCoreTests/TranscriptInsertionTests.swift
 operational Package.swift
 operational .gitignore
 operational coverage-scope.txt

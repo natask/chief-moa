@@ -274,11 +274,30 @@ untrusted evidence, exposes no tools, returns `{version,suggestion,actions:[]}`
 only, and does not persist a conversation, task, run, or broker event.
 
 The public semantic AX action vocabulary and Aggie approval coordinator compile,
-but live native mutation remains disabled until gateway proposal ingestion,
-element/state fingerprint binding, and fsync-backed pending/terminal receipts
-are wired and audited. The current ad-hoc-signed QA bundle is compilation and
-package evidence only; it has not been launched or TCC-tested and is not a
-production signing/notarization artifact.
+but model-originated native mutation remains disabled until gateway proposal
+ingestion is wired and audited. One narrower user-originated mutation exists for
+literal voice transcription only:
+
+```text
+external app has a focused non-secure AXTextField/AXTextArea
+  -> Moa binds app PID/process generation/signing identity, focused window,
+     focused AX element, role/settable/secure state, value digest, and selection
+     before its command panel takes focus
+  -> gateway returns the exact final transcript; no model rewrite is requested
+  -> Moa previews that literal transcript and asks for a separate confirmation
+  -> local hash-linked pending receipt is appended and fsynced
+  -> the same app/window/element/value/selection state is synchronously
+     revalidated immediately before one AXValue set
+  -> local terminal inserted/rejected receipt is appended; no click, key,
+     submit, focus steal, or fallback action occurs
+```
+
+Secure, non-settable, unsupported-role, wrong-process-generation, changed-window,
+changed-element, changed-value, and changed-selection targets fail with zero AX
+mutation. Receipts contain hashes and bounded outcome metadata, never the raw
+field value or transcript. The current ad-hoc-signed QA bundle remains
+compilation and package evidence only; this insertion path has not been launched
+or TCC-tested and is not a production signing/notarization artifact.
 
 ## Runtime Flows
 
