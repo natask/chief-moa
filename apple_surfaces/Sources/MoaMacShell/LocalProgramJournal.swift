@@ -67,9 +67,10 @@ public struct MacProgramTerminalReceipt: Codable, Equatable, Sendable {
         case "interrupted": failure = Failure(code: "runtime_interrupted", message: "The local runtime was interrupted.")
         case "indeterminate": failure = Failure(code: "indeterminate", message: "A local effect outcome could not be proven.")
         default:
+            let receiptFailure = local.error == "receipt_failed"
             let limit = local.error.map { $0.contains("TooLarge") || $0.contains("Budget") || $0.contains("expired") } ?? false
-            failure = Failure(code: limit ? "limit_exceeded" : "runtime_failed",
-                message: limit ? "A local execution limit was exceeded." : "The local runtime failed safely.")
+            failure = Failure(code: receiptFailure ? "receipt_failed" : limit ? "limit_exceeded" : "runtime_failed",
+                message: receiptFailure ? "The local receipt could not be committed." : limit ? "A local execution limit was exceeded." : "The local runtime failed safely.")
         }
         let material = HashMaterial(version: 1, type: "surface.execution.receipt", receiptID: receiptID,
             executionID: local.executionID, sessionID: local.sessionID, turnID: local.turnID,
@@ -218,7 +219,15 @@ public struct MacProgramLifecycleEvent: Codable, Equatable, Sendable {
         default: throw LocalProgramError.invalidInput
         }
         guard Set(payload.keys) == keys else { throw LocalProgramError.invalidInput }
-        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        guard let occurred = root["occurred_at"]?.stringValue, MacProtocolTimestamp.parse(occurred) != nil else {
+            throw LocalProgramError.invalidInput
+        }
+        if kind == "approval_required" {
+            guard let expires = payload["expires_at"]?.stringValue, MacProtocolTimestamp.parse(expires) != nil else {
+                throw LocalProgramError.invalidInput
+            }
+        }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = MacProtocolTimestamp.decodingStrategy
         do { return try decoder.decode(Self.self, from: data) }
         catch { throw LocalProgramError.invalidInput }
     }
@@ -359,7 +368,7 @@ public enum MacProgramClaim: Equatable, Sendable {
 
 public protocol MacProgramJournaling: AnyObject, Sendable {
     func reject(_ envelope: MacLocalProgramEnvelope, claimantDeviceID: String,
-                clientInstanceID: String, at: Date) throws -> MacLocalProgramResult
+                clientInstanceID: String, reason: String, at: Date) throws -> MacLocalProgramResult
     func claim(_ envelope: MacLocalProgramEnvelope, claimantDeviceID: String,
                clientInstanceID: String, at: Date) throws -> MacProgramClaim
     func markStarted(executionID: String, at: Date) throws
@@ -372,13 +381,27 @@ public protocol MacProgramJournaling: AnyObject, Sendable {
     func requestStop(executionID: String, at: Date) throws
     func isStopRequested(executionID: String) throws -> Bool
     func events(executionID: String) throws -> [MacProgramLifecycleEvent]
+    func toolReceipts(executionID: String) throws -> [MacLocalActionReceipt]
     func terminalReceipt(executionID: String) throws -> MacProgramTerminalReceipt?
+}
+
+public extension MacProgramJournaling {
+    func reject(_ envelope: MacLocalProgramEnvelope, claimantDeviceID: String,
+                clientInstanceID: String, at: Date) throws -> MacLocalProgramResult {
+        try reject(envelope, claimantDeviceID: claimantDeviceID,
+            clientInstanceID: clientInstanceID, reason: "proposal_rejected", at: at)
+    }
 }
 
 /// A closed, fsync-backed snapshot journal. It persists only identifiers,
 /// digests, bounded receipt summaries, and lifecycle state—never source,
 /// result JSON, AX labels/trees, values, screenshots, environment, or tokens.
 public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked Sendable {
+    private struct ApprovalRecord: Codable {
+        let effectClass: String, capabilityID: String, toolCallID: String, expiresAt: Date
+        var status: String
+        var consumed: Bool
+    }
     private struct Record: Codable {
         let executionID: String, idempotencyKey: String, sessionID: String, turnID: String
         let claimantDeviceID: String, clientInstanceID: String
@@ -389,7 +412,7 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
         var stopRequested: Bool
         var events: [MacProgramLifecycleEvent]
         var pending: [String: MacProgramPendingTool]
-        var approvals: [String: String]
+        var approvals: [String: ApprovalRecord]
         var receipts: [MacLocalActionReceipt]
         var terminal: MacLocalProgramResult?
         var terminalReceipt: MacProgramTerminalReceipt?
@@ -408,9 +431,15 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
     }
 
     public func reject(_ envelope: MacLocalProgramEnvelope, claimantDeviceID: String,
-                       clientInstanceID: String, at: Date) throws -> MacLocalProgramResult {
+                       clientInstanceID: String, reason: String, at: Date) throws -> MacLocalProgramResult {
         try mutate { state in
-            if let existing = state.records[envelope.executionID]?.terminal { return existing }
+            if let existing = state.records[envelope.executionID] {
+                guard existing.proposalSHA256 == envelope.proposalSHA256,
+                      existing.claimantDeviceID == claimantDeviceID,
+                      existing.clientInstanceID == clientInstanceID,
+                      let terminal = existing.terminal else { throw LocalProgramError.replayed }
+                return terminal
+            }
             guard !state.records.values.contains(where: { $0.idempotencyKey == envelope.idempotencyKey })
             else { throw LocalProgramError.replayed }
             let claimant = MacReceiptClaimant(deviceID: claimantDeviceID,
@@ -418,7 +447,7 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
             let local = MacLocalProgramResult(executionID: envelope.executionID,
                 sessionID: envelope.sessionID, turnID: envelope.turnID,
                 claimantDeviceID: claimantDeviceID, runtimeID: envelope.runtime.runtimeID,
-                status: "rejected", resultJSON: nil, error: "proposal_rejected", toolCalls: 0,
+                status: "rejected", resultJSON: nil, error: reason, toolCalls: 0,
                 receipts: [], programSHA256: envelope.program.sha256,
                 catalogSHA256: envelope.catalog.sha256,
                 bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings),
@@ -434,7 +463,7 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
                 idempotencyKey: envelope.idempotencyKey, sessionID: envelope.sessionID,
                 turnID: envelope.turnID, claimantDeviceID: claimantDeviceID,
                 clientInstanceID: clientInstanceID, runtimeID: envelope.runtime.runtimeID,
-                proposalSHA256: MacLocalProgramDigest.canonical(envelope),
+                proposalSHA256: envelope.proposalSHA256,
                 programSHA256: envelope.program.sha256, catalogSHA256: envelope.catalog.sha256,
                 bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings),
                 initialStateSHA256: envelope.bindings.stateSHA256,
@@ -454,13 +483,14 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
                       record.catalogSHA256 == envelope.catalog.sha256,
                       record.bindingsSHA256 == MacLocalProgramDigest.bindings(envelope.bindings),
                       record.claimantDeviceID == claimantDeviceID,
-                      record.clientInstanceID == clientInstanceID
+                      record.clientInstanceID == clientInstanceID,
+                      record.proposalSHA256 == envelope.proposalSHA256
                 else { throw LocalProgramError.replayed }
                 return .replay(record.terminal)
             }
             guard !state.records.values.contains(where: { $0.idempotencyKey == envelope.idempotencyKey })
             else { throw LocalProgramError.replayed }
-            let proposalSHA256 = MacLocalProgramDigest.canonical(envelope)
+            let proposalSHA256 = envelope.proposalSHA256
             let claimant = MacReceiptClaimant(deviceID: claimantDeviceID, clientInstanceID: clientInstanceID)
             let event = try MacProgramLifecycleEvent(executionID: envelope.executionID,
                 sequence: 1, kind: "accepted", occurredAt: at, claimant: claimant,
@@ -523,13 +553,23 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
                   receipt.catalogSHA256 == record.catalogSHA256,
                   receipt.bindingsSHA256 == record.bindingsSHA256,
                   receipt.previousReceiptSHA256 == record.receipts.last?.receiptSHA256,
-                  let pending = record.pending.removeValue(forKey: receipt.toolCallID),
+                  let pending = record.pending[receipt.toolCallID],
                   pending.capabilityID == receipt.capabilityID,
                   pending.inputSHA256 == receipt.inputSHA256,
                   pending.preStateSHA256 == receipt.preStateSHA256
             else { throw LocalProgramError.replayed }
             guard pending.effectClass == "read" || receipt.status != "succeeded" || receipt.postStateSHA256 != nil
             else { throw LocalProgramError.replayed }
+            let approvals = record.approvals.filter { $0.value.toolCallID == receipt.toolCallID }
+            if let approvalID = receipt.approvalID {
+                guard var approval = record.approvals[approvalID], approval.status == "approved", !approval.consumed,
+                      approval.toolCallID == receipt.toolCallID, approval.capabilityID == receipt.capabilityID,
+                      approval.effectClass == pending.effectClass else { throw LocalProgramError.replayed }
+                approval.consumed = true; record.approvals[approvalID] = approval
+            } else if approvals.values.contains(where: { $0.status == "approved" }) {
+                throw LocalProgramError.replayed
+            }
+            record.pending.removeValue(forKey: receipt.toolCallID)
             record.receipts.append(receipt)
             try Self.append(kind: "tool_finished", at: at, capabilityID: receipt.capabilityID,
                 toolCallID: receipt.toolCallID, status: receipt.status, to: &record)
@@ -542,7 +582,11 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
             guard record.terminal == nil, record.pending[toolCallID] != nil,
                   record.approvals[approvalID] == nil, expiresAt <= record.proposalExpiresAt,
                   expiresAt > at else { throw LocalProgramError.replayed }
-            record.approvals[approvalID] = "pending"
+            guard let pending = record.pending[toolCallID], pending.capabilityID == capabilityID,
+                  pending.effectClass == effectClass else { throw LocalProgramError.replayed }
+            record.approvals[approvalID] = ApprovalRecord(effectClass: effectClass,
+                capabilityID: capabilityID, toolCallID: toolCallID, expiresAt: expiresAt,
+                status: "pending", consumed: false)
             try Self.append(kind: "approval_required", at: at, capabilityID: capabilityID,
                 toolCallID: toolCallID, status: effectClass, approvalID: approvalID,
                 approvalExpiresAt: expiresAt, to: &record)
@@ -551,10 +595,12 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
 
     public func resolveApproval(executionID: String, approvalID: String, status: String, at: Date) throws {
         try update(executionID) { record in
-            guard record.terminal == nil, record.approvals[approvalID] == "pending" else {
+            guard record.terminal == nil, ["approved", "denied", "expired", "cancelled"].contains(status),
+                  var approval = record.approvals[approvalID], approval.status == "pending",
+                  (status == "expired" ? at >= approval.expiresAt : at < approval.expiresAt) else {
                 throw LocalProgramError.replayed
             }
-            record.approvals[approvalID] = status
+            approval.status = status; record.approvals[approvalID] = approval
             try Self.append(kind: "approval_resolved", at: at, status: status,
                 approvalID: approvalID, to: &record)
         }
@@ -610,6 +656,16 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
         try read { state in
             guard let record = state.records[executionID] else { throw LocalProgramError.invalidEnvelope }
             return record.events
+        }
+    }
+
+    public func toolReceipts(executionID: String) throws -> [MacLocalActionReceipt] {
+        try read { state in
+            guard let record = state.records[executionID] else { throw LocalProgramError.invalidEnvelope }
+            guard record.receipts.allSatisfy(\.hasValidDigest) else {
+                throw LocalProgramError.executionFailed("tool receipt digest mismatch")
+            }
+            return record.receipts
         }
     }
 
@@ -699,13 +755,13 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
     private func load() throws -> State {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return State() }
         do {
-            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = MacProtocolTimestamp.decodingStrategy
             return try decoder.decode(State.self, from: Data(contentsOf: fileURL))
         } catch { throw LocalProgramError.executionFailed("journal is unreadable") }
     }
 
     private func persist(_ state: State) throws {
-        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = MacProtocolTimestamp.encodingStrategy; encoder.outputFormatting = [.sortedKeys]
         let data: Data
         do { data = try encoder.encode(state) }
         catch { throw LocalProgramError.executionFailed("journal encoding failed") }

@@ -57,6 +57,9 @@ final class MacProgramRunnerHandle: @unchecked Sendable {
 enum MacProgramProcessRunner {
     static func run(executableURL: URL, source: String, wallMS: Int,
                     handle: MacProgramRunnerHandle,
+                    resultBytes: Int = LocalProgramLimits.outputBytes,
+                    logBytes: Int = LocalProgramLimits.logBytes,
+                    progress: @escaping @Sendable (String, Int, Int) -> Bool = { _, _, _ in true },
                     call: @escaping @Sendable (String, String) -> String) throws -> MacProgramRunnerOutcome {
         let process = Process()
         let input = Pipe(), output = Pipe(), errors = Pipe()
@@ -66,7 +69,8 @@ enum MacProgramProcessRunner {
         process.standardInput = input; process.standardOutput = output; process.standardError = errors
 
         let terminal = DispatchSemaphore(value: 0)
-        let state = RunnerState(input: input, handle: handle, call: call, terminal: terminal)
+        let state = RunnerState(input: input, handle: handle, logBytes: logBytes,
+            progress: progress, call: call, terminal: terminal)
         output.fileHandleForReading.readabilityHandler = { file in
             let data = file.availableData
             if data.isEmpty { state.finishEOF(); return }
@@ -74,7 +78,8 @@ enum MacProgramProcessRunner {
         }
         try process.run()
         handle.attach(process)
-        try state.send(["kind": "start", "source": source])
+        try state.send(["kind": "start", "source": source,
+            "result_bytes": resultBytes, "log_bytes": logBytes])
 
         let wait = terminal.wait(timeout: .now() + .milliseconds(wallMS))
         let timedOut = wait == .timedOut
@@ -97,17 +102,30 @@ enum MacProgramProcessRunner {
         private let lock = NSLock()
         private let input: Pipe
         private let handle: MacProgramRunnerHandle
+        private let logBytes: Int
+        private let progress: @Sendable (String, Int, Int) -> Bool
         private let call: @Sendable (String, String) -> String
         private let terminal: DispatchSemaphore
         private var buffer = Data()
         private var outputJSON: String?
         private var error: String?
         private var finished = false
+        private var emittedProgressBytes = 0
+        private var abortPolls = 0
+        private static let allowedProgressMessages: Set<String> = [
+            "Processing local items.",
+            "Processed local items.",
+            "Trying a safe local alternative.",
+            "Local work completed.",
+        ]
 
         init(input: Pipe, handle: MacProgramRunnerHandle,
+             logBytes: Int = LocalProgramLimits.logBytes,
+             progress: @escaping @Sendable (String, Int, Int) -> Bool = { _, _, _ in true },
              call: @escaping @Sendable (String, String) -> String,
              terminal: DispatchSemaphore) {
-            self.input = input; self.handle = handle; self.call = call; self.terminal = terminal
+            self.input = input; self.handle = handle; self.logBytes = logBytes
+            self.progress = progress; self.call = call; self.terminal = terminal
         }
 
         func consume(_ data: Data) {
@@ -146,9 +164,20 @@ enum MacProgramProcessRunner {
         }
 
         private func process(_ line: Data) {
+            if lock.withLock({ finished }) {
+                lock.withLock {
+                    outputJSON = nil
+                    error = "program runner protocol violation"
+                }
+                handle.stop()
+                return
+            }
             guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  let kind = object["kind"] as? String else { return }
-            if kind == "call", let id = object["id"] as? Int,
+                  let kind = object["kind"] as? String else {
+                fail("program runner protocol violation"); return
+            }
+            if kind == "call", Set(object.keys) == ["kind", "id", "capability_id", "input_json"],
+               let id = object["id"] as? Int,
                let capability = object["capability_id"] as? String,
                let inputJSON = object["input_json"] as? String {
                 guard handle.admitCall() else { return }
@@ -156,14 +185,48 @@ enum MacProgramProcessRunner {
                 handle.completeCall()
                 guard handle.isActive else { return }
                 try? send(["kind": "call_result", "id": id, "output_json": response])
-            } else if kind == "terminal" {
+            } else if kind == "progress",
+                      Set(object.keys) == ["kind", "id", "message", "completed", "total"],
+                      let id = object["id"] as? Int,
+                      let message = object["message"] as? String,
+                      let completed = object["completed"] as? Int,
+                      let total = object["total"] as? Int,
+                      Self.allowedProgressMessages.contains(message), message.utf8.count <= 240,
+                      completed >= 0, total >= 0, completed <= total {
+                let nextBytes = emittedProgressBytes + message.utf8.count
+                guard nextBytes <= logBytes, progress(message, completed, total), handle.isActive else {
+                    try? send(["kind": "progress_result", "id": id, "ok": false])
+                    fail("program runner progress rejected"); return
+                }
+                emittedProgressBytes = nextBytes
+                try? send(["kind": "progress_result", "id": id, "ok": true])
+            } else if kind == "abort_poll", Set(object.keys) == ["kind", "id"],
+                      let id = object["id"] as? Int {
+                abortPolls += 1
+                guard abortPolls <= 256 else {
+                    fail("program runner abort channel exceeded local limit"); return
+                }
+                try? send(["kind": "abort_result", "id": id, "aborted": !handle.isActive])
+            } else if kind == "terminal",
+                      (Set(object.keys) == ["kind", "output_json"] ||
+                       Set(object.keys) == ["kind", "error"]) {
                 lock.withLock {
                     guard !finished else { return }
                     outputJSON = object["output_json"] as? String
                     error = object["error"] == nil ? nil : "program runner failed"
                     finished = true; terminal.signal()
                 }
+            } else {
+                fail("program runner protocol violation")
             }
+        }
+
+        private func fail(_ message: String) {
+            let shouldStop = lock.withLock { () -> Bool in
+                guard !finished else { return false }
+                error = message; finished = true; terminal.signal(); return true
+            }
+            if shouldStop { handle.stop() }
         }
     }
 }
