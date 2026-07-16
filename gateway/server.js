@@ -9640,6 +9640,8 @@ function sessionContextPayload({ sessionId, branchId = "default", allBranches = 
     browser_tasks: browserTasks,
     approvals: [],
     receipts: [],
+    surface_events: [],
+    tool_receipts: [],
     memory_summaries: [],
   };
 }
@@ -11441,6 +11443,8 @@ function summarizeToolRequest(requestRecord, options = {}) {
     claim_attempt: options.includeInput ? Number(requestRecord.claim_attempt || 0) : undefined,
     claimed_client_instance_id: options.includeInput ? requestRecord.claimed_client_instance_id || "" : undefined,
     receipt_count: Array.isArray(requestRecord.receipts) ? requestRecord.receipts.length : 0,
+    surface_event_count: Array.isArray(requestRecord.surface_events) ? requestRecord.surface_events.length : 0,
+    tool_receipt_count: Array.isArray(requestRecord.tool_receipts) ? requestRecord.tool_receipts.length : 0,
     latest_receipt: Array.isArray(requestRecord.receipts) && requestRecord.receipts.length
       ? requestRecord.receipts[requestRecord.receipts.length - 1]
       : null,

@@ -4,6 +4,8 @@ const {
   PROGRAM_TOOL,
   canonicalJson,
   sha256,
+  validateSurfaceExecutionEvent,
+  validateSurfaceProgramToolReceipt,
   validateSurfaceProgramTerminalReceipt,
 } = require("./surface-program-protocol");
 
@@ -26,7 +28,9 @@ function createDeviceToolHandlers(deps) {
     const isToolCreate = pathname === "/v1/tool/requests" && request.method === "POST";
     const isToolClaim = pathname === "/v1/tool/requests/claim" && request.method === "POST";
     const isReceipt = request.method === "POST" && pathname.startsWith("/v1/tool/requests/") && pathname.endsWith("/receipts");
-    if (!(isDeviceList || isHeartbeat || isToolList || isToolCreate || isToolClaim || isReceipt)) return false;
+    const isExecutionEvent = request.method === "POST" && pathname.startsWith("/v1/tool/requests/") && pathname.endsWith("/events");
+    const isToolReceipt = request.method === "POST" && pathname.startsWith("/v1/tool/requests/") && pathname.endsWith("/tool-receipts");
+    if (!(isDeviceList || isHeartbeat || isToolList || isToolCreate || isToolClaim || isReceipt || isExecutionEvent || isToolReceipt)) return false;
     if (!authorized(request)) {
       sendJson(response, 401, { error: "missing or invalid gateway token" });
       return true;
@@ -41,6 +45,8 @@ function createDeviceToolHandlers(deps) {
     }) });
     else if (isToolCreate) await handleCreateToolRequest(request, response);
     else if (isToolClaim) await handleClaimToolRequest(request, response);
+    else if (isExecutionEvent) await handleSurfaceExecutionEvent(request, response, pathname.slice("/v1/tool/requests/".length, -"/events".length));
+    else if (isToolReceipt) await handleSurfaceToolReceipt(request, response, pathname.slice("/v1/tool/requests/".length, -"/tool-receipts".length));
     else await handleToolRequestReceipt(request, response, pathname.slice("/v1/tool/requests/".length, -"/receipts".length));
     return true;
   }
@@ -76,10 +82,69 @@ function createDeviceToolHandlers(deps) {
       catch (error) { sendJson(response, 400, { error: cleanError(error) }); return; }
     }
     if (!device) { sendJson(response, 404, { error: "device client has not heartbeated" }); return; }
+    const clientInstanceId = normalizeDeviceId(body.client_instance_id || body.clientInstanceId || "");
+    if (device.client_instance_id && (!clientInstanceId || clientInstanceId !== device.client_instance_id)) {
+      sendJson(response, 409, { error: "client_instance_id must match the current device heartbeat" }); return;
+    }
     const task = claimNextToolRequest(device);
     if (!task) { sendJson(response, 204, {}); return; }
     await recordToolRequestProductEvent(task, "claimed");
     sendJson(response, 200, { request: summarizeToolRequest(task, { includeInput: true }) });
+  }
+
+  function activeSurfaceClaim(current, body, timestamp) {
+    if (current.tool !== PROGRAM_TOOL || current.status !== "claimed" || !current.claim_id) throw Object.assign(new Error("surface program must have an active exact claim"), { code: "inactive_surface_claim" });
+    const claimant = body?.claimant || {};
+    if (claimant.device_id !== current.claimed_by || claimant.client_instance_id !== current.claimed_client_instance_id || claimant.surface_type !== current.input.target.surface_type) throw Object.assign(new Error("surface program claimant does not match the exact claim"), { code: "claimant_mismatch" });
+    const leaseExpiresMs = Date.parse(current.lease_expires_at || "");
+    if (!Number.isFinite(leaseExpiresMs) || Date.parse(timestamp) >= leaseExpiresMs) throw Object.assign(new Error("surface program claim lease expired"), { code: "claim_expired" });
+    return { device_id: current.claimed_by, client_instance_id: current.claimed_client_instance_id };
+  }
+
+  async function handleSurfaceExecutionEvent(request, response, id) {
+    const requestId = sanitizeId(id);
+    if (!toolRequestExists(requestId)) { sendJson(response, 404, { error: "tool request not found" }); return; }
+    const body = await readJsonBody(request); const current = readToolRequest(requestId); const timestamp = now();
+    let event;
+    try {
+      const claim = activeSurfaceClaim(current, body, timestamp);
+      event = validateSurfaceExecutionEvent(current.input, body, claim, { nowMs: Date.parse(timestamp) });
+    } catch (error) { sendJson(response, 400, { error: cleanError(error), code: error.code || "invalid_execution_event" }); return; }
+    const events = Array.isArray(current.surface_events) ? current.surface_events : [];
+    const replay = events.find((item) => item.event_id === event.event_id || item.sequence === event.sequence);
+    if (replay) {
+      if (canonicalJson(replay) === canonicalJson(event)) sendJson(response, 200, { event: replay, idempotent_replay: true });
+      else sendJson(response, 409, { error: "execution event conflicts with stored sequence or id" });
+      return;
+    }
+    if (event.sequence !== events.length + 1 || (events.length === 0 && event.kind !== "accepted")) { sendJson(response, 409, { error: "execution event sequence must begin with accepted and remain contiguous" }); return; }
+    if (events.some((item) => item.kind === "terminal")) { sendJson(response, 409, { error: "execution already has a terminal lifecycle event" }); return; }
+    const next = updateToolRequest(current.id, { surface_events: events.concat([event]), updated_at: timestamp });
+    await recordToolRequestProductEvent(next, "surface_execution_event", event);
+    sendJson(response, 202, { event });
+  }
+
+  async function handleSurfaceToolReceipt(request, response, id) {
+    const requestId = sanitizeId(id);
+    if (!toolRequestExists(requestId)) { sendJson(response, 404, { error: "tool request not found" }); return; }
+    const body = await readJsonBody(request); const current = readToolRequest(requestId); const timestamp = now();
+    const receipts = Array.isArray(current.tool_receipts) ? current.tool_receipts : [];
+    const rawReplay = receipts.find((item) => item.receipt_id === body.receipt_id || (item.tool_call_id === body.tool_call_id && item.attempt === body.attempt));
+    if (rawReplay) {
+      if (canonicalJson(rawReplay) === canonicalJson(body)) sendJson(response, 200, { receipt: rawReplay, idempotent_replay: true });
+      else sendJson(response, 409, { error: "tool receipt conflicts with stored call attempt" });
+      return;
+    }
+    let receipt;
+    try {
+      const claim = activeSurfaceClaim(current, body, timestamp);
+      receipt = validateSurfaceProgramToolReceipt(current.input, body, claim, { nowMs: Date.parse(timestamp), previousToolReceipt: receipts[receipts.length - 1] || null });
+      const started = (current.surface_events || []).find((event) => event.kind === "tool_started" && event.payload.tool_call_id === receipt.tool_call_id && event.payload.attempt === receipt.attempt && event.payload.capability_id === receipt.capability_id);
+      if (!started) throw Object.assign(new Error("tool receipt has no matching tool_started lifecycle event"), { code: "missing_tool_started_event" });
+    } catch (error) { sendJson(response, 400, { error: cleanError(error), code: error.code || "invalid_tool_receipt" }); return; }
+    const next = updateToolRequest(current.id, { tool_receipts: receipts.concat([receipt]), updated_at: timestamp });
+    await recordToolRequestProductEvent(next, "surface_tool_receipt", receipt);
+    sendJson(response, 202, { receipt });
   }
 
   async function handleToolRequestReceipt(request, response, id) {
@@ -142,7 +207,11 @@ function createDeviceToolHandlers(deps) {
       terminal = validateSurfaceProgramTerminalReceipt(current.input, body, {
         device_id: current.claimed_by,
         client_instance_id: current.claimed_client_instance_id,
-      }, { nowMs: Date.parse(timestamp) });
+      }, { nowMs: Date.parse(timestamp), toolReceipts: current.tool_receipts || [] });
+      const events = current.surface_events || [];
+      const accepted = events[0]?.kind === "accepted";
+      const terminalEvent = events[events.length - 1];
+      if (!accepted || terminalEvent?.kind !== "terminal" || terminalEvent.payload.receipt_id !== terminal.receipt_id || terminalEvent.payload.status !== terminal.status || terminalEvent.payload.receipt_sha256 !== terminal.receipt_sha256) throw Object.assign(new Error("terminal receipt must match a contiguous accepted-to-terminal lifecycle"), { code: "terminal_event_mismatch" });
     } catch (error) {
       sendJson(response, 400, { error: cleanError(error), code: error.code || "invalid_terminal_receipt" });
       return;
@@ -162,7 +231,7 @@ function createDeviceToolHandlers(deps) {
     sendJson(response, 200, { request: summarizeToolRequest(next), receipt });
   }
 
-  return { routeDeviceTools, handleDeviceClientHeartbeat, handleCreateToolRequest, handleClaimToolRequest, handleToolRequestReceipt, handleSurfaceProgramReceipt };
+  return { routeDeviceTools, handleDeviceClientHeartbeat, handleCreateToolRequest, handleClaimToolRequest, handleToolRequestReceipt, handleSurfaceExecutionEvent, handleSurfaceToolReceipt, handleSurfaceProgramReceipt };
 }
 
 module.exports = { createDeviceToolHandlers };
