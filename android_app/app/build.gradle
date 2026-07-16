@@ -173,7 +173,11 @@ def imePolicyClasses = files(
 def screenEvidenceEnvelopeClasses = files(
         fileTree(
                 dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
-                includes: ['**/MoaScreenEvidenceEnvelope*.class']
+                includes: [
+                        '**/MoaScreenEvidenceEnvelope*.class',
+                        '**/MoaScreenContextCache*.class',
+                        '**/MoaScreenContextReleasePolicy*.class'
+                ]
         )
 )
 

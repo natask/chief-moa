@@ -19,15 +19,14 @@ import java.util.Set;
 public final class MoaAccessibilityService extends AccessibilityService {
     private static final int MAX_SUMMARY_CHARS = 1800;
     private static final int MAX_NODE_TEXTS = 44;
+    private static final String SECURE_CONTENT_MARKER = "[secure content omitted]";
+    private static final MoaScreenContextCache SCREEN_CACHE = new MoaScreenContextCache();
     private static volatile MoaAccessibilityService activeService;
-    private static volatile String latestSummary = "";
-    private static volatile String latestPackage = "";
-    private static volatile String latestClass = "";
-    private static volatile long latestUpdatedAtMs = 0L;
 
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        SCREEN_CACHE.clear();
         activeService = this;
     }
 
@@ -36,27 +35,30 @@ public final class MoaAccessibilityService extends AccessibilityService {
         activeService = this;
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) {
+            SCREEN_CACHE.clear();
             return;
         }
 
         StringBuilder builder = new StringBuilder();
-        if (event != null && event.getPackageName() != null) {
-            latestPackage = event.getPackageName().toString();
-            builder.append("Package: ").append(latestPackage).append('\n');
+        String packageName = root.getPackageName() == null ? "" : root.getPackageName().toString();
+        String className = event == null || event.getClassName() == null
+                ? ""
+                : event.getClassName().toString();
+        if (!packageName.isEmpty()) {
+            builder.append("Package: ").append(packageName).append('\n');
         }
-        if (event != null && event.getClassName() != null) {
-            latestClass = event.getClassName().toString();
-            builder.append("Class: ").append(latestClass).append('\n');
+        if (!className.isEmpty()) {
+            builder.append("Class: ").append(className).append('\n');
         }
         builder.append("Visible text: ");
 
-        collectNodeText(root, builder, new HashSet<>(), new int[]{0});
+        boolean[] secureContent = new boolean[]{false};
+        collectNodeText(root, builder, new HashSet<>(), new int[]{0}, secureContent);
         String summary = builder.toString().trim();
         if (summary.length() > MAX_SUMMARY_CHARS) {
             summary = summary.substring(0, MAX_SUMMARY_CHARS).trim();
         }
-        latestSummary = summary;
-        latestUpdatedAtMs = System.currentTimeMillis();
+        SCREEN_CACHE.update(packageName, className, summary, System.currentTimeMillis(), secureContent[0]);
     }
 
     @Override
@@ -67,6 +69,7 @@ public final class MoaAccessibilityService extends AccessibilityService {
     public boolean onUnbind(Intent intent) {
         if (activeService == this) {
             activeService = null;
+            SCREEN_CACHE.clear();
         }
         return super.onUnbind(intent);
     }
@@ -75,6 +78,7 @@ public final class MoaAccessibilityService extends AccessibilityService {
     public void onDestroy() {
         if (activeService == this) {
             activeService = null;
+            SCREEN_CACHE.clear();
         }
         super.onDestroy();
     }
@@ -99,14 +103,19 @@ public final class MoaAccessibilityService extends AccessibilityService {
             return null;
         }
 
+        MoaScreenContextCache.Snapshot cached = SCREEN_CACHE.read();
+        if (!cached.available()) {
+            return null;
+        }
         JSONObject snapshot = new JSONObject();
         try {
             snapshot.put("running", true);
             snapshot.put("available", true);
-            snapshot.put("package", latestPackage);
-            snapshot.put("class", latestClass);
-            snapshot.put("updated_at_ms", latestUpdatedAtMs);
-            snapshot.put("summary", latestScreenSummary());
+            snapshot.put("package", cached.packageName);
+            snapshot.put("class", cached.className);
+            snapshot.put("updated_at_ms", cached.updatedAtMs);
+            snapshot.put("summary", cached.summary.trim());
+            snapshot.put("secure_content", cached.secureContent);
             snapshot.put("active_app", currentActiveAppDescriptor());
         } catch (JSONException ignored) {
         }
@@ -114,21 +123,23 @@ public final class MoaAccessibilityService extends AccessibilityService {
     }
 
     static JSONObject currentActiveAppDescriptor() {
+        MoaScreenContextCache.Snapshot cached = SCREEN_CACHE.read();
         return MoaActiveAppDescriptor.create(
                 isRunning(),
-                latestPackage,
-                latestClass,
-                latestUpdatedAtMs,
+                cached.packageName,
+                cached.className,
+                cached.updatedAtMs,
                 System.currentTimeMillis()
         );
     }
 
     static JSONArray currentExecutionAdapters() {
+        MoaScreenContextCache.Snapshot cached = SCREEN_CACHE.read();
         return MoaActiveAppDescriptor.executionAdapters(
                 isRunning(),
-                latestPackage,
-                latestClass,
-                latestUpdatedAtMs,
+                cached.packageName,
+                cached.className,
+                cached.updatedAtMs,
                 System.currentTimeMillis()
         );
     }
@@ -177,7 +188,7 @@ public final class MoaAccessibilityService extends AccessibilityService {
     }
 
     static String latestScreenSummary() {
-        return latestSummary == null ? "" : latestSummary.trim();
+        return SCREEN_CACHE.read().summary.trim();
     }
 
     static boolean isEnabled(Context context) {
@@ -206,8 +217,20 @@ public final class MoaAccessibilityService extends AccessibilityService {
         return new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
     }
 
-    private static void collectNodeText(AccessibilityNodeInfo node, StringBuilder builder, Set<String> seen, int[] count) {
+    private static void collectNodeText(
+            AccessibilityNodeInfo node,
+            StringBuilder builder,
+            Set<String> seen,
+            int[] count,
+            boolean[] secureContent
+    ) {
         if (node == null || count[0] >= MAX_NODE_TEXTS || builder.length() >= MAX_SUMMARY_CHARS) {
+            return;
+        }
+
+        if (node.isPassword()) {
+            secureContent[0] = true;
+            appendText(builder, seen, count, SECURE_CONTENT_MARKER);
             return;
         }
 
@@ -217,7 +240,7 @@ public final class MoaAccessibilityService extends AccessibilityService {
         appendText(builder, seen, count, description);
 
         for (int i = 0; i < node.getChildCount(); i++) {
-            collectNodeText(node.getChild(i), builder, seen, count);
+            collectNodeText(node.getChild(i), builder, seen, count, secureContent);
             if (count[0] >= MAX_NODE_TEXTS || builder.length() >= MAX_SUMMARY_CHARS) {
                 return;
             }

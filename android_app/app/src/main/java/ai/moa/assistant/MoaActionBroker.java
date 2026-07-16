@@ -234,8 +234,9 @@ final class MoaActionBroker {
     }
 
     void putScreenContext(JSONObject body) throws JSONException {
+        body.remove("screen");
         JSONObject screen = screenSnapshot();
-        if (screen != null) {
+        if (screen != null && !screen.optBoolean("secure_content", false)) {
             body.put("screen", screen);
         }
     }

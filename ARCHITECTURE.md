@@ -694,6 +694,12 @@ capture failure, or app/freshness drift releases no pixels and remains visible
 as a semantic-only or no-context fallback. The chat response is rendered as
 text only; this route does not execute action proposals. Android still owns
 validation, approval, execution, and receipts for any later local effect.
+Semantic release has its own final gate: accessibility traversal replaces a
+password subtree with a secure marker and never reads its value, service
+unbind/destroy clears the process cache, and callback-time semantic context is
+released only when it is non-secure, fresh, and package-bound to the capture.
+Secure denial, target drift, stale state, or vanished accessibility authority
+removes both `screen_evidence` and the legacy `screen` object before dispatch.
 
 ### Android input method (literal dictation candidate)
 

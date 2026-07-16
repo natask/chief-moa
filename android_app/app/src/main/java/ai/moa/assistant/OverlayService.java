@@ -1898,46 +1898,61 @@ public final class OverlayService extends Service {
         MoaAccessibilityService.captureScreenshot(consent, new MoaScreenshotCaptureAdapter.Callback() {
             @Override
             public void onCaptured(MoaScreenshotCapture capture) {
-                mainHandler.post(() -> finishScreenAwareAsk(requestBody, capture, null));
+                mainHandler.post(() -> finishScreenAwareAsk(requestBody, expectedPackage, capture, null));
             }
 
             @Override
             public void onDenied(MoaScreenshotPolicy.DenialReason reason) {
-                mainHandler.post(() -> finishScreenAwareAsk(requestBody, null, reason));
+                mainHandler.post(() -> finishScreenAwareAsk(requestBody, expectedPackage, null, reason));
             }
         });
     }
 
     private void finishScreenAwareAsk(
             JSONObject requestBody,
+            String expectedPackage,
             MoaScreenshotCapture capture,
             MoaScreenshotPolicy.DenialReason denial
     ) {
         screenAskInFlight = false;
         refreshScreenAskControl();
         try {
-            // Refresh semantic evidence after the asynchronous pixel capture so
-            // the gateway receives the context nearest the captured frame.
-            actionBroker.putScreenContext(requestBody);
-            String semanticSummary = actionBroker.currentScreenSummary();
+            JSONObject refreshedScreen = actionBroker.screenSnapshot();
+            boolean hasSemanticContext;
             if (capture != null) {
+                hasSemanticContext = MoaScreenContextReleasePolicy.applyCapturedContext(
+                        requestBody,
+                        refreshedScreen,
+                        capture
+                );
+                String semanticSummary = hasSemanticContext
+                        ? refreshedScreen.optString("summary", "")
+                        : "";
                 MoaScreenEvidenceEnvelope.attachToAsk(requestBody, capture, semanticSummary);
                 setScreenAskStatus("Screenshot attached once · model response remains a proposal");
             } else {
+                hasSemanticContext = MoaScreenContextReleasePolicy.applyDeniedContext(
+                        requestBody,
+                        refreshedScreen,
+                        expectedPackage,
+                        System.currentTimeMillis(),
+                        denial
+                );
                 setScreenAskStatus(MoaScreenEvidenceEnvelope.visibleFallback(
                         denial,
-                        !semanticSummary.trim().isEmpty()
+                        hasSemanticContext
                 ));
             }
         } catch (Exception error) {
             try {
-                MoaScreenEvidenceEnvelope.fallBackWithoutScreenshot(requestBody);
-            } catch (JSONException ignored) {
+                MoaScreenContextReleasePolicy.clearScreenContext(requestBody);
+            } catch (Exception ignored) {
                 requestBody.remove("screen_evidence");
+                requestBody.remove("screen");
             }
             setScreenAskStatus(MoaScreenEvidenceEnvelope.visibleFallback(
                     MoaScreenshotPolicy.DenialReason.IMAGE_UNAVAILABLE,
-                    !actionBroker.currentScreenSummary().trim().isEmpty()
+                    false
             ));
         }
         dispatchGatewayReply(requestBody, false);

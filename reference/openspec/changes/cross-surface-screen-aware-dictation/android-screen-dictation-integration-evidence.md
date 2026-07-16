@@ -33,7 +33,9 @@ it.
 - IME pure policy aggregate: 145/149 lines (97.3%), 127/136 branches (93.4%),
   and 26/27 methods (96.3%).
 - Screen-evidence envelope: 51/51 lines (100%), 34/35 branches (97.1%), and
-  7/7 methods (100%).
+  7/7 methods (100%) in the initial integration. The semantic release repair
+  expands that focused gate to 101/101 lines (100%), 73/79 branches (92.4%),
+  and 21/21 methods (100%).
 - The gateway capture-block boundary test requires an existing audio-note id
   and asserts the Android IME source; no SpeechRecognizer result is represented
   as durable audio.
@@ -50,3 +52,13 @@ apps, sensitive-field suppression, and stale-focus refusal all remain open.
 The deployed gateway must contain the exact route contract ending at
 `f11e121f` (or a verified compatible successor) before screen-evidence or
 capture-block runtime QA can pass.
+
+## Semantic release repair
+
+Verifier regressions now prove that secure/password denial removes both pixels
+and the legacy semantic `screen`, a missing service removes preloaded screen
+state, app-switch callback mismatch releases no semantic context, and capture
+success includes semantic context only when its package and freshness bind to
+the captured frame. Accessibility traversal stops at password nodes, emits only
+a secure omission marker, and unbind/destroy clears the cached package,
+summary, class, timestamp, and secure flag.

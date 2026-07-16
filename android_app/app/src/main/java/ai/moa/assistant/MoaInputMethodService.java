@@ -29,9 +29,10 @@ public final class MoaInputMethodService extends InputMethodService {
     private MoaEditorSessionBinding.SessionToken recognitionSession;
     private SpeechRecognizer speechRecognizer;
     private boolean listening;
+    private boolean ignoreNextDictateClick;
     private TextView statusView;
     private TextView candidateView;
-    private Button dictateButton;
+    private DictateButton dictateButton;
     private Button insertButton;
     private Button cancelButton;
 
@@ -53,9 +54,18 @@ public final class MoaInputMethodService extends InputMethodService {
         actions.setGravity(Gravity.CENTER_VERTICAL);
         root.addView(actions);
 
-        dictateButton = button("Hold to Dictate");
+        dictateButton = new DictateButton();
         dictateButton.setContentDescription("Hold to dictate literal text, then release to finish");
-        dictateButton.setOnTouchListener((view, event) -> handleDictateTouch(event));
+        dictateButton.setOnClickListener(view -> {
+            if (ignoreNextDictateClick) {
+                ignoreNextDictateClick = false;
+            } else if (listening) {
+                stopLiteralRecognition();
+            } else {
+                startLiteralRecognition();
+            }
+        });
+        dictateButton.setOnTouchListener(this::handleDictateTouch);
         actions.addView(dictateButton, weightedButtonParams());
 
         insertButton = button("Insert");
@@ -105,7 +115,7 @@ public final class MoaInputMethodService extends InputMethodService {
         super.onDestroy();
     }
 
-    private boolean handleDictateTouch(MotionEvent event) {
+    private boolean handleDictateTouch(View view, MotionEvent event) {
         if (event == null) {
             return true;
         }
@@ -113,6 +123,8 @@ public final class MoaInputMethodService extends InputMethodService {
             startLiteralRecognition();
         } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
             stopLiteralRecognition();
+            ignoreNextDictateClick = true;
+            view.performClick();
         } else if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
             cancelLiteralRecognition("Dictation interrupted · no text inserted");
         }
@@ -362,6 +374,21 @@ public final class MoaInputMethodService extends InputMethodService {
         button.setTextColor(MoaColors.PAPER);
         button.setBackground(MoaDrawables.rounded(0x14FFFFFF, dp(12), MoaColors.RAISED_BORDER, dp(1)));
         return button;
+    }
+
+    private final class DictateButton extends Button {
+        DictateButton() {
+            super(MoaInputMethodService.this);
+            setAllCaps(false);
+            setText("Hold to Dictate");
+            setTextColor(MoaColors.PAPER);
+            setBackground(MoaDrawables.rounded(0x14FFFFFF, dp(12), MoaColors.RAISED_BORDER, dp(1)));
+        }
+
+        @Override
+        public boolean performClick() {
+            return super.performClick();
+        }
     }
 
     private LinearLayout.LayoutParams weightedButtonParams() {

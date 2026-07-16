@@ -50,6 +50,8 @@ reserved for a later integration ticket.
 - Candidate status: deterministic Android glue is implemented in
   `android-screen-dictation-integration-evidence.md`; physical-phone stale,
   secure, and denial QA remains not measured, so this ticket stays open.
+  Callback-time release regressions cover secure/password no-context fallback,
+  missing accessibility authority, stale state, and package mismatch.
 
 ## 4. Android IME literal dictation
 
