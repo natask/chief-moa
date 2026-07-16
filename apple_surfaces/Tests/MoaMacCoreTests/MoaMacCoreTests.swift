@@ -49,8 +49,12 @@ private let process = ProcessIdentity(bundleID: "com.example.Editor", pid: 42, p
 }
 
 @Test func chatReplyIsInertAndBounded() throws {
+    let safe = Data(#"{"text":"Review this first","context":{"branch":"default"}}"#.utf8)
+    #expect(try GatewayChatReplyDecoder.decode(safe) == GatewayChatReply(text: "Review this first"))
     let withProposal = Data(#"{"text":"Review this first","actions":[{"kind":"press"}]}"#.utf8)
-    #expect(try GatewayChatReplyDecoder.decode(withProposal) == GatewayChatReply(text: "Review this first"))
+    #expect(throws: GatewayChatError.invalidResponse) { try GatewayChatReplyDecoder.decode(withProposal) }
+    let nestedTool = Data(#"{"text":"Review this first","context":{"tool_calls":[]}}"#.utf8)
+    #expect(throws: GatewayChatError.invalidResponse) { try GatewayChatReplyDecoder.decode(nestedTool) }
     #expect(throws: GatewayChatError.invalidResponse) { try GatewayChatReplyDecoder.decode(Data(#"{"actions":[]}"#.utf8)) }
     #expect(throws: GatewayChatError.responseTooLarge) {
         try GatewayChatReplyDecoder.decode(Data(repeating: 0x20, count: GatewayChatReplyDecoder.maximumResponseBytes + 1))

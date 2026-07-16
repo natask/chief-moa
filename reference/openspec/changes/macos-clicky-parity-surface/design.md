@@ -4,6 +4,10 @@
 
 `MoaMac` runs as an `LSUIElement` menu-bar application. `Control+Space` uses
 the public Carbon hot-key registration API and toggles an app-owned `NSPanel`.
+If that system combination is already reserved, registration falls back to
+`Option+Space` and the command panel shows the shortcut that actually won.
+If neither registration succeeds, the menu-bar entry remains available and the
+panel says to use it instead of silently advertising a broken shortcut.
 The panel is centered on the active screen, can become key for text entry, and
 hides on Escape. Settings and the existing screen-context grant UI remain in a
 normal deeper window.
@@ -44,4 +48,3 @@ Pull requests produce an ad-hoc-signed QA ZIP and SHA-256 as compilation and
 packaging evidence. Developer ID signing, hardened runtime, notarization,
 stapling, universal architecture, isolated TCC QA, rollback, and active install
 remain promotion gates and must not be inferred from the QA artifact.
-
