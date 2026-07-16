@@ -238,7 +238,7 @@ async function main() {
       const reply = document.querySelector(".turn:last-child .ag");
       if (!action || !reply) return null;
       return { action: action.textContent, reply: reply.textContent };
-    })()`, 3000);
+    })()`, 8000);
     await pageCdp.send("Input.dispatchMouseEvent", {
       type: "mouseReleased",
       x: talkPoint.x,
