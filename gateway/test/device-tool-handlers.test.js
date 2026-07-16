@@ -50,7 +50,7 @@ function lifecycle(envelope, terminal = terminalReceipt(envelope)) {
   const claimant = { surface_type: "browser_extension", device_id: "phone", client_instance_id: "client-1" };
   return [
     { version: 1, type: "surface.execution.event", event_id: "event-1", execution_id: envelope.execution_id, sequence: 1, kind: "accepted", occurred_at: new Date(PROGRAM_NOW + 10).toISOString(), claimant, payload: { proposal_sha256: sha256(envelope) } },
-    { version: 1, type: "surface.execution.event", event_id: "event-2", execution_id: envelope.execution_id, sequence: 2, kind: "terminal", occurred_at: new Date(PROGRAM_NOW + 20).toISOString(), claimant, payload: { status: terminal.status, receipt_id: terminal.receipt_id, receipt_sha256: terminal.receipt_sha256 } },
+    { version: 1, type: "surface.execution.event", event_id: "event-2", execution_id: envelope.execution_id, sequence: 2, kind: "started", occurred_at: new Date(PROGRAM_NOW + 20).toISOString(), claimant, payload: {} },
   ];
 }
 
@@ -227,21 +227,25 @@ test("receipts enforce target and claimant before recording success or failure",
 test("surface program receipts require a live exact claim and accept one terminal outcome", async () => {
   const input = programEnvelope();
   const body = terminalReceipt(input);
-  const current = {
+  let current = {
     id: "req-1", tool: PROGRAM_TOOL, input, status: "claimed", target_device_id: "phone",
     claimed_by: "phone", claimed_client_instance_id: "client-1", claim_id: "claim-1", claim_attempt: 1,
     lease_expires_at: new Date(PROGRAM_NOW + 60000).toISOString(), receipts: [], tool_receipts: [], surface_events: lifecycle(input, body),
   };
-  const state = harness({ readToolRequest: () => current });
+  const state = harness({ readToolRequest: () => current, updateToolRequest: (_id, patch) => { current = { ...current, ...patch }; return current; } });
   let response = {};
   await state.handlers.handleToolRequestReceipt(request("POST", body), response, "req-1");
-  assert.equal(response.status, 200);
-  assert.equal(response.payload.request.status, "completed");
-  assert.equal(response.payload.receipt.local_receipt.execution_id, "exec-1");
-  assert.equal(state.events[0][1], "receipt");
+  assert.equal(response.status, 202);
+  assert.equal(response.payload.receipt.execution_id, "exec-1");
+  assert.equal(state.events[0][1], "surface_terminal_receipt");
+  const terminalEvent = programEvent(input, 3, "terminal", { status: body.status, receipt_id: body.receipt_id, receipt_sha256: body.receipt_sha256 });
+  terminalEvent.occurred_at = new Date(PROGRAM_NOW + 300).toISOString();
+  response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", terminalEvent), response, "req-1");
+  assert.equal(response.status, 202);
+  assert.equal(current.status, "completed");
 
-  const existing = { ...response.payload.receipt, terminal_digest: sha256(body) };
-  const replay = harness({ readToolRequest: () => ({ ...current, receipts: [existing] }) });
+  const replay = harness({ readToolRequest: () => current });
   response = {};
   await replay.handlers.handleToolRequestReceipt(request("POST", body), response, "req-1");
   assert.equal(response.payload.idempotent_replay, true);
@@ -276,12 +280,16 @@ test("surface program receipt rejects missing/expired claims and forged terminal
   assert.equal(response.payload.code, "runtime_id_mismatch");
 
   response = {};
-  const stoppedBody = terminalReceipt(input, { status: "stopped", error: { code: "stopped", message: "user stopped" } });
-  const stopped = { ...base, status: "claimed", surface_events: lifecycle(input, stoppedBody) };
-  state = harness({ readToolRequest: () => stopped });
+  const stoppedBody = terminalReceipt(input, { status: "stopped", error: { code: "user_stop", message: "User stopped" } });
+  let stopped = { ...base, status: "claimed", surface_events: lifecycle(input, stoppedBody) };
+  state = harness({ readToolRequest: () => stopped, updateToolRequest: (_id, patch) => { stopped = { ...stopped, ...patch }; return stopped; } });
   await state.handlers.handleToolRequestReceipt(request("POST", stoppedBody), response, "req-1");
-  assert.equal(response.status, 200);
-  assert.equal(response.payload.request.status, "cancelled");
+  assert.equal(response.status, 202);
+  const stoppedEvent = programEvent(input, 3, "terminal", { status: "stopped", receipt_id: stoppedBody.receipt_id, receipt_sha256: stoppedBody.receipt_sha256 });
+  stoppedEvent.occurred_at = new Date(PROGRAM_NOW + 300).toISOString();
+  response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", stoppedEvent), response, "req-1");
+  assert.equal(stopped.status, "cancelled");
 });
 
 test("surface lifecycle and tool receipt routes enforce sequence, replay, and chains", async () => {
@@ -311,11 +319,19 @@ test("surface lifecycle and tool receipt routes enforce sequence, replay, and ch
   await state.handlers.handleSurfaceExecutionEvent(request("POST", { ...accepted, event_id: "conflict" }), response, "req-1");
   assert.equal(response.status, 409);
 
-  const started = programEvent(input, 2, "tool_started", { capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1 });
+  const runtimeStarted = programEvent(input, 2, "started", {});
+  response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", runtimeStarted), response, "req-1");
+  assert.equal(response.status, 202);
+  const started = programEvent(input, 3, "tool_started", { capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1 });
   response = {};
   await state.handlers.handleSurfaceExecutionEvent(request("POST", started), response, "req-1");
   assert.equal(response.status, 202);
   const tool = programToolReceipt(input);
+  const prematureFinish = programEvent(input, 4, "tool_finished", { capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1, status: tool.status, receipt_id: tool.receipt_id, receipt_sha256: tool.receipt_sha256 });
+  response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", prematureFinish), response, "req-1");
+  assert.equal(response.payload.code, "tool_finished_receipt_mismatch");
   response = {};
   await state.handlers.handleSurfaceToolReceipt(request("POST", tool), response, "req-1");
   assert.equal(response.status, 202);
@@ -326,11 +342,20 @@ test("surface lifecycle and tool receipt routes enforce sequence, replay, and ch
   await state.handlers.handleSurfaceToolReceipt(request("POST", { ...tool, receipt_id: "conflict", result: { ...tool.result, summary: "different" } }), response, "req-1");
   assert.ok([400, 409].includes(response.status));
 
+  const finished = programEvent(input, 4, "tool_finished", { capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1, status: tool.status, receipt_id: tool.receipt_id, receipt_sha256: tool.receipt_sha256 });
+  response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", finished), response, "req-1");
+  assert.equal(response.status, 202);
+
   const terminal = terminalReceipt(input, {
     tool_attempts: { count: 1, first_receipt_sha256: tool.receipt_sha256, last_receipt_sha256: tool.receipt_sha256 },
     previous_receipt_sha256: tool.receipt_sha256,
   });
-  const terminalEvent = programEvent(input, 3, "terminal", { status: "completed", receipt_id: "receipt-local-1", receipt_sha256: terminal.receipt_sha256 });
+  response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", terminal), response, "req-1");
+  assert.equal(response.status, 202);
+  const terminalEvent = programEvent(input, 5, "terminal", { status: "completed", receipt_id: "receipt-local-1", receipt_sha256: terminal.receipt_sha256 });
+  terminalEvent.occurred_at = new Date(PROGRAM_NOW + 300).toISOString();
   response = {};
   await state.handlers.handleSurfaceExecutionEvent(request("POST", terminalEvent), response, "req-1");
   assert.equal(response.status, 202);
@@ -338,10 +363,102 @@ test("surface lifecycle and tool receipt routes enforce sequence, replay, and ch
   await state.handlers.handleSurfaceExecutionEvent(request("POST", programEvent(input, 4, "progress", { message: "late", completed: 1, total: 1 })), response, "req-1");
   assert.equal(response.status, 409);
 
+  assert.equal(stored.status, "completed");
+});
+
+test("preaccept rejection commits its terminal receipt before the sole terminal event", async () => {
+  const input = programEnvelope();
+  const rejected = terminalReceipt(input, {
+    started_at: null, status: "rejected", result: { summary: "Proposal rejected", data_sha256: null, artifact_refs: [] },
+    final_state_sha256: null, error: { code: "proposal_rejected", message: "Proposal rejected" },
+  });
+  let stored = {
+    id: "req-1", tool: PROGRAM_TOOL, input, status: "claimed", target_device_id: "phone", claimed_by: "phone",
+    claimed_client_instance_id: "client-1", claim_id: "claim-1", lease_expires_at: new Date(PROGRAM_NOW + 60000).toISOString(),
+    receipts: [], surface_events: [], tool_receipts: [],
+  };
+  const state = harness({ readToolRequest: () => stored, updateToolRequest: (_id, patch) => { stored = { ...stored, ...patch }; return stored; } });
+  let response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", rejected), response, "req-1");
+  assert.equal(response.status, 202);
+  const terminal = programEvent(input, 1, "terminal", { status: "rejected", receipt_id: rejected.receipt_id, receipt_sha256: rejected.receipt_sha256 });
+  terminal.occurred_at = new Date(PROGRAM_NOW + 300).toISOString();
   response = {};
-  await state.handlers.handleToolRequestReceipt(request("POST", terminal), response, "req-1");
-  assert.equal(response.status, 200);
-  assert.equal(response.payload.request.status, "completed");
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", terminal), response, "req-1");
+  assert.equal(response.status, 202);
+  assert.equal(stored.status, "failed");
+  response = {};
+  await state.handlers.handleSurfaceToolReceipt(request("POST", programToolReceipt(input)), response, "req-1");
+  assert.equal(response.status, 409);
+});
+
+test("approval and start transitions reject unmatched and expired resolutions", async () => {
+  const input = programEnvelope();
+  let stored = {
+    id: "req-1", tool: PROGRAM_TOOL, input, status: "claimed", target_device_id: "phone", claimed_by: "phone",
+    claimed_client_instance_id: "client-1", claim_id: "claim-1", lease_expires_at: new Date(PROGRAM_NOW + 60000).toISOString(), receipts: [], surface_events: [], tool_receipts: [],
+  };
+  const state = harness({ readToolRequest: () => stored, updateToolRequest: (_id, patch) => { stored = { ...stored, ...patch }; return stored; } });
+  let response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", programEvent(input, 1, "accepted", { proposal_sha256: sha256(input) })), response, "req-1");
+  const unmatched = programEvent(input, 2, "approval_resolved", { approval_id: "approval-1", status: "approved" });
+  response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", unmatched), response, "req-1");
+  assert.equal(response.payload.code, "invalid_approval_resolution");
+  const required = programEvent(input, 2, "approval_required", { approval_id: "approval-1", effect_class: "read", capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1, expires_at: new Date(PROGRAM_NOW + 10000).toISOString() });
+  response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", required), response, "req-1");
+  assert.equal(response.status, 202);
+  response = {};
+  await state.handlers.handleSurfaceExecutionEvent(request("POST", programEvent(input, 3, "started", {})), response, "req-1");
+  assert.equal(response.payload.code, "invalid_started_transition");
+});
+
+test("lifecycle reducer fails closed across ordering, pairing, and attempt adversaries", async () => {
+  const input = programEnvelope();
+  const accepted = programEvent(input, 1, "accepted", { proposal_sha256: sha256(input) });
+  const started = programEvent(input, 2, "started", {});
+  async function attempt(events, event, extra = {}) {
+    const current = {
+      id: "req-1", tool: PROGRAM_TOOL, input, status: "claimed", target_device_id: "phone", claimed_by: "phone",
+      claimed_client_instance_id: "client-1", claim_id: "claim-1", lease_expires_at: new Date(PROGRAM_NOW + 60000).toISOString(),
+      receipts: [], surface_events: events, tool_receipts: [], ...extra,
+    };
+    const state = harness({ readToolRequest: () => current }); const response = {};
+    await state.handlers.handleSurfaceExecutionEvent(request("POST", event), response, "req-1");
+    return response;
+  }
+  assert.equal((await attempt([], programEvent(input, 1, "started", {}))).payload.code, "invalid_first_event");
+  const reordered = programEvent(input, 2, "progress", { message: "Fixture progress", completed: 0, total: 1 });
+  reordered.occurred_at = new Date(PROGRAM_NOW).toISOString();
+  assert.equal((await attempt([accepted], reordered)).payload.code, "event_timestamp_reordered");
+  assert.equal((await attempt([accepted], programEvent(input, 2, "accepted", { proposal_sha256: sha256(input) }))).payload.code, "duplicate_acceptance");
+  assert.equal((await attempt([accepted], programEvent(input, 2, "progress", { message: "Fixture progress", completed: 0, total: 1 }))).payload.code, "event_before_start");
+  assert.equal((await attempt([accepted, started], programEvent(input, 3, "tool_started", { capability_id: "browser.observe", tool_call_id: "call-1", attempt: 2 }))).payload.code, "invalid_tool_attempt");
+  const approval = programEvent(input, 2, "approval_required", { approval_id: "approval-1", effect_class: "read", capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1, expires_at: new Date(PROGRAM_NOW + 10000).toISOString() });
+  assert.equal((await attempt([accepted, approval], programEvent(input, 3, "approval_required", { ...approval.payload }))).payload.code, "invalid_approval_transition");
+  assert.equal((await attempt([accepted, approval], programEvent(input, 3, "approval_resolved", { approval_id: "approval-1", status: "approved" }))).status, 202);
+  assert.equal((await attempt([accepted, started], programEvent(input, 3, "started", {}))).payload.code, "invalid_started_transition");
+  const expiredResolution = programEvent(input, 3, "approval_resolved", { approval_id: "approval-1", status: "approved" });
+  expiredResolution.occurred_at = new Date(PROGRAM_NOW + 11000).toISOString();
+  assert.equal((await attempt([accepted, approval], expiredResolution)).payload.code, "invalid_approval_resolution");
+  const expiredStatus = programEvent(input, 3, "approval_resolved", { approval_id: "approval-1", status: "expired" });
+  expiredStatus.occurred_at = new Date(PROGRAM_NOW + 11000).toISOString();
+  assert.equal((await attempt([accepted, approval], expiredStatus)).status, 202);
+  const callStarted = programEvent(input, 3, "tool_started", { capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1 });
+  assert.equal((await attempt([accepted, started, callStarted], programEvent(input, 4, "tool_started", { capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1 }))).payload.code, "invalid_tool_attempt");
+  assert.equal((await attempt([accepted, started], programEvent(input, 3, "progress", { message: "Fixture progress", completed: 1, total: 1 }))).status, 202);
+  assert.equal((await attempt([accepted, started], programEvent(input, 3, "stopping", { reason: "user_stop" }))).status, 202);
+  const terminalReceiptValue = terminalReceipt(input);
+  const terminalEvent = programEvent(input, 4, "terminal", { status: "completed", receipt_id: terminalReceiptValue.receipt_id, receipt_sha256: terminalReceiptValue.receipt_sha256 });
+  terminalEvent.occurred_at = new Date(PROGRAM_NOW + 300).toISOString();
+  assert.equal((await attempt([accepted, started, callStarted], terminalEvent, { terminal_receipt: terminalReceiptValue })).payload.code, "pending_execution_work");
+  const missingTerminal = { ...terminalEvent, sequence: 3, event_id: "event-missing-terminal" };
+  assert.equal((await attempt([accepted, started], missingTerminal)).payload.code, "terminal_receipt_mismatch");
+  const tool = programToolReceipt(input);
+  const finished = programEvent(input, 4, "tool_finished", { capability_id: "browser.observe", tool_call_id: "call-1", attempt: 1, status: tool.status, receipt_id: tool.receipt_id, receipt_sha256: tool.receipt_sha256 });
+  const duplicateFinish = programEvent(input, 5, "tool_finished", { ...finished.payload });
+  assert.equal((await attempt([accepted, started, callStarted, finished], duplicateFinish, { tool_receipts: [tool] })).payload.code, "tool_finished_receipt_mismatch");
 });
 
 test("surface lifecycle routes reject missing, inactive, stale, mismatched, and unstarted input", async () => {

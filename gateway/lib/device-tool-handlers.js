@@ -77,7 +77,7 @@ function createDeviceToolHandlers(deps) {
     const deviceId = normalizeDeviceId(body.device_id || body.deviceId || body.client_id || body.clientId || "");
     if (!deviceId) { sendJson(response, 400, { error: "device_id is required" }); return; }
     let device = readDeviceClientsMap()[deviceId];
-    if (!device && (body.surface_type || body.surfaceType || body.local_tool_manifest || body.tool_manifest || body.capabilities)) {
+    if (!device && !(body.execution_runtimes || body.executionRuntimes) && (body.surface_type || body.surfaceType || body.local_tool_manifest || body.tool_manifest || body.capabilities)) {
       try { device = upsertDeviceClient(body); }
       catch (error) { sendJson(response, 400, { error: cleanError(error) }); return; }
     }
@@ -101,25 +101,82 @@ function createDeviceToolHandlers(deps) {
     return { device_id: current.claimed_by, client_instance_id: current.claimed_client_instance_id };
   }
 
+  function enforceEventTransition(current, event) {
+    const events = current.surface_events || [];
+    const previous = events[events.length - 1];
+    if (previous && Date.parse(event.occurred_at) < Date.parse(previous.occurred_at)) throw Object.assign(new Error("execution event timestamps must be nondecreasing"), { code: "event_timestamp_reordered" });
+    if (events.length === 0) {
+      if (event.kind === "accepted") return;
+      if (event.kind === "terminal" && event.payload.status === "rejected") return;
+      throw Object.assign(new Error("first event must accept or reject the proposal"), { code: "invalid_first_event" });
+    }
+    if (events.some((item) => item.kind === "terminal")) throw Object.assign(new Error("execution already terminated"), { code: "execution_terminal" });
+    const accepted = events[0].kind === "accepted";
+    const started = events.some((item) => item.kind === "started");
+    const unresolvedApprovals = events.filter((item) => item.kind === "approval_required" && !events.some((other) => other.kind === "approval_resolved" && other.payload.approval_id === item.payload.approval_id));
+    if (event.kind === "accepted") throw Object.assign(new Error("execution can only be accepted once"), { code: "duplicate_acceptance" });
+    if (event.kind === "started") {
+      if (!accepted || started || unresolvedApprovals.length) throw Object.assign(new Error("runtime start is out of order"), { code: "invalid_started_transition" });
+      return;
+    }
+    if (event.kind === "approval_required") {
+      if (!accepted || events.some((item) => item.kind === "approval_required" && item.payload.approval_id === event.payload.approval_id)) throw Object.assign(new Error("approval request is out of order or reused"), { code: "invalid_approval_transition" });
+      return;
+    }
+    if (event.kind === "approval_resolved") {
+      const pending = unresolvedApprovals.find((item) => item.payload.approval_id === event.payload.approval_id);
+      if (!pending || Date.parse(event.occurred_at) > Date.parse(pending.payload.expires_at) && event.payload.status !== "expired") throw Object.assign(new Error("approval resolution has no live matching request"), { code: "invalid_approval_resolution" });
+      return;
+    }
+    if (["tool_started", "tool_finished", "progress", "stopping"].includes(event.kind) && !started) throw Object.assign(new Error("runtime event occurred before start"), { code: "event_before_start" });
+    if (event.kind === "tool_started") {
+      const attempts = events.filter((item) => item.kind === "tool_started" && item.payload.tool_call_id === event.payload.tool_call_id).map((item) => item.payload.attempt);
+      if (event.payload.attempt !== attempts.length + 1 || events.some((item) => item.kind === "tool_started" && item.payload.tool_call_id === event.payload.tool_call_id && item.payload.attempt === event.payload.attempt)) throw Object.assign(new Error("tool attempts must start at one and remain contiguous"), { code: "invalid_tool_attempt" });
+    }
+    if (event.kind === "tool_finished") {
+      const start = events.find((item) => item.kind === "tool_started" && item.payload.tool_call_id === event.payload.tool_call_id && item.payload.attempt === event.payload.attempt && item.payload.capability_id === event.payload.capability_id);
+      const alreadyFinished = events.some((item) => item.kind === "tool_finished" && item.payload.tool_call_id === event.payload.tool_call_id && item.payload.attempt === event.payload.attempt);
+      const receipt = (current.tool_receipts || []).find((item) => item.receipt_id === event.payload.receipt_id);
+      if (!start || alreadyFinished || !receipt || receipt.tool_call_id !== event.payload.tool_call_id || receipt.attempt !== event.payload.attempt || receipt.capability_id !== event.payload.capability_id || receipt.status !== event.payload.status || receipt.receipt_sha256 !== event.payload.receipt_sha256) throw Object.assign(new Error("tool finish must match one durable receipt and start"), { code: "tool_finished_receipt_mismatch" });
+    }
+    if (event.kind === "terminal") {
+      const terminal = current.terminal_receipt;
+      const unfinished = events.filter((item) => item.kind === "tool_started" && !events.some((other) => other.kind === "tool_finished" && other.payload.tool_call_id === item.payload.tool_call_id && other.payload.attempt === item.payload.attempt));
+      if (unfinished.length || unresolvedApprovals.length) throw Object.assign(new Error("execution cannot terminate with pending tools or approvals"), { code: "pending_execution_work" });
+      if (!terminal || terminal.receipt_id !== event.payload.receipt_id || terminal.status !== event.payload.status || terminal.receipt_sha256 !== event.payload.receipt_sha256 || Date.parse(event.occurred_at) < Date.parse(terminal.finished_at)) throw Object.assign(new Error("terminal event must match its durable receipt"), { code: "terminal_receipt_mismatch" });
+      if (!started && event.payload.status !== "rejected") throw Object.assign(new Error("an unstarted execution can only be rejected"), { code: "invalid_unstarted_terminal" });
+    }
+  }
+
   async function handleSurfaceExecutionEvent(request, response, id) {
     const requestId = sanitizeId(id);
     if (!toolRequestExists(requestId)) { sendJson(response, 404, { error: "tool request not found" }); return; }
     const body = await readJsonBody(request); const current = readToolRequest(requestId); const timestamp = now();
+    const storedEvents = Array.isArray(current.surface_events) ? current.surface_events : [];
+    const storedReplay = storedEvents.find((item) => item.event_id === body.event_id || item.sequence === body.sequence);
+    if (storedReplay) {
+      if (canonicalJson(storedReplay) === canonicalJson(body)) sendJson(response, 200, { event: storedReplay, idempotent_replay: true });
+      else sendJson(response, 409, { error: "execution event conflicts with stored sequence or id" });
+      return;
+    }
     let event;
     try {
       const claim = activeSurfaceClaim(current, body, timestamp);
       event = validateSurfaceExecutionEvent(current.input, body, claim, { nowMs: Date.parse(timestamp) });
     } catch (error) { sendJson(response, 400, { error: cleanError(error), code: error.code || "invalid_execution_event" }); return; }
-    const events = Array.isArray(current.surface_events) ? current.surface_events : [];
-    const replay = events.find((item) => item.event_id === event.event_id || item.sequence === event.sequence);
-    if (replay) {
-      if (canonicalJson(replay) === canonicalJson(event)) sendJson(response, 200, { event: replay, idempotent_replay: true });
-      else sendJson(response, 409, { error: "execution event conflicts with stored sequence or id" });
-      return;
+    const events = storedEvents;
+    if (event.sequence !== events.length + 1) { sendJson(response, 409, { error: "execution event sequence must remain contiguous" }); return; }
+    try { enforceEventTransition(current, event); }
+    catch (error) { sendJson(response, 409, { error: cleanError(error), code: error.code || "invalid_event_transition" }); return; }
+    const patch = { surface_events: events.concat([event]), updated_at: timestamp };
+    if (event.kind === "terminal") {
+      const terminal = current.terminal_receipt;
+      patch.status = terminal.status === "completed" ? "completed" : ["stopped", "interrupted"].includes(terminal.status) ? "cancelled" : "failed";
+      patch.finished_at = timestamp;
+      patch.receipts = [{ id: randomId("receipt"), ts: timestamp, ok: terminal.status === "completed", device_id: terminal.claimant.device_id, summary: terminal.status, error: terminal.error?.message || "", result: terminal.result, local_receipt: terminal, terminal_digest: sha256(terminal) }];
+      patch.error = terminal.error?.message || "";
     }
-    if (event.sequence !== events.length + 1 || (events.length === 0 && event.kind !== "accepted")) { sendJson(response, 409, { error: "execution event sequence must begin with accepted and remain contiguous" }); return; }
-    if (events.some((item) => item.kind === "terminal")) { sendJson(response, 409, { error: "execution already has a terminal lifecycle event" }); return; }
-    const next = updateToolRequest(current.id, { surface_events: events.concat([event]), updated_at: timestamp });
+    const next = updateToolRequest(current.id, patch, Number(current.state_revision || 0));
     await recordToolRequestProductEvent(next, "surface_execution_event", event);
     sendJson(response, 202, { event });
   }
@@ -128,6 +185,7 @@ function createDeviceToolHandlers(deps) {
     const requestId = sanitizeId(id);
     if (!toolRequestExists(requestId)) { sendJson(response, 404, { error: "tool request not found" }); return; }
     const body = await readJsonBody(request); const current = readToolRequest(requestId); const timestamp = now();
+    if ((current.surface_events || []).some((item) => item.kind === "terminal")) { sendJson(response, 409, { error: "execution already terminated" }); return; }
     const receipts = Array.isArray(current.tool_receipts) ? current.tool_receipts : [];
     const rawReplay = receipts.find((item) => item.receipt_id === body.receipt_id || (item.tool_call_id === body.tool_call_id && item.attempt === body.attempt));
     if (rawReplay) {
@@ -138,11 +196,14 @@ function createDeviceToolHandlers(deps) {
     let receipt;
     try {
       const claim = activeSurfaceClaim(current, body, timestamp);
-      receipt = validateSurfaceProgramToolReceipt(current.input, body, claim, { nowMs: Date.parse(timestamp), previousToolReceipt: receipts[receipts.length - 1] || null });
+      const approvals = (current.surface_events || []).filter((event) => event.kind === "approval_resolved" && event.payload.status === "approved").map((event) => event.payload.approval_id);
+      const device = readDeviceClientsMap()[current.claimed_by] || {};
+      const capability = (device.local_tool_manifest || []).find((item) => (item.capability_id || item.tool) === body.capability_id);
+      receipt = validateSurfaceProgramToolReceipt(current.input, body, claim, { nowMs: Date.parse(timestamp), previousToolReceipt: receipts[receipts.length - 1] || null, toolReceipts: receipts, approvalIds: approvals, effectClass: capability?.effect_class });
       const started = (current.surface_events || []).find((event) => event.kind === "tool_started" && event.payload.tool_call_id === receipt.tool_call_id && event.payload.attempt === receipt.attempt && event.payload.capability_id === receipt.capability_id);
       if (!started) throw Object.assign(new Error("tool receipt has no matching tool_started lifecycle event"), { code: "missing_tool_started_event" });
     } catch (error) { sendJson(response, 400, { error: cleanError(error), code: error.code || "invalid_tool_receipt" }); return; }
-    const next = updateToolRequest(current.id, { tool_receipts: receipts.concat([receipt]), updated_at: timestamp });
+    const next = updateToolRequest(current.id, { tool_receipts: receipts.concat([receipt]), updated_at: timestamp }, Number(current.state_revision || 0));
     await recordToolRequestProductEvent(next, "surface_tool_receipt", receipt);
     sendJson(response, 202, { receipt });
   }
@@ -183,13 +244,10 @@ function createDeviceToolHandlers(deps) {
   }
 
   async function handleSurfaceProgramReceipt(response, current, body, deviceId) {
-    const existing = Array.isArray(current.receipts) ? current.receipts[0] : null;
+    const existing = current.terminal_receipt || (Array.isArray(current.receipts) ? current.receipts[0]?.local_receipt : null);
     if (existing) {
-      if (existing.terminal_digest === sha256(body)) {
-        sendJson(response, 200, { request: summarizeToolRequest(current), receipt: existing, idempotent_replay: true });
-      } else {
-        sendJson(response, 409, { error: "surface program already has a different terminal receipt" });
-      }
+      if (canonicalJson(existing) === canonicalJson(body)) sendJson(response, 200, { request: summarizeToolRequest(current), receipt: existing, idempotent_replay: true });
+      else sendJson(response, 409, { error: "surface program already has a different terminal receipt" });
       return;
     }
     if (current.status !== "claimed" || !current.claim_id || !deviceId) {
@@ -210,25 +268,15 @@ function createDeviceToolHandlers(deps) {
       }, { nowMs: Date.parse(timestamp), toolReceipts: current.tool_receipts || [] });
       const events = current.surface_events || [];
       const accepted = events[0]?.kind === "accepted";
-      const terminalEvent = events[events.length - 1];
-      if (!accepted || terminalEvent?.kind !== "terminal" || terminalEvent.payload.receipt_id !== terminal.receipt_id || terminalEvent.payload.status !== terminal.status || terminalEvent.payload.receipt_sha256 !== terminal.receipt_sha256) throw Object.assign(new Error("terminal receipt must match a contiguous accepted-to-terminal lifecycle"), { code: "terminal_event_mismatch" });
+      const started = events.some((event) => event.kind === "started");
+      if (events.some((event) => event.kind === "terminal") || (!accepted && terminal.status !== "rejected") || (!started && terminal.status !== "rejected")) throw Object.assign(new Error("terminal receipt is inconsistent with lifecycle state"), { code: "terminal_state_mismatch" });
     } catch (error) {
       sendJson(response, 400, { error: cleanError(error), code: error.code || "invalid_terminal_receipt" });
       return;
     }
-    const receipt = {
-      id: randomId("receipt"), ts: timestamp, ok: terminal.status === "completed",
-      device_id: terminal.claimant.device_id, summary: terminal.status,
-      error: terminal.error?.message || "", result: terminal.result, local_receipt: terminal,
-      terminal_digest: sha256(body),
-    };
-    const status = terminal.status === "completed" ? "completed"
-      : ["stopped", "interrupted"].includes(terminal.status) ? "cancelled" : "failed";
-    const next = updateToolRequest(current.id, {
-      status, updated_at: timestamp, finished_at: timestamp, receipts: [receipt], error: terminal.error?.message || "",
-    });
-    await recordToolRequestProductEvent(next, "receipt", receipt);
-    sendJson(response, 200, { request: summarizeToolRequest(next), receipt });
+    const next = updateToolRequest(current.id, { terminal_receipt: terminal, updated_at: timestamp }, Number(current.state_revision || 0));
+    await recordToolRequestProductEvent(next, "surface_terminal_receipt", terminal);
+    sendJson(response, 202, { request: summarizeToolRequest(next), receipt: terminal });
   }
 
   return { routeDeviceTools, handleDeviceClientHeartbeat, handleCreateToolRequest, handleClaimToolRequest, handleToolRequestReceipt, handleSurfaceExecutionEvent, handleSurfaceToolReceipt, handleSurfaceProgramReceipt };

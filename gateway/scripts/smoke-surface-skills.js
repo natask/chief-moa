@@ -89,13 +89,21 @@ async function main() {
 
 async function assertSurfaceProgram(baseUrl, call) {
   const now = Date.now();
+  const capabilities = ["browser.click", "browser.observe"].map((capabilityId) => ({
+    capability_id: capabilityId,
+    description: `Fixture ${capabilityId} capability.`,
+    input_schema: {}, output_schema: {}, effect_class: capabilityId.endsWith("observe") ? "read" : "local_mutation",
+    approval_class: "none", idempotency: capabilityId.endsWith("observe") ? "read_only" : "idempotent",
+    concurrency: capabilityId.endsWith("observe") ? "parallel_read" : "serialized_resource", restore_capability_id: null,
+  }));
+  const catalogSnapshot = { version: 1, capabilities };
   const advertisement = {
     version: 1,
     type: "surface.runtime.advertised",
     advertisement_id: "surface_smoke_advertisement",
     target: { surface_type: "browser_extension", device_id: "browser_surface_smoke" },
     runtime: { runtime_id: "browser.javascript.v1", language: "javascript", bridge_version: 1, entrypoint: "main" },
-    catalog: { version: 1, sha256: "a".repeat(64), capability_ids: ["browser.observe", "browser.click"] },
+    catalog: { version: 1, sha256: sha256(catalogSnapshot), capability_ids: capabilities.map((item) => item.capability_id) },
     limits: { source_bytes: 65536, wall_ms: 30000, memory_bytes: 32 * 1024 * 1024, tool_calls: 100, parallel_calls: 8, result_bytes: 65536, log_bytes: 32768 },
     issued_at: new Date(now - 1000).toISOString(),
     expires_at: new Date(now + 120000).toISOString(),
@@ -104,6 +112,7 @@ async function assertSurfaceProgram(baseUrl, call) {
     device_id: "browser_surface_smoke",
     client_instance_id: "browser_surface_smoke_instance",
     surface_type: "browser_extension",
+    local_tool_manifest: capabilities,
     execution_runtimes: [advertisement],
   });
   assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
@@ -163,9 +172,9 @@ async function assertSurfaceProgram(baseUrl, call) {
     receipt_sha256: "e".repeat(64),
   };
   terminal.receipt_sha256 = receiptDigest(terminal);
-  assert.equal((await postEvent(5, "terminal", { status: "completed", receipt_id: terminal.receipt_id, receipt_sha256: terminal.receipt_sha256 })).status, 202);
   const posted = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, terminal);
-  assert.equal(posted.status, 200, JSON.stringify(posted.json));
+  assert.equal(posted.status, 202, JSON.stringify(posted.json));
+  assert.equal((await postEvent(5, "terminal", { status: "completed", receipt_id: terminal.receipt_id, receipt_sha256: terminal.receipt_sha256 })).status, 202);
   const result = await programPromise;
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.queued, false);

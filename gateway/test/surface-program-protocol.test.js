@@ -13,7 +13,7 @@ function advertisement(overrides = {}, options = {}) {
     version: 1, type: "surface.runtime.advertised", advertisement_id: "ad-1",
     target: { surface_type: "browser_extension", device_id: "browser-1" },
     runtime: { runtime_id: "browser.javascript.v1", language: "javascript", bridge_version: 1, entrypoint: "main" },
-    catalog: { version: 7, sha256: hex("a"), capability_ids: ["browser.observe", "browser.click"] },
+    catalog: { version: 7, sha256: hex("a"), capability_ids: ["browser.click", "browser.observe"] },
     limits: { source_bytes: 4096, wall_ms: 30000, memory_bytes: 32 * 1024 * 1024, tool_calls: 100, parallel_calls: 8, result_bytes: 65536, log_bytes: 32768 },
     issued_at: new Date(NOW - 1000).toISOString(), expires_at: new Date(NOW + 60000).toISOString(),
     ...overrides,
@@ -149,9 +149,10 @@ test("all binding variants preserve their authority-bearing types", () => {
     [{ kind: "gateway_server", tenant_id: "t", project_id: "p", state_sha256: hex("a") }, "gateway", { runtime_id: "gateway.quickjs.v1", language: "javascript", bridge_version: 1, entrypoint: "main" }],
   ];
   for (const [bindings, surfaceType, runtime] of cases) {
-    const ad = advertisement({ target: { surface_type: surfaceType, device_id: "browser-1" }, runtime });
+    const ad = advertisement({ target: { surface_type: surfaceType, device_id: "browser-1" }, runtime }, { gatewayOwned: surfaceType === "gateway" });
     assert.equal(proposal({ bindings }, { advertisement: ad }).bindings.kind, bindings.kind);
   }
+  assert.equal(advertisement({ target: { surface_type: "gateway", device_id: "external" }, runtime: { runtime_id: "gateway.quickjs.v1", language: "javascript", bridge_version: 1, entrypoint: "main" } }), null);
 });
 
 test("proposal validation rejects tampering, expiry, target, and catalog drift", () => {
@@ -189,7 +190,7 @@ test("terminal receipt is exact-claim bound and closed", () => {
     ["unknown_terminal_receipt_field", (v) => { v.extra = true; }],
   ];
   for (const [code, mutate] of cases) { const copy = clone(receipt(env)); mutate(copy); assert.throws(() => p.validateSurfaceProgramTerminalReceipt(env, copy, claim, { nowMs: NOW + 300 }), { code }); }
-  const rejected = receipt(env, { status: "rejected", started_at: null, tool_attempts: { count: 0, first_receipt_sha256: null, last_receipt_sha256: null }, result: { summary: "Denied", data_sha256: null, artifact_refs: [] }, error: { code: "denied", message: "Local policy denied" }, final_state_sha256: null });
+  const rejected = receipt(env, { status: "rejected", started_at: null, tool_attempts: { count: 0, first_receipt_sha256: null, last_receipt_sha256: null }, result: { summary: "Denied", data_sha256: null, artifact_refs: [] }, error: { code: "policy_denied", message: "Local policy denied" }, final_state_sha256: null });
   assert.equal(p.validateSurfaceProgramTerminalReceipt(env, rejected, claim, { nowMs: NOW + 60000 }).started_at, null);
   const forged = receipt(env); forged.receipt_sha256 = hex("f");
   assert.throws(() => p.validateSurfaceProgramTerminalReceipt(env, forged, claim, { nowMs: NOW + 300 }), { code: "receipt_sha256_mismatch" });
@@ -216,7 +217,7 @@ test("lifecycle events are closed, claimant-bound, typed, and fresh", () => {
   assert.throws(() => p.validateSurfaceExecutionEvent(env, { ...accepted, payload: { proposal_sha256: hex("f") } }, claim, { nowMs: NOW + 100 }), { code: "proposal_sha256_mismatch" });
   assert.throws(() => p.validateSurfaceExecutionEvent(env, executionEvent(env, 2, "tool_started", { capability_id: "browser.shell", tool_call_id: "call", attempt: 1 }), claim, { nowMs: NOW + 100 }), { code: "capability_escalation" });
   assert.throws(() => p.validateSurfaceExecutionEvent(env, executionEvent(env, 2, "progress", { message: "Bearer secret", completed: 1, total: 2 }), claim, { nowMs: NOW + 100 }), { code: "sensitive_or_invalid_progress" });
-  assert.throws(() => p.validateSurfaceExecutionEvent(env, { ...accepted, occurred_at: new Date(NOW + 40000).toISOString() }, claim, { nowMs: NOW }), { code: "future_event" });
+  assert.throws(() => p.validateSurfaceExecutionEvent(env, { ...accepted, occurred_at: new Date(NOW + 40000).toISOString() }, claim, { nowMs: NOW }), { code: "event_timestamp_out_of_bounds" });
 });
 
 test("tool receipts recompute their digest, state link, and receipt chain", () => {
@@ -267,4 +268,88 @@ test("profile, event, receipt, and sensitive-data adversaries fail closed", () =
   assert.throws(() => p.validateSurfaceProgramTerminalReceipt(env, wrongCount, claim, { nowMs: NOW + 100 }), { code: "tool_attempt_count_mismatch" });
   const wrongPrevious = receipt(env, { previous_receipt_sha256: hex("f") });
   assert.throws(() => p.validateSurfaceProgramTerminalReceipt(env, wrongPrevious, claim, { nowMs: NOW + 100 }), { code: "terminal_receipt_chain_mismatch" });
+});
+
+test("catalog snapshots are exact sorted descriptors and advertisements recompute them", () => {
+  const capabilities = [
+    { capability_id: "browser.click", description: "Click one fixture control.", input_schema: { type: "object" }, output_schema: {}, effect_class: "local_mutation", approval_class: "explicit_preview", idempotency: "idempotent", concurrency: "serialized_resource", restore_capability_id: null },
+    { capability_id: "browser.observe", description: "Observe bounded fixture state.", input_schema: {}, output_schema: { type: "object" }, effect_class: "read", approval_class: "none", idempotency: "read_only", concurrency: "parallel_read", restore_capability_id: "browser.click" },
+  ];
+  const snapshot = p.validateCapabilitySnapshot({ version: 7, capabilities });
+  const exact = clone({
+    version: 1, type: "surface.runtime.advertised", advertisement_id: "catalog-ad",
+    target: { surface_type: "browser_extension", device_id: "browser-1" },
+    runtime: { runtime_id: "browser.javascript.v1", language: "javascript", bridge_version: 1, entrypoint: "main" },
+    catalog: { version: 7, sha256: p.sha256(snapshot), capability_ids: capabilities.map((item) => item.capability_id) },
+    limits: { source_bytes: 4096, wall_ms: 30000, memory_bytes: null, tool_calls: 10, parallel_calls: 2, result_bytes: 4096, log_bytes: 0 },
+    issued_at: new Date(NOW - 1000).toISOString(), expires_at: new Date(NOW + 60000).toISOString(),
+  });
+  assert.equal(p.sanitizeExecutionRuntime(exact, { nowMs: NOW, catalogSnapshot: snapshot }).limits.memory_bytes, null);
+  assert.equal(p.sanitizeExecutionRuntime({ ...exact, catalog: { ...exact.catalog, sha256: hex("f") } }, { nowMs: NOW, catalogSnapshot: snapshot }), null);
+  assert.throws(() => p.validateCapabilitySnapshot({ version: 7, capabilities: capabilities.slice().reverse() }), { code: "invalid_capability_ids" });
+  assert.throws(() => p.validateCapabilitySnapshot({ version: 7, capabilities: [{ ...capabilities[0], restore_capability_id: "missing" }] }), { code: "invalid_restore_capability_id" });
+  assert.throws(() => p.validateCapabilitySnapshot({ version: 7, capabilities: [{ ...capabilities[0], extra: true }] }), { code: "unknown_capability_descriptor_field" });
+  assert.deepEqual(p.capabilitySnapshotFromManifest(7, capabilities).capabilities.map((item) => item.capability_id), ["browser.click", "browser.observe"]);
+  const legacyNamed = { ...capabilities[0], tool: capabilities[0].capability_id }; delete legacyNamed.capability_id;
+  assert.equal(p.capabilitySnapshotFromManifest(7, [legacyNamed]).capabilities[0].capability_id, "browser.click");
+  assert.throws(() => p.capabilitySnapshotFromManifest(7, {}), { code: "invalid_capability_manifest" });
+  for (const patch of [
+    { capability_id: "Bad ID" }, { effect_class: "write" }, { approval_class: "ambient" },
+    { idempotency: "maybe" }, { concurrency: "unbounded" },
+  ]) assert.throws(() => p.validateCapabilitySnapshot({ version: 7, capabilities: [{ ...capabilities[0], ...patch }] }), { code: "invalid_capability_descriptor" });
+  const invalidIdAd = clone(exact); invalidIdAd.catalog.capability_ids = ["Bad ID"];
+  assert.equal(p.sanitizeExecutionRuntime(invalidIdAd, { nowMs: NOW }), null);
+});
+
+test("canonical bytes reject invalid JSON domain values and preserve RFC 8785 ordering", () => {
+  assert.equal(p.canonicalJson(null), "null");
+  assert.equal(p.canonicalJson(true), "true");
+  assert.equal(p.canonicalJson(["fixture", 1.5]), '["fixture",1.5]');
+  assert.equal(p.canonicalJson({ z: 1, a: "é", n: 1e-7 }), '{"a":"é","n":1e-7,"z":1}');
+  for (const value of [{ x: NaN }, { x: Infinity }, { x: Number.MAX_SAFE_INTEGER + 1 }, [undefined], { x: "\ud800" }]) {
+    assert.throws(() => p.canonicalJson(value), p.SurfaceProgramValidationError);
+  }
+  assert.equal(p.canonicalJson({ pair: "\ud83d\ude00" }), '{"pair":"😀"}');
+  assert.throws(() => p.canonicalJson({ x: "\udc00" }), { code: "invalid_unicode" });
+  const cycle = {}; cycle.self = cycle;
+  assert.throws(() => p.canonicalJson(cycle), { code: "invalid_canonical_value" });
+  const noncanonical = clone(advertisement());
+  noncanonical.issued_at = "2026-07-16T12:00:00Z";
+  assert.equal(p.sanitizeExecutionRuntime(noncanonical, { nowMs: NOW }), null);
+});
+
+test("bindings and receipt nullable conditions fail closed", () => {
+  const env = proposal(); const claim = { device_id: "browser-1", client_instance_id: "client-1" };
+  const bound = clone(env.bindings);
+  assert.throws(() => proposal({ bindings: { ...bound, tab_id: 0 } }), { code: "invalid_tab_id" });
+  const evalAd = advertisement({ catalog: { version: 7, sha256: hex("a"), capability_ids: ["browser.observe", "browser.page.evaluate"] } });
+  assert.throws(() => proposal({ bindings: { ...bound, allowed_frames: [1], allowed_worlds: ["MAIN"], site_grant_id: "grant" } }, { advertisement: evalAd }), { code: "allowed_frames_missing_bound_frame" });
+  assert.throws(() => proposal({ bindings: { ...bound, allowed_frames: [0, 0], allowed_worlds: ["MAIN"], site_grant_id: "grant" } }, { advertisement: evalAd }), { code: "invalid_allowed_frames" });
+  const completed = receipt(env, { error: { code: "runtime_failed", message: "Runtime failed" } });
+  assert.throws(() => p.validateSurfaceProgramTerminalReceipt(env, completed, claim, { nowMs: NOW, toolReceipts: [] }), { code: "invalid_terminal_error" });
+  const failed = receipt(env, { status: "failed", error: { code: "unknown", message: "Runtime failed" } });
+  assert.throws(() => p.validateSurfaceProgramTerminalReceipt(env, failed, claim, { nowMs: NOW, toolReceipts: [] }), { code: "invalid_terminal_error" });
+  const duplicateArtifacts = receipt(env, { result: { summary: "Fixture complete", data_sha256: null, artifact_refs: ["artifact_a", "artifact_a"] } });
+  assert.throws(() => p.validateSurfaceProgramTerminalReceipt(env, duplicateArtifacts, claim, { nowMs: NOW, toolReceipts: [] }), { code: "invalid_artifact_refs" });
+  const mutation = toolReceipt(env, { post_state_sha256: null });
+  assert.throws(() => p.validateSurfaceProgramToolReceipt(env, mutation, claim, { nowMs: NOW, effectClass: "local_mutation", toolReceipts: [] }), { code: "missing_mutation_post_state" });
+});
+
+test("every terminal error family and receipt linkage condition is closed", () => {
+  const env = proposal(); const claim = { device_id: "browser-1", client_instance_id: "client-1" };
+  const families = [
+    ["rejected", "proposal_rejected", null], ["failed", "runtime_failed"], ["timed_out", "timeout"],
+    ["stopped", "user_stop"], ["interrupted", "runtime_interrupted"], ["indeterminate", "indeterminate"],
+  ];
+  for (const [status, code, startedAt] of families) {
+    const value = receipt(env, { status, ...(startedAt === null ? { started_at: null } : {}), error: { code, message: "Fixture execution ended" }, final_state_sha256: null });
+    assert.equal(p.validateSurfaceProgramTerminalReceipt(env, value, claim, { nowMs: NOW, toolReceipts: [] }).status, status);
+  }
+  const artifacts = receipt(env, { result: { summary: "Fixture complete", data_sha256: hex("1"), artifact_refs: ["artifact_a", "artifact_b"] } });
+  assert.equal(p.validateSurfaceProgramTerminalReceipt(env, artifacts, claim, { nowMs: NOW, toolReceipts: [] }).result.artifact_refs.length, 2);
+  const withApproval = toolReceipt(env, { approval_id: "approval-1" });
+  assert.throws(() => p.validateSurfaceProgramToolReceipt(env, withApproval, claim, { nowMs: NOW, toolReceipts: [], approvalIds: [] }), { code: "approval_id_mismatch" });
+  assert.equal(p.validateSurfaceProgramToolReceipt(env, withApproval, claim, { nowMs: NOW, toolReceipts: [], approvalIds: ["approval-1"], effectClass: "read" }).approval_id, "approval-1");
+  const external = toolReceipt(env, { result: { summary: "Fixture result", data_sha256: hex("2"), resource_id: "https://fixture.test" } });
+  assert.throws(() => p.validateSurfaceProgramToolReceipt(env, external, claim, { nowMs: NOW, toolReceipts: [] }), { code: "invalid_resource_id" });
 });
