@@ -118,20 +118,23 @@ curl -kfsS --max-time 5 -H "Authorization: Bearer $preview_token" "$preview_url/
 # Recheck immediately before minting apply authority. update.sh checks again
 # after its final backup/restore pass and immediately before checkout mutation.
 require_drain
-database_ref="docker-volume://${project}_moa-postgres-data"
-queue_ref="queue://${project}-disabled-isolated"
-storage_ref="docker-volume://${project}_moa-gateway-data"
-worker_ref="worker-pool://${project}-disabled-isolated"
-backup_ref="backup://${latest_backup##*/}"
-rollback_ref="git://$current"
+database_ref="verification://database/${project}-postgres-volume"
+queue_ref="verification://queue/${project}-disabled-isolated"
+storage_ref="verification://storage/${project}-gateway-volume"
+worker_ref="verification://worker-pool/${project}-disabled-isolated"
+drain_ref="verification://drain/active-drain-safe"
+compatibility_ref="restore://candidate/${latest_backup##*/}/$suffix"
+backup_ref="backup://snapshot/${latest_backup##*/}"
+rollback_ref="rollback://git/$current"
+post_smoke_ref="smoke://active/health"
 node_runtime "$source_dir/scripts/vps/create-promotion-evidence.js" \
   --commit "$target" --control-plane-url "$MOA_CONTROL_PLANE_URL" --output "$evidence_file" \
   --preview-url "$preview_url" --active-url "$MOA_ACTIVE_URL" \
   --database-ref "$database_ref" --queue-ref "$queue_ref" --storage-ref "$storage_ref" \
-  --worker-pool-ref "$worker_ref" --drain-resume-ref "health://active/drain-safe" \
-  --compatibility-ref "restore-check://${latest_backup##*/}/candidate-$suffix" \
+  --worker-pool-ref "$worker_ref" --drain-resume-ref "$drain_ref" \
+  --compatibility-ref "$compatibility_ref" \
   --backup-restore-ref "$backup_ref" --rollback-ref "$rollback_ref" \
-  --post-apply-smoke-ref "$MOA_ACTIVE_URL/health"
+  --post-apply-smoke-ref "$post_smoke_ref"
 
 MOA_PROMOTION_EVIDENCE_FILE="$evidence_file" "$SCRIPT_DIR/update.sh" --ref "$REF" --evidence "$evidence_file"
 trap - EXIT

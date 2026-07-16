@@ -10,10 +10,10 @@ const { createPromotionEvidence } = require("../../scripts/vps/create-promotion-
 const input = (output) => ({
   commit: "a".repeat(40), "control-plane-url": "https://control.example.test", output,
   "preview-url": "http://127.0.0.1:18787", "active-url": "https://api.example.test",
-  "database-ref": "database://preview", "queue-ref": "queue://preview",
-  "storage-ref": "storage://preview", "worker-pool-ref": "workers://preview",
-  "drain-resume-ref": "health://drained", "compatibility-ref": "restore://compatible",
-  "backup-restore-ref": "backup://passed", "rollback-ref": "git://rollback",
+  "database-ref": "verification://database/preview", "queue-ref": "verification://queue/preview",
+  "storage-ref": "verification://storage/preview", "worker-pool-ref": "verification://worker-pool/preview",
+  "drain-resume-ref": "verification://drain/safe", "compatibility-ref": "restore://candidate/compatible",
+  "backup-restore-ref": "backup://snapshot/passed", "rollback-ref": "rollback://git/previous",
   "post-apply-smoke-ref": "smoke://planned",
 });
 const env = {
@@ -50,6 +50,12 @@ test("promotion evidence client binds each M4 transition to its scoped role", as
   assert.equal(calls[0].body.candidate_refs[0].provenance_ref, `provenance://git/${"a".repeat(40)}`);
   assert.deepEqual(calls[0].body.artifact_refs, [`artifact://git/${"a".repeat(40)}`]);
   assert.equal(calls[0].body.provenance_ref, `provenance://git/${"a".repeat(40)}`);
+  assert.deepEqual(calls[4].body.extra_refs, [
+    "verification://database/preview", "verification://queue/preview",
+    "verification://storage/preview", "verification://worker-pool/preview",
+    "verification://drain/safe", "restore://candidate/compatible",
+    "backup://snapshot/passed", "rollback://git/previous", "smoke://planned",
+  ]);
   assert.equal(JSON.parse(fs.readFileSync(output, "utf8")).candidate_commit, "a".repeat(40));
   assert.equal(fs.statSync(output).mode & 0o777, 0o600);
 });
