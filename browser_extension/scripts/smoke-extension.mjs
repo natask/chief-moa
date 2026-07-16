@@ -509,6 +509,9 @@ async function main() {
               if (clean.cmd === "voiceSessionAttach" || clean.cmd === "voiceSessionControl" || clean.cmd === "voiceSessionClose") {
                 return Promise.resolve({ ok: true });
               }
+              if (clean.cmd === "run") {
+                return Promise.resolve({ ok: true });
+              }
               return window.__ageeShortcutSmokeOrig(message, ...rest);
             };
           },
@@ -595,6 +598,16 @@ async function main() {
         await dispatchTap(".", "Period");
         await sleep(120);
         const tapStarted = await read();
+        const tapAttach = tapStarted.calls.find((call) => call.cmd === "voiceSessionAttach");
+        if (tapAttach?.voiceSessionId) {
+	          await chrome.tabs.sendMessage(tabId, {
+	            cmd: "voiceSessionEvent",
+	            voiceSessionId: tapAttach.voiceSessionId,
+	            event: { type: "transcript_final", text: "summarize this page" },
+	          });
+	          await sleep(120);
+	        }
+        const tapTranscriptDeferred = await read();
 
         await dispatchTap(".", "Period");
         await sleep(120);
@@ -634,11 +647,14 @@ async function main() {
 	          },
 	        });
 
-	        return { comma, tapStarted, tapCommitted, holdBeforeRelease, holdReleased, commandHoldBeforeRelease, commandHoldReleased };
+	        return { comma, tapStarted, tapTranscriptDeferred, tapCommitted, holdBeforeRelease, holdReleased, commandHoldBeforeRelease, commandHoldReleased };
 	      })()
 	    `);
 	    const tapStarts = shortcutVoice?.tapStarted?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
-	    const tapControls = shortcutVoice?.tapCommitted?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+	    const tapDeferredRuns = shortcutVoice?.tapTranscriptDeferred?.calls?.filter((call) => call.cmd === "run") || [];
+	    const tapDeferredControls = shortcutVoice?.tapTranscriptDeferred?.calls?.filter((call) => call.cmd === "voiceSessionControl") || [];
+	    const tapRuns = shortcutVoice?.tapCommitted?.calls?.filter((call) => call.cmd === "run") || [];
+	    const tapCancelControls = shortcutVoice?.tapCommitted?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "cancel_turn") || [];
 	    const holdStarts = shortcutVoice?.holdBeforeRelease?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
 	    const holdControlsBefore = shortcutVoice?.holdBeforeRelease?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
 	    const holdControlsAfter = shortcutVoice?.holdReleased?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
@@ -653,11 +669,15 @@ async function main() {
       tapStarts.length !== 1 ||
       tapStarts[0]?.autoCommit !== false ||
       !shortcutVoice?.tapStarted?.listening ||
-      tapControls.length !== 1 ||
+	      tapDeferredRuns.length !== 0 ||
+	      tapDeferredControls.length !== 0 ||
+	      tapRuns.length !== 1 ||
+	      tapRuns[0]?.instruction !== "summarize this page" ||
+	      tapCancelControls.length !== 1 ||
 	      holdStarts.length !== 2 ||
 	      holdStarts[1]?.autoCommit !== false ||
-	      holdControlsBefore.length !== 1 ||
-	      holdControlsAfter.length !== 2 ||
+	      holdControlsBefore.length !== 0 ||
+	      holdControlsAfter.length !== 1 ||
 	      commandStarts.length !== 1 ||
 	      commandStarts[0]?.autoCommit !== false ||
 	      commandControlsBefore.length !== 0 ||
