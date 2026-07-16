@@ -32,6 +32,15 @@ import {
   browserTurnSummary,
   normalizeBrowserSnapshot,
 } from "./browser-turn-protocol.js";
+import {
+  CAPABILITIES as SURFACE_PROGRAM_CAPABILITIES,
+  SURFACE_PROGRAM_TOOL,
+  browserProgramRuntimeManifest,
+  sha256 as surfaceProgramSha256,
+  validateSurfaceProgramEnvelope,
+} from "./surface-program-contract.js";
+import { createSurfaceProgramBroker } from "./surface-program-broker.js";
+import { createChromeSurfaceProgramAdapter } from "./surface-program-chrome-adapter.js";
 
 chrome.runtime.onInstalled.addListener(async () => {
   await initializePrivacyState();
@@ -592,6 +601,9 @@ let devReloadPollTimer = null;
 let devReloadPollInFlight = false;
 let deviceClientHeartbeatTimer = null;
 let deviceClientHeartbeatInFlight = false;
+const activeSurfacePrograms = new Map();
+const SURFACE_PROGRAM_RECORDS_KEY = "ageeSurfaceProgramRecordsV1";
+let surfaceProgramRecordWriteTail = Promise.resolve();
 
 function startBrowserTaskPolling() {
   if (!chrome?.storage?.local || !chrome?.alarms || !chrome?.debugger || !chrome?.tabs) return;
@@ -670,16 +682,14 @@ async function pollBrowserToolRequests() {
         device_id: deviceId,
         surface_type: "browser_extension",
         local_tool_manifest: browserLocalToolManifest(),
+        runtime_advertisements: [await browserProgramRuntimeManifest(deviceId)],
       },
     });
     const request = claimed?.request;
     if (!request?.id) return;
-    const receipt = await executeBrowserToolRequest(request);
+    const receipt = await executeBrowserToolRequest(request, deviceId);
     await callGateway(cfg, `/v1/tool/requests/${encodeURIComponent(request.id)}/receipts`, {
-      body: {
-        device_id: deviceId,
-        ...receipt,
-      },
+      body: request.tool === SURFACE_PROGRAM_TOOL ? receipt : { device_id: deviceId, ...receipt },
     });
   } catch {
     // Background polling stays quiet; claimed work reports through receipts.
@@ -688,10 +698,165 @@ async function pollBrowserToolRequests() {
   }
 }
 
-async function executeBrowserToolRequest(request) {
+async function readSurfaceProgramRecords() {
+  const stored = await chrome.storage.local.get({ [SURFACE_PROGRAM_RECORDS_KEY]: {} });
+  const records = stored[SURFACE_PROGRAM_RECORDS_KEY];
+  return records && typeof records === "object" && !Array.isArray(records) ? records : {};
+}
+
+async function writeSurfaceProgramRecord(key, record) {
+  const update = surfaceProgramRecordWriteTail.then(async () => {
+    const records = await readSurfaceProgramRecords();
+    records[key] = record;
+    const ordered = Object.entries(records).sort((a, b) => String(b[1]?.updated_at || "").localeCompare(String(a[1]?.updated_at || ""))).slice(0, 100);
+    await chrome.storage.local.set({ [SURFACE_PROGRAM_RECORDS_KEY]: Object.fromEntries(ordered) });
+  });
+  surfaceProgramRecordWriteTail = update.catch(() => {});
+  return update;
+}
+
+async function appendSurfaceProgramToolReceipt(key, receipt) {
+  const update = surfaceProgramRecordWriteTail.then(async () => {
+    const records = await readSurfaceProgramRecords();
+    const current = records[key];
+    if (!current || current.status !== "pending") throw new Error("surface_program_pending_record_missing");
+    const toolReceipts = Array.isArray(current.tool_receipts) ? current.tool_receipts : [];
+    records[key] = { ...current, tool_receipts: [...toolReceipts, receipt], updated_at: receipt.finished_at };
+    await chrome.storage.local.set({ [SURFACE_PROGRAM_RECORDS_KEY]: records });
+  });
+  surfaceProgramRecordWriteTail = update.catch(() => {});
+  await update;
+  return receipt;
+}
+
+async function waitForSurfaceProgramCalls(broker, deadlineMs) {
+  while (broker.stats().active_calls > 0 && Date.now() < deadlineMs) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return broker.stats().active_calls === 0;
+}
+
+async function surfaceProgramTerminalReceipt(envelope, deviceId, startedAt, status, result, error, broker, adapter) {
+  const attempts = broker.trace();
+  const finalBinding = await adapter.currentBinding(envelope.bindings.tab_id).catch(() => null);
+  const receipt = {
+    version: 1,
+    type: "surface.execution.receipt",
+    receipt_id: `receipt_${crypto.randomUUID()}`,
+    execution_id: envelope.execution_id,
+    session_id: envelope.session_id,
+    turn_id: envelope.turn_id,
+    claimant: { surface_type: "browser_extension", device_id: deviceId, client_instance_id: BROWSER_TASK_CLIENT_ID },
+    runtime_id: envelope.runtime.runtime_id,
+    program_sha256: envelope.program.sha256,
+    catalog_sha256: envelope.catalog.sha256,
+    bindings_sha256: await surfaceProgramSha256(envelope.bindings),
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    status,
+    tool_attempts: {
+      count: attempts.length,
+      first_receipt_sha256: attempts[0]?.receipt_sha256 || null,
+      last_receipt_sha256: attempts.at(-1)?.receipt_sha256 || null,
+    },
+    result: {
+      summary: status === "completed" ? "Surface program completed locally." : "Surface program did not complete.",
+      data_sha256: result === undefined ? null : await surfaceProgramSha256(result),
+      artifact_refs: [],
+    },
+    final_state_sha256: finalBinding?.state_sha256 || null,
+    error: { code: error ? status : null, message: error ? String(error).slice(0, 500) : null },
+    previous_receipt_sha256: attempts.at(-1)?.receipt_sha256 || null,
+  };
+  receipt.receipt_sha256 = await surfaceProgramSha256(receipt);
+  return receipt;
+}
+
+async function surfaceProgramToolReceipt(envelope, deviceId, attempt) {
+  const receipt = {
+    version: 1,
+    type: "surface.execution.tool_receipt",
+    receipt_id: `tool_receipt_${crypto.randomUUID()}`,
+    execution_id: envelope.execution_id,
+    claimant: { surface_type: "browser_extension", device_id: deviceId, client_instance_id: BROWSER_TASK_CLIENT_ID },
+    tool_call_id: attempt.call_id,
+    attempt: 1,
+    capability_id: attempt.capability_id,
+    program_sha256: envelope.program.sha256,
+    catalog_sha256: envelope.catalog.sha256,
+    bindings_sha256: await surfaceProgramSha256(envelope.bindings),
+    input_sha256: attempt.input_sha256,
+    pre_state_sha256: attempt.pre_state_sha256,
+    approval_id: null,
+    started_at: attempt.started_at,
+    finished_at: attempt.finished_at,
+    status: attempt.status,
+    result: { summary: attempt.status === "succeeded" ? "Local capability completed." : "Local capability did not complete.", data_sha256: attempt.result_sha256 || null, resource_id: null },
+    post_state_sha256: attempt.post_state_sha256,
+    previous_receipt_sha256: attempt.previous_receipt_sha256,
+  };
+  receipt.receipt_sha256 = await surfaceProgramSha256(receipt);
+  return receipt;
+}
+
+async function executeSurfaceProgramRequest(request, deviceId) {
+  const runtime = await browserProgramRuntimeManifest(deviceId);
+  const validated = await validateSurfaceProgramEnvelope(request.input, { expectedDeviceId: deviceId, runtime });
+  const envelope = validated.envelope;
+  const recordKey = `${envelope.execution_id}:${envelope.idempotency_key}`;
+  const records = await readSurfaceProgramRecords();
+  const existing = records[recordKey];
+  if (existing?.program_sha256 && existing.program_sha256 !== envelope.program.sha256) throw new Error("surface_program_replay_conflict");
+  if (existing?.terminal_receipt) return existing.terminal_receipt;
+  if (existing?.status === "pending") throw new Error("surface_program_interrupted_pending_effects");
+
+  const adapter = createChromeSurfaceProgramAdapter();
+  await adapter.currentBinding(envelope.bindings.tab_id).then((binding) => {
+    const expected = envelope.bindings;
+    const staleFields = ["tab_id", "window_id", "frame_id", "origin", "document_id", "page_epoch", "observation_sha256", "state_sha256"].filter((key) => binding[key] !== expected[key]);
+    if (staleFields.length) throw new Error(`browser_binding_stale:${staleFields.join(",")}`);
+  });
+
+  const startedAt = new Date().toISOString();
+  await writeSurfaceProgramRecord(recordKey, { status: "pending", program_sha256: envelope.program.sha256, tool_receipts: [], updated_at: startedAt });
+  const broker = createSurfaceProgramBroker({
+    envelope,
+    adapter,
+    recordReceipt: async (attempt) => appendSurfaceProgramToolReceipt(recordKey, await surfaceProgramToolReceipt(envelope, deviceId, attempt)),
+  });
+  const runToken = crypto.randomUUID();
+  const run = { broker, run_token: runToken, active: true, has_in_flight_write: false };
+  activeSurfacePrograms.set(envelope.execution_id, run);
+  let sandboxResult;
+  try {
+    await ensureOffscreenVoiceDocument();
+    sandboxResult = await chrome.runtime.sendMessage({ cmd: "surfaceProgramRun", execution_id: envelope.execution_id, run_token: runToken, source: envelope.program.source, wall_ms: envelope.limits.wall_ms });
+  } catch (error) {
+    sandboxResult = { ok: false, error: String(error?.message || error) };
+  }
+  run.active = false;
+  const drained = await waitForSurfaceProgramCalls(broker, Date.now() + 250);
+  activeSurfacePrograms.delete(envelope.execution_id);
+
+  let status = sandboxResult?.ok && drained ? "completed" : sandboxResult?.error === "program_wall_time_exceeded" ? "timed_out" : drained ? "failed" : "indeterminate";
+  let error = status === "completed" ? "" : sandboxResult?.error || (drained ? "surface_program_failed" : "in_flight_tool_call_indeterminate");
+  try {
+    broker.assertResultSize(sandboxResult?.result);
+  } catch (sizeError) {
+    status = "failed";
+    error = String(sizeError?.message || sizeError);
+  }
+  const terminal = await surfaceProgramTerminalReceipt(envelope, deviceId, startedAt, status, sandboxResult?.result, error, broker, adapter);
+  const persisted = (await readSurfaceProgramRecords())[recordKey];
+  await writeSurfaceProgramRecord(recordKey, { status: "terminal", program_sha256: envelope.program.sha256, tool_receipts: persisted?.tool_receipts || [], terminal_receipt: terminal, updated_at: terminal.finished_at });
+  return terminal;
+}
+
+async function executeBrowserToolRequest(request, deviceId = "") {
   const tool = String(request?.tool || "");
   const input = request?.input && typeof request.input === "object" ? request.input : {};
   try {
+    if (tool === SURFACE_PROGRAM_TOOL) return await executeSurfaceProgramRequest(request, deviceId);
     if (tool === "browser.tab.list") {
       const tabs = await chrome.tabs.query({ currentWindow: input.current_window !== false });
       return {
@@ -1125,12 +1290,15 @@ async function heartbeatDeviceClient() {
     const sessionId = await getStableSessionId();
     const owner = await getActiveBrowserAgentOwner();
     const sessionAdvertisement = await currentBrowserSessionAdvertisement();
+    const runtimeAdvertisement = await browserProgramRuntimeManifest(deviceId);
     await callGateway(cfg, "/v1/device-clients/heartbeat", {
       body: {
         device_id: deviceId,
         surface_type: "browser_extension",
         status: "online",
         local_tool_manifest: browserLocalToolManifest(),
+        runtime_advertisements: [runtimeAdvertisement],
+        current_binding: sessionAdvertisement.surface_program_binding,
         metadata: {
           source: "agee-extension",
           extension_version: chrome.runtime.getManifest().version,
@@ -1156,14 +1324,33 @@ async function currentBrowserSessionAdvertisement() {
     // useful for device presence even when page identity cannot be observed.
   }
   const contextDescriptor = browserContextDescriptor(active);
+  let surfaceProgramBinding = null;
+  if (Number.isInteger(active?.id)) {
+    surfaceProgramBinding = await createChromeSurfaceProgramAdapter().currentBinding(active.id).catch(() => null);
+    if (surfaceProgramBinding) surfaceProgramBinding = { kind: "browser_document", ...surfaceProgramBinding };
+  }
   return {
     context_descriptor: contextDescriptor,
     execution_adapters: browserSessionExecutionAdapters(contextDescriptor),
+    surface_program_binding: surfaceProgramBinding,
   };
 }
 
 function browserLocalToolManifest() {
   return [
+    { tool: SURFACE_PROGRAM_TOOL, risk: "mixed_browser_local", approval: "preauthorized_program" },
+    ...SURFACE_PROGRAM_CAPABILITIES.map((capability) => ({
+      tool: capability.name,
+      description: capability.description,
+      input_schema: capability.input_schema,
+      output_schema: capability.output_schema,
+      risk: capability.risk,
+      approval: capability.approval,
+      effect_class: capability.effect_class,
+      concurrency: capability.concurrency,
+      idempotency: capability.idempotency,
+      restore: capability.restore,
+    })),
     { tool: "browser.tab.list", risk: "read_only", approval: "none" },
     { tool: "browser.tab.open", risk: "navigation", approval: "implicit_user_command" },
     { tool: "browser.tab.activate", risk: "navigation", approval: "implicit_user_command" },
@@ -4052,6 +4239,21 @@ async function captureAmbientFrame() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.cmd === "surfaceProgramToolCall") {
+    const expectedOffscreenUrl = chrome.runtime.getURL(OFFSCREEN_VOICE_DOCUMENT);
+    const run = activeSurfacePrograms.get(String(msg.execution_id || ""));
+    if (sender.id !== chrome.runtime.id || sender.tab || sender.url !== expectedOffscreenUrl || !run || !run.active || msg.run_token !== run.run_token) {
+      sendResponse({ ok: false, error: "surface_program_call_not_authorized" });
+      return true;
+    }
+    const capability = SURFACE_PROGRAM_CAPABILITIES.find((item) => item.name === msg.capability_id);
+    if (capability?.risk !== "read_only") run.has_in_flight_write = true;
+    run.broker.call(String(msg.capability_id || ""), msg.args || {})
+      .then((result) => sendResponse(run.active ? { ok: true, result } : { ok: false, error: "surface_program_stopped" }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }))
+      .finally(() => { if (capability?.risk !== "read_only") run.has_in_flight_write = false; });
+    return true;
+  }
   if (msg.cmd === "offscreenVoiceAudio") {
     // Record-scoped capture ids buffer locally for /v1/audio-notes; everything
     // else is live voice audio for the gateway socket.

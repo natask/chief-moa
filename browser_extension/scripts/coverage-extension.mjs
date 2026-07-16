@@ -106,6 +106,11 @@ const focusedThresholds = new Map([
   ["extension/content-extension-api-runtime.js", 90],
   ["extension/content-context-control-runtime.js", 90],
   ["extension/content-note-controller-runtime.js", 90],
+  ["extension/program-sandbox-bootstrap.js", 91],
+  ["extension/surface-program-broker.js", 91],
+  ["extension/surface-program-chrome-adapter.js", 91],
+  ["extension/surface-program-contract.js", 91],
+  ["extension/surface-program-offscreen-bridge.js", 91],
 ]);
 const focusedResults = [];
 for (const [relative, minimum] of focusedThresholds) {
