@@ -12,6 +12,7 @@ const requiredFiles = [
   "extension/browser-turn-protocol.js",
   "extension/browser-context-adapter.js",
   "extension/config.js",
+  "extension/content-companion-policy-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/page-observation-runtime.js",
@@ -84,6 +85,7 @@ const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
+const contentCompanionPolicySource = readFileSync("extension/content-companion-policy-runtime.js", "utf8");
 const contentVoicePolicySource = readFileSync("extension/content-voice-policy-runtime.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const pageObservationRuntimeSource = readFileSync("extension/page-observation-runtime.js", "utf8");
@@ -134,9 +136,23 @@ if (
   mainContentScript.js.indexOf("page-observation-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-voice-policy-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-voice-policy-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("content-companion-policy-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-companion-policy-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
-  throw new Error("page observation and voice policy runtimes must load before content.js in declared and dynamic injection paths");
+  throw new Error("page observation, voice policy, and companion policy runtimes must load before content.js in declared and dynamic injection paths");
+}
+if (
+  !/AgeeContentCompanionPolicyRuntime/.test(contentCompanionPolicySource) ||
+  !/function sanitizeActiveCompanionPet/.test(contentCompanionPolicySource) ||
+  !/function formatLanguageChipText/.test(contentCompanionPolicySource) ||
+  !/function sanitizeAvatarBehaviorRuntime/.test(contentCompanionPolicySource) ||
+  /function (?:compactText|safePetImageSource|shortLangTag|parseLanguageCodes)\(/.test(contentSource) ||
+  !/companionPolicy\.sanitizeActiveCompanionPet\(payload, chrome\.runtime\.id\)/.test(contentSource) ||
+  !/companionPolicy\.formatLanguageChipText\(profile, replyOverride\)/.test(contentSource) ||
+  !/companionPolicy\.sanitizeAvatarBehaviorRuntime\(runtime\)/.test(contentSource)
+) {
+  throw new Error("companion, language, and avatar input policy must stay extracted and delegated from content.js");
 }
 if (packageJson.scripts?.["smoke:proactive"] !== "node scripts/smoke-proactive.mjs" || packageJson.scripts?.["test:proactive"] !== "node scripts/test-proactive-helper.mjs") {
   throw new Error("package scripts must expose focused proactive unit and real-extension privacy smokes");
@@ -212,7 +228,7 @@ if (
 }
 
 if (
-  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
+  !/files: \["ui-spec-runtime\.js", "proactive-helper\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content\.js"\]/.test(backgroundSource) ||
   !/id="proactiveHelp"/.test(contentSource) ||
   !/id="agee-proactive-indicator" data-scope="current-tab" data-local-only="true"/.test(contentSource) ||
   !/cmd: "proactiveSignal"/.test(contentSource) ||
@@ -1077,6 +1093,7 @@ for (const file of [
   "extension/browser-agent-loop-policy.js",
   "extension/browser-task-intent.js",
   "extension/config.js",
+  "extension/content-companion-policy-runtime.js",
   "extension/content-voice-policy-runtime.js",
   "extension/content.js",
   "extension/page-observation-runtime.js",
@@ -1124,9 +1141,8 @@ for (const file of [
 
 execFileSync(process.execPath, ["--test", "scripts/test-voice-sampler-lifecycle.mjs"], { stdio: "inherit" });
 execFileSync(process.execPath, ["scripts/test-proactive-helper.mjs"], { stdio: "inherit" });
-// Pure-function tests for the persistent cue-card cascade dismiss and
-// language chip formatter (extracted straight out of extension/content.js —
-// see the file for why it can't be an ordinary ESM import).
+// Pure-function tests for the persistent cue-card cascade dismiss and the
+// extracted companion/language policy runtime.
 execFileSync(process.execPath, ["scripts/test-cue-dismiss.mjs"], { stdio: "inherit" });
 execFileSync(process.execPath, ["scripts/test-browser-context-adapter.mjs"], { stdio: "inherit" });
 

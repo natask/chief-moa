@@ -125,12 +125,7 @@
   let devReloadInFlight = false;
   let devReloadVersion = null;
   const voicePolicy = window.AgeeContentVoicePolicyRuntime;
-  const AVATAR_BEHAVIOR_MOTIONS = new Set(["still", "pulse", "hop", "orbit", "float", "shake", "glow"]);
-  const AVATAR_BEHAVIOR_TRIGGERS = new Set(["idle", "editing", "listening", "thinking", "speaking", "done", "error", "attention", "busy"]);
-  const AVATAR_BEHAVIOR_INTENSITIES = new Set(["subtle", "normal", "strong"]);
-  const AVATAR_BEHAVIOR_DURATIONS = new Set(["while_active"]);
-  const COMPANION_PET_PALETTES = new Set(["graphite", "green", "blue", "violet", "red", "amber", "teal", "mono"]);
-  const COMPANION_PET_MOTIONS = new Set(["hover", "peek", "tap", "trail", "float", "walk", "climb", "spark"]);
+  const companionPolicy = window.AgeeContentCompanionPolicyRuntime;
   const COMPANION_PET_COLORS = {
     graphite: ["#555a62", "#262a30"],
     green: ["#208553", "#0f5534"],
@@ -1822,46 +1817,8 @@
       .catch(() => {});
   }
 
-  function compactText(value, max = 120) {
-    return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
-  }
-
-  function safePetImageSource(value) {
-    const raw = String(value || "").trim();
-    if (!raw || raw.length > 350 * 1024) return "";
-    if (/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(raw)) return raw;
-    try {
-      const url = new URL(raw);
-      if (
-        url.protocol === "chrome-extension:"
-        && url.hostname === chrome.runtime.id
-      ) return url.href;
-    } catch {}
-    return "";
-  }
-
   function sanitizeActiveCompanionPet(payload) {
-    const record = payload?.active_companion || payload?.activeCompanion || payload;
-    if (!record || typeof record !== "object") return null;
-    const pet = record.pet && typeof record.pet === "object" ? record.pet : {};
-    const sprite = pet.sprite && typeof pet.sprite === "object" ? pet.sprite : {};
-    const name = compactText(record.companion_name || record.name || pet.name, 80);
-    const id = compactText(record.companion_id || record.id, 100);
-    if (!name && !id) return null;
-    const palette = COMPANION_PET_PALETTES.has(String(pet.palette || "")) ? String(pet.palette) : "blue";
-    const motion = COMPANION_PET_MOTIONS.has(String(pet.motion || "")) ? String(pet.motion) : "walk";
-    const imageSrc = safePetImageSource(sprite.image_data_url || sprite.asset_url || pet.asset_url);
-    const scale = Number(pet.scale);
-    return {
-      id,
-      name: name || "A.G. companion",
-      summary: compactText(record.companion_summary || record.summary, 140),
-      source: compactText(record.source, 40),
-      palette,
-      motion,
-      scale: Number.isFinite(scale) ? Math.min(Math.max(scale, 0.65), 1.6) : 1,
-      imageSrc,
-    };
+    return companionPolicy.sanitizeActiveCompanionPet(payload, chrome.runtime.id);
   }
 
   function loadActiveCompanionPet() {
@@ -1880,19 +1837,6 @@
   // cached gateway profile (input_languages / input_language_primary); the
   // spoken side prefers the live reply_language from the current turn's
   // turn_done and otherwise falls back to the profile's language_primary.
-  function shortLangTag(code) {
-    const value = String(code || "").trim();
-    if (!value) return "";
-    return value.split(/[-_]/)[0].toLowerCase();
-  }
-
-  function parseLanguageCodes(value) {
-    return String(value || "")
-      .split(",")
-      .map((code) => shortLangTag(code))
-      .filter(Boolean);
-  }
-
   // Pure formatter: profile is the {input_languages, input_language_primary,
   // language, language_primary} shape cached under ageeProfileCache;
   // replyOverride is the live reply language for the current turn (state.
@@ -1900,15 +1844,7 @@
   // Returns "" (never "undefined"/"null") when there is nothing to show, so
   // the caller can hide the chip instead of rendering garbage.
   function formatLanguageChipText(profile, replyOverride) {
-    const p = profile && typeof profile === "object" ? profile : {};
-    const heard = parseLanguageCodes(p.input_languages).length
-      ? parseLanguageCodes(p.input_languages)
-      : parseLanguageCodes(p.input_language_primary);
-    const spoken = parseLanguageCodes(replyOverride || p.language_primary || p.language);
-    const parts = [];
-    if (heard.length) parts.push(`Hears ${[...new Set(heard)].join("·")}`);
-    if (spoken.length) parts.push(`Speaks ${spoken[0]}`);
-    return parts.join(" · ");
+    return companionPolicy.formatLanguageChipText(profile, replyOverride);
   }
 
   function renderLanguageChip() {
@@ -1969,34 +1905,7 @@
   }
 
   function sanitizeAvatarBehaviorRuntime(runtime) {
-    const behavior = runtime?.active?.avatar_behavior;
-    const spec = behavior?.spec;
-    if (
-      runtime?.version !== 1 ||
-      behavior?.type !== "avatar_behavior" ||
-      !spec ||
-      typeof spec !== "object"
-    ) {
-      return null;
-    }
-    const motion = String(spec.motion || "");
-    const trigger = String(spec.trigger || "");
-    if (!AVATAR_BEHAVIOR_MOTIONS.has(motion) || !AVATAR_BEHAVIOR_TRIGGERS.has(trigger)) {
-      return null;
-    }
-    const intensity = AVATAR_BEHAVIOR_INTENSITIES.has(String(spec.intensity || ""))
-      ? String(spec.intensity)
-      : "normal";
-    const duration = AVATAR_BEHAVIOR_DURATIONS.has(String(spec.duration || ""))
-      ? String(spec.duration)
-      : "while_active";
-    return {
-      id: typeof behavior.artifact_id === "string" ? behavior.artifact_id.slice(0, 80) : "",
-      motion,
-      trigger,
-      intensity,
-      duration,
-    };
+    return companionPolicy.sanitizeAvatarBehaviorRuntime(runtime);
   }
 
   function applyAvatarBehaviorRuntime(runtime) {
