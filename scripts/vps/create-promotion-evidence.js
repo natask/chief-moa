@@ -34,12 +34,13 @@ async function createPromotionEvidence(input, env = process.env) {
     if (!response.ok) throw new Error(`${method} ${pathname} returned HTTP ${response.status}: ${String(payload.error || "request failed").slice(0, 300)}`);
     return payload;
   };
-  const artifactRef = `git://${commit}`;
+  const artifactRef = `artifact://git/${commit}`;
+  const provenanceRef = `provenance://git/${commit}`;
   const requestPayload = await call("POST", "/v1/work-history/deployments/requests", tokens.user, {
     target: "gateway", mode: "preview", branch: "vps-deploy", commit_sha: commit,
     reason: "CI-verified VPS promotion", adapter_kind: "isolated_compose",
-    candidate_refs: [{ candidate_id: `gateway-${suffix}`, artifact_ref: artifactRef, provenance_ref: artifactRef }],
-    artifact_refs: [artifactRef], provenance_ref: artifactRef,
+    candidate_refs: [{ candidate_id: `gateway-${suffix}`, artifact_ref: artifactRef, provenance_ref: provenanceRef }],
+    artifact_refs: [artifactRef], provenance_ref: provenanceRef,
     source_turn_id: `vps-promotion-${suffix}`,
   });
   const requestId = required(requestPayload.request?.request_id, "request_id");

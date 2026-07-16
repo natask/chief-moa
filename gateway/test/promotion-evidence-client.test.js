@@ -46,6 +46,10 @@ test("promotion evidence client binds each M4 transition to its scoped role", as
     `Bearer ${env.MOA_PREVIEW_DEPLOYER_TOKEN}`,
     `Bearer ${env.MOA_PRODUCTION_PROMOTER_TOKEN}`,
   ]);
+  assert.equal(calls[0].body.candidate_refs[0].artifact_ref, `artifact://git/${"a".repeat(40)}`);
+  assert.equal(calls[0].body.candidate_refs[0].provenance_ref, `provenance://git/${"a".repeat(40)}`);
+  assert.deepEqual(calls[0].body.artifact_refs, [`artifact://git/${"a".repeat(40)}`]);
+  assert.equal(calls[0].body.provenance_ref, `provenance://git/${"a".repeat(40)}`);
   assert.equal(JSON.parse(fs.readFileSync(output, "utf8")).candidate_commit, "a".repeat(40));
   assert.equal(fs.statSync(output).mode & 0o777, 0o600);
 });
