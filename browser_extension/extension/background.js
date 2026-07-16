@@ -10,6 +10,7 @@ import { isStopCommand } from "./stop-intent.js";
 import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice.js";
 import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
+import { sendToOffscreenReceiver, waitForOffscreenReceiver } from "./offscreen-voice-bridge.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
 import {
@@ -2187,19 +2188,34 @@ async function ensureOffscreenVoiceDocument() {
   await creatingOffscreenVoiceDocument;
 }
 
-function extensionMicApprovalMessage(error) {
+async function ensureOffscreenVoiceReceiver() {
+  await ensureOffscreenVoiceDocument();
+  return waitForOffscreenReceiver((message) => chrome.runtime.sendMessage(message));
+}
+
+function extensionMicCaptureMessage(error, code = error?.code) {
   const detail = String(error?.message || error || "").trim();
   const suffix = detail ? ` (${detail})` : "";
-  return `A.G. could not open the extension microphone. Open the A.G. toolbar icon > Options, click "Grant microphone", and allow microphone access for the extension. If Chrome has blocked it, open chrome://extensions/?id=${chrome.runtime.id}, choose Details or Site settings, set Microphone to Allow, then start voice again.${suffix}`;
+  if (code === "offscreen_runtime_unavailable") {
+    return `A.G. could not start its microphone runtime. Reload the A.G. extension, then start voice again.${suffix}`;
+  }
+  if (code === "microphone_permission_denied") {
+    return `Chrome denied A.G. microphone access. The error is shown here first; when you are ready, ask A.G. to open Settings or open the A.G. toolbar icon > Options, click "Grant microphone", and allow access. You can also open chrome://extensions/?id=${chrome.runtime.id}, choose Details or Site settings, and set Microphone to Allow.${suffix}`;
+  }
+  return `A.G. could not start microphone capture. Check that a microphone is connected and available, then try again.${suffix}`;
 }
 
 async function startOffscreenVoiceCapture(id) {
-  await ensureOffscreenVoiceDocument();
-  const response = await chrome.runtime.sendMessage({
-    cmd: "offscreenVoiceCaptureStart",
-    voiceSessionId: id,
-  });
-  if (!response?.ok) throw new Error(response?.error || "extension microphone capture did not start");
+  const response = await sendToOffscreenReceiver(
+    (message) => chrome.runtime.sendMessage(message),
+    ensureOffscreenVoiceReceiver,
+    { cmd: "offscreenVoiceCaptureStart", voiceSessionId: id },
+  );
+  if (!response?.ok) {
+    const error = new Error(response?.error || "extension microphone capture did not start");
+    error.code = response?.code || "microphone_capture_failed";
+    throw error;
+  }
 }
 
 async function stopOffscreenVoiceCapture(id) {
@@ -2213,12 +2229,11 @@ async function stopOffscreenVoiceCapture(id) {
     .catch(() => {});
 }
 
-function handleOffscreenVoiceError(id, error) {
+function handleOffscreenVoiceError(id, error, code = error?.code) {
   const session = voiceSessions.get(id);
   if (!session) return;
-  const message = extensionMicApprovalMessage(error);
+  const message = extensionMicCaptureMessage(error, code);
   session.setupErrorMessage = message;
-  chrome.runtime.openOptionsPage?.().catch(() => {});
   deliverVoiceSessionEvent(session, {
     event: {
       type: "error",
@@ -2982,7 +2997,7 @@ async function startRecordSession(tabId) {
     await startOffscreenVoiceCapture(id);
   } catch (error) {
     recordSessions.delete(id);
-    return { ok: false, error: extensionMicApprovalMessage(error) };
+    return { ok: false, error: extensionMicCaptureMessage(error) };
   }
   return { ok: true, recordSessionId: id };
 }
@@ -3116,10 +3131,10 @@ async function startVideoNoteSession(tabId) {
       maxBytes: VIDEO_NOTE_MAX_BYTES,
     });
     if (!response?.ok) {
-      return { ok: false, error: response?.error || extensionMicApprovalMessage("video capture did not start") };
+      return { ok: false, error: response?.error || extensionMicCaptureMessage("video capture did not start") };
     }
   } catch (error) {
-    return { ok: false, error: extensionMicApprovalMessage(error) };
+    return { ok: false, error: extensionMicCaptureMessage(error) };
   }
   videoNoteSession = { id, tabId, startedAt: Date.now() };
   return { ok: true, videoSessionId: id };
@@ -4068,7 +4083,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true });
       return true;
     }
-    handleOffscreenVoiceError(msg.voiceSessionId, msg.error);
+    handleOffscreenVoiceError(msg.voiceSessionId, msg.error, msg.code);
     sendResponse({ ok: true });
     return true;
   }

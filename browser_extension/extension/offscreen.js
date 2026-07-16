@@ -4,6 +4,16 @@
 
 let activeCapture = null;
 
+function captureFailure(error, stage) {
+  const message = String(error?.message || error || "microphone capture failed");
+  const failure = new Error(message);
+  const name = String(error?.name || "");
+  failure.code = stage === "user_media" && ["NotAllowedError", "SecurityError"].includes(name)
+    ? "microphone_permission_denied"
+    : "microphone_capture_failed";
+  return failure;
+}
+
 function bytesToBase64(buffer) {
   const bytes = new Uint8Array(buffer || 0);
   let binary = "";
@@ -66,6 +76,7 @@ async function startCapture(voiceSessionId) {
 
   let stream = null;
   let audioCtx = null;
+  let stage = "user_media";
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -75,6 +86,7 @@ async function startCapture(voiceSessionId) {
         autoGainControl: true,
       },
     });
+    stage = "audio_runtime";
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextCtor) throw new Error("Web Audio is not available in this browser.");
 
@@ -122,7 +134,7 @@ async function startCapture(voiceSessionId) {
       await audioCtx?.close();
     } catch {}
     if (activeCapture?.voiceSessionId === voiceSessionId) activeCapture = null;
-    throw error;
+    throw captureFailure(error, stage);
   }
 }
 
@@ -333,6 +345,10 @@ async function stopAndUploadVideoCapture(msg) {
 // ---- End video note capture -------------------------------------------------
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.cmd === "offscreenVoiceReady") {
+    sendResponse({ ok: true, context: "offscreen" });
+    return true;
+  }
   if (msg.cmd === "offscreenVideoCaptureStart") {
     startVideoCapture(msg)
       .then(() => sendResponse({ ok: true }))
@@ -360,9 +376,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             cmd: "offscreenVoiceError",
             voiceSessionId: msg.voiceSessionId,
             error: String(error?.message || error),
+            code: error?.code || "microphone_capture_failed",
           })
           .catch(() => {});
-        sendResponse({ ok: false, error: String(error?.message || error) });
+        sendResponse({ ok: false, error: String(error?.message || error), code: error?.code || "microphone_capture_failed" });
       });
     return true;
   }
@@ -376,6 +393,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 export {
   bytesToBase64,
+  captureFailure,
   discardVideoCapture,
   pickVideoMimeType,
   resampleToPcm16,
