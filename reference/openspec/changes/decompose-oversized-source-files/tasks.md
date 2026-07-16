@@ -457,6 +457,13 @@
       reduce `content.js` to 3,136 lines and raise the exact whole-extension
       ratchet to 57.74% lines, 38.69% branches, and 32.01% functions with 46
       passing unit-test files and a passing real headless-Chromium smoke.
+- [x] 4.4t Instrument temporary copies of `background.js` and `content.js` with
+      a CSP-safe, full-source Istanbul denominator, execute them through the
+      real MV3 service-worker/content-script smoke, and merge their counters
+      with the Node unit report. Verify all 30 runtime files execute, preserve
+      the normal uninstrumented timing-sensitive smoke, and raise the enforced
+      whole-extension floor to 70.71% lines, 49.30% branches, and 53.32%
+      functions without excluding either orchestration entrypoint.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
