@@ -488,6 +488,7 @@ if (/openOptionsPage/.test(offscreenVoiceErrorBody)) {
 const micFailureHandler = backgroundSource.match(/function handleOffscreenVoiceError[\s\S]*?\n}/)?.[0] || "";
 if (
   /openOptionsPage/.test(micFailureHandler) ||
+  !/code === "microphone_permission_denied"/.test(micFailureHandler) ||
   !/Take me to microphone setup/.test(backgroundSource) ||
   !/target:\s*MICROPHONE_RECOVERY_TARGET/.test(backgroundSource) ||
   !/micRecoveryBanner/.test(optionsHtmlSource) ||
