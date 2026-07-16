@@ -73,6 +73,13 @@ Moa Gateway
   browser still store only that gateway URL plus a token; voice uses the matching
   `wss://.../v1/voice/sessions` URL.
 
+  `GET /v1/sessions/:id/messages` is the canonical bounded read model for
+  cross-surface conversation history. It merges gateway-owned chat, voice,
+  browser, and broker records into stable user/assistant messages, preserves
+  source and completeness metadata, and removes duplicates only when records
+  carry an explicit shared identity. Android and browser clients may cache or
+  render this projection, but do not become conversation stores.
+
 Execution machine
   Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
   build/test commands, desktop/browser/server automation.
@@ -342,6 +349,10 @@ cascaded voice paths assemble that pack through a canonical context-artifact
 envelope with versioned cache identity, stable source ids, ranking rationale,
 and secret-like-text redaction before any provider call. History stays out of
 the transient cue stack and appears only when the user opens History.
+The browser side panel and Android full app hydrate that History view from the
+canonical session-message projection. They request a bounded latest window,
+preserve long message text within the API limit, and expose stale/retry state;
+overlay cue retirement remains independent of durable history.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript
@@ -1708,6 +1719,9 @@ queues.
   claim -> receipt bridge, plus the panel route).
 - `gateway/lib/event-substrate.js`: product event substrate adapter for
   Postgres `product_events` or local `product-events.jsonl`.
+- `gateway/lib/session-messages.js`: canonical bounded cross-surface session
+  message projection with stable identities, provenance, and explicit-link
+  deduplication.
 - `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
   validators, active pointers, and runtime projection for conversational
   customization.
