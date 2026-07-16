@@ -1,4 +1,22 @@
-# Voice-First Orb Gestures (Experimental)
+# Voice-First Orb Gestures
+
+## Current Browser Contract (Accepted 2026-07-16)
+
+The browser mark defaults to the manual single-click toggle:
+
+- First single click starts recording in the current thread.
+- The next single click stops and sends that capture exactly once.
+- Double-click controls a fresh-thread capture. It transfers the device audio
+  floor but does not cancel the foreground response's generation or text stream.
+- Triple-click opens text chat without cancelling active capture or generation.
+- Hold and release remains push-to-talk.
+- The previous `X — mascot — Send` review controls are superseded.
+- Existing installations receive a one-time versioned migration to this
+  contract. An explicit post-migration click-to-type preference remains
+  available under Interaction settings.
+
+This is extension-owned interaction state. It does not require or wait for a
+gateway/server release.
 
 ## Why
 
@@ -43,7 +61,7 @@ chat), v2 mapping (single tap = talk toggle, double = chat), and v3
 single-tap start/send toggle are superseded on both Android and the browser
 voice-first path.
 
-## Accepted Review-Before-Send Revision (2026-07-14)
+## Superseded Review-Before-Send Revision (2026-07-14)
 
 The next product revision makes the cheapest gesture consistent and visibly
 reversible on Android and in the browser:
@@ -125,8 +143,8 @@ it. This is distinct from sending a turn to Moa:
 
 Flags:
 
-- Browser: `ageeVoiceFirstGesturesEnabled` in `chrome.storage.local`, checkbox
-  under Experimental in options.
+- Browser: `ageeVoiceFirstGesturesEnabled` in `chrome.storage.local`, default on
+  with a versioned migration and an Interaction-settings fallback.
 - Android: `MoaPrefs` boolean `voice_first_gestures`, toggle in the settings
   app.
 
@@ -135,7 +153,7 @@ Flags:
 - No chat removal yet; triple click keeps it reachable.
 - No change to the Cmd+./Cmd+, hotkeys (they already match the proposed shape).
 - No gateway, voice-session protocol, or provider changes.
-- No default-on flip; that decision follows the experiment.
+- Android default behavior remains a separate surface decision.
 
 ## Boundaries
 
@@ -152,6 +170,8 @@ Flags:
   double-click starts a new voice thread; triple-click opens chat; hold-to-talk
   release commits; open cards remain wholly above or below the moved orb; and
   dragging onto Remove hides the orb. Flag off restores the legacy gestures.
-- Browser manual QA with the flag on: one mascot click starts a draft with
-  `X` and `↑` beside the mascot; another mascot click does not send; `X`
-  discards; `↑` commits once; and hold-release remains push-to-talk.
+- Browser manual QA: one mascot click starts capture and the next single click
+  sends it once; double-click starts a fresh capture and the next double-click
+  sends that once; double-click during a foreground response suppresses its
+  audio without cancelling its generation/text; triple-click opens chat without
+  cancelling active work; and hold-release remains push-to-talk.

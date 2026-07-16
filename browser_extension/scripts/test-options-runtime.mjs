@@ -65,6 +65,7 @@ const stored = {
   ageeGatewayUserSet: true,
   ageeLivekitVoiceEnabled: true,
   ageeVoiceFirstGesturesEnabled: true,
+  ageeVoiceFirstGesturesContractVersion: 1,
   ageeBackgroundAutomationEnabled: true,
   ageeBackgroundAutomationConsentVersion: 1,
 };
@@ -150,6 +151,7 @@ assert.match(await options.profileQuery(), /^\?scope=device&device_id=browser_/)
 
 await elements.get("livekitVoice").emit("change");
 await elements.get("voiceFirstGestures").emit("change");
+assert.equal(stored.ageeVoiceFirstGesturesContractVersion, 1);
 elements.get("livekitVoice").checked = false;
 await elements.get("livekitVoice").emit("change");
 elements.get("voiceFirstGestures").checked = false;

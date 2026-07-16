@@ -294,9 +294,19 @@ hold with movement only repositions the mark. Browser voice can opt a session
 into background assistant speech, where starting a new spoken turn opens a new
 gateway voice turn without stopping already queued assistant audio.
 
-An experimental voice-first gesture mode (off by default; browser flag
-`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) remaps
-the primary surface toward voice. Android uses the reviewable v4 contract:
+The browser's default mark gesture is voice-first: one click starts a manual
+current-thread capture and the next single click stops and sends it exactly
+once. That path interrupts and steers the foreground turn. Double-click controls
+a fresh-thread capture without cancelling the foreground provider turn: the
+client transfers the audio floor by suppressing prior playback while its text
+and generation continue. Triple-click opens chat without cancelling active work,
+and a still hold remains push-to-talk. The extension performs a one-time
+versioned migration from the earlier off-by-default/review-controls experiment;
+users may explicitly restore click-to-type afterward in Interaction settings.
+This is client-owned gesture state and requires no gateway deployment.
+
+Android still uses the reviewable v4 contract behind its `voice_first_gestures`
+preference:
 Single click starts a draft with visible `X — orb — ↑` controls (discard and the
 single Send action); later orb taps never commit it. Those controls are separate
 overlay windows beside the orb, so the transcript card above or below the orb is

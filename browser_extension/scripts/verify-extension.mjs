@@ -1003,9 +1003,29 @@ if (
   !/voiceFirstCaptureOrigin !== origin[\s\S]{0,40}return "noop"/.test(contentSource) ||
   !/voiceFirstCaptureOrigin === "double"/.test(contentSource) ||
   !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
-  !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}openTextSurface/.test(contentSource)
+  !/chain\.count === 3[\s\S]{0,220}openTextSurface/.test(contentSource)
 ) {
   throw new Error("voice-first gestures must defer collision-safe single/double/triple actions and preserve fresh-thread capture provenance");
+}
+const startVoiceFirstCaptureBody = sourceBetween(
+  contentSource,
+  /function startVoiceFirstCapture\(/,
+  /function parkPriorVoiceForSeparateCapture\(/,
+  "voice-first capture admission"
+);
+if (
+  !/origin === "double"[\s\S]{0,360}parkPriorVoiceForSeparateCapture\(\)/.test(startVoiceFirstCaptureBody) ||
+  !/function parkPriorVoiceForSeparateCapture\([\s\S]{0,260}assistantSpeechSuppressed = true[\s\S]{0,180}stopLivePlayback\(state\)/.test(contentSource) ||
+  !/if \(state\.assistantSpeechSuppressed\) return;/.test(contentSource)
+) {
+  throw new Error("double-click must mute prior playback without cancelling its generation");
+}
+if (
+  !/let voiceFirstGestures = true;/.test(contentSource) ||
+  !/resolveVoiceFirstPreference\([\s\S]{0,220}VOICE_FIRST_GESTURES_CONTRACT_VERSION/.test(contentSource) ||
+  !/Single-click voice is on by default/.test(readFileSync("extension/options.html", "utf8"))
+) {
+  throw new Error("single-click start/send voice must be the upgrade-safe default browser interaction");
 }
 
 const launcherClickBody = sourceBetween(

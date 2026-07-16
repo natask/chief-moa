@@ -66,21 +66,27 @@ if (livekitVoiceEl) {
   });
 }
 
-// Experimental voice-first mark gestures flag (off by default). Read live by
+// Voice-first mark gestures are the default interaction. The switch remains as
+// an accessibility fallback for users who prefer click-to-type.
 // content.js: single click = current-thread capture toggle, hold = push-to-talk,
 // double-click = fresh-thread capture toggle, triple-click = chat. Off keeps the
 // legacy gesture map.
 const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
+const VOICE_FIRST_GESTURES_CONTRACT_KEY = "ageeVoiceFirstGesturesContractVersion";
+const VOICE_FIRST_GESTURES_CONTRACT_VERSION = 1;
 const voiceFirstGesturesEl = document.getElementById("voiceFirstGestures");
 const voiceFirstGesturesStatusEl = document.getElementById("voiceFirstGesturesStatus");
 if (voiceFirstGesturesEl) {
-  chrome.storage.local.get({ [VOICE_FIRST_GESTURES_KEY]: false }).then((stored) => {
-    voiceFirstGesturesEl.checked = stored[VOICE_FIRST_GESTURES_KEY] === true;
+  chrome.storage.local.get({ [VOICE_FIRST_GESTURES_KEY]: true }).then((stored) => {
+    voiceFirstGesturesEl.checked = stored[VOICE_FIRST_GESTURES_KEY] !== false;
   });
   voiceFirstGesturesEl.addEventListener("change", async () => {
-    await chrome.storage.local.set({ [VOICE_FIRST_GESTURES_KEY]: voiceFirstGesturesEl.checked === true });
+    await chrome.storage.local.set({
+      [VOICE_FIRST_GESTURES_KEY]: voiceFirstGesturesEl.checked === true,
+      [VOICE_FIRST_GESTURES_CONTRACT_KEY]: VOICE_FIRST_GESTURES_CONTRACT_VERSION,
+    });
     if (voiceFirstGesturesStatusEl) {
-      voiceFirstGesturesStatusEl.textContent = voiceFirstGesturesEl.checked ? "On (experimental)" : "Off";
+      voiceFirstGesturesStatusEl.textContent = voiceFirstGesturesEl.checked ? "On" : "Off";
       voiceFirstGesturesStatusEl.style.color = "#777";
     }
   });

@@ -53,8 +53,22 @@
       if (active && captureOrigin === "double") return "commit_new";
       return active ? "cancel_then_start_new" : "start_new";
     }
-    if (count === 3) return active ? "cancel_then_open_chat" : "open_chat";
+    if (count === 3) return active ? "open_chat_preserve_capture" : "open_chat";
     return "noop";
+  }
+
+  function resolveVoiceFirstPreference({ enabled, contractVersion } = {}, currentVersion = 1) {
+    const version = Number(contractVersion || 0);
+    const migrated = version < currentVersion;
+    return Object.freeze({
+      enabled: migrated ? true : enabled !== false,
+      contractVersion: currentVersion,
+      migrated,
+    });
+  }
+
+  function audioFloorPolicyForCapture(origin) {
+    return origin === "double" ? "mute_prior_continue_generation" : "interrupt_prior_and_steer";
   }
 
   function latchAdmission({ voiceFirstEnabled, draftControlsEnabled } = {}) {
@@ -94,9 +108,11 @@
 
   globalThis.AgeeVoiceCaptureGesture = {
     DEFAULTS,
+    audioFloorPolicyForCapture,
     continueTapChain,
     latchAdmission,
     resolveTapAction,
+    resolveVoiceFirstPreference,
     resolveVoiceFirstTransition,
     resolveHoldDirection,
     resolveDraftHoldAction,

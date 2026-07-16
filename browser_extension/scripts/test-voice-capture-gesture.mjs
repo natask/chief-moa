@@ -70,13 +70,31 @@ assertEqual(
 );
 assertEqual(
   gesture.resolveVoiceFirstTransition({ tapCount: 3, capturing: true, captureOrigin: "double" }),
-  "cancel_then_open_chat",
-  "triple opens chat without sending active capture"
+  "open_chat_preserve_capture",
+  "triple opens chat without interrupting active capture"
 );
 assertEqual(
   gesture.resolveVoiceFirstTransition({ tapCount: 4, capturing: true, captureOrigin: "single" }),
   "noop",
   "fourth click stays inert"
+);
+
+const migratedVoiceFirst = gesture.resolveVoiceFirstPreference({ enabled: false, contractVersion: 0 });
+assertEqual(migratedVoiceFirst.enabled, true, "upgrade enables canonical single-click voice once");
+assertEqual(migratedVoiceFirst.contractVersion, 1, "upgrade records current gesture contract");
+assertEqual(migratedVoiceFirst.migrated, true, "old gesture preference is migrated");
+const explicitLegacyPreference = gesture.resolveVoiceFirstPreference({ enabled: false, contractVersion: 1 });
+assertEqual(explicitLegacyPreference.enabled, false, "current explicit click-to-type preference remains respected");
+assertEqual(explicitLegacyPreference.migrated, false, "current preference needs no migration");
+assertEqual(
+  gesture.audioFloorPolicyForCapture("single"),
+  "interrupt_prior_and_steer",
+  "single click steers the foreground Aggie"
+);
+assertEqual(
+  gesture.audioFloorPolicyForCapture("double"),
+  "mute_prior_continue_generation",
+  "double-click preserves prior generation while transferring audio"
 );
 
 const mutableAdmission = { voiceFirstEnabled: true, draftControlsEnabled: true };

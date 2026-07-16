@@ -119,17 +119,15 @@ Voice uses an extension offscreen document for microphone capture, so websites
 do not need per-site microphone approval for A.G. turns. Capture starts before
 the gateway has finished opening the voice session; early PCM chunks queue until
 `session_ready`, then flush in order before any commit so the first syllables are
-preserved. Cmd/Ctrl+. and the Moa mark's legacy double-click share one voice contract:
-quick tap/double-click toggles a manual turn on, the next quick press commits
-it, and holding Cmd/Ctrl+. or the second mark click captures only for the hold
-and commits on release. The Moa mark mirrors Android for text and movement:
-single click opens the chat menu, and click-and-hold while moving drags the
-mark.
-With experimental voice-first gestures enabled, one mascot click toggles manual
+preserved. Cmd/Ctrl+. retains its keyboard voice toggle and hold-to-talk
+contract. The default Moa mark gesture is voice-first: one mascot click toggles manual
 capture in the current thread: click once to start, then click again to stop and
 send. Holding the mascot keeps push-to-talk in that thread and sends on release.
-A double-click uses the same start/stop toggle in a fresh thread, while a
-triple-click cancels any pending capture without sending and opens chat.
+A double-click uses the same start/stop toggle in a fresh thread, suppressing
+the prior reply's device audio while its generation and text continue. A
+triple-click opens chat without cancelling active work. Click-and-hold while
+moving still drags the mark. Interaction settings retain click-to-type as an
+explicit accessibility fallback.
 If Chrome blocks offscreen microphone capture, the overlay shows a visible
 permission error and opens the A.G. Options page; grant the microphone there or
 set Microphone to Allow for the extension from `chrome://extensions`.

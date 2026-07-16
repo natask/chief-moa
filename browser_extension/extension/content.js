@@ -82,13 +82,15 @@
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
-  // Voice-first gesture experiment (off by default). When the flag is on the
-  // mark remaps to: single click = current-thread capture toggle, still hold =
+  // Voice-first gesture contract (on by default): single click = current-thread
+  // capture toggle, still hold =
   // push-to-talk, double-click = fresh-thread capture toggle, and triple-click
   // = text chat. Flag off keeps the legacy contract untouched.
   const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
+  const VOICE_FIRST_GESTURES_CONTRACT_KEY = "ageeVoiceFirstGesturesContractVersion";
+  const VOICE_FIRST_GESTURES_CONTRACT_VERSION = 1;
   const VOICE_FIRST_HOLD_MS = 260;
-  let voiceFirstGestures = false;
+  let voiceFirstGestures = true;
   let voiceFirstHoldTimer = null;
   let voiceFirstTapChain = null;
   let voiceFirstHoldStartedTurn = false;
@@ -1203,8 +1205,8 @@
       return;
     }
     if (chain.count === 3) {
-      // Chat must never inherit a hot microphone or commit a pending capture.
-      if (liveVoice && listening) cancelTalkMode();
+      // Opening text is presentation-only. It never cancels a capture or an
+      // assistant response that is already in progress.
       openTextSurface({ fresh: false });
     }
   }
@@ -1215,10 +1217,17 @@
 
   function startVoiceFirstCapture(origin, { freshThread = false } = {}) {
     primeAudio();
-    // A deliberate voice-first gesture is always barge-in. The optional
-    // overlapping-assistant-speech preference does not override the user's tap.
-    if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
-    stopSpeaking();
+    if (origin === "double") {
+      // A separate Aggie/branch takes the device audio floor without killing
+      // the foreground turn. Its text and provider generation keep streaming;
+      // only already-queued and future audio are suppressed on this device.
+      parkPriorVoiceForSeparateCapture();
+    } else {
+      // A single click addresses the foreground Aggie, so it is a real barge-in
+      // and the replacement capture steers the current branch.
+      if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
+      stopSpeaking();
+    }
     if (freshThread) {
       newThreadArmed = true;
       newThreadLabel = "";
@@ -1233,6 +1242,16 @@
     if (liveVoice) liveVoice.tapTalk = true;
     syncTalkModeUi();
     return "on";
+  }
+
+  function parkPriorVoiceForSeparateCapture() {
+    for (const state of liveVoiceStates) {
+      if (state.committed !== true) continue;
+      state.assistantSpeechSuppressed = true;
+      state.audioFloorParked = true;
+      stopLivePlayback(state);
+    }
+    stopSpeaking();
   }
 
   function toggleVoiceFirstCapture(origin) {
@@ -1273,9 +1292,22 @@
   }
 
   function restoreVoiceFirstGestures() {
-    safeStorageLocalGet({ [VOICE_FIRST_GESTURES_KEY]: false })
-      .then((stored) => {
-        voiceFirstGestures = stored[VOICE_FIRST_GESTURES_KEY] === true;
+    safeStorageLocalGet({
+      [VOICE_FIRST_GESTURES_KEY]: true,
+      [VOICE_FIRST_GESTURES_CONTRACT_KEY]: 0,
+    })
+      .then(async (stored) => {
+        const preference = AgeeVoiceCaptureGesture.resolveVoiceFirstPreference({
+          enabled: stored[VOICE_FIRST_GESTURES_KEY],
+          contractVersion: stored[VOICE_FIRST_GESTURES_CONTRACT_KEY],
+        }, VOICE_FIRST_GESTURES_CONTRACT_VERSION);
+        voiceFirstGestures = preference.enabled;
+        if (preference.migrated) {
+          await safeStorageLocalSet({
+            [VOICE_FIRST_GESTURES_KEY]: true,
+            [VOICE_FIRST_GESTURES_CONTRACT_KEY]: preference.contractVersion,
+          });
+        }
         applyGestureModeHints();
       })
       .catch(() => {});
@@ -2658,6 +2690,8 @@
       playedAssistantAudioSegments: [],
       playbackProgressSent: false,
       assistantText: "",
+      assistantSpeechSuppressed: false,
+      audioFloorParked: false,
       transcript: "",
       gatewayRouted: false,
       incognito: context.action === "incognito",
@@ -2869,6 +2903,7 @@
   function playLiveAssistantPcm(state, buffer) {
     if (!buffer || !buffer.byteLength) return;
     if (!isLiveVoiceStateActive(state)) return;
+    if (state.assistantSpeechSuppressed) return;
     primeAudio();
     if (!audioCtx) return;
     const pcm = new Int16Array(buffer);
@@ -3256,7 +3291,12 @@
     ensureVoiceCueCard(state, state.transcript || "Voice", summary);
     updateCue(state.cueId, summary, "done");
     reactLauncher("done");
-    if (!wasCurrentTurn) return;
+    if (!wasCurrentTurn) {
+      sendFinalPlaybackProgress(state);
+      closeLiveVoiceSession(state, "background reply done");
+      untrackLiveVoiceState(state);
+      return;
+    }
     setVoiceState(false);
     // Wait for the spoken reply to finish playing, then either listen again (so
     // the user just keeps talking) or fall back to idle if the conversation was
