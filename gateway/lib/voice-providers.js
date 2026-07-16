@@ -10,8 +10,7 @@ const { voiceOptionsPayload } = require("./profile-options");
 const { createSttStage, createReasonerStage, createTtsStage } = require("./voice-stages");
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
-const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition");
-
+const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition"); const { phoneActionGeminiDeclaration } = require("./surface-skills");
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
   sample_rate: 16000,
@@ -2686,6 +2685,7 @@ class GeminiLiveVoiceProvider {
       },
       tools: [{
         functionDeclarations: [
+          ...((tool) => tool ? [tool] : [])(phoneActionGeminiDeclaration(turn)),
           {
             name: "launch_agent_run",
             description: "Start a durable A.G. gateway agent run on the home machine for work that should continue outside the live voice response.",

@@ -57,7 +57,7 @@ async function main() {
     await step("live loop: toolCall -> client page_tweak event", () => assertLivePageTweakEvent(wsUrl, fakeLive));
     await step("typed loop: model tool_call -> actions[] page_tweak", () => assertHttpPageTweakAction(baseUrl, fakeModel));
     await step("typed loop: no tool_call -> plain reply, no action", () => assertHttpPlainReply(baseUrl, fakeModel));
-    await step("typed loop: non-browser source is not offered the tool", () => assertHttpNonBrowserSource(baseUrl, fakeModel));
+    await step("typed loop: non-browser source is not offered the page-tweak tool", () => assertHttpNonBrowserSource(baseUrl, fakeModel));
 
     console.log(JSON.stringify({
       ok: true,
@@ -66,7 +66,7 @@ async function main() {
         "live: a browser-source propose_page_tweak toolCall produces a client-visible page_tweak event on the session socket carrying { type:'page_tweak', record }",
         "typed: a browser-source HTTP turn whose model calls propose_page_tweak returns actions[] with the validated { type:'page_tweak', record }, kind+params intact",
         "typed: a turn where the model does not call the tool returns a plain reply with an empty actions[]",
-        "typed: a non-browser source turn does not expose the tool and returns a plain reply",
+        "typed: a non-browser source turn exposes Android phone_action but never the page-tweak tool",
       ],
     }, null, 2));
   } finally {
@@ -174,10 +174,8 @@ async function assertHttpPlainReply(baseUrl, fakeModel) {
 }
 
 async function assertHttpNonBrowserSource(baseUrl, fakeModel) {
-  // A non-browser source must never be offered the tool; even if the fake model
-  // is primed with a tool call, the gateway must not send tools and must return a
-  // plain reply. We prime a plain reply here (the gateway never sends tools), and
-  // assert no page_tweak action lands.
+  // Android now receives its own bounded phone_action tool. It must still never
+  // receive propose_page_tweak, and no page_tweak action may land in the reply.
   fakeModel.nextResponse = plainReply("Sure, here is an answer.");
   const turn = await postJson(`${baseUrl}/v1/voice/turns`, {
     session_id: "pt-http-smoke",
@@ -188,7 +186,8 @@ async function assertHttpNonBrowserSource(baseUrl, fakeModel) {
   assert.equal(turn.status, 200, `non-browser turn must succeed: ${JSON.stringify(turn.json)}`);
   const action = (turn.json.actions || []).find((a) => a.type === "page_tweak");
   assert.ok(!action, `non-browser source must not get a page_tweak action: ${JSON.stringify(turn.json.actions)}`);
-  assert.ok(fakeModel.lastRequestHadNoTools, "gateway must not send a tools array for a non-browser source turn");
+  assert.ok(fakeModel.lastToolNames.includes("phone_action"), "Android turn must expose phone_action");
+  assert.ok(!fakeModel.lastToolNames.includes("propose_page_tweak"), "Android turn must not expose propose_page_tweak");
 }
 
 function toolCallResponse(args, content) {
@@ -259,7 +258,7 @@ async function startFakeLive() {
 // Fake OpenAI-compatible chat endpoint: returns the primed nextResponse to any
 // POST /chat/completions and records whether the request carried a tools array.
 async function startFakeModel() {
-  const state = { nextResponse: plainReply("ok"), lastRequestHadNoTools: false };
+  const state = { nextResponse: plainReply("ok"), lastRequestHadNoTools: false, lastToolNames: [] };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
@@ -267,6 +266,7 @@ async function startFakeModel() {
       let parsed = {};
       try { parsed = JSON.parse(body || "{}"); } catch {}
       state.lastRequestHadNoTools = !Array.isArray(parsed.tools) || parsed.tools.length === 0;
+      state.lastToolNames = (parsed.tools || []).map((tool) => tool?.function?.name).filter(Boolean);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(state.nextResponse));
     });
@@ -277,6 +277,7 @@ async function startFakeModel() {
     get nextResponse() { return state.nextResponse; },
     set nextResponse(value) { state.nextResponse = value; },
     get lastRequestHadNoTools() { return state.lastRequestHadNoTools; },
+    get lastToolNames() { return state.lastToolNames.slice(); },
     close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
   };
 }

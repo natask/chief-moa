@@ -480,6 +480,8 @@ async function assertUiOpen(baseUrl, runId) {
 
   const receipt = await postJson(`${baseUrl}/v1/tool/requests/${requestId}/receipts`, {
     device_id: "phone-smoke",
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `work_${requestId}`,
     ok: true,
     summary: "opened the run page locally",
     local_receipt: { tool: "ui.open", opened_route: claim.json.request.input.safe_url },

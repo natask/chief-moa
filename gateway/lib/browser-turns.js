@@ -33,6 +33,7 @@ function createBrowserTurnLifecycle({ answerBrowserEvidence, now = () => new Dat
         classification: record.classification || "browser_page_question",
         completed_at: completedAt,
         updated_at: record.updated_at || completedAt,
+        actions: arrayOrEmpty(response?.actions),
         response,
       };
     },

@@ -129,6 +129,8 @@ async function assertRefreshFailureBridge(baseUrl) {
   // The device receipts it after displaying it to the user.
   const receipt = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, {
     device_id: DEVICE_ID,
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `credential_${request.id}`,
     ok: true,
     summary: "shown credential-health reauth prompt",
   });
