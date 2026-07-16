@@ -2,8 +2,8 @@
   "schema_version": 1,
   "goal_percent": 90,
   "minimum_percent": {
-    "lines": 51.76,
-    "branches": 33.42,
-    "functions": 28.33
+    "lines": 52.36,
+    "branches": 34.39,
+    "functions": 28.87
   }
 }
