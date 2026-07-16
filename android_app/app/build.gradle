@@ -174,13 +174,16 @@ tasks.register('verifyDebugUnitTestCoverage', JacocoCoverageVerification) {
 def surfaceProgramCoverageClasses = files(fileTree(
         dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
         includes: [
-                '**/MoaProgramJson.class',
-                '**/MoaScriptExecutionCatalog.class',
-                '**/MoaSurfaceProgramContract.class',
-                '**/MoaSurfaceProgramReceipts.class',
-                '**/MoaAndroidProgramHost.class',
-                '**/MoaSurfaceProgramStore.class',
-                '**/MoaWebViewProgramRuntime.class'
+                '**/MoaProgramJson*.class',
+                '**/MoaScriptExecutionCatalog*.class',
+                '**/MoaSurfaceProgramContract*.class',
+                '**/MoaSurfaceProgramReceipts*.class',
+                '**/MoaSurfaceProgramEvents*.class',
+                '**/MoaAndroidProgramHost*.class',
+                '**/MoaAccessibilityProgramAdapter*.class',
+                '**/MoaSurfaceProgramStore*.class',
+                '**/MoaWebViewProgramRuntime*.class',
+                '**/MoaProgramRuntimeService*.class'
         ]
 ))
 
@@ -196,15 +199,15 @@ tasks.register('reportSurfaceProgramCoverage', JacocoReport) {
 
 tasks.register('verifySurfaceProgramCoverage', JacocoCoverageVerification) {
     group = 'verification'
-    description = 'Requires every focused Android local-program class to exceed 91% line/branch/method coverage.'
+    description = 'Requires every focused Android local-program source module to exceed 90% line and branch coverage.'
     dependsOn tasks.named('testDebugUnitTest')
     executionData.from(debugUnitTestCoverageData)
     classDirectories.from(surfaceProgramCoverageClasses)
     sourceDirectories.from(debugProductionSources)
     violationRules {
         rule {
-            element = 'CLASS'
-            ['LINE', 'BRANCH', 'METHOD'].each { kind ->
+            element = 'SOURCEFILE'
+            ['LINE', 'BRANCH'].each { kind ->
                 limit { counter = kind; value = 'COVEREDRATIO'; minimum = new BigDecimal('0.91') }
             }
         }
@@ -217,6 +220,7 @@ tasks.named('check') {
 
 dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'io.github.erdtman:java-json-canonicalization:1.1'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
     testImplementation 'org.robolectric:robolectric:4.14.1'

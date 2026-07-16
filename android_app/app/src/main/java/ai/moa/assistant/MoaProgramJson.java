@@ -2,60 +2,48 @@ package ai.moa.assistant;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.erdtman.jcs.JsonCanonicalizer;
 
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Locale;
 
 /** Deterministic JSON and digest helpers shared by the local-program authority boundary. */
 final class MoaProgramJson {
     private MoaProgramJson() {}
 
     static String canonical(Object value) {
-        if (value == null || value == JSONObject.NULL) return "null";
-        if (value instanceof JSONObject) {
-            JSONObject object = (JSONObject) value;
-            List<String> keys = new ArrayList<>();
-            Iterator<String> iterator = object.keys();
-            while (iterator.hasNext()) keys.add(iterator.next());
-            Collections.sort(keys);
-            List<String> entries = new ArrayList<>();
-            for (String key : keys) entries.add(JSONObject.quote(key) + ":" + canonical(object.opt(key)));
-            return "{" + String.join(",", entries) + "}";
+        validate(value);
+        String json;
+        boolean primitive = !(value instanceof JSONObject) && !(value instanceof JSONArray);
+        if (value == null || value == JSONObject.NULL) json = "null";
+        else if (!primitive) json = value.toString();
+        else if (value instanceof String) json = JSONObject.quote((String) value);
+        else json = String.valueOf(value); // validate() has already closed the primitive domain.
+        try {
+            String input = primitive ? "{\"v\":" + json + "}" : json;
+            String canonical = new String(new JsonCanonicalizer(input).getEncodedUTF8(), StandardCharsets.UTF_8);
+            return primitive ? canonical.substring(canonical.indexOf(':') + 1, canonical.length() - 1) : canonical;
         }
-        if (value instanceof JSONArray) {
-            JSONArray array = (JSONArray) value;
-            List<String> items = new ArrayList<>();
-            for (int i = 0; i < array.length(); i++) items.add(canonical(array.opt(i)));
-            return "[" + String.join(",", items) + "]";
-        }
-        if (value instanceof String) return JSONObject.quote((String) value);
-        if (value instanceof Boolean) return value.toString();
-        if (value instanceof Number) {
-            double number = ((Number) value).doubleValue();
-            if (!Double.isFinite(number)) throw new IllegalArgumentException("non_finite_number");
-            return value.toString();
-        }
-        throw new IllegalArgumentException("unsupported_json_value");
+        catch (Exception error) { throw new IllegalArgumentException("invalid_jcs_value", error); }
     }
 
     static String sha256(String value) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
-            StringBuilder result = new StringBuilder(64);
-            for (byte item : digest) result.append(String.format(Locale.ROOT, "%02x", item & 0xff));
-            return result.toString();
-        } catch (Exception impossible) {
-            throw new IllegalStateException("SHA-256 unavailable", impossible);
-        }
+        return okio.ByteString.encodeUtf8(value).sha256().hex();
     }
 
     static JSONObject copy(JSONObject input) {
         try { return new JSONObject(input.toString()); }
         catch (Exception error) { throw new IllegalArgumentException("invalid_json", error); }
+    }
+
+    private static void validate(Object value) {
+        if (value == null || value == JSONObject.NULL || value instanceof String || value instanceof Boolean) return;
+        if (value instanceof Number) {
+            double number = ((Number) value).doubleValue();
+            if (!Double.isFinite(number) || (Math.rint(number) == number && Math.abs(number) > 9_007_199_254_740_991d)) throw new IllegalArgumentException("invalid_jcs_number");
+            return;
+        }
+        if (value instanceof JSONObject) { java.util.Iterator<String> keys = ((JSONObject) value).keys(); while (keys.hasNext()) validate(((JSONObject) value).opt(keys.next())); return; }
+        if (value instanceof JSONArray) { JSONArray array = (JSONArray) value; for (int i = 0; i < array.length(); i++) validate(array.opt(i)); return; }
+        throw new IllegalArgumentException("unsupported_json_value");
     }
 }
