@@ -1,6 +1,6 @@
 const PROGRAM_SANDBOX_URL = chrome.runtime.getURL("program-sandbox.html");
 
-function executeInProgramSandbox({ execution_id, run_token, source, wall_ms }) {
+function executeInProgramSandbox({ execution_id, run_token, source, wall_ms, result_bytes, memory_bytes, log_bytes }) {
   return new Promise((resolve) => {
     if (typeof source !== "string" || !source.trim() || new TextEncoder().encode(source).byteLength > 64 * 1024) return resolve({ ok: false, error: "program_source_invalid" });
     if (!Number.isInteger(wall_ms) || wall_ms < 100 || wall_ms > 30_000) return resolve({ ok: false, error: "program_wall_limit_invalid" });
@@ -14,9 +14,11 @@ function executeInProgramSandbox({ execution_id, run_token, source, wall_ms }) {
     let pendingToolCalls = 0;
     let programResult = null;
     const finish = (result) => {
+      /* c8 ignore next -- defensive idempotency guard for racing host callbacks */
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      try { channel.port1.postMessage({ type: "program_cancel" }); } catch {}
       channel.port1.close();
       iframe.remove();
       resolve(result);
@@ -57,7 +59,7 @@ function executeInProgramSandbox({ execution_id, run_token, source, wall_ms }) {
     };
     channel.port1.start();
     iframe.addEventListener("load", () => {
-      iframe.contentWindow.postMessage({ type: "surface_program_start", source }, "*", [channel.port2]);
+      iframe.contentWindow.postMessage({ type: "surface_program_start", source, result_bytes, memory_bytes, log_bytes }, "*", [channel.port2]);
     }, { once: true });
     document.body.append(iframe);
   });

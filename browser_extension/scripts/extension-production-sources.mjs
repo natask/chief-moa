@@ -28,6 +28,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/surface-program-contract.js",
   "extension/surface-program-offscreen-bridge.js",
   "extension/program-sandbox-bootstrap.js",
+  "extension/program-sandbox-worker.js",
   "extension/sidepanel.js",
   "extension/stop-intent.js",
   "extension/tweaks.js",
