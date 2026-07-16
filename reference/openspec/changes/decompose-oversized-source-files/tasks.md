@@ -350,6 +350,13 @@
       and 100% functions. Raise the exact whole-extension ratchet to 27.47%
       lines, 13.16% branches, and 11.45% functions with 31 passing unit tests
       and a passing real headless-Chromium smoke.
+- [x] 4.4d Execute the bounded per-origin tweaks runtime under storage, DOM,
+      deterministic intent-planning, every CSS compiler kind, agent-record
+      validation, reapplication, removal, and message-routing tests; add it to
+      the focused 90% gate. Verified at 99.14% lines, 91.54% branches, and 100%
+      functions. Raise the exact whole-extension ratchet to 31.73% lines,
+      15.04% branches, and 13.69% functions with 32 passing unit tests and a
+      passing real headless-Chromium smoke.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
