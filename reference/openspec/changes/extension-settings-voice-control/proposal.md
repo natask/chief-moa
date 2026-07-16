@@ -21,8 +21,8 @@ prompt and behavior) is one of the settings this surface reads and writes.
 - Give the agent a queryable catalog of canonical gateway runtime-profile
   settings so the user can list, explain, semantically search, compare, and ask
   for useful recommendations without already knowing exact setting labels.
-  Merging browser-local controls into that projection is a follow-up; this
-  browser change does not claim an Android settings registry.
+  The browser merges its five registered local controls into the read-only
+  projection; this browser change does not claim an Android settings registry.
 - Project catalog results as selectable visual controls in the existing command
   or workspace surface. Options remains the deep configuration and Chrome
   permission-remediation surface rather than the only place settings can be
@@ -44,10 +44,20 @@ current/default values, constraints, redaction, and rejection of unknown
 settings. The same catalog is available through authenticated HTTP routes and
 the gateway voice agent's `read_agent_settings` tool.
 
-The current browser does not yet merge extension-local controls into that
-catalog, render catalog results in a Command-K-style surface, or broker generic
-extension-local writes. Android preferences remain Android-owned and are not
-enumerated or mutated by this browser/gateway slice.
+The browser also implements a read-only registry for exactly five existing local
+controls: gateway URL, redacted gateway-token configured state, LiveKit voice
+transport, consent-gated background automation, and microphone permission. The
+side panel merges those entries with reachable gateway results and supports
+typed list, exact get, search, and recommendation. It renders selectable rows,
+shows effective/default/constraint/redaction metadata, focuses settings search
+with Cmd/Ctrl+K, and deep-links only to the user-operated microphone permission
+walkthrough.
+
+Spoken settings-result projection, browser-side compare projection, generic
+catalog-owned writes, and a gateway-backed browser merge smoke remain pending.
+The gateway's read tool already supports compare over gateway profile defaults.
+Android preferences remain Android-owned and are not enumerated or mutated by
+this browser/gateway slice.
 
 ## Capabilities
 
