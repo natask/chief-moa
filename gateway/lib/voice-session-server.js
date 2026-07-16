@@ -14,10 +14,8 @@ const {
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
 const { canonicalVoice } = require("./profile-options");
 const {
-  hasPartialEndpointPlayback,
-  normalizeAssistantAudioSegment: normalizeSegmentRaw,
-  normalizePlaybackProgress: normalizeProgressRaw,
-  normalizeProgressStage,
+  hasPartialEndpointPlayback, normalizeAssistantAudioSegment: normalizeSegmentRaw,
+  normalizePlaybackProgress: normalizeProgressRaw, normalizeProgressStage,
 } = require("./voice-playback-progress");
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
