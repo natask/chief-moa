@@ -41,8 +41,10 @@ thing the agent actually observed.
 - Make Explain, Help, Collaborate, and Delegate distinct user-addressable agents
   with explicit authority contracts and routing over shared evidence, artifact,
   proposal, run, and receipt primitives.
-- Extend typed generated output and introduce only narrow, reversible,
-  explicitly approved page-change proposals.
+- Extend typed generated output with two distinct effect lanes: narrow,
+  reversible packaged page-change helpers and profile-authorized generated page
+  programs. Program receipts state actual cleanup/rollback support rather than
+  promising universal reversibility.
 - Convert the direction into acceptance-scoped tickets beginning with agent
   selection/routing and a bounded delegated browser run.
 
@@ -64,8 +66,8 @@ stale.
 3. Own the browser experience rather than add another chat box.
 4. Ground explanations and actions in the exact observed page state and
    location, including through scrolling.
-5. Generate useful content and visual artifacts, with an explicit path for
-   bounded page modification.
+5. Generate useful content and visual artifacts, with explicit authority paths
+   for packaged page-change helpers and generated page programs.
 6. Provide a companion character the user can interact with, customize, and
    control.
 7. Support tutorials and repeatable workflows as applications of the same
@@ -105,7 +107,8 @@ stale.
   workflow that composes the agents.
 - A bounded delegation contract containing goal, scope, allowed action classes,
   approval policy, stop conditions, checkpoints, and completion evidence.
-- Declarative generated artifacts and bounded page-change proposals.
+- Declarative generated artifacts, bounded packaged page-change proposals, and
+  `moa.browser-program.v2` artifacts under an explicit execution profile.
 - Companion presence and controls shared across the on-page and workspace
   surfaces.
 
@@ -137,8 +140,11 @@ stale.
   completion evidence or an explicit blocker.
 - One request can produce an explanation plus an anchored visual annotation
   without starting a tutorial.
-- One request can produce a durable generated artifact, and one explicitly
-  approved request can apply a bounded page change with a receipt and undo.
+- One request can produce a durable generated artifact; an approved packaged
+  change can apply with a receipt and defined undo, while an authorized browser
+  program records its source/hash, profile, effect receipt, and actual
+  cleanup/rollback result without claiming every arbitrary mutation is
+  reversible.
 - The companion exposes visible stop, mode, and customization controls without
   becoming the canonical state owner.
 - A tutorial uses the same anchors, artifacts, proposals, and receipts rather

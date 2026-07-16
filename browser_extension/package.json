@@ -13,6 +13,7 @@
     "smoke:cdp": "node scripts/smoke-cdp.mjs",
     "smoke:integration": "node scripts/smoke-integration.mjs",
     "smoke:tweaks": "node scripts/smoke-tweaks.mjs",
+    "smoke:user-scripts": "node scripts/smoke-user-scripts.mjs",
     "smoke:gateway": "node scripts/smoke-gateway.mjs",
     "smoke:ambient": "node scripts/smoke-ambient.mjs",
     "smoke:settings": "node scripts/smoke-settings.mjs",

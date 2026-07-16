@@ -6,13 +6,25 @@ Deliver two deliberately separate capabilities without turning downloaded model
 output into privileged extension code:
 
 - **Tier B** renders a reviewed rich UI artifact in a packaged MV3 sandbox page.
-- **Tier C** registers reviewed, user-provided page automation only through
-  `chrome.userScripts`, after both Chrome's own enablement and a Moa approval.
+- **Tier C / `reviewed_standalone_v1`** registers reviewed, user-provided page
+  automation only through `chrome.userScripts`, after Chrome enablement and a
+  direct Moa approval for each changed revision.
+- **`delegated_runtime_v1`** is a separate default-off private-runtime profile
+  for generated page programs inside a confirmed Delegate envelope. It is not
+  enabled by Tier B or standalone-script approval.
 
 The stable packaged extension remains the broker and policy authority. Gateway
 artifacts are proposals. Tier B never receives Chrome APIs, extension storage,
-gateway credentials, raw page DOM, or page-action authority. Tier C is disabled
-by default and cannot be reached by changing a Tier B artifact.
+gateway credentials, raw page DOM, or page-action authority. Both program
+profiles are disabled by default and cannot be reached by changing a Tier B
+artifact. Generated source never executes in the service worker.
+
+This document's original Tier C requirements are preserved as
+`reviewed_standalone_v1`, not universalized. The accepted Tweeks direction is
+implemented only as `delegated_runtime_v1`, where a confirmed envelope may
+preauthorize exact program classes. Complete source inspection, immutable
+hash-bound revisions, local revalidation, packaged stop/review controls, and
+local receipts apply to both profiles.
 
 This is a hard implementation contract, not authorization to implement it. If
 the current manifest, artifact envelope, ownership, or approval/receipt store
@@ -111,7 +123,7 @@ Official Chrome sources establish the boundary:
   gateway tokens, page content, artifact source text beyond hashes, and user
   secrets.
 
-## Tier C contract: explicit userScripts opt-in
+## Tier C contract: `reviewed_standalone_v1`
 
 ### Enablement and permissions
 
@@ -125,7 +137,7 @@ Official Chrome sources establish the boundary:
 - Host access is optional and requested from the approval click for the exact
   origin/match set. No blanket `<all_urls>` request, silent widening, or reuse of
   unrelated host permission is allowed.
-- V1 registers into `USER_SCRIPT` only. `MAIN` world, all-frames execution,
+- This profile registers into `USER_SCRIPT` only. `MAIN` world, all-frames execution,
   `about:blank`/data/blob matching, incognito, file URLs, browser-internal pages,
   and opaque origins are forbidden.
 - Messaging is disabled by default. If a later artifact needs it, that is a new
@@ -163,6 +175,48 @@ Official Chrome sources establish the boundary:
   browsing history in user-script globals or messages.
 - No auto-apply, time-delayed approval, approval reuse after source/match/world
   change, silent fallback to `MAIN`, or success receipt before read-back.
+
+## Delegated program contract: `delegated_runtime_v1`
+
+### Enablement and authority
+
+- The delegated runtime has a distinct default-off opt-in in addition to Chrome
+  userScripts availability and exact host access.
+- Execution requires a typed `delegate` role and a current confirmed envelope
+  that explicitly preauthorizes `script.evaluate` and/or `script.persist`.
+- Every `moa.browser-program.v2` revision binds complete inspectable source and
+  digest, exact tab/document/frame/origin or matches/excludes, mode, world,
+  effect class, task/run/envelope, bridge grants, limits, and rollback metadata.
+- An immutable revision inside every current envelope/grant bound does not need
+  a redundant direct confirmation. Scope/world/bridge widening, origin/document
+  change, checkpoint, destructive application effect, stale evidence, or an
+  expired envelope pauses before execution.
+
+### Worlds and executors
+
+- `USER_SCRIPT` remains the default world.
+- `MAIN` is available only through a separate visible grant. Arbitrary-code,
+  site scope, frame scope, and bridge authority do not imply it.
+- CDP `Runtime.evaluate` is a distinct executor behind its own visible grant.
+  It is never a silent fallback from `chrome.userScripts.execute`, never reuses
+  a general debugger attachment as approval, and must bind the same immutable
+  program revision and target.
+- Bridge handlers are named, separately granted, schema-validated, and
+  receipted. Page code never receives general extension service-worker or
+  credential authority.
+
+### Receipts, stop, and rollback
+
+- Every attempt receipts artifact/revision/hash, profile/executor/world, exact
+  target, role/envelope/grants, before/after evidence, bounded result/error,
+  registration read-back, cleanup/removal result, and status.
+- The packaged extension owns stop, inspection, registration removal, and
+  rollback controls outside the page. A generated overlay cannot obscure or
+  become the canonical owner of those controls.
+- Stop prevents new executions and removes selected persistent registrations;
+  it does not claim to reverse an arbitrary page effect without a proven cleanup
+  path. Deleting application data remains a destructive site action even if
+  JavaScript performs it.
 
 ## Expected behavior and edge cases
 
@@ -251,12 +305,17 @@ Block implementation or merge if any of these is unresolved:
 
 - Tier B can choose executable code, remote content, privileged method names, or
   an origin/nonce-unbound message path.
-- Tier C lacks source-and-scope inspection, direct approval, exact host access,
-  API/toggle failure handling, isolated world, read-back, or verified removal.
+- `reviewed_standalone_v1` lacks source-and-scope inspection, direct revision
+  approval, exact host access, API/toggle failure handling, `USER_SCRIPT`,
+  read-back, or verified removal.
+- `delegated_runtime_v1` lacks a confirmed envelope, immutable source/hash
+  binding, independent visible `MAIN`/CDP/bridge grants, exact scope and
+  checkpoint enforcement, packaged stop, or local receipts.
 - Gateway artifact provenance/approval or receipts have no authoritative owner.
 - Browser tests require the active user profile, active gateway, or active data.
-- Repository reality requires `MAIN` world, blanket hosts, relaxed CSP, remote
-  code, or a second privileged execution route.
+- Repository reality requires blanket hosts, relaxed CSP, remote code, or a
+  generated-code route through privileged extension execution. `MAIN` and CDP
+  are permitted only by the independent `delegated_runtime_v1` grants above.
 - Acceptance gates are missing and the manager declines the required tooling.
 
 Any contradiction in architecture, ownership, or acceptance gates returns to

@@ -1,1 +1,5 @@
+- Integrated the guarded userScripts runtime onto the current browser extension and assigned release version 0.1.60 — agent: codex/gpt-5 — 752d9c19
+- Separated immediate execution history from persistent registrations and made userScripts disable an exact storage/registration transaction with closed reason redaction and packaged-runtime Chrome QA — agent: codex/gpt-5 — b2826601
+- Hardened userScripts authority discrimination, revision immutability, duplicate execution locking, receipt redaction, transactional removal, and real Chrome toggle/runtime QA — agent: codex/gpt-5 — dd071ede
+- Added a default-off, approval-bound Chrome userScripts runtime with exact validation, read-back, rollback/removal, bounded receipts, and settings-only onboarding — agent: codex/gpt-5 — 5754bfce
 - Video notes (extension half): shift-click record = screen+mic WebM via desktopCapture picker + offscreen MediaRecorder (120s/20MiB caps), direct upload to /v1/video-notes, then a /v1/voice/turns video turn whose reply lands on the note's cue; Stop-sharing bar auto-finishes; voice/audio-note/video-note mutually refuse the mic — agent: claude-code/fable-5 — 1865dc3
