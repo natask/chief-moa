@@ -25,6 +25,14 @@ function createProfileHandlers({
       });
       return;
     }
+    const nonWritableFields = settingsCatalog.nonWritableFields(patch);
+    if (nonWritableFields.length > 0) {
+      sendJson(response, 400, {
+        error: "non_writable_profile_fields",
+        non_writable_fields: nonWritableFields,
+      });
+      return;
+    }
     const profileOptions = profileOptionsFromBody(body, "global");
     if (!requireDeviceScope(response, profileOptions)) return;
     const before = agentProfile.effective(profileOptions);
@@ -89,6 +97,11 @@ function createProfileHandlers({
       if (pathname === "/v1/agent/settings/recommend") {
         const settings = settingsCatalog.recommend(query, { ...options, limit });
         sendJson(response, 200, { version: "profile-settings/v1", query, count: settings.length, settings });
+        return true;
+      }
+      if (pathname === "/v1/agent/settings/compare") {
+        const settings = settingsCatalog.compare(options);
+        sendJson(response, 200, { version: "profile-settings/v1", count: settings.length, settings });
         return true;
       }
       const id = decodeURIComponent(pathname.slice("/v1/agent/settings/".length));

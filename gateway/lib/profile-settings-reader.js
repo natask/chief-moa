@@ -1,6 +1,6 @@
 "use strict";
 
-const OPERATIONS = Object.freeze(["list", "get", "search", "recommend"]);
+const OPERATIONS = Object.freeze(["list", "get", "search", "recommend", "compare"]);
 
 function createProfileSettingsReader(settingsCatalog) {
   if (!settingsCatalog) throw new Error("settingsCatalog is required");
@@ -33,10 +33,13 @@ function createProfileSettingsReader(settingsCatalog) {
     }
     const settings = operation === "list"
       ? settingsCatalog.list(options)
-      : settingsCatalog[operation](query, options);
+      : operation === "compare"
+        ? settingsCatalog.compare(options)
+        : settingsCatalog[operation](query, options);
     return {
       ok: true,
-      type: operation === "recommend" ? "agent_settings_recommendations" : "agent_settings",
+      type: operation === "recommend" ? "agent_settings_recommendations"
+        : operation === "compare" ? "agent_settings_comparison" : "agent_settings",
       operation,
       query,
       count: settings.length,
@@ -56,7 +59,7 @@ function requestedOperation(input) {
 function readAgentSettingsTool(handler) {
   return {
     name: "read_agent_settings",
-    description: "Read only the gateway's canonical existing settings catalog. operation=list returns every setting and current/default values; get reads one exact id; search finds settings by meaning/aliases; recommend ranks relevant existing settings for a goal. Never invent a setting. This tool cannot write. Secret values, if any, are redacted.",
+    description: "Read only the gateway's canonical existing settings catalog. operation=list returns every setting and current/default values; get reads one exact id; search finds settings by meaning/aliases; recommend ranks relevant existing settings for a goal; compare returns settings whose current values differ from defaults. Never invent a setting. This tool cannot write. Secret values, if any, are redacted.",
     parameters: {
       type: "object",
       properties: {
@@ -74,11 +77,11 @@ function readAgentSettingsTool(handler) {
 function readAgentSettingsGeminiDeclaration() {
   return {
     name: "read_agent_settings",
-    description: "Read only the canonical existing gateway settings. Use list to enumerate all settings, get for an exact id, search to find settings by meaning, or recommend to rank existing settings for a goal. Never invent a setting. This cannot write, and secret values are redacted.",
+    description: "Read only the canonical existing gateway settings. Use list to enumerate all settings, get for an exact id, search to find settings by meaning, recommend to rank existing settings for a goal, or compare to return current values that differ from defaults. Never invent a setting. This cannot write, and secret values are redacted.",
     parameters: {
       type: "OBJECT",
       properties: {
-        operation: { type: "STRING", description: "list, get, search, or recommend" },
+        operation: { type: "STRING", description: "list, get, search, recommend, or compare" },
         id: { type: "STRING", description: "Exact setting id for get." },
         query: { type: "STRING", description: "Natural-language goal for search or recommend." },
         scope: { type: "STRING", description: "global or device" },

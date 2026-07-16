@@ -34,6 +34,7 @@ test("catalog describes every canonical profile field exactly once", () => {
   assert.deepEqual(settings.map((setting) => setting.id), PROFILE_FIELDS);
   assert.equal(settings.length, 31);
   assert.ok(settings.every((setting) => setting.readable === true));
+  assert.ok(settings.every((setting) => setting.owner && setting.takes_effect));
   assert.equal(catalog.get("made_up_setting"), null);
 });
 
@@ -46,8 +47,12 @@ test("catalog exposes current/default state, constraints, and managed fields", (
   assert.equal(terse.type, "integer");
   assert.equal(catalog.get("voice").values.includes("Aoede"), true);
   assert.deepEqual(catalog.get("response_modality").values, ["auto", "speech", "text"]);
-  assert.equal(catalog.get("active_companion_id").writable, true);
+  assert.equal(catalog.get("active_companion_id").writable, false);
   assert.equal(catalog.get("active_companion_id").managed, true);
+  assert.equal(catalog.get("active_companion_id").owner, "companion_runtime");
+  assert.equal(catalog.get("active_companion_id").takes_effect, "when_companion_is_applied");
+  assert.equal(catalog.get("voice").owner, "agent_profile");
+  assert.equal(catalog.get("voice").takes_effect, "next_turn");
   assert.equal(catalog.get("system_prompt").sensitivity, "private");
   assert.equal(catalog.get("system_prompt").value, "default instructions");
 });
@@ -63,6 +68,15 @@ test("search and recommendations are deterministic and catalog-grounded", () => 
   assert.equal(recommended[0].id, "response_modality");
   assert.ok(recommended.every((setting) => PROFILE_FIELDS.includes(setting.id)));
   assert.ok(recommended.every((setting) => setting.recommendation));
+  assert.deepEqual(catalog.search("privacy").map((setting) => setting.id), ["memory_policy"]);
+  assert.deepEqual(catalog.search("settings related to privacy").map((setting) => setting.id), ["memory_policy"]);
+  assert.deepEqual(catalog.search("what settings are related to my account"), []);
+});
+
+test("compare reports only current values that differ from defaults", () => {
+  const { catalog } = catalogHarness();
+  assert.deepEqual(catalog.compare().map((setting) => setting.id), ["assistant_name", "voice_max_chars"]);
+  assert.deepEqual(catalog.nonWritableFields({ voice: "Aoede", active_companion_id: "friend" }), ["active_companion_id"]);
 });
 
 test("secret-shaped values are always redacted by the shared projector", () => {
@@ -72,7 +86,7 @@ test("secret-shaped values are always redacted by the shared projector", () => {
   assert.equal(publicValue("gateway_token", ""), "");
 });
 
-test("agent reader supports list/get/search/recommend without inventing settings", () => {
+test("agent reader supports list/get/search/recommend/compare without inventing settings", () => {
   const { catalog } = catalogHarness();
   const read = createProfileSettingsReader(catalog);
   assert.equal(read({ operation: "list" }).count, PROFILE_FIELDS.length);
@@ -80,6 +94,8 @@ test("agent reader supports list/get/search/recommend without inventing settings
   assert.equal(read({ operation: "get", id: "imaginary" }).error, "unknown_setting");
   assert.equal(read({ operation: "search", query: "voice speed" }).settings[0].id, "speaking_rate");
   assert.equal(read({ operation: "recommend", query: "more concise" }).settings[0].id, "voice_max_chars");
+  assert.equal(read({ operation: "compare" }).type, "agent_settings_comparison");
+  assert.equal(read({ operation: "compare" }).count, 2);
   assert.equal(read({ operation: "search" }).error, "settings_query_required");
   assert.equal(read({ operation: "invent" }).error, "unknown_settings_operation");
   assert.equal(read({ operation: "list", scope: "device" }).error, "device_id_required_for_device_scope");
@@ -88,6 +104,6 @@ test("agent reader supports list/get/search/recommend without inventing settings
   assert.equal(requestedOperation({}), "list");
   const classic = readAgentSettingsTool(() => ({}));
   assert.equal(classic.name, "read_agent_settings");
-  assert.deepEqual(classic.parameters.properties.operation.enum, ["list", "get", "search", "recommend"]);
+  assert.deepEqual(classic.parameters.properties.operation.enum, ["list", "get", "search", "recommend", "compare"]);
   assert.equal(readAgentSettingsGeminiDeclaration().name, "read_agent_settings");
 });

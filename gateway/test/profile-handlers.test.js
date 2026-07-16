@@ -36,6 +36,8 @@ function makeHarness(overrides = {}) {
       get: (id) => id === "model" ? { id: "model" } : null,
       search: (query) => query === "reasoning" ? [{ id: "model" }] : [],
       recommend: (query) => query === "speak" ? [{ id: "language", recommendation: "Use language." }] : [],
+      compare: () => [{ id: "model", value: "old", default_value: "default", overridden: true }],
+      nonWritableFields: () => [],
     },
     ...overrides, agentProfile,
   };
@@ -99,7 +101,24 @@ test("put rejects unknown fields atomically instead of silently inventing settin
   assert.equal(metadata.response.status, 200);
 });
 
-test("settings catalog routes list, get, search, and recommend canonical settings", async () => {
+test("put rejects managed companion identity fields atomically", async () => {
+  const harness = makeHarness({
+    agentProfile: { fields: () => ["model", "language", "active_companion_id"] },
+    settingsCatalog: {
+      list: () => [], get: () => null, search: () => [], recommend: () => [], compare: () => [],
+      nonWritableFields: (patch) => Object.keys(patch).filter((field) => field === "active_companion_id"),
+    },
+  });
+  const result = await route(harness, "PUT", "/v1/agent/profile", {
+    profile: { model: "new", active_companion_id: "forged" },
+  });
+  assert.equal(result.response.status, 400);
+  assert.equal(result.response.payload.error, "non_writable_profile_fields");
+  assert.deepEqual(result.response.payload.non_writable_fields, ["active_companion_id"]);
+  assert.equal(harness.calls.some(([name]) => name === "patch"), false);
+});
+
+test("settings catalog routes list, get, search, recommend, and compare canonical settings", async () => {
   const harness = makeHarness();
   const listed = await route(harness, "GET", "/v1/agent/settings");
   assert.equal(listed.response.payload.count, 2);
@@ -112,6 +131,8 @@ test("settings catalog routes list, get, search, and recommend canonical setting
   assert.equal(missing.response.payload.error, "unknown_setting");
   const recommendations = await route(harness, "GET", "/v1/agent/settings/recommend", null, "?q=speak");
   assert.equal(recommendations.response.payload.settings[0].id, "language");
+  const comparison = await route(harness, "GET", "/v1/agent/settings/compare");
+  assert.equal(comparison.response.payload.settings[0].id, "model");
 });
 
 test("reset records before and after versions with source defaults", async () => {
