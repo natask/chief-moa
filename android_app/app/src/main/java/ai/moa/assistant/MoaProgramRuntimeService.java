@@ -168,8 +168,10 @@ public final class MoaProgramRuntimeService extends Service {
             return;
         }
         active.removeJavascriptInterface("AndroidBridge");
-        WebViewRenderProcess renderer = active.getWebViewRenderProcess();
-        if (renderer != null) renderer.terminate();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WebViewRenderProcess renderer = active.getWebViewRenderProcess();
+            if (renderer != null) renderer.terminate();
+        }
         active.stopLoading();
         active.destroy();
     }
