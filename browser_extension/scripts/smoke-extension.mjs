@@ -12,15 +12,22 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { resolveChromeForTesting, quietChromeArgs } from "./chrome-for-testing.mjs";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
-const extensionPath = join(root, "extension");
+const sourceExtensionPath = join(root, "extension");
+const extensionPath = process.env.AGEE_EXTENSION_PATH
+  ? resolve(process.env.AGEE_EXTENSION_PATH)
+  : sourceExtensionPath;
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `smoke-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
 const artifactsDir = join(runDir, "artifacts");
+const coverageOutput = process.env.AGEE_COVERAGE_OUTPUT
+  ? resolve(process.env.AGEE_COVERAGE_OUTPUT)
+  : "";
+const instrumentedCoverage = process.env.AGEE_INSTRUMENTED_COVERAGE === "1";
 let latestChromeStderr = "";
 
 function serve() {
@@ -47,6 +54,14 @@ function serve() {
 
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
+async function waitForProcessExit(child, timeoutMs = 2000) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await Promise.race([
+    new Promise((resolveExit) => child.once("exit", resolveExit)),
+    delay(timeoutMs),
+  ]);
 }
 
 async function waitForFile(path, timeoutMs = 15000) {
@@ -99,7 +114,12 @@ async function waitForTarget(port, predicate, timeoutMs = 15000) {
   const started = Date.now();
   let lastTargets = [];
   while (Date.now() - started < timeoutMs) {
-    lastTargets = await targets(port);
+    try {
+      lastTargets = await targets(port);
+    } catch {
+      await delay(200);
+      continue;
+    }
     const found = lastTargets.find(predicate);
     if (found) return found;
     await delay(200);
@@ -140,11 +160,11 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
 }
 
 function assertVoicePlaybackStopContract() {
-  const source = readFileSync(join(extensionPath, "content.js"), "utf8");
-  const extensionApi = readFileSync(join(extensionPath, "content-extension-api-runtime.js"), "utf8");
-  const background = readFileSync(join(extensionPath, "background.js"), "utf8");
-  const offscreen = readFileSync(join(extensionPath, "offscreen.js"), "utf8");
-  const offscreenWorklet = readFileSync(join(extensionPath, "offscreen-audio-worklet.js"), "utf8");
+  const source = readFileSync(join(sourceExtensionPath, "content.js"), "utf8");
+  const extensionApi = readFileSync(join(sourceExtensionPath, "content-extension-api-runtime.js"), "utf8");
+  const background = readFileSync(join(sourceExtensionPath, "background.js"), "utf8");
+  const offscreen = readFileSync(join(sourceExtensionPath, "offscreen.js"), "utf8");
+  const offscreenWorklet = readFileSync(join(sourceExtensionPath, "offscreen-audio-worklet.js"), "utf8");
   if (!/assistantPlaybackSources\s*=\s*new Set\(\)/.test(source)) {
     throw new Error("content.js must keep a global assistant PCM playback source registry");
   }
@@ -239,6 +259,8 @@ async function main() {
     }
 
     const extensionId = workerTarget.url.match(/^chrome-extension:\/\/([a-p]+)\//)[1];
+    workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
+    await workerCdp.send("Runtime.enable");
 
     // Create a page target explicitly: --headless=new does not auto-open one.
     const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
@@ -263,8 +285,6 @@ async function main() {
     // Drive the real background -> content path from the service worker, exactly
     // as production does (background.js uses chrome.tabs.sendMessage). A reply
     // proves the real content script auto-injected on the localhost match.
-    workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
-    await workerCdp.send("Runtime.enable");
     // Fresh installs intentionally have no implicit hosted gateway. This smoke
     // explicitly configures a fake origin before exercising intercepted voice
     // transport; no real request is expected to succeed at this hostname.
@@ -392,7 +412,8 @@ async function main() {
       throw new Error(`overlay exposed separate top voice strip during voice: ${JSON.stringify(overlayMetrics)}`);
     }
 
-    const shortcutVoice = await evaluate(workerCdp, `
+    if (!instrumentedCoverage) {
+      const shortcutVoice = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
         const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -576,6 +597,7 @@ async function main() {
 	    ) {
 	      throw new Error(`shortcut voice/text smoke failed: ${JSON.stringify(shortcutVoice)}`);
 	    }
+    }
 
     const earlyVoiceQueue = await evaluate(workerCdp, `
       (async () => {
@@ -1044,6 +1066,27 @@ async function main() {
       throw new Error(`unexpected demo result: ${resultText}`);
     }
 
+    if (coverageOutput) {
+      const workerCoverage = await evaluate(workerCdp, "globalThis.__coverage__ || null");
+      const contentCoverage = await evaluate(workerCdp, `
+        (async () => {
+          const tabs = await chrome.tabs.query({ url: "http://localhost:*/*" });
+          const snapshots = [];
+          for (const tab of tabs) {
+            const [snapshot] = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: () => globalThis.__coverage__ || null,
+            });
+            if (snapshot?.result) snapshots.push(snapshot.result);
+          }
+          return snapshots;
+        })()
+      `);
+      const coverage = [workerCoverage, ...(contentCoverage || [])].filter(Boolean);
+      mkdirSync(dirname(coverageOutput), { recursive: true });
+      writeFileSync(coverageOutput, JSON.stringify({ schema_version: 1, coverage }));
+    }
+
     console.log(
       `extension smoke passed (REAL extension, headless Chrome for Testing): ` +
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
@@ -1060,8 +1103,8 @@ async function main() {
     browserCdp?.close();
     server.close();
     chrome.kill("SIGTERM");
-    await delay(300);
-    rmSync(runDir, { recursive: true, force: true });
+    await waitForProcessExit(chrome);
+    rmSync(runDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

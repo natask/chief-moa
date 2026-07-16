@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,10 @@ import {
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const { createCoverageMap } = coverageLibrary;
 const { createInstrumenter } = instrumentLibrary;
+const browserOnlySources = new Set([
+  "extension/background.js",
+  "extension/content.js",
+]);
 validateProductionSourceClassification(root);
 
 const testFiles = readdirSync(join(root, "scripts"))
@@ -23,7 +27,11 @@ const testFiles = readdirSync(join(root, "scripts"))
 if (testFiles.length === 0) throw new Error("coverage requires at least one unit test file");
 
 const temporary = mkdtempSync(join(tmpdir(), "agee-extension-coverage-"));
+const cleanupTemporary = () => rmSync(temporary, { recursive: true, force: true });
+process.once("exit", cleanupTemporary);
 const reportDirectory = join(temporary, "report");
+const browserCoveragePath = join(temporary, "browser-istanbul.json");
+const browserExtensionPath = join(temporary, "extension");
 const c8Entry = join(root, "node_modules", "c8", "bin", "c8.js");
 const run = spawnSync(process.execPath, [
   c8Entry,
@@ -44,19 +52,72 @@ if (run.status !== 0) {
   throw new Error(`coverage unit tests failed with exit code ${run.status}`);
 }
 
+cpSync(join(root, "extension"), browserExtensionPath, { recursive: true });
+for (const relative of browserOnlySources) {
+  const absolute = resolve(root, relative);
+  const instrumenter = createInstrumenter({
+    compact: true,
+    esModules: true,
+    coverageGlobalScope: "globalThis",
+    coverageGlobalScopeFunc: false,
+  });
+  const instrumented = instrumenter.instrumentSync(readFileSync(absolute, "utf8"), absolute);
+  writeFileSync(join(browserExtensionPath, relative.replace(/^extension\//, "")), instrumented);
+}
+
+const browserRun = spawnSync(process.execPath, ["scripts/smoke-extension.mjs"], {
+  cwd: root,
+  encoding: "utf8",
+  env: {
+    ...process.env,
+    AGEE_COVERAGE_OUTPUT: browserCoveragePath,
+    AGEE_EXTENSION_PATH: browserExtensionPath,
+    AGEE_INSTRUMENTED_COVERAGE: "1",
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+process.stdout.write(browserRun.stdout || "");
+process.stderr.write(browserRun.stderr || "");
+if (browserRun.status !== 0) {
+  rmSync(temporary, { recursive: true, force: true });
+  throw new Error(`Chromium coverage smoke failed with exit code ${browserRun.status}`);
+}
+
 const executedRaw = JSON.parse(readFileSync(join(reportDirectory, "coverage-final.json"), "utf8"));
 const executedByPath = new Map(
   Object.entries(executedRaw).map(([path, coverage]) => [resolve(path), coverage]),
 );
 const coverageMap = createCoverageMap({});
+const browserCoverageMap = createCoverageMap({});
 const executionKinds = new Map();
+
+const browserRaw = JSON.parse(readFileSync(browserCoveragePath, "utf8"));
+if (browserRaw.schema_version !== 1 || !Array.isArray(browserRaw.coverage)) {
+  throw new Error("Chromium coverage smoke emitted an invalid coverage envelope");
+}
+for (const snapshot of browserRaw.coverage) {
+  for (const [path, converted] of Object.entries(snapshot || {})) {
+    const absolute = resolve(path);
+    const relative = RUNTIME_SOURCE_FILES.find((file) => resolve(root, file) === absolute);
+    if (relative && browserOnlySources.has(relative)) browserCoverageMap.addFileCoverage(converted);
+  }
+}
+const missingBrowserCoverage = [...browserOnlySources]
+  .filter((relative) => !browserCoverageMap.files().includes(resolve(root, relative)));
+if (missingBrowserCoverage.length) {
+  throw new Error(`Chromium coverage omitted required orchestration sources: ${missingBrowserCoverage.join(", ")}`);
+}
 
 for (const relative of RUNTIME_SOURCE_FILES) {
   const absolute = resolve(root, relative);
   const executed = executedByPath.get(absolute);
+  const browserExecuted = browserCoverageMap.files().includes(absolute);
   if (executed) {
     coverageMap.addFileCoverage(executed);
-    executionKinds.set(relative, "v8");
+  }
+  if (browserExecuted) coverageMap.addFileCoverage(browserCoverageMap.fileCoverageFor(absolute));
+  if (executed || browserExecuted) {
+    executionKinds.set(relative, executed && browserExecuted ? "node+chromium" : executed ? "node" : "chromium");
     continue;
   }
 
@@ -129,17 +190,30 @@ for (const name of ["lines", "branches", "functions"]) {
   }
 }
 
-const executedCount = [...executionKinds.values()].filter((kind) => kind === "v8").length;
+const executedCount = [...executionKinds.values()].filter((kind) => kind !== "static-zero").length;
+const browserOnlyResults = [...browserOnlySources].map((relative) => {
+  const summary = coverageMap.fileCoverageFor(resolve(root, relative)).toSummary();
+  return {
+    relative,
+    lines: Number(summary.lines.pct),
+    branches: Number(summary.branches.pct),
+    functions: Number(summary.functions.pct),
+  };
+});
 console.log("production extension coverage (vendor, UI markup/styles, tests, and dev tooling excluded)");
 for (const name of ["lines", "branches", "functions"]) {
   const metric = metrics[name];
   console.log(`  ${name}: ${metric.pct.toFixed(2)}% (${metric.covered}/${metric.total})`);
 }
-console.log(`  V8-executed sources: ${executedCount}/${RUNTIME_SOURCE_FILES.length}; conservative zero metadata: ${RUNTIME_SOURCE_FILES.length - executedCount}`);
+console.log(`  Node/Chromium-executed sources: ${executedCount}/${RUNTIME_SOURCE_FILES.length}; conservative zero metadata: ${RUNTIME_SOURCE_FILES.length - executedCount}`);
+for (const result of browserOnlyResults) {
+  console.log(`  Chromium ${result.relative}: ${result.lines.toFixed(2)}% lines, ${result.branches.toFixed(2)}% branches, ${result.functions.toFixed(2)}% functions`);
+}
 for (const { relative, minimum, result } of focusedResults) {
   console.log(`  focused ${relative}: ${result.lines.toFixed(2)}% lines, ${result.branches.toFixed(2)}% branches, ${result.functions.toFixed(2)}% functions (gate ${minimum}%)`);
 }
 console.log(`  goal: ${Number(ratchet.goal_percent).toFixed(0)}%; current ratchet: ${JSON.stringify(ratchet.minimum_percent)}`);
 
-rmSync(temporary, { recursive: true, force: true });
+process.removeListener("exit", cleanupTemporary);
+cleanupTemporary();
 if (failures.length) throw new Error(`coverage ratchet failed: ${failures.join("; ")}`);

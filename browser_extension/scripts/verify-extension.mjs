@@ -93,6 +93,8 @@ const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
+const coverageSource = readFileSync("scripts/coverage-extension.mjs", "utf8");
+const extensionSmokeSource = readFileSync("scripts/smoke-extension.mjs", "utf8");
 const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel"];
 const requiredHostPermissions = ["http://*/*", "https://*/*", "wss://api.agee.app/*"];
 
@@ -203,6 +205,16 @@ if (
   packageJson.scripts?.verify !== "npm run test:unit && node scripts/verify-extension.mjs"
 ) {
   throw new Error("verification must run every focused unit script and expose the production coverage ratchet");
+}
+if (
+  !/AGEE_EXTENSION_PATH/.test(extensionSmokeSource) ||
+  !/AGEE_COVERAGE_OUTPUT/.test(extensionSmokeSource) ||
+  !/Chromium coverage smoke failed/.test(coverageSource) ||
+  !/coverageGlobalScope: "globalThis"/.test(coverageSource) ||
+  !/coverageGlobalScopeFunc: false/.test(coverageSource) ||
+  !/browserCoverageMap\.addFileCoverage/.test(coverageSource)
+) {
+  throw new Error("production coverage must merge real Chromium content-script and service-worker execution");
 }
 
 if (
