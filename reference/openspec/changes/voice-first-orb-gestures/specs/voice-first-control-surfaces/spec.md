@@ -52,6 +52,10 @@ socket close.
 #### Scenario: Intentional cancel is quiet
 - **WHEN** Android locally cancels or supersedes a voice session
 - **THEN** it does not show a connection-dropped error
+- **AND** a transport failure racing graceful socket close does not show a
+  voice-turn-failed error
+- **WHEN** the same transport failure occurs before any local termination
+- **THEN** Android reports the genuine failure
 
 #### Scenario: Unexpected remote close retains evidence
 - **WHEN** a committed voice session closes remotely before turn completion

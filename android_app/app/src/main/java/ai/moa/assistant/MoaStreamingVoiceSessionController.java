@@ -85,6 +85,7 @@ final class MoaStreamingVoiceSessionController {
     private final Runnable autoCommitCheck = this::maybeAutoCommitTurn;
     private final Runnable pendingCommitTimeout = this::failPendingCommitTurn;
     private final Object lock = new Object();
+    private final MoaVoiceFailureAdmission failureAdmission = new MoaVoiceFailureAdmission();
 
     private MoaAudioCaptureController captureController;
     // A microphone already warmed by the gesture. When present, startSession
@@ -177,6 +178,7 @@ final class MoaStreamingVoiceSessionController {
                 return;
             }
             active = true;
+            int sessionGeneration = failureAdmission.beginSession();
             committed = false;
             commitRequested = false;
             assistantAudioStarted = false;
@@ -197,7 +199,8 @@ final class MoaStreamingVoiceSessionController {
             // CaptureCallback is attached at start()/go-live time, not here.
             captureController = prewarmedCapture != null ? prewarmedCapture : new MoaAudioCaptureController();
             prewarmedCapture = null;
-            gatewaySocket = new MoaVoiceGatewaySocket(gatewayUrl, gatewayToken, new SocketCallback());
+            gatewaySocket = new MoaVoiceGatewaySocket(
+                    gatewayUrl, gatewayToken, new SocketCallback(sessionGeneration));
             gatewaySocket.connect();
         }
         post(() -> callback.onSessionStarted(sessionId(), turnId()));
@@ -268,6 +271,7 @@ final class MoaStreamingVoiceSessionController {
         String currentTurnId;
         MoaAssistantAudioProgressTracker.PlaybackProgress finalPlaybackProgress;
         synchronized (lock) {
+            failureAdmission.markLocalTermination();
             capture = captureController;
             playback = playbackController;
             socket = gatewaySocket;
@@ -320,6 +324,7 @@ final class MoaStreamingVoiceSessionController {
         MoaVoiceGatewaySocket socket;
         String currentTurnId;
         synchronized (lock) {
+            failureAdmission.markLocalTermination();
             capture = captureController;
             playback = playbackController;
             socket = gatewaySocket;
@@ -357,6 +362,7 @@ final class MoaStreamingVoiceSessionController {
         String currentTurnId;
         MoaAssistantAudioProgressTracker.PlaybackProgress finalPlaybackProgress;
         synchronized (lock) {
+            failureAdmission.markLocalTermination();
             capture = captureController;
             playback = playbackController;
             socket = gatewaySocket;
@@ -563,7 +569,16 @@ final class MoaStreamingVoiceSessionController {
 
     private void reportError(String message, Throwable error) {
         mainHandler.removeCallbacks(pendingCommitTimeout);
-        post(() -> callback.onError(message, error));
+        int sessionGeneration = failureAdmission.currentGeneration();
+        if (!failureAdmission.shouldReportFailure(sessionGeneration)) {
+            Log.i(TAG, "ignoring failure after local voice teardown: " + safe(message));
+            return;
+        }
+        post(() -> {
+            if (failureAdmission.shouldReportFailure(sessionGeneration)) {
+                callback.onError(message, error);
+            }
+        });
     }
 
     private void maybeSendFinalPlaybackProgress(MoaVoiceGatewaySocket socket, String currentTurnId, MoaAssistantAudioProgressTracker.PlaybackProgress progress, String reason) {
@@ -745,13 +760,25 @@ final class MoaStreamingVoiceSessionController {
     }
 
     private final class SocketCallback implements MoaVoiceGatewaySocket.Callback {
+        private final int sessionGeneration;
+
+        SocketCallback(int sessionGeneration) {
+            this.sessionGeneration = sessionGeneration;
+        }
+
         @Override
         public void onSocketOpen() {
+            if (!failureAdmission.isCurrentSession(sessionGeneration)) {
+                return;
+            }
             startSessionAfterSocketOpen();
         }
 
         @Override
         public void onSocketClosed(int code, String reason) {
+            if (!failureAdmission.isCurrentSession(sessionGeneration)) {
+                return;
+            }
             boolean wasActive;
             synchronized (lock) {
                 wasActive = active;
@@ -777,9 +804,24 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onSocketFailure(String message, Throwable error) {
+            boolean admitted = failureAdmission.onSocketFailure(sessionGeneration, () ->
+                    handleAdmittedSocketFailure(sessionGeneration, message, error));
+            if (!admitted) {
+                Log.i(TAG, "ignoring socket failure after local voice teardown");
+            }
+        }
+
+        private void handleAdmittedSocketFailure(
+                int admittedGeneration,
+                String message,
+                Throwable error
+        ) {
             MoaAudioCaptureController capture;
             MoaAudioPlaybackController playback;
             synchronized (lock) {
+                if (!failureAdmission.shouldReportFailure(admittedGeneration)) {
+                    return;
+                }
                 capture = captureController;
                 playback = playbackController;
                 active = false;
