@@ -2121,7 +2121,7 @@ async function ensureContent(tabId) {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "page-observation-runtime.js", "content-voice-policy-runtime.js", "content-companion-policy-runtime.js", "content-extension-api-runtime.js", "content-context-control-runtime.js", "content-note-controller-runtime.js", "content-ui-controller-runtime.js", "content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "page-observation-runtime.js", "content-voice-policy-runtime.js", "content-companion-policy-runtime.js", "content-extension-api-runtime.js", "content-context-control-runtime.js", "content-note-controller-runtime.js", "content-dictation-controller-runtime.js", "content-ui-controller-runtime.js", "content.js"] });
   }
 }
 
@@ -2276,7 +2276,7 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
 async function startVoiceSessionWithMode(tabId, opts = {}) {
   // livekit-voice.js delivers straight to a tab's content script; panel
   // sessions must stay on the proxy path, whose events route through send().
-  if (tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
+  if (opts.deliveryIntent !== "literal_text" && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
     try {
       const cfg = await getConfig();
       const sessionId = await getStableSessionId();
@@ -2300,7 +2300,7 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   return startVoiceSessionProxy(tabId, opts);
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, deliveryIntent, frameId, documentId, onSessionCreated } = {}) {
   // Hold the capture mutex across the async setup window. recordSessionStart
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
@@ -2310,7 +2310,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, deliveryIntent, frameId, documentId, onSessionCreated });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
@@ -2334,7 +2334,7 @@ async function switchThreadBranch(cfg, action, label) {
   return String(data?.thread?.branch_id || data?.active?.branch_id || data?.branch_id || "").trim();
 }
 
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, deliveryIntent, frameId, documentId, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
   const session = {
@@ -2363,6 +2363,9 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     maxCommitTimer: null,
     profileOverride,
     sampleText,
+    deliveryIntent: deliveryIntent === "literal_text" ? "literal_text" : null,
+    frameId: Number.isInteger(frameId) ? frameId : 0,
+    documentId: typeof documentId === "string" ? documentId : null,
   };
   voiceSessions.set(id, session);
   onSessionCreated?.(id);
@@ -2482,8 +2485,9 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
           platform: "browser",
           source: "agee-extension",
           device_id: ticket.device_id || "",
-          input: "voice",
+          input: session.deliveryIntent === "literal_text" ? "dictation" : "voice",
         },
+        ...(session.deliveryIntent ? { delivery_intent: session.deliveryIntent } : {}),
         playback_policy: {
           assistant_overlap: assistantOverlap === true,
         },
@@ -2504,6 +2508,9 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         voiceSessionId: id,
         session_id: ticket.session_id,
         conversation_id: ticket.conversation_id || ticket.session_id,
+        tabId: session.tabId,
+        frameId: session.frameId,
+        documentId: session.documentId,
       });
     };
 
@@ -2677,7 +2684,16 @@ function deliverVoiceSessionEvent(session, payload) {
     if (session.pendingEvents.length > MAX_PENDING_VOICE_EVENTS) session.pendingEvents.shift();
     return;
   }
-  send(session.tabId, message);
+  sendVoiceEventToSession(session, message);
+}
+
+function sendVoiceEventToSession(session, message) {
+  if (session.tabId === PANEL_TAB_ID) {
+    send(session.tabId, message);
+    return;
+  }
+  const target = session.documentId ? { documentId: session.documentId } : { frameId: session.frameId };
+  chrome.tabs.sendMessage(session.tabId, message, target).catch(() => {});
 }
 
 function attachVoiceSession(id, tabId) {
@@ -2686,7 +2702,7 @@ function attachVoiceSession(id, tabId) {
   session.attached = true;
   const pendingEvents = session.pendingEvents || [];
   session.pendingEvents = [];
-  for (const event of pendingEvents) send(session.tabId, event);
+  for (const event of pendingEvents) sendVoiceEventToSession(session, event);
   if (session.closed) voiceSessions.delete(id);
   return { ok: true, flushed: pendingEvents.length };
 }
@@ -4129,6 +4145,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       autoCommit: msg.autoCommit !== false,
       contextAction: msg.contextAction,
       threadLabel: msg.threadLabel,
+      deliveryIntent: msg.deliveryIntent,
+      frameId: sender.frameId,
+      documentId: sender.documentId,
     })
       .then((session) => {
         if (session?.voiceSessionId) {

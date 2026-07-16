@@ -166,6 +166,7 @@ const focusedThresholds = new Map([
   ["extension/content-companion-policy-runtime.js", 90],
   ["extension/content-extension-api-runtime.js", 90],
   ["extension/content-context-control-runtime.js", 90],
+  ["extension/content-dictation-controller-runtime.js", 90],
   ["extension/content-note-controller-runtime.js", 90],
   ["extension/content-ui-controller-runtime.js", 90],
 ]);

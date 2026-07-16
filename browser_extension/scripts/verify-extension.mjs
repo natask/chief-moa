@@ -14,6 +14,7 @@ const requiredFiles = [
   "extension/config.js",
   "extension/content-companion-policy-runtime.js",
   "extension/content-context-control-runtime.js",
+  "extension/content-dictation-controller-runtime.js",
   "extension/content-extension-api-runtime.js",
   "extension/content-note-controller-runtime.js",
   "extension/content-ui-controller-runtime.js",
@@ -82,6 +83,7 @@ const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentCompanionPolicySource = readFileSync("extension/content-companion-policy-runtime.js", "utf8");
 const contentContextControlSource = readFileSync("extension/content-context-control-runtime.js", "utf8");
+const contentDictationControllerSource = readFileSync("extension/content-dictation-controller-runtime.js", "utf8");
 const contentExtensionApiSource = readFileSync("extension/content-extension-api-runtime.js", "utf8");
 const contentNoteControllerSource = readFileSync("extension/content-note-controller-runtime.js", "utf8");
 const contentUiControllerSource = readFileSync("extension/content-ui-controller-runtime.js", "utf8");
@@ -139,11 +141,22 @@ if (
   mainContentScript.js.indexOf("content-context-control-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-note-controller-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-note-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
+  mainContentScript.js.indexOf("content-dictation-controller-runtime.js") < 0 ||
+  mainContentScript.js.indexOf("content-dictation-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("content-ui-controller-runtime.js") < 0 ||
   mainContentScript.js.indexOf("content-ui-controller-runtime.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-note-controller-runtime\.js", "content-ui-controller-runtime\.js", "content\.js"\]/.test(backgroundSource)
+  !/files: \["ui-spec-runtime\.js", "page-observation-runtime\.js", "content-voice-policy-runtime\.js", "content-companion-policy-runtime\.js", "content-extension-api-runtime\.js", "content-context-control-runtime\.js", "content-note-controller-runtime\.js", "content-dictation-controller-runtime\.js", "content-ui-controller-runtime\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("content support runtimes must load before content.js in declared and dynamic injection paths");
+}
+if (
+  !/function createController\(/.test(contentDictationControllerSource) ||
+  !/SENSITIVE_TARGET:\s*"sensitive_target"/.test(contentDictationControllerSource) ||
+  !/ALREADY_CONSUMED:\s*"already_consumed"/.test(contentDictationControllerSource) ||
+  !/deliveryIntent:\s*"literal_text"/.test(contentSource) ||
+  !/delivery_intent:\s*session\.deliveryIntent/.test(backgroundSource)
+) {
+  throw new Error("literal dictation must remain locally target-bound, single-consume, sensitive-field rejecting, and explicit on the wire");
 }
 if (
   !/AgeeContentCompanionPolicyRuntime/.test(contentCompanionPolicySource) ||
@@ -901,7 +914,7 @@ if (
 if (
   !/isLivekitVoiceEnabled\(\)/.test(backgroundSource) ||
   !/startLivekitVoiceSession\(/.test(backgroundSource) ||
-  !/if \(tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
+  !/if \(opts\.deliveryIntent !== "literal_text" && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
   !/return startVoiceSessionProxy\(tabId, opts\);/.test(backgroundSource)
 ) {
   throw new Error("background.js must gate LiveKit voice behind the flag and fall back to the WS startVoiceSessionProxy path");
@@ -1103,6 +1116,7 @@ for (const file of [
   "extension/config.js",
   "extension/content-companion-policy-runtime.js",
   "extension/content-context-control-runtime.js",
+  "extension/content-dictation-controller-runtime.js",
   "extension/content-extension-api-runtime.js",
   "extension/content-note-controller-runtime.js",
   "extension/content-ui-controller-runtime.js",

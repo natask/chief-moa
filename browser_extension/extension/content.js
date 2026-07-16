@@ -106,6 +106,7 @@
   let devReloadVersion = null;
   const voicePolicy = window.AgeeContentVoicePolicyRuntime;
   const companionPolicy = window.AgeeContentCompanionPolicyRuntime;
+  let dictationContext = { documentToken: document };
   const {
     base64ToBuffer,
     canCallExtensionApi,
@@ -118,6 +119,32 @@
     getChrome: () => (typeof chrome === "undefined" ? undefined : chrome),
     decodeBase64: (value) => atob(value),
     ByteArray: Uint8Array,
+  });
+  const dictationController = window.AgeeContentDictationControllerRuntime.createController({
+    readActiveTarget: () => document.activeElement,
+    readContext: () => dictationContext,
+    insertText: (target, kind, text) => window.AgeeContentDictationControllerRuntime.insertDomText(target, kind, text, document),
+    watch: (target, invalidate) => {
+      const onBlur = () => invalidate("focus_changed");
+      const onWindowBlur = () => invalidate("stale_context");
+      const onVisibility = () => {
+        if (document.visibilityState !== "visible") invalidate("stale_context");
+      };
+      target.addEventListener?.("blur", onBlur, { once: true });
+      window.addEventListener("blur", onWindowBlur, { once: true });
+      document.addEventListener("visibilitychange", onVisibility);
+      return () => {
+        target.removeEventListener?.("blur", onBlur);
+        window.removeEventListener("blur", onWindowBlur);
+        document.removeEventListener("visibilitychange", onVisibility);
+      };
+    },
+    onReceipt: (receipt) => {
+      safeStorageLocalGet({ ageeDictationReceipts: [] }).then(({ ageeDictationReceipts }) => {
+        const prior = Array.isArray(ageeDictationReceipts) ? ageeDictationReceipts : [];
+        return safeStorageLocalSet({ ageeDictationReceipts: [...prior.slice(-49), receipt] });
+      }).catch(() => {});
+    },
   });
   const {
     consumeContextControls,
@@ -1839,7 +1866,7 @@
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
-    openTextSurface({ fresh: false });
+    if (options.openText !== false) openTextSurface({ fresh: false });
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
@@ -1874,6 +1901,8 @@
       gatewayRouted: false,
       incognito: context.action === "incognito",
       assistantSpeechOverlap: preserveAssistantPlayback,
+      dictationBindingId: options.dictationBindingId || null,
+      deliveryIntent: options.deliveryIntent || null,
     };
     trackLiveVoiceState(state);
     liveVoice = state;
@@ -1891,6 +1920,7 @@
         autoCommit: options.autoCommit !== false,
         contextAction: context.action,
         threadLabel: context.label,
+        deliveryIntent: state.deliveryIntent,
       });
       if (isExtensionContextInvalidated()) {
         stopLiveVoiceState(state, "context invalidated");
@@ -1902,6 +1932,19 @@
         throw new Error(session?.error || "gateway did not open a voice session");
       }
       attachLiveVoiceSession(state, session.voiceSessionId);
+      if (state.dictationBindingId) {
+        const nextContext = {
+          ...dictationContext,
+          tabId: session.tabId,
+          frameId: session.frameId,
+          documentId: session.documentId,
+        };
+        if (!dictationController.attachContext(state.dictationBindingId, nextContext)) {
+          finishLiteralDictation(state, "");
+          return;
+        }
+        dictationContext = nextContext;
+      }
       if (state.commitWhenReady) commitLiveVoiceTurn();
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));
@@ -1969,6 +2012,10 @@
       return;
     }
     if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
+      if (msg.type === "transcript_final" && state.dictationBindingId) {
+        finishLiteralDictation(state, typeof msg.text === "string" ? msg.text : "");
+        return;
+      }
       const incomingText = String(msg.text || "").trim();
       if (!incomingText) return;
       const text = mergeLiveVoiceTranscript(state.transcript, incomingText);
@@ -2254,6 +2301,10 @@
 
   function stopLiveVoiceState(state, mode = "stop") {
     if (!isLiveVoiceStateActive(state)) return;
+    if (state.dictationBindingId) {
+      dictationController.invalidate(state.dictationBindingId, mode === "revoked" ? "stale_context" : "focus_changed");
+      dictationController.insert(state.dictationBindingId, "");
+    }
     stopLiveCapture(state);
     // Capture fully-played segments before stopLivePlayback stop()s the sources.
     const playedSegments = state.framesPlayed || 0;
@@ -2526,6 +2577,37 @@
     beginManualVoiceGesture();
   }
 
+  function beginLiteralDictation(bindingId) {
+    if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
+    stopSpeaking();
+    startLiveVoiceTurn({
+      conversation: false,
+      autoCommit: false,
+      openText: false,
+      dictationBindingId: bindingId,
+      deliveryIntent: "literal_text",
+    });
+    return "started";
+  }
+
+  function finishLiteralDictation(state, transcript) {
+    if (!state?.dictationBindingId || !isLiveVoiceStateActive(state)) return;
+    const result = dictationController.insert(state.dictationBindingId, transcript);
+    state.gatewayRouted = true;
+    state.committed = true;
+    stopLiveCapture(state);
+    sendLiveVoiceControl(state, liveCancelTurnMessage(state, state.framesPlayed || 0));
+    closeLiveVoiceSession(state, result.ok ? "literal dictation inserted" : `literal dictation refused: ${result.reason}`);
+    removeCueCard(state.cueId);
+    untrackLiveVoiceState(state);
+    conversationActive = false;
+    setVoiceState(false);
+    setTranscript("");
+    if (result.ok) reactLauncher("done");
+    else reactLauncher("error");
+    if (agentState !== "idle") setAgentState("idle");
+  }
+
   // Audio/video note capture state is owned by the extracted controller. The
   // content script only projects that state onto the shared record control.
   function setNoteCaptureState(kind, active) {
@@ -2550,7 +2632,18 @@
 
   function armVoiceHotkeyGesture() {
     const startedAt = Date.now();
-    const action = beginManualVoiceGesture();
+    let action;
+    if (liveVoice?.dictationBindingId && listening) {
+      commitLiveVoiceTurn();
+      action = "committed";
+    } else {
+      const binding = dictationController.bind();
+      if (binding.ok) action = beginLiteralDictation(binding.id);
+      else if (binding.reason === "sensitive_target") {
+        reactLauncher("error");
+        action = "blocked";
+      } else action = beginManualVoiceGesture();
+    }
     voiceHotkeyState = { action, hold: false, startedAt };
     clearVoiceHotkeyHoldTimer();
     if (action !== "started") return;
