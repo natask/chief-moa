@@ -377,6 +377,8 @@ public protocol MacProgramJournaling: AnyObject, Sendable {
     func requireApproval(executionID: String, approvalID: String, effectClass: String,
                          capabilityID: String, toolCallID: String, expiresAt: Date, at: Date) throws
     func resolveApproval(executionID: String, approvalID: String, status: String, at: Date) throws
+    func recordProgress(executionID: String, message: String,
+                        completed: Int, total: Int, at: Date) throws
     func finish(executionID: String, result: MacLocalProgramResult, at: Date) throws
     func requestStop(executionID: String, at: Date) throws
     func isStopRequested(executionID: String) throws -> Bool
@@ -606,6 +608,17 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
         }
     }
 
+    public func recordProgress(executionID: String, message: String,
+                               completed: Int, total: Int, at: Date) throws {
+        try update(executionID) { record in
+            guard record.terminal == nil, !record.stopRequested else {
+                throw LocalProgramError.stopped
+            }
+            try Self.append(kind: "progress", at: at, status: message,
+                progressCompleted: completed, progressTotal: total, to: &record)
+        }
+    }
+
     public func finish(executionID: String, result: MacLocalProgramResult, at: Date) throws {
         try update(executionID) { record in
             if let terminal = record.terminal {
@@ -682,6 +695,7 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
     private static func append(kind: String, at: Date, capabilityID: String? = nil,
                                toolCallID: String? = nil, status: String? = nil,
                                approvalID: String? = nil, approvalExpiresAt: Date? = nil,
+                               progressCompleted: Int? = nil, progressTotal: Int? = nil,
                                to record: inout Record) throws {
         let claimant = MacReceiptClaimant(deviceID: record.claimantDeviceID,
             clientInstanceID: record.clientInstanceID)
@@ -708,6 +722,11 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
         case "approval_resolved":
             guard let approvalID, let status else { throw LocalProgramError.invalidInput }
             payload = .approvalResolved(approvalID: approvalID, status: status)
+        case "progress":
+            guard let status, let progressCompleted, let progressTotal else {
+                throw LocalProgramError.invalidInput
+            }
+            payload = .progress(message: status, completed: progressCompleted, total: progressTotal)
         case "terminal":
             guard let receipt = record.terminalReceipt, let status else { throw LocalProgramError.invalidInput }
             payload = .terminal(status: status, receiptID: receipt.receiptID,
