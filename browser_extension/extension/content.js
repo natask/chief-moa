@@ -1956,7 +1956,12 @@
         return;
       }
       if (!session?.ok || !session.voiceSessionId) {
-        throw new Error(session?.error || "gateway did not open a voice session");
+        const recovery = session?.failure_code === "microphone_permission_denied" &&
+          session?.recovery?.target === "microphone_permission"
+          ? session.recovery
+          : null;
+        finishLiveVoiceError(state, session?.error || "gateway did not open a voice session", recovery);
+        return;
       }
       attachLiveVoiceSession(state, session.voiceSessionId);
       if (state.commitWhenReady) commitLiveVoiceTurn();

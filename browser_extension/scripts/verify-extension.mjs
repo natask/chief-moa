@@ -29,6 +29,7 @@ const requiredFiles = [
   "extension/livekit-voice.js",
   "extension/voice-sampler.js",
   "extension/voice-sampler-runtime.js",
+  "extension/voice-start-failure.js",
   "extension/offscreen-livekit.html",
   "extension/offscreen-livekit.js",
   "extension/vendor/livekit-client.esm.js",
@@ -83,6 +84,7 @@ const browserAgentLoopPolicySource = readFileSync("extension/browser-agent-loop-
 const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
+const voiceStartFailureSource = readFileSync("extension/voice-start-failure.js", "utf8");
 const configSource = readFileSync("extension/config.js", "utf8");
 const contentCompanionPolicySource = readFileSync("extension/content-companion-policy-runtime.js", "utf8");
 const contentContextControlSource = readFileSync("extension/content-context-control-runtime.js", "utf8");
@@ -514,6 +516,18 @@ if (
   !/MICROPHONE_RECOVERY_TARGET/.test(optionsRecoverySource)
 ) {
   throw new Error("microphone recovery must render first and open guided Options only after an explicit user action");
+}
+if (
+  !/session\.setupFailure =/.test(backgroundSource) ||
+  !/createVoiceStartError\(session\.setupFailure/.test(backgroundSource) ||
+  !/sendResponse\(voiceStartFailure\(error\)\)/.test(backgroundSource) ||
+  !/return voiceStartFailure\(error\)/.test(backgroundSource) ||
+  !/microphoneRecoveryFromStartFailure\(res\)/.test(sidepanelSource) ||
+  !/session\?\.failure_code === "microphone_permission_denied"/.test(contentSource) ||
+  !/failure\?\.failure_code \|\| ""\) !== MICROPHONE_PERMISSION_FAILURE/.test(voiceStartFailureSource) ||
+  !/failure\?\.recovery\?\.target !== MICROPHONE_RECOVERY_TARGET/.test(voiceStartFailureSource)
+) {
+  throw new Error("microphone start rejection must preserve typed recovery to overlay and side panel");
 }
 
 if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {

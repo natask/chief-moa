@@ -414,6 +414,33 @@ await new Promise((resolve) => setImmediate(resolve));
 assert.equal(active.done, true);
 assert.equal(active.ui.ag.textContent, "Recovered reply");
 
+responseOverrides.set("voiceSessionStart", {
+  ok: false,
+  error: "Chrome denied microphone access.",
+  code: "microphone_capture_failed",
+  failure_code: "microphone_permission_denied",
+  recovery: { target: "microphone_permission", action_label: "Take me to microphone setup" },
+});
+assert.equal(await panel.startTurn("voice", { youText: "" }), null);
+let startFailureCard = document.getElementById("log").children.at(-1);
+assert.equal(startFailureCard.children[1].children[1].textContent, "Take me to microphone setup");
+await startFailureCard.children[1].children[1].emit("click");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(posted.at(-1).cmd, "openOptions");
+assert.equal(posted.at(-1).target, "microphone_permission");
+
+responseOverrides.set("voiceSessionStart", {
+  ok: false,
+  error: "Reload the extension.",
+  code: "offscreen_runtime_unavailable",
+  failure_code: "offscreen_runtime_unavailable",
+  recovery: { target: "microphone_permission", action_label: "Must not render" },
+});
+assert.equal(await panel.startTurn("voice", { youText: "" }), null);
+startFailureCard = document.getElementById("log").children.at(-1);
+assert.equal(startFailureCard.children[1].children.length, 0);
+assert.equal(startFailureCard.children[1].textContent, "Reload the extension.");
+
 responseOverrides.set("voiceSessionStart", { ok: false, error: "start denied" });
 assert.equal(await panel.startTurn("voice", { youText: "" }), null);
 responseOverrides.set("voiceSessionStart", { ok: true });
