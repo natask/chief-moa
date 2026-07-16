@@ -1,14 +1,7 @@
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import vm from "node:vm";
-
-const root = resolve(new URL("..", import.meta.url).pathname);
-const source = readFileSync(join(root, "extension", "voice-draft-protocol.js"), "utf8");
-const context = { globalThis: {} };
-vm.createContext(context);
-vm.runInContext(source, context, { filename: "voice-draft-protocol.js" });
-
-const protocol = context.globalThis.AgeeVoiceDraftProtocol;
+const previousProtocol = globalThis.AgeeVoiceDraftProtocol;
+delete globalThis.AgeeVoiceDraftProtocol;
+await import(`../extension/voice-draft-protocol.js?test=${Date.now()}`);
+const protocol = globalThis.AgeeVoiceDraftProtocol;
 if (!protocol) throw new Error("voice-draft-protocol.js did not install AgeeVoiceDraftProtocol");
 
 function assert(condition, label) {
@@ -38,6 +31,8 @@ const createExpected = { action: "create", draftId: "", requestedRevision: 0, ..
 
 assert(protocol.validateReady(createReady, createExpected).ok === true, "canonical create ready must bind");
 assert(protocol.validateReady(createReady, { ...createExpected, draftId: " bad" }).ok === false, "malformed expected create authority must not become absence");
+assert(protocol.validateReady(createReady, { ...createExpected, draftId: "draft-1" }).ok === false, "create cannot replace supplied draft authority");
+assert(protocol.validateReady(createReady, { ...createExpected, requestedRevision: 1 }).ok === false, "create cannot replace supplied revision authority");
 
 const hostileAuthority = [42, true, " draft-1", "draft-1 ", "../draft", "draft/one", "draft\n1", "x".repeat(121)];
 for (const candidate of hostileAuthority) {
@@ -77,6 +72,7 @@ resumeReady.action = "resume";
 resumeReady.draft.revision = 8;
 const resumeExpected = { action: "resume", draftId: "draft-1", requestedRevision: 7, ...authority };
 assert(protocol.validateReady(resumeReady, resumeExpected).ok === true, "strictly newer resume ready must bind");
+assert(protocol.validateReady(resumeReady, { ...resumeExpected, draftId: "other" }).ok === false, "resume cannot switch drafts");
 for (const revision of [7, 6, "8"]) {
   const event = structuredClone(resumeReady);
   event.draft.revision = revision;
@@ -193,6 +189,9 @@ assert(protocol.commitControlRequest({ voiceSessionId: " voice-1 ", turnId: "tur
 const lateDraft = protocol.lateStartDisposition({ active: false, draftMode: true, voiceSessionId: "voice-1", turnId: "turn-1" });
 assert(lateDraft?.primary?.message?.type === "discard_turn", "late cancelled draft is discarded instead of attached");
 assert(lateDraft?.fallback?.cmd === "voiceSessionClose", "late draft has a close fallback");
+const lateOrdinary = protocol.lateStartDisposition({ active: false, draftMode: false, voiceSessionId: "voice-1", turnId: "turn-1" });
+assert(lateOrdinary?.primary?.cmd === "voiceSessionClose" && lateOrdinary.fallback === null, "late ordinary start closes directly");
+assert(protocol.lateStartDisposition({ active: false, draftMode: false, voiceSessionId: "", turnId: "turn-1" }) === null, "late start needs exact session authority");
 assert(protocol.lateStartDisposition({ active: true, draftMode: true, voiceSessionId: "voice-1", turnId: "turn-1" }) === null, "active start may attach");
 assert(protocol.acceptedCapabilityResponse(1, 2, { supported: true, gateway_url: "https://old.example", expires_at_ms: 10 }) === null, "old endpoint generation cannot enable a replacement");
 assert(protocol.acceptedCapabilityResponse(2, 2, { supported: true, gateway_url: "https://new.example", expires_at_ms: 10 })?.gatewayUrl === "https://new.example", "current endpoint capability is bound to its URL");
@@ -210,5 +209,8 @@ assert(protocol.capabilityFresh({ supported: true, stale: false, expiresAtMs: 10
 assert(protocol.capabilityFresh({ supported: true, stale: false, expiresAtMs: 1000 }, 1000) === false, "expiry boundary fails closed");
 assert(protocol.capabilityFresh({ supported: true, stale: true, expiresAtMs: 1001 }, 1000) === false, "stale capability rejected");
 assert(protocol.capabilityFresh({ supported: true, stale: false, expiresAtMs: "1001" }, 1000) === false, "string expiry rejected");
+
+if (previousProtocol === undefined) delete globalThis.AgeeVoiceDraftProtocol;
+else globalThis.AgeeVoiceDraftProtocol = previousProtocol;
 
 console.log("voice-draft-protocol ok");
