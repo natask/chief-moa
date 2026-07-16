@@ -6,6 +6,15 @@ import static org.junit.Assert.assertEquals;
 
 public final class MoaSpeechTranscriptAccumulatorTest {
     @Test
+    public void cumulativeCorrectionReplacesLionWithLine() {
+        MoaSpeechTranscriptAccumulator accumulator = new MoaSpeechTranscriptAccumulator();
+
+        assertEquals("draw the lion", accumulator.updateCumulative("draw the lion"));
+        assertEquals("draw the line", accumulator.updateCumulative("draw the line"));
+        assertEquals("draw line", accumulator.finalizeExact("draw line"));
+    }
+
+    @Test
     public void cumulativeRecognizerUpdatesReplaceOlderHypothesis() {
         MoaSpeechTranscriptAccumulator accumulator = new MoaSpeechTranscriptAccumulator();
 

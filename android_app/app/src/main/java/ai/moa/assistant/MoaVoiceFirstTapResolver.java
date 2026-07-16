@@ -1,22 +1,18 @@
 package ai.moa.assistant;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 final class MoaVoiceFirstTapResolver {
     enum CaptureOrigin {
         NONE,
-        CURRENT_THREAD,
-        FRESH_THREAD
+        CURRENT_THREAD
     }
 
     enum Action {
-        START_OR_INTERRUPT,
+        START_OR_CONTINUE,
         STOP_AND_SEND,
-        CANCEL_CAPTURE,
-        START_FRESH,
-        OPEN_CHAT
+        HARD_INTERRUPT
     }
 
     private int tapCount;
@@ -34,33 +30,17 @@ final class MoaVoiceFirstTapResolver {
         reset();
         CaptureOrigin origin = captureOrigin == null ? CaptureOrigin.NONE : captureOrigin;
         if (resolvedTapCount == 1) {
-            if (origin == CaptureOrigin.FRESH_THREAD) {
-                // A fresh-thread capture belongs to the double-click toggle.
-                // A colliding single click cannot send or cancel it.
-                return Collections.emptyList();
-            }
             return Collections.singletonList(origin == CaptureOrigin.CURRENT_THREAD
                     ? Action.STOP_AND_SEND
-                    : Action.START_OR_INTERRUPT);
+                    : Action.START_OR_CONTINUE);
         }
         if (resolvedTapCount == 2) {
-            if (origin == CaptureOrigin.FRESH_THREAD) {
-                return Collections.singletonList(Action.STOP_AND_SEND);
-            }
-            List<Action> actions = new ArrayList<>();
-            if (origin == CaptureOrigin.CURRENT_THREAD) {
-                actions.add(Action.CANCEL_CAPTURE);
-            }
-            actions.add(Action.START_FRESH);
-            return actions;
+            return origin == CaptureOrigin.NONE
+                    ? Collections.singletonList(Action.START_OR_CONTINUE)
+                    : Collections.emptyList();
         }
         if (resolvedTapCount == 3) {
-            List<Action> actions = new ArrayList<>();
-            if (origin != CaptureOrigin.NONE) {
-                actions.add(Action.CANCEL_CAPTURE);
-            }
-            actions.add(Action.OPEN_CHAT);
-            return actions;
+            return Collections.singletonList(Action.HARD_INTERRUPT);
         }
         return Collections.emptyList();
     }

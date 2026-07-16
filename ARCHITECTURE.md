@@ -308,17 +308,24 @@ into background assistant speech, where starting a new spoken turn opens a new
 gateway voice turn without stopping already queued assistant audio.
 
 The voice-first gesture contract (browser flag
-`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) is manual
-and cross-surface: single click toggles current-thread capture; a still hold is
-push-to-talk in that thread and release sends; double-click toggles capture in a
-fresh thread; triple-click cancels without sending and opens chat. Starting a
-fresh-thread capture cancels an active current-thread capture without sending.
-Large movement after a hold starts cancels capture and escapes into drag. No
-separate X/Send side controls own disposition, and normal manual turns never
-wait for silence detection. The one open chat/transcript card follows the orb
+`ageeVoiceFirstGesturesEnabled`, Android pref `voice_first_gestures`) keeps
+ordinary capture on the active durable thread. Single click starts capture or
+commits an active draft; double-click starts/continues the same thread and never
+issues a fresh-thread action; triple-click is the explicit hard interrupt; a
+fourth click and beyond are inert. A still hold remains push-to-talk in that
+thread and release sends. Large movement after a hold starts cancels capture and
+escapes into drag. Android retains native X/Send alternatives beside a tap
+draft, and orb tap, Send, and post-speech silence converge on one idempotent
+commit. Streaming partials replace the previous cumulative hypothesis and the
+final transcript is authoritative. Local cancellation is distinct from remote
+socket closure, whose code/reason remain diagnostic evidence. The one open chat/transcript card follows the orb
 and flips wholly above or below it. Android drag-to-remove and explicit Hide
 actions keep their existing behavior. Keyboard shortcuts and flag-off legacy
 behavior remain unchanged. Delivery policy is separate from gesture mechanics.
+True capture while a previous response continues playing remains blocked on
+splitting the Android capture/playback controller and adding a gateway causal
+queue; Android therefore preserves the active response rather than cancelling
+it when same-thread continue cannot safely begin immediately.
 The gateway owns versioned, device-scoped Ask/Note/Coach admission as internal
 routing state. Clients do not expose a mode selector: the user changes behavior
 conversationally (for example, "take a note" or "coach me") and preflight

@@ -305,8 +305,8 @@ public final class OverlayService extends Service {
         discardWarmMic();
         cancelStreamingTurnWatchdog();
         voiceLog.clear();
-        removeTranscriptOverlay();
         removeVoiceDraftControls();
+        removeTranscriptOverlay();
         removePanel();
         removeOrbRemoveTarget();
         if (orbDragFrameCoalescer != null) {
@@ -533,9 +533,7 @@ public final class OverlayService extends Service {
                 this::manualTapCaptureOrigin,
                 this::handleOrbStartTalkLoop,
                 this::handleOrbStopAndSend,
-                this::handleOrbStartFreshTalkLoop,
                 this::handleOrbCancelTalkLoop,
-                this::showPanel,
                 this::handleOrbPushToTalkCancel,
                 this::showOrbRemoveTarget,
                 this::updateOrbDragSurfaces,
@@ -1377,6 +1375,7 @@ public final class OverlayService extends Service {
         if (voiceLanguageLine != null) {
             voiceLanguageLine.setText(sessionLanguageStatus());
         }
+        updateVoiceDraftControls();
     }
 
     private String sessionLanguageStatus() {
@@ -2582,26 +2581,22 @@ public final class OverlayService extends Service {
                 : MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
     }
 
-    // VOICE-FIRST single quick tap (draft off) = start a reviewable draft with
-    // barge-in. Starting stops any assistant audio first, which is the interrupt.
-    // A tap never cuts a live user mic: while a PTT hold or a record capture owns
-    // the mic this is a no-op, so nothing spoken is dropped.
+    // Single/double start always stays on the current durable thread. A normal
+    // start never cancels an in-flight response; triple tap is the explicit hard
+    // interrupt. True simultaneous capture + playback needs a split controller
+    // and gateway causal queue, so an active response is preserved here.
     private void handleOrbStartTalkLoop() {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
-        boolean freshThread = nextVoiceCaptureFreshThread;
-        manualTapCaptureOrigin = freshThread
-                ? MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD
-                : MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD;
+        if (streamingVoiceActive() && currentStreamingTurnCommitRequested) {
+            return;
+        }
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD;
         if (recordModeEnabled) {
             startAudioNoteCapture();
             return;
         }
-        stopAssistantAudioForBargeIn();
-        // Suppress the "didn't catch that" cue for this first turn only: a tap that
-        // starts the loop and captures no speech was a barge-in or a stray tap, not
-        // a failed utterance. Set after the barge-in teardown clears it.
         suppressFirstTapTurnEmptyCue = true;
         startReviewableVoiceDraft();
         nextVoiceCaptureFreshThread = false;
@@ -2615,31 +2610,21 @@ public final class OverlayService extends Service {
         sendVoiceDraft();
     }
 
-    private void handleOrbStartFreshTalkLoop() {
-        if (pushToTalkVoiceTurn || audioNoteActive) {
-            return;
-        }
-        if (recordModeEnabled) {
-            startAudioNoteCapture();
-            manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
-            return;
-        }
-        contextControls.armNewThread();
-        refreshContextControls();
-        nextVoiceCaptureFreshThread = true;
-        handleOrbStartTalkLoop();
-        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
-    }
-
     private void handleOrbCancelTalkLoop() {
         suppressFirstTapTurnEmptyCue = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         if (audioNoteActive) {
             cancelAudioNoteCapture();
         }
-        discardVoiceDraft();
-        voiceLog.clear();
-        removeTranscriptOverlay();
+        if (streamingVoiceActive()) {
+            stopStreamingVoiceKeepingCard();
+        } else {
+            continuousVoiceLoop = false;
+            cancelContinuousVoiceRestart();
+            voiceController.stopQuietly();
+        }
+        cancelVoiceSampler();
+        setVoiceRuntimeState(VoiceRuntimeState.READY);
         updateMicState();
     }
 
@@ -3227,11 +3212,9 @@ public final class OverlayService extends Service {
             startLocalVoiceTurn(true, true);
             return;
         }
-        // Tap-created drafts never use silence auto-commit. The matching orb
-        // toggle commits; triple-click cancels locally before opening chat.
-        // Continuous here means the draft remains the active voice surface,
-        // not that it auto-rearms after reply.
-        startStreamingVoiceTurn(false, true);
+        // Natural silence sends automatically; tapping the orb or Send invokes
+        // the same idempotent controller commit while the draft is still open.
+        startStreamingVoiceTurn(true, true);
     }
 
     private void startStreamingVoiceTurn(boolean autoCommitOnSilence, boolean continuousLoop) {
@@ -3415,7 +3398,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 markStreamingTurnProgressing();
-                String transcript = streamingTranscriptAccumulator.update(text);
+                String transcript = streamingTranscriptAccumulator.updateCumulative(text);
                 currentStreamingTranscript = safe(transcript);
                 updateVoiceUserTranscript(currentStreamingTranscript, currentStreamingTurnCommitRequested);
                 setVoiceRuntimeState(currentStreamingTurnCommitRequested ? VoiceRuntimeState.THINKING : VoiceRuntimeState.LISTENING);
@@ -3430,7 +3413,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 markStreamingTurnProgressing();
-                String transcript = safe(streamingTranscriptAccumulator.update(text));
+                String transcript = safe(streamingTranscriptAccumulator.finalizeExact(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
                     if (nextStreamingTurnFollowsActiveRun || agentRuns.hasRuns()) {
@@ -3615,11 +3598,14 @@ public final class OverlayService extends Service {
             }
 
             @Override
-            public void onSessionClosed() {
+            public void onSessionClosed(MoaVoiceSessionTermination termination) {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
                 cancelStreamingTurnWatchdog();
+                if (termination.kind == MoaVoiceSessionTermination.Kind.LOCAL_CANCEL) {
+                    return;
+                }
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -3628,7 +3614,12 @@ public final class OverlayService extends Service {
                 // committed and in flight, say so instead of resetting silently.
                 if (currentStreamingTurnCommitRequested) {
                     currentStreamingTurnCommitRequested = false;
-                    String notice = "Voice connection dropped — try again.";
+                    String closeDetail = termination.code > 0
+                            ? " (code " + termination.code + ")"
+                            : "";
+                    Log.w(TAG, "voice socket closed" + closeDetail + ": " + safe(termination.reason));
+                    String notice = "Voice connection dropped" + closeDetail
+                            + ". Your words are still here — tap Send to retry.";
                     updateVoiceAssistantTranscript(notice);
                     speakOverlayNotice(notice);
                     setVoiceRuntimeState(VoiceRuntimeState.ERROR);

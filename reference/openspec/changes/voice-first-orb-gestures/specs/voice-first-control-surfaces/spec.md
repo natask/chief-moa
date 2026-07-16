@@ -1,71 +1,69 @@
 ## ADDED Requirements
 
-### Requirement: Android voice-first gestures manually control capture
-When the Android `voice_first_gestures` preference is enabled, the overlay SHALL
-use explicit user gestures to start and stop capture. Silence or assistant/model
-output SHALL NOT dispose a normal manual capture. The gesture that starts a
-toggle capture SHALL be the only toggle gesture that can send it.
+### Requirement: Android voice-first gestures use one durable thread
+When `voice_first_gestures` is enabled, Android SHALL keep ordinary voice
+capture on the active durable thread. Silence, the orb, and the visible Send
+control MAY converge on the same idempotent commit operation.
 
-#### Scenario: Single click toggles current-thread capture
-- **WHEN** the voice-first Android flag is enabled and the user single-clicks
-  the idle orb
-- **THEN** Android starts capture on the current active thread
-- **WHEN** the user later single-clicks that current-thread capture
-- **THEN** Android stops and sends the turn exactly once
+#### Scenario: Single tap starts or sends
+- **WHEN** the user single-taps the idle orb
+- **THEN** Android starts capture on the active thread
+- **WHEN** the user single-taps while that capture is active
+- **THEN** Android commits the turn exactly once
 
-#### Scenario: Double-click toggles fresh-thread capture
-- **WHEN** the user double-clicks the idle orb
-- **THEN** Android starts capture with the explicit fresh-thread context action
-- **WHEN** the user later single-clicks that fresh-thread capture
-- **THEN** Android does not send it
-- **WHEN** the user later double-clicks that fresh-thread capture
-- **THEN** Android stops and sends the turn exactly once
+#### Scenario: Silence sends a completed utterance
+- **WHEN** speech has been detected and the post-speech silence reaches the
+  endpointing threshold
+- **THEN** Android commits the same draft exactly once
+- **AND** a later orb or Send tap cannot duplicate it
 
-#### Scenario: Fresh start cannot leak current capture
-- **WHEN** current-thread capture is active and the user double-clicks
-- **THEN** Android cancels that capture without sending
-- **AND** starts a fresh-thread capture
+#### Scenario: Double tap never replaces the thread
+- **WHEN** the user double-taps while idle
+- **THEN** Android starts or continues voice on the active durable thread
+- **AND** does not issue a fresh-thread context action
+- **WHEN** capture is already active
+- **THEN** double tap neither cancels nor commits that capture
 
-#### Scenario: Hold is same-thread push-to-talk
-- **WHEN** the user presses and holds the still orb past the hold threshold
-- **THEN** Android starts capture on the current thread
-- **AND** release stops and sends exactly once
-- **AND** a large movement after capture starts cancels and escapes into drag
+#### Scenario: Triple tap is the hard interrupt
+- **WHEN** the user triple-taps during capture, playback, or an active response
+- **THEN** Android stops that active voice work without sending an uncommitted draft
+- **AND** preserves prior transcript/history text
+- **AND** a fourth tap and beyond do nothing
 
-#### Scenario: Triple click opens chat without sending
-- **WHEN** capture is active and the user triple-clicks
-- **THEN** Android cancels it without sending
-- **AND** opens chat with no hot mic
+#### Scenario: Draft controls remain explicit alternatives
+- **WHEN** a tap-started draft is active
+- **THEN** Android renders native X and Send controls beside the orb
+- **AND** X cancels an uncommitted draft locally
+- **AND** Send invokes the same idempotent commit as silence or an orb tap
 
-#### Scenario: Flag off preserves the legacy contract
-- **WHEN** the voice-first Android flag is disabled
-- **THEN** a single tap opens chat
-- **AND** double-click-and-hold remains the voice capture gesture
+### Requirement: Streaming transcripts are authoritative snapshots
+Android SHALL treat streaming partial hypotheses as cumulative snapshots and
+the final hypothesis as authoritative.
 
-### Requirement: Browser voice-first gestures match Android
-When `ageeVoiceFirstGesturesEnabled` is enabled, the browser mascot SHALL expose
-the same single, hold, double, and triple gesture meanings as Android. It SHALL
-NOT expose separate X/Send voice-draft controls.
+#### Scenario: Provider corrects a word
+- **WHEN** a partial changes from `draw the lion` to `draw the line`
+- **THEN** the visible transcript is `draw the line`
+- **AND** the superseded word is not appended
 
-#### Scenario: Browser single and double toggles are origin matched
-- **WHEN** a single click starts current-thread capture
-- **THEN** only a later single click stops and sends it
-- **WHEN** a double-click starts fresh-thread capture
-- **THEN** a later single click does not send it
-- **AND** only a later double-click stops and sends it
+### Requirement: Session termination distinguishes intent
+Android SHALL distinguish an intentional local cancel from an unexpected remote
+socket close.
 
-#### Scenario: Browser double-click replaces current capture safely
-- **WHEN** current-thread capture is active and the user double-clicks
-- **THEN** the browser cancels it without sending
-- **AND** starts fresh-thread capture
+#### Scenario: Intentional cancel is quiet
+- **WHEN** Android locally cancels or supersedes a voice session
+- **THEN** it does not show a connection-dropped error
 
-#### Scenario: Browser hold and triple-click are collision safe
-- **WHEN** the user holds the still mascot
-- **THEN** capture is push-to-talk and release sends exactly once
-- **WHEN** the user triple-clicks while capture is active
-- **THEN** the browser cancels without sending and opens chat
+#### Scenario: Unexpected remote close retains evidence
+- **WHEN** a committed voice session closes remotely before turn completion
+- **THEN** Android keeps the recognized utterance visible
+- **AND** reports the close code while offering retry
 
-#### Scenario: Removed side controls cannot retain authority
-- **WHEN** voice-first capture is active
-- **THEN** no separate X or Send control is rendered beside the mascot
-- **AND** transcript/chat cards do not own capture disposition
+### Requirement: Browser converges on the same chord
+The browser voice-first surface SHALL converge on the same single/double/triple
+meanings and idempotent send behavior. Browser delivery is a separate lane from
+this Android implementation unit.
+
+#### Scenario: Browser follow-up retains the durable thread
+- **WHEN** the browser voice-first lane adopts this contract
+- **THEN** double click does not create a fresh thread
+- **AND** triple click is the hard interrupt

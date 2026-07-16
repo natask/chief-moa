@@ -24,10 +24,10 @@ import java.util.function.Supplier;
 //   A single tap is confirmed only after the double-tap window passes, so the
 //   chat menu never flashes before a double-click hold engages voice.
 //
-// Flag ON (manual voice):
-//   single quick tap       -> toggle current-thread capture; inert during fresh-thread capture
-//   double quick tap       -> toggle fresh-thread capture, replacing an active current draft
-//   triple quick tap       -> cancel an active draft and open chat
+// Flag ON (voice first):
+//   single quick tap       -> start current-thread capture, or send an active capture
+//   double quick tap       -> start/continue the current durable thread; never replace it
+//   triple quick tap       -> hard interrupt capture/playback/response
 //   fourth tap and beyond  -> nothing
 //   press-and-hold, still  -> onDoublePressStart / onPressToTalkRelease
 //                             (push to talk; the mic warms at press-down)
@@ -69,9 +69,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final Supplier<MoaVoiceFirstTapResolver.CaptureOrigin> manualCaptureOrigin;
     private final Runnable onStartTalkLoop;
     private final Runnable onSendTalkLoop;
-    private final Runnable onStartFreshTalkLoop;
-    private final Runnable onCancelTalkLoop;
-    private final Runnable onOpenChat;
+    private final Runnable onHardInterrupt;
     private final Runnable onPressToTalkCancel;
     private final Runnable onOrbDragStart;
     private final Runnable onOrbDragMove;
@@ -117,9 +115,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             Supplier<MoaVoiceFirstTapResolver.CaptureOrigin> manualCaptureOrigin,
             Runnable onStartTalkLoop,
             Runnable onSendTalkLoop,
-            Runnable onStartFreshTalkLoop,
-            Runnable onCancelTalkLoop,
-            Runnable onOpenChat,
+            Runnable onHardInterrupt,
             Runnable onPressToTalkCancel,
             Runnable onOrbDragStart,
             Runnable onOrbDragMove,
@@ -138,9 +134,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         this.manualCaptureOrigin = manualCaptureOrigin;
         this.onStartTalkLoop = onStartTalkLoop;
         this.onSendTalkLoop = onSendTalkLoop;
-        this.onStartFreshTalkLoop = onStartFreshTalkLoop;
-        this.onCancelTalkLoop = onCancelTalkLoop;
-        this.onOpenChat = onOpenChat;
+        this.onHardInterrupt = onHardInterrupt;
         this.onPressToTalkCancel = onPressToTalkCancel;
         this.onOrbDragStart = onOrbDragStart;
         this.onOrbDragMove = onOrbDragMove;
@@ -407,9 +401,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 actions,
                 onStartTalkLoop,
                 onSendTalkLoop,
-                onCancelTalkLoop,
-                onStartFreshTalkLoop,
-                onOpenChat
+                onHardInterrupt
         );
     }
 
