@@ -159,6 +159,64 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
   throw new Error(`Timed out waiting for expression: ${expression}; last=${JSON.stringify(lastValue)}`);
 }
 
+async function elementCenter(cdp, selector) {
+  const point = await evaluate(cdp, `(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) return null;
+    element.scrollIntoView({ block: "center", inline: "center" });
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    return {
+      x,
+      y,
+      hit: hit?.id || hit?.className || hit?.tagName || "",
+      hitMatches: hit === element || element.contains(hit),
+    };
+  })()`);
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !point.hitMatches) {
+    throw new Error(`could not hit ${selector} with trusted pointer input: ${JSON.stringify(point)}`);
+  }
+  return point;
+}
+
+async function trustedPointerDown(cdp, point) {
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+}
+
+async function trustedPointerUp(cdp, point) {
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+}
+
+async function trustedTaps(cdp, point, count, gapMs = 35) {
+  for (let index = 0; index < count; index += 1) {
+    await trustedPointerDown(cdp, point);
+    await trustedPointerUp(cdp, point);
+    if (index + 1 < count) await delay(gapMs);
+  }
+}
+
+async function trustedEscape(cdp) {
+  const params = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...params });
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
+}
+
 function assertVoicePlaybackStopContract() {
   const source = readFileSync(join(sourceExtensionPath, "content.js"), "utf8");
   const extensionApi = readFileSync(join(sourceExtensionPath, "content-extension-api-runtime.js"), "utf8");
@@ -657,7 +715,176 @@ async function main() {
 	    ) {
 	      throw new Error(`shortcut voice/text smoke failed: ${JSON.stringify(shortcutVoice)}`);
 	    }
+	    }
+
+	    const pointerTabId = await evaluate(workerCdp, `
+	      chrome.tabs.query({ url: "http://localhost/*" }).then((tabs) =>
+	        tabs.find((tab) => tab.url === ${JSON.stringify(demoUrl)})?.id || null
+	      )
+	    `);
+	    if (!pointerTabId) throw new Error("could not correlate the trusted pointer page with its Chrome tab");
+	    await pageCdp.send("Page.bringToFront");
+	    const pointerSmokeInstall = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${pointerTabId};
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            window.__ageePointerSmoke = { calls: [], seq: 0 };
+            window.__ageePointerSmokeOrig = chrome.runtime.sendMessage.bind(chrome.runtime);
+            chrome.runtime.sendMessage = (message, ...rest) => {
+              const clean = JSON.parse(JSON.stringify(message || {}));
+              window.__ageePointerSmoke.calls.push(clean);
+              if (clean.cmd === "voiceSessionStart") {
+                window.__ageePointerSmoke.seq += 1;
+                return Promise.resolve({
+                  ok: true,
+                  voiceSessionId: "pointer-smoke-" + window.__ageePointerSmoke.seq,
+                });
+              }
+              if (["voiceSessionAttach", "voiceSessionControl", "voiceSessionClose"].includes(clean.cmd)) {
+                return Promise.resolve({ ok: true });
+              }
+              return window.__ageePointerSmokeOrig(message, ...rest);
+            };
+          },
+        });
+        await chrome.tabs.sendMessage(tabId, { cmd: "stop" });
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => { window.__ageePointerSmoke.calls = []; },
+        });
+        return true;
+      })()
+    `);
+    if (pointerSmokeInstall !== true) throw new Error("trusted pointer voice fake did not install");
+
+    const readPointerSmoke = () => evaluate(workerCdp, `
+      (async () => {
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId: ${pointerTabId} },
+          func: () => ({
+            calls: window.__ageePointerSmoke?.calls || [],
+            listening: document.querySelector("#agee-voice")?.classList.contains("listening") || false,
+            open: document.querySelector("#agee-root")?.classList.contains("agee-open") || false,
+          }),
+        });
+        return result?.result || null;
+      })()
+    `);
+    const resetPointerSmoke = () => evaluate(workerCdp, `
+      chrome.scripting.executeScript({
+        target: { tabId: ${pointerTabId} },
+        func: () => { window.__ageePointerSmoke.calls = []; },
+      }).then(() => true)
+    `);
+    const stopPointerVoice = () => evaluate(workerCdp, `
+      chrome.tabs.sendMessage(${pointerTabId}, { cmd: "stop" }).then(() => true)
+    `);
+
+    if ((await readPointerSmoke())?.open) {
+      await trustedEscape(pageCdp);
+      await delay(100);
     }
+    const tapLauncher = async (count) => {
+	      await pageCdp.send("Page.bringToFront");
+      const point = await elementCenter(pageCdp, "#agee-launcher");
+      await trustedTaps(pageCdp, point, count);
+    };
+
+    await tapLauncher(1);
+    await delay(340);
+    const pointerSingleStarted = await readPointerSmoke();
+    await tapLauncher(1);
+    await delay(340);
+    const pointerSingleStopped = await readPointerSmoke();
+    const singleStarts = pointerSingleStarted?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
+    const singleCommits = pointerSingleStopped?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+    if (
+      !pointerSingleStarted?.listening || pointerSingleStarted?.open ||
+      singleStarts.length !== 1 || singleStarts[0]?.contextAction ||
+      pointerSingleStopped?.listening || singleCommits.length !== 1
+    ) {
+      throw new Error(`trusted single pointer gesture failed: ${JSON.stringify({ pointerSingleStarted, pointerSingleStopped })}`);
+    }
+    await stopPointerVoice();
+    await resetPointerSmoke();
+
+    await tapLauncher(2);
+    await delay(340);
+    const pointerDoubleStartedForSingle = await readPointerSmoke();
+    await tapLauncher(1);
+    await delay(340);
+    const pointerDoubleStoppedBySingle = await readPointerSmoke();
+    const doubleSingleStarts = pointerDoubleStartedForSingle?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
+    const doubleSingleCommits = pointerDoubleStoppedBySingle?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+    if (
+      !pointerDoubleStartedForSingle?.listening || pointerDoubleStartedForSingle?.open ||
+      doubleSingleStarts.length !== 1 || doubleSingleStarts[0]?.contextAction !== "new" ||
+      pointerDoubleStoppedBySingle?.listening || doubleSingleCommits.length !== 1
+    ) {
+      throw new Error(`trusted double/single pointer gesture failed: ${JSON.stringify({ pointerDoubleStartedForSingle, pointerDoubleStoppedBySingle })}`);
+    }
+    await stopPointerVoice();
+    await resetPointerSmoke();
+
+    await tapLauncher(2);
+    await delay(340);
+    const pointerDoubleStartedForDouble = await readPointerSmoke();
+    await tapLauncher(2);
+    await delay(340);
+    const pointerDoubleStoppedByDouble = await readPointerSmoke();
+    const doubleDoubleStarts = pointerDoubleStartedForDouble?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
+    const doubleDoubleCommits = pointerDoubleStoppedByDouble?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+    if (
+      !pointerDoubleStartedForDouble?.listening || pointerDoubleStartedForDouble?.open ||
+      doubleDoubleStarts.length !== 1 || doubleDoubleStarts[0]?.contextAction !== "new" ||
+      pointerDoubleStoppedByDouble?.listening || doubleDoubleCommits.length !== 1
+    ) {
+      throw new Error(`trusted double/double pointer gesture failed: ${JSON.stringify({ pointerDoubleStartedForDouble, pointerDoubleStoppedByDouble })}`);
+    }
+    await stopPointerVoice();
+    await resetPointerSmoke();
+
+    await tapLauncher(3);
+    await delay(340);
+    const pointerTriple = await readPointerSmoke();
+    if (!pointerTriple?.open || pointerTriple.listening || pointerTriple.calls.some((call) => call.cmd === "voiceSessionStart")) {
+      throw new Error(`trusted triple pointer gesture failed: ${JSON.stringify(pointerTriple)}`);
+    }
+    await trustedEscape(pageCdp);
+    await delay(100);
+    await resetPointerSmoke();
+
+    await pageCdp.send("Page.bringToFront");
+    const holdPoint = await elementCenter(pageCdp, "#agee-launcher");
+    await trustedPointerDown(pageCdp, holdPoint);
+    await delay(320);
+    const pointerHoldStarted = await readPointerSmoke();
+    await trustedPointerUp(pageCdp, holdPoint);
+    await delay(140);
+    const pointerHoldReleased = await readPointerSmoke();
+    const holdPointerStarts = pointerHoldStarted?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
+    const holdPointerCommits = pointerHoldReleased?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+    if (
+      !pointerHoldStarted?.listening || pointerHoldStarted?.open ||
+      holdPointerStarts.length !== 1 || holdPointerStarts[0]?.autoCommit !== false ||
+      pointerHoldReleased?.listening || holdPointerCommits.length !== 1
+    ) {
+      throw new Error(`trusted hold pointer gesture failed: ${JSON.stringify({ pointerHoldStarted, pointerHoldReleased })}`);
+    }
+    await stopPointerVoice();
+    await evaluate(workerCdp, `
+      chrome.scripting.executeScript({
+        target: { tabId: ${pointerTabId} },
+        func: () => {
+          if (window.__ageePointerSmokeOrig) chrome.runtime.sendMessage = window.__ageePointerSmokeOrig;
+          delete window.__ageePointerSmoke;
+          delete window.__ageePointerSmokeOrig;
+        },
+      }).then(() => true)
+    `);
 
     const earlyVoiceQueue = await evaluate(workerCdp, `
       (async () => {
@@ -1147,11 +1374,97 @@ async function main() {
       writeFileSync(coverageOutput, JSON.stringify({ schema_version: 1, coverage }));
     }
 
+    const updateReinjection = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${pointerTabId};
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const root = document.querySelector("#agee-root");
+            if (root) root.dataset.ageeReloadProbe = "stale";
+            window.__ageeLoaded = "previous-extension-version";
+          },
+        });
+        await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: [
+            "ui-spec-runtime.js",
+            "page-observation-runtime.js",
+            "content-voice-policy-runtime.js",
+            "content-companion-policy-runtime.js",
+            "content-extension-api-runtime.js",
+            "content-context-control-runtime.js",
+            "content-note-controller-runtime.js",
+            "content-ui-controller-runtime.js",
+            "voice-capture-gesture.js",
+            "content.js",
+          ],
+        });
+        const pingAfter = (await chrome.tabs.sendMessage(tabId, { cmd: "ping" }))?.ok === true;
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            window.__ageeUpdateSmoke = { calls: [], seq: 0 };
+            window.__ageeUpdateSmokeOrig = chrome.runtime.sendMessage.bind(chrome.runtime);
+            chrome.runtime.sendMessage = (message, ...rest) => {
+              const clean = JSON.parse(JSON.stringify(message || {}));
+              window.__ageeUpdateSmoke.calls.push(clean);
+              if (clean.cmd === "voiceSessionStart") {
+                window.__ageeUpdateSmoke.seq += 1;
+                return Promise.resolve({ ok: true, voiceSessionId: "update-smoke-" + window.__ageeUpdateSmoke.seq });
+              }
+              if (["voiceSessionAttach", "voiceSessionControl", "voiceSessionClose"].includes(clean.cmd)) {
+                return Promise.resolve({ ok: true });
+              }
+              return window.__ageeUpdateSmokeOrig(message, ...rest);
+            };
+          },
+        });
+        const [page] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => ({
+            rootCount: document.querySelectorAll("#agee-root").length,
+            staleProbe: document.querySelector("#agee-root")?.dataset?.ageeReloadProbe || "",
+          }),
+        });
+        return { pingAfter, ...(page?.result || {}) };
+      })()
+    `);
+    if (
+      updateReinjection?.pingAfter !== true ||
+      updateReinjection?.rootCount !== 1 ||
+      updateReinjection?.staleProbe
+    ) {
+      throw new Error(`extension update did not install a fresh content runtime on the open tab: ${JSON.stringify(updateReinjection)}`);
+    }
+    await pageCdp.send("Page.bringToFront");
+    const updatedLauncherPoint = await elementCenter(pageCdp, "#agee-launcher");
+    await trustedTaps(pageCdp, updatedLauncherPoint, 1);
+    await delay(340);
+    await trustedTaps(pageCdp, await elementCenter(pageCdp, "#agee-launcher"), 1);
+    await delay(340);
+    const updatedGesture = await evaluate(workerCdp, `
+      chrome.scripting.executeScript({
+        target: { tabId: ${pointerTabId} },
+        func: () => ({
+          calls: window.__ageeUpdateSmoke?.calls || [],
+          listening: document.querySelector("#agee-voice")?.classList.contains("listening") || false,
+        }),
+      }).then(([result]) => result?.result || null)
+    `);
+    const updatedStarts = updatedGesture?.calls?.filter((call) => call.cmd === "voiceSessionStart") || [];
+    const updatedCommits = updatedGesture?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
+    if (updatedGesture?.listening || updatedStarts.length !== 1 || updatedCommits.length !== 1) {
+      throw new Error(`fresh extension runtime gesture failed after open-tab update reinjection: ${JSON.stringify(updatedGesture)}`);
+    }
+
     console.log(
       `extension smoke passed (REAL extension, headless Chrome for Testing): ` +
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
         `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
+        `trusted launcher pointer gestures and open-tab extension update/reinjection checked, ` +
         `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );

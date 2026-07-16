@@ -199,9 +199,13 @@ if (
 }
 if (
   !/function createContentContextControlRuntime/.test(contentContextControlSource) ||
+  !/function armNewThread/.test(contentContextControlSource) ||
   !/function maybeHandleContextSlashCommand/.test(contentContextControlSource) ||
   !/function consumeContextControls/.test(contentContextControlSource) ||
-  /function (?:maybeHandleContextSlashCommand|consumeContextControls)\(/.test(contentSource) ||
+  /function (?:armNewThread|maybeHandleContextSlashCommand|consumeContextControls)\(/.test(contentSource) ||
+  !/const \{[\s\S]{0,80}armNewThread,[\s\S]{0,120}consumeContextControls/.test(contentSource) ||
+  !/if \(freshThread\) \{\s*armNewThread\(\);/.test(contentSource) ||
+  /\bnewThreadArmed\s*=|\bnewThreadLabel\s*=/.test(contentSource) ||
   !/AgeeContentContextControlRuntime\.createContentContextControlRuntime\(\{[\s\S]{0,120}onModeCue: showContextModeCue/.test(contentSource)
 ) {
   throw new Error("content thread and incognito controls must stay behind the extracted context-control runtime");
@@ -462,6 +466,9 @@ if (
 
 if (
   !/const AGGIE_ROOT_ID\s*=\s*"agee-root"/.test(contentSource) ||
+  !/const CONTENT_RUNTIME_VERSION\s*=\s*String\(chrome\.runtime\.getManifest\(\)\.version/.test(contentSource) ||
+  !/window\.__ageeLoaded === CONTENT_RUNTIME_VERSION/.test(contentSource) ||
+  !/window\.__ageeLoaded = CONTENT_RUNTIME_VERSION/.test(contentSource) ||
   !/window\.top !== window/.test(contentSource) ||
   !/function pruneDuplicateAggies|const pruneDuplicateAggies/.test(contentSource) ||
   !/querySelector\("#agee-launcher"\)/.test(contentSource) ||
@@ -469,6 +476,16 @@ if (
   !/existingAggies\(\)\.forEach/.test(contentSource)
 ) {
   throw new Error("content.js must keep one Aggie root per top-level page after reinjection");
+}
+
+const showContextModeCueBody = sourceBetween(
+  contentSource,
+  /function showContextModeCue\(/,
+  /function build\(/,
+  "showContextModeCue"
+);
+if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\)/.test(showContextModeCueBody) || /\boptions\b/.test(showContextModeCueBody)) {
+  throw new Error("typed /new and /incognito cues must open without an undefined options reference");
 }
 
 if (!/Grant microphone/.test(optionsHtmlSource) || !/navigator\.mediaDevices\.getUserMedia/.test(optionsSource)) {

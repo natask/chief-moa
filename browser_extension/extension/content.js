@@ -2,6 +2,7 @@
 
 (() => {
   const AGGIE_ROOT_ID = "agee-root";
+  const CONTENT_RUNTIME_VERSION = String(chrome.runtime.getManifest().version || "unknown");
   const existingAggies = () => Array.from(document.querySelectorAll(`#${AGGIE_ROOT_ID}`));
   const pruneDuplicateAggies = () => {
     const nodes = existingAggies();
@@ -12,11 +13,11 @@
   };
 
   if (window.top !== window) return;
-  if (window.__ageeLoaded) {
+  if (window.__ageeLoaded === CONTENT_RUNTIME_VERSION) {
     pruneDuplicateAggies();
     return;
   }
-  window.__ageeLoaded = true;
+  window.__ageeLoaded = CONTENT_RUNTIME_VERSION;
   existingAggies().forEach((node) => node.remove());
 
   // ---- Overlay UI -------------------------------------------------------
@@ -120,6 +121,7 @@
     ByteArray: Uint8Array,
   });
   const {
+    armNewThread,
     consumeContextControls,
     maybeHandleContextSlashCommand,
   } = window.AgeeContentContextControlRuntime.createContentContextControlRuntime({
@@ -213,7 +215,7 @@
 
   function showContextModeCue(label, statusText) {
     const cueId = newCueId();
-    if (options.openText !== false) openTextSurface({ fresh: false });
+    openTextSurface({ fresh: false });
     createCue(cueId, label, { presentation: "card" });
     updateCue(cueId, statusText, "done");
   }
@@ -722,8 +724,7 @@
       stopSpeaking();
     }
     if (freshThread) {
-      newThreadArmed = true;
-      newThreadLabel = "";
+      armNewThread();
     }
     voiceFirstCaptureOrigin = origin;
     startLiveVoiceTurn({

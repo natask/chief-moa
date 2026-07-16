@@ -9,6 +9,11 @@
     let newThreadArmed = false;
     let newThreadLabel = "";
 
+    function armNewThread(label = "") {
+      newThreadArmed = true;
+      newThreadLabel = String(label || "").trim().slice(0, 120);
+    }
+
     function maybeHandleContextSlashCommand(instruction) {
       const raw = String(instruction || "").trim();
       if (!raw.startsWith("/")) return false;
@@ -30,8 +35,7 @@
         return true;
       }
       if (command === "new") {
-        newThreadArmed = true;
-        newThreadLabel = rest.slice(0, 120);
+        armNewThread(rest);
         onModeCue(
           raw,
           newThreadLabel
@@ -54,7 +58,7 @@
       return { action: "", label: "" };
     }
 
-    return Object.freeze({ consumeContextControls, maybeHandleContextSlashCommand });
+    return Object.freeze({ armNewThread, consumeContextControls, maybeHandleContextSlashCommand });
   }
 
   root.AgeeContentContextControlRuntime = Object.freeze({ createContentContextControlRuntime });
