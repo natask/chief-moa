@@ -159,8 +159,59 @@ tasks.register('verifyDebugUnitTestCoverage', JacocoCoverageVerification) {
     }
 }
 
+def imePolicyClasses = files(
+        fileTree(
+                dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
+                includes: [
+                        '**/MoaEditorSensitivityPolicy*.class',
+                        '**/MoaEditorSessionBinding*.class'
+                ]
+        )
+)
+
+tasks.register('reportImePolicyCoverage', JacocoReport) {
+    group = 'verification'
+    description = 'Reports focused coverage for the pure IME safety and session policy.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(imePolicyClasses)
+    sourceDirectories.from(debugProductionSources)
+
+    reports {
+        xml.required = true
+        html.required = true
+        xml.outputLocation = layout.buildDirectory.file('reports/jacoco/imePolicy/xml/report.xml')
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco/imePolicy/html')
+    }
+}
+
+tasks.register('verifyImePolicyCoverage', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Requires >=90% line, branch, and method coverage for pure IME policy.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    executionData.from(debugUnitTestCoverageData)
+    classDirectories.from(imePolicyClasses)
+    sourceDirectories.from(debugProductionSources)
+
+    violationRules {
+        rule {
+            element = 'BUNDLE'
+            ['LINE', 'BRANCH', 'METHOD'].each { counterName ->
+                limit {
+                    counter = counterName
+                    value = 'COVEREDRATIO'
+                    minimum = new BigDecimal('0.90')
+                }
+            }
+        }
+    }
+}
+
 tasks.named('check') {
     dependsOn tasks.named('verifyDebugUnitTestCoverage')
+    dependsOn tasks.named('verifyImePolicyCoverage')
 }
 
 dependencies {

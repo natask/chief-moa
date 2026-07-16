@@ -101,6 +101,20 @@
                 android:resource="@xml/moa_accessibility_config" />
         </service>
 
+        <service
+            android:name=".MoaInputMethodService"
+            android:exported="true"
+            android:label="@string/moa_ime_name"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/moa_input_method" />
+        </service>
+
         <provider
             android:name=".MoaApkProvider"
             android:authorities="${applicationId}.apkprovider"

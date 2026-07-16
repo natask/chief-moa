@@ -166,6 +166,7 @@ public final class MainActivity extends Activity {
         root.addView(gatewayCard());
         root.addView(controlCenterCard());
         root.addView(actionCard());
+        root.addView(dictationKeyboardCard());
         root.addView(orbSizeCard());
         root.addView(gesturesCard());
 
@@ -330,6 +331,27 @@ public final class MainActivity extends Activity {
         card.addView(stopButton);
 
         addPermissionHelp(card);
+        return card;
+    }
+
+    private View dictationKeyboardCard() {
+        LinearLayout card = card();
+        addCardTitle(card, "Dictation keyboard");
+        addHint(card, "Opt in through Android settings. This build exposes a local insertion test only; it does not record or send audio.");
+
+        Button enable = primaryButton("Enable A.G. Dictation");
+        enable.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
+        card.addView(enable);
+
+        Button choose = secondaryButton("Choose keyboard");
+        choose.setOnClickListener(v -> {
+            android.view.inputmethod.InputMethodManager manager =
+                    getSystemService(android.view.inputmethod.InputMethodManager.class);
+            if (manager != null) {
+                manager.showInputMethodPicker();
+            }
+        });
+        card.addView(choose);
         return card;
     }
 
