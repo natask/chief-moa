@@ -151,6 +151,12 @@ deleting, or excluding meaningful failure-path and integration tests.
   `db41f87c18b38909fc90624166cfd0d84a86cc8d30471100794bfdbfcee72145` because
   ZIP metadata is checkout-dependent. Active reload was confirmed: the loaded
   unpacked extension observed the version bump and polled again after reloading.
+- Browser extension: version `0.1.54` was verified with all 46 unit tests, the
+  exact production coverage ratchet, and the real headless-Chromium smoke, then
+  retained as `browser_extension/dist/A.G.-0.1.54.zip` (420,367 bytes; SHA-256
+  `dd1ea7bde11a402799dcd14eb193f2048fc26500642802f1fbdf75615423f13b`). Active
+  reload was confirmed when the loaded unpacked extension observed the version
+  bump and polled again after reloading.
 - Gateway: the complete production-only run passed 1014 tests with one skip, but
   no isolated preview, backup/restore evidence, or state-compatibility rollout
   was established. The branch was therefore not pushed through the
