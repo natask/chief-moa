@@ -1,3 +1,7 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
 const previousGesture = globalThis.AgeeVoiceCaptureGesture;
 delete globalThis.AgeeVoiceCaptureGesture;
 await import(`../extension/voice-capture-gesture.js?test=${Date.now()}`);
@@ -156,6 +160,66 @@ assertEqual(
   "release",
   "ambiguous custom threshold releases"
 );
+
+function extractFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`missing ${name} in content.js`);
+  const bodyStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+    if (depth === 0) return source.slice(start, index + 1);
+  }
+  throw new Error(`unbalanced ${name} in content.js`);
+}
+
+const contentSource = readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
+const overlapContext = vm.createContext({});
+vm.runInContext(`
+  const olderCommitted = { committed: true, assistantSpeechSuppressed: false };
+  const activeCapture = { committed: false, assistantSpeechSuppressed: false };
+  const liveVoiceStates = new Set([olderCommitted, activeCapture]);
+  let liveVoice = activeCapture;
+  let conversationActive = true;
+  let voiceFirstCaptureOrigin = "single";
+  const canceled = [];
+  const playbackStopped = [];
+  let speakingStopped = 0;
+  function stopLiveVoiceState(state, mode) {
+    canceled.push({ state, mode });
+    liveVoiceStates.delete(state);
+    if (liveVoice === state) liveVoice = null;
+  }
+  function stopLivePlayback(state) { playbackStopped.push(state); }
+  function stopSpeaking() { speakingStopped += 1; }
+  ${extractFunction(contentSource, "cancelActiveUncommittedVoiceCapture")}
+  ${extractFunction(contentSource, "parkPriorVoiceForSeparateCapture")}
+  const canceledActive = cancelActiveUncommittedVoiceCapture();
+  parkPriorVoiceForSeparateCapture();
+  globalThis.result = {
+    canceledActive,
+    olderStillTracked: liveVoiceStates.has(olderCommitted),
+    activeStillTracked: liveVoiceStates.has(activeCapture),
+    canceledCount: canceled.length,
+    canceledMode: canceled[0]?.mode || "",
+    canceledOlder: canceled.some((entry) => entry.state === olderCommitted),
+    olderSuppressed: olderCommitted.assistantSpeechSuppressed,
+    olderPlaybackStopped: playbackStopped.includes(olderCommitted),
+    speakingStopped,
+  };
+`, overlapContext);
+assert.deepEqual({ ...overlapContext.result }, {
+  canceledActive: true,
+  olderStillTracked: true,
+  activeStillTracked: false,
+  canceledCount: 1,
+  canceledMode: "cancel",
+  canceledOlder: false,
+  olderSuppressed: true,
+  olderPlaybackStopped: true,
+  speakingStopped: 1,
+});
 
 if (previousGesture === undefined) delete globalThis.AgeeVoiceCaptureGesture;
 else globalThis.AgeeVoiceCaptureGesture = previousGesture;
