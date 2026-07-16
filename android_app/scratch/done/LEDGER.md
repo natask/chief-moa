@@ -1,3 +1,4 @@
+- Reskinned the overlay and full app to opaque native-black surfaces and remapped outside taps from close to a fade of the lion/panel/transcript family with a consumed wake touch — agent: Claude Code/Fable 5 — 14eb5c7f
 - Android steering pre-generates replacement identity, reports exact device ownership, cancels stale provider work immediately, and opens the new mic turn without waiting for cancellation acknowledgement — agent: Codex/GPT-5 — integration candidate
 - Marked interrupted Android assistant replies at a compact steering boundary and turn-gated hosted audio so stale callbacks cannot resume speech over the new mic turn — agent: codex/gpt-5 — 0f077607
 - Bound manual voice toggles to their capture origin so a single click cannot send a double-started fresh-thread capture, with resolver and touch-dispatch regressions — agent: codex/gpt-5 — f41f6088
