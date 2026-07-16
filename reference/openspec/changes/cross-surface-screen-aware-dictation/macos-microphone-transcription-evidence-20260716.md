@@ -27,7 +27,10 @@
   ad-hoc-signed arm64 QA ZIP.
 - `cd apple_surfaces && bash scripts/scan-moa-mac.sh dist/MoaMac.app`: passed.
 - QA ZIP SHA-256:
-  `696223cd409882c8f88cf57281df298ee6e99fc21db34f789d35473dab9d73f8`.
+  `461ca411e411ed88ab75eb2fbd01d2ee2d8c43db2f6c1778edb7ea2d850d93ae`.
+  This identifies the retained artifact from exact-candidate verification. The
+  current ad-hoc ZIP packaging path is not byte-reproducible across separate
+  invocations, so rebuilding it requires recording a new artifact digest.
 
 ## Required real-Mac evidence still missing
 
