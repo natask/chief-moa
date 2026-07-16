@@ -411,6 +411,36 @@ async function main() {
       throw new Error(`overlay exposed separate top voice strip during voice: ${JSON.stringify(overlayMetrics)}`);
     }
 
+    // Prove an ordinary typed product-search request reaches the first-party
+    // browser command runtime before the fake gateway and opens real results.
+    await evaluate(pageCdp, `
+      (() => {
+        const input = document.querySelector("#agee-input");
+        input.value = "find me an ergonomic red chair on Amazon";
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        return true;
+      })()
+    `);
+    const typedSearchTab = await waitForEval(workerCdp, `
+      chrome.tabs.query({}).then(tabs => tabs.find(tab =>
+        String(tab.pendingUrl || tab.url || "").startsWith("https://www.amazon.com/s?k=ergonomic+red+chair")
+      ) || null)
+    `);
+    if (!typedSearchTab?.id || !typedSearchTab.active) {
+      throw new Error(`typed Amazon search did not open an active result tab: ${JSON.stringify(typedSearchTab)}`);
+    }
+    const typedSearchSummary = await waitForEval(pageCdp, `
+      (() => {
+        const card = [...document.querySelectorAll("#agee-log .agee-cue")].pop();
+        if (!card || !card.classList.contains("agee-cue-done")) return null;
+        return card.querySelector(".agee-cue-status")?.textContent || null;
+      })()
+    `);
+    if (!/opened amazon results for ergonomic red chair/i.test(typedSearchSummary)) {
+      throw new Error(`typed Amazon search did not render its local receipt: ${JSON.stringify(typedSearchSummary)}`);
+    }
+    await evaluate(workerCdp, `chrome.tabs.update(${ping.tabId}, { active: true }).then(() => chrome.tabs.remove(${Number(typedSearchTab.id)}))`);
+
     const shortcutVoice = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
@@ -1068,6 +1098,7 @@ async function main() {
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
         `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
+        `typed Amazon command opened results and rendered "${typedSearchSummary}", ` +
         `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );

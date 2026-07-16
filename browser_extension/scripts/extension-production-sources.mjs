@@ -8,6 +8,8 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/browser-agent-role-runtime.js",
   "extension/browser-automation-contract.js",
   "extension/browser-automation-runtime.js",
+  "extension/browser-command-runtime.js",
+  "extension/browser-command-transcript-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
   "extension/browser-turn-protocol.js",

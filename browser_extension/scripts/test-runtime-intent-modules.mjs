@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   extractHttpUrl,
   looksLikePageContextQuestion,
+  parseBrowserSearchIntent,
   parseBrowserTaskIntent,
   parseOpenTabIntent,
 } from "../extension/browser-task-intent.js";
@@ -31,6 +32,19 @@ test("browser intent parsing separates direct open, task, and page-context reque
   assert.equal(looksLikePageContextQuestion("inspect this page"), true);
   assert.equal(looksLikePageContextQuestion("unrelated statement"), false);
   assert.equal(looksLikePageContextQuestion("x".repeat(261)), false);
+  assert.deepEqual(parseBrowserSearchIntent("find me an ergonomic red chair on Amazon"), {
+    query: "ergonomic red chair", provider: "amazon", active: true,
+  });
+  assert.deepEqual(parseBrowserSearchIntent("Hey A.G., open a new tab that says mechanical keyboards"), {
+    query: "mechanical keyboards", provider: "google", active: true,
+  });
+  assert.deepEqual(parseBrowserSearchIntent("search Amazon for desk lamps"), {
+    query: "desk lamps", provider: "amazon", active: true,
+  });
+  assert.equal(parseBrowserSearchIntent("tell me about ergonomic chairs"), null);
+  assert.equal(parseBrowserSearchIntent("find this button"), null);
+  assert.equal(parseBrowserSearchIntent("search this page for checkout"), null);
+  assert.equal(parseBrowserSearchIntent("find me a product like this on Amazon"), null);
 });
 
 test("settings parser handles bounded profile changes and rejects examples", () => {

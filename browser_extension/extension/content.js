@@ -2439,7 +2439,7 @@
       return;
     }
     const role = AgeeSteeringUi.roleForInstruction(instruction);
-    if (role === "delegate") {
+    if (role === "delegate" && !isBrowserCommandTranscript(instruction)) {
       const host = location.hostname || "this page";
       askInlineConfirm(
         `Delegate this task on ${host} for up to 20 steps? A.G. may click, type, select, scroll, press keys, wait, and capture page evidence. Navigation or sensitive or out-of-scope work stops for approval.`,
@@ -2977,6 +2977,7 @@
   function routeLiveTranscriptThroughGateway(state, transcript) {
     if (liveVoice !== state || !isLiveVoiceStateActive(state) || state.gatewayRouted) return;
     const pageContextTurn = isPageContextTranscript(transcript);
+    const browserCommandTurn = isBrowserCommandTranscript(transcript);
     state.gatewayRouted = true;
     state.committed = true;
     stopLiveCapture(state);
@@ -2988,9 +2989,9 @@
     setAgentState("thinking");
     setTranscript(transcript);
     updateCueLabel(state.cueId, transcript);
-    materializeCue(state.cueId, transcript, pageContextTurn ? "collecting page context" : "updating settings...");
+    materializeCue(state.cueId, transcript, pageContextTurn ? "collecting page context" : browserCommandTurn ? "opening browser..." : "updating settings...");
     sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments));
-    closeLiveVoiceSession(state, pageContextTurn ? "page context routed to browser agent" : "profile control routed to gateway");
+    closeLiveVoiceSession(state, pageContextTurn ? "page context routed to browser agent" : browserCommandTurn ? "browser command routed locally" : "profile control routed to gateway");
     untrackLiveVoiceState(state);
     safeRuntimeSendMessage({
       cmd: "run",
@@ -3587,7 +3588,7 @@
   }
 
   function shouldRouteLiveTranscriptThroughGateway(text) {
-    return isProfileControlTranscript(text) || isPageContextTranscript(text);
+    return isProfileControlTranscript(text) || isPageContextTranscript(text) || isBrowserCommandTranscript(text);
   }
 
   function isPageContextTranscript(text) {
@@ -3603,6 +3604,10 @@
     return /\b(?:summari[sz]e|read|describe|check|inspect|analy[sz]e|explain|review|scan)\b/i.test(raw) ||
       /\b(?:what|where|which|who|why|how|can|does|is|are|should)\b/i.test(lower) ||
       /\?$/.test(raw);
+  }
+
+  function isBrowserCommandTranscript(text) {
+    return AgeeBrowserCommandTranscriptRuntime.isBrowserCommandTranscript(text);
   }
 
   function applySpeechOverlapPolicyFromTranscript(state, text) {
