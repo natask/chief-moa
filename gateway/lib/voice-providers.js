@@ -26,7 +26,14 @@ const {
   googleCredentialFile,
   serviceAccountAccessToken,
 } = require("./google-auth");
-const { evaluateSttTranscript, rejectedTranscriptEvidence } = require("./stt-transcript-policy");
+const {
+  buildStreamingRecognitionConfig,
+  evaluateSttTranscript,
+  extractSpeechTranscript,
+  notifyTranscriptRejected,
+  rejectedTranscriptEvidence,
+  sttPartialTranscriptHook,
+} = require("./stt-transcript-policy");
 
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
@@ -1813,26 +1820,14 @@ class CascadedVoiceProvider {
   }
 
   streamingRecognitionConfig(codes, sampleRate, channels, customPrompt = "") {
-    const features = { enableAutomaticPunctuation: true };
-    if (customPrompt) {
-      features.customPromptConfig = { customPrompt };
-    }
-    return {
+    return buildStreamingRecognitionConfig({
       recognizer: this.recognizerResource(),
-      streamingConfig: {
-        config: {
-          explicitDecodingConfig: {
-            encoding: "LINEAR16",
-            sampleRateHertz: sampleRate,
-            audioChannelCount: channels,
-          },
-          languageCodes: codes,
-          model: this.model,
-          features,
-        },
-        streamingFeatures: { interimResults: true },
-      },
-    };
+      codes,
+      sampleRate,
+      channels,
+      customPrompt,
+      model: this.model,
+    });
   }
 
   // Open a streaming STT session that tees audio as it arrives from the
@@ -1876,12 +1871,7 @@ class CascadedVoiceProvider {
             languageCode: result?.languageCode || result?.language_code || "",
           }));
         },
-        onPartial: hooks && typeof hooks.onTranscriptPartial === "function"
-          ? (text) => {
-            const evaluation = evaluateSttTranscript(text);
-            return evaluation.accepted ? hooks.onTranscriptPartial(evaluation.text) : undefined;
-          }
-          : null,
+        onPartial: sttPartialTranscriptHook(hooks),
         rotateAfterMs: this.streamingSttRotateAfterMs,
         logger: (event, details) => {
           try {
@@ -3701,48 +3691,6 @@ function transcriptionText(value) {
   return String(value.text || value.transcript || "").trim();
 }
 
-function extractSpeechTranscript(response, activeLanguageCodes = []) {
-  const results = Array.isArray(response?.results) ? response.results : [];
-  const restricted = new Set((Array.isArray(activeLanguageCodes) ? activeLanguageCodes : [])
-    .map((code) => String(code || "").trim().toLowerCase())
-    .filter((code) => code && code !== "auto"));
-  let rejected = 0;
-  const providerAccepted = results
-    .filter((result) => {
-      const languageCode = String(result?.languageCode || result?.language_code || "").trim().toLowerCase();
-      if (!languageCode || restricted.size === 0 || restricted.has(languageCode)) {
-        return true;
-      }
-      rejected += 1;
-      return false;
-    })
-    .map((result) => result?.alternatives?.[0]?.transcript || "")
-    .filter(Boolean)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const evaluation = evaluateSttTranscript(providerAccepted);
-  const languageCode = results
-    .map((result) => result?.languageCode || result?.language_code || "")
-    .find(Boolean) || "";
-  if (!evaluation.accepted) {
-    return {
-      text: "",
-      languageRejected: true,
-      rejected_results: Math.max(1, rejected),
-      rejection: rejectedTranscriptEvidence(evaluation, {
-        phase: "batch_final",
-        providerLanguageCode: languageCode,
-      }),
-    };
-  }
-  return {
-    text: evaluation.text,
-    languageRejected: rejected > 0 && !evaluation.text,
-    rejected_results: rejected,
-  };
-}
-
 function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -3954,15 +3902,6 @@ async function voiceStageError(hooks, stage, startedAtMs, error, details = {}) {
     });
   } catch {
     // Stage diagnostics are observability only; never fail the voice turn.
-  }
-}
-
-async function notifyTranscriptRejected(hooks, evidence) {
-  if (!evidence || !hooks || typeof hooks.onTranscriptRejected !== "function") return;
-  try {
-    await hooks.onTranscriptRejected(evidence);
-  } catch {
-    // Enforcement already happened; evidence persistence must not fail a turn.
   }
 }
 

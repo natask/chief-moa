@@ -44,7 +44,91 @@ function rejectedTranscriptEvidence(evaluation, details = {}) {
   };
 }
 
+function extractSpeechTranscript(response, activeLanguageCodes = []) {
+  const results = Array.isArray(response?.results) ? response.results : [];
+  const restricted = new Set((Array.isArray(activeLanguageCodes) ? activeLanguageCodes : [])
+    .map((code) => String(code || "").trim().toLowerCase())
+    .filter((code) => code && code !== "auto"));
+  let rejected = 0;
+  const providerAccepted = results
+    .filter((result) => {
+      const languageCode = String(result?.languageCode || result?.language_code || "").trim().toLowerCase();
+      if (!languageCode || restricted.size === 0 || restricted.has(languageCode)) return true;
+      rejected += 1;
+      return false;
+    })
+    .map((result) => result?.alternatives?.[0]?.transcript || "")
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const evaluation = evaluateSttTranscript(providerAccepted);
+  const languageCode = results
+    .map((result) => result?.languageCode || result?.language_code || "")
+    .find(Boolean) || "";
+  if (!evaluation.accepted) {
+    return {
+      text: "",
+      languageRejected: true,
+      rejected_results: Math.max(1, rejected),
+      rejection: rejectedTranscriptEvidence(evaluation, {
+        phase: "batch_final",
+        providerLanguageCode: languageCode,
+      }),
+    };
+  }
+  return {
+    text: evaluation.text,
+    languageRejected: rejected > 0 && !evaluation.text,
+    rejected_results: rejected,
+  };
+}
+
+function sttPartialTranscriptHook(hooks) {
+  if (!hooks || typeof hooks.onTranscriptPartial !== "function") return null;
+  return (text) => {
+    const evaluation = evaluateSttTranscript(text);
+    return evaluation.accepted ? hooks.onTranscriptPartial(evaluation.text) : undefined;
+  };
+}
+
+function buildStreamingRecognitionConfig(options) {
+  const features = { enableAutomaticPunctuation: true };
+  if (options.customPrompt) {
+    features.customPromptConfig = { customPrompt: options.customPrompt };
+  }
+  return {
+    recognizer: options.recognizer,
+    streamingConfig: {
+      config: {
+        explicitDecodingConfig: {
+          encoding: "LINEAR16",
+          sampleRateHertz: options.sampleRate,
+          audioChannelCount: options.channels,
+        },
+        languageCodes: options.codes,
+        model: options.model,
+        features,
+      },
+      streamingFeatures: { interimResults: true },
+    },
+  };
+}
+
+async function notifyTranscriptRejected(hooks, evidence) {
+  if (!evidence || !hooks || typeof hooks.onTranscriptRejected !== "function") return;
+  try {
+    await hooks.onTranscriptRejected(evidence);
+  } catch {
+    // Enforcement already happened; evidence persistence must not fail a turn.
+  }
+}
+
 module.exports = {
+  buildStreamingRecognitionConfig,
   evaluateSttTranscript,
+  extractSpeechTranscript,
+  notifyTranscriptRejected,
   rejectedTranscriptEvidence,
+  sttPartialTranscriptHook,
 };

@@ -20,6 +20,7 @@ const {
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
 const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
+const { createVoiceTranscriptEventHooks } = require("./voice-transcript-events");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -684,42 +685,13 @@ class VoiceSessionConnection {
           ...sanitized,
         });
       },
-      onTranscriptPartial: async (text) => {
-        if (turnSuperseded()) return;
-        const value = String(text || "").trim();
-        if (!value) return;
-        providerEvents.transcript = value;
-        await this.recordProviderEvent(turn, providerEvents, "transcript_partial", { text: value });
-        await this.sendEvent({
-          type: "transcript_partial",
-          session_id: turn.sessionId,
-          branch_id: turn.branchId,
-          turn_id: turn.turnId,
-          text: value,
-        });
-      },
-      onTranscriptFinal: async (text) => {
-        if (turnSuperseded()) return;
-        const value = String(text || "").trim();
-        if (!value) return;
-        providerEvents.transcript = value;
-        providerEvents.transcriptFinalSent = true;
-        await this.recordProviderEvent(turn, providerEvents, "transcript_final", { text: value });
-        await this.sendEvent({
-          type: "transcript_final",
-          session_id: turn.sessionId,
-          branch_id: turn.branchId,
-          turn_id: turn.turnId,
-          text: value,
-        });
-      },
-      onTranscriptRejected: async (evidence) => {
-        if (turnSuperseded()) return;
-        providerEvents.transcript = "";
-        providerEvents.transcriptFinalSent = false;
-        turn.transcriptLanguageRejected = true;
-        await this.recordProviderEvent(turn, providerEvents, "stt_candidate_rejected", evidence || {});
-      },
+      ...createVoiceTranscriptEventHooks({
+        turn,
+        providerEvents,
+        turnSuperseded,
+        recordProviderEvent: (type, payload) => this.recordProviderEvent(turn, providerEvents, type, payload),
+        sendEvent: (payload) => this.sendEvent(payload),
+      }),
       onAssistantText: async (text) => {
         if (turnSuperseded()) return;
         const value = String(text || "").trim();
