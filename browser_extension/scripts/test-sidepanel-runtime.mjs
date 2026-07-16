@@ -18,6 +18,7 @@ class FakeElement {
     this.textContent = "";
     this.value = "";
     this.disabled = false;
+    this.hidden = false;
     this.type = "";
     this.removed = false;
   }
@@ -36,6 +37,7 @@ class FakeElement {
   appendChild(node) { this.append(node); return node; }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  focus() { this.ownerDocument.activeElement = this; this.focused = true; }
   scrollIntoView() { this.scrolled = true; }
   remove() {
     this.removed = true;
@@ -88,7 +90,10 @@ class FakeDocument {
 }
 
 const document = new FakeDocument();
-for (const id of ["status", "log", "talk", "form", "text", "sendBtn", "agentModeSelector", "floatBtn"]) {
+for (const id of [
+  "status", "log", "talk", "form", "text", "sendBtn", "agentModeSelector", "floatBtn",
+  "settingsForm", "settingsSearch", "settingsRecommend", "settingsAll", "settingsResults", "settingsDetail",
+]) {
   document.elements.set(id, new FakeElement(id, document));
 }
 for (const role of ["delegate", "help", "collaborate", "explain"]) {
@@ -96,7 +101,9 @@ for (const role of ["delegate", "help", "collaborate", "explain"]) {
   button.dataset.agentModeOption = role;
   document.elements.set(button.id, button);
 }
-document.body.append(...["status", "agentModeSelector", "log", "talk", "form", "floatBtn"].map((id) => document.getElementById(id)));
+document.body.append(...[
+  "status", "agentModeSelector", "settingsForm", "settingsResults", "settingsDetail", "log", "talk", "form", "floatBtn",
+].map((id) => document.getElementById(id)));
 
 const timers = new Map();
 let nextTimer = 1;
@@ -117,6 +124,29 @@ const port = {
   onDisconnect: { addListener(listener) { disconnectListener = listener; } },
   postMessage(message) {
     posted.push(message);
+    const microphoneSetting = {
+      id: "browser.microphone_permission",
+      title: "Microphone permission",
+      owner: "browser_extension",
+      current: "denied",
+      default: "prompt",
+      description: "Chrome microphone access for browser voice.",
+      constraints: ["Only the user can change this permission."],
+      takes_effect: "next voice capture",
+      redaction: "none",
+      deep_link: { target: "microphone_permission", label: "Open microphone setup" },
+    };
+    const tokenSetting = {
+      id: "browser.gateway_token",
+      title: "Gateway token",
+      owner: "browser_extension",
+      current: "configured (value redacted)",
+      default: "not configured",
+      description: "Configured token state only.",
+      constraints: ["Secret stays redacted."],
+      takes_effect: "next gateway request",
+      redaction: "configured state only",
+    };
     const defaultResponses = {
       voiceSessionStart: { ok: true, voiceSessionId: "voice-session" },
       voiceSessionAttach: { ok: true },
@@ -126,7 +156,12 @@ const port = {
       browserRoleTurn: { ok: true, summary: "Browser task done" },
       openOptions: { ok: true },
     };
-    const configured = responseOverrides.has(message.cmd) ? responseOverrides.get(message.cmd) : defaultResponses[message.cmd];
+    const settingsResponse = message.operation === "get"
+      ? { ok: true, setting: message.id === tokenSetting.id ? tokenSetting : microphoneSetting }
+      : { ok: true, settings: message.query === "token" ? [tokenSetting] : [microphoneSetting] };
+    const configured = responseOverrides.has(message.cmd)
+      ? responseOverrides.get(message.cmd)
+      : message.cmd === "settingsQuery" ? settingsResponse : defaultResponses[message.cmd];
     if (configured === "throw") throw new Error("post failed");
     if (configured === "throw-string") throw "post failed string";
     if (configured === "silent") return;
@@ -193,6 +228,38 @@ const panel = await import(`../extension/sidepanel.js?test=${Date.now()}`);
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(document.getElementById("status").textContent, "Ready.");
 assert.equal(document.getElementById("agentModeSelector").dataset.agentMode, "help");
+
+document.getElementById("settingsSearch").value = "microphone";
+await document.getElementById("settingsForm").emit("submit");
+await new Promise((resolve) => setImmediate(resolve));
+const settingsResults = document.getElementById("settingsResults");
+assert.equal(settingsResults.hidden, false);
+assert.equal(settingsResults.children[0].dataset.settingId, "browser.microphone_permission");
+assert.equal(settingsResults.children[0].children[1].textContent, "Current: denied");
+await settingsResults.children[0].emit("click");
+await new Promise((resolve) => setImmediate(resolve));
+const settingsDetail = document.getElementById("settingsDetail");
+assert.equal(settingsDetail.hidden, false);
+assert.match(settingsDetail.children[1].textContent, /Owner: browser_extension/);
+assert.match(settingsDetail.children[1].textContent, /Current: denied/);
+assert.match(settingsDetail.children[1].textContent, /Default: prompt/);
+assert.match(settingsDetail.children[1].textContent, /Takes effect: next voice capture/);
+assert.match(settingsDetail.children[1].textContent, /Redaction: none/);
+assert.equal(settingsDetail.children[2].textContent, "Open microphone setup");
+await settingsDetail.children[2].emit("click");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(posted.at(-1).cmd, "openOptions");
+assert.equal(posted.at(-1).target, "microphone_permission");
+
+document.getElementById("settingsSearch").value = "token";
+await panel.runSettingsQuery("search");
+await settingsResults.children[0].emit("click");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(settingsDetail.children.length, 2);
+assert.match(settingsDetail.children[1].textContent, /configured \(value redacted\)/);
+assert.doesNotMatch(JSON.stringify(posted), /must-never-appear/);
+await document.emit("keydown", { key: "k", metaKey: true });
+assert.equal(document.activeElement, document.getElementById("settingsSearch"));
 
 panel.setAgentRole("EXPLAIN");
 assert.deepEqual(storageWrites.at(-1), { ageeBrowserAgentRole: "explain" });

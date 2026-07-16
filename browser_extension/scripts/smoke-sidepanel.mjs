@@ -119,6 +119,7 @@ async function main() {
 
   let browserCdp;
   let pageCdp;
+  let optionsCdp;
   let workerCdp;
   try {
     const devToolsPort = Number((await waitForFile(join(profilePath, "DevToolsActivePort"))).split("\n")[0]);
@@ -157,6 +158,7 @@ async function main() {
       const selector = document.getElementById("agentModeSelector");
       const buttons = [...document.querySelectorAll("[data-agent-mode-option]")];
       const initial = selector?.dataset.agentMode || "";
+      await new Promise((resolve) => setTimeout(resolve, 100));
       document.getElementById("agentModeCollaborate")?.click();
       await new Promise((resolve) => setTimeout(resolve, 50));
       const stored = await chrome.storage.local.get("ageeBrowserAgentRole");
@@ -174,6 +176,49 @@ async function main() {
       JSON.stringify(roleUi?.pressed) !== JSON.stringify(["collaborate"])
     ) {
       throw new Error(`side-panel role selector did not persist one explicit role: ${JSON.stringify(roleUi)}`);
+    }
+
+    await evaluate(pageCdp, `(() => {
+      const input = document.getElementById("settingsSearch");
+      input.value = "microphone";
+      document.getElementById("settingsForm")?.requestSubmit();
+      return true;
+    })()`);
+    await waitForEval(
+      pageCdp,
+      'document.querySelector(".setting-row[data-setting-id=\\"browser.microphone_permission\\"]")?.textContent.includes("Current:")',
+    );
+    await evaluate(pageCdp, 'document.querySelector(".setting-row[data-setting-id=\\"browser.microphone_permission\\"]")?.click()');
+    const settingsProjection = await waitForEval(pageCdp, `(() => {
+      const detail = document.getElementById("settingsDetail");
+      const action = detail?.querySelector(".setting-deep-link");
+      if (detail?.hidden || !action) return null;
+      return { text: detail.textContent, action: action.textContent };
+    })()`);
+    if (
+      !settingsProjection.text.includes("Owner: browser_extension") ||
+      !settingsProjection.text.includes("Default: prompt") ||
+      !settingsProjection.text.includes("Takes effect: next voice capture") ||
+      !settingsProjection.text.includes("Redaction: none") ||
+      settingsProjection.action !== "Open microphone setup"
+    ) {
+      throw new Error(`settings discovery did not render the typed permission projection: ${JSON.stringify(settingsProjection)}`);
+    }
+    await evaluate(pageCdp, 'document.querySelector("#settingsDetail .setting-deep-link")?.click()');
+    const optionsTarget = await waitForTarget(
+      devToolsPort,
+      (target) => target.type === "page" && String(target.url || "").startsWith(`chrome-extension://${extensionId}/options.html`),
+    );
+    optionsCdp = new Cdp(optionsTarget.webSocketDebuggerUrl);
+    await optionsCdp.send("Runtime.enable");
+    const recovery = await waitForEval(optionsCdp, `(() => {
+      const banner = document.getElementById("micRecoveryBanner");
+      const grant = document.getElementById("grantMic");
+      if (!banner || banner.hidden || !grant?.classList.contains("mic-recovery-focus")) return null;
+      return { banner: banner.textContent, focused: document.activeElement === grant };
+    })()`);
+    if (!recovery.focused || !recovery.banner.includes("microphone")) {
+      throw new Error(`microphone setup did not show and focus its walkthrough: ${JSON.stringify(recovery)}`);
     }
 
     await evaluate(pageCdp, `(() => {
@@ -209,10 +254,12 @@ async function main() {
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
+        "settings search selected the grounded microphone row and opened its focused walkthrough, " +
         "role selector persisted Collaborate, Delegate confirmation cancelled safely, chrome.sidePanel.open available.",
     );
   } finally {
     workerCdp?.close();
+    optionsCdp?.close();
     pageCdp?.close();
     browserCdp?.close();
     chrome.kill("SIGTERM");
