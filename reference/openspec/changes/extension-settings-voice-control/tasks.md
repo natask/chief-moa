@@ -63,6 +63,11 @@
       open Options with a typed one-shot recovery target, permission status, and
       focused Grant microphone control. Static verification rejects an
       unconditional Options redirect from the capture-error path.
+      `npm run smoke:sidepanel` forces a real offscreen `NotAllowedError` during
+      initial session setup and proves both the side panel and page overlay retain
+      the structured denial after the unattached session closes. Neither surface
+      opens Options before the explicit action; runtime-unavailable unit coverage
+      proves it cannot inherit the permission action.
 
 ### Verification notes
 

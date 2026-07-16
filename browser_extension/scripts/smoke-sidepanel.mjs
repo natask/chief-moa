@@ -11,6 +11,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { resolveChromeForTesting, quietChromeArgs } from "./chrome-for-testing.mjs";
 
@@ -113,11 +114,32 @@ async function main() {
   const chromePath = resolveChromeForTesting();
   mkdirSync(profilePath, { recursive: true });
 
+  const gateway = createServer((request, response) => {
+    if (request.url === "/fixture") {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><title>Recovery fixture</title><main>Microphone recovery fixture</main>");
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      ws_url: "ws://127.0.0.1:9/v1/voice/sessions",
+      session_id: "sidepanel-recovery-smoke",
+      conversation_id: "sidepanel-recovery-smoke",
+    }));
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    gateway.once("error", rejectListen);
+    gateway.listen(0, "127.0.0.1", resolveListen);
+  });
+  const gatewayUrl = `http://127.0.0.1:${gateway.address().port}`;
+
   const chrome = spawn(chromePath, quietChromeArgs({ extensionPath, profilePath }), {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   let browserCdp;
+  let offscreenCdp;
+  let overlayCdp;
   let pageCdp;
   let optionsCdp;
   let workerCdp;
@@ -143,6 +165,14 @@ async function main() {
     }
     const sidePanelApi = await waitForEval(workerCdp, 'typeof chrome.sidePanel?.open === "function"');
     if (!sidePanelApi) throw new Error("chrome.sidePanel.open is not available in the service worker");
+    await evaluate(workerCdp, `(async () => {
+      await chrome.storage.local.set({
+        ageeGatewayUrl: ${JSON.stringify(gatewayUrl)},
+        ageeGatewayToken: "",
+        ageeGatewayUserSet: true,
+      });
+      return true;
+    })()`);
 
     const panelUrl = `chrome-extension://${extensionId}/sidepanel.html`;
     const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
@@ -178,6 +208,89 @@ async function main() {
       throw new Error(`side-panel role selector did not persist one explicit role: ${JSON.stringify(roleUi)}`);
     }
 
+    await evaluate(workerCdp, `(async () => {
+      const url = chrome.runtime.getURL("offscreen.html");
+      const existing = await chrome.runtime.getContexts({
+        contextTypes: ["OFFSCREEN_DOCUMENT"],
+        documentUrls: [url],
+      });
+      if (!existing.length) {
+        await chrome.offscreen.createDocument({
+          url: "offscreen.html",
+          reasons: ["USER_MEDIA"],
+          justification: "Side-panel microphone recovery smoke",
+        });
+      }
+      return true;
+    })()`);
+    const offscreenTarget = await waitForTarget(
+      devToolsPort,
+      (target) => String(target.url || "") === `chrome-extension://${extensionId}/offscreen.html`,
+    );
+    offscreenCdp = new Cdp(offscreenTarget.webSocketDebuggerUrl);
+    await offscreenCdp.send("Runtime.enable");
+    await evaluate(offscreenCdp, `(() => {
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+        configurable: true,
+        value: async () => { throw new DOMException("Permission denied by recovery smoke", "NotAllowedError"); },
+      });
+      return true;
+    })()`);
+    const talkPoint = await evaluate(pageCdp, `(() => {
+      const rect = document.getElementById("talk")?.getBoundingClientRect();
+      return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+    })()`);
+    if (!talkPoint) throw new Error("side-panel talk control was not measurable");
+    await pageCdp.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: talkPoint.x,
+      y: talkPoint.y,
+      button: "left",
+      clickCount: 1,
+    });
+    const voiceRecovery = await waitForEval(pageCdp, `(() => {
+      const action = document.querySelector(".turn:last-child .microphone-recovery-action");
+      const reply = document.querySelector(".turn:last-child .ag");
+      if (!action || !reply) return null;
+      return { action: action.textContent, reply: reply.textContent };
+    })()`, 3000);
+    await pageCdp.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: talkPoint.x,
+      y: talkPoint.y,
+      button: "left",
+      clickCount: 1,
+    });
+    const optionsBeforeRecoveryAction = (await targets(devToolsPort)).filter(
+      (target) => target.type === "page" && String(target.url || "").startsWith(`chrome-extension://${extensionId}/options.html`),
+    );
+    if (
+      optionsBeforeRecoveryAction.length !== 0 ||
+      voiceRecovery.action !== "Take me to microphone setup" ||
+      !voiceRecovery.reply.includes("microphone")
+    ) {
+      throw new Error(`initial microphone denial did not stay visible before navigation: ${JSON.stringify({ voiceRecovery, optionsBeforeRecoveryAction })}`);
+    }
+    await evaluate(pageCdp, 'document.querySelector(".turn:last-child .microphone-recovery-action")?.click()');
+    const optionsTarget = await waitForTarget(
+      devToolsPort,
+      (target) => target.type === "page" && String(target.url || "").startsWith(`chrome-extension://${extensionId}/options.html`),
+    );
+    optionsCdp = new Cdp(optionsTarget.webSocketDebuggerUrl);
+    await optionsCdp.send("Runtime.enable");
+    const recovery = await waitForEval(optionsCdp, `(() => {
+      const banner = document.getElementById("micRecoveryBanner");
+      const grant = document.getElementById("grantMic");
+      if (!banner || banner.hidden || !grant?.classList.contains("mic-recovery-focus")) return null;
+      return { banner: banner.textContent, focused: document.activeElement === grant };
+    })()`);
+    if (!recovery.focused || !recovery.banner.includes("microphone")) {
+      throw new Error(`microphone setup did not show and focus its walkthrough: ${JSON.stringify(recovery)}`);
+    }
+    optionsCdp.close();
+    optionsCdp = null;
+    await browserCdp.send("Target.closeTarget", { targetId: optionsTarget.id });
+
     await evaluate(pageCdp, `(() => {
       const input = document.getElementById("settingsSearch");
       input.value = "microphone";
@@ -204,22 +317,37 @@ async function main() {
     ) {
       throw new Error(`settings discovery did not render the typed permission projection: ${JSON.stringify(settingsProjection)}`);
     }
-    await evaluate(pageCdp, 'document.querySelector("#settingsDetail .setting-deep-link")?.click()');
-    const optionsTarget = await waitForTarget(
+
+    const { targetId: overlayTargetId } = await browserCdp.send("Target.createTarget", { url: `${gatewayUrl}/fixture` });
+    const overlayTarget = await waitForTarget(
+      devToolsPort,
+      (target) => target.type === "page" && target.id === overlayTargetId,
+    );
+    overlayCdp = new Cdp(overlayTarget.webSocketDebuggerUrl);
+    await overlayCdp.send("Runtime.enable");
+    await waitForEval(overlayCdp, 'document.readyState === "complete" && document.querySelector("#agee-voice")');
+    await evaluate(overlayCdp, 'document.querySelector("#agee-voice")?.click()');
+    const overlayRecovery = await waitForEval(overlayCdp, `(() => {
+      const action = document.querySelector(".agee-cue-recovery");
+      const status = document.querySelector(".agee-cue-error .agee-cue-status");
+      if (!action || !status) return null;
+      return { action: action.textContent, status: status.textContent };
+    })()`);
+    const optionsBeforeOverlayAction = (await targets(devToolsPort)).filter(
+      (target) => target.type === "page" && String(target.url || "").startsWith(`chrome-extension://${extensionId}/options.html`),
+    );
+    if (
+      optionsBeforeOverlayAction.length !== 0 ||
+      overlayRecovery.action !== "Take me to microphone setup" ||
+      !overlayRecovery.status.includes("microphone")
+    ) {
+      throw new Error(`overlay microphone denial did not stay visible before navigation: ${JSON.stringify({ overlayRecovery, optionsBeforeOverlayAction })}`);
+    }
+    await evaluate(overlayCdp, 'document.querySelector(".agee-cue-recovery")?.click()');
+    await waitForTarget(
       devToolsPort,
       (target) => target.type === "page" && String(target.url || "").startsWith(`chrome-extension://${extensionId}/options.html`),
     );
-    optionsCdp = new Cdp(optionsTarget.webSocketDebuggerUrl);
-    await optionsCdp.send("Runtime.enable");
-    const recovery = await waitForEval(optionsCdp, `(() => {
-      const banner = document.getElementById("micRecoveryBanner");
-      const grant = document.getElementById("grantMic");
-      if (!banner || banner.hidden || !grant?.classList.contains("mic-recovery-focus")) return null;
-      return { banner: banner.textContent, focused: document.activeElement === grant };
-    })()`);
-    if (!recovery.focused || !recovery.banner.includes("microphone")) {
-      throw new Error(`microphone setup did not show and focus its walkthrough: ${JSON.stringify(recovery)}`);
-    }
 
     await evaluate(pageCdp, `(() => {
       document.getElementById("agentModeDelegate")?.click();
@@ -254,15 +382,20 @@ async function main() {
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
-        "settings search selected the grounded microphone row and opened its focused walkthrough, " +
+        "initial microphone denial stayed visible until its explicit recovery action opened the focused walkthrough, " +
+        "the page overlay preserved the same structured start-denial action without auto-navigation, " +
+        "settings search selected the grounded microphone row, " +
         "role selector persisted Collaborate, Delegate confirmation cancelled safely, chrome.sidePanel.open available.",
     );
   } finally {
     workerCdp?.close();
+    offscreenCdp?.close();
+    overlayCdp?.close();
     optionsCdp?.close();
     pageCdp?.close();
     browserCdp?.close();
     chrome.kill("SIGTERM");
+    gateway.close();
     await delay(300);
     try {
       rmSync(runDir, { recursive: true, force: true });

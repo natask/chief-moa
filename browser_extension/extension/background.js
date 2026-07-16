@@ -19,6 +19,7 @@ import {
   createOptionsRecovery,
 } from "./options-recovery.js";
 import { normalizeGatewaySetting, readBrowserSettings } from "./browser-settings-registry.js";
+import { createVoiceStartError, voiceStartFailure } from "./voice-start-failure.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   buildAgentLoopObservationPayload,
@@ -2249,21 +2250,27 @@ function handleOffscreenVoiceError(id, error, code = error?.code) {
   if (!session) return;
   const message = extensionMicCaptureMessage(error, code);
   session.setupErrorMessage = message;
+  session.setupFailure = {
+    message,
+    code: "microphone_capture_failed",
+    failure_code: code || "microphone_capture_failed",
+    ...(code === "microphone_permission_denied"
+      ? {
+          recovery: {
+            target: MICROPHONE_RECOVERY_TARGET,
+            action_label: "Take me to microphone setup",
+          },
+        }
+      : {}),
+  };
   deliverVoiceSessionEvent(session, {
     event: {
       type: "error",
-      code: "microphone_capture_failed",
-      failure_code: code || "microphone_capture_failed",
+      code: session.setupFailure.code,
+      failure_code: session.setupFailure.failure_code,
       recoverable: false,
       message,
-      ...(code === "microphone_permission_denied"
-        ? {
-            recovery: {
-              target: MICROPHONE_RECOVERY_TARGET,
-              action_label: "Take me to microphone setup",
-            },
-          }
-        : {}),
+      ...(session.setupFailure.recovery ? { recovery: session.setupFailure.recovery } : {}),
     },
   });
   closeVoiceSession(id, "microphone capture failed");
@@ -2407,7 +2414,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
   voiceSessions.set(id, session);
   onSessionCreated?.(id);
   if (voiceSessions.get(id) !== session || session.closed) {
-    throw new Error(session.setupErrorMessage || "Voice session closed during setup.");
+    throw createVoiceStartError(session.setupFailure, session.setupErrorMessage);
   }
   if (session.capture === "extension-offscreen") {
     session.captureStartRequested = true;
@@ -2449,7 +2456,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     }
     ticket = await createVoiceSessionTicket(cfg);
     if (voiceSessions.get(id) !== session || session.closed) {
-      throw new Error(session.setupErrorMessage || "Voice session closed during setup.");
+      throw createVoiceStartError(session.setupFailure, session.setupErrorMessage);
     }
     // Re-check after the awaits above: a record session that slipped in before
     // the mutex was visible must win. Abort this voice start cleanly instead of
@@ -2483,7 +2490,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       try {
         ws.close();
       } catch {}
-      reject(new Error(session.setupErrorMessage || "Voice session closed during setup."));
+      reject(createVoiceStartError(session.setupFailure, session.setupErrorMessage));
       return;
     }
     session.ws = ws;
@@ -4180,7 +4187,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         sendResponse({ ok: true, ...session });
       })
-      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      .catch((error) => sendResponse(voiceStartFailure(error)));
     return true;
   }
   if (msg.cmd === "voiceSessionAttach" && sender.tab) {
@@ -4708,23 +4715,27 @@ async function handlePanelRequest(msg) {
       cue_id: msg.cueId || null,
       status: "listening",
     });
-    const session = await startVoiceSessionWithMode(PANEL_TAB_ID, {
-      cueId: msg.cueId,
-      turnId: msg.turnId,
-      assistantOverlap: msg.assistantOverlap === true,
-      capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
-      autoCommit: msg.autoCommit !== false,
-      contextAction: msg.contextAction,
-      threadLabel: msg.threadLabel,
-    });
-    if (session?.voiceSessionId) {
-      setActiveBrowserAgentOwner(PANEL_TAB_ID, "panel voice session started", {
-        cue_id: msg.cueId || null,
-        voice_session_id: session.voiceSessionId,
-        status: "listening",
-      }).catch(() => {});
+    try {
+      const session = await startVoiceSessionWithMode(PANEL_TAB_ID, {
+        cueId: msg.cueId,
+        turnId: msg.turnId,
+        assistantOverlap: msg.assistantOverlap === true,
+        capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
+        autoCommit: msg.autoCommit !== false,
+        contextAction: msg.contextAction,
+        threadLabel: msg.threadLabel,
+      });
+      if (session?.voiceSessionId) {
+        setActiveBrowserAgentOwner(PANEL_TAB_ID, "panel voice session started", {
+          cue_id: msg.cueId || null,
+          voice_session_id: session.voiceSessionId,
+          status: "listening",
+        }).catch(() => {});
+      }
+      return { ok: true, ...session };
+    } catch (error) {
+      return voiceStartFailure(error);
     }
-    return { ok: true, ...session };
   }
   if (msg.cmd === "voiceSessionAttach") {
     return attachVoiceSession(msg.voiceSessionId, PANEL_TAB_ID);
