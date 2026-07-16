@@ -48,6 +48,37 @@ its declared and locally enforced budgets.
 - **AND** it does not inherit the browser program's target, permission, or
   approval
 
+### Requirement: Advertised runtime limits are enforceable
+
+Every advertised surface runtime SHALL execute in an independently terminable
+worker/process or an embedded engine with a host-side interrupt. V1 SHALL
+require finite locally enforced source, wall-time, tool-call, parallel-call,
+result, and log budgets. `memory_bytes` SHALL be a finite enforced value or the
+required value `null` when independent memory accounting is unavailable; no
+surface SHALL advertise an unenforced finite limit. Proposals SHALL preserve
+null or narrow advertised limits and SHALL NOT widen them.
+
+#### Scenario: Generated code enters a synchronous infinite loop
+
+- **WHEN** generated code blocks its own JavaScript event loop past `wall_ms`
+- **THEN** a host outside that loop revokes its bridge and terminates the realm
+- **AND** no new local tool call begins
+- **AND** the execution is receipted without claiming an in-flight effect was
+  reversed
+
+#### Scenario: Surface cannot measure per-realm memory
+
+- **WHEN** a runtime host cannot independently measure and enforce memory bytes
+- **THEN** it advertises `memory_bytes: null`
+- **AND** does not publish a guessed finite memory guarantee
+
+#### Scenario: Log budget is only checked after execution
+
+- **WHEN** a host would allow unbounded logs and truncate them only after the
+  program ends
+- **THEN** it does not conform to or advertise the V1 runtime until logging is
+  bounded during execution
+
 ### Requirement: Each surface selects an appropriate scripting profile
 
 The common wire contract SHALL describe a program and runtime profile without
@@ -150,6 +181,64 @@ protocol bytes defined for that field.
 - **THEN** the surface returns the recorded outcome or rejects the replay
 - **AND** performs no duplicate effect
 
+### Requirement: V1 profiles and bindings are interoperably closed
+
+V1 implementations SHALL use only the atomic surface/runtime/language/bridge/
+entrypoint/binding rows and exact required binding keys defined in `design.md`.
+Every V1 runtime SHALL use bridge version `1` and entrypoint `main`. Unknown,
+missing, null, or extra binding fields SHALL fail. Browser page-evaluation
+fields SHALL be absent without `browser.page.evaluate` and all present with it;
+`gateway_server` SHALL bind a tenant and exactly one project, connection, or
+resource. Approval policy SHALL use only the ratified program and effect-class
+enums.
+
+#### Scenario: Runtime tuple mixes surface authorities
+
+- **WHEN** a proposal combines Android WebView JavaScript with a shell language,
+  browser binding, different bridge version, or different entrypoint
+- **THEN** every conforming implementation rejects the tuple before acceptance
+
+#### Scenario: Gateway resource is ambiguous
+
+- **WHEN** a `gateway_server` binding has zero or multiple project, connection,
+  and resource selectors
+- **THEN** the gateway rejects it without executing a server capability
+
+#### Scenario: Browser evaluation scope is smuggled into a base program
+
+- **WHEN** evaluation scope/grant fields are present while
+  `browser.page.evaluate` is absent from the immutable capability subset
+- **THEN** the browser rejects the closed binding
+
+### Requirement: Catalogs and protocol digests are canonical
+
+Every conforming implementation SHALL calculate non-source protocol digests
+from UTF-8 RFC 8785 JCS bytes after closed-schema validation. Program source
+SHALL hash its exact UTF-8 bytes. Catalog capabilities SHALL use the exact
+descriptor keys/enums, sorted unique capability IDs, canonical schemas, and
+explicit set normalization defined in `design.md`; a client-asserted catalog hash SHALL
+NOT substitute for recomputation. Receipt self-hashes SHALL omit the
+`receipt_sha256` key entirely while computing the digest.
+
+#### Scenario: Equivalent object key orders are hashed
+
+- **WHEN** two implementations receive the same closed record with different
+  input object-key order
+- **THEN** they compute identical canonical bytes and SHA-256
+
+#### Scenario: Receipt includes its own hash during computation
+
+- **WHEN** a receipt digest is calculated with `receipt_sha256` present as a
+  value or `null`
+- **THEN** verification rejects it because V1 requires that key to be omitted
+  from the hash input
+
+#### Scenario: Advertised catalog digest is forged
+
+- **WHEN** the catalog ID projection or descriptor snapshot does not recompute
+  to the advertised version/digest
+- **THEN** the advertisement is unusable for selection or execution
+
 ### Requirement: Local policy governs every host call
 
 The runtime SHALL receive only immutable advertised functions, bounded
@@ -216,6 +305,64 @@ dumps, environment contents, credentials, and browser session material.
 - **WHEN** the surface cannot durably record acceptance or pending effect state
 - **THEN** execution does not begin
 - **AND** a bounded rejection outcome is returned
+
+### Requirement: Lifecycle and receipt linkage is exact and ordered
+
+Every surface SHALL emit only the exact non-null payload keys for each V1
+lifecycle kind defined in `design.md`. Sequence SHALL start at one, preserve one
+claimant, pair tool and approval events, and end at terminal. Tool receipts
+SHALL form one verified durable chain in receipt-commit order; the terminal
+receipt SHALL report the exact count/endpoints and link to the last tool hash or
+null for zero attempts. `tool_finished` and `terminal` events SHALL link the
+exact durable receipt identity, status, and verified digest.
+
+#### Scenario: Exact event is delivered twice
+
+- **WHEN** the same execution, sequence, event ID, and canonical bytes arrive
+  again
+- **THEN** ingestion treats it idempotently without advancing sequence twice
+
+#### Scenario: Event conflicts or arrives after terminal
+
+- **WHEN** an event reuses an ID/sequence with different bytes, creates a gap or
+  reorder, changes claimant, mismatches its referenced receipt, or follows
+  terminal
+- **THEN** ingestion rejects it without advancing stored sequence
+- **AND** requires reconciliation rather than silently reordering it
+
+#### Scenario: Terminal attempt summary lies
+
+- **WHEN** count, first hash, last hash, or terminal previous hash does not match
+  the verified tool-receipt chain
+- **THEN** the terminal receipt and terminal event are rejected
+
+#### Scenario: Parallel tool calls finish out of order
+
+- **WHEN** concurrent read calls complete in a different order than they began
+- **THEN** their receipts join the single chain in durable receipt-commit order
+- **AND** their start/finish lifecycle pairs remain independently valid
+
+### Requirement: Receipt text and artifact references are non-sensitive
+
+Receipt/progress summaries and errors SHALL be locally constructed from bounded
+allowlisted protocol templates, counts, reason codes, and opaque IDs rather
+than observed or tool-produced content. Artifact references SHALL be sorted
+unique opaque IDs matching `artifact_[A-Za-z0-9_-]{1,120}` and SHALL NOT be
+URLs, paths, inline data, or user-controlled names. Nullable receipt fields and
+their status/effect conditions SHALL match the exact rules in `design.md`.
+
+#### Scenario: Tool error contains captured page content
+
+- **WHEN** a runtime exception or tool output contains page, form,
+  Accessibility, screenshot, credential, environment, or session material
+- **THEN** the receipt uses a safe protocol reason/template instead
+- **AND** the raw content is absent from events and receipts
+
+#### Scenario: Artifact reference is a URL or path
+
+- **WHEN** an artifact reference contains a URL, path, query, fragment, data
+  encoding, or non-opaque user-controlled name
+- **THEN** receipt validation rejects it
 
 ### Requirement: QA and release never consume personal surface state
 

@@ -7,11 +7,18 @@
   isolated-QA rules, and focused coverage gate.
 - [x] Add the normative `surface-local-program-execution` specification and
   reflect the architecture-significant boundary in `ARCHITECTURE.md`.
+- [x] Ratify the exact V1 profile registry, binding unions, approval enums,
+  catalog canonicalization, JCS/self-hash rules, advertisement freshness,
+  lifecycle payloads/sequencing, receipt nullable/chain/linkage rules, and
+  opaque artifact/sensitive-omission contract.
 - [ ] Implement shared closed-schema decoders, canonical digests, lifecycle
   sequencing, replay protection, receipt validation, and exact-target routing.
 - [ ] Add adversarial protocol tests for unknown fields/types, legacy executable
   fields, source/catalog/state drift, replay, forged receipts, profile
-  escalation, budget enforcement, interruption, and sensitive-data omission.
+  escalation, JCS cross-language fixtures, event gap/reorder/conflict,
+  count/chain/link mismatch, nullable-condition mismatch, opaque artifact IDs,
+  synchronous infinite loops, false finite budget claims, budget enforcement,
+  interruption, and sensitive-data omission.
 
 ## Gateway and server-side runtime
 
