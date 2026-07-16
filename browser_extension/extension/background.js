@@ -18,6 +18,7 @@ import {
   OPTIONS_RECOVERY_STORAGE_KEY,
   createOptionsRecovery,
 } from "./options-recovery.js";
+import { normalizeGatewaySetting, readBrowserSettings } from "./browser-settings-registry.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   buildAgentLoopObservationPayload,
@@ -72,6 +73,7 @@ const PRIVACY_NOTICE_KEY = "ageePrivacyNoticePending";
 const BACKGROUND_AUTOMATION_KEY = "ageeBackgroundAutomationEnabled";
 const BACKGROUND_AUTOMATION_CONSENT_KEY = "ageeBackgroundAutomationConsentVersion";
 const BACKGROUND_AUTOMATION_CONSENT_VERSION = 1;
+const LIVEKIT_VOICE_FLAG_KEY = "ageeLivekitVoiceEnabled";
 let privacyMigrationInFlight = null;
 const BROWSER_AGENT_PROGRESS_TEXT = {
   collecting_page_context: "collecting page context",
@@ -4585,10 +4587,84 @@ function closePanelSessions(reason) {
   }
 }
 
+async function browserSettingsState(microphonePermission) {
+  const cfg = await getConfig();
+  const stored = await chrome.storage.local.get({
+    [LIVEKIT_VOICE_FLAG_KEY]: false,
+    [BACKGROUND_AUTOMATION_KEY]: false,
+    [BACKGROUND_AUTOMATION_CONSENT_KEY]: 0,
+  });
+  return {
+    gatewayUrl: cfg.gatewayUrl || "",
+    gatewayTokenConfigured: Boolean(cfg.gatewayToken),
+    livekitVoiceEnabled: stored[LIVEKIT_VOICE_FLAG_KEY] === true,
+    backgroundAutomationEnabled: stored[BACKGROUND_AUTOMATION_KEY] === true,
+    backgroundAutomationConsentCurrent:
+      stored[BACKGROUND_AUTOMATION_CONSENT_KEY] === BACKGROUND_AUTOMATION_CONSENT_VERSION,
+    microphonePermission,
+  };
+}
+
+async function gatewaySettingsQuery(cfg, { operation, id, query, limit }) {
+  let path;
+  if (operation === "get") {
+    const gatewayId = String(id || "").replace(/^gateway\./, "");
+    path = `/v1/agent/settings/${encodeURIComponent(gatewayId)}`;
+  } else if (operation === "recommend") {
+    path = `/v1/agent/settings/recommend?q=${encodeURIComponent(query)}&limit=${limit}`;
+  } else {
+    const params = new URLSearchParams();
+    if (operation === "search") params.set("q", query);
+    params.set("limit", String(limit));
+    path = `/v1/agent/settings?${params.toString()}`;
+  }
+  const payload = await callGateway(cfg, path, { method: "GET", maxResponseBytes: 512 * 1024 });
+  const records = operation === "get" ? [payload] : Array.isArray(payload?.settings) ? payload.settings : [];
+  return records.map(normalizeGatewaySetting).filter(Boolean);
+}
+
+async function querySettingsForPanel(msg) {
+  const operation = String(msg.operation || (msg.id ? "get" : msg.query ? "search" : "list")).toLowerCase();
+  const limit = Math.max(1, Math.min(Number(msg.limit || 20) || 20, 20));
+  const state = await browserSettingsState(msg.microphonePermission);
+  const local = readBrowserSettings({ operation, id: msg.id, query: msg.query, limit }, state);
+  if (operation === "get" && String(msg.id || "").startsWith("browser.")) return local;
+  const cfg = await getConfig();
+  let gatewaySettings = [];
+  let gatewayError = "";
+  try {
+    gatewaySettings = await gatewaySettingsQuery(cfg, {
+      operation,
+      id: msg.id,
+      query: String(msg.query || ""),
+      limit,
+    });
+  } catch (error) {
+    gatewayError = String(error?.message || error);
+  }
+  if (operation === "get") {
+    if (gatewaySettings[0]) return { ok: true, operation, setting: gatewaySettings[0] };
+    return { ok: false, error: "unknown_setting", setting_id: String(msg.id || ""), gateway_error: gatewayError };
+  }
+  if (!local.ok) return local;
+  const settings = [...local.settings, ...gatewaySettings].slice(0, limit);
+  return {
+    ok: true,
+    operation,
+    query: String(msg.query || ""),
+    count: settings.length,
+    settings,
+    ...(gatewayError ? { gateway_error: gatewayError } : {}),
+  };
+}
+
 async function handlePanelRequest(msg) {
   if (msg.cmd === "openOptions") {
     await openOptionsForTarget(msg.target);
     return { ok: true };
+  }
+  if (msg.cmd === "settingsQuery") {
+    return querySettingsForPanel(msg);
   }
   if (msg.cmd === "browserRoleTurn") {
     const role = normalizeBrowserAgentRole(msg.role);

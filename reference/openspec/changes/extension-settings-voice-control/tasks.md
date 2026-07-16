@@ -3,7 +3,7 @@
 - [x] 1.1 Present the extension's settings (gateway URL/token, runtime profile fields incl. system prompt, model) in one settings surface.
 - [x] 1.2 Read current values from the gateway (`GET /v1/agent/profile`) and local config; show what is in effect.
 - [x] 1.3 Load model, voice, and language choices from the gateway profile-options catalog; render languages as searchable multi-select controls while persisting the existing gateway profile fields.
-- [ ] 1.4 Define one merged, read-only settings catalog projection over
+- [x] 1.4 Define one merged, read-only settings catalog projection over
       `GET /v1/agent/profile`, `GET /v1/agent/profile/options`, and an allowlist
       of extension-local settings. Every rendered user-configurable control has
       exactly one stable catalog key, owner, and effective value; secrets expose
@@ -11,10 +11,16 @@
 - [ ] 1.5 Add list, semantic search, compare, and recommendation query intents
       over the catalog. Exact and paraphrased queries return grounded entries;
       a query never mutates state.
+  - [x] 1.5a Add catalog-grounded list, exact get, semantic search, and
+        recommendation for existing gateway and browser-local settings. Compare
+        remains pending.
 - [ ] 1.6 Render query results as selectable setting rows in the existing
       command/workspace UI and deep-link into the focused Options control only
       for deep configuration or permission remediation. Typed and voice paths
       expose the same result identities and current values.
+  - [x] 1.6a Render the typed side-panel projection as selectable/searchable
+        rows and expose only the microphone permission remediation deep link.
+        The matching voice projection remains pending.
 
 ## 2. Change Settings By Talking To The Agent
 
@@ -40,6 +46,10 @@
       the next `POST /v1/voice/turns` returns a spoken reply capped to 140 chars — no gateway restart.
 - [ ] 3.3 Smoke list, search, recommendation, and current-value queries and prove
       that every result is catalog-grounded and no query mutates state.
+  - [x] 3.3a Unit-smoke list, search, recommendation, exact get, effective
+        current values, token redaction, consent gating, and unknown-operation
+        rejection; real-Chrome smoke search, row selection, and microphone
+        walkthrough deep-linking. Full gateway-backed browser smoke remains pending.
 - [ ] 3.4 Smoke one gateway-owned and one extension-local update and prove the
       owning surface refreshes to the effective value with an observable result.
 - [ ] 3.5 Smoke microphone recovery: the active surface displays the failure
