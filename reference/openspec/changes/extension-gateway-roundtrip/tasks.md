@@ -7,18 +7,24 @@
 - [x] 1.5 Note the confirmed round-trip sequence in `browser_extension/README.md`. — added a "Verify the gateway round-trip" section documenting the health → command → describe → loud-failure sequence and the `smoke:gateway` script.
 - [x] 1.6 Route browser voice through the gateway streaming voice session, not browser-native STT/TTS. — implemented short-lived `/v1/voice/session-ticket` auth for browser WebSockets, streams PCM16 to `/v1/voice/sessions`, and plays returned assistant PCM audio. Verified by `gateway/scripts/smoke-browser-voice-ticket.js`.
 - [x] 1.7 Replace the visible chat/log panel with a one-current-intent browser surface: Cmd+, opens text, Cmd+. starts icon-first voice, replies/errors render above the input without clearing or replacing its draft, and visible history is omitted unless explicitly requested through Moa. Verified by `npm run verify` and `npm run smoke:gateway`.
-- [x] 1.9 Auto-commit browser voice turns after speech silence so the user does not need a second click/hotkey to send captured audio.
+- [x] 1.9 Keep canonical browser-mark capture manual: starting from the mark
+      disables silence auto-commit, and only the matching click-toggle or
+      push-to-talk release commits the turn. Gateway conversation modes that
+      explicitly opt into automatic continuation remain a separate path.
 - [x] 1.8 Move browser microphone capture to an extension-owned offscreen document so websites do not receive mic permission. Content script now controls UI only; `offscreen.js` owns `getUserMedia`, sends PCM16 chunks to `background.js`, and the options page seeds the extension-origin microphone grant. Verified by `npm run verify` and `npm run smoke`.
-- [x] 1.10 Show browser voice transcript/assistant feedback above the input while keeping the input available; the browser mark single-click path is reserved for opening the chat menu and does not commit current speech.
+- [x] 1.10 Show browser voice transcript/assistant feedback above the input
+      while keeping the input available; a browser-mark single click starts
+      current-thread capture and the next single click commits it once.
 - [x] 1.11 Share one browser-agent owner across tabs: store the active owner in
       `chrome.storage.local`, broadcast owner changes to content scripts, revoke
       old-tab voice/task cues on transfer, prefer the owner tab for queued
       browser tasks, and verify with a two-tab real-extension smoke. Verified
       by `cd browser_extension && npm run verify && npm run smoke`.
-- [x] 1.12 Add manual browser mark push-to-talk: double-clicking and holding the
-      mark starts a gateway voice session with browser silence auto-commit
-      disabled, releasing the mark commits the turn, and the manual turn does
-      not re-arm the mic. A normal click-and-hold is only for moving the mark.
+- [x] 1.12 Apply the canonical browser-mark chord map: double click starts a
+      fresh-thread capture and a later single or double click commits it once;
+      triple click opens text without cancelling active work; a still hold is
+      push-to-talk committed on release; movement across the drag threshold
+      repositions the mark without submitting a voice turn.
 - [x] 1.13 Guard browser voice WebSocket sends so revoked or closed sessions do
       not call `send` on CLOSING/CLOSED sockets. Verified by `npm run verify`.
 - [x] 1.14 Replace offscreen `ScriptProcessorNode` microphone capture with an

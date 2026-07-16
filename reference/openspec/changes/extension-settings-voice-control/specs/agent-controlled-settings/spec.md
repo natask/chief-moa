@@ -22,20 +22,23 @@ than only answering conversationally.
 - **AND** the next Live voice turn uses the updated identity, voice, or language profile
 
 ### Requirement: Agent-readable settings catalog
-Every user-configurable setting exposed by the browser surface SHALL have one
-stable catalog entry containing its key, owning scope, current effective value,
-default, description, allowed values or constraints, mutability, and whether it
-takes effect immediately. The user SHALL be able to ask the agent to list,
-explain, search, compare, and recommend settings. Search MAY use semantic
-ranking, but every result SHALL be grounded in a catalog entry and identify the
-effective value.
+Every canonical gateway runtime-profile setting SHALL have one stable catalog
+entry containing its key, owning scope, current effective value, default,
+description, allowed values or constraints, and mutability. The user SHALL be
+able to ask the gateway voice agent to list, get, search, and recommend those
+settings. Search MAY use semantic ranking, but every result SHALL be grounded in
+a catalog entry and identify the effective value.
+
+This initial catalog SHALL NOT claim to enumerate Android preferences or
+browser extension-local controls. Those surfaces remain owned by their local
+clients until a separately implemented merged projection registers them.
 
 Secrets such as the gateway session token SHALL be represented only by bounded
 redacted state and SHALL NOT be returned as catalog values.
 
 #### Scenario: User asks for all settings
-- **WHEN** the user asks the agent what settings are available
-- **THEN** the agent returns a bounded, categorized list of registered gateway-owned and extension-local settings
+- **WHEN** the user asks the gateway voice agent what runtime-profile settings are available
+- **THEN** the agent returns a bounded, categorized list of registered gateway-owned settings
 - **AND** each returned setting identifies its current effective value or a redacted configured/unconfigured state
 
 #### Scenario: User searches by desired outcome
@@ -46,6 +49,11 @@ redacted state and SHALL NOT be returned as catalog values.
 #### Scenario: User searches by concept
 - **WHEN** the user asks for settings related to a concept such as voice, language, or privacy
 - **THEN** the agent returns catalog-grounded matches even when the wording does not exactly match a setting label
+
+#### Scenario: Local client settings are not overclaimed
+- **WHEN** a gateway catalog query is made before browser-local or Android settings are registered
+- **THEN** the result identifies itself as the gateway runtime-profile catalog
+- **AND** it does not claim completeness for browser-local controls or Android preferences
 
 ### Requirement: Settings mutation cannot invent configuration
 The agent SHALL mutate only registered, writable settings through the owning
