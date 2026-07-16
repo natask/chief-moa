@@ -4255,8 +4255,8 @@ async function handleVoiceProfileControl(record, transcript, turnProfileOptions 
 }
 
 // HTTP-path counterpart of the revert_agent_profile live tool. mode "reset"
-// restores gateway defaults; mode "previous" undoes the last change. Both append
-// a new version so the profile can never land broken, and both report the
+// restores writable gateway defaults; mode "previous" undoes the last writable
+// change. Both preserve companion identity, append one version, and report the
 // spoken confirmation plus a structured action for the client.
 function handleVoiceProfileRevert(record, intent, profileOptions) {
   const mode = intent.mode === "reset" ? "reset" : "previous";
@@ -4282,8 +4282,8 @@ function handleVoiceProfileRevert(record, intent, profileOptions) {
       deviceId: profileOptions.deviceId,
     });
     const message = changed.length > 0
-      ? `Reset ${scopeText} to the default settings. Applies ${application.applies.replace(/_/g, " ")}.`
-      : `Your settings were already the defaults ${scopeText}, so nothing changed.`;
+      ? `Reset writable settings ${scopeText} to their defaults. Companion identity stayed active. Applies ${application.applies.replace(/_/g, " ")}.`
+      : `Your writable settings were already the defaults ${scopeText}, so nothing changed.`;
     return {
       ...voiceTurnPayload(record, {
         classification: "profile_control",
@@ -6924,9 +6924,9 @@ function applyAgentProfilePatch(call, args, patch, sourceLabel = "agent-tool", o
 }
 
 // Reversibility by voice: "undo that" / "reset your settings". mode "previous"
-// (default) restores the version before the last change; mode "reset" restores
-// the gateway defaults. Both append a new version so the app never lands in a
-// broken state, and both honor global/device scope like other profile changes.
+// (default) restores writable state before the last change; mode "reset" restores
+// writable gateway defaults. Both preserve companion-runtime-owned identity in
+// one version, and both honor global/device scope like other profile changes.
 function liveToolRevertAgentProfile(call, args) {
   const mode = String(args.mode || args.target || "previous").trim().toLowerCase() === "reset"
     ? "reset"
@@ -6962,8 +6962,8 @@ function liveToolRevertAgentProfile(call, args) {
     const application = profileApplicationSemantics();
     const scopeText = profileOptions.scope === "device" ? "on this device" : "on all devices";
     const message = changed.length > 0
-      ? `Reset ${scopeText} to the default settings. It applies ${application.applies.replace(/_/g, " ")}.`
-      : `Your settings were already the defaults ${scopeText}, so nothing changed.`;
+      ? `Reset writable settings ${scopeText} to their defaults. Companion identity stayed active. It applies ${application.applies.replace(/_/g, " ")}.`
+      : `Your writable settings were already the defaults ${scopeText}, so nothing changed.`;
     return {
       ok: true,
       type: "agent_profile_reverted",
@@ -8832,7 +8832,7 @@ function cascadedVoiceProfileTools(call) {
     },
     {
       name: "revert_agent_profile",
-      description: "Undo your durable settings: mode=\"previous\" restores the state before your last change (undo); mode=\"reset\" restores the gateway defaults. Honors scope like update_agent_profile.",
+      description: "Undo writable durable settings: mode=\"previous\" restores prior writable state; mode=\"reset\" restores writable gateway defaults. Companion-runtime identity remains unchanged. Honors scope like update_agent_profile.",
       parameters: {
         type: "object",
         properties: {

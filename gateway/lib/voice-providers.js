@@ -2778,7 +2778,7 @@ class GeminiLiveVoiceProvider {
           },
           {
             name: "revert_agent_profile",
-            description: "Undo your own durable settings by voice. Call this when the user says undo, undo that, undo the last change, revert, or go back — use mode='previous' to restore the settings from before your last change. Call it with mode='reset' when the user says reset your settings, start over, or go back to default. Honors scope='device' vs scope='global' the same way as update_agent_profile. After calling, confirm briefly what you undid; the change applies to the next interaction.",
+            description: "Undo your own writable durable settings by voice. Call this when the user says undo, undo that, undo the last change, revert, or go back — use mode='previous' to restore writable settings from before your last change. Call it with mode='reset' when the user says reset your settings, start over, or go back to default. Companion-runtime identity is preserved and changes only through companion authority. Honors scope='device' vs scope='global' the same way as update_agent_profile. After calling, confirm briefly what you undid; the change applies to the next interaction.",
             parameters: {
               type: "OBJECT",
               properties: {

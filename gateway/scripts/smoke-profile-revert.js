@@ -5,7 +5,7 @@
 // reversibility + the browser page-tweak contract.
 //
 //   1. Store: revertLast undoes the last change (global + device scope) and
-//      reset restores defaults, always appending a new version so the profile
+//      reset restores writable defaults, always appending a new version so the profile
 //      never lands broken.
 //   2. Live tool path (through a fake Gemini Live socket that emits toolCall and
 //      captures the toolResponse the gateway sends back):
@@ -70,12 +70,13 @@ async function main() {
       ok: true,
       base_url: baseUrl,
       checks: [
-        "store revertLast undoes last change (global); reset restores defaults; both append a version",
+        "store revertLast undoes writable changes (global); reset restores writable defaults; both append a version",
         "store revertLast (device scope) undoes the last device change without breaking the profile",
+        "generic reset, rollback, and undo preserve companion-runtime identity",
         "Gemini Live setup exposes read_agent_settings, update_agent_profile, revert_agent_profile, propose_page_tweak",
         "live update_agent_profile sets response_modality=text; invalid values are kept previous; unknown fields reject atomically",
         "live read_agent_settings lists all canonical settings, recommends only catalog settings, and rejects unknown ids",
-        "live revert_agent_profile mode=previous undoes the last change; mode=reset restores defaults",
+        "live revert_agent_profile mode=previous undoes the last writable change; mode=reset restores writable defaults",
         "live propose_page_tweak returns a page_tweak action for a valid record and rejects an unknown kind, never failing the turn",
         "http 'reply in text' persists response_modality=text; 'undo that' reverts; 'reset your settings' restores defaults",
       ],
@@ -138,6 +139,21 @@ async function assertStoreRevert(tempDir) {
   const deviceRevert = store.revertLast({ scope: "device", deviceId, source: "smoke" });
   assert.ok(deviceRevert.ok, `device revertLast must succeed: ${JSON.stringify(deviceRevert)}`);
   assert.notEqual(store.effective({ deviceId }).voice, "Leda", "device revertLast must undo the device change");
+
+  const managed = { active_companion_id: "pet_smoke", active_companion_name: "Scout",
+    active_companion_source: "library", active_companion_version: "v1" };
+  const managedDir = path.join(tempDir, "store-managed-authority");
+  const managedStore = createAgentProfileStore({ dataDir: managedDir, defaults: { voice_max_chars: 280 } });
+  const baseline = managedStore.currentVersion();
+  managedStore.patch({ ...managed, voice_max_chars: 120 }, { source: "verified-companion-package" });
+  for (const operation of ["revert", "reset", "rollback"]) {
+    if (operation === "revert") managedStore.revertLast({ source: "voice" });
+    if (operation === "reset") managedStore.reset({ source: "api" });
+    if (operation === "rollback") managedStore.rollback(baseline, { source: "api" });
+    for (const [field, value] of Object.entries(managed)) {
+      assert.equal(managedStore.effective()[field], value, `${operation} must preserve companion-owned ${field}`);
+    }
+  }
 }
 
 async function assertSetupTools(dataDir) {
