@@ -55,6 +55,28 @@ private final class FakeMacProgramAuthority: MacAccessibilityProgramAuthority, @
 }
 
 private struct FixtureFailure: Error {}
+
+private final class FakeSystemAXPlatform: MacSystemAccessibilityPlatform, @unchecked Sendable {
+    var observations: [MacAXProgramObservation] = []
+    var processError: (any Error)?
+    var observeError: (any Error)?
+    var performError: (any Error)?
+    var requiredWindows: [String?] = []
+    var performed = 0
+    func validateProcess() throws { if let processError { throw processError } }
+    func observe(requiredWindowID: String?, now: Date) throws -> MacAXProgramObservation {
+        requiredWindows.append(requiredWindowID)
+        if let observeError { throw observeError }
+        guard !observations.isEmpty else { throw LocalProgramError.staleObservation }
+        return observations.removeFirst()
+    }
+    func perform(_ request: MacAXActionRequest, executionID: String,
+                 sequence: Int, now: Date) throws -> String? {
+        performed += 1
+        if let performError { throw performError }
+        return "ax_fixture_resource"
+    }
+}
 private struct FixtureApprover: MacProgramApprovalAuthorizing {
     func resolve(approvalID: String, effectClass: String, capabilityID: String,
                  executionID: String, expiresAt: Date) -> MacProgramApprovalDecision {
@@ -584,6 +606,124 @@ private func makeRuntime(source: String,
     let events = try runtime.lifecycleEvents(executionID: envelope.executionID)
     #expect(events.map(\.kind) == ["accepted", "started", "tool_started", "approval_required",
         "approval_resolved", "tool_finished", "terminal"])
+}
+
+@Test func systemAuthorityPolicyIsCoveredWithSyntheticPlatformOnly() throws {
+    let process = ProcessIdentity(bundleID: "com.example.fixture", pid: 42,
+        processStart: fixtureNow.addingTimeInterval(-10), signingIdentity: "fixture-signing")
+    // Construction of the production adapter performs no AX/TCC work. Keep its
+    // public wiring covered without invoking any live system API.
+    _ = SystemMacAccessibilityAuthority(process: process,
+        applicationName: "Fixture", grantID: "grant-production-wiring")
+    let generation = String(format: "%.6f", process.processStart.timeIntervalSince1970)
+    func observation(_ id: String, window: String = "window-1",
+                     expiry: Date = fixtureNow.addingTimeInterval(30), label: String = "Continue") -> MacAXProgramObservation {
+        .init(binding: .init(bundleID: process.bundleID, pid: process.pid,
+            processGeneration: generation, windowID: window, observationID: id,
+            observedAt: fixtureNow, expiresAt: expiry), applicationName: "Fixture",
+            windowTitle: "Window", nodes: [.init(handle: "node-1", role: "AXButton",
+                label: label, enabled: true, focused: false, actions: ["press"])])
+    }
+    let initial = observation("obs-1")
+    let platform = FakeSystemAXPlatform(); platform.observations = [initial]
+    let authority = SystemMacAccessibilityAuthority(process: process, grantID: "grant-1", platform: platform)
+    let bindings = MacLocalProgramEnvelope.Bindings(localGrantID: "grant-1",
+        bundleID: process.bundleID, pid: process.pid, processGeneration: generation,
+        signingIdentity: process.signingIdentity, windowID: "window-1", axSnapshotID: "obs-1",
+        stateSHA256: MacLocalProgramDigest.axState(initial))
+    #expect(throws: LocalProgramError.staleObservation) {
+        try authority.validate(bindings: bindings, now: fixtureNow)
+    }
+    #expect(try authority.observe(now: fixtureNow) == initial)
+    try authority.validate(bindings: bindings, now: fixtureNow)
+    try authority.validate(bindings: bindings, now: fixtureNow)
+    #expect(throws: LocalProgramError.staleObservation) {
+        try authority.validate(bindings: .init(localGrantID: "grant-1", bundleID: process.bundleID,
+            pid: process.pid, processGeneration: generation, signingIdentity: process.signingIdentity,
+            windowID: "window-1", axSnapshotID: "obs-1", stateSHA256: String(repeating: "d", count: 64)),
+            now: fixtureNow)
+    }
+
+    let refreshed = observation("obs-2")
+    platform.observations = [refreshed]
+    #expect(try authority.observe(now: fixtureNow) == refreshed)
+    let post = observation("obs-3", label: "Done")
+    platform.observations = [post]
+    let outcome = try authority.perform(.init(action: "press", handle: "node-1",
+        observationID: "obs-2"), executionID: "exec", sequence: 1, now: fixtureNow)
+    #expect(outcome.postStateSHA256 == MacLocalProgramDigest.axState(post))
+    #expect(outcome.resourceID == "ax_fixture_resource")
+    #expect(platform.performed == 1)
+    #expect(platform.requiredWindows == [nil, "window-1", "window-1"])
+    #expect(throws: LocalProgramError.staleObservation) {
+        try authority.perform(.init(action: "press", handle: "node-1", observationID: "wrong"),
+            executionID: "exec", sequence: 9, now: fixtureNow)
+    }
+
+    platform.observations = [observation("obs-4")]
+    _ = try authority.observe(now: fixtureNow)
+    platform.observeError = FixtureFailure()
+    let uncertain = try authority.perform(.init(action: "press", handle: "node-1",
+        observationID: "obs-4"), executionID: "exec", sequence: 2, now: fixtureNow)
+    #expect(uncertain.postStateSHA256 == nil)
+
+    let driftPlatform = FakeSystemAXPlatform()
+    driftPlatform.observations = [initial, observation("drift", window: "window-other")]
+    let driftAuthority = SystemMacAccessibilityAuthority(process: process,
+        grantID: "grant-1", platform: driftPlatform)
+    _ = try driftAuthority.observe(now: fixtureNow)
+    try driftAuthority.validate(bindings: bindings, now: fixtureNow)
+    #expect(throws: LocalProgramError.staleTarget) { try driftAuthority.observe(now: fixtureNow) }
+
+    let expiredPlatform = FakeSystemAXPlatform()
+    expiredPlatform.observations = [observation("expired", expiry: fixtureNow)]
+    let expiredAuthority = SystemMacAccessibilityAuthority(process: process,
+        grantID: "grant-1", platform: expiredPlatform)
+    #expect(throws: LocalProgramError.staleTarget) { try expiredAuthority.observe(now: fixtureNow) }
+
+    let badStatePlatform = FakeSystemAXPlatform(); badStatePlatform.observations = [initial]
+    let badStateAuthority = SystemMacAccessibilityAuthority(process: process,
+        grantID: "grant-1", platform: badStatePlatform)
+    _ = try badStateAuthority.observe(now: fixtureNow)
+    #expect(throws: LocalProgramError.staleObservation) {
+        try badStateAuthority.validate(bindings: .init(localGrantID: "grant-1", bundleID: process.bundleID,
+            pid: process.pid, processGeneration: generation, signingIdentity: process.signingIdentity,
+            windowID: "window-1", axSnapshotID: "obs-1", stateSHA256: String(repeating: "e", count: 64)),
+            now: fixtureNow)
+    }
+
+    platform.processError = LocalProgramError.staleTarget
+    #expect(throws: LocalProgramError.staleTarget) { try authority.observe(now: fixtureNow) }
+    #expect(throws: LocalProgramError.staleTarget) {
+        try authority.validate(bindings: .init(localGrantID: "wrong", bundleID: process.bundleID,
+            pid: process.pid, processGeneration: generation, signingIdentity: process.signingIdentity,
+            windowID: "window-1", axSnapshotID: "obs", stateSHA256: String(repeating: "a", count: 64)),
+            now: fixtureNow)
+    }
+}
+
+@Test func accessibilityPolicyAndRawSystemCallsRemainSeparatedBySource() throws {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let shell = packageRoot.appendingPathComponent("Sources/MoaMacShell")
+    let coordinator = try String(contentsOf:
+        shell.appendingPathComponent("SystemMacAccessibilityAuthority.swift"), encoding: .utf8)
+    let adapter = try String(contentsOf:
+        shell.appendingPathComponent("ApplicationServicesMacAccessibilityPlatform.swift"), encoding: .utf8)
+
+    #expect(coordinator.contains("MacSystemAccessibilityPlatform"))
+    for forbidden in ["import ApplicationServices", "import AppKit", "AXUIElement",
+                      "NSRunningApplication", "AXUIElementCopyAttributeValue"] {
+        #expect(!coordinator.contains(forbidden))
+    }
+    #expect(adapter.contains("import ApplicationServices"))
+    #expect(adapter.contains("AXUIElement"))
+    for forbidden in ["MacProgramJournaling", "MacLocalActionReceipt",
+                      "MacProgramApprovalAuthorizing", "MacLocalProgramEnvelope.Program"] {
+        #expect(!adapter.contains(forbidden))
+    }
 }
 
 @Test func stopReturnsBeforeInFlightEffectAndReceiptsIndeterminate() async throws {
